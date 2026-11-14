@@ -3,7 +3,7 @@
 //! without calling RaTeX again.
 //!
 //! RaTeX is young (0.1.x), so it only ever runs inside this crate's entry points ([`layout`],
-//! [`to_omml`], [`check`]). Each one caps its input (4 KB, nesting 32) and runs under
+//! [`to_omml`], [`check`]). Each one caps its input (4 KB, nesting 32, no macro definitions, at most [`MAX_CELLS`] matrix cells) and runs under
 //! `catch_unwind`, so a stray panic becomes a [`MathError`]. See the RaTeX gate in
 //! `docs/decisions.md` and `tests/gate.rs`.
 //!
@@ -33,6 +33,9 @@ pub const MAX_DEPTH: usize = 32;
 pub const MAX_EM: f32 = 10_000.0;
 /// Most items one equation may produce.
 pub const MAX_ITEMS: usize = 50_000;
+/// Most matrix cells one equation may have, counting the empty cells that pad a short row to the
+/// width of the widest one. A ragged matrix costs rows times the widest row, not what is typed.
+pub const MAX_CELLS: usize = 2_500;
 
 /// The error for a source over [`MAX_SOURCE_BYTES`]. It is one shared value so that a cache can
 /// answer for such a source by its length alone, without reading it.
@@ -223,20 +226,61 @@ fn parse(latex: &str) -> Result<Vec<ratex_parser::ParseNode>, MathError> {
     })
 }
 
-/// The size and nesting caps, checked before RaTeX sees the source.
+/// Control words that define or rebind macros. User macros have no use in an equation, and
+/// RaTeX caps only how many expansions run, not how large they grow, so a self-referencing
+/// definition whose argument doubles on every call keeps the expander busy without bound. They are
+/// refused before RaTeX sees the source.
+const MACRO_DEFINERS: &[&str] =
+    &["def", "gdef", "edef", "xdef", "let", "futurelet", "global", "long", "newcommand", "renewcommand", "providecommand"];
+
+/// One open `\begin…\end` environment, counted from the source text.
+struct Grid {
+    /// Rows ended so far (by `\\`, `\cr` or `\newline`).
+    rows: usize,
+    /// Cells in the current row.
+    cells: usize,
+    /// Cells in the widest row so far.
+    widest: usize,
+}
+
+impl Grid {
+    fn new() -> Grid {
+        Grid { rows: 0, cells: 1, widest: 0 }
+    }
+    fn end_row(&mut self) {
+        self.widest = self.widest.max(self.cells);
+        self.rows += 1;
+        self.cells = 1;
+    }
+    /// The padded grid RaTeX lays out and `to_omml` writes: every row as wide as the widest.
+    fn padded_cells(&self) -> usize {
+        (self.rows + 1).saturating_mul(self.widest.max(self.cells))
+    }
+}
+
+/// The size, nesting, macro and matrix caps, checked before RaTeX sees the source.
 fn check_caps(latex: &str) -> Result<(), MathError> {
     if latex.len() > MAX_SOURCE_BYTES {
         return Err(SOURCE_TOO_LONG.clone());
     }
+    // `%` starts a comment, except inside the address of `\href` and `\url`, where RaTeX reads it
+    // as a character. Which one it is decides what the rest of the line means, so the two are not
+    // allowed together.
+    if latex.contains('%') && (latex.contains("\\href") || latex.contains("\\url")) {
+        return Err(MathError::new("A % can't be combined with a link in an equation.", latex.find('%').map(|i| i..i + 1)));
+    }
     let mut depth = 0usize;
+    let mut grids: Vec<Grid> = Vec::new();
+    let mut cells_total = 0usize;
     let mut chars = latex.char_indices().peekable();
     while let Some((i, c)) = chars.next() {
         let open = match c {
             '\\' => {
-                // A control word, or an escaped character (`\{` is not a group).
+                // A control word (letters and `@`, as RaTeX's lexer reads it), or an escaped
+                // character (`\{` is not a group).
                 let mut word = String::new();
                 while let Some(&(_, n)) = chars.peek() {
-                    if n.is_ascii_alphabetic() {
+                    if n.is_ascii_alphabetic() || n == '@' {
                         word.push(n);
                         chars.next();
                     } else {
@@ -244,14 +288,69 @@ fn check_caps(latex: &str) -> Result<(), MathError> {
                     }
                 }
                 if word.is_empty() {
-                    chars.next();
+                    if let Some((_, n)) = chars.next()
+                        && n == '\\'
+                        && let Some(g) = grids.last_mut()
+                    {
+                        g.end_row();
+                    }
                     continue;
                 }
+                if MACRO_DEFINERS.contains(&word.as_str()) {
+                    return Err(MathError::new("Macro definitions are not supported in equations.", Some(i..i + 1 + word.len())));
+                }
                 match word.as_str() {
-                    "left" | "begin" => Some(true),
-                    "right" | "end" => Some(false),
+                    "verb" => {
+                        // Verbatim text runs to the next copy of its delimiter, whatever it
+                        // holds: no group, comment, row or definition starts inside it.
+                        if chars.peek().is_some_and(|&(_, n)| n == '*') {
+                            chars.next();
+                        }
+                        if let Some((_, delim)) = chars.next() {
+                            for (_, n) in chars.by_ref() {
+                                if n == delim {
+                                    break;
+                                }
+                            }
+                        }
+                        None
+                    }
+                    // RaTeX reads `\newline` as `\\`, so it ends a row like `\cr` does.
+                    "cr" | "newline" => {
+                        if let Some(g) = grids.last_mut() {
+                            g.end_row();
+                        }
+                        None
+                    }
+                    "begin" => {
+                        if let Some(n) = alignat_columns(latex.get(i + 6..).unwrap_or_default())
+                            && n > MAX_ALIGNAT_PAIRS
+                        {
+                            return Err(too_many_cells(i..i + 6));
+                        }
+                        grids.push(Grid::new());
+                        Some(true)
+                    }
+                    "end" => {
+                        if let Some(g) = grids.pop() {
+                            cells_total = cells_total.saturating_add(g.padded_cells());
+                            if cells_total > MAX_CELLS {
+                                return Err(too_many_cells(i..i + 1 + word.len()));
+                            }
+                        }
+                        Some(false)
+                    }
+                    "left" => Some(true),
+                    "right" => Some(false),
                     _ => None,
                 }
+            }
+            '&' | '@' => {
+                // `@` makes an arrow cell and an empty cell beside it in a `CD` diagram.
+                if let Some(g) = grids.last_mut() {
+                    g.cells += if c == '@' { 2 } else { 1 };
+                }
+                None
             }
             '%' => {
                 // A comment runs to the end of the line.
@@ -277,7 +376,70 @@ fn check_caps(latex: &str) -> Result<(), MathError> {
             None => {}
         }
     }
+    // An environment left open is a syntax error for the parser to report, but it still counts.
+    for g in grids {
+        cells_total = cells_total.saturating_add(g.padded_cells());
+    }
+    if cells_total > MAX_CELLS {
+        return Err(too_many_cells(latex.len()..latex.len()));
+    }
     Ok(())
+}
+
+/// Most column pairs `\begin{alignedat}{N}` may ask for. RaTeX allocates 2N column specs before
+/// it lays anything out.
+const MAX_ALIGNAT_PAIRS: usize = 50;
+
+/// N of `{alignat}{N}`, `{alignat*}{N}` or `{alignedat}{N}` at the start of `rest` (just after
+/// `\begin`). `usize::MAX` when the count is present but is not a plain digit string RaTeX reads
+/// the same way (too long, or hidden by a comment, inner spaces or a macro): refused, not skipped.
+/// An environment name that is computed (contains `\` or `{`) is refused the same way.
+///
+/// RaTeX reads the environment name and the count through its lexer, which drops comments and
+/// spaces, so they are dropped here too before the two groups are compared.
+fn alignat_columns(rest: &str) -> Option<usize> {
+    // Enough for the longest name and any count that fits `usize`; a longer count is refused.
+    const WINDOW: usize = 64;
+    let mut kept = String::new();
+    let mut chars = rest.chars();
+    while kept.len() < WINDOW {
+        match chars.next() {
+            None => break,
+            Some('%') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+            }
+            Some(c) if c.is_whitespace() => {}
+            Some(c) => kept.push(c),
+        }
+    }
+    let group = kept.strip_prefix('{')?;
+    // A name that does not close inside the window cannot be read, so it is refused.
+    let Some((name, after)) = group.split_once('}') else {
+        return Some(usize::MAX);
+    };
+    // A computed name (`align\@char{97}t` reads as `alignat`) cannot be resolved here: refused
+    // too. Every real environment name is letters, optionally with a trailing `*`.
+    if name.contains(['\\', '{']) {
+        return Some(usize::MAX);
+    }
+    if !matches!(name, "alignat" | "alignat*" | "alignedat") {
+        return None;
+    }
+    let Some(digits) = after.strip_prefix('{').and_then(|a| a.split_once('}')).map(|(d, _)| d) else {
+        return Some(usize::MAX);
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return Some(usize::MAX);
+    }
+    Some(digits.parse().unwrap_or(usize::MAX))
+}
+
+fn too_many_cells(span: Range<usize>) -> MathError {
+    MathError::new(format!("An equation can have at most {MAX_CELLS} matrix cells (rows times the widest row)."), Some(span))
 }
 
 fn color(c: &Color) -> Option<[u8; 3]> {
@@ -509,6 +671,116 @@ mod tests {
         }
     }
 
+    /// Runs `f` on its own thread and fails if it has not returned within `secs` seconds.
+    fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .stack_size(2 << 20)
+            .spawn(move || {
+                let _ = tx.send(f());
+            })
+            .unwrap();
+        match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+            Ok(v) => v,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => panic!("did not return within {secs} s"),
+            Err(e) => panic!("the worker thread died: {e}"),
+        }
+    }
+
+    #[test]
+    fn macro_definitions_are_refused_before_the_expander_runs() {
+        let defs = [
+            "\\def\\a#1{\\a{#1#1}}\\a{x}",
+            "\\gdef\\a#1{\\a{#1#1#1#1}}\\a{x}",
+            "\\edef\\a#1{\\a{#1#1}}\\a{x}",
+            "\\xdef\\a#1{{#1}{#1}}\\a{x}",
+            "\\newcommand{\\a}[1]{\\a{#1#1}}\\a{x}",
+            "\\renewcommand{\\a}[1]{\\a{#1#1}}\\a{x}",
+            "\\providecommand{\\a}[1]{\\a{#1#1}}\\a{x}",
+            "\\let\\a\\frac \\a{1}{2}",
+            "\\futurelet\\a\\frac \\a{1}{2}",
+            "\\global\\def\\a#1{\\a{#1#1}}\\a{x}",
+            "\\long\\def\\a#1{\\a{#1#1}}\\a{x}",
+            "{\\def\\a#1{\\a{#1#1}}}\\a{x}",
+        ];
+        for src in defs {
+            // `check_caps` alone, so this cannot hang even if the refusal regresses.
+            let e = check_caps(src).unwrap_err();
+            assert!(e.message.contains("Macro definitions"), "{src}: {e}");
+            assert_eq!(e.span.as_ref().map(|r| &src[r.clone()]).map(|w| w.starts_with('\\')), Some(true));
+            let s = src.to_string();
+            let (c, l, o) = within(10, move || (check(&s).is_err(), layout(&s).is_err(), to_omml(&s, 11.0, None).is_err()));
+            assert!(c && l && o, "{src}");
+        }
+        // Names that merely start with a definer, escaped backslashes and comments are not macros.
+        for ok in ["\\default", "\\letter", "\\\\def", "x % \\def\\a\n+1", "\\longrightarrow"] {
+            assert!(check_caps(ok).is_ok(), "{ok}");
+        }
+        assert!(layout("\\longrightarrow x").is_ok());
+        // Text the lexer reads differently from a plain scan must not hide a definition: a
+        // verbatim `%` is no comment, a `%` in a link address is no comment, `@` joins a word.
+        for src in [
+            "\\verb|%|\\def\\a#1{\\a{#1#1}}\\a{x}",
+            "\\verb\\x\\\\def\\a#1{\\a{#1#1}}\\a{x}",
+            "%\\verb|\n\\def\\a#1{\\a{#1#1}}\\a{x}",
+            "\\href{a%b}{x}\\def\\a#1{\\a{#1#1}}\\a{x}",
+            "\\url{a%}\\def\\a#1{\\a{#1#1}}\\a{x}",
+        ] {
+            assert!(check_caps(src).is_err(), "{src}");
+        }
+        assert!(check_caps("\\verb|\\def| x").is_ok(), "verbatim text is not a definition");
+        assert!(check_caps("\\def@x").is_ok(), "`\\def@x` is one unknown word to the lexer");
+    }
+
+    #[test]
+    fn ragged_matrices_are_capped_by_their_padded_size() {
+        let ragged = format!("\\begin{{matrix}}{}{}\\end{{matrix}}", "a\\\\".repeat(650), "a&".repeat(999) + "a");
+        assert!(ragged.len() < MAX_SOURCE_BYTES);
+        let e = check_caps(&ragged).unwrap_err();
+        assert!(e.message.contains("matrix cells"), "{e}");
+        let r = ragged.clone();
+        let (l, o) = within(10, move || (layout(&r).unwrap_err(), to_omml(&r, 11.0, None).unwrap_err()));
+        assert!(l.message.contains("matrix cells") && o.message.contains("matrix cells"));
+        // Without the environment words there is no grid to count; the parser rejects it.
+        // Ordinary and wide-but-regular matrices still work, and so does a trailing `\\`.
+        let wide = format!("\\begin{{pmatrix}}{}\\end{{pmatrix}}", vec!["a&".repeat(39) + "a"; 40].join("\\\\"));
+        assert!(wide.len() < MAX_SOURCE_BYTES);
+        assert!(layout(&wide).is_ok());
+        assert!(to_omml(&wide, 11.0, None).is_ok());
+        assert!(layout("\\begin{pmatrix} a & b \\\\ c & d \\\\ \\end{pmatrix}").is_ok());
+        // Diagram arrows and `alignedat` column counts size a grid without any `&`.
+        let cd = format!("\\begin{{CD}}{}{}\\end{{CD}}", "A\\\\".repeat(900), "@>>>".repeat(300));
+        assert!(cd.len() < MAX_SOURCE_BYTES);
+        assert!(check_caps(&cd).is_err_and(|e| e.message.contains("matrix cells")));
+        let r = "\\begin{alignedat}{99999999}a\\end{alignedat}";
+        assert!(check_caps(r).is_err_and(|e| e.message.contains("matrix cells")));
+        assert!(check_caps("\\begin{alignedat}{2}a&b&c&d\\end{alignedat}").is_ok());
+        // A comment, inner spaces or a macro in the count do not hide it from the cap.
+        for hidden in [
+            "\\begin{alignedat}%\n{99999999}a\\end{alignedat}",
+            "\\begin %c\n {alignedat}{99999999}a\\end{alignedat}",
+            "\\begin{alignedat}{9 9}a\\end{alignedat}",
+            "\\begin{alignedat}{9%x\n9}a\\end{alignedat}",
+            "\\begin{align%x\nedat}{99}a\\end{alignedat}",
+            "\\begin{alignedat}{9\\relax9}a\\end{alignedat}",
+        ] {
+            assert!(check_caps(hidden).is_err_and(|e| e.message.contains("matrix cells")), "{hidden}");
+        }
+        // A computed environment name reads as `alignat` to the parser, so it is capped too.
+        for name in ["align\\@char{97}t", "alignedat\\relax", "al\\@char{105}gnat*"] {
+            let over = format!("\\begin{{{name}}}{{51}}a\\end{{alignat}}");
+            assert!(check_caps(&over).is_err_and(|e| e.message.contains("matrix cells")), "{over}");
+        }
+        let long = format!("\\begin{{{}}}{{51}}a\\end{{alignat}}", "a".repeat(80));
+        assert!(check_caps(&long).is_err_and(|e| e.message.contains("matrix cells")));
+        assert!(check_caps("\\begin{alignat}{50}a\\end{alignat}").is_ok());
+        assert!(check_caps("\\begin{alignedat} {2} % two pairs\na&b&c&d\\end{alignedat}").is_ok());
+        assert!(layout("\\begin{CD}A @>f>> B \\\\ @VVV @VVV \\\\ C @>>> D\\end{CD}").is_ok());
+        assert!(check_caps("\\operatorname{curl} 50\\%").is_ok());
+        let two = format!("{0}{0}", "\\begin{matrix}a&b\\\\c&d\\end{matrix}");
+        assert!(check_caps(&two).is_ok());
+    }
+
     #[test]
     fn an_injected_panic_is_an_error_not_a_crash() {
         INJECT_PANIC.with(|p| p.set(true));
@@ -529,5 +801,21 @@ mod tests {
     fn empty_source_is_an_empty_list() {
         let l = layout("").unwrap();
         assert!(l.items.is_empty());
+    }
+
+    #[test]
+    fn newline_rows_count_toward_the_matrix_cap() {
+        // RaTeX reads `\newline` as `\\`, so it ends a row like `\cr` does.
+        for brk in ["\\newline ", "\\cr ", "\\\\"] {
+            let src = format!("\\begin{{matrix}}{}{}\\end{{matrix}}", format!("a{brk}").repeat(250), "a&".repeat(700) + "a");
+            assert!(src.len() < MAX_SOURCE_BYTES);
+            let e = check_caps(&src).unwrap_err();
+            assert!(e.message.contains("matrix cells"), "{brk}: {e}");
+            let s = src.clone();
+            let (l, o) = within(10, move || (layout(&s).unwrap_err(), to_omml(&s, 11.0, None).unwrap_err()));
+            assert!(l.message.contains("matrix cells") && o.message.contains("matrix cells"), "{brk}");
+        }
+        assert!(check_caps("\\begin{matrix}a&b\\newline c&d\\end{matrix}").is_ok());
+        assert!(layout("\\begin{matrix}a&b\\newline c&d\\end{matrix}").is_ok());
     }
 }
