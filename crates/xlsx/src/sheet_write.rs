@@ -100,8 +100,12 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     // sheetPr
     let fit = sheet.print.fit_to.is_some();
     let summary = !sheet.summary_below || !sheet.summary_right;
-    if sheet.tab_color.is_some() || fit || summary {
-        s.push_str("<sheetPr>");
+    if sheet.tab_color.is_some() || fit || summary || sheet.code_name.is_some() {
+        s.push_str("<sheetPr");
+        if let Some(cn) = &sheet.code_name {
+            let _ = write!(s, " codeName=\"{}\"", esc_attr(cn));
+        }
+        s.push('>');
         if let Some(c) = &sheet.tab_color {
             let _ = write!(s, "<tabColor {}/>", color_attrs(c));
         }
@@ -713,8 +717,12 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
     if sheet.zoom != 100 && (10..=400).contains(&sheet.zoom) {
         let _ = write!(s, " zoomScale=\"{0}\" zoomScaleNormal=\"{0}\"", sheet.zoom);
     }
-    if sheet.view_top_left != CellRef::default() && sheet.freeze.is_none() {
-        let _ = write!(s, " topLeftCell=\"{}\"", sheet.view_top_left.a1());
+    if sheet.freeze.is_none() {
+        if sheet.view_top_left != CellRef::default() {
+            let _ = write!(s, " topLeftCell=\"{}\"", sheet.view_top_left.a1());
+        }
+    } else if let Some(c) = sheet.view_top_left_frozen {
+        let _ = write!(s, " topLeftCell=\"{}\"", c.a1());
     }
     s.push_str(" workbookViewId=\"0\">");
     let active = sheet.view_active.a1();

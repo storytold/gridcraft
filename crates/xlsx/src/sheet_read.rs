@@ -166,6 +166,22 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
 
+/// Returns whether `fitToPage` was set (the caller folds that into its own local, since it also
+/// feeds page setup read elsewhere in the part).
+fn read_sheet_pr(e: &El, sheet: &mut Sheet, palette: &[u32]) -> bool {
+    if let Some(cn) = e.attr("codeName") {
+        sheet.code_name = Some(cn.to_string());
+    }
+    if let Some(t) = e.child("tabColor") {
+        sheet.tab_color = Some(read_color(t, palette));
+    }
+    if let Some(o) = e.child("outlinePr") {
+        sheet.summary_below = o.flag("summaryBelow", true);
+        sheet.summary_right = o.flag("summaryRight", true);
+    }
+    e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false))
+}
+
 fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
         let px = pt_to_px(h);
@@ -215,16 +231,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     cx.cf_ext_ids.clear();
     for e in &root.children {
         match e.name.as_str() {
-            "sheetPr" => {
-                if let Some(t) = e.child("tabColor") {
-                    sheet.tab_color = Some(read_color(t, &cx.palette));
-                }
-                if let Some(o) = e.child("outlinePr") {
-                    sheet.summary_below = o.flag("summaryBelow", true);
-                    sheet.summary_right = o.flag("summaryRight", true);
-                }
-                fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
-            }
+            "sheetPr" => fit_to_page = read_sheet_pr(e, &mut sheet, &cx.palette),
             "sheetViews" => read_views(e, &mut sheet),
             "sheetFormatPr" => read_sheet_format(e, &mut sheet),
             "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
@@ -440,7 +447,10 @@ fn read_views(e: &El, sheet: &mut Sheet) {
             let rows = p.attr_f64("ySplit").unwrap_or(0.0).clamp(0.0, (MAX_ROWS - 1) as f64) as u32;
             if rows > 0 || cols > 0 {
                 sheet.freeze = Some((rows, cols));
-                // With frozen panes the scroll position is the scrolling pane's first cell.
+                // sheetView's own topLeftCell, read above into view_top_left, is really the
+                // frozen pane's scroll position when panes are frozen - save it separately
+                // before view_top_left becomes the scrolling pane's position instead.
+                sheet.view_top_left_frozen = v.attr("topLeftCell").and_then(CellRef::parse);
                 if let Some(c) = p.attr("topLeftCell").and_then(CellRef::parse) {
                     sheet.view_top_left = c;
                 }
