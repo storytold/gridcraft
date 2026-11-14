@@ -11,6 +11,9 @@ use crate::{Arg, Ctx, FnSpec, VAR};
 
 mod day_count;
 mod depreciation;
+#[cfg(test)]
+mod numerical_tests;
+mod scaled;
 mod securities;
 mod tvm;
 pub(crate) use tvm::cumulative_args;
