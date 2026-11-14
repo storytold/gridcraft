@@ -32,6 +32,28 @@ fn subtotal_honours_header_false() {
 }
 
 #[test]
+fn subtotal_groups_adjacent_labels_case_insensitively() {
+    for (labels, expected_groups, expected_subtotals) in [(["a", "A"], 1, [30.0, 30.0]), (["A", "a"], 1, [30.0, 30.0]), (["a", "b"], 2, [10.0, 20.0])]
+    {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"], [labels[0], 10], [labels[1], 20]]})).unwrap();
+        let result =
+            s.execute("data.subtotal", json!({"range": "A1:B3", "groupBy": "A", "function": "sum", "columns": ["B"], "header": true})).unwrap();
+        assert_eq!(result["groups"], json!(expected_groups), "{labels:?}");
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        let subtotal_rows = if expected_groups == 1 { [4, 0] } else { [3, 5] };
+        for (row, expected) in subtotal_rows.into_iter().zip(expected_subtotals) {
+            if row != 0 {
+                assert_eq!(get(&mut s, &format!("B{row}"))["value"], json!(expected), "{labels:?}");
+            }
+        }
+        let grand_total_row = expected_groups + 4;
+        assert_eq!(get(&mut s, &format!("B{grand_total_row}"))["value"], json!(30.0), "{labels:?}");
+    }
+}
+
+#[test]
 fn subtotal_puts_summary_rows_below_their_detail() {
     let mut s = Session::new();
     s.new_workbook();
