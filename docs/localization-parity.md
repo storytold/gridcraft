@@ -154,6 +154,7 @@ scope. Automated code review is not linguistic review.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Spanish function help expanded to 479 function descriptions and 282 argument names; localization parity and roadmap records reconciled with the current catalog audit |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |

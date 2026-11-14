@@ -594,7 +594,7 @@ pub(super) const DESCRIPTIONS: &[(&str, &str)] = &[
     ("Replaces part of a text by position.", "Sustituye una parte de un texto según su posición."),
     (
         "Returns 1 when a number is at least the step, otherwise 0.",
-        "Devuelve 1 si un número es igual o superior al múltiplo indicado; en caso contrario, devuelve 0.",
+        "Devuelve 1 si un número es igual o superior al umbral indicado; en caso contrario, devuelve 0.",
     ),
     ("Returns 1 when two numbers are equal, otherwise 0.", "Devuelve 1 si dos números son iguales; en caso contrario, devuelve 0."),
     (
@@ -1040,7 +1040,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("period", "periodo"),
     ("places", "posiciones"),
     ("pmt", "pago"),
-    ("population_s", "tamaño_población"),
+    ("population_s", "éxitos_en_población"),
     ("power", "potencia"),
     ("pr", "precio"),
     ("principal", "capital"),
@@ -1076,7 +1076,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("row_total_depth", "profundidad_total_filas"),
     ("rows", "filas"),
     ("salvage", "valor_residual"),
-    ("sample_s", "tamaño_muestra"),
+    ("sample_s", "éxitos_en_muestra"),
     ("scan_by_column", "examinar_por_columna"),
     ("schedule", "serie_tipos"),
     ("search_mode", "modo_búsqueda"),
