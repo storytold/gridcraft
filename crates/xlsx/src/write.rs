@@ -251,6 +251,7 @@ fn workbook_view_attrs(wb: &Workbook) -> String {
 
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
+/// Rejects PivotTable source-work overflows instead of returning a package missing those pivots.
 pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
@@ -298,7 +299,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     };
 
     let mut wb_rels = Rels::default();
-    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
+    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels)?;
 
     let names = write_defined_names(wb, &kept, &out.chart_names);
 
@@ -491,12 +492,13 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     zip.finish()
 }
 
+/// Writes the sheet parts and propagates cache-limit failures before a package is published.
 fn write_sheets(
     wb: &Workbook,
     out: &mut Out,
     active: usize,
     wb_rels: &mut Rels,
-) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+) -> Result<(String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter), IoError> {
     // Kept content first: the chart sheets among the worksheets need their relationship ids.
     let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
     let mut pivots = crate::pivot::PivotWriter::default();
@@ -506,7 +508,7 @@ fn write_sheets(
     for (i, sheet) in wb.sheets.iter().enumerate() {
         sheets_xml.push_str(&kept.sheet_entries(i, false, &mut ids));
         let (xml, mut rels) = crate::sheet_write::write_sheet(wb, i, i == active, out);
-        pivots.add_sheet(wb, i, out, &mut rels);
+        pivots.add_sheet(wb, i, out, &mut rels)?;
         let name = format!("xl/worksheets/sheet{}.xml", i + 1);
         out.part(&name, Some(CT_WORKSHEET), xml.into_bytes());
         if !rels.is_empty() {
@@ -525,7 +527,7 @@ fn write_sheets(
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 
-    (sheets_xml, kept, pivots)
+    Ok((sheets_xml, kept, pivots))
 }
 
 fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {
