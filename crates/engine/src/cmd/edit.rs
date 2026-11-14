@@ -209,6 +209,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    forget_circles_of_gone_sheets(d);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"undone": label}))
@@ -230,9 +231,19 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
+    forget_circles_of_gone_sheets(d);
     d.calc.rebuild(&d.wb);
     d.revision += 1;
     Ok(json!({"redone": label}))
+}
+
+/// Undo and Redo leave the validation circles where they are, except on a sheet the restored
+/// workbook doesn't have by that name: a sheet that takes the name later would show them.
+fn forget_circles_of_gone_sheets(d: &mut crate::DocState) {
+    if !d.validation_circles.is_empty() {
+        let wb = d.wb.clone();
+        d.follow_validation_circles(&wb, &[]);
+    }
 }
 
 // ---------------------------------------------------------------- clear
