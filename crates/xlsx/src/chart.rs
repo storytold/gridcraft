@@ -239,18 +239,23 @@ fn axis_ids(g: &El) -> Vec<String> {
 pub fn read_chart(root: &El) -> Option<Chart> {
     let chart = root.child("chart")?;
     let plot = chart.child("plotArea")?;
-    let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
+    let mut groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
+    // An empty group draws nothing: the chart's kind and axes come from the groups with series
+    // (a chart without series from its first group).
+    if groups.iter().any(|(g, _)| g.child("ser").is_some()) {
+        groups.retain(|(g, _)| g.child("ser").is_some());
+    }
     let (_, first_kind) = *groups.first()?;
     // The primary axes are the pair whose value axis sits left or bottom (a secondary pair is on
     // the right or top), else the first group's; groups on other axes are secondary.
     // Collected once: a file may hold many groups, each looked up here.
-    let mut val_axes: HashMap<&str, &str> = HashMap::new();
+    let mut val_sides: HashMap<&str, &str> = HashMap::new();
     for a in plot.kids("valAx") {
         if let (Some(id), Some(pos)) = (a.child_val("axId"), a.child_val("axPos")) {
-            val_axes.entry(id).or_insert(pos);
+            val_sides.entry(id).or_insert(pos);
         }
     }
-    let val_pos = |id: &str| val_axes.get(id).copied();
+    let val_pos = |id: &str| val_sides.get(id).copied();
     let pairs: Vec<Vec<String>> = groups.iter().map(|(g, _)| axis_ids(g)).collect();
     // A pair's value axis is its second (for scatter, the y axis): the one whose side tells.
     let primary_axes = pairs
@@ -281,14 +286,18 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
-    let cat_ax = plot.child("catAx").or_else(|| plot.child("dateAx"));
+    // The axes are the primary pair's (an axis of another pair, or of an empty group, holds
+    // another scale's titles), else the first of their kind in the file.
+    let primary = |a: &&El| a.child_val("axId").is_some_and(|id| primary_axes.iter().any(|p| p == id));
+    let first_of = |tags: &[&str], pos: &[&str]| {
+        let fits = |a: &&El| tags.contains(&a.name.as_str()) && (pos.is_empty() || a.child_val("axPos").is_some_and(|p| pos.contains(&p)));
+        plot.children.iter().filter(|a| fits(a)).find(primary).or_else(|| plot.children.iter().find(fits))
+    };
     let scatter = matches!(first_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let (x_ax, y_ax) = if scatter {
-        let x = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("b") | Some("t"))).copied();
-        let y = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l") | Some("r"))).copied();
-        (x, y)
+        (first_of(&["valAx"], &["b", "t"]), first_of(&["valAx"], &["l", "r"]))
     } else {
-        (cat_ax, val_axes.first().copied())
+        (first_of(&["catAx", "dateAx"], &[]), first_of(&["valAx"], &[]))
     };
     let legend = match chart.child("legend") {
         None => LegendPos::None,

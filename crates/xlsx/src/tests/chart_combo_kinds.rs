@@ -361,3 +361,29 @@ fn many_groups_are_read_in_linear_time() {
     let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
     assert_eq!(ch.series.len(), 1);
 }
+
+/// An empty group of another kind before the groups with series (as another writer may leave)
+/// sets neither the chart's axes nor which series are secondary.
+#[test]
+fn an_empty_group_sets_neither_axes_nor_secondary() {
+    let ax = |tag: &str, id: u32, cross: u32, pos: &str, title: &str| {
+        format!(
+            "<c:{tag}><c:axId val=\"{id}\"/><c:axPos val=\"{pos}\"/><c:title><c:tx><c:rich><a:p><a:r><a:t>{title}</a:t></a:r></a:p></c:rich></c:tx></c:title><c:crossAx val=\"{cross}\"/></c:{tag}>"
+        )
+    };
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>\
+         <c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{AX}</c:barChart>\
+         <c:scatterChart><c:scatterStyle val=\"lineMarker\"/>{}<c:axId val=\"3\"/><c:axId val=\"4\"/></c:scatterChart>\
+         {}{}{}{}</c:plotArea></c:chart></c:chartSpace>",
+        ser(0),
+        ax("catAx", 1, 2, "b", "BARCAT"),
+        ax("valAx", 2, 1, "l", "BARVAL"),
+        ax("valAx", 3, 4, "b", "SCX"),
+        ax("valAx", 4, 3, "l", "SCY"),
+    );
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(ch.kind, ChartKind::ScatterLines);
+    assert!(!ch.series[0].secondary);
+    assert_eq!((ch.x_title.as_deref(), ch.y_title.as_deref()), (Some("SCX"), Some("SCY")));
+}
