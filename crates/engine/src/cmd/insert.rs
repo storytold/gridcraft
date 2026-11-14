@@ -538,6 +538,69 @@ fn valid_table_name(name: &str) -> bool {
         && name.chars().enumerate().all(|(i, c)| c.is_alphanumeric() || c == '_' || c == '.' || (i == 0 && c == '\\'))
 }
 
+/// Rename table references in a custom total without capturing LET/LAMBDA parameters.
+/// An explicit stack also keeps long operator chains from growing the Rust call stack.
+fn rename_total_table_refs(expr: &mut gridcraft_formula::Expr, old: &str, new: &str, shadowed: bool) -> bool {
+    use gridcraft_formula::Expr;
+    let mut pending = vec![(expr, shadowed, false)];
+    let mut hit = false;
+    while let Some((node, old_bound, new_bound)) = pending.pop() {
+        match node {
+            Expr::Struct(st) if st.table.eq_ignore_ascii_case(old) => {
+                st.table = new.to_string();
+                hit = true;
+            }
+            Expr::Name(name) if !old_bound && name.eq_ignore_ascii_case(old) => {
+                if new_bound {
+                    // A local binding named like the destination must not capture the renamed table.
+                    *node =
+                        Expr::Struct(gridcraft_formula::StructRef { table: new.to_string(), specifiers: Vec::new(), col_start: None, col_end: None });
+                } else {
+                    *name = new.to_string();
+                }
+                hit = true;
+            }
+            Expr::Call(name, args) => match name.as_str() {
+                "LET" if args.len() >= 3 && !args.len().is_multiple_of(2) => {
+                    if let Some((body, pairs)) = args.split_last_mut() {
+                        let mut local = (old_bound, new_bound);
+                        for pair in pairs.chunks_mut(2) {
+                            if let [declaration, value] = pair {
+                                // A LET binding starts after its own initializer, not inside it.
+                                pending.push((value, local.0, local.1));
+                                local.0 |= matches!(declaration, Expr::Name(n) if gridcraft_formula::same_name(n, old));
+                                local.1 |= matches!(declaration, Expr::Name(n) if gridcraft_formula::same_name(n, new));
+                            }
+                        }
+                        pending.push((body, local.0, local.1));
+                    }
+                }
+                "LAMBDA" => {
+                    if let Some((body, params)) = args.split_last_mut() {
+                        let old_local = old_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if gridcraft_formula::same_name(n, old)));
+                        let new_local = new_bound || params.iter().any(|p| matches!(p, Expr::Name(n) if gridcraft_formula::same_name(n, new)));
+                        pending.push((body, old_local, new_local));
+                    }
+                }
+                _ => pending.extend(args.iter_mut().map(|e| (e, old_bound, new_bound))),
+            },
+            Expr::Array(rows) => pending.extend(rows.iter_mut().flatten().map(|e| (e, old_bound, new_bound))),
+            Expr::Unary(_, e) | Expr::Paren(e) => pending.push((e, old_bound, new_bound)),
+            Expr::Binary(_, a, b) => {
+                pending.push((a, old_bound, new_bound));
+                pending.push((b, old_bound, new_bound));
+            }
+            Expr::Invoke(callee, args) => {
+                pending.push((callee, old_bound, new_bound));
+                pending.extend(args.iter_mut().map(|e| (e, old_bound, new_bound)));
+            }
+            _ => {}
+        }
+    }
+    hit
+}
+
+/// Rename a table and its dependent references while preserving defined names and lexical bindings.
 fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     let name = str_param(p, "name").ok_or_else(|| bad("table.rename", "missing `name`"))?.to_string();
@@ -572,6 +635,14 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 });
                 if let Some(cell) = sh.cells.get_mut(c) {
                     cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
+                }
+            }
+            // Only custom totals labels are formulas. Ordinary text labels must stay verbatim.
+            for col in sh.tables.iter_mut().flat_map(|t| &mut t.columns).filter(|c| c.totals == TotalsFn::Custom) {
+                let Some(text) = col.totals_label.as_mut() else { continue };
+                let Ok(mut e) = gridcraft_formula::parse(text) else { continue };
+                if rename_total_table_refs(&mut e, &old, &name, shadowed) {
+                    *text = gridcraft_formula::print(&e);
                 }
             }
         }
@@ -1971,6 +2042,60 @@ mod tests {
         let other = s.execute("cell.get", json!({"sheet": "Two", "cell": "A1"})).unwrap();
         assert_eq!(other["formula"], "=Sheet1!A3");
         assert_eq!(other["value"], json!(20.0));
+    }
+
+    /// Destination bindings must leave renamed tables explicit after printing and reparsing.
+    #[test]
+    fn custom_total_rename_avoids_unicode_destination_bindings() {
+        use gridcraft_formula::Expr;
+        for (source, destination, binding) in [("Prices", "PriceList", "pricelist"), ("Prices", "Café", "CAFÉ")] {
+            for formula in [format!("LET({binding},2,SUM({source}))"), format!("LAMBDA({binding},SUM({source}))(2)")] {
+                let mut expr = gridcraft_formula::parse(&formula).unwrap();
+                assert!(rename_total_table_refs(&mut expr, source, destination, false));
+                let printed = gridcraft_formula::print(&expr);
+                assert!(printed.contains(&format!("SUM({destination}[])")), "{printed}");
+                let back = gridcraft_formula::parse(&printed).unwrap();
+                let call = match &back {
+                    Expr::Invoke(callee, _) => callee.as_ref(),
+                    other => other,
+                };
+                let Expr::Call(_, args) = call else { panic!("expected LET or LAMBDA: {printed}") };
+                let Some(Expr::Call(_, sum_args)) = args.last() else { panic!("expected SUM: {printed}") };
+                assert!(matches!(sum_args.as_slice(), [Expr::Struct(st)] if st.table == destination), "{printed}");
+            }
+        }
+    }
+
+    /// Unicode-equivalent source bindings shadow the table only after their declaration.
+    #[test]
+    fn custom_total_rename_preserves_unicode_source_bindings() {
+        for (formula, expected) in [
+            ("LET(CAFÉ,2,SUM(Café))", "LET(CAFÉ,2,SUM(Café))"),
+            ("LAMBDA(CAFÉ,SUM(Café))(2)", "LAMBDA(CAFÉ,SUM(Café))(2)"),
+            ("LET(CAFÉ,SUM(Café),SUM(Café))", "LET(CAFÉ,SUM(PriceList),SUM(Café))"),
+            ("SUM(Café)+LAMBDA(CAFÉ,SUM(Café))(2)+SUM(Café)", "SUM(PriceList)+LAMBDA(CAFÉ,SUM(Café))(2)+SUM(PriceList)"),
+        ] {
+            let mut expr = gridcraft_formula::parse(formula).unwrap();
+            let changed = rename_total_table_refs(&mut expr, "Café", "PriceList", false);
+            assert_eq!(gridcraft_formula::print(&expr), expected, "{formula}");
+            assert_eq!(changed, formula != expected, "{formula}");
+        }
+    }
+
+    /// Defined names remain names and long custom-total chains can be renamed without recursive traversal.
+    #[test]
+    fn custom_total_rename_preserves_defined_names_and_long_chains() {
+        let mut expr = gridcraft_formula::parse("SUM(Prices)+SUM(Prices[Price])").unwrap();
+        assert!(rename_total_table_refs(&mut expr, "Prices", "PriceList", true));
+        assert_eq!(gridcraft_formula::print(&expr), "SUM(Prices)+SUM(PriceList[Price])");
+        let mut expr = gridcraft_formula::parse("SUM(Prices)").unwrap();
+        assert!(!rename_total_table_refs(&mut expr, "Prices", "PriceList", true));
+        assert_eq!(gridcraft_formula::print(&expr), "SUM(Prices)");
+        let formula = std::iter::repeat_n("Prices", 1_000).collect::<Vec<_>>().join("+");
+        let expected = std::iter::repeat_n("PriceList", 1_000).collect::<Vec<_>>().join("+");
+        let mut expr = gridcraft_formula::parse(&formula).unwrap();
+        assert!(rename_total_table_refs(&mut expr, "Prices", "PriceList", false));
+        assert_eq!(gridcraft_formula::print(&expr), expected);
     }
 
     #[test]
