@@ -395,3 +395,29 @@ fn csv_used_range_limit_is_enforced_while_reading() {
     // No limit by default.
     assert!(read_csv(dense, &CsvOptions::default()).is_ok());
 }
+
+#[test]
+fn a_field_past_a_cells_32767_characters_is_cut_with_a_warning() {
+    let text = |wb: &Workbook, r: u32, c: u32| match v(wb, r, c) {
+        Value::Text(t) => t.to_string(),
+        v => panic!("{v:?}"),
+    };
+    // A 1.1 MB field (a log line repeated), a field of exactly the limit, and one of emoji (two
+    // UTF-16 units each, so it passes the limit at half as many characters and must not be split).
+    let long = "Connection Error: could not start.\n".repeat(32_000);
+    let exact = "x".repeat(32_767);
+    let emoji = "🙂".repeat(20_000);
+    let src = format!("id,message\n1,\"{long}\"\n2,{exact}\n3,{emoji}\n");
+    let (wb, report) = read_csv_with_report(src.as_bytes(), &CsvOptions::default()).unwrap();
+    let b2 = text(&wb, 1, 1);
+    assert_eq!(b2.encode_utf16().count(), 32_767);
+    assert!(long.starts_with(&b2));
+    assert_eq!(text(&wb, 2, 1), exact);
+    let b4 = text(&wb, 3, 1);
+    assert_eq!(b4.chars().count(), 16_383);
+    assert!(b4.chars().all(|c| c == '🙂'));
+    assert_eq!(report.warnings, vec!["2 cells were longer than a cell's 32767 characters and were cut to fit (the first is B2)".to_string()]);
+    // Short fields are untouched and warn about nothing.
+    let (_, report) = read_csv_with_report(b"a,b\n1,2\n", &CsvOptions::default()).unwrap();
+    assert!(report.warnings.is_empty());
+}
