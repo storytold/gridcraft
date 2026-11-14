@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-use gridcraft_core::parse::parse_number_text;
+use gridcraft_core::parse::coerce_number_text;
 use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
@@ -109,7 +109,7 @@ impl Criterion {
         let (op, rest) = split_op(t);
         let operand = if rest.is_empty() {
             Operand::Blank
-        } else if let Some(n) = parse_number_text(rest) {
+        } else if let Some(n) = coerce_number_text(rest) {
             Operand::Number(n)
         } else if rest.eq_ignore_ascii_case("TRUE") {
             Operand::Bool(true)
@@ -141,7 +141,7 @@ impl Criterion {
         let cell = match v {
             Value::Number(x) => Some(*x),
             // Numeric text matches only for equality (COUNTIF("1") counts text "1").
-            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text(t),
+            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => coerce_number_text(t),
             _ => None,
         };
         match cell {

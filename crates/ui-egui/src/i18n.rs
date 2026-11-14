@@ -7,6 +7,7 @@
 //! CJK fonts stay system-provided: [`crate::theme`] appends available CJK faces to every family so
 //! Japanese, Chinese and Korean labels and workbook text can render without bundling font files.
 
+use gridcraft_engine::core::parse::NumberText;
 use serde::{Deserialize, Serialize};
 
 mod cs;
@@ -53,6 +54,133 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+}
+
+/// How the system writes numbers in text: decimal and group separators and currency. Windows says
+/// so itself, in the regional format settings, which can differ from the display language and can
+/// be changed by hand. Elsewhere, and if that can't be read, this goes by the language tag.
+pub fn system_number_text() -> NumberText {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        number_text_from(windows_number_format(), sys_locale::get_locale().as_deref())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        NumberText::POINT
+    }
+}
+
+/// The Windows regional format settings: decimal separator, then group separator and currency.
+#[cfg(not(target_arch = "wasm32"))]
+fn windows_number_format() -> Option<(String, Option<String>, Option<String>)> {
+    #[cfg(windows)]
+    {
+        let key = windows_registry::CURRENT_USER.open(r"Control Panel\International").ok()?;
+        let decimal = key.get_string("sDecimal").ok()?;
+        Some((decimal, key.get_string("sThousand").ok(), key.get_string("sCurrency").ok()))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// The Windows settings decide when there are some; otherwise the tag's `Region` where it covers
+/// the language, else the tag table (a comma, `.` between thousands and `€`, as in Italian).
+#[cfg(not(target_arch = "wasm32"))]
+fn number_text_from(windows: Option<(String, Option<String>, Option<String>)>, tag: Option<&str>) -> NumberText {
+    if let Some((decimal, group, currency)) = windows {
+        let Some(decimal) = decimal.chars().next() else { return NumberText::POINT };
+        let group = group.and_then(|g| g.chars().next()).unwrap_or(if decimal == ',' { '.' } else { ',' });
+        // Read once, at startup: the symbol lives as long as the process.
+        let currency: &'static str = currency.map_or("", |c| Box::leak(c.into_boxed_str()));
+        return NumberText { decimal, group, currency };
+    }
+    let Some(tag) = tag else { return NumberText::POINT };
+    let clean = tag.split('.').next().unwrap_or(tag).replace('_', "-");
+    // A region of its own first; then a territory that writes numbers unlike its language's
+    // usual region (Spanish in Mexico, English in South Africa); then the language's region.
+    if let Some(region) = gridcraft_engine::core::region::find(&clean) {
+        return NumberText::of_region(region);
+    }
+    if let Some(n) = territory_number_text(&clean) {
+        return n;
+    }
+    if let Some(region) = covering_region(&clean) {
+        return NumberText::of_region(region);
+    }
+    if tag_uses_decimal_comma(tag) { NumberText::ITALIAN } else { NumberText::POINT }
+}
+
+/// Territories whose numbers differ from their language's usual region, as in the tag table:
+/// a decimal point in Switzerland, Liechtenstein, Mexico, Central America, the United States and
+/// Latin America's `419`; a decimal comma with no-break spaces and the rand in South Africa (CLDR).
+#[cfg(not(target_arch = "wasm32"))]
+fn territory_number_text(tag: &str) -> Option<NumberText> {
+    let territory = tag.split('-').skip(1).find(|p| p.len() == 2 || p.len() == 3)?.to_ascii_uppercase();
+    match territory.as_str() {
+        "CH" | "LI" | "MX" | "GT" | "HN" | "NI" | "PA" | "PE" | "PR" | "SV" | "DO" | "US" | "419" => Some(NumberText::POINT),
+        "ZA" => Some(NumberText { decimal: ',', group: '\u{a0}', currency: "R" }),
+        _ => None,
+    }
+}
+
+/// The `Region` for a tag when one has its language (`Region::lookup` otherwise falls back to
+/// en-US, which would mislead for a language it doesn't know).
+#[cfg(not(target_arch = "wasm32"))]
+fn covering_region(tag: &str) -> Option<&'static gridcraft_engine::core::region::Region> {
+    let tag = tag.split('.').next().unwrap_or(tag).replace('_', "-");
+    let language = tag.split('-').next().unwrap_or("").to_ascii_lowercase();
+    let region = gridcraft_engine::core::region::lookup(&tag);
+    region.tag.split('-').next().is_some_and(|l| l.eq_ignore_ascii_case(&language)).then_some(region)
+}
+
+/// By region where it decides, otherwise by language.
+pub fn tag_uses_decimal_comma(tag: &str) -> bool {
+    let mut parts = tag.split(['-', '_', '.']);
+    let language = parts.next().unwrap_or("").to_ascii_lowercase();
+    let region = parts.find(|p| p.len() == 2 || p.len() == 3).map(str::to_ascii_uppercase).unwrap_or_default();
+    // Switzerland and Liechtenstein write a decimal point in most of their languages; Mexico and
+    // Central America write one in Spanish, as do the United States and Latin America's generic
+    // `419`, while South Africa writes a comma in English.
+    match region.as_str() {
+        "CH" | "LI" | "MX" | "GT" | "HN" | "NI" | "PA" | "PE" | "PR" | "SV" | "DO" | "US" | "419" => return false,
+        "ZA" => return true,
+        _ => {}
+    }
+    matches!(
+        language.as_str(),
+        "it" | "de"
+            | "fr"
+            | "es"
+            | "pt"
+            | "nl"
+            | "ru"
+            | "pl"
+            | "cs"
+            | "sk"
+            | "uk"
+            | "ro"
+            | "tr"
+            | "sv"
+            | "da"
+            | "nb"
+            | "nn"
+            | "no"
+            | "fi"
+            | "el"
+            | "hu"
+            | "hr"
+            | "sl"
+            | "sr"
+            | "bg"
+            | "lt"
+            | "lv"
+            | "et"
+            | "ca"
+            | "id"
+            | "vi"
+    )
 }
 
 impl Language {
@@ -544,5 +672,44 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+}
+
+#[cfg(test)]
+mod decimal_comma_region_tests {
+    use super::{NumberText, number_text_from, tag_uses_decimal_comma};
+
+    fn windows(decimal: &str, group: &str, currency: &str) -> Option<(String, Option<String>, Option<String>)> {
+        Some((decimal.into(), Some(group.into()), Some(currency.into())))
+    }
+
+    /// Windows's own settings, then the tag's region, then the table.
+    #[test]
+    fn the_system_number_format_is_found() {
+        assert_eq!(number_text_from(windows(",", ".", "\u{20ac}"), Some("en-US")), NumberText::ITALIAN);
+        assert_eq!(number_text_from(windows(".", ",", "$"), Some("it-IT")), NumberText::POINT);
+        let fr = number_text_from(None, Some("fr_FR.UTF-8"));
+        assert_eq!((fr.decimal, fr.group), (',', '\u{a0}'));
+        assert_eq!(number_text_from(None, Some("pt-BR")).currency, "R$");
+        assert_eq!(number_text_from(None, Some("de-CH")).decimal, '.');
+        // Territories that write numbers unlike their language's usual region.
+        for tag in ["es-MX", "es-US", "es-419", "it-CH", "fr-CH", "de-CH"] {
+            assert_eq!(number_text_from(None, Some(tag)).decimal, '.', "{tag}");
+        }
+        assert_eq!(number_text_from(None, Some("en-ZA")), NumberText { decimal: ',', group: '\u{a0}', currency: "R" });
+        // A language Region doesn't cover goes by the table.
+        assert_eq!(number_text_from(None, Some("pl-PL")), NumberText::ITALIAN);
+        assert_eq!(number_text_from(None, Some("en-US")), NumberText::POINT);
+        assert_eq!(number_text_from(None, None), NumberText::POINT);
+    }
+
+    #[test]
+    fn regions_and_languages_decide_the_separator() {
+        for tag in ["it-IT", "it_IT.UTF-8", "de-DE", "fr-FR", "es-ES", "pt-BR", "en-ZA", "ru"] {
+            assert!(tag_uses_decimal_comma(tag), "{tag}");
+        }
+        for tag in ["en-US", "en-GB", "it-CH", "de-CH", "es-MX", "es-US", "es-419", "ja-JP", "zh-CN", "", "en"] {
+            assert!(!tag_uses_decimal_comma(tag), "{tag}");
+        }
     }
 }

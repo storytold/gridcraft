@@ -2881,6 +2881,38 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
 }
 
+#[test]
+fn text_reads_with_a_decimal_comma_where_the_region_writes_one() {
+    gridcraft_core::parse::with_decimal_comma(true, || {
+        let mut t = T::new();
+        t.set("A1", "7");
+        t.set("B1", "5");
+        // Saved by Excel with Italian settings: the literal is text, read as a number by `*`.
+        t.set("C1", "=(IF(A1>=B1,\"1,0000\",A1/B1))*3");
+        assert_eq!(t.num("C1"), 3.0);
+        t.set("C2", "=\"1.000,5\"*2");
+        assert_eq!(t.num("C2"), 2001.0);
+        t.set("C3", "=VALUE(\"1,5\")");
+        assert_eq!(t.num("C3"), 1.5);
+        t.set("C4", "=\"1.5\"*2");
+        assert_eq!(t.get("C4"), Value::Error(CellError::Value));
+        // Criteria too: `"1,5"` is the number 1.5, and matches the text `1,5`.
+        t.set("D1", "1.5");
+        t.set("D2", "'1,5");
+        t.set("C5", "=COUNTIF(D1:D2,\"1,5\")");
+        assert_eq!(t.num("C5"), 2.0);
+    });
+}
+
+#[test]
+fn text_keeps_reading_with_a_decimal_point_by_default() {
+    let mut t = T::new();
+    t.set("C1", "=\"1,0000\"*3");
+    assert_eq!(t.get("C1"), Value::Error(CellError::Value));
+    t.set("C2", "=\"1.5\"*2");
+    assert_eq!(t.num("C2"), 3.0);
+}
+
 /// A computed criterion whose formula runs a database function over the same criteria counts as
 /// not met inside itself: before, each record's check ran the function again for every record, at
 /// every level, so the work grew exponentially with the nesting allowed.

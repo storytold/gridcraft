@@ -318,6 +318,8 @@ fn main() -> eframe::Result<()> {
             None => logger.no_file(),
         }
     }
+    // Before any workbook calculates, the sample included.
+    gridcraft_engine::core::parse::set_system_number_text(gridcraft_ui_egui::i18n::system_number_text());
     let mut session = Session::new();
     if let Some(s) = &sample
         && let Err(e) = session.execute("file.new", json!({"sample": s}))

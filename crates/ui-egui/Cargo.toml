@@ -44,6 +44,11 @@ craft-update = { workspace = true }
 sys-locale = { workspace = true }
 craft-window = { workspace = true }
 
+[target.'cfg(windows)'.dependencies]
+# The decimal separator in the regional format settings; already in the tree. Safe to call, where
+# `GetLocaleInfoEx` would need the unsafe code this workspace forbids.
+windows-registry = "0.6"
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Read the browser's preferred language for the first-run web interface language.
 web-sys = { version = "0.3", features = ["Window", "Navigator", "Performance"] }

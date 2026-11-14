@@ -36,3 +36,17 @@ clipboard exchange retain strict English syntax. This also applies to advanced d
 Name Manager and conditional-format rules. Localization happens at the cell/formula-bar editor
 boundary, including filling the selected range with Ctrl+Enter; it does not change the workbook
 format or teach the calculation engine ambiguous aliases.
+
+## Text read as a number
+
+Arithmetic on text, `VALUE`, criteria and Paste Special's operations (Add, Multiply…) read numbers
+the way the system's region writes them, as Excel does. On Windows the desktop app takes the decimal
+and group separators and the currency from the regional format settings, which can differ from the
+display language; elsewhere from the system's language and region tag, through the regions GridCraft
+knows. With a decimal comma `"1,5"*1` is
+1.5, `"1.000,5"*1` is 1000.5, `"1,0000"*1` is 1, and `"1.5"*1` and `"$1,5"*1` are `#VALUE!`. So a
+workbook relying on such text can calculate differently on another system, also as in Excel.
+Everything that reads text as a number this way in the desktop app follows the setting, data
+validation and conditional formatting thresholds included. The CLI never sets it, so it always
+reads a decimal point; so do `NUMBERVALUE`, filters and typed entry, everywhere. Dates in text
+aren't affected: they still read month first.

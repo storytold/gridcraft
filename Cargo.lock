@@ -2318,6 +2318,7 @@ dependencies = [
  "unicode-bidi",
  "web-sys",
  "web-time",
+ "windows-registry",
  "zbus",
 ]
 
