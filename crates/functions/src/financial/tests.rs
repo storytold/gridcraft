@@ -190,6 +190,23 @@ fn securities() {
     close_tol(ev("YIELD", vec![d(2008, 2, 15), d(2008, 6, 15), n(0.05), n(pv), n(100.0), n(2.0)]), 0.04, 1e-9);
 }
 
+/// Under US 30/360 the settlement-to-maturity interval is the issue-to-maturity count less the
+/// issue-to-settlement count, so a 30th-to-31st span still counts one day (issue #4093).
+#[test]
+fn maturity_securities_count_us_30_360_from_issue() {
+    let (s, m, i) = (d(2025, 1, 30), d(2025, 1, 31), d(2025, 1, 29));
+    close_tol(ev("PRICEMAT", vec![s.clone(), m.clone(), i.clone(), n(0.0), n(3.6), n(0.0)]), 99.00990099009901, 1e-9);
+    close_tol(ev("PRICEMAT", vec![s.clone(), m.clone(), i.clone(), n(0.05), n(0.04), n(0.0)]), 100.00277592613166, 1e-9);
+    close_tol(ev("YIELDMAT", vec![s, m, i, n(0.05), n(100.0), n(0.0)]), 0.0499930565199356, 1e-9);
+    let (s, m, i) = (d(2025, 12, 30), d(2025, 12, 31), d(2025, 12, 29));
+    close_tol(ev("PRICEMAT", vec![s, m, i, n(0.0), n(3.6), n(0.0)]), 99.00990099009901, 1e-9);
+    // Controls that already agreed: basis 2, and a February 1 maturity under basis 0.
+    let (s, m, i) = (d(2025, 1, 30), d(2025, 1, 31), d(2025, 1, 29));
+    close_tol(ev("PRICEMAT", vec![s, m, i, n(0.0), n(3.6), n(2.0)]), 99.00990099009901, 1e-9);
+    let (s, m, i) = (d(2025, 1, 30), d(2025, 2, 1), d(2025, 1, 29));
+    close_tol(ev("PRICEMAT", vec![s, m, i, n(0.0), n(3.6), n(0.0)]), 99.00990099009901, 1e-9);
+}
+
 fn number(v: Value) -> f64 {
     match v {
         Value::Number(x) => x,

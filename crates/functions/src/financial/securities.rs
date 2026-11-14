@@ -171,8 +171,10 @@ fn mat_terms(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, f64, f64)> {
         return Err(CellError::Num);
     }
     let dim = year_frac(sys, issue, m, b)?;
-    let dsm = year_frac(sys, s, m, b)?;
     let ai = year_frac(sys, issue, s, b)?;
+    // US 30/360 is not additive (Jan 30 to Jan 31 counts zero days on its own), so the
+    // settlement-to-maturity interval is the issue-to-maturity count less issue-to-settlement.
+    let dsm = if b == 0 { (day_count(sys, issue, m, b)? - day_count(sys, issue, s, b)?) / 360.0 } else { year_frac(sys, s, m, b)? };
     Ok((dim, dsm, ai, rate, x))
 }
 
