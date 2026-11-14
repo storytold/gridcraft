@@ -5082,6 +5082,48 @@ fn paste_special_validation_moves_relative_references() {
     assert!(ok(&mut s, "C3", "20"));
 }
 
+/// A dropdown label is the region's text; the canonical spelling a script passes still works,
+/// unless it is the label of another cell.
+#[test]
+fn filter_labels_are_the_regions_text_not_the_canonical_value() {
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["n"], [1234], [1.234]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2", "code": "#,##0"})).unwrap();
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A2").unwrap()), "1.234");
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A3").unwrap()), "1,234");
+    s.execute("data.filter", json!({})).unwrap();
+    let hidden = |s: &Session| -> Vec<u32> {
+        let mut h: Vec<u32> = s.doc().unwrap().wb.sheet(0).unwrap().rows.iter().filter(|(_, r)| r.hidden).map(|(k, _)| *k).collect();
+        h.sort();
+        h
+    };
+    // The label `1.234` is A2's text only: A3 holds 1.234 but is shown `1,234`.
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1.234"]})).unwrap();
+    assert_eq!(hidden(&s), vec![2]);
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1,234"]})).unwrap();
+    assert_eq!(hidden(&s), vec![1]);
+    // Canonical values that no cell shows as a label still select by value.
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1234"]})).unwrap();
+    assert_eq!(hidden(&s), vec![2]);
+}
+
+/// The clipboard's text is read back by `edit.paste`, which reads en-US: a number copied from a
+/// region pastes back as the same number, not as the region's grouped text read the en-US way.
+#[test]
+fn copied_numbers_paste_back_as_the_same_numbers_in_a_region() {
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1234.5]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "#,##0.00"})).unwrap();
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A1").unwrap()), "1.234,50");
+    let text = s.execute("edit.copy", json!({"range": "A1"})).unwrap()["text"].as_str().unwrap().to_string();
+    // Another session has no internal clipboard, so the paste goes through the text.
+    let mut other = self::s();
+    other.execute("edit.paste", json!({"text": text, "at": "B2"})).unwrap();
+    assert_eq!(v(&other, "B2").as_f64(), Some(1234.5), "{text:?}");
+}
+
 /// "Set precision as displayed" (formulas.calculationOptions `precisionAsDisplayed`). Behaviour
 /// observed in Excel through COM with synthetic values: turning it on rounds existing constants
 /// and formulas to their formats; constants typed or reformatted while it is on are rounded at

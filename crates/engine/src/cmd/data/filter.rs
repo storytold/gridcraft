@@ -189,7 +189,15 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
+    // A Values criterion holds labels as the dropdown shows them (the region's text). The column's
+    // own labels, lowercased: a label that some cell shows is matched against what cells show only.
+    let mut labels: std::collections::HashMap<usize, std::collections::HashSet<String>> = std::collections::HashMap::new();
     for (i, (off, c)) in af.criteria.iter().enumerate() {
+        if matches!(c, FilterCriterion::Values { .. }) {
+            let col = r.start.col + off;
+            let shown = (r.start.row + 1..=r.end.row).map(|row| crate::display::cell_text(wb, sh, CellRef::new(row, col)).to_lowercase()).collect();
+            labels.insert(i, shown);
+        }
         if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
             let col = r.start.col + off;
             let mut nums: Vec<f64> = (r.start.row + 1..=r.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
@@ -217,7 +225,13 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     if filter_blank(&v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                        // Besides the shown text, a value a script passes in its canonical spelling
+                        // (`1234` for a cell shown as `1,234`) matches, unless it is itself a label.
+                        let shown = labels.get(&i);
+                        values.iter().any(|x| {
+                            x.eq_ignore_ascii_case(&text)
+                                || (x.eq_ignore_ascii_case(&v.display()) && !shown.is_some_and(|l| l.contains(&x.to_lowercase())))
+                        })
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
