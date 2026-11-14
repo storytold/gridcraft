@@ -159,6 +159,23 @@ fn coupons() {
 }
 
 #[test]
+fn pricemat_discounts_before_overflowing() {
+    // #4095: issue 2025-01-01, settlement 30 days later, actual/360. The undiscounted redemption
+    // 100 + dim * rate * 100 overflows binary64, but the discounted price fits.
+    let issue = serial_from_ymd(DateSystem::D1900, 2025, 1, 1).unwrap();
+    let after = |days: f64| n(issue + days);
+    close_tol(ev("PRICEMAT", vec![after(30.0), after(120.0), n(issue), n(1e307), n(1e305), n(2.0)]), -8.333333333333333e307, 1e-12);
+    close_tol(ev("PRICEMAT", vec![after(30.0), after(390.0), n(issue), n(2e306), n(1e307), n(2.0)]), -1.6666666666666666e307, 1e-12);
+    // Actual/365: the discounted redemption (about 1.3e4) is negligible next to the accrued interest.
+    close_tol(ev("PRICEMAT", vec![after(30.0), after(120.0), n(issue), n(1e307), n(1e305), n(3.0)]), -(1e307 * (3000.0 / 365.0)), 1e-12);
+    // Controls from the report that were already finite stay unchanged.
+    let control = 100.0 * (1.0 + 1e306 * (120.0 / 360.0)) / (1.0 + 1e305 * (90.0 / 360.0)) - 100.0 * 1e306 * (30.0 / 360.0);
+    close_tol(ev("PRICEMAT", vec![after(30.0), after(120.0), n(issue), n(1e306), n(1e305), n(2.0)]), control, 1e-12);
+    let control = 100.0 * (1.0 + 1e307 * (60.0 / 360.0)) / (1.0 + 1e305 * (30.0 / 360.0)) - 100.0 * 1e307 * (30.0 / 360.0);
+    close_tol(ev("PRICEMAT", vec![after(30.0), after(60.0), n(issue), n(1e307), n(1e305), n(2.0)]), control, 1e-12);
+}
+
+#[test]
 fn securities() {
     close_tol(ev("DISC", vec![d(2007, 1, 25), d(2007, 6, 15), n(97.975), n(100.0), n(1.0)]), 0.052420213, 1e-8);
     close_tol(ev("PRICEDISC", vec![d(2008, 2, 16), d(2008, 3, 1), n(0.0525), n(100.0), n(2.0)]), 99.79583333, 1e-9);
