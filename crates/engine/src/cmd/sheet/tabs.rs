@@ -206,10 +206,37 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             cx.wb.sheets.insert(at, Arc::new(sh));
             cx.wb.set_active_sheet(at);
         } else {
+            let order: Vec<String> = cx.wb.sheets.iter().map(|s| s.name.clone()).collect();
+            let name = src.name.clone();
             let sh = cx.wb.sheets.remove(i);
             let at = to.min(n - 1);
             cx.wb.sheets.insert(at, sh);
             cx.wb.set_active_sheet(at);
+            // A 3-D span (`Jan:Mar`) whose end sheet moves past its other end shrinks to the sheet
+            // next to it that stays inside (#3741).
+            let ends = |e: gridcraft_formula::Expr| gridcraft_formula::adjust::move_sheet_ends(&e, &name, &order, at).unwrap_or(e);
+            for si in 0..cx.wb.sheets.len() {
+                let keys: Vec<(CellRef, Arc<gridcraft_model::Formula>)> =
+                    cx.wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
+                let Some(sh) = cx.wb.sheet_mut(si) else { continue };
+                for (c, f) in keys {
+                    let changed = f.with_expr(|e| gridcraft_formula::adjust::move_sheet_ends(e, &name, &order, at)).flatten();
+                    if let Some(ne) = changed
+                        && let Some(cell) = sh.cells.get_mut(c)
+                    {
+                        cell.formula = Some(Arc::new(gridcraft_model::Formula::from_expr(ne)));
+                    }
+                }
+            }
+            crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| ends(e))?;
+            crate::cmd::edit::rewrite_cell_links(&mut cx.wb, |_, e| ends(e));
+            for n in cx.wb.names.iter_mut() {
+                if let Ok(e) = gridcraft_formula::parse_name(&n.formula)
+                    && let Some(ne) = gridcraft_formula::adjust::move_sheet_ends(&e, &name, &order, at)
+                {
+                    n.formula = gridcraft_formula::print(&ne);
+                }
+            }
             // Sheet-level names follow their sheet.
             for nm in cx.wb.names.iter_mut() {
                 if let Some(sc) = nm.scope.as_mut() {
