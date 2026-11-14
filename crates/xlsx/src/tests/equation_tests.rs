@@ -469,3 +469,18 @@ fn a_paragraph_split_in_an_equation_without_office_math_reads_back_as_the_edit()
     // back is the source with a newline after that space, and nothing else moved or dropped.
     assert_eq!(s[0].text, cd.replacen(' ', " \n", 1), "the split text, exactly");
 }
+
+#[test]
+fn the_plain_text_stand_in_for_an_equation_is_drawn_at_a_normal_size() {
+    // A source Office Math cannot hold is saved as the text box alone; a source it can hold has
+    // the same box as its fallback. Neither takes the (large) size the equation is drawn at.
+    let wb = book(vec![equation(1, "B2", "\\begin{CD} A @>f>> B \\end{CD}", Color::Auto), equation(2, "B8", "x^2", Color::Auto)]);
+    let d = drawing(&unzip(&write_xlsx(&wb).unwrap()));
+    let text_runs: Vec<&str> = d.match_indices("<a:r><a:rPr").map(|(i, _)| &d[i..i + d[i..].find("</a:rPr>").unwrap()]).collect();
+    assert_eq!(text_runs.len(), 2, "{d}");
+    for r in text_runs {
+        assert!(r.contains(" sz=\"1100\""), "{r}");
+    }
+    // The Office Math box keeps the size of the equation.
+    assert!(!d.contains("<a:endParaRPr lang=\"en-US\" sz=\"1100\"/>"), "{d}");
+}
