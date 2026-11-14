@@ -743,3 +743,251 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+/// The value at `a` on the active sheet.
+fn value_at(s: &Session, a: &str) -> Value {
+    s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap())
+}
+
+/// Copies `copy` and pastes it with `edit.paste` over the selection `target`.
+fn paste_over(s: &mut Session, copy: &str, target: &str) -> Result<Json> {
+    s.execute("edit.copy", json!({"range": copy})).unwrap();
+    s.execute("selection.set", json!({"range": target})).unwrap();
+    s.execute("edit.paste", json!({}))
+}
+
+#[test]
+fn paste_tiles_exact_multiples_of_a_mid_grid_selection() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2], [3, 4]]})).unwrap();
+    paste_over(&mut s, "A1:B2", "D1:G4").unwrap();
+    for (a, n) in [("D1", 1.0), ("E1", 2.0), ("F1", 1.0), ("G2", 4.0), ("D3", 1.0), ("F4", 3.0), ("G4", 4.0)] {
+        assert_eq!(value_at(&s, a), Value::Number(n), "{a}");
+    }
+    assert_eq!(value_at(&s, "H1"), Value::Empty);
+    assert_eq!(value_at(&s, "D5"), Value::Empty);
+    assert_eq!(s.doc().unwrap().selection.a1(), "D1:G4");
+    // Not a multiple: the block lands once.
+    paste_over(&mut s, "A1:B2", "D10:F12").unwrap();
+    assert_eq!(value_at(&s, "D10"), Value::Number(1.0));
+    assert_eq!(value_at(&s, "E11"), Value::Number(4.0));
+    assert_eq!(value_at(&s, "F10"), Value::Empty);
+    assert_eq!(value_at(&s, "D12"), Value::Empty);
+}
+
+#[test]
+fn whole_column_paste_repeats_across_not_down() {
+    // #3370: values in A1:A4, copy A:A, select B:F, paste.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4]]})).unwrap();
+    paste_over(&mut s, "A:A", "B:F").unwrap();
+    for col in ["B", "C", "D", "E", "F"] {
+        for row in 1..=4 {
+            assert_eq!(value_at(&s, &format!("{col}{row}")), Value::Number(f64::from(row)), "{col}{row}");
+        }
+        assert_eq!(value_at(&s, &format!("{col}5")), Value::Empty, "{col}5 is blank below the copy");
+        assert_eq!(value_at(&s, &format!("{col}1000000")), Value::Empty, "{col}1000000: nothing stamped down the column");
+    }
+    assert_eq!(value_at(&s, "G1"), Value::Empty);
+    assert_eq!(s.doc().unwrap().selection.current(), RangeRef::cols(1, 5), "the columns stay selected");
+    // A mid-grid block pasted over whole columns lands once at the top of each.
+    s.execute("range.setValues", json!({"range": "H1", "values": [["x"], ["y"]]})).unwrap();
+    paste_over(&mut s, "H1:H2", "J:K").unwrap();
+    assert_eq!((value_at(&s, "J1"), value_at(&s, "K2")), (Value::text("x"), Value::text("y")));
+    assert_eq!((value_at(&s, "J3"), value_at(&s, "L1")), (Value::Empty, Value::Empty));
+}
+
+#[test]
+fn whole_column_paste_repeats_at_the_width_copied() {
+    // A:D holds data only in A:B, so the copy is trimmed to A1:B1; it still repeats every 4 columns.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    paste_over(&mut s, "A:D", "E:L").unwrap();
+    let row: Vec<Value> = ["E1", "F1", "G1", "H1", "I1", "J1", "K1", "L1", "M1"].iter().map(|a| value_at(&s, a)).collect();
+    let (one, two, none) = (Value::Number(1.0), Value::Number(2.0), Value::Empty);
+    assert_eq!(row, vec![one.clone(), two.clone(), none.clone(), none.clone(), one, two, none.clone(), none.clone(), none]);
+    // The whole sheet copied over the whole sheet lands once, where it was.
+    paste_over(&mut s, "A1:XFD1048576", "A1:XFD1048576").unwrap();
+    assert_eq!(value_at(&s, "A1"), Value::Number(1.0));
+    assert_eq!(value_at(&s, "I1"), Value::Number(1.0));
+    assert_eq!(value_at(&s, "N1"), Value::Empty, "no second copy of the used range");
+}
+
+#[test]
+fn whole_row_paste_repeats_down_not_across() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3]]})).unwrap();
+    paste_over(&mut s, "1:1", "2:5").unwrap();
+    for row in 2..=5 {
+        for (col, n) in [("A", 1.0), ("B", 2.0), ("C", 3.0)] {
+            assert_eq!(value_at(&s, &format!("{col}{row}")), Value::Number(n), "{col}{row}");
+        }
+        assert_eq!(value_at(&s, &format!("D{row}")), Value::Empty);
+        assert_eq!(value_at(&s, &format!("XFD{row}")), Value::Empty, "nothing stamped along the row");
+    }
+    assert_eq!(value_at(&s, "A6"), Value::Empty);
+    assert_eq!(s.doc().unwrap().selection.current(), RangeRef::rows(1, 4), "the rows stay selected");
+}
+
+#[test]
+fn paste_tiles_a_selection_over_four_million_cells_within_the_bound() {
+    // #3370: the old cap counted the selection (4,000,000 cells); the bound is on cells written,
+    // and this paste writes exactly MAX_TILED_PASTE_CELLS.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    let pasted = paste_over(&mut s, "A1", "B1:F1000000").unwrap();
+    assert_eq!(pasted["pasted"], "B1:F1000000");
+    for a in ["B1", "F1", "C500000", "B1000000", "F1000000"] {
+        assert_eq!(value_at(&s, a), Value::Number(7.0), "{a}");
+    }
+    assert_eq!(value_at(&s, "B1000001"), Value::Empty);
+}
+
+#[test]
+fn paste_writing_more_than_the_bound_is_refused_and_writes_nothing() {
+    let mut s = Session::new();
+    s.new_workbook();
+    // Column A holds 1,000 values and row 1 five (A1:E1): the used range is A1:E1000.
+    let column: Vec<Vec<u32>> = (1..=1000).map(|n| vec![n]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": column})).unwrap();
+    s.execute("range.setValues", json!({"range": "B1", "values": [[2, 3, 4, 5]]})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().cells.clone();
+    let undo = s.doc().unwrap().undo.len();
+    // Mid-grid: 5 × 1,000,001 one-cell tiles, 5 cells over the bound.
+    let err = paste_over(&mut s, "A1", "G1:K1000001").unwrap_err();
+    assert!(err.to_string().contains("too large"), "{err}");
+    // Whole columns: 16,383 tiles of the 1,000-cell column A1:A1000.
+    assert!(paste_over(&mut s, "A:A", "B:XFD").is_err());
+    // Whole rows: 1,048,575 tiles of the 5-cell row A1:E1.
+    assert!(paste_over(&mut s, "1:1", "2:1048576").is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().cells, before, "the refused pastes wrote nothing");
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "and left no undo step");
+    for a in ["G1", "F1", "B1001", "A2"] {
+        let expected = if a == "A2" { Value::Number(2.0) } else { Value::Empty };
+        assert_eq!(value_at(&s, a), expected, "{a}");
+    }
+}
+
+#[test]
+fn tiled_paste_replicates_merged_areas_at_every_tile() {
+    // #3370 review: the copied block's merged areas travel with the cells, tile by tile.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:F1").unwrap();
+    assert_eq!(value_at(&s, "C1"), Value::Number(1.0));
+    assert_eq!(value_at(&s, "E1"), Value::Number(1.0));
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    for want in ["A1:B1", "C1:D1", "E1:F1"] {
+        assert!(merges.contains(&RangeRef::parse(want).unwrap()), "merge {want} in {merges:?}");
+    }
+}
+
+#[test]
+fn tiled_paste_drops_only_the_destination_merges_it_displaces() {
+    // #3370 review: a later tile displaces an existing merge just as the first does.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "D1:E1"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "H1:I1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:F1").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 4, "{merges:?}");
+    for want in ["A1:B1", "C1:D1", "E1:F1", "H1:I1"] {
+        assert!(merges.contains(&RangeRef::parse(want).unwrap()), "merge {want} in {merges:?}");
+    }
+    assert!(!merges.contains(&RangeRef::parse("D1:E1").unwrap()), "the displaced merge is gone: {merges:?}");
+}
+
+#[test]
+fn tiled_paste_replicates_merges_over_many_tiles() {
+    // #3370 review: tiling down a tall selection lands a merge per tile, without the
+    // destination list being rescanned per tile.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:D2000").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 2001, "the original plus one per tile row");
+    assert!(merges.contains(&RangeRef::parse("C2000:D2000").unwrap()));
+}
+
+#[test]
+fn paste_displacing_a_merge_unblocks_the_spill_it_covered() {
+    // #3370 review: =SEQUENCE(2) at G2 spills into G3, but the merge E3:G3 covers G3, so
+    // it sits at #SPILL!. Pasting a block whose own merge overlaps only the blocking
+    // merge's left edge displaces it, and the spill is evaluated again even though its
+    // anchor was never written.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "B1:C1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G2", "input": "=SEQUENCE(2)"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "E3:G3"})).unwrap();
+    assert_eq!(value_at(&s, "G2"), gridcraft_core::Value::Error(gridcraft_core::CellError::Spill), "the merge blocks the spill");
+    paste_over(&mut s, "A1:C1", "C3:G3").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert!(merges.contains(&RangeRef::parse("D3:E3").unwrap()), "the tile's merge landed: {merges:?}");
+    assert!(!merges.contains(&RangeRef::parse("E3:G3").unwrap()), "the blocking merge was displaced: {merges:?}");
+    assert_eq!(value_at(&s, "G2"), Value::Number(1.0), "the spill flows once its merge is displaced");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(2, 6)), Value::Number(2.0), "the second value lands in G3");
+}
+#[test]
+fn repeating_a_tiled_merge_paste_over_itself_keeps_one_merge_per_tile() {
+    // #3370 review: pasting the same merged block over an area that already holds its
+    // merges displaces each old merge with the identical new one — the count stays one
+    // per tile, and the lookup must not rescan every existing merge per tile.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:D2000").unwrap();
+    paste_over(&mut s, "A1:B1", "C1:D2000").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 2001, "the original plus one per tile row, replaced not duplicated");
+    assert!(merges.contains(&RangeRef::parse("C2000:D2000").unwrap()));
+    assert_eq!(value_at(&s, "C2000"), Value::Number(1.0));
+}
+
+#[test]
+fn repeating_a_wide_tiled_merge_paste_over_itself_keeps_one_merge_per_tile() {
+    // #3370 review: a wide tiled paste puts thousands of merges on a single row;
+    // pasting it again must displace each with the identical new one — the count
+    // stays one per tile — and the candidate lookup must prune by column as well
+    // as row, or the repeat checks every merge on the row against every other.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    paste_over(&mut s, "A1:B1", "C1:XFD1").unwrap();
+    paste_over(&mut s, "A1:B1", "C1:XFD1").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    assert_eq!(merges.len(), 8192, "the original plus one per tile across the row, replaced not duplicated");
+    assert!(merges.contains(&RangeRef::parse("XFC1:XFD1").unwrap()));
+    assert_eq!(value_at(&s, "XFC1"), Value::Number(1.0));
+}
+
+#[test]
+fn tiled_cut_moves_each_cell_into_every_tile() {
+    // A cut pasted over a multiple of its size tiles; the cut path reads the taken cells by position.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:G2"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    for (a, n) in [("D1", 1.0), ("E1", 2.0), ("F1", 1.0), ("G1", 2.0), ("D2", 1.0), ("G2", 2.0)] {
+        assert_eq!(value_at(&s, a), Value::Number(n), "{a}");
+    }
+    assert_eq!((value_at(&s, "A1"), value_at(&s, "B1")), (Value::Empty, Value::Empty), "the source was emptied");
+}
