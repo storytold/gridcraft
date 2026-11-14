@@ -114,10 +114,14 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         let mut dest_held: std::collections::BTreeMap<(u32, u32), Vec<(u32, u32)>> = Default::default();
         if !link && !skip_cells {
             let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
-            let held =
-                cx.wb.sheet(dest_sheet).into_iter().flat_map(|sh| {
-                    sh.cells.iter_range(pasted).map(|(c, _)| c).chain(sh.cell_pictures.keys().copied().filter(|c| pasted.contains(*c)))
-                });
+            let held = cx.wb.sheet(dest_sheet).into_iter().flat_map(|sh| {
+                sh.cells
+                    .iter_range(pasted)
+                    .map(|(c, _)| c)
+                    .chain(sh.cell_pictures.keys().copied().filter(|c| pasted.contains(*c)))
+                    .chain(sh.comments.keys().copied().filter(|c| pasted.contains(*c)))
+                    .chain(sh.hyperlinks.keys().copied().filter(|c| pasted.contains(*c)))
+            });
             for d in held.collect::<Vec<_>>() {
                 let (dr, dc) = (d.row - at.row, d.col - at.col);
                 let local = (dr % h, dc % w);
@@ -316,13 +320,16 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             }
                         }
                         What::All => {
-                            if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
-                                cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
-                            }
-                            if let Some(h) = src_sheet.hyperlinks.get(&sc).cloned() {
-                                cx.sheet_mut(dest_sheet)?.hyperlinks.insert(dest, h);
-                            }
-                            cx.sheet_mut(dest_sheet)?.set_cell(dest, new);
+                            let sh = cx.sheet_mut(dest_sheet)?;
+                            match src_sheet.comments.get(&sc).cloned() {
+                                Some(cm) => sh.comments.insert(dest, cm),
+                                None => sh.comments.remove(&dest),
+                            };
+                            match src_sheet.hyperlinks.get(&sc).cloned() {
+                                Some(h) => sh.hyperlinks.insert(dest, h),
+                                None => sh.hyperlinks.remove(&dest),
+                            };
+                            sh.set_cell(dest, new);
                         }
                         _ => cx.sheet_mut(dest_sheet)?.set_cell(dest, new),
                     }
