@@ -4,6 +4,7 @@
 //! `ROW`, `OFFSET`, `INDEX`, `:` and friends can work on references) or a lambda. Cell reads go
 //! through [`Host`], which lets the recalculation engine evaluate dirty precedents on demand.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
@@ -154,6 +155,8 @@ pub struct Evaluator<'h> {
     /// runs out of work after the same number of calls that a legitimately wide one could
     /// make, instead of an amount of work that squares with array nesting (#2382).
     fuel: u64,
+    /// Whether a reference into a linked workbook was read.
+    linked: Cell<bool>,
     /// Work this cell still has left (see [`EVAL_WORK`]), shared by every branch of the formula
     /// and by the formulas it computes on the way (names, computed criteria).
     work: u64,
@@ -215,12 +218,16 @@ impl Ctx for FnCtx<'_, '_> {
             calls: self.ev.calls,
             stack_top: self.ev.stack_top,
             fuel: self.ev.fuel,
+            linked: Cell::new(false),
             work: self.ev.work,
             exhausted: false,
             active_criteria: std::mem::take(&mut self.ev.active_criteria),
         };
         ev.active_criteria.push((area.sheet, at));
         let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
+        if ev.reads_linked_workbook() {
+            self.ev.linked.set(true);
+        }
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
         self.ev.work = ev.work;
@@ -262,7 +269,13 @@ impl<'h> Evaluator<'h> {
             work: EVAL_WORK,
             exhausted: false,
             active_criteria: Vec::new(),
+            linked: Cell::new(false),
         }
+    }
+
+    /// Whether evaluating read a reference into a linked workbook, which is never opened.
+    pub fn reads_linked_workbook(&self) -> bool {
+        self.linked.get()
     }
 
     /// Spends `units` of this cell's work; `false` (and nothing left) when there isn't enough.
@@ -307,6 +320,9 @@ impl<'h> Evaluator<'h> {
     }
 
     pub fn reference_areas(&self, r: &Reference) -> Result<Vec<Area>, CellError> {
+        if r.is_external() {
+            self.linked.set(true);
+        }
         let range = r.range();
         Ok(self.resolve_sheet(&r.sheet)?.into_iter().map(|sheet| Area { sheet, range }).collect())
     }
@@ -454,6 +470,10 @@ impl<'h> Evaluator<'h> {
         // Sheet-qualified `Sheet1!Name`. The parser stores the sheet unquoted, so it is used as
         // is (`' Sales '` keeps its spaces) and split at the last `!` (`'a!b'!Name`).
         let (scope_sheet, bare) = match n.rsplit_once('!') {
+            Some((s, _)) if s.contains('[') => {
+                self.linked.set(true);
+                return err(CellError::Name);
+            }
             Some((s, b)) => match wb.sheet_index(s) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
