@@ -21,6 +21,7 @@ web-time = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
+craft-csv = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
