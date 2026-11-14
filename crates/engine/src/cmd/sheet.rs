@@ -402,6 +402,9 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
 
         let mut touched = Vec::new();
+        // The moved columns' rules go with them as a cut's do, so a rule wider than them
+        // stays on its other cells and checks what it did.
+        let snapshot = cx.wb.sheets.get(sheet).cloned().ok_or_else(|| bad("sheet.moveColumns", "no such sheet"))?;
         {
             let sh = cx.sheet_mut(sheet)?;
             let pictures: Vec<_> =
@@ -434,6 +437,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 sh.cols.insert(destination + offset, info);
             }
         }
+        crate::cmd::edit::move_cut_rules(cx, &snapshot, (sheet, sheet), source, CellRef::new(0, destination))?;
         for cell in touched {
             cx.touch(sheet, cell);
         }

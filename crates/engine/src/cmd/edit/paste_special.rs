@@ -563,7 +563,13 @@ fn paste_validations(
 /// as the cut cells' are: kept written for where their cells were (on another sheet, with
 /// their references to it named), so the reference rewrite for the move shifts those into the
 /// block once. `snapshot` is the source sheet as it was cut.
-fn move_cut_rules(cx: &mut crate::cmd::Ctx, snapshot: &gridcraft_model::Sheet, (from, to): (usize, usize), src: RangeRef, at: CellRef) -> Result<()> {
+pub(crate) fn move_cut_rules(
+    cx: &mut crate::cmd::Ctx,
+    snapshot: &gridcraft_model::Sheet,
+    (from, to): (usize, usize),
+    src: RangeRef,
+    at: CellRef,
+) -> Result<()> {
     let mut cfs = crate::cmd::data::moved_rule_parts(&snapshot.cond_formats, src, at);
     let mut dvs = crate::cmd::data::moved_rule_parts(&snapshot.validations, src, at);
     if from != to {
