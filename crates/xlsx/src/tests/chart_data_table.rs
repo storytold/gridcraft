@@ -10,7 +10,7 @@ fn chart(table: &str) -> gridcraft_model::Chart {
         <c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>12</c:v></c:pt></c:numLit></c:val>\
         </c:ser><c:axId val=\"1\"/><c:axId val=\"2\"/></c:barChart><c:catAx/><c:valAx/>{table}</c:plotArea></c:chart></c:chartSpace>"
     );
-    read_chart(&parse(xml.as_bytes()).unwrap()).unwrap()
+    read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().0
 }
 
 #[test]
