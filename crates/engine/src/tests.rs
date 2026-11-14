@@ -5658,6 +5658,30 @@ fn paste_that_does_not_fit_on_the_sheet_is_refused() {
     assert_eq!(v(&s, "A20"), Value::Text("x".into()));
 }
 
+#[test]
+fn paste_special_refuses_unknown_operations_without_changing_the_destination() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B1", "values": [[2, 10]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    let history = s.execute("history.list", json!({})).unwrap();
+    let clipboard = s.clipboard.clone().unwrap();
+    for operation in ["multipy", "ADD", ""] {
+        let err = s.execute("edit.pasteSpecial", json!({"what": "values", "at": "B1", "operation": operation})).unwrap_err();
+        assert!(err.to_string().contains("unknown `operation`"), "{operation}: {err}");
+        assert_eq!(v(&s, "B1"), Value::Number(10.0));
+        assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        let kept = s.clipboard.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&kept.wb, &clipboard.wb));
+        assert_eq!((&kept.text, kept.range, kept.cut), (&clipboard.text, clipboard.range, clipboard.cut));
+    }
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "B1", "operation": "add"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(12.0));
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "B1", "operation": "none"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Number(2.0));
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "C1"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::Number(2.0));
+}
+
 /// Paste visits only cells that hold something on either side: a blank copied cell still clears
 /// (or reformats) a destination cell that holds something, and blank onto blank stays blank, even
 /// with an operation (Excel leaves it empty rather than writing 0).
