@@ -21,6 +21,27 @@ fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec
     craft_csv::parse_records(text, delim, quote, MAX_COLS as usize, on_record);
 }
 
+/// Longest text a cell holds, in UTF-16 code units: Excel's 32,767 characters, which TEXT and XLSB
+/// already keep to. A CSV field can be any length; a longer one is cut here, with a warning.
+const MAX_CELL_TEXT: usize = 32_767;
+
+/// Cuts `field` to [`MAX_CELL_TEXT`] UTF-16 code units, never inside a character. True if it was cut.
+fn cut_to_cell_limit(field: &mut String) -> bool {
+    // A UTF-8 byte is at most one UTF-16 unit, so a short field needs no count.
+    if field.len() <= MAX_CELL_TEXT {
+        return false;
+    }
+    let mut units = 0;
+    for (i, ch) in field.char_indices() {
+        units += ch.len_utf16();
+        if units > MAX_CELL_TEXT {
+            field.truncate(i);
+            return true;
+        }
+    }
+    false
+}
+
 /// How many rows and bytes of a text file are read to decide each column's date order.
 const DATE_SAMPLE_ROWS: usize = 200;
 const DATE_SAMPLE_BYTES: usize = 1 << 20;
@@ -271,12 +292,14 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     // The bounding box of the non-empty cells, which is the sheet's used range.
     let mut used: Option<(u32, u32, u32, u32)> = None;
     let mut too_many = false;
+    // Fields cut to a cell's limit: how many, and the first one's cell.
+    let mut cut: (usize, Option<CellRef>) = (0, None);
     parse_records(&text, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
         }
         // A blank line is an empty row.
-        for (col, f) in rec.into_iter().enumerate() {
+        for (col, mut f) in rec.into_iter().enumerate() {
             if col as u32 >= MAX_COLS {
                 break;
             }
@@ -284,6 +307,10 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
                 continue;
             }
             let pos = CellRef::new(row, col as u32);
+            if cut_to_cell_limit(&mut f) {
+                cut.0 += 1;
+                cut.1.get_or_insert(pos);
+            }
             let (r0, c0, c1) = used.map_or((row, col as u32, col as u32), |(r0, c0, _, c1)| (r0, c0.min(col as u32), c1.max(col as u32)));
             used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
@@ -318,6 +345,14 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     });
     if too_many {
         return Err(IoError::TooLarge(format!("the CSV's used range is over the limit of {} cells", opts.max_used_cells.unwrap_or(0))));
+    }
+    if let (n, Some(first)) = cut {
+        let first = format!("{}{}", col_to_letters(first.col), first.row + 1);
+        report.warn(if n == 1 {
+            format!("cell {first} was longer than a cell's {MAX_CELL_TEXT} characters and was cut to fit")
+        } else {
+            format!("{n} cells were longer than a cell's {MAX_CELL_TEXT} characters and were cut to fit (the first is {first})")
+        });
     }
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];

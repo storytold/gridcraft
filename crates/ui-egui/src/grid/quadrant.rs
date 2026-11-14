@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border, paint_cf_icon,
-    painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    Look, MAX_CELL_CHARS, MAX_LINE_CHARS, MergedArea, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look,
+    merged_edges, paint_border, paint_cf_icon, painted_halign, rotated_text_pos, shrink_font, truncate_display, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -359,6 +359,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
         text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
     }
+    truncate_display(&mut text, MAX_CELL_CHARS);
     if text.is_empty() {
         return;
     }
@@ -401,7 +402,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
-    let first_line: String = text.chars().filter(|&ch| ch != '\n' && ch != '\r').collect();
+    let mut first_line: String = text.chars().filter(|&ch| ch != '\n' && ch != '\r').collect();
+    truncate_display(&mut first_line, MAX_LINE_CHARS);
     // The fill position indexes `text`; move it back by the breaks removed before it.
     let fill_char = fill_char.map(|(ch, pos)| (ch, pos.saturating_sub(text.get(..pos).map_or(0, |s| s.matches(['\n', '\r']).count()))));
     // Shrink to fit: too-wide content is drawn in a smaller font so it fits the cell (or the
