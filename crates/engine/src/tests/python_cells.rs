@@ -530,3 +530,18 @@ fn python_code_with_an_empty_value_counts_as_content() {
     s.execute("edit.copy", json!({"range": "T1"})).unwrap();
     assert!(s.execute("edit.paste", json!({"at": "R2"})).is_err_and(|e| e.to_string().contains("part of an array")));
 }
+
+/// Renaming a defined name or a table renames it in Python cells' `xl()` references too.
+#[test]
+fn xl_references_follow_name_and_table_renames() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    let table = s.doc().unwrap().wb.sheets[0].tables[0].name.clone();
+    s.execute("formulas.defineName", json!({"name": "Opts", "refersTo": "=Sheet1!$A$2:$A$3"})).unwrap();
+    plant(&mut s, 0, "E1", &format!("a = xl(\"Opts\")\nb = xl(\"{table}[v]\")"));
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Opts", "refersTo": "=Sheet1!$A$2:$A$3"})).unwrap();
+    assert_eq!(code(&s, 0, "E1").as_deref(), Some(format!("a = xl(\"Choices\")\nb = xl(\"{table}[v]\")").as_str()));
+    s.execute("table.rename", json!({"table": table, "name": "Data"})).unwrap();
+    assert_eq!(code(&s, 0, "E1").as_deref(), Some("a = xl(\"Choices\")\nb = xl(\"Data[v]\")"));
+}

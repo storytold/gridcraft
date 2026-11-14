@@ -35,7 +35,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::{rewrite_all_formulas, rewrite_cell_links, rewrite_python_refs};
+pub(crate) use paste_special::{move_cut_rules, rewrite_all_formulas, rewrite_python_refs};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_next_corner, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {

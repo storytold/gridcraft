@@ -154,7 +154,10 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
     sh.merges = sh.merges.iter().filter_map(|m| map_range(*m)).filter(|m| !m.is_single()).collect();
     for cf in sh.cond_formats.iter_mut() {
-        cf.ranges = cf.ranges.iter().filter_map(|r| map_range(*r)).collect();
+        let before = std::mem::take(&mut cf.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r).map(|m| (*r, m))).collect();
+        cf.ranges = moves.iter().map(|(_, m)| *m).collect();
+        rehost_rule(cf.rule.relative_formulas_mut(), &before, &moves, &e);
     }
     for er in sh.edit_ranges.iter_mut() {
         er.ranges = er.ranges.iter().filter_map(|r| map_range(*r)).collect();
@@ -162,7 +165,10 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     sh.edit_ranges.retain(|er| !er.ranges.is_empty());
     sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
     for dv in sh.validations.iter_mut() {
-        dv.ranges = dv.ranges.iter().filter_map(|r| map_range(*r)).collect();
+        let before = std::mem::take(&mut dv.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r).map(|m| (*r, m))).collect();
+        dv.ranges = moves.iter().map(|(_, m)| *m).collect();
+        rehost_rule(dv.formulas_mut(), &before, &moves, &e);
     }
     sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {
@@ -215,38 +221,10 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
 }
 
-/// Rewrites every formula reference (chart series included), sparkline source and PivotTable
-/// source for a structural edit on `target`.
+/// Rewrites every reference the workbook holds for a structural edit on `target`.
 pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
     cx.edits.push((target.to_string(), e.clone()));
-    let wb = &mut cx.wb;
-    super::edit::rewrite_all_formulas(wb, target, e)?;
-    for si in 0..wb.sheets.len() {
-        let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
-        let Some(sh) = wb.sheet_mut(si) else { continue };
-        let fix = |text: &str| -> String {
-            match gridcraft_formula::parse(text) {
-                Ok(expr) => gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e)),
-                Err(_) => text.to_string(),
-            }
-        };
-        for sp in sh.sparklines.iter_mut() {
-            sp.source = fix(&sp.source);
-        }
-        // PivotTable sources (a range, table or defined name) are only rewritten when the edit
-        // moves them, so table and name sources keep their text.
-        for pt in sh.pivots.iter_mut() {
-            let body = pt.source.trim().trim_start_matches('=');
-            if let Ok(expr) = gridcraft_formula::parse(body) {
-                let before = gridcraft_formula::print(&expr);
-                let after = gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e));
-                if after != before {
-                    pt.source = after;
-                }
-            }
-        }
-    }
-    Ok(())
+    super::edit::rewrite_all_formulas(&mut cx.wb, target, e)
 }
 
 /// Inserting or deleting cells moves the copied block away from the stored source range, so, like
@@ -424,6 +402,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
 
         let mut touched = Vec::new();
+        // The moved columns' rules go with them as a cut's do, so a rule wider than them
+        // stays on its other cells and checks what it did.
+        let snapshot = cx.wb.sheets.get(sheet).cloned().ok_or_else(|| bad("sheet.moveColumns", "no such sheet"))?;
+        crate::cmd::edit::move_cut_rules(cx, &snapshot, (sheet, sheet), source, CellRef::new(0, destination))?;
         {
             let sh = cx.sheet_mut(sheet)?;
             let pictures: Vec<_> =
@@ -431,6 +413,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             let cells = sh.take_cells(source);
             let moved_lines: Vec<_> = (0..count).filter_map(|offset| sh.cols.remove(&(moved_from + offset)).map(|info| (offset, info))).collect();
             let movement = Edit::Move { from: source, to_row: 0, to_col: destination };
+            // (Its conditional formats and validation no longer touch the moved columns.)
             shift_cell_features(sh, &movement);
             for object in sh
                 .charts
@@ -725,13 +708,75 @@ pub(crate) fn map_range(r: RangeRef, e: &Edit) -> Option<RangeRef> {
     }
 }
 
+/// A conditional format's or validation's formulas are written for its ranges' top-left cell.
+/// When an edit moves its ranges (`moves`: each range before and after) so the top-left is
+/// another cell, they are re-hosted at that cell where it stood before the edit; rewriting the
+/// workbook's references for the edit then moves them as it moves a formula there. A range
+/// moved whole keeps its cells in step, so its top-left stood where the range's offset says;
+/// only one cut short (its first cells deleted) takes the cell that moved into its place.
+/// `before` is every range the rule had before the edit (the formulas are written for their
+/// top-left cell, which may lie in a range the edit removed).
+fn rehost_rule(formulas: Vec<&mut String>, before: &[RangeRef], moves: &[(RangeRef, RangeRef)], e: &Edit) {
+    let (Some(from), Some(to)) = (RangeRef::top_left(before), RangeRef::top_left(&moves.iter().map(|(_, m)| *m).collect::<Vec<_>>())) else {
+        return;
+    };
+    let whole = |(r, m): &(RangeRef, RangeRef)| r.width() == m.width() && r.height() == m.height();
+    let back = |c: CellRef, (r, m): &(RangeRef, RangeRef)| {
+        CellRef::new(
+            (i64::from(c.row) - i64::from(m.start.row) + i64::from(r.start.row)).max(0) as u32,
+            (i64::from(c.col) - i64::from(m.start.col) + i64::from(r.start.col)).max(0) as u32,
+        )
+    };
+    let holder = moves.iter().find(|(_, m)| m.contains(to));
+    let same_shift = moves.iter().all(whole)
+        && moves.windows(2).all(|w| match w {
+            [a, b] => back(to, a) == back(to, b),
+            _ => true,
+        });
+    let at = match holder {
+        Some(p) if whole(p) => back(to, p),
+        Some(_) => pre_image(e, to),
+        None if same_shift => moves.first().map_or(to, |p| back(to, p)),
+        None => pre_image(e, to),
+    };
+    if at != from {
+        for f in formulas {
+            *f = crate::cmd::data::move_rule_formula(f, from, at);
+        }
+    }
+}
+
+/// Where the cell that `e` puts at `c` stood before it (`c` itself when nothing moved it).
+fn pre_image(e: &Edit, c: CellRef) -> CellRef {
+    let (axis, count) = match *e {
+        Edit::Insert { axis, count, .. } | Edit::Delete { axis, count, .. } => (axis, count),
+        Edit::InsertCells { axis, range } | Edit::DeleteCells { axis, range } => {
+            (axis, if axis == Axis::Rows { range.height() } else { range.width() })
+        }
+        // A move takes ranges whole, which `rehost_rule` handles by their offset.
+        Edit::Move { .. } | Edit::MoveToSheet { .. } => return c,
+    };
+    let along = |d: i64| match axis {
+        Axis::Rows => c.offset(d, 0),
+        Axis::Cols => c.offset(0, d),
+    };
+    [Some(c), along(i64::from(count)), along(-i64::from(count))]
+        .into_iter()
+        .flatten()
+        .find(|p| map_range(RangeRef::cell(*p), e).map(|r| r.start) == Some(c))
+        .unwrap_or(c)
+}
+
 /// Shifts what Insert/Delete Cells moves along with the cells: merged areas, conditional
 /// format, validation, table, filter and print-area ranges, notes, links and sparklines.
 pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     let map_cell = |c: CellRef| map_range(RangeRef::cell(c), e).map(|r| r.start);
     sh.merges = sh.merges.iter().filter_map(|m| map_range(*m, e)).filter(|m| !m.is_single()).collect();
     for cf in sh.cond_formats.iter_mut() {
-        cf.ranges = cf.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
+        let before = std::mem::take(&mut cf.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r, e).map(|m| (*r, m))).collect();
+        cf.ranges = moves.iter().map(|(_, m)| *m).collect();
+        rehost_rule(cf.rule.relative_formulas_mut(), &before, &moves, e);
     }
     for er in sh.edit_ranges.iter_mut() {
         er.ranges = er.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
@@ -739,7 +784,10 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     sh.edit_ranges.retain(|er| !er.ranges.is_empty());
     sh.cond_formats.retain(|cf| !cf.ranges.is_empty());
     for dv in sh.validations.iter_mut() {
-        dv.ranges = dv.ranges.iter().filter_map(|r| map_range(*r, e)).collect();
+        let before = std::mem::take(&mut dv.ranges);
+        let moves: Vec<(RangeRef, RangeRef)> = before.iter().filter_map(|r| map_range(*r, e).map(|m| (*r, m))).collect();
+        dv.ranges = moves.iter().map(|(_, m)| *m).collect();
+        rehost_rule(dv.formulas_mut(), &before, &moves, e);
     }
     sh.validations.retain(|dv| !dv.ranges.is_empty());
     for t in sh.tables.iter_mut() {
