@@ -157,8 +157,19 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     }
     book -= dep;
     let mut rest = book - salvage;
+    // The asset life fixes the schedule: periods 0 to `last`, then nothing.
+    // The small tolerance keeps a life such as 1/0.2 from rounding up a period.
+    let last = (life - 1e-9).ceil() - 1.0;
+    if period > last {
+        return num_val(0.0);
+    }
     let mut n = 1.0;
     while n <= period {
+        if n >= last - 1.0 {
+            // The two final scheduled periods split the remaining value.
+            let left = period - n;
+            return num_val(if left <= 1.0 { (book * 0.5).round() } else { 0.0 });
+        }
         dep = (r * book).round();
         rest -= dep;
         if rest < 0.0 {
