@@ -55,7 +55,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             Statistical,
             A,
             "AVERAGEA(value1, [value2], ...)",
-            "Mean counting text as 0 and logical values as 1 or 0.",
+            "Mean: reference text counts as 0 and logicals as 1/0; direct arguments coerce; literal arrays use numbers only.",
             |a: &[Arg], _c: C| num_val(mean(&numbers_a(a)?)?)
         ),
         f!("MEDIAN", 1, VAR, Statistical, A, "MEDIAN(number1, [number2], ...)", "Middle value of the numbers.", |a: &[Arg], _c: C| num_val(median(
@@ -87,7 +87,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             Statistical,
             A,
             "STDEVA(value1, [value2], ...)",
-            "Sample standard deviation counting text as 0 and logicals as 1/0.",
+            "Sample standard deviation: reference text counts as 0 and logicals as 1/0; direct arguments coerce; literal arrays use numbers only.",
             |a: &[Arg], _c: C| { num_val(var_s(&numbers_a(a)?)?.sqrt()) }
         ),
         f!(
@@ -97,7 +97,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             Statistical,
             A,
             "STDEVPA(value1, [value2], ...)",
-            "Population standard deviation counting text as 0 and logicals as 1/0.",
+            "Population standard deviation: reference text counts as 0 and logicals as 1/0; direct arguments coerce; literal arrays use numbers only.",
             |a: &[Arg], _c: C| { num_val(var_p(&numbers_a(a)?)?.sqrt()) }
         ),
         f!("VAR", 1, VAR, Compatibility, A, "VAR(number1, [number2], ...)", "Sample variance.", |a: &[Arg], _c: C| num_val(var_s(&numbers(a)?)?)),
@@ -115,7 +115,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             Statistical,
             A,
             "VARA(value1, [value2], ...)",
-            "Sample variance counting text as 0 and logicals as 1/0.",
+            "Sample variance: reference text counts as 0 and logicals as 1/0; direct arguments coerce; literal arrays use numbers only.",
             |a: &[Arg], _c: C| num_val(var_s(&numbers_a(a)?)?)
         ),
         f!(
@@ -125,7 +125,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             Statistical,
             A,
             "VARPA(value1, [value2], ...)",
-            "Population variance counting text as 0 and logicals as 1/0.",
+            "Population variance: reference text counts as 0 and logicals as 1/0; direct arguments coerce; literal arrays use numbers only.",
             |a: &[Arg], _c: C| num_val(var_p(&numbers_a(a)?)?)
         ),
         f!("MIN", 0, VAR, Statistical, A, "MIN(number1, [number2], ...)", "Smallest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
@@ -138,7 +138,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             Statistical,
             A,
             "MINA(value1, [value2], ...)",
-            "Smallest value counting text as 0 and logicals as 1/0.",
+            "Smallest value: reference text counts as 0 and logicals as 1/0; direct arguments coerce; literal arrays use numbers only.",
             |a: &[Arg], _c: C| num_val(min_of(&numbers_a(a)?))
         ),
         f!("MAX", 1, VAR, Statistical, A, "MAX(number1, [number2], ...)", "Largest number (0 when there are none).", |a: &[Arg], _c: C| num_val(
@@ -151,7 +151,7 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             Statistical,
             A,
             "MAXA(value1, [value2], ...)",
-            "Largest value counting text as 0 and logicals as 1/0.",
+            "Largest value: reference text counts as 0 and logicals as 1/0; direct arguments coerce; literal arrays use numbers only.",
             |a: &[Arg], _c: C| num_val(max_of(&numbers_a(a)?))
         ),
         f!("LARGE", 2, 2, Statistical, S_ARR_K, "LARGE(array, k)", "The k-th largest number in a data set.", large),

@@ -106,6 +106,7 @@ This improves series preparation; it does not change the model-fitting or season
 
 | Function | Excel parity note |
 |---|---|
+| AVERAGEA / MAXA / MINA / VARA / VARPA / STDEVA / STDEVPA | Literal arrays count numeric elements only; references count logical values as 1/0 and text as 0; direct arguments are coerced. Errors propagate and blanks are skipped. |
 | BINOM.DIST / BINOM.DIST.RANGE | Trial count is truncated, then must be at most 2,147,483,646; larger trials return `#NUM!`. |
 | BETA.DIST | Density mode returns `#NUM!` at the lower or upper interval endpoint when the corresponding shape parameter is less than or equal to 1; cumulative endpoint results remain 0 and 1. |
 | HARMEAN | Returns `#N/A` when arrays and references contain no numeric observations; zero and negative numeric observations still return `#NUM!`. |
@@ -163,6 +164,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 | 2026-10-31 | minor | BETA.DIST density returns `#NUM!` at the lower endpoint with alpha less than or equal to 1 and upper endpoint with beta less than or equal to 1; cumulative behavior is unchanged |
 | 2026-10-31 | minor | HARMEAN returns `#N/A` when array or reference inputs contain no numbers; nonpositive numeric observations remain `#NUM!` |
 | 2026-10-31 | minor | YEARFRAC basis 0 tests the end-31 rule against the original start day; MOD returns `#NUM!` from a quotient of 1.1259E12; PERCENTRANK returns `#DIV/0!` from significance 309 and 15 significant digits from 15 (Excel 16) |
+| 2026-10-31 | minor | A-family aggregates ignore logical and text elements in literal arrays, keep reference coercion through BYROW/BYCOL slices, and retain direct-argument handling |
 | 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
 | 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
