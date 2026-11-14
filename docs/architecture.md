@@ -221,11 +221,11 @@ Conditional-format and validation formulas are written for the top-left cell of 
 ranges. When an edit moves that cell (cuts a range short, or removes the range holding it), the
 rule's top-left-relative formulas (`CfRule::relative_formulas_mut`, `Validation::formulas_mut`)
 are first re-hosted at the cell that takes its place (`rehost_rule`, given the ranges as they were
-before the edit), then moved once by the walker, so deleting a rule's first row no longer turns it
-into `#REF!`. A range moved whole or left in place keeps its formulas, and colour-scale, data-bar
-and icon-set thresholds are read as written. A cut takes the rules on its cells with it (the
-engine's `Rule` trait, `remove_rule_cells`, `moved_rule_parts`), so their ranges and formulas move
-together, once; a cut to another sheet qualifies their references with the source sheet. A cut is
+before the edit), then moved once by the walker, so deleting a rule's first row leaves its formulas reading
+the same cells. A range moved whole or left in place keeps its formulas, and colour-scale, data-bar
+and icon-set thresholds are read as written. A cut, and Move Columns, take the rules on their
+cells with them (`move_cut_rules`, on the engine's `Rule` trait, `remove_rule_cells` and
+`moved_rule_parts`), so their ranges and formulas move together, once; a cut to another sheet qualifies their references with the source sheet. A cut is
 pasted as it is: Paste Special refuses to transpose it or tile it over a larger selection, as
 Excel does.
 

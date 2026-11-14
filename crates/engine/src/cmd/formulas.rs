@@ -416,7 +416,8 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Formulas that use a renamed name follow it: cell formulas and other names' definitions, on
+/// References to a renamed name follow it: every one the workbook holds
+/// ([`gridcraft_model::Workbook::rewrite_references`]) and Python cells' `xl()` references, on
 /// the sheets where `old` resolves to the renamed name (its own sheet for a sheet-scoped name;
 /// every sheet without a same-named sheet-level name for a workbook-level one).
 fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) -> Result<()> {

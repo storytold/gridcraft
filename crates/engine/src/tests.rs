@@ -6685,7 +6685,7 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
 
 /// Renaming a sheet renames a PivotTable's source to it, and the PivotTable still refreshes.
 #[test]
-fn sheet_rename_renames_every_reference() {
+fn sheet_rename_renames_a_pivot_source() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Region", "Sales"], ["East", 1], ["West", 2]]})).unwrap();
     s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!E3", "rows": ["Region"], "values": ["Sales"]}))
@@ -6774,10 +6774,13 @@ fn a_copied_sheets_chart_plots_the_copy() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1:B3", "values": [["x", "y"], ["a", 1], ["b", 2]]})).unwrap();
     s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    // A series name written as a formula on no sheet keeps its `=`, and stays a reference.
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].name = Some("=A1".into());
     s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
     let wb = &s.doc().unwrap().wb;
     let copy = wb.sheets.iter().find(|sh| sh.name != "Sheet1").unwrap();
     assert!(copy.charts[0].series[0].values.contains(&copy.name), "{}", copy.charts[0].series[0].values);
+    assert_eq!(copy.charts[0].series[0].name.as_deref(), Some("=A1"));
 }
 
 /// A rule's formulas follow its ranges: deleting its top-left row re-hosts them at the cell
@@ -6925,6 +6928,15 @@ fn moving_a_column_out_of_a_rule_keeps_every_cell_checking_itself() {
     };
     // Old A is now D; old B and C are A and B.
     for at in ["A1", "B2", "D3"] {
+        assert!(ok(&s, at, "5"), "{at} takes 5");
+        assert!(!ok(&s, at, "-5"), "{at} refuses -5");
+    }
+    // Moved left, a whole range of the rule becomes its top-left: the parts left behind still
+    // check themselves.
+    let mut s = super::tests::s();
+    s.execute("data.validation", json!({"range": "B1:B3,D1:D3", "type": "custom", "formula1": "=B1>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 1})).unwrap();
+    for at in ["B1", "C2"] {
         assert!(ok(&s, at, "5"), "{at} takes 5");
         assert!(!ok(&s, at, "-5"), "{at} refuses -5");
     }

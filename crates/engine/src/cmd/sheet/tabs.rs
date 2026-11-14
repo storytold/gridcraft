@@ -135,18 +135,26 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             sh.name = name;
             // A copied sheet's charts plot the copy's own data, as Excel's do (its formulas keep
             // what they name).
-            let fix = |t: &str| match gridcraft_formula::parse(t.trim_start_matches('=')) {
-                Ok(e) => gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &base, &sh.name)),
-                Err(_) => t.to_string(),
+            // Text that names no other sheet is kept as written (a leading `=` included).
+            let copy = sh.name.clone();
+            let fix = |t: &mut String| {
+                let Ok(e) = gridcraft_formula::parse(t.trim_start_matches('=')) else { return };
+                let before = gridcraft_formula::print(&e);
+                let after = gridcraft_formula::print(&gridcraft_formula::adjust::rename_sheet(e, &base, &copy));
+                if after != before {
+                    *t = if t.starts_with('=') { format!("={after}") } else { after };
+                }
             };
             for ch in &mut sh.charts {
                 for se in &mut ch.series {
-                    se.values = fix(&se.values);
+                    fix(&mut se.values);
                     for t in [&mut se.categories, &mut se.name, &mut se.bubble_sizes].into_iter().flatten() {
-                        *t = fix(t);
+                        fix(t);
                     }
                 }
-                ch.source = ch.source.as_deref().map(fix);
+                if let Some(t) = ch.source.as_mut() {
+                    fix(t);
+                }
             }
             sh.tables.clear(); // table names must be unique
             sh.preserved = None; // kept file content (form controls, OLE objects…) stays with the original

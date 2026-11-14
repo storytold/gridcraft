@@ -405,6 +405,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         // The moved columns' rules go with them as a cut's do, so a rule wider than them
         // stays on its other cells and checks what it did.
         let snapshot = cx.wb.sheets.get(sheet).cloned().ok_or_else(|| bad("sheet.moveColumns", "no such sheet"))?;
+        crate::cmd::edit::move_cut_rules(cx, &snapshot, (sheet, sheet), source, CellRef::new(0, destination))?;
         {
             let sh = cx.sheet_mut(sheet)?;
             let pictures: Vec<_> =
@@ -412,6 +413,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             let cells = sh.take_cells(source);
             let moved_lines: Vec<_> = (0..count).filter_map(|offset| sh.cols.remove(&(moved_from + offset)).map(|info| (offset, info))).collect();
             let movement = Edit::Move { from: source, to_row: 0, to_col: destination };
+            // (Its conditional formats and validation no longer touch the moved columns.)
             shift_cell_features(sh, &movement);
             for object in sh
                 .charts
@@ -437,7 +439,6 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 sh.cols.insert(destination + offset, info);
             }
         }
-        crate::cmd::edit::move_cut_rules(cx, &snapshot, (sheet, sheet), source, CellRef::new(0, destination))?;
         for cell in touched {
             cx.touch(sheet, cell);
         }

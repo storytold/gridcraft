@@ -558,11 +558,11 @@ fn paste_validations(
     Ok(())
 }
 
-/// A cut takes its cells' conditional formats and validation with it, from sheet `from` to the
-/// block at `at` on sheet `to`, replacing the rules there. The moved parts' formulas are handled
-/// as the cut cells' are: kept written for where their cells were (on another sheet, with
-/// their references to it named), so the reference rewrite for the move shifts those into the
-/// block once. `snapshot` is the source sheet as it was cut.
+/// A cut, or Move Columns, takes its cells' conditional formats and validation with it, from
+/// sheet `from` to the block at `at` on sheet `to`, replacing the rules there. The moved parts'
+/// formulas are handled as the moved cells' are: kept written for where their cells were (on
+/// another sheet, with their references to it named), so the reference rewrite for the move
+/// shifts those into the block once. `snapshot` is the source sheet before the block moved.
 pub(crate) fn move_cut_rules(
     cx: &mut crate::cmd::Ctx,
     snapshot: &gridcraft_model::Sheet,
@@ -602,9 +602,8 @@ pub(crate) fn move_cut_rules(
 }
 
 /// Applies a reference adjustment to every reference the workbook holds
-/// ([`Workbook::rewrite_references`]: formulas, names, conditional formats, validation,
-/// charts, sparklines, PivotTable sources) and its Python cells, and moves the legacy array
-/// ranges on `target`.
+/// ([`Workbook::rewrite_references`]) and its Python cells, and moves the legacy array ranges
+/// on `target`.
 ///
 /// [`Workbook::rewrite_references`]: gridcraft_model::Workbook::rewrite_references
 pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) -> Result<()> {
