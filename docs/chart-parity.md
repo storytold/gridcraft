@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-07 · **Change:** minor (chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-09 · **Change:** minor (up/down bars on line charts; earlier: chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -51,7 +51,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Secondary axis | any series | line series in combo charts |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
-| Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
+| Up/down bars, high-low lines, drop lines, series lines | yes | **partial**: up/down bars on line charts are read, drawn and saved (fills with their opacity, outlines, inner shadows as an even tint, gap width; not on stock charts); high-low lines, drop lines and series lines missing |
 | Data table under the chart | yes | yes for column, bar, line, area and compatible combo charts: live formatted values, blank cells, grouped category headers, optional legend keys, horizontal/vertical borders and outline; native `c:dTable` XLSX round-trip; shared UI/print/PDF rendering |
 | Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour only; Format Chart pane covers chart-level options |
 | Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
@@ -107,6 +107,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Up/down bars on line charts (`c:upDownBars`): read, drawn and saved. In each category a bar from the first line series to the last, light (#F9F9F9) where the last is higher and dark (#3F3F3F) where lower, a black line where equal, `1 / (1 + gapWidth / 100)` of a category wide, over the lines, as measured in Excel; fills and their opacity, outlines (without `a:ln`, Excel's thin black one for chart styles 1-16 and 33-40 and none for 17-32 and 41-48; none with `a:noFill`) and inner shadows from the file, a shadow drawn as an even tint matched to the centre of Excel's bar. Stock charts are not covered |
 | 2026-11-07 | minor | Chart-data-table keys use the shared plot-kind helper with their series index after #1150. A focused regression checks the first combo series uses a column key and later series use line keys. No readiness score change. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |

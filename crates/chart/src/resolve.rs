@@ -534,7 +534,42 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    // Excel's defaults: near-white bars up, dark grey bars down.
+    let rgba = |c: Option<gridcraft_model::Color>, opacity: Option<u8>, d: [u8; 3]| {
+        let [r, g, b] = c.and_then(|c| c.resolve(&wb.theme)).unwrap_or(d);
+        let a = opacity.map_or(255, |o| (f32::from(o.min(100)) * 2.55).round() as u8);
+        [r, g, b, a]
+    };
+    // Excel's default bar outline follows the chart style (measured on a synthetic chart): thin
+    // and black for styles 1-16 and 33-40, none for 17-32 and 41-48.
+    let default_outline = (!matches!(chart.style, 17..=32 | 41..=48)).then_some(([0, 0, 0, 0xFF], 0.75));
+    let outline = |o: gridcraft_model::BarOutline| match o {
+        gridcraft_model::BarOutline::Auto => default_outline,
+        gridcraft_model::BarOutline::None => None,
+        gridcraft_model::BarOutline::Solid { color, width } => {
+            Some((rgba(color, None, [0, 0, 0]), width.filter(|w| w.is_finite()).map_or(0.75, |w| w.clamp(0.25, 20.0))))
+        }
+    };
+    // Shadow lengths are in points; the chart draws in pixels at 100%.
+    const PX_PER_PT: f32 = 96.0 / 72.0;
+    let shadow = |s: Option<gridcraft_model::InnerShadow>| {
+        s.map(|s| {
+            let (sin, cos) = s.direction.to_radians().sin_cos();
+            let d = s.distance.clamp(0.0, 1584.0) * PX_PER_PT;
+            let blur = s.blur.clamp(0.0, 1584.0) * PX_PER_PT;
+            crate::BarShadow { blur, dx: d * cos, dy: d * sin, color: rgba(Some(s.color), Some(s.opacity), [0, 0, 0]) }
+        })
+    };
+    let up_down = chart.up_down_bars.map(|u| crate::UpDownBars {
+        gap: f32::from(u.gap_width.min(500)),
+        up: rgba(u.up, u.up_opacity, [0xF9, 0xF9, 0xF9]),
+        down: rgba(u.down, u.down_opacity, [0x3F, 0x3F, 0x3F]),
+        up_outline: outline(u.up_outline),
+        down_outline: outline(u.down_outline),
+        up_shadow: shadow(u.up_shadow),
+        down_shadow: shadow(u.down_shadow),
+    });
+    ChartData { categories, category_levels, series, palette, up_down }
 }
 
 #[cfg(test)]

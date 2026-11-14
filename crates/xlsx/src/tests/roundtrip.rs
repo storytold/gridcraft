@@ -430,6 +430,7 @@ fn sample() -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        up_down_bars: None,
     };
     for kind in [
         ChartKind::ColumnClustered,
