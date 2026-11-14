@@ -46,6 +46,9 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// The current sheet's charts read from chart parts: (model chart id, chart part name). Their
+    /// original XML is kept for saving (see `passthrough`).
+    pub chart_parts: Vec<(u32, String)>,
 }
 
 impl Ctx<'_> {
@@ -267,6 +270,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        chart_parts: vec![],
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -357,6 +361,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
+        kept.charts(&mut cx, &mut sheet);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
             Some("veryHidden") => Visibility::VeryHidden,

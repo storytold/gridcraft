@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-07 · **Change:** minor (chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-07 · **Change:** minor (an unedited embedded chart keeps its original XML on save (#1668); chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -81,11 +81,18 @@ Format reference: [Microsoft's DrawingML data table documentation](https://learn
 
 ## XLSX round-trip
 
-Charts are read from and written to DrawingML chart parts, but only the fields the model holds
-survive: anything else (axis scaling, label options, error bars, per-point formats, chartex
-extensions) is lost when GridCraft saves a workbook it opened. That is the main reason charts are
-**~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
-back.
+Charts are read from and written to DrawingML chart parts. A chart that was not edited keeps its
+original chart part on save, with its style, colour and user-shape parts (#1668): everything the
+model doesn't hold (axis scaling, label options, error bars, per-point formats, text boxes in the
+chart) survives. Moving or resizing a chart is not an edit. The original part is not used, and
+the chart is written from the model as before, when the chart was edited (title, series, kind,
+legend…), when a sheet its formulas name was renamed or deleted (including references the model
+doesn't hold, such as a title taken from a cell), or after a row or column insert that moved its
+series. Then only the fields the model holds survive. Not kept: histogram, waterfall and other
+chartex charts (their data goes through `_xlchart` defined names GridCraft renumbers on save),
+and charts GridCraft can't read. The kept part's cached series values (`c:numCache`) are not
+refreshed when cells change (#1677). That is the main reason charts are **~30% ready**: a user who
+edits a chart from an Excel workbook still gets a simpler chart back (#1675).
 
 Series data, categories and names may refer to defined names, as dynamic (OFFSET) ranges do:
 Excel writes a workbook-scoped name as `[0]!Name` in `<c:f>`. GridCraft reads it as the bare
@@ -96,7 +103,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 ## Work (40–60 h)
 
-1. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
+1. Preserve unmodelled chart XML on round-trip: the original part is kept for unedited charts (#1668); patch only edited fields (#1675) and move references the model doesn't hold (#1676): 4–8 h.
 2. Axis options, label options, gridlines per axis, legend formatting: 10–15 h.
 3. Error bars; Format Trendline pane (trendlines landed): 4–6 h.
 4. Per-element Format pane parity, smoothed lines, exploded pie, pie/bar of pie, 100% variants: 8–12 h.
@@ -112,6 +119,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
+| 2026-10-24 | minor | An unedited embedded chart keeps its original chart part, with its style, colour and user-shape parts, on save (#1668) |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-18 | minor | Doughnut charts: every series is a ring (first series innermost), hole size and first slice angle modelled, editable and round-tripped; rotated slices split at 12 o'clock without overlap; legend names categories like Excel's default (#1823) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
@@ -123,4 +131,4 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 | 2026-10-11 | minor | Recommended Charts dialog with previews (#215) |
 | 2026-10-11 | minor | Select Data dialog with category axis labels; a blank top-left cell makes the first column the categories (#287) |
 | 2026-10-10 | minor | Smooth lines (#62) and Switch Row/Column on file charts (#116) landed; chart resize bug (#190) |
-| 2026-10-10 | major | Created from a source audit: 25 kinds (25 of ~60 subtypes), element gaps, round-trip loss |
+| 2026-10-10 | major | Created from a source audit: 25 kinds (25 of ~60 subtypes), element gaps, round-trip loss | 
