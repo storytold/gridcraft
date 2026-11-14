@@ -474,7 +474,7 @@ fn run(args: &[String]) -> Result<(), String> {
 
 fn commands(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search"], &["json"])?;
-    a.no_extra(1)?;
+    a.no_extra(usize::from(a.opt("search").is_none()))?;
     let q = a.opt("search").or(a.positional.first().map(String::as_str)).map(str::to_ascii_lowercase);
     let s = Session::new();
     let list: Vec<_> = s
@@ -508,7 +508,7 @@ fn commands(args: &[String]) -> Result<(), String> {
 
 fn functions(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["search", "category"], &["json"])?;
-    a.no_extra(1)?;
+    a.no_extra(usize::from(a.opt("search").is_none()))?;
     let mut p = json!({});
     if let Some(q) = a.opt("search").or(a.positional.first().map(String::as_str)) {
         p["search"] = json!(q);
@@ -591,6 +591,13 @@ fn send(args: &[String]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn listing_with_explicit_search_rejects_a_positional_argument() {
+        let args = ["--search", "sum", "stray"].map(str::to_string);
+        assert_eq!(commands(&args).unwrap_err(), "unexpected argument `stray`");
+        assert_eq!(functions(&args).unwrap_err(), "unexpected argument `stray`");
+    }
 
     #[test]
     fn parses_commands() {
