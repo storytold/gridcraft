@@ -152,7 +152,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Object",
             [],
             None,
-            "{kind: chart|image|shape|slicer|equation|control, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger)}",
+            "{kind: chart|image|shape|slicer|equation|control, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger), rotation?: degrees clockwise (shapes, not ink)}",
             has_doc,
             move_object
         ),
@@ -1186,6 +1186,7 @@ fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     });
     let shape = Shape {
         math: Default::default(),
+        rotation: 0.0,
         id,
         kind,
         anchor: Anchor {
@@ -1288,6 +1289,13 @@ fn size_cap(current: f32) -> f64 {
 fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, o) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
+    let rotation = f64_param(p, "rotation").filter(|v| v.is_finite());
+    if rotation.is_some() {
+        let ink = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.shapes.iter().any(|x| x.id == o.id && x.kind == ShapeKind::Ink));
+        if o.kind != ObjKind::Shape || ink {
+            return Err(bad("object.move", "only shapes other than ink rotate"));
+        }
+    }
     edit(s, |cx| {
         let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
         if let Some(at) = at {
@@ -1304,6 +1312,11 @@ fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = f64_param(p, "height") {
             a.height = v.clamp(0.0, size_cap(a.height)) as f32;
+        }
+        if let Some(r) = rotation
+            && let Some(shape) = cx.sheet_mut(sheet)?.shapes.iter_mut().find(|x| x.id == o.id)
+        {
+            shape.rotation = r.rem_euclid(360.0) as f32;
         }
         Ok(Json::Null)
     })
@@ -1834,6 +1847,7 @@ fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let color = super::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
         math: Default::default(),
+        rotation: 0.0,
         id,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },

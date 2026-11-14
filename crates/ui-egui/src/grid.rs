@@ -151,6 +151,12 @@ pub enum Drag {
         /// step of an earlier drag.
         stepped: bool,
     },
+    /// Turning a shape about the centre of `rect` (its screen rect as the drag began).
+    Rotate {
+        obj: gridcraft_engine::model::ObjRef,
+        rect: Rect,
+        stepped: bool,
+    },
 }
 
 /// The fill a left-drag of the handle just made, which the Auto Fill Options button can redo

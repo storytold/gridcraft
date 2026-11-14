@@ -95,6 +95,7 @@ fn insert_equation(s: &mut Session, p: &Json) -> Result<Json> {
         text: latex.to_string(),
         format: Default::default(),
         math: Default::default(),
+        rotation: 0.0,
     };
     shape.math.refresh(latex);
     let sheet = d.wb.active_sheet();
