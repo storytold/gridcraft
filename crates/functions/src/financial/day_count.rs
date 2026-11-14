@@ -14,6 +14,15 @@ pub(super) fn date(a: &[Arg], i: usize) -> R<f64> {
     Ok(d)
 }
 
+/// [`date`] with date text read in the workbook's date system, as DATEVALUE reads it.
+pub(super) fn date_in(a: &[Arg], i: usize, sys: DateSystem) -> R<f64> {
+    let d = crate::util::scalar(crate::util::arg(a, i)?).to_number_in(sys)?.trunc();
+    if !(0.0..=2_958_465.0).contains(&d) {
+        return Err(CellError::Num);
+    }
+    Ok(d)
+}
+
 pub(super) fn ymd(sys: DateSystem, s: f64) -> R<(i32, u32, u32)> {
     let dt = datetime_from_serial(sys, s.trunc()).ok_or(CellError::Num)?;
     Ok((dt.year, dt.month, dt.day.max(1)))

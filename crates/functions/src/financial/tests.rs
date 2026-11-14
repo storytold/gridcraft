@@ -317,3 +317,22 @@ fn securities_read_dates_in_the_1904_system() {
     let odd = vec![d4(2008, 11, 11), d4(2021, 3, 1), d4(2008, 10, 15), d4(2009, 3, 1), n(0.0785), n(0.0625), n(100.0), n(2.0), n(1.0)];
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
+
+#[test]
+fn discount_securities_read_iso_date_text_in_the_1904_system() {
+    // #4084: date text resolves in the workbook's date system, as DATEVALUE does.
+    let d4 = |y, m, dd| n(serial_from_ymd(DateSystem::D1904, y, m, dd).unwrap());
+    let ev4 = |name: &str, args: Vec<Arg>| {
+        let mut ctx = TestCtx { sys: DateSystem::D1904, ..TestCtx::default() };
+        crate::call(crate::lookup(name).unwrap(), &args, &mut ctx)
+    };
+    let disc = |name: &str, x: f64, y: f64| ev4(name, vec![t("2025-01-15"), d4(2025, 2, 14), n(x), n(y), n(2.0)]);
+    close_tol(disc("DISC", 95.0, 100.0), 0.6000000000000005, 1e-12);
+    close_tol(disc("INTRATE", 95.0, 100.0), 0.631578947368421, 1e-12);
+    close_tol(disc("PRICEDISC", 0.05, 100.0), 99.58333333333333, 1e-12);
+    close_tol(disc("RECEIVED", 1000.0, 0.05), 1004.18410041841, 1e-9);
+    close_tol(disc("YIELDDISC", 95.0, 100.0), 0.631578947368421, 1e-12);
+    // Maturity given as text gives the same result as the serial.
+    let text_maturity = vec![d4(2025, 1, 15), t("2025-02-14"), n(0.05), n(100.0), n(3.0)];
+    close_tol(ev4("PRICEDISC", text_maturity), 99.58904109589041, 1e-12);
+}
