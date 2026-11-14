@@ -31,6 +31,7 @@ pub mod dnd;
 pub mod doc_windows;
 pub mod editor;
 pub mod equation;
+pub mod file_providers;
 mod floating_pictures;
 pub mod fonts;
 pub mod form_controls;
