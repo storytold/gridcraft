@@ -350,16 +350,32 @@ fn a_chart_without_series_survives_a_round_trip() {
 
 /// The primary axes are found in one pass over the value axes, however many groups a file has.
 #[test]
+#[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
 fn many_groups_are_read_in_linear_time() {
-    let groups =
-        "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:axId val=\"1\"/><c:axId val=\"2\"/></c:barChart>".repeat(20_000);
+    // Every group has a series and its own value axis on the right, so no group is the primary
+    // pair and every group's value axis is looked up among all the others.
+    const N: usize = 40_000;
+    let groups: String = (0..N)
+        .map(|i| {
+            format!(
+                "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{}<c:axId val=\"{}\"/><c:axId val=\"{}\"/></c:barChart>",
+                ser(i),
+                2 * i + 1,
+                2 * i + 2
+            )
+        })
+        .collect();
+    let axes: String = (0..N).map(|i| format!("<c:valAx><c:axId val=\"{}\"/><c:axPos val=\"r\"/></c:valAx>", 2 * i + 2)).collect();
     let xml = format!(
-        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{groups}{}</c:plotArea></c:chart></c:chartSpace>",
-        bar(&ser(0))
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{groups}{axes}</c:plotArea></c:chart></c:chartSpace>"
     );
-    // Quadratic lookups took minutes here in a debug build.
-    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
-    assert_eq!(ch.series.len(), 1);
+    let doc = parse(xml.as_bytes()).unwrap();
+    let t0 = std::time::Instant::now();
+    let ch = read_chart(&doc).unwrap();
+    let took = t0.elapsed();
+    assert_eq!(ch.series.len(), N);
+    // Well under a second here in a debug build; scanning the value axes for each group took about 25 s.
+    assert!(took < std::time::Duration::from_secs(4), "{took:?}");
 }
 
 /// An empty group of another kind before the groups with series (as another writer may leave)
