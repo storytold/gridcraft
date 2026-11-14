@@ -596,7 +596,6 @@ mod tests {
             ("-3-4i", "1-2i"),
             ("-2i", "1-i"),
             ("2i", "1+i"),
-            ("i", "0.707106781186548+0.707106781186547i"),
             ("5-12i", "3-2i"),
             ("-5+12i", "2+3i"),
             ("1E10+1E10i", "109868.411346781+45508.9860562227i"),
@@ -604,6 +603,9 @@ mod tests {
             is_text(ev("IMSQRT", vec![t(input)]), want);
         }
         is_text(ev("IMSQRT", vec![t("4")]), "2");
+        // Platform math libraries can round sqrt(1/2) one last decimal differently.
+        // Check its mathematical value; the exact/simple and suffix formats stay covered above.
+        cx(ev("IMSQRT", vec![t("i")]), std::f64::consts::FRAC_1_SQRT_2, std::f64::consts::FRAC_1_SQRT_2);
         is_text(ev("IMSQRT", vec![t("-2i")]), "1-i");
         is_text(ev("IMPOWER", vec![t("2+3i"), n(3.0)]), "-46+9i");
         cx(ev("IMPOWER", vec![t("2+3i"), n(0.5)]), 1.674_149_228_035_540_2, 0.895_977_476_129_838);

@@ -46,7 +46,7 @@ fn what_a_policy_refuses() {
     assert!(check(Policy::new().read("relative/path")).contains("absolute"));
     assert!(check(Policy::new().read("")).contains("absolute"));
     assert!(check(Policy::new().read(dir.join("missing"))).contains("missing"));
-    assert!(check(Policy::new().read(PathBuf::from(format!("/{}", "a".repeat(MAX_PATH_BYTES))))).contains("longer"));
+    assert!(check(Policy::new().read(dir.join("a".repeat(MAX_PATH_BYTES)))).contains("longer"));
     let mut many = Policy::new();
     for _ in 0..=MAX_PATHS {
         many = many.read(&dir);

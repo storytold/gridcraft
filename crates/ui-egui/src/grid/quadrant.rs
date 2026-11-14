@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
     Look, MergedArea, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border, paint_cf_icon,
-    painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    painted_halign, rotated_text_pos, row_primary_bounds, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -83,11 +83,13 @@ fn wrapped_text_clip(p: &Painter, rect: Rect, galley: &egui::Galley, y: f32, val
         return clip;
     };
 
-    if y + last_row.rect().bottom() <= rect.bottom() + 0.01 {
+    // A line fits by its primary font's line box, the same bounds the text is placed with: the
+    // taller box a fallback face adds to the row must not hide a line that fits inside the cell.
+    if y + row_primary_bounds(last_row).1 <= rect.bottom() + 0.01 {
         return clip;
     }
 
-    let last_full_bottom = galley.rows.iter().map(|row| y + row.rect().bottom()).rfind(|bottom| *bottom <= rect.bottom() + 0.01);
+    let last_full_bottom = galley.rows.iter().map(|row| y + row_primary_bounds(row).1).rfind(|bottom| *bottom <= rect.bottom() + 0.01);
 
     clip.max.y = last_full_bottom.map(|bottom| clip.bottom().min(bottom)).unwrap_or(clip.top()).max(clip.top());
 
