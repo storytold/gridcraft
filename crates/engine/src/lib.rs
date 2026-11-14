@@ -235,7 +235,7 @@ const JOURNAL_MAX_ENTRIES: usize = 10_000;
 /// `engine.journal`), and a `file.open` holds the whole file as base64: without a size cap a
 /// few opens of a large workbook keep tens of MB alive.
 pub(crate) const JOURNAL_MAX_BYTES: usize = 64 * 1024 * 1024;
-const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
+pub(crate) const UNDO_BYTES_LIMIT: usize = 128 * 1024 * 1024;
 
 /// Comment and hyperlink text of a sheet: a changed sheet's snapshot keeps its own copy of these
 /// strings (an edit deep-copies them), so they count against the history budget with the cells.
