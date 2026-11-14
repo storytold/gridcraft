@@ -28,6 +28,7 @@ mod tr;
 mod uk;
 mod vi;
 mod zh;
+pub(crate) mod zh_hant;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +38,8 @@ pub enum Language {
     Es,
     El,
     Zh,
+    #[serde(rename = "zh-hant")]
+    ZhHant,
     Ja,
     Ko,
     Ru,
@@ -56,11 +59,12 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
         Self::Zh,
+        Self::ZhHant,
         Self::Ja,
         Self::Ko,
         Self::Ru,
@@ -94,6 +98,7 @@ impl Language {
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
+            Self::ZhHant => "繁體中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
             Self::Ru => "Русский",
@@ -119,6 +124,7 @@ impl Language {
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
+            Self::ZhHant => "zh-hant",
             Self::Ja => "ja",
             Self::Ko => "ko",
             Self::Ru => "ru",
@@ -147,7 +153,23 @@ impl Language {
         Self::ALL.iter().map(|l| format!("\"{}\"", l.code())).collect::<Vec<_>>().join(separator)
     }
 
+    /// Resolves a locale tag; an explicit Chinese script takes precedence over its region.
     fn from_tag(tag: &str) -> Option<Self> {
+        // Script subtags take precedence over the region. Keep legacy `zh` preferences
+        // Simplified, while Taiwan, Hong Kong and Macao select the separate Hant catalog.
+        let normalized = tag.trim().split(['.', '@']).next()?.replace('_', "-").to_ascii_lowercase();
+        let parts: Vec<&str> = normalized.split('-').collect();
+        if parts.first() == Some(&"zh") {
+            return Some(if parts.contains(&"hant") {
+                Self::ZhHant
+            } else if parts.contains(&"hans") {
+                Self::Zh
+            } else if parts.iter().any(|p| ["tw", "hk", "mo"].contains(p)) {
+                Self::ZhHant
+            } else {
+                Self::Zh
+            });
+        }
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
             "es" => Some(Self::Es),
@@ -205,6 +227,7 @@ impl Language {
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
+            Self::ZhHant => zh_hant::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
             Self::PtBr => pt::translate(text),
@@ -324,6 +347,41 @@ fn name_sort_key(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Chinese script selection and persisted preferences must distinguish Hant from legacy Hans.
+    fn traditional_chinese_tags_keep_scripts_and_saved_preferences_separate() {
+        for tag in ["zh-hant", "ZH_Hant_TW", "zh-TW", "zh_HK.UTF-8", "zh-MO", "zh-Hant-CN"] {
+            assert_eq!(Language::parse(tag), Some(Language::ZhHant), "{tag}");
+        }
+        for tag in ["zh", "zh-CN", "zh-SG", "zh-Hans", "zh-Hans-TW"] {
+            assert_eq!(Language::parse(tag), Some(Language::Zh), "{tag}");
+        }
+        let saved: crate::UiState = serde_json::from_str(r#"{"language":"zh-TW"}"#).unwrap();
+        assert_eq!(saved.language, Language::ZhHant);
+        assert_eq!(serde_json::to_value(saved).unwrap()["language"], "zh-hant");
+        assert_eq!(Language::ZhHant.formula_locale(), gridcraft_engine::formula::FormulaLocale::En);
+    }
+
+    #[test]
+    /// Catalog entries preserve lookup order, formatting placeholders and label line breaks.
+    fn traditional_chinese_catalog_preserves_lookup_and_formatting_contracts() {
+        assert!(zh_hant::CATALOG.windows(2).all(|pair| pair[0].0 < pair[1].0), "catalog must be sorted and unique");
+        for (english, translated) in zh_hant::CATALOG {
+            assert!(!translated.trim().is_empty(), "empty translation: {english}");
+            assert!(!translated.contains('|'), "context leaked: {english}");
+            let placeholders = |text: &str| {
+                let mut names: Vec<String> = text.split('{').skip(1).filter_map(|s| s.split_once('}').map(|(name, _)| name.to_owned())).collect();
+                names.sort();
+                names
+            };
+            assert_eq!(placeholders(english), placeholders(translated), "{english}");
+            assert_eq!(english.matches('\n').count(), translated.matches('\n').count(), "{english}");
+            assert_eq!(Language::ZhHant.tr(english), *translated);
+        }
+        assert_eq!(Language::ZhHant.tr("Unknown context|Untranslated label"), "Untranslated label");
+        assert_eq!(Language::ZhHant.tr("Sheet1!A1"), "Sheet1!A1");
+    }
 
     /// Every shipped catalog names GridCraft's own Diagram and Decorative Text features, and
     /// Diagram never repeats that catalog's chart word (both sit on the Insert tab).

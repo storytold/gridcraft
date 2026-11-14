@@ -1,5 +1,12 @@
 # GridCraft roadmap
 
+2026-11-03: Traditional Chinese (`zh-hant`) interface catalog, Taiwan terminology, separate
+Traditional/Simplified locale detection and installed Noto Sans CJK TC preference. No readiness
+estimate change. [Details / 詳細說明](docs/localization-zh-hant.md).
+
+2026-11-03：新增繁體中文（台灣用語）介面翻譯，分開辨識繁簡語系，並優先使用已安裝的
+Noto Sans CJK TC。就緒程度估計維持原樣。
+
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
 > **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-05 · **Change:** minor (CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
@@ -101,6 +108,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Language | Code | Status | UI strings |
 |---|---|---|---|
 | English | en | full (source language) | 100% |
+| Traditional Chinese (Taiwan) / 繁體中文（台灣） | zh-hant | catalog + native TC font preference / 翻譯檔與桌面繁中字型優先順序 | 1,175 lookup entries / 個查表項目 |
 | Simplified Chinese | zh-Hans | menus only | ~12% |
 | Spanish | es | none | 0% |
 | Hindi | hi | none | 0% |
@@ -272,6 +280,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 |---|---|---|
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
+| 2026-11-03 | minor | Traditional Chinese catalog, script-aware locale selection and installed Noto TC preference / 繁中翻譯、繁簡語系分流與已安裝 Noto TC 優先順序 |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |

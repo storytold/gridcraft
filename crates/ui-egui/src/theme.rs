@@ -26,8 +26,8 @@ mod font_setup;
 pub use font_fallback::symbol_face_installed;
 #[cfg(test)]
 use font_fallback::{
-    PREFERRED_ARABIC, arabic, cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, load_faces, preferred_file,
-    symbols_more, thai,
+    PREFERRED_ARABIC, arabic, cjk_han_japanese, cjk_han_simplified, cjk_han_traditional, cjk_hangul, fallback_faces, hebrew, lao, load_faces,
+    preferred_file, symbols_more, thai,
 };
 #[cfg(all(test, unix, not(target_os = "macos")))]
 use font_fallback::{covers_arabic, fontconfig_arabic, parse_fc_match};

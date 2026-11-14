@@ -6,8 +6,8 @@ use crate::i18n::Language;
 fn fallback_faces_are_appended_to_every_family() {
     // Structural: whatever loaded, the non-Latin fallback keys must sit at the end of each chain
     // (after the Latin/default fonts) so Latin still wins for Latin text, in the language's order.
-    for han in [HanOrder::Chinese, HanOrder::Japanese] {
-        let language = if han == HanOrder::Japanese { Language::Ja } else { Language::Zh };
+    for language in [Language::Zh, Language::Ja, Language::ZhHant] {
+        let han = HanOrder::of(language);
         let fonts = font_definitions_for_language(language);
         let fb_keys: Vec<String> = fallback_faces(han).into_iter().map(|(k, _)| k.to_string()).filter(|k| fonts.font_data.contains_key(k)).collect();
         if fb_keys.is_empty() {
@@ -118,6 +118,7 @@ fn interface_families_fall_back_to_the_cell_font() {
 }
 
 #[test]
+/// Each interface language selects its Han glyph region without reordering other scripts.
 fn language_reorders_only_the_han_faces() {
     let keys = |han| fallback_faces(han).into_iter().map(|(k, _)| k).collect::<Vec<_>>();
     assert_eq!(
@@ -129,16 +130,19 @@ fn language_reorders_only_the_han_faces() {
         ["sys-cjk-han-zh", "sys-cjk-han-ja", "sys-cjk-hangul", "sys-thai", "sys-lao", "sys-hebrew", "sys-arabic", "sys-symbols", "sys-symbols-2"]
     );
     assert_eq!(HanOrder::of(Language::Ja), HanOrder::Japanese);
+    assert_eq!(HanOrder::of(Language::ZhHant), HanOrder::TraditionalChinese);
+    assert_eq!(&keys(HanOrder::TraditionalChinese)[..3], ["sys-cjk-han-tc", "sys-cjk-han-zh", "sys-cjk-han-ja"]);
     for l in [Language::En, Language::Zh, Language::Ko, Language::Ru, Language::PtBr, Language::De, Language::Cs, Language::Fr, Language::Tr] {
         assert_eq!(HanOrder::of(l), HanOrder::Chinese, "{l:?} shares the default order (no font rebuild)");
     }
 }
 
 #[test]
+/// Flatpak font candidates retain the regional face indexes of the shared Noto collection.
 fn cjk_fallback_probes_flatpak_fonts_with_the_correct_locale_faces() {
     // Exercise the candidates the fallback loader actually consumes, not just the directory
     // constant. This must work on CI without an installed CJK font or a Flatpak runtime.
-    for (candidates, face) in [(cjk_han_japanese(), 0), (cjk_han_simplified(), 2), (cjk_hangul(), 1)] {
+    for (candidates, face) in [(cjk_han_japanese(), 0), (cjk_han_simplified(), 2), (cjk_han_traditional(), 3), (cjk_hangul(), 1)] {
         for directory in [
             "/run/host/fonts/opentype/noto",
             "/run/host/fonts/google-noto-cjk",
@@ -162,11 +166,33 @@ fn cjk_fallback_probes_flatpak_fonts_with_the_correct_locale_faces() {
 }
 
 #[test]
+/// An installed TC face must cover the catalog itself; other regional fallbacks cannot mask gaps.
+fn traditional_chinese_system_face_covers_the_catalog_when_installed() {
+    use skrifa::MetadataProvider;
+
+    let installed = cjk_han_traditional().iter().any(|(path, index)| try_load(&[(path.as_str(), *index)]).is_some());
+    if !installed {
+        eprintln!("skipped Traditional Chinese glyph check: install Noto Sans CJK TC or a supported TC system face");
+        return;
+    }
+    let fonts = font_definitions_for_language(Language::ZhHant);
+    let face = fonts.font_data.get("sys-cjk-han-tc").expect("an installed TC face must be wired into the font definitions");
+    let font = skrifa::FontRef::from_index(face.bytes(), face.index).unwrap();
+    let charmap = font.charmap();
+    // Inspect the TC face itself: an SC or Japanese fallback must not mask a missing TC glyph.
+    for (_, text) in crate::i18n::zh_hant::CATALOG {
+        for c in text.chars().filter(|c| ('\u{3400}'..='\u{9fff}').contains(c)) {
+            assert!(charmap.map(c).is_some(), "TC face lacks {c} in {text}");
+        }
+    }
+}
+
+#[test]
 /// A font file shared by several fallback scripts is loaded once, with one shared font blob rather than a copy per script.
 fn fallback_faces_load_each_file_once() {
     // The region-merged Noto Sans CJK .ttc serves Japanese, Chinese and Hangul; it must be loaded
     // once, not once per script (tens of MB each).
-    for language in [Language::En, Language::Ja] {
+    for language in [Language::En, Language::Ja, Language::ZhHant] {
         let fonts = font_definitions_for_language(language);
         let present: Vec<&Arc<FontData>> = fallback_faces(HanOrder::of(language)).into_iter().filter_map(|(k, _)| fonts.font_data.get(k)).collect();
         for (i, a) in present.iter().enumerate() {
