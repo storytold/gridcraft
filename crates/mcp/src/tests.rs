@@ -248,10 +248,12 @@ fn sort_string_keys_validate_direction_before_sorting() {
         assert_eq!(ok(&mut s, "inspect_workbook", json!({}))["selection"], "C5");
     }
     for key in ["A", "A asc", "A ASCENDING"] {
+        ok(&mut s, "write_range", json!({"range": "A1", "values": unsorted}));
         ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": [key], "header": false}));
         assert_eq!(ok(&mut s, "read_range", json!({"range": "A1:A3"}))["values"], json!([["a"], ["b"], ["c"]]));
     }
     for key in ["A desc", "A DeScEnDiNg"] {
+        ok(&mut s, "write_range", json!({"range": "A1", "values": unsorted}));
         ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": [key], "header": false}));
         assert_eq!(ok(&mut s, "read_range", json!({"range": "A1:A3"}))["values"], json!([["c"], ["b"], ["a"]]));
     }
