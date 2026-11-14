@@ -31,14 +31,16 @@ mod fidelity;
 mod package;
 mod report;
 
-pub use calc::oracle;
 #[cfg(test)]
 use calc::volatile_names;
 #[cfg(test)]
 use calc::{bool_cached_as_number, values_match};
+use calc::{oracle, snapshot_formula_values};
 #[cfg(test)]
 use fidelity::diff_workbooks;
+#[cfg(test)]
 pub use fidelity::round_trip;
+use fidelity::round_trip_owned;
 use package::full_calc_on_load;
 #[cfg(test)]
 use package::validate_package;
@@ -369,7 +371,7 @@ pub fn check_bytes(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
 
 fn check_inner(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
     let mut report = FileReport { path: path.to_string(), ..Default::default() };
-    let (cached, warnings) = match gridcraft_engine::io::open_bytes(path, bytes) {
+    let (mut wb, warnings) = match gridcraft_engine::io::open_bytes(path, bytes) {
         Ok(x) => x,
         Err(e) => {
             report.error = Some(e.to_string());
@@ -377,12 +379,14 @@ fn check_inner(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
         }
     };
     report.warnings = warnings;
-    let mut fresh = cached.clone();
+    let saved = snapshot_formula_values(&wb);
     let mut calc = Calc::new();
-    calc.recalc_all(&mut fresh);
+    calc.recalc_all(&mut wb);
     let trust_cache = !full_calc_on_load(bytes);
-    report.calc = oracle(&cached, &fresh, &calc, trust_cache, opts);
-    report.round_trip = round_trip(&fresh, bytes, opts);
+    report.calc = oracle(&saved, &wb, &calc, trust_cache, opts);
+    drop(saved);
+    drop(calc);
+    report.round_trip = round_trip_owned(wb, bytes, opts);
     report
 }
 
