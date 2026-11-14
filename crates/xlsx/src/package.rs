@@ -52,7 +52,6 @@ impl<'a> Package<'a> {
     }
 
     /// Every part's (normalized) name, sorted.
-    #[cfg(test)]
     pub fn names(&self) -> Vec<String> {
         self.opc.names().into_iter().map(str::to_string).collect()
     }

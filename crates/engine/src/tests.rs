@@ -2694,6 +2694,27 @@ fn ods_import_keeps_cached_values_and_reports_limits() {
 }
 
 #[test]
+fn numbers_import_keeps_saved_values_and_never_reuses_source_as_save_target() {
+    use gridcraft_xlsx::testing::{NumbersCell as N, numbers_document};
+    let bytes = numbers_document(&[("Data", vec![("Table 1", vec![vec![N::Number(42.0), N::Text("Original data")]])])]);
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Numbers);
+    for name in ["source.numbers", "disguised.xlsx"] {
+        let mut s = s();
+        let r = s.execute("file.open", json!({"name": name, "base64": crate::io::base64_encode(&bytes)})).unwrap();
+        assert!(!r["warnings"].as_array().unwrap().is_empty());
+        assert!(s.doc().unwrap().path.is_none());
+        assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+        assert_eq!(v(&s, "B1"), Value::from("Original data"));
+        assert!(s.execute("file.saveAs", json!({"path": "source.numbers"})).is_err());
+        assert!(s.execute("file.saveBytes", json!({"format": "numbers"})).is_err());
+        let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+        s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    }
+}
+
+#[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn ods_import_never_reuses_source_as_save_target() {
     let nonce = unique_nonce();

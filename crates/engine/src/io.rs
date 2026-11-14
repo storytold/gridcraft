@@ -24,6 +24,8 @@ pub enum FileKind {
     Xls,
     Xlsb,
     Ods,
+    /// Apple Numbers document (data import only).
+    Numbers,
     Csv,
     Tsv,
     Json,
@@ -40,6 +42,7 @@ impl FileKind {
             "xls" | "xlt" => FileKind::Xls,
             "xlsb" => FileKind::Xlsb,
             "ods" => FileKind::Ods,
+            "numbers" => FileKind::Numbers,
             "csv" => FileKind::Csv,
             "tsv" | "tab" | "txt" => FileKind::Tsv,
             "json" | "scjson" => FileKind::Json,
@@ -290,12 +293,17 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     let import = match sniffed {
         gridcraft_xlsx::Format::Ods => Some(FileKind::Ods),
         gridcraft_xlsx::Format::Xlsb => Some(FileKind::Xlsb),
+        gridcraft_xlsx::Format::Numbers => Some(FileKind::Numbers),
         // An XLSX package is never read as ODS/XLSB just because of its name.
         gridcraft_xlsx::Format::Xlsx => None,
-        _ => kind.filter(|k| matches!(k, FileKind::Ods | FileKind::Xlsb)),
+        _ => kind.filter(|k| matches!(k, FileKind::Ods | FileKind::Xlsb | FileKind::Numbers)),
     };
     if let Some(import) = import {
-        let read = if import == FileKind::Ods { gridcraft_xlsx::read_ods } else { gridcraft_xlsx::read_xlsb };
+        let read = match import {
+            FileKind::Ods => gridcraft_xlsx::read_ods,
+            FileKind::Numbers => gridcraft_xlsx::read_numbers,
+            _ => gridcraft_xlsx::read_xlsb,
+        };
         let (wb, report) = read(bytes).map_err(|e| EngineError::Other(format!("We can't import '{name}': {e}")))?;
         return Ok((wb, report.warnings));
     }
@@ -524,6 +532,9 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         }
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
+        FileKind::Numbers => {
+            Err(EngineError::Other("Numbers (.numbers) is supported for data import only. Save as .xlsx or another supported export format.".into()))
+        }
         FileKind::Sylk => {
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
