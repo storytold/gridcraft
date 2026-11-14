@@ -119,7 +119,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
         }
         "Font" => {
             craft_ui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
-                for f in crate::fonts::families() {
+                for f in crate::fonts::families().iter() {
                     ui.selectable_value(&mut st.font.name, f.clone(), f.clone());
                 }
             });
