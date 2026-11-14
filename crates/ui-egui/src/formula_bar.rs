@@ -476,6 +476,17 @@ fn show_edit<'t>(
         .show(ui)
 }
 
+/// Stable widget ID for the in-cell text editor (also shared by Ready-mode cell IME focus).
+pub(crate) fn cell_editor_id() -> egui::Id {
+    egui::Id::unique("gridcraft.cell_editor")
+}
+
+/// Drops persisted [`egui::text_edit::TextEditState`] for the closed in-cell editor so
+/// [`egui::Context::text_edit_focused`] reports `false` in Ready mode.
+pub(crate) fn clear_cell_editor_state(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<egui::text_edit::TextEditState>(cell_editor_id()));
+}
+
 /// The text editor used in the cell and in the formula bar (they share `app.editor`). It shows
 /// `max_height` of text and scrolls beyond that, keeping the caret in view.
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
@@ -522,21 +533,40 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let chars_before = ed.text.chars().count();
-    // A dialog opened over the edit (Paste Name) takes the keyboard until it closes, and the
+    // A dialog or alert box opened over the edit takes the keyboard until it closes, and the
     // editor takes it back afterwards.
-    let dialog_open = app.dialog.is_some();
+    let dialog_open = app.dialog.is_some() || app.message.is_some();
     if dialog_open && mine {
         ed.request_focus = true;
         ed.keep_selection = true;
     }
+    let want_focus = mine && !dialog_open && ed.request_focus;
+    if want_focus && ui.is_visible() {
+        ui.ctx().memory_mut(|m| m.request_focus(id));
+    }
     let synced = mine && !dialog_open && (ed.request_focus || ed.sync_caret);
+    if synced {
+        ed.request_focus = false;
+        // Closing a dialog that changed nothing (Cancel) gives the selection back as it was.
+        let range = if ed.keep_selection && !ed.sync_caret {
+            egui::text::CCursorRange::two(egui::text::CCursor::new(ed.anchor), egui::text::CCursor::new(ed.caret))
+        } else {
+            ed.anchor = ed.caret;
+            egui::text::CCursorRange::one(egui::text::CCursor::new(ed.caret))
+        };
+        ed.sync_caret = false;
+        ed.keep_selection = false;
+        let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+        state.cursor.set_char_range(Some(range));
+        state.store(ui.ctx(), id);
+    }
     let edit = if multiline || ed.text.contains('\n') { TextEdit::multiline(&mut ed.text) } else { TextEdit::singleline(&mut ed.text) };
     let edit = edit.interactive(!dialog_open);
     let caret_index = ed.caret;
     // The in-cell editor grows with its text and never scrolls, so the field keeps its whole width
     // for the text (a scroll area would take the bar's width off it and wrap the text narrower
     // than the cell does). The formula bar shows its lines and scrolls past them.
-    let mut output = if on_sheet {
+    let output = if on_sheet {
         show_edit(edit, ui, id, font, width, &mut layouter)
     } else {
         egui::ScrollArea::vertical()
@@ -558,32 +588,16 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     // Both editors are text inputs without a visible label next to them: name the one being shown.
     let accessible_name = (if on_sheet { app.ui.language.tr("Cell Editor") } else { app.ui.language.tr("Formula Bar") }).to_string();
     let resp = output.response.response.clone().accessible_name(accessible_name);
-    if synced {
-        if ed.request_focus {
-            resp.request_focus();
-        }
-        ed.request_focus = false;
-        // Closing a dialog that changed nothing (Cancel) gives the selection back as it was.
-        let range = if ed.keep_selection && !ed.sync_caret {
-            egui::text::CCursorRange::two(egui::text::CCursor::new(ed.anchor), egui::text::CCursor::new(ed.caret))
-        } else {
-            ed.anchor = ed.caret;
-            egui::text::CCursorRange::one(egui::text::CCursor::new(ed.caret))
-        };
-        ed.sync_caret = false;
-        ed.keep_selection = false;
-        output.state.cursor.set_char_range(Some(range));
-        output.state.store(ui.ctx(), id);
-    } else if resp.clicked() || resp.gained_focus() {
+    if want_focus && !resp.has_focus() {
+        resp.request_focus();
+    }
+    if !synced && (resp.clicked() || resp.gained_focus()) {
         // Clicking into the other editor moves editing there.
         ed.from_formula_bar = id == egui::Id::unique("gridcraft.formula_bar");
         ed.enter_mode = false;
         app.session.mode = gridcraft_engine::Mode::Edit;
     }
-    if !synced
-        && !dialog_open
-        && let Some(r) = output.cursor_range
-    {
+    if !dialog_open && let Some(r) = output.cursor_range {
         ed.caret = r.primary.index.into();
         ed.anchor = r.secondary.index.into();
     }
@@ -636,6 +650,15 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         } else {
             app.commit_edit(dr, dc, array, fill);
         }
+    }
+    if app.editor.is_none() {
+        clear_cell_editor_state(ui.ctx());
+        ui.ctx().memory_mut(|m| m.interrupt_ime());
+        app.grid.ime_was_editing = false;
+        app.grid.ime_ready_cell = None;
+    } else {
+        app.grid.ime_was_editing = true;
+        app.grid.ime_ready_cell = None;
     }
     EditorInfo { lines, caret }
 }
@@ -869,6 +892,15 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         Some(PythonKey::Cancel) => app.cancel_edit(),
         Some(PythonKey::Leave) => app.toggle_python_mode(),
         None => {}
+    }
+    if app.editor.is_none() {
+        clear_cell_editor_state(ui.ctx());
+        ui.ctx().memory_mut(|m| m.interrupt_ime());
+        app.grid.ime_was_editing = false;
+        app.grid.ime_ready_cell = None;
+    } else {
+        app.grid.ime_was_editing = true;
+        app.grid.ime_ready_cell = None;
     }
     info
 }

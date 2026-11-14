@@ -336,6 +336,12 @@ pub struct GridState {
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+    /// Active `(doc uid, sheet uid, cell)` observed while Ready mode owns IME on the grid cell id.
+    pub(crate) ime_ready_cell: Option<(u64, u64, CellRef)>,
+    /// Context generation for Ready-mode grid IME; starts at 1 cleanly and increments on cell change.
+    pub(crate) ime_ready_gen: u64,
+    /// True once an in-cell or formula-bar editor was open, so returning to Ready mode interrupts IME.
+    pub(crate) ime_was_editing: bool,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and

@@ -202,6 +202,18 @@ impl SheetApp {
         // shown); any other window's request was dropped before it.
         self.ui.keytip_invoke = self.ui.keytip_invoke_next.take();
         text_box::before_ui(self, &ctx);
+        if self.editor.is_none() {
+            formula_bar::clear_cell_editor_state(&ctx);
+            if self.grid.ime_was_editing {
+                self.grid.ime_was_editing = false;
+                self.grid.ime_ready_cell = None;
+                self.grid.ime_ready_gen = self.grid.ime_ready_gen.max(1).saturating_add(1);
+                ctx.memory_mut(|m| m.interrupt_ime());
+            }
+        } else {
+            self.grid.ime_was_editing = true;
+            self.grid.ime_ready_cell = None;
+        }
         // Another window came forward without going through a command (which settles drafts
         // first): the draft goes into its own window instead of floating over this one. If its
         // workbook refuses it, its window comes back to the front with the draft open.
