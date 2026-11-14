@@ -901,6 +901,42 @@ fn spills() {
 }
 
 #[test]
+fn stack_functions_preserve_single_cell_reference_errors_and_recalculate_dependents() {
+    for (source, error) in [("=NA()", CellError::NA), ("#N/A", CellError::NA), ("=1/0", CellError::Div0), ("#DIV/0!", CellError::Div0)] {
+        for name in ["VSTACK", "HSTACK"] {
+            let mut t = T::new();
+            t.set("Z6", source);
+            assert_eq!(t.get("Z6"), Value::Error(error), "{source}: source precondition");
+            t.set("A1", &format!("={name}(1,Z6,2)"));
+            assert_eq!(t.get("A1"), Value::Number(1.0), "{source}: {name} anchor");
+            let (middle, last, shape) = if name == "VSTACK" { ("A2", "A3", (3, 1)) } else { ("B1", "C1", (1, 3)) };
+            assert_eq!(t.get(middle), Value::Error(error));
+            assert_eq!(t.num(last), 2.0);
+            let spill = t.wb.sheet(0).unwrap().spill_ranges[&c("A1")];
+            assert_eq!((spill.height(), spill.width()), shape);
+            t.set("H1", "=SUM(IFERROR(A1#,0))");
+            assert_eq!(t.num("H1"), 3.0);
+            t.set("Z6", "7");
+            assert_eq!((t.num(middle), t.num("H1")), (7.0, 10.0));
+            t.set("Z6", source);
+            assert_eq!(t.get(middle), Value::Error(error));
+            assert_eq!(t.num("H1"), 3.0);
+        }
+    }
+}
+
+#[test]
+fn stack_functions_still_propagate_direct_error_expressions() {
+    for name in ["VSTACK", "HSTACK"] {
+        let mut t = T::new();
+        t.set("A1", &format!("={name}(1,NA(),2)"));
+        assert_eq!(t.get("A1"), Value::Error(CellError::NA));
+        assert!(!t.wb.sheet(0).unwrap().spill_ranges.contains_key(&c("A1")));
+        assert_eq!((t.get("A2"), t.get("B1")), (Value::Empty, Value::Empty));
+    }
+}
+
+#[test]
 fn an_anchor_given_a_formula_that_reads_its_old_spill_area_sees_it_empty() {
     // The new formula was evaluated while the old array was still laid out, and only the
     // anchor's dependents were evaluated again once it was gone.

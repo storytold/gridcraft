@@ -26,6 +26,13 @@ fn arr_arg(args: &[Arg], i: usize) -> R<Array> {
     Ok(as_array(v).into_owned())
 }
 
+/// Stacks keep referenced errors as elements. Other array functions, including
+/// WRAPROWS and EXPAND, still propagate scalar reference errors through `arr_arg`.
+fn stack_arg(args: &[Arg], i: usize) -> R<Array> {
+    let a = arg(args, i)?;
+    if a.from_ref { Ok(as_array(&a.value).into_owned()) } else { arr_arg(args, i) }
+}
+
 fn rows_of(a: &Array) -> Vec<Vec<Value>> {
     (0..a.rows).map(|r| (0..a.cols).map(|c| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()).collect()
 }
@@ -318,7 +325,7 @@ fn vstack(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut rows = Vec::new();
     let mut total = 0usize;
     for i in 0..args.len() {
-        let a = arr_arg(args, i)?;
+        let a = stack_arg(args, i)?;
         total = total.saturating_add(a.data.len());
         if total > MAX_CELLS {
             return Err(CellError::Num);
@@ -334,7 +341,7 @@ fn hstack(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut w = 0usize;
     let mut total = 0usize;
     for i in 0..args.len() {
-        let a = arr_arg(args, i)?;
+        let a = stack_arg(args, i)?;
         h = h.max(a.rows);
         w = w.saturating_add(a.cols);
         total = total.saturating_add(a.data.len());
@@ -1289,6 +1296,50 @@ mod tests {
         assert_eq!(rows_of(&ev("TOCOL", vec![av(m.clone()), n(2.0), b(true)])), vec![vec![nv(1.0)], vec![Value::Empty], vec![nv(4.0)]]);
         is_err(ev("TOCOL", vec![av(m), n(4.0)]), CellError::Value);
         is_err(ev("TOROW", vec![av(arr(vec![vec![Value::Empty]])), n(1.0)]), CellError::Calc);
+    }
+
+    #[test]
+    fn stacking_preserves_referenced_scalar_errors_in_each_position() {
+        for error in [CellError::NA, CellError::Div0] {
+            for name in ["VSTACK", "HSTACK"] {
+                for position in 0..3 {
+                    let mut args = vec![n(1.0), n(2.0), n(3.0)];
+                    args[position] = rf(Value::Error(error));
+                    let mut values = vec![nv(1.0), nv(2.0), nv(3.0)];
+                    values[position] = Value::Error(error);
+                    let expected = if name == "VSTACK" { values.into_iter().map(|v| vec![v]).collect() } else { vec![values] };
+                    assert_eq!(rows_of(&ev(name, args)), expected, "{name}, {error:?}, argument {position}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stacking_direct_errors_propagate_and_multicell_reference_errors_remain_data() {
+        for error in [CellError::NA, CellError::Div0] {
+            for name in ["VSTACK", "HSTACK"] {
+                is_err(ev(name, vec![n(1.0), e(error), n(2.0)]), error);
+            }
+            let source = arr(vec![vec![Value::Error(error)], vec![nv(0.0)]]);
+            assert_eq!(
+                rows_of(&ev("VSTACK", vec![n(1.0), rf(source.clone()), n(2.0)])),
+                vec![vec![nv(1.0)], vec![Value::Error(error)], vec![nv(0.0)], vec![nv(2.0)]]
+            );
+            assert_eq!(
+                rows_of(&ev("HSTACK", vec![n(1.0), rf(source), n(2.0)])),
+                vec![vec![nv(1.0), Value::Error(error), nv(2.0)], vec![Value::Error(CellError::NA), nv(0.0), Value::Error(CellError::NA)]]
+            );
+        }
+    }
+
+    #[test]
+    fn stacking_padding_neighbors_keep_their_scalar_reference_error_policy() {
+        for error in [CellError::NA, CellError::Div0] {
+            for name in ["WRAPROWS", "WRAPCOLS"] {
+                is_err(ev(name, vec![rf(Value::Error(error)), n(2.0), n(0.0)]), error);
+            }
+            is_err(ev("EXPAND", vec![rf(Value::Error(error)), n(2.0), n(2.0), n(0.0)]), error);
+        }
     }
 
     #[test]
