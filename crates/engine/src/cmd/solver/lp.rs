@@ -243,12 +243,16 @@ fn phase_one(tableau: &mut Tableau, normalized: &[(Vec<f64>, Sense, f64)], budge
 }
 
 /// Depth-first branch and bound over a relaxation solver; returns the best integer point.
+/// `fixed` is the part of every relaxation's value that no branch can change (the objective's
+/// constant and the terms of variables fixed at the root). The numerical pruning tolerance is
+/// measured without it, so a large constant cannot prune a better integer point.
 pub(super) fn branch_and_bound(
     lo: &[f64],
     hi: &[f64],
     integer: &[bool],
     max_nodes: usize,
     gap: f64,
+    fixed: f64,
     relax: &mut dyn FnMut(&[f64], &[f64]) -> Outcome,
 ) -> (Outcome, usize) {
     let mut stack: Vec<(Vec<f64>, Vec<f64>)> = vec![(lo.to_vec(), hi.to_vec())];
@@ -277,7 +281,7 @@ pub(super) fn branch_and_bound(
             limited = true;
         }
         if let Some((_, b)) = &best
-            && obj >= b - gap * b.abs().max(1e-12) - 1e-9 * (1.0 + b.abs())
+            && obj >= b - gap * b.abs().max(1e-12) - 1e-9 * (1.0 + (b - fixed).abs())
         {
             continue;
         }
@@ -501,10 +505,11 @@ pub(super) fn linear_program(goal: Goal, cf: &[f64], f_const: f64, lin: &[(Vec<f
 }
 
 /// The linear program Simplex LP solves: the model linearised at `x0`, its objective
-/// coefficients, the costs and rows for the goal, and the work limit for its size.
+/// coefficients, the costs, constant offset, and rows for the goal, and the work limit for its size.
 pub(super) struct SimplexProgram {
     pub(super) cf: Vec<f64>,
     pub(super) c: Vec<f64>,
+    pub(super) obj_offset: f64,
     pub(super) rows: Vec<LpRow>,
     pub(super) work: u64,
 }
@@ -516,8 +521,13 @@ pub(super) struct SimplexProgram {
 pub(super) fn simplex_program(ev: &mut Evaluator, goal: Goal, x0: &[f64]) -> std::result::Result<SimplexProgram, &'static str> {
     let ((cf, f_const), lin) = linearize(ev, x0)?;
     let (c, rows) = linear_program(goal, &cf, f_const, &lin, &ev.rows);
+    let obj_offset = match goal {
+        Goal::Max => -f_const,
+        Goal::Min => f_const,
+        Goal::Value(_) => 0.0,
+    };
     let size = (rows.len() as u64 + 2 * x0.len() as u64 + 1) * (4 * x0.len() as u64 + 2 * rows.len() as u64 + 1);
-    Ok(SimplexProgram { cf, c, rows, work: LP_WORK.max(size) })
+    Ok(SimplexProgram { cf, c, obj_offset, rows, work: LP_WORK.max(size) })
 }
 
 /// Linearises the model at `x0` (n + 1 evaluations) and checks it at one more point. Returns the
