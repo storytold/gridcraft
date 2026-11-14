@@ -257,7 +257,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         (false, _) => None,
     };
     if let Some(text) = source {
-        let ink = obj.child("txBody").and_then(|tb| first_run_color(tb, 0)).unwrap_or_default();
+        let ink = equation_ink(obj.child("txBody"), &text, described_source(descr).is_some());
         return Some(Shape {
             id: 0,
             kind: ShapeKind::Equation,
@@ -327,6 +327,22 @@ fn described_source(descr: &str) -> Option<(&str, &str)> {
     (rest.as_bytes().get(16) == Some(&b':') && marker.bytes().all(|b| b.is_ascii_hexdigit()) && !src.trim().is_empty()).then_some((marker, src))
 }
 
+/// The colour an equation's frame carries (its "ink": the colour of everything the source does
+/// not colour itself). GridCraft saves it on the paragraph's `a:endParaRPr`. Another writer's
+/// Office Math has none: its first run's colour stands in. The runs of GridCraft's own equation
+/// cannot stand in when the source colours some of them (`{\color{green}a}+d` would read back
+/// green), so a source with a colour command and no saved ink reads as Automatic.
+fn equation_ink(tb: Option<&El>, source: &str, own: bool) -> Color {
+    let Some(tb) = tb else { return Color::default() };
+    if let Some(c) = tb.kids("p").find_map(|p| p.child("endParaRPr")).and_then(|e| e.child("solidFill")).and_then(dml_color) {
+        return c;
+    }
+    if own && (source.contains("\\color") || source.contains("\\textcolor")) {
+        return Color::default();
+    }
+    first_run_color(tb, 0).unwrap_or_default()
+}
+
 /// The colour of the first run (DrawingML `rPr` with a fill) under `e`.
 fn first_run_color(e: &El, depth: usize) -> Option<Color> {
     if depth > 12 {
@@ -380,7 +396,7 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
     match gridcraft_math::to_omml(&sh.text, size_pt, sh.line.resolve(theme)) {
         Ok(omml) => {
             let math = format!(
-                "<a:p><a:pPr algn=\"ctr\"/><a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMathParaPr><m:jc m:val=\"centerGroup\"/></m:oMathParaPr>{omml}</m:oMathPara></a14:m><a:endParaRPr lang=\"en-US\" sz=\"{sz}\"/></a:p>"
+                "<a:p><a:pPr algn=\"ctr\"/><a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMathParaPr><m:jc m:val=\"centerGroup\"/></m:oMathParaPr>{omml}</m:oMathPara></a14:m><a:endParaRPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:endParaRPr></a:p>"
             );
             let _ = write!(
                 s,

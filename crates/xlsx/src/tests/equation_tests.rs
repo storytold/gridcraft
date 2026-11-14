@@ -469,3 +469,46 @@ fn a_paragraph_split_in_an_equation_without_office_math_reads_back_as_the_edit()
     // back is the source with a newline after that space, and nothing else moved or dropped.
     assert_eq!(s[0].text, cd.replacen(' ', " \n", 1), "the split text, exactly");
 }
+
+/// The saved Office Math of `src` with its first run coloured green (as a coloured source is
+/// written when the converter carries `\color`), read back; `keep_descr` keeps GridCraft's own
+/// source in the description, else the equation is another writer's Office Math.
+fn first_run_green(src: &str, ink: Color, keep_descr: bool) -> Shape {
+    let wb = book(vec![equation(1, "B2", src, ink)]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    let at = d.find("<a:rPr lang=\"en-US\"").unwrap();
+    let close = d[at..].find('>').unwrap() + at + 1;
+    let green = "<a:solidFill><a:srgbClr val=\"008000\"/></a:solidFill>";
+    match d[close..].starts_with("<a:solidFill>") {
+        true => {
+            let end = d[close..].find("</a:solidFill>").unwrap() + close + "</a:solidFill>".len();
+            d.replace_range(close..end, green);
+        }
+        false => d.insert_str(close, green),
+    }
+    if !keep_descr {
+        let a = d.find(" descr=\"gridcraft:latex:").unwrap();
+        let b = d[a + 8..].find('"').unwrap() + a + 9;
+        d.replace_range(a..b, "");
+    }
+    parts.insert(name, d.into_bytes());
+    let s = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].kind, ShapeKind::Equation);
+    s[0].clone()
+}
+
+#[test]
+fn a_coloured_run_in_gridcraft_s_own_equation_is_not_the_frames_ink() {
+    // `b` and `+d` have no colour of their own: they take the frame's ink, not the green of the
+    // first run, which would paint the whole equation green after reopening the file.
+    let src = "{\\color{green}a+{\\color{black}b}+c}+d";
+    assert_eq!(first_run_green(src, Color::Auto, true).line, Color::Auto);
+    assert_eq!(first_run_green(src, Color::Rgb(0x1F4E79), true).line, Color::Rgb(0x1F4E79));
+    // A source without a colour command keeps reading the run colour (files saved before the
+    // paragraph carried the ink), and another writer's Office Math too.
+    assert_eq!(first_run_green("a+b", Color::Auto, true).line, Color::Rgb(0x008000));
+    assert_eq!(first_run_green("a+b", Color::Auto, false).line, Color::Rgb(0x008000));
+}
