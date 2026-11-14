@@ -340,6 +340,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description" => "Beschreibung",
         "No workbook is open." => "Es ist keine Arbeitsmappe geöffnet.",
         "Save as type" => "Dateityp",
+        "File name" => "Dateiname",
         "Excel Workbook (*.xlsx)" => "Excel-Arbeitsmappe (*.xlsx)",
         "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8 (durch Trennzeichen getrennt) (*.csv)",
         "Web Page (*.html)" => "Webseite (*.html)",

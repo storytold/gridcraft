@@ -16,7 +16,18 @@ impl SheetApp {
         r
     }
 
-    pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+    pub(super) fn run_command(&mut self, id: &str, mut params: Json) -> Result<Json, String> {
+        // `fileName` on `file.exportPdf` names the web download (Save As › File name). It is for this
+        // layer, which hands the bytes to the browser, so it never reaches the engine.
+        let pdf_name = if id == "file.exportPdf" {
+            params
+                .as_object_mut()
+                .and_then(|m| m.remove("fileName"))
+                .and_then(|v| v.as_str().and_then(|n| backstage::clean_file_stem(n, "pdf")))
+                .map(|stem| format!("{stem}.pdf"))
+        } else {
+            None
+        };
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
@@ -94,7 +105,7 @@ impl SheetApp {
         if id == "file.exportPdf"
             && let Ok(r) = &r
         {
-            self.deliver_pdf(r);
+            self.deliver_pdf(r, pdf_name);
         }
         // The scan stopped at its cell allowance: say that some cells were not checked.
         if id == "data.circleInvalid"
@@ -416,7 +427,10 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                // `fileName`: what Save As › File name holds. Cleaned, it names the file (with .xlsx).
+                let typed =
+                    params.get("fileName").and_then(Json::as_str).and_then(|n| backstage::clean_file_stem(n, "xlsx")).map(|s| format!("{s}.xlsx"));
+                let suggested = typed.clone().unwrap_or_else(|| self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into()));
                 if let Some(pick) = &self.services.pick_save {
                     if let Some(path) = pick(&suggested) {
                         let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
@@ -427,7 +441,7 @@ impl SheetApp {
                     && let Some(dl) = &self.services.download
                     && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
                 {
-                    let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
+                    let name = typed.unwrap_or_else(|| r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string());
                     dl(&name, &b);
                 }
             }

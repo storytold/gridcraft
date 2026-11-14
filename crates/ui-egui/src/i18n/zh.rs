@@ -410,6 +410,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description" => "说明",
         "No workbook is open." => "没有打开的工作簿。",
         "Save as type" => "保存类型",
+        "File name" => "文件名",
         "Excel Workbook (*.xlsx)" => "Excel 工作簿 (*.xlsx)",
         "CSV UTF-8 (Comma delimited) (*.csv)" => "CSV UTF-8(逗号分隔) (*.csv)",
         "Web Page (*.html)" => "网页 (*.html)",
