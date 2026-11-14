@@ -162,9 +162,12 @@ const MAX_DYNAMIC_CELLS: u64 = 16_000_000;
 /// so adversarial range counts can't make each cell scan a long list (a real workbook has a
 /// handful of ranges).
 const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
-/// Most conditional-format range cells one sheet keeps, over all rules of an element: every
-/// rule copies its element's whole range list, so rules × ranges must stay bounded.
-const MAX_COND_CELLS: u64 = 4_000_000;
+/// Most conditional-format ranges one sheet keeps, over all rules of an element: every rule
+/// copies its element's whole range list, so rules × ranges must stay bounded. Ranges are counted,
+/// not the cells they cover: a range costs the same however large it is, and nothing walks a
+/// rule's cells (painting asks whether a cell is inside; statistics read only the used cells), so
+/// a rule over whole columns or the whole sheet, common in real files, is kept.
+const MAX_COND_RANGES: u64 = 4_000_000;
 
 fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
@@ -210,7 +213,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
 
     let mut fit_to_page = false;
     let mut link_budget = LinkBudget::default();
-    let mut cf_kept_cells = 0u64;
+    let mut cf_kept_ranges = 0u64;
     let mut column_assignments_left = MAX_COLUMN_ASSIGNMENTS;
     cx.cf_ext_ids.clear();
     for e in &root.children {
@@ -237,7 +240,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     }
                 }
             }
-            "conditionalFormatting" => read_cf(cx, e, &mut sheet, &mut cf_kept_cells),
+            "conditionalFormatting" => read_cf(cx, e, &mut sheet, &mut cf_kept_ranges),
             "dataValidations" => {
                 for v in e.kids("dataValidation") {
                     if let Some(v) = read_validation(v) {
