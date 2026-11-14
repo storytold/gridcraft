@@ -13,23 +13,38 @@ workspace = true
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+gridcraft-sandbox = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
 image = { workspace = true }
+chrono = { workspace = true }
 
 [build-dependencies]
 # Icon + VERSIONINFO for gridcraft.exe; build.rs only uses it when the target is Windows.
 winresource = "0.1"
 
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["x11"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Retain X11 fallback; draw Wayland client-side controls without bundled title fonts.
+winit = { version = "0.30", default-features = false, features = ["x11", "wayland-csd-adwaita-notitle"] }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
+# Same craft-libs revision as the workspace's craft-update and craft-window (see the root
+# Cargo.toml).
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "aa84415bae3b765fef6b7ef42404f66ad1cff9d9" }
+craft-update = { workspace = true }
 rfd = { workspace = true }
-arboard = { workspace = true }
+arboard = { workspace = true, features = ["image-data"] }
+gridcraft-mcp = { workspace = true }
+# The control channel's token (OS random numbers); already in the tree.
+getrandom = "0.4"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
-arboard = { workspace = true, features = ["wayland-data-control"] }
+arboard = { workspace = true, features = ["image-data", "wayland-data-control"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Blocks on the start-up DirectX 12 adapter probe (`graphics.rs`); already in the tree via eframe.
@@ -42,6 +57,10 @@ muda = { version = "0.21", default-features = false }
 # by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our
 # workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
+# apple_events.rs brings the app forward for a Dock quit's question. Already in Cargo.lock (muda,
+# winit); pinned exactly to the same versions.
+objc2 = "=0.6.5"
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back. Already in Cargo.lock (muda, winit);
 # pinned exactly to the same versions.

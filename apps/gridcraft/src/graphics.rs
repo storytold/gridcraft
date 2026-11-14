@@ -1,4 +1,5 @@
-//! Windows graphics instance configuration, applied before wgpu can initialize any driver.
+//! Graphics instance configuration, applied before wgpu can initialize any driver: Windows
+//! backends and the DirectX 12 shader compiler, and the Intel Mac indirect-validation skip.
 //!
 //! Vulkan is never initialized unless `WGPU_BACKEND` asks for it: enumerating Vulkan adapters
 //! crashes inside Intel's `igvk64.dll` on some UHD Graphics drivers (#120), and that access
@@ -8,11 +9,37 @@
 //! whichever `dxcompiler.dll` the DLL search path happens to find (#339, #354): see
 //! [`dx12_compiler`].
 
+// On macOS only the indirect-validation items are used outside tests; on Windows the other way
+// round, so those two carry their own `allow`.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
+
 use eframe::{
     NativeOptions,
     egui_wgpu::WgpuSetup,
-    wgpu::{Backends, DeviceType, Dx12Compiler},
+    wgpu::{Backends, DeviceType, Dx12Compiler, InstanceFlags},
 };
+
+/// wgpu compiles its indirect-call validation compute shaders inside `request_device`. On Intel
+/// Macs (Iris 5100 in a Mac mini 2014) Metal's compiler aborts on them ("Compiler encountered an
+/// internal error"), the device is lost and eframe exits before the window opens. GridCraft issues
+/// no indirect draws or dispatches, so Intel Macs skip them; every other GPU keeps wgpu's default.
+/// Same as WordCraft (storytold/wordcraft#2652) and PhotoCraft (storytold/PhotoCraft#3171).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn skips_indirect_validation(macos: bool, intel: bool) -> bool {
+    macos && intel
+}
+
+/// Leaves wgpu's indirect-call validation out of the instance eframe creates when `skip`.
+/// `WGPU_VALIDATION_INDIRECT_CALL=1` still turns it back on.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn configure_indirect_validation(options: &mut NativeOptions, skip: bool) {
+    if !skip {
+        return;
+    }
+    if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+        create.instance_descriptor.flags = create.instance_descriptor.flags.difference(InstanceFlags::VALIDATION_INDIRECT_CALL).with_env();
+    }
+}
 
 /// What the start-up probe learned about one DirectX 12 adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +167,55 @@ fn probe_dx12(options: &NativeOptions) -> Vec<Dx12Adapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn instance_flags(options: &NativeOptions) -> InstanceFlags {
+        let WgpuSetup::CreateNew(create) = &options.wgpu_options.wgpu_setup else {
+            panic!("default native options must create a wgpu instance");
+        };
+        create.instance_descriptor.flags
+    }
+
+    #[test]
+    fn intel_macs_skip_the_indirect_validation_shaders() {
+        // Metal's Intel compiler aborted on them, losing the device before the window opened.
+        assert!(skips_indirect_validation(true, true));
+        // Apple silicon, Windows and Linux keep wgpu's validation.
+        for (macos, intel) in [(true, false), (false, true), (false, false)] {
+            assert!(!skips_indirect_validation(macos, intel), "macos={macos} intel={intel}");
+        }
+        let mut options = NativeOptions::default();
+        let before = instance_flags(&options);
+        configure_indirect_validation(&mut options, false);
+        assert_eq!(instance_flags(&options), before, "flags untouched when not skipping");
+        if std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
+            configure_indirect_validation(&mut options, true);
+            assert!(!instance_flags(&options).contains(InstanceFlags::VALIDATION_INDIRECT_CALL));
+        }
+    }
+
+    /// `WGPU_VALIDATION_INDIRECT_CALL=1` turns the validation back on even when it is skipped.
+    /// Tests can't set environment variables (`set_var` is unsafe, and unsafe code is forbidden),
+    /// so this runs itself again as a child process with the variable set.
+    #[test]
+    fn the_environment_turns_indirect_validation_back_on() {
+        const NAME: &str = "graphics::tests::the_environment_turns_indirect_validation_back_on";
+        if std::env::var_os("GRIDCRAFT_INDIRECT_VALIDATION_CHILD").is_some() {
+            let mut options = NativeOptions::default();
+            configure_indirect_validation(&mut options, true);
+            assert!(instance_flags(&options).contains(InstanceFlags::VALIDATION_INDIRECT_CALL));
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let out = std::process::Command::new(exe)
+            .args(["--exact", NAME, "--test-threads=1"])
+            .env("GRIDCRAFT_INDIRECT_VALIDATION_CHILD", "1")
+            .env("WGPU_VALIDATION_INDIRECT_CALL", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // `--exact` matching nothing would pass too, so the child must report this one test.
+        assert!(out.status.success() && stdout.contains("1 passed"), "child test failed:\n{stdout}{}", String::from_utf8_lossy(&out.stderr));
+    }
 
     fn configured_backends(backends: Backends) -> Backends {
         let mut options = NativeOptions::default();

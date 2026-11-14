@@ -1,11 +1,20 @@
-//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, CSV/TSV, JSON (debug), HTML export.
+//! Opening and saving files: XLSX, legacy XLS import, XLSB and ODS data import, SYLK import, CSV/TSV, JSON (debug), HTML export.
 
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{Sheet, Workbook};
+use gridcraft_model::{LineIndex, Sheet, Workbook};
 
 use crate::{EngineError, Result};
+
+mod sylk;
+
+/// The function library's answers to what the XLSX and XLS readers and the XLSX writer need to know about functions
+/// (which names are built in, which parameters take a single value).
+pub const XLSX_FUNCTIONS: gridcraft_xlsx::FunctionInfo = gridcraft_xlsx::FunctionInfo {
+    is_builtin: |name| gridcraft_functions::lookup(name).is_some(),
+    is_scalar_arg: |name, i| gridcraft_functions::lookup(name).is_none_or(|s| s.is_scalar_arg(i)),
+};
 
 /// File formats GridCraft reads or writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,6 +28,8 @@ pub enum FileKind {
     Tsv,
     Json,
     Html,
+    /// SYLK symbolic link text (import only).
+    Sylk,
 }
 
 impl FileKind {
@@ -33,6 +44,7 @@ impl FileKind {
             "tsv" | "tab" | "txt" => FileKind::Tsv,
             "json" | "scjson" => FileKind::Json,
             "html" | "htm" => FileKind::Html,
+            "slk" => FileKind::Sylk,
             _ => return None,
         })
     }
@@ -55,8 +67,15 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
 /// [`open_bytes`], first decrypting a password-protected workbook with `password`. Errors never
 /// quote the password.
 pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_with(name, bytes, password, false)
+}
+
+/// [`open_bytes_with_password`], and with `csv_as_text` a CSV/TSV/TXT file keeps every field as
+/// the text it holds, with no number, date or boolean conversion (identifiers such as GTINs, SKUs
+/// and ZIP codes survive). It does not apply to other formats.
+pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
-        let (mut wb, warnings) = open_plain(name, bytes)?;
+        let (mut wb, warnings) = open_plain(name, bytes, csv_as_text)?;
         fit_imported_rows(&mut wb);
         return Ok((wb, warnings));
     }
@@ -70,7 +89,7 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
     if gridcraft_xlsx::sniff(&plain) == gridcraft_xlsx::Format::Encrypted {
         return Err(EngineError::Other(format!("We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).")));
     }
-    let (mut wb, mut warnings) = open_plain(name, &plain)?;
+    let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
     fit_imported_rows(&mut wb);
     warnings.insert(0, DECRYPTED_NOTICE.into());
     Ok((wb, warnings))
@@ -81,14 +100,18 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
 fn fit_imported_rows(wb: &mut Workbook) {
+    // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
+    let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
         rows.sort_unstable();
         rows.dedup();
+        // One sweep over the sheet's merges for all of its rows, in ascending order.
+        let mut sweep = crate::cmd::MergeSweep::new(left);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::auto_row_height(wb, si, row);
+            crate::cmd::fit_row_height(wb, si, row, &mut sweep);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)
@@ -97,6 +120,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
                 sh.rows.entry(row).or_default().size = Some(before);
             }
         }
+        left = sweep.left();
     }
 }
 
@@ -111,12 +135,149 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
     }
 }
 
-/// Parses bytes that aren't encrypted.
-fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
+/// Parses bytes that aren't encrypted, then takes the workbook's macros, and the button actions
+/// xlsx has no place for, out of their hidden names, and adopts the Python cells they hold (see
+/// [`adopt_python`]) within the limits of [`enforce_python_limits`].
+fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text)?;
+    warnings.extend(crate::macros::load(&mut wb));
+    crate::cmd::controls::load_action_names(&mut wb);
+    warnings.extend(adopt_python(&mut wb));
+    warnings.extend(enforce_python_limits(&mut wb));
+    Ok((wb, warnings))
+}
+
+/// The most result cells [`adopt_python`] rebuilds from a file's cached spills, over all its
+/// Python cells (each one is also limited to [`gridcraft_model::python::MAX_RESULT_CELLS`]).
+pub const MAX_ADOPTED_RESULT_CELLS: u64 = 4_000_000;
+
+/// Python cells from a file: a cell whose formula is `PY("…",0|1)` (a format that kept it as a
+/// formula) becomes a Python cell, and a Python cell whose spilled values the file cached gets
+/// them back as its result, so it shows them until it runs again. Results are rebuilt for at most
+/// [`MAX_ADOPTED_RESULT_CELLS`] cells in all; the rest keep only their own cached value, and the
+/// values they spilled stay as plain values. Returns the warnings.
+pub fn adopt_python(wb: &mut Workbook) -> Vec<String> {
+    let mut budget = MAX_ADOPTED_RESULT_CELLS;
+    let mut skipped = 0usize;
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let formulas: Vec<(CellRef, gridcraft_model::PyCode)> = sh
+            .cells
+            .iter()
+            .filter_map(|(c, cell)| cell.formula.as_ref().and_then(|f| gridcraft_model::PyCode::from_formula(&f.text)).map(|p| (c, p)))
+            .collect();
+        let max = gridcraft_model::python::MAX_RESULT_CELLS as u64;
+        let spills: Vec<(CellRef, RangeRef)> = sh
+            .spill_ranges
+            .iter()
+            .filter(|(a, r)| r.count() <= max && sh.cell(**a).and_then(|c| c.py.as_ref()).is_some_and(|p| p.output.is_none()))
+            .map(|(a, r)| (*a, *r))
+            .collect();
+        if formulas.is_empty() && spills.is_empty() {
+            continue;
+        }
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for (c, py) in formulas {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.formula = None;
+                cell.py = Some(std::sync::Arc::new(py));
+            }
+        }
+        for (anchor, range) in spills {
+            let Some(left) = budget.checked_sub(range.count()) else {
+                skipped += 1;
+                // The cell keeps only its own value; the values it spilled stay as plain values, so
+                // nothing shows as a spill that no result holds, and nothing the file showed is lost.
+                sh.settle_spill(anchor);
+                continue;
+            };
+            budget = left;
+            let data: Vec<gridcraft_core::Value> =
+                range.iter().map(|c| if c == anchor { sh.cell(c).map(|x| x.value.clone()).unwrap_or_default() } else { sh.value(c) }).collect();
+            let Some(array) = gridcraft_core::Array::new(range.height() as usize, range.width() as usize, data) else { continue };
+            if let Some(py) = sh.cells.get_mut(anchor).and_then(|x| x.py.as_mut()) {
+                std::sync::Arc::make_mut(py).output =
+                    Some(gridcraft_model::PyOutput { value: array.into(), type_name: "list".into(), preview: String::new(), convertible: true });
+            }
+        }
+    }
+    if skipped == 0 {
+        return Vec::new();
+    }
+    vec![format!(
+        "The file's Python results are larger than {MAX_ADOPTED_RESULT_CELLS} cells in all, so {skipped} Python cell(s) have no result until they run again; the values they spilled were kept as plain values."
+    )]
+}
+
+/// A file is somebody else's work: a Python cell whose code doesn't fit in Excel's
+/// 8,192-character formula keeps only its cached value, and a kept result that is not a
+/// well-formed array of at most [`gridcraft_model::python::MAX_RESULT_CELLS`] cells is dropped
+/// (the cell keeps its value). Either way the values the cell spilled stay as plain values
+/// ([`gridcraft_model::Sheet::settle_spill`]). Returns the warnings.
+pub fn enforce_python_limits(wb: &mut Workbook) -> Vec<String> {
+    let mut long = Vec::new();
+    for si in 0..wb.sheets.len() {
+        let Some(sh) = wb.sheets.get(si) else { continue };
+        let mut over = Vec::new();
+        let mut bad_output = Vec::new();
+        for (c, cell) in sh.cells.iter() {
+            let Some(py) = &cell.py else { continue };
+            if !py.fits() {
+                long.push(format!("{}!{}", sh.name, c.a1()));
+                over.push(c);
+            } else if py.output.as_ref().is_some_and(|o| !sane_python_output(&o.value)) {
+                bad_output.push(c);
+            }
+        }
+        if over.is_empty() && bad_output.is_empty() {
+            continue;
+        }
+        let dropped: Vec<CellRef> = over.iter().chain(&bad_output).copied().collect();
+        let Some(sh) = wb.sheet_mut(si) else { continue };
+        for c in over {
+            if let Some(cell) = sh.cells.get_mut(c) {
+                cell.py = None;
+            }
+        }
+        for c in bad_output {
+            if let Some(py) = sh.cells.get_mut(c).and_then(|x| x.py.as_mut()) {
+                std::sync::Arc::make_mut(py).output = None;
+            }
+        }
+        // A dropped result (or code dropped to its value) leaves the values it spilled as plain
+        // values, as the file showed them, with no live spill.
+        for c in dropped {
+            sh.settle_spill(c);
+        }
+    }
+    let Some(first) = long.first() else { return vec![] };
+    let more = if long.len() > 1 { format!(" (and {} more)", long.len() - 1) } else { String::new() };
+    vec![format!(
+        "A Python cell's code is longer than Excel's {}-character formula limit, so {first}{more} kept only its last calculated value.",
+        gridcraft_model::python::MAX_FORMULA_CHARS
+    )]
+}
+
+/// A Python result a file may hold: a scalar, or an array whose size matches its data and has at
+/// most [`gridcraft_model::python::MAX_RESULT_CELLS`] cells.
+fn sane_python_output(v: &gridcraft_core::Value) -> bool {
+    match v {
+        gridcraft_core::Value::Array(a) => {
+            a.rows >= 1
+                && a.cols >= 1
+                && a.rows.checked_mul(a.cols).is_some_and(|n| n == a.data.len() && n <= gridcraft_model::python::MAX_RESULT_CELLS)
+        }
+        _ => true,
+    }
+}
+
+/// Parses bytes that aren't encrypted, as they are.
+fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
-        let (wb, report) = gridcraft_xlsx::read_xls(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        let (wb, report) =
+            gridcraft_xlsx::read_xls_with(bytes, XLSX_FUNCTIONS).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
         return Ok((wb, report.warnings));
     }
     if sniffed == gridcraft_xlsx::Format::LegacyBinary {
@@ -140,38 +301,185 @@ fn open_plain(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     }
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
-        let (wb, report) = gridcraft_xlsx::read_xlsx(bytes).map_err(|e| EngineError::Other(format!("We can't open '{name}': {e}")))?;
+        // Google Sheets' export wrapper is read as the formula inside when GridCraft calculates it (#2871).
+        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, (XLSX_FUNCTIONS, &gridcraft_calc::is_known_function as &dyn Fn(&str) -> bool))
+            .map_err(|e| {
+                EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
+                    (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
+                    _ => format!("We can't open '{name}': {e}"),
+                })
+            })?;
         return Ok((wb, report.warnings));
+    }
+    if let Some(read) = read_html_table(name, kind, bytes, csv_as_text) {
+        return read;
     }
     match kind {
         Some(FileKind::Json) => {
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
+                // The file's macros are read after this (`macros::load`), so they come along.
+                let macros = std::mem::take(&mut wb.macros_read);
                 wb = Workbook::new();
+                wb.macros_read = macros;
             }
-            Ok((wb, vec![]))
+            // The file's band placement and cell count are derived state: rebuild them from the
+            // cells themselves, dropping what is outside the sheet grid (#1008).
+            let dropped: usize = wb.sheets.iter_mut().map(|sh| std::sync::Arc::make_mut(sh).cells.rebuild()).sum();
+            let mut warnings = Vec::new();
+            if dropped > 0 {
+                warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
+            }
+            Ok((wb, warnings))
+        }
+        Some(FileKind::Sylk) => {
+            let (mut wb, warnings) = sylk::read(name, bytes)?;
+            rename_first_sheet(&mut wb, name);
+            Ok((wb, warnings))
         }
         Some(FileKind::Tsv) => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
             wb.csv_delimiter = None;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
         _ => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, ..Default::default() };
-            let mut wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, ..Default::default() };
+            let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, vec![]))
+            Ok((wb, report.warnings))
         }
     }
 }
 
+/// What to tell the user when one part of an XLSX package unpacks to more than the reader's
+/// per-part limit: the sizes, why the limit is there, and what gets the data in. The limit is
+/// per part, so smaller sheets fit; the shared strings are one part for every sheet, so only a
+/// CSV, which has no parts, helps there.
+fn part_too_large_message(name: &str, part: &str, size: u64) -> String {
+    let limit = gridcraft_xlsx::MAX_PART >> 20;
+    let mb = size >> 20;
+    let size = if mb > limit { format!("{mb} MB") } else { format!("more than {limit} MB") };
+    let remedy = if part.contains("worksheets/") {
+        "To open it, split the data across several sheets, since the limit applies to each part, or save the sheet as CSV, which keeps only its values."
+    } else {
+        "To open it, save the data as CSV, which keeps only its values."
+    };
+    format!(
+        "We can't open '{name}': its part {part} unpacks to {size}, over GridCraft's limit of {limit} MB for one part \
+         (a guard against damaged or malicious files). {remedy}"
+    )
+}
+
+/// How much of a text file is read to tell whether it is a web page.
+const HTML_SNIFF_BYTES: usize = 64 << 10;
+
+/// A web page that holds a table, whatever its extension: a web app's "Export to Excel" is often
+/// HTML saved as `.xls` (#3166). Excel opens its table as a sheet (after warning that the format
+/// and extension don't match): the cells read like typed input (or as text with `csv_as_text`),
+/// header cells (`<th>`) are bold and centred, and the sheet takes the name the page gives it
+/// (`<x:Name>`) or the file's. `None` when the bytes aren't such a page.
+fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text: bool) -> Option<Result<(Workbook, Vec<String>)>> {
+    // Every other text file (CSV, TSV, JSON) passes through here: look at the start only, and decode
+    // the whole file once it is known to be a page within the size a text import takes.
+    if matches!(kind, Some(FileKind::Json)) || bytes.len() > gridcraft_xlsx::MAX_CSV_BYTES {
+        return None;
+    }
+    let start = gridcraft_xlsx::decode_text(bytes.get(..HTML_SNIFF_BYTES).unwrap_or(bytes));
+    // Comments an exporter writes before the page (`<!-- ... -->`) don't make it something else.
+    let mut rest = start.trim_start_matches('\u{feff}').trim_start();
+    while let Some(after) = rest.strip_prefix("<!--") {
+        match after.find("-->").and_then(|end| after.get(end + 3..)) {
+            Some(more) => rest = more.trim_start(),
+            None => break,
+        }
+    }
+    let head: String = rest.chars().take(16).collect::<String>().to_ascii_lowercase();
+    if !["<!doctype html", "<html", "<table", "<head", "<body", "<meta"].iter().any(|t| head.starts_with(t)) {
+        return None;
+    }
+    // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
+    let text = gridcraft_xlsx::decode_text(bytes);
+    let rows = crate::clip_html::table_cells(&text, gridcraft_core::MAX_ROWS as usize, gridcraft_core::MAX_COLS as usize);
+    if rows.iter().all(Vec::is_empty) {
+        return None;
+    }
+    // The cells go through the CSV reader, so numbers, dates and text read exactly as they do there.
+    let mut tsv = String::new();
+    for row in &rows {
+        let fields: Vec<String> = row
+            .iter()
+            .map(|cell| {
+                // The number the page recorded (`x:num`) only when values are read; as text, the
+                // cell keeps the text it shows.
+                let field = match cell.num.filter(|_| !csv_as_text) {
+                    Some(n) => gridcraft_core::number_to_text(n),
+                    // Whitespace is already collapsed; non-breaking spaces stay, as in Excel.
+                    None => cell.text.clone(),
+                };
+                if field.contains(['\t', '\n', '\r', '"']) { format!("\"{}\"", field.replace('"', "\"\"")) } else { field }
+            })
+            .collect();
+        tsv.push_str(&fields.join("\t"));
+        tsv.push('\n');
+    }
+    let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
+    let read = gridcraft_xlsx::read_csv_with_report(tsv.as_bytes(), &opts).map_err(|e| EngineError::Other(e.to_string()));
+    Some(read.map(|(mut wb, report)| {
+        wb.csv_delimiter = None;
+        // Header cells are bold and centred on top of the style the CSV reader gave them, so a
+        // date in a header keeps its date format.
+        let headers: Vec<CellRef> = rows
+            .iter()
+            .enumerate()
+            .flat_map(|(r, row)| row.iter().enumerate().filter(|(_, cell)| cell.header && !cell.text.trim().is_empty()).map(move |(c, _)| CellRef::new(r as u32, c as u32)))
+            .collect();
+        let mut bold: std::collections::HashMap<gridcraft_model::StyleId, gridcraft_model::StyleId> = std::collections::HashMap::new();
+        for at in headers {
+            let Some(base) = wb.sheet(0).map(|sh| sh.style_id(at)) else { continue };
+            let id = *bold.entry(base).or_insert_with(|| {
+                wb.styles.derive(base, |st| {
+                    st.font.bold = true;
+                    st.align.h = gridcraft_model::HAlign::Center;
+                })
+            });
+            if let Some(sh) = wb.sheet_mut(0) {
+                sh.set_style(at, id);
+            }
+        }
+        let page_name = find_between(&text, "<x:Name>", "</x:Name>").map(|n| crate::clip_html::normalized(n.trim()));
+        match page_name.filter(|n| !n.is_empty()) {
+            Some(sheet) => set_first_sheet_name(&mut wb, &sheet),
+            None => rename_first_sheet(&mut wb, name),
+        }
+        let mut warnings = report.warnings;
+        if !matches!(kind, Some(FileKind::Html)) {
+            warnings.insert(0, format!("'{name}' is a web page (HTML), not a workbook in the format its name says: its table was opened as a sheet. Save as .xlsx to keep your changes."));
+        }
+        (wb, warnings)
+    }))
+}
+
+/// The text between the first `open` and the `close` after it, matched case-insensitively.
+fn find_between<'a>(text: &'a str, open: &str, close: &str) -> Option<&'a str> {
+    let lower = text.to_ascii_lowercase();
+    let start = lower.find(&open.to_ascii_lowercase())?.checked_add(open.len())?;
+    let len = lower.get(start..)?.find(&close.to_ascii_lowercase())?;
+    text.get(start..start.checked_add(len)?)
+}
+
 /// A CSV opens as a sheet named after the file (like Excel).
 fn rename_first_sheet(wb: &mut Workbook, path: &str) {
-    let stem = std::path::Path::new(path).file_stem().and_then(|s| s.to_str()).unwrap_or("Sheet1");
+    let stem = std::path::Path::new(path).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Sheet1");
+    set_first_sheet_name(wb, stem);
+}
+
+/// Names the first sheet `name`, without the characters a sheet name can't hold and cut to 31
+/// characters; an empty or reserved result keeps the default name.
+fn set_first_sheet_name(wb: &mut Workbook, stem: &str) {
     let clean: String = stem.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
     let clean = clean.trim_matches('\'').to_string();
     // "History" is reserved (see `Workbook::check_sheet_name`): keep the default name instead.
@@ -188,7 +496,7 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     // An unknown or missing extension is refused rather than written as an XLSX under that name:
     // a typo like `.cvs` would otherwise produce a file no other app recognises.
     let Some(kind) = FileKind::from_path(path) else {
-        let name = std::path::Path::new(path).file_name().and_then(|n| n.to_str()).unwrap_or(path);
+        let name = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path);
         return Err(EngineError::Other(format!("{name}: unknown file format. Save as .xlsx, .csv, .tsv, .json or .html.")));
     };
     save_bytes_as(wb, path, kind)
@@ -196,20 +504,33 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
 
 /// Encodes a workbook as `kind`, whatever `path`'s extension says.
 pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8>> {
-    let sheet = wb.active_sheet;
+    let sheet = wb.active_sheet();
     match kind {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
         // the VBA project, so any other name saves without it, as Excel does.
-        FileKind::Xlsx => gridcraft_xlsx::write_xlsx_as(wb, gridcraft_xlsx::XlsxKind::from_path(path)).map_err(|e| EngineError::Other(e.to_string())),
+        // Macros, and button actions xlsx has no place for, travel in hidden names.
+        FileKind::Xlsx => {
+            let named = crate::macros::with_names(wb)?;
+            let named = match crate::cmd::controls::with_action_names(named.as_ref().unwrap_or(wb))? {
+                Some(w) => Some(w),
+                None => named,
+            };
+            let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
+            gridcraft_xlsx::write_xlsx_named_with(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book, XLSX_FUNCTIONS)
+                .map_err(|e| EngineError::Other(e.to_string()))
+        }
         FileKind::Xls => {
             Err(EngineError::Other("Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
         FileKind::Xlsb => Err(EngineError::Other("XLSB is supported for data import only. Save as .xlsx or another supported export format.".into())),
         FileKind::Ods => Err(EngineError::Other("ODS is supported for data import only. Save as .xlsx or another supported export format.".into())),
+        FileKind::Sylk => {
+            Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
+        }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
-        FileKind::Json => serde_json::to_vec_pretty(wb).map_err(|e| EngineError::Other(e.to_string())),
+        FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
 }
@@ -226,6 +547,12 @@ pub fn save_file_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
 /// The folder of the file at `path`, which relative paths to linked workbooks are relative to.
 pub fn source_dir(path: &str) -> Option<std::path::PathBuf> {
     std::path::absolute(path).ok()?.parent().map(std::path::Path::to_path_buf)
+}
+
+/// The file at `path` as `CELL("filename")` reports it: absolute, so the folder is the one the
+/// user sees. A workbook that arrived as bytes has no path and keeps only its name.
+pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
+    std::path::absolute(path).ok()
 }
 
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
@@ -247,11 +574,62 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
     .map_err(|e| EngineError::Other(e.to_string()))
 }
 
-fn esc(s: &str) -> String {
+/// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
+/// times as ISO 8601, booleans `TRUE`/`FALSE`, errors as their text, text as stored. Save As CSV
+/// writes displayed text instead ([`save_bytes`]) and stays the default.
+pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
+    let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
+    gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
+        gridcraft_core::Value::Number(n) if n.is_finite() => {
+            let shape = crate::display::parsed(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
+            match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
+                Some(((date, time), d)) => iso(&d, date, time),
+                None => n.to_string(),
+            }
+        }
+        gridcraft_core::Value::Text(t) => t.to_string(),
+        v => crate::display::value_text_as(wb, &v, "General"),
+    })
+    .map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// `date` and `time` say which parts the cell's format shows; a format with neither is not a date.
+fn iso(d: &gridcraft_core::date::DateTime, date: bool, time: bool) -> String {
+    let day = format!("{:04}-{:02}-{:02}", d.year, d.month, d.day);
+    let mut clock = format!("{:02}:{:02}:{:02}", d.hour, d.minute, d.second);
+    if d.milli != 0 {
+        clock.push_str(&format!(".{:03}", d.milli));
+    }
+    match (date, time) {
+        (true, true) => format!("{day}T{clock}"),
+        (false, true) => clock,
+        _ => day,
+    }
+}
+
+pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef) -> String {
+/// [`esc`], or `None` once the escaped text would pass `limit` bytes (nothing larger is built).
+fn esc_within(s: &str, limit: usize) -> Option<String> {
+    let mut out = String::with_capacity(s.len().min(limit));
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+        if out.len() > limit {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String {
     let st = wb.styles.get(sh.style_id(c));
     let mut css = String::new();
     if st.font.bold {
@@ -270,18 +648,85 @@ fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef) -> String {
     }
     let v = sh.value(c);
     let align = match st.align.h {
-        gridcraft_model::HAlign::Center => "center",
-        gridcraft_model::HAlign::Right => "right",
-        gridcraft_model::HAlign::Left => "left",
-        _ if v.is_number() => "right",
-        _ => "left",
+        gridcraft_model::HAlign::Center => Some("center"),
+        gridcraft_model::HAlign::Right => Some("right"),
+        gridcraft_model::HAlign::Left => Some("left"),
+        _ if v.is_number() => Some(if sh.right_to_left { "left" } else { "right" }),
+        _ if dir == CellDir::Auto => None,
+        _ => Some("left"),
     };
-    let _ = write!(css, "text-align:{align};");
+    if let Some(align) = align {
+        let _ = write!(css, "text-align:{align};");
+    }
     css
+}
+
+/// How a cell marks its direction in HTML. Text on a right-to-left sheet, or text with
+/// right-to-left letters, follows its first strong character (`dir="auto"`), so General
+/// alignment puts Arabic and Hebrew on the right. Numbers on a right-to-left sheet stay left to
+/// right so `-5` doesn't read `5-`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CellDir {
+    Inherit,
+    Auto,
+    Ltr,
+}
+
+impl CellDir {
+    fn of(sh: &Sheet, c: CellRef, text: &str) -> CellDir {
+        if sh.value(c).is_number() {
+            if sh.right_to_left { CellDir::Ltr } else { CellDir::Inherit }
+        } else if sh.right_to_left || text.chars().any(is_right_to_left_letter) {
+            CellDir::Auto
+        } else {
+            CellDir::Inherit
+        }
+    }
+
+    fn attr(self) -> &'static str {
+        match self {
+            CellDir::Inherit => "",
+            CellDir::Auto => " dir=\"auto\"",
+            CellDir::Ltr => " dir=\"ltr\"",
+        }
+    }
+}
+
+/// Hebrew, Arabic, Syriac, Thaana, N'Ko and their presentation forms.
+fn is_right_to_left_letter(c: char) -> bool {
+    matches!(c, '\u{0590}'..='\u{08FF}' | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')
+}
+
+fn table_dir(sh: &Sheet) -> &'static str {
+    if sh.right_to_left { " dir=\"rtl\"" } else { "" }
 }
 
 const CLIPBOARD_HTML_MAX_BYTES: usize = 4 * 1024 * 1024;
 const CLIPBOARD_HTML_MAX_CELLS: u64 = 10_000;
+
+/// Most cells the merge index holds: one entry per merged cell inside the exported range.
+const MERGE_INDEX_MAX_ENTRIES: usize = 1_000_000;
+
+/// The merge covering each cell of `rect`, as `Sheet::merge_at` would find it (the first in the
+/// sheet's list), built once so a table lookup is one probe instead of a scan of every merge.
+/// `None` when overlapping merges would cost more than a few visits per cell of `rect`, or merged
+/// cells fill more than [`MERGE_INDEX_MAX_ENTRIES`]: a hostile file's merge list can't multiply the
+/// work or the memory of a bounded export.
+fn merge_index(sh: &Sheet, rect: RangeRef) -> Option<std::collections::HashMap<CellRef, RangeRef>> {
+    let mut map = std::collections::HashMap::new();
+    let mut left = rect.count().saturating_mul(4);
+    for m in &sh.merges {
+        let Some(part) = m.intersection(&rect) else { continue };
+        left = left.checked_sub(part.count())?;
+        for c in part.iter() {
+            map.entry(c).or_insert(*m);
+        }
+        if map.len() > MERGE_INDEX_MAX_ENTRIES {
+            return None;
+        }
+    }
+    Some(map)
+}
 
 /// An HTML fragment for the same range as `plain_text`, previously produced by
 /// `display::range_text`. Large copies keep plain text only; never return a partial table.
@@ -291,8 +736,9 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
         return None;
     }
     let sh = wb.sheet(sheet)?;
+    let merges = merge_index(sh, r)?;
     let mut out = ClipboardHtml(String::new());
-    out.write_str("<table style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">").ok()?;
+    write!(out, "<table{} style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">", table_dir(sh)).ok()?;
     for row in r.start.row..=r.end.row {
         if sh.is_row_hidden(row) {
             continue;
@@ -300,7 +746,7 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
         out.write_str("<tr>").ok()?;
         for col in r.start.col..=r.end.col {
             let c = CellRef::new(row, col);
-            let span = if let Some(merged) = sh.merges.iter().find(|m| m.contains(c)).and_then(|m| m.intersection(&r)) {
+            let span = if let Some(merged) = merges.get(&c).and_then(|m| m.intersection(&r)) {
                 let first_row = (merged.start.row..=merged.end.row).find(|&row| !sh.is_row_hidden(row))?;
                 if c != CellRef::new(first_row, merged.start.col) {
                     continue;
@@ -310,11 +756,12 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
             } else {
                 String::new()
             };
-            let css = html_cell_css(wb, sh, c);
-            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{span}>").ok()?;
             // Use the visible selected cell, even when the merge's original anchor
             // is outside the range or hidden. This matches the plain-text copy.
             let text = crate::display::cell_text(wb, sh, c);
+            let dir = CellDir::of(sh, c, &text);
+            let css = html_cell_css(wb, sh, c, dir);
+            write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}>", dir.attr()).ok()?;
             let mut chars = text.chars().peekable();
             while let Some(ch) = chars.next() {
                 match ch {
@@ -357,67 +804,292 @@ impl std::fmt::Write for ClipboardHtml {
 /// Most rows Save as Web Page writes. A sheet whose used range is taller fails instead of losing cells.
 const HTML_EXPORT_MAX_ROWS: u32 = 100_001;
 
-/// A sheet as a standalone HTML table (Save as Web Page).
+/// Rows × columns of one web-page table. Save as Web Page writes every kept row's full used
+/// column span into one growing String, so a sparse sheet with a lone far-right cell (or a
+/// tall, wide one) would otherwise be gigabytes of `<td></td>` before finishing (#2387).
+const HTML_EXPORT_MAX_CELLS: u64 = 4_000_000;
+
+/// Most bytes of one web page. Every cell may hold long text (shared across many cells in the
+/// file), so the cell count alone doesn't bound the page; past this the export fails instead.
+const HTML_EXPORT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+fn html_too_big() -> EngineError {
+    EngineError::Other(format!("the web page would be over {} MiB. Save as .xlsx or CSV instead.", HTML_EXPORT_MAX_BYTES / (1024 * 1024)))
+}
+
+/// A sheet as a standalone HTML table (Save as Web Page). A sheet with pictures gets the sheet's
+/// own column widths and row heights so each picture and chart (inline SVG) can sit at its anchor.
 pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     let Some(sh) = wb.sheet(sheet) else { return Ok(String::new()) };
+    let fixed = !(sh.images.is_empty() && sh.charts.is_empty());
+    let used = sh.used_range();
     let mut out = String::new();
     let _ = write!(
         out,
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>table{{border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt}}td{{border:1px solid #d4d4d4;padding:2px 4px;white-space:nowrap}}</style></head><body><table>",
-        esc(&sh.name)
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>{}</title><style>table{{border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt{}}}td{{border:1px solid #d4d4d4;padding:{};white-space:nowrap{}}}</style></head><body>",
+        esc(&sh.name),
+        if fixed { ";table-layout:fixed" } else { "" },
+        if fixed { "0 4px" } else { "2px 4px" },
+        if fixed { ";overflow:hidden;line-height:1" } else { "" }
     );
-    if let Some(r) = sh.used_range() {
+    if fixed {
+        out.push_str("<div style=\"position:relative\">");
+    }
+    let _ = write!(out, "<table{}", table_dir(sh));
+    if let (true, Some(r)) = (fixed, used) {
+        let width: f32 = (r.start.col..=r.end.col).map(|c| sh.col_width(c)).sum();
+        let _ = write!(out, " style=\"width:{width}px\"");
+    }
+    out.push('>');
+    if let Some(r) = used {
         if r.height() > HTML_EXPORT_MAX_ROWS {
             return Err(EngineError::Other(format!(
                 "the sheet is too tall for a web page ({} rows, at most {HTML_EXPORT_MAX_ROWS}). Save as .xlsx or CSV instead.",
                 r.height()
             )));
         }
+        // The table is one growing String: every kept row writes a `<td>` for the whole used
+        // column span (unless the sheet has no row that is that wide). A tall, wide sheet
+        // (or a sparse one with a lone far-right cell) would be gigabytes before finishing,
+        // so the rectangle itself is bounded (#2387).
+        if u64::from(r.height()) * u64::from(r.width()) > HTML_EXPORT_MAX_CELLS {
+            return Err(EngineError::Other(format!(
+                "the sheet is too tall × wide for a web page ({} × {} cells, at most {HTML_EXPORT_MAX_CELLS}). Save as .xlsx or CSV instead.",
+                r.height(),
+                r.width()
+            )));
+        }
+        let merges = merge_index(sh, r)
+            .ok_or_else(|| EngineError::Other("the sheet's merged cells overlap too much, or cover too many cells, for a web page.".into()))?;
+        // Visible rows and columns of the table before each line, so a merge's span is counted
+        // in constant time whatever the file says its size is.
+        let visible_before = |hidden: &dyn Fn(u32) -> bool, from: u32, to: u32| {
+            let mut v = Vec::with_capacity((to - from) as usize + 2);
+            v.push(0u32);
+            for line in from..=to {
+                v.push(v.last().copied().unwrap_or(0) + u32::from(!hidden(line)));
+            }
+            v
+        };
+        let rows_before = visible_before(&|y| sh.is_row_hidden(y), r.start.row, r.end.row);
+        let cols_before = visible_before(&|x| sh.is_col_hidden(x), r.start.col, r.end.col);
+        let visible = |before: &[u32], from: u32, a: u32, b: u32| {
+            let at = |line: u32| before.get((line - from) as usize).copied().unwrap_or(0);
+            at(b + 1) - at(a)
+        };
+        if fixed {
+            out.push_str("<colgroup>");
+            for col in (r.start.col..=r.end.col).filter(|&c| !sh.is_col_hidden(c)) {
+                let _ = write!(out, "<col style=\"width:{}px\">", sh.col_width(col));
+            }
+            out.push_str("</colgroup>");
+        }
         for row in r.start.row..=r.end.row {
             if sh.is_row_hidden(row) {
                 continue;
             }
-            out.push_str("<tr>");
+            if fixed {
+                let _ = write!(out, "<tr style=\"height:{}px\">", sh.row_height(row));
+            } else {
+                out.push_str("<tr>");
+            }
             for col in r.start.col..=r.end.col {
                 let c = CellRef::new(row, col);
-                if sh.merges.iter().any(|m| m.contains(c) && m.start != c) {
+                let merge = merges.get(&c);
+                if merge.is_some_and(|m| m.start != c) || (fixed && sh.is_col_hidden(col)) {
                     continue;
                 }
-                let css = html_cell_css(wb, sh, c);
-                let span = sh
-                    .merges
-                    .iter()
-                    .find(|m| m.start == c)
-                    .map(|m| format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width()))
+                let text = crate::display::cell_text(wb, sh, c);
+                let dir = CellDir::of(sh, c, &text);
+                let css = html_cell_css(wb, sh, c, dir);
+                let span = merge
+                    .map(|m| {
+                        if fixed {
+                            // Spans count the table's visible lines: the merge is clipped to the table.
+                            let rows = visible(&rows_before, r.start.row, m.start.row, m.end.row.min(r.end.row));
+                            let cols = visible(&cols_before, r.start.col, m.start.col, m.end.col.min(r.end.col));
+                            format!(" rowspan=\"{rows}\" colspan=\"{cols}\"")
+                        } else {
+                            format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width())
+                        }
+                    })
                     .unwrap_or_default();
-                let _ = write!(out, "<td style=\"{css}\"{span}>{}</td>", esc(&crate::display::cell_text(wb, sh, c)));
+                // The text is escaped only as far as the page still has room for it.
+                let Some(escaped) = esc_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
+                let _ = write!(out, "<td style=\"{css}\"{}{span}>{escaped}</td>", dir.attr());
+                if out.len() > HTML_EXPORT_MAX_BYTES {
+                    return Err(html_too_big());
+                }
             }
             out.push_str("</tr>");
         }
     }
-    out.push_str("</table></body></html>");
+    out.push_str("</table>");
+    if fixed {
+        // Sheet units are CSS pixels; the table starts at the used range, not at A1.
+        // Indexed positions: each anchor would otherwise sum every custom row and column before it.
+        let ri = LineIndex::new(&sh.rows, sh.default_row_height, gridcraft_core::MAX_ROWS);
+        let ci = LineIndex::new(&sh.cols, sh.default_col_width, gridcraft_core::MAX_COLS);
+        let (left, top) = used.map_or((0.0, 0.0), |r| (ci.start(r.start.col), ri.start(r.start.row)));
+        let place = |a: &gridcraft_model::Anchor| {
+            format!(
+                "position:absolute;left:{}px;top:{}px;width:{}px;height:{}px",
+                ci.start(a.cell.col) - left + f64::from(a.dx),
+                ri.start(a.cell.row) - top + f64::from(a.dy),
+                a.width.max(0.0),
+                a.height.max(0.0)
+            )
+        };
+        for im in &sh.images {
+            // The base64 text is a third longer than the picture: refused before it is built.
+            if out.len().saturating_add(im.data.len().div_ceil(3).saturating_mul(4)) > HTML_EXPORT_MAX_BYTES {
+                return Err(html_too_big());
+            }
+            // The attributes are escaped only as far as the page has room for them.
+            let room = HTML_EXPORT_MAX_BYTES.saturating_sub(out.len());
+            let (Some(mime), Some(alt)) = (esc_within(&im.mime, room), esc_within(&im.alt, room)) else { return Err(html_too_big()) };
+            let _ = write!(out, "<img src=\"data:{mime};base64,{}\" alt=\"{alt}\" style=\"{}\">", base64_encode(&im.data), place(&im.anchor));
+            if out.len() > HTML_EXPORT_MAX_BYTES {
+                return Err(html_too_big());
+            }
+        }
+        let mut svg_budget = crate::chart_svg::MAX_PAGE_SVG_BYTES;
+        for ch in &sh.charts {
+            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor), svg_budget)? {
+                svg_budget -= svg.len();
+                out.push_str(&svg);
+                if out.len() > HTML_EXPORT_MAX_BYTES {
+                    return Err(html_too_big());
+                }
+            }
+        }
+        out.push_str("</div>");
+    }
+    out.push_str("</body></html>");
+    if out.len() > HTML_EXPORT_MAX_BYTES {
+        return Err(html_too_big());
+    }
     Ok(out)
 }
 
+thread_local! {
+    /// How many [`ScriptSandbox`]es are alive on this thread.
+    static SCRIPT_SANDBOX: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// While one is alive, [`read_file`] and [`write_file`] on this thread refuse every path: a
+/// stored script's steps run inside one (#2178), so no command reaches the file system from a
+/// script whatever its parameters are called. Dropping it (also on unwind) lifts the refusal.
+pub struct ScriptSandbox(std::marker::PhantomData<*const ()>);
+
+impl ScriptSandbox {
+    pub fn enter() -> Self {
+        let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_add(1)));
+        ScriptSandbox(std::marker::PhantomData)
+    }
+}
+
+impl Drop for ScriptSandbox {
+    fn drop(&mut self) {
+        let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_sub(1)));
+    }
+}
+
+/// Refuses file access while a [`ScriptSandbox`] is alive (and, failing closed, while the
+/// thread is being torn down).
+fn script_sandbox_check(path: &str) -> Result<()> {
+    if SCRIPT_SANDBOX.try_with(|c| c.get() > 0).unwrap_or(true) {
+        return Err(EngineError::Other(format!("{path}: scripts, and macro steps without the permission, can't read or write files")));
+    }
+    Ok(())
+}
+
+/// The largest native file the reader still touches: its own cap plus one, used to stop
+/// reads whose bytes arrive faster than metadata can claim (device files, growing files).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
-    let meta = std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    if meta.len() > 2 * 1024 * 1024 * 1024 {
+    use std::io::Read;
+    script_sandbox_check(path)?;
+    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
+    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
+    // O_NONBLOCK when the crate takes a libc dependency.
+    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
+    let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    // A symlink to an endless device reports length 0 but streams forever, so metadata
+    // alone never bounds the read: require a real file and cap the bytes actually taken.
+    if !f.metadata().map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
+    let mut buf = Vec::new();
+    let mut limited = (&f).take(MAX_READ_BYTES + 1);
+    limited.read_to_end(&mut buf).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    if buf.len() as u64 > MAX_READ_BYTES {
         return Err(EngineError::Other("files larger than 2 GB aren't supported".into()));
     }
-    std::fs::read(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+    Ok(buf)
 }
 
 #[cfg(target_arch = "wasm32")]
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
+    script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    script_sandbox_check(path)?;
     // Write to a temporary file, then rename: a crash never leaves a half-written workbook.
+    // The temporary file is created exclusively, so an existing file or symlink at that
+    // path (planted by another local user) makes the save fail instead of truncating the
+    // link's target; and it inherits the destination's access restrictions, so saving a
+    // private workbook doesn't widen who can read it.
     let tmp = format!("{path}.sctmp");
-    std::fs::write(&tmp, bytes).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| {
+    let prior_meta = std::fs::metadata(path).ok();
+    let prior = prior_meta.as_ref().map(std::fs::Metadata::permissions);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    // Over an existing file the replacement starts owner-only, whatever the umask: its group is
+    // still the saving user's primary one until it is changed below, and a member of that group
+    // must not be able to open it (and keep the descriptor) before then.
+    #[cfg(unix)]
+    if prior.is_some() {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&tmp).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        EngineError::Other(format!("{path}: {e}"))
+    })?;
+    // The replacement belongs to the saving user's primary group: restore the old file's group and
+    // then its mode. When the group can't be restored its access is dropped rather than handed to a
+    // different group; failing to read that back is a failed save.
+    #[cfg(unix)]
+    if let Some(m) = &prior_meta {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let _ = std::os::unix::fs::fchown(&f, None, Some(m.gid()));
+        let group_kept = f.metadata().map(|now| now.gid() == m.gid()).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            EngineError::Other(format!("{path}: {e}"))
+        })?;
+        // Best effort: a file system that can't change modes keeps the owner-only one. Without the
+        // group, the old owner and other bits are kept and the group, setuid and setgid bits dropped.
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(restored_mode(m.mode(), group_kept)));
+    }
+    #[cfg(not(unix))]
+    if let Some(p) = &prior {
+        let _ = f.set_permissions(p.clone());
+    }
+    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        EngineError::Other(format!("{path}: {e}"))
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
         let _ = std::fs::remove_file(&tmp);
@@ -425,8 +1097,16 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     })
 }
 
+/// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
+/// restored; without the group, the owner and other bits only.
+#[cfg(unix)]
+fn restored_mode(old: u32, group_kept: bool) -> u32 {
+    if group_kept { old & 0o7777 } else { old & 0o707 }
+}
+
 #[cfg(target_arch = "wasm32")]
 pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
+    script_sandbox_check(path)?;
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
@@ -497,246 +1177,4 @@ pub fn image_size(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn html_export_fails_instead_of_dropping_cells_past_the_row_limit() {
-        let mut wb = Workbook::new();
-        let sh = wb.sheet_mut(0).unwrap();
-        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("near"));
-        sh.set_value(CellRef::new(149_999, 0), gridcraft_core::Value::text("far"));
-        assert!(save_bytes(&wb, "book.html").is_err());
-        let sh = wb.sheet_mut(0).unwrap();
-        sh.remove_cell(CellRef::new(149_999, 0));
-        sh.set_value(CellRef::new(100_000, 0), gridcraft_core::Value::text("far"));
-        let html = String::from_utf8(save_bytes(&wb, "book.html").unwrap()).unwrap();
-        assert!(html.contains(">near</td>") && html.contains(">far</td>"));
-    }
-
-    #[test]
-    fn macros_are_saved_only_into_xlsm() {
-        let mut wb = Workbook::new();
-        wb.vba_project = Some(b"vba".to_vec());
-        let has_macros = |path: &str| {
-            let bytes = save_bytes(&wb, path).unwrap();
-            gridcraft_xlsx::read_xlsx(&bytes).unwrap().0.vba_project.is_some()
-        };
-        assert!(has_macros("book.xlsm"));
-        assert!(has_macros("BOOK.XLSM"));
-        assert!(!has_macros("book.xlsx"), "an .xlsx never carries a VBA project");
-        assert!(has_macros("book.xltm"), "a macro-enabled template keeps the VBA project");
-        assert!(!has_macros("book.xltx"), "a macro-free template never carries a VBA project");
-        assert!(wb.vba_project.is_some(), "the open workbook keeps its macros");
-    }
-
-    #[test]
-    fn csv_named_history_does_not_get_the_reserved_sheet_name() {
-        for file in ["History.csv", "hIsToRy.csv", "history.tsv"] {
-            let (wb, _) = open_bytes(file, b"1\n").unwrap();
-            let name = wb.sheets[0].name.clone();
-            assert!(wb.check_sheet_name(&name, Some(0)).is_ok(), "{file} opened as {name:?}");
-        }
-        let (wb, _) = open_bytes("Sales.csv", b"1\n").unwrap();
-        assert_eq!(wb.sheets[0].name, "Sales");
-    }
-
-    /// A save that can't be put in place (here a folder already has the workbook's name, as
-    /// with a file another app holds locked) fails without leaving `<name>.sctmp` behind.
-    #[cfg(not(target_arch = "wasm32"))]
-    #[test]
-    fn failed_save_leaves_no_temporary_file() {
-        let dir = std::env::temp_dir().join(format!("gridcraft-write-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let blocked = dir.join("Book1.xlsx");
-        std::fs::create_dir(&blocked).unwrap();
-        assert!(write_file(blocked.to_str().unwrap(), b"workbook").is_err());
-        assert!(!dir.join("Book1.xlsx.sctmp").exists(), "the temporary file is removed");
-        // An ordinary save still works and leaves only the workbook.
-        let ok = dir.join("Book2.xlsx");
-        write_file(ok.to_str().unwrap(), b"workbook").unwrap();
-        assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
-        assert!(!dir.join("Book2.xlsx.sctmp").exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A minimal compound (CFB/OLE2) file — FAT in sector 0, directory in sector 1 — holding a
-    /// root entry and the given stream names.
-    fn cfb(streams: &[&str]) -> Vec<u8> {
-        let mut b = vec![0u8; 512 * 3];
-        let mut put = |at: usize, v: &[u8]| b[at..at + v.len()].copy_from_slice(v);
-        put(0, &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
-        put(30, &9u16.to_le_bytes());
-        put(44, &1u32.to_le_bytes());
-        put(48, &1u32.to_le_bytes());
-        put(68, &0xFFFF_FFFEu32.to_le_bytes());
-        for i in 1..109 {
-            put(76 + i * 4, &0xFFFF_FFFFu32.to_le_bytes());
-        }
-        put(512, &0xFFFF_FFFDu32.to_le_bytes());
-        put(516, &0xFFFF_FFFEu32.to_le_bytes());
-        for (k, name) in std::iter::once("Root Entry").chain(streams.iter().copied()).enumerate() {
-            let units: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
-            put(1024 + k * 128, &units);
-            put(1024 + k * 128 + 64, &(units.len() as u16 + 2).to_le_bytes());
-        }
-        b
-    }
-
-    /// Cut-list rows as a CAD/CAM program exports them: `;`-separated, CRLF, part codes in the last
-    /// two columns, a part name containing a comma.
-    const CUT_LIST: &str = "1;511;184;P3_L1_led;2162PE;16;1MM_2162PE;1MM_2162PE;;;1244121406FB;\r\n\
-                            1;562.5;510;Komoda, lijevo;2162PE;19;1MM_2162PE;;;;12441214071A;124412140710\r\n";
-
-    #[test]
-    fn csv_save_keeps_the_separator_it_was_opened_with() {
-        let (wb, _) = open_bytes("cut list.csv", CUT_LIST.as_bytes()).unwrap();
-        assert_eq!(wb.csv_delimiter, Some(b';'));
-        assert_eq!(String::from_utf8(save_bytes(&wb, "cut list.csv").unwrap()).unwrap(), CUT_LIST);
-        // Save As another .csv name keeps it too; a comma file stays a comma file (quoting only
-        // fields that contain the separator in use).
-        assert_eq!(String::from_utf8(save_bytes(&wb, "copy.CSV").unwrap()).unwrap(), CUT_LIST);
-        let commas = "\"Komoda, lijevo\",b\r\n1,x;y\r\n";
-        let (wb, _) = open_bytes("plain.csv", commas.as_bytes()).unwrap();
-        assert_eq!(String::from_utf8(save_bytes(&wb, "plain.csv").unwrap()).unwrap(), commas);
-        // A tab-separated file named .csv round-trips with tabs.
-        let tabs = "a\tb\r\n1\t2\r\n";
-        let (wb, _) = open_bytes("tabs.csv", tabs.as_bytes()).unwrap();
-        assert_eq!(String::from_utf8(save_bytes(&wb, "tabs.csv").unwrap()).unwrap(), tabs);
-    }
-
-    #[test]
-    fn csv_save_of_a_workbook_not_read_from_csv_uses_commas() {
-        let mut wb = Workbook::new();
-        if let Some(sh) = wb.sheet_mut(0) {
-            sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("a"));
-            sh.set_value(CellRef::new(0, 1), gridcraft_core::Value::Number(1.0));
-        }
-        assert_eq!(save_bytes(&wb, "new.csv").unwrap(), b"a,1\r\n");
-        // Through .xlsx the CSV origin is gone, as in Excel.
-        let (from_csv, _) = open_bytes("cut list.csv", CUT_LIST.as_bytes()).unwrap();
-        let (reopened, _) = open_bytes("book.xlsx", &save_bytes(&from_csv, "book.xlsx").unwrap()).unwrap();
-        assert_eq!(reopened.csv_delimiter, None);
-        assert!(String::from_utf8(save_bytes(&reopened, "again.csv").unwrap()).unwrap().starts_with("1,511,184,"));
-        // A .tsv/.txt saved as .csv gets commas; as .tsv it keeps tabs.
-        let (tsv, _) = open_bytes("list.txt", b"a\tb\r\n").unwrap();
-        assert_eq!(save_bytes(&tsv, "list.csv").unwrap(), b"a,b\r\n");
-        assert_eq!(save_bytes(&tsv, "list.tsv").unwrap(), b"a\tb\r\n");
-    }
-
-    #[test]
-    fn encrypted_workbook_is_reported_not_misread() {
-        let file = gridcraft_xlsx::testing::encrypt_workbook(b"package", "pw");
-        let msg = open_bytes("secret.xlsx", &file).unwrap_err().to_string();
-        assert!(msg.contains(PASSWORD_REQUIRED), "got: {msg}");
-        assert!(!msg.contains("zip"), "must not surface the zip error: {msg}");
-        // A compound file naming the streams but unreadable is damage: no password is asked for,
-        // and none helps.
-        let file = cfb(&["EncryptionInfo", "EncryptedPackage"]);
-        for password in [None, Some("pw")] {
-            let msg = open_bytes_with_password("secret.xlsx", &file, password).unwrap_err().to_string();
-            assert!(msg.contains("damaged") && !msg.contains(PASSWORD_REQUIRED), "got: {msg}");
-        }
-    }
-
-    #[test]
-    fn encryption_no_password_opens_is_reported_without_asking_for_one() {
-        let info: &[u8] = &[3, 0, 2, 0, 4, 0, 0, 0]; // Standard header flags: RC4, not AES
-        let file = gridcraft_xlsx::testing::compound_file(&[("EncryptionInfo", info), ("EncryptedPackage", &[0; 8])]);
-        let msg = open_bytes("rc4.xlsx", &file).unwrap_err().to_string();
-        assert!(msg.contains("RC4") && !msg.contains(PASSWORD_REQUIRED), "got: {msg}");
-        let irm = gridcraft_xlsx::testing::compound_file(&[("EncryptedPackage", &[0; 8])]);
-        let msg = open_bytes("irm.xlsx", &irm).unwrap_err().to_string();
-        assert!(msg.contains("rights-management") && !msg.contains("damaged"), "got: {msg}");
-    }
-
-    #[test]
-    fn other_compound_files_are_not_called_encrypted() {
-        let err = open_bytes("old.doc", &cfb(&["WordDocument", "\u{5}SummaryInformation"])).unwrap_err();
-        let msg = err.to_string();
-        assert!(msg.contains("not an Excel workbook"), "got: {msg}");
-        assert!(!msg.contains("password"), "got: {msg}");
-    }
-
-    /// Save As CSV/TSV writes cells as displayed: number formats applied, formula results,
-    /// whole values in narrow columns (never `#####`), quoting unchanged.
-    #[test]
-    fn csv_writes_displayed_text() {
-        use gridcraft_core::{CellError, Value};
-        use gridcraft_model::{Cell, Formula, LineInfo, NumFmt, StyleId};
-        let mut wb = Workbook::new();
-        let mut styled = |code: &str| wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
-        let (date, money, pct, frac, text, fixed, thousands) =
-            (styled("yyyy-mm-dd"), styled("$#,##0.00"), styled("0.0%"), styled("# ?/?"), styled("@"), styled("0.00"), styled("#,##0"));
-        let sh = wb.sheet_mut(0).unwrap();
-        let cells = [
-            ("A1", Cell { value: Value::Number(46023.0), formula: None, style: date }),
-            ("B1", Cell { value: Value::Number(1234.5), formula: None, style: money }),
-            ("C1", Cell { value: Value::Number(0.125), formula: None, style: pct }),
-            ("D1", Cell { value: Value::Number(1.5), formula: None, style: frac }),
-            ("E1", Cell { value: Value::text("007"), formula: None, style: text }),
-            ("F1", Cell { value: Value::Error(CellError::NA), formula: None, style: money }),
-            ("G1", Cell { value: Value::Bool(true), formula: None, style: StyleId::DEFAULT }),
-            ("A2", Cell { value: Value::Number(46024.0), style: date, ..Cell::formula(Formula::new("A1+1")) }),
-            ("B2", Cell { value: Value::Number(12345678.9), formula: None, style: fixed }),
-            ("C2", Cell { value: Value::Number(-0.25), formula: None, style: StyleId::DEFAULT }),
-            ("D2", Cell { value: Value::Number(1234567.0), formula: None, style: thousands }),
-        ];
-        for (a, c) in cells {
-            sh.set_cell(CellRef::parse(a).unwrap(), c);
-        }
-        // Column B is far too narrow for its numbers: the grid shows #####, the file must not.
-        sh.cols.insert(1, LineInfo { size: Some(1.0), ..Default::default() });
-        sh.show_formulas = true;
-        let csv = String::from_utf8(save_bytes(&wb, "out.csv").unwrap()).unwrap();
-        assert_eq!(csv, "2026-01-01,\"$1,234.50\",12.5%,1 1/2,007,#N/A,TRUE\r\n2026-01-02,12345678.90,-0.25,\"1,234,567\",,,\r\n");
-        let tsv = String::from_utf8(save_bytes(&wb, "out.tsv").unwrap()).unwrap();
-        assert!(tsv.starts_with("2026-01-01\t$1,234.50\t12.5%\t"), "{tsv}");
-    }
-
-    #[test]
-    fn delimited_exports_preserve_general_precision_and_explicit_number_formats() {
-        use gridcraft_core::Value;
-        use gridcraft_model::{Cell, NumFmt, StyleId};
-        let mut workbook = Workbook::new();
-        let scientific = workbook.styles.derive(StyleId::DEFAULT, |style| style.num_fmt = NumFmt::new("0.00E+00"));
-        let sheet = workbook.sheet_mut(0).unwrap();
-        sheet.set_cell(CellRef::new(0, 0), Cell { value: Value::Number(124412140710.0), ..Default::default() });
-        sheet.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(1.23456789012345), ..Default::default() });
-        sheet.set_cell(CellRef::new(0, 2), Cell { value: Value::Number(124412140710.0), style: scientific, ..Default::default() });
-        for (path, separator) in [("data.csv", ","), ("data.tsv", "\t")] {
-            let output = String::from_utf8(save_bytes(&workbook, path).unwrap()).unwrap();
-            assert_eq!(output, format!("124412140710{separator}1.23456789012345{separator}1.24E+11\r\n"));
-        }
-    }
-
-    #[test]
-    fn template_extension_saves_template_content_type() {
-        let bytes = save_bytes(&Workbook::new(), "Budget.xltx").unwrap();
-        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-        let mut types = String::new();
-        std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut types).unwrap();
-        assert!(
-            types.contains(
-                r#"PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.template.main+xml""#
-            ),
-            "{types}"
-        );
-    }
-
-    #[test]
-    fn content_wins_over_a_mismatched_extension() {
-        let mut wb = Workbook::new();
-        wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::Number(7.0));
-        let package = save_bytes(&wb, "book.xlsx").unwrap();
-        for name in ["book.xlsx", "book.ods", "book.xlsb", "book.csv"] {
-            let (opened, _) = open_bytes(name, &package).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(opened.sheet(0).unwrap().value(CellRef::new(0, 0)), gridcraft_core::Value::Number(7.0), "{name}");
-        }
-        for name in ["data.xlsx", "data.csv"] {
-            let (opened, _) = open_bytes(name, b"a,b\n1,2\n").unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(opened.sheet(0).unwrap().value(CellRef::new(0, 1)), gridcraft_core::Value::text("b"), "{name}");
-        }
-    }
-}
+mod tests;

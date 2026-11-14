@@ -25,14 +25,22 @@ const MAX_REPLY: u64 = 256 * 1024 * 1024;
 /// A running GridCraft app, reached through its loopback control port.
 pub struct Remote {
     addr: String,
+    token: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
 }
 
 impl Remote {
-    /// Connect to `addr` (`127.0.0.1:7979`), failing fast when nothing is listening.
+    /// Connect to `addr` (`127.0.0.1:7979`), failing fast when nothing is listening. The app
+    /// requires a token (#777): `GRIDCRAFT_CONTROL_TOKEN`, else the file the app wrote for this port.
     pub fn connect(addr: &str) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1 };
+        let token = crate::control_auth::client_token(addr).map_err(|e| std::io::Error::new(std::io::ErrorKind::PermissionDenied, e))?;
+        Self::connect_with_token(addr, token)
+    }
+
+    /// Like [`Remote::connect`] with a token the caller already has.
+    pub fn connect_with_token(addr: &str, token: String) -> std::io::Result<Self> {
+        let mut r = Self { addr: addr.to_string(), token, conn: None, next_id: 1 };
         r.reconnect()?;
         Ok(r)
     }
@@ -45,19 +53,49 @@ impl Remote {
         self.conn = None;
         let mut last = std::io::Error::new(std::io::ErrorKind::NotFound, format!("cannot resolve {}", self.addr));
         for sa in self.addr.to_socket_addrs()? {
+            // The token goes over plain TCP, so only to this machine: a network peer could read it,
+            // and the app's control port listens on loopback only.
+            if !sa.ip().is_loopback() {
+                last = std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!("{sa} is not a loopback address: the control token is sent only to 127.0.0.1 or ::1"),
+                );
+                continue;
+            }
             match TcpStream::connect_timeout(&sa, Duration::from_secs(2)) {
                 Ok(s) => {
                     s.set_nodelay(true).ok();
                     s.set_read_timeout(Some(IO_TIMEOUT)).ok();
                     s.set_write_timeout(Some(IO_TIMEOUT)).ok();
                     let read = s.try_clone()?;
-                    self.conn = Some((BufReader::new(read), s));
+                    let mut conn = (BufReader::new(read), s);
+                    Self::authenticate(&mut conn, &self.token)?;
+                    self.conn = Some(conn);
                     return Ok(());
                 }
                 Err(e) => last = e,
             }
         }
         Err(last)
+    }
+
+    /// The handshake every connection starts with: the app closes one that doesn't send the token first.
+    fn authenticate(conn: &mut (BufReader<TcpStream>, TcpStream), token: &str) -> std::io::Result<()> {
+        let (reader, writer) = conn;
+        writer.write_all(crate::control_auth::auth_line(0, token).as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        let mut reply = String::new();
+        let n = std::io::Read::take(reader, 64 * 1024).read_line(&mut reply)?;
+        let ok = n > 0 && serde_json::from_str::<Value>(reply.trim()).ok().and_then(|v| v.get("ok").and_then(Value::as_bool)) == Some(true);
+        if ok {
+            Ok(())
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the app refused the control token (is GRIDCRAFT_CONTROL_TOKEN or the app's token file for this port out of date?)",
+            ))
+        }
     }
 
     fn roundtrip(&mut self, line: &str) -> std::io::Result<String> {

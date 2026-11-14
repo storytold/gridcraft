@@ -1,31 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  GridCraft MSI (WiX Toolset v5: `dotnet tool install -g wix`). Built by package.ps1:
-
-    wix build gridcraft.wxs -arch x64 -d Version=1.2.3 -d BinDir=... -d IconPath=... -o out.msi
-
-  Per-machine install into Program Files, a Start Menu shortcut, an optional desktop shortcut,
-  App Paths (Win+R `gridcraft`),
-  and GridCraft offered under "Open with" (and in Settings > Default apps) for .xlsx, .xlsm,
-  .csv and .tsv, without taking over the user's default app for them.
-
-  UpgradeCode is fixed for GridCraft (generated 2026-10-07): never change it, or upgrades
-  install side by side instead of replacing the old version.
--->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package
-      Name="GridCraft"
-      Manufacturer="Learning Machines LLC"
-      Version="$(var.Version)"
-      UpgradeCode="5511327B-F305-41BE-92D0-EB84944E7C4D"
-      Scope="perMachine"
-      Compressed="yes"
-      Language="1033">
+  <?ifndef HasCraftFontLicences ?>
+  <?define HasCraftFontLicences=0 ?>
+  <?endif?>
+  <Package Name="GridCraft" Manufacturer="Learning Machines LLC" Version="$(var.Version)" UpgradeCode="5511327B-F305-41BE-92D0-EB84944E7C4D" Scope="perUserOrMachine" Compressed="yes" Language="1033">
     <SummaryInformation Description="GridCraft spreadsheet" Manufacturer="Learning Machines LLC" />
+    <?include $(sys.SOURCEFILEDIR)install-policy.wxi?>
     <!-- Same-version upgrades let successive pre-releases of one X.Y.Z replace each other
          (MSI versions are numeric, so 1.2.3-rc.1 and 1.2.3-rc.2 are both 1.2.3). -->
-    <MajorUpgrade AllowSameVersionUpgrades="yes"
-        DowngradeErrorMessage="A newer version of GridCraft is already installed." />
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of GridCraft is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <Icon Id="GridcraftIcon.ico" SourceFile="$(var.IconPath)" />
@@ -39,16 +22,10 @@
          execute sequence cannot reload the old choice after the user unchecks the box. -->
     <Property Id="DESKTOPSHORTCUT" Secure="yes" />
     <Property Id="SAVEDDESKTOPSHORTCUT" Secure="yes">
-      <RegistrySearch Id="FindDesktopShortcutPreference" Root="HKLM"
-          Key="Software\GridCraft\Installer" Name="DesktopShortcut" Type="raw" />
-    </Property>
-    <SetProperty Id="DESKTOPSHORTCUT" Action="LoadDesktopShortcutPreference" Value="1"
-        After="AppSearch" Sequence="first"
-        Condition="NOT DESKTOPSHORTCUT AND SAVEDDESKTOPSHORTCUT = &quot;1&quot;" />
-    <SetProperty Id="DESKTOPSHORTCUT" Action="DefaultDesktopShortcut" Value="0"
-        After="LoadDesktopShortcutPreference" Sequence="first" Condition="NOT DESKTOPSHORTCUT" />
-    <SetProperty Id="DesktopShortcutChoice" Value="1" After="DefaultDesktopShortcut"
-        Sequence="ui" Condition="DESKTOPSHORTCUT = &quot;1&quot;" />
+      </Property>
+    <SetProperty Id="DESKTOPSHORTCUT" Action="LoadDesktopShortcutPreference" Value="1" After="CraftLoadOption1U" Sequence="first" Condition="NOT DESKTOPSHORTCUT AND SAVEDDESKTOPSHORTCUT = &quot;1&quot;" />
+    <SetProperty Id="DESKTOPSHORTCUT" Action="DefaultDesktopShortcut" Value="0" After="LoadDesktopShortcutPreference" Sequence="first" Condition="NOT DESKTOPSHORTCUT" />
+    <SetProperty Id="DesktopShortcutChoice" Value="1" After="DefaultDesktopShortcut" Sequence="ui" Condition="DESKTOPSHORTCUT = &quot;1&quot;" />
 
     <Property Id="DefaultUIFont" Value="GridcraftUIFont" />
     <Property Id="ErrorDialog" Value="GridcraftErrorDlg" />
@@ -57,12 +34,16 @@
       <TextStyle Id="GridcraftUIFont" FaceName="Segoe UI" Size="9" />
       <Dialog Id="DesktopShortcutDlg" Width="320" Height="150" Title="GridCraft Setup" NoMinimize="yes">
         <Control Id="Heading" Type="Text" X="15" Y="15" Width="290" Height="20" Text="Install GridCraft" />
-        <Control Id="Description" Type="Text" X="15" Y="40" Width="290" Height="28"
-            Text="Install GridCraft for everyone who uses this computer." />
-        <Control Id="DesktopShortcutCheckbox" Type="CheckBox" X="15" Y="76" Width="290" Height="18"
-            Property="DesktopShortcutChoice" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
-        <Control Id="Install" Type="PushButton" X="165" Y="118" Width="65" Height="20"
-            Default="yes" ElevationShield="yes" Text="&amp;Install">
+        <Control Id="Description" Type="Text" X="15" Y="40" Width="290" Height="28" Text="Install GridCraft using the account option you selected." />
+        <Control Id="DesktopShortcutCheckbox" Type="CheckBox" X="15" Y="76" Width="290" Height="18" Property="DesktopShortcutChoice" CheckBoxValue="1" Text="Create a &amp;desktop shortcut" />
+        <Control Id="Install" Type="PushButton" X="165" Y="118" Width="65" Height="20" Default="yes" DefaultCondition="ALLUSERS = 1" ElevationShield="yes" HideCondition="ALLUSERS &lt;&gt; 1" ShowCondition="ALLUSERS = 1" Text="&amp;Install">
+          <!-- An unchecked checkbox clears its property. Publish an explicit zero so the
+               elevated execute sequence receives an unambiguous opt-out. -->
+          <Publish Property="DESKTOPSHORTCUT" Value="1" Condition="DesktopShortcutChoice" />
+          <Publish Property="DESKTOPSHORTCUT" Value="0" Condition="NOT DesktopShortcutChoice" />
+          <Publish Event="EndDialog" Value="Return" />
+        </Control>
+        <Control Id="InstallUser" Type="PushButton" DefaultCondition="ALLUSERS &lt;&gt; 1" HideCondition="ALLUSERS = 1" ShowCondition="ALLUSERS &lt;&gt; 1" X="165" Y="118" Width="65" Height="20" Text="&amp;Install">
           <!-- An unchecked checkbox clears its property. Publish an explicit zero so the
                elevated execute sequence receives an unambiguous opt-out. -->
           <Publish Property="DESKTOPSHORTCUT" Value="1" Condition="DesktopShortcutChoice" />
@@ -101,8 +82,7 @@
         </Control>
       </Dialog>
       <Dialog Id="FilesInUse" Width="320" Height="190" Title="GridCraft Setup" NoMinimize="yes">
-        <Control Id="Description" Type="Text" X="15" Y="15" Width="290" Height="35"
-            Text="Close the applications listed below, then choose Retry. Ignore may require a restart." />
+        <Control Id="Description" Type="Text" X="15" Y="15" Width="290" Height="35" Text="Close the applications listed below, then choose Retry. Ignore may require a restart." />
         <Control Id="Files" Type="ListBox" X="15" Y="55" Width="290" Height="85" Property="FileInUseProcess" />
         <Control Id="Retry" Type="PushButton" X="95" Y="155" Width="65" Height="20" Default="yes" Text="Retry">
           <Publish Event="EndDialog" Value="Retry" />
@@ -148,54 +128,65 @@
     </AdminUISequence>
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="GridCraft" />
+      <Directory Id="CraftSuiteFolder" Name="ArtCraft">
+        <Directory Id="INSTALLFOLDER" Name="GridCraft" />
+      </Directory>
     </StandardDirectory>
     <StandardDirectory Id="ProgramMenuFolder" />
     <StandardDirectory Id="DesktopFolder" />
 
     <Feature Id="Main" Title="GridCraft" Level="1">
+      <?if $(var.HasCraftFontLicences) = 1 ?>
+      <ComponentGroupRef Id="CraftFontLicences" />
+      <?endif?>
       <ComponentGroupRef Id="GridcraftFiles" />
     </Feature>
-  </Package>
+  <Property Id="CRAFT_OPTION_1_M" Secure="yes"><RegistrySearch Id="CRAFT_OPTION_1_MSearch" Root="HKLM" Key="Software\GridCraft\Installer" Name="DesktopShortcut" Type="raw" />
+    </Property><SetProperty Id="SAVEDDESKTOPSHORTCUT" Action="CraftLoadOption1M" Value="[CRAFT_OPTION_1_M]" After="LaunchConditions" Sequence="both" Condition="ALLUSERS = 1" /><Property Id="CRAFT_OPTION_1_U" Secure="yes"><RegistrySearch Id="CRAFT_OPTION_1_USearch" Root="HKCU" Key="Software\GridCraft\Installer" Name="DesktopShortcut" Type="raw" />
+    </Property><SetProperty Id="SAVEDDESKTOPSHORTCUT" Action="CraftLoadOption1U" Value="[CRAFT_OPTION_1_U]" After="CraftLoadOption1M" Sequence="both" Condition="ALLUSERS &lt;&gt; 1" /></Package>
 
   <Fragment>
+    <?if $(var.HasCraftFontLicences) = 1 ?>
+    <ComponentGroup Id="CraftFontLicences" Directory="INSTALLFOLDER">
+      <Files Include="$(var.DocsDir)\**" />
+    </ComponentGroup>
+    <?endif?>
     <ComponentGroup Id="GridcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="GridcraftApp" Guid="0507D4B6-12FF-4882-84E1-59083E74A4EB">
         <File Id="GridcraftExe" Source="$(var.BinDir)\gridcraft.exe" KeyPath="yes">
-          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="GridCraft"
-              Description="GridCraft spreadsheet" WorkingDirectory="INSTALLFOLDER" Advertise="yes"
-              Icon="GridcraftIcon.ico" IconIndex="0" />
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="GridCraft" Description="GridCraft spreadsheet" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="GridcraftIcon.ico" IconIndex="0" />
         </File>
 
-        <RegistryValue Root="HKLM" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe" Value="[#GridcraftExe]" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\gridcraft.exe" Value="[#GridcraftExe]" Type="string" />
 
         <!-- ProgIds: how Explorer opens a file with GridCraft. Nothing here sets HKCR\.<ext>'s
              default value, so the user's current default app is left alone. -->
-        <RegistryValue Root="HKLM" Key="Software\Classes\GridCraft.Workbook" Value="GridCraft Workbook" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\GridCraft.Workbook\DefaultIcon" Value="&quot;[#GridcraftExe]&quot;,0" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\GridCraft.Workbook\shell\open\command" Value="&quot;[#GridcraftExe]&quot; &quot;%1&quot;" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\GridCraft.TextData" Value="GridCraft Text Data" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\GridCraft.TextData\DefaultIcon" Value="&quot;[#GridcraftExe]&quot;,0" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\GridCraft.TextData\shell\open\command" Value="&quot;[#GridcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\GridCraft.Workbook" Value="GridCraft Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\GridCraft.Workbook\DefaultIcon" Value="&quot;[#GridcraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\GridCraft.Workbook\shell\open\command" Value="&quot;[#GridcraftExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\GridCraft.TextData" Value="GridCraft Text Data" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\GridCraft.TextData\DefaultIcon" Value="&quot;[#GridcraftExe]&quot;,0" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\GridCraft.TextData\shell\open\command" Value="&quot;[#GridcraftExe]&quot; &quot;%1&quot;" Type="string" />
 
         <!-- "Open with": Windows reads only the value names under OpenWithProgids; the data is
              ignored (WiX rejects an empty Value, so it repeats the ProgId). -->
-        <RegistryValue Root="HKLM" Key="Software\Classes\.xlsx\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.xlsm\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.xlsx\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.xlsm\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
         <!-- .xlsb and .ods are imported (data only) into a new workbook that saves as .xlsx. -->
-        <RegistryValue Root="HKLM" Key="Software\Classes\.xlsb\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.ods\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.csv\OpenWithProgids" Name="GridCraft.TextData" Value="GridCraft.TextData" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\Classes\.tsv\OpenWithProgids" Name="GridCraft.TextData" Value="GridCraft.TextData" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.xlsb\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.ods\OpenWithProgids" Name="GridCraft.Workbook" Value="GridCraft.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.csv\OpenWithProgids" Name="GridCraft.TextData" Value="GridCraft.TextData" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.tsv\OpenWithProgids" Name="GridCraft.TextData" Value="GridCraft.TextData" Type="string" />
 
         <!-- Settings > Default apps: lets the user pick GridCraft for these types. -->
-        <RegistryValue Root="HKLM" Key="Software\GridCraft\Capabilities" Name="ApplicationName" Value="GridCraft" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\GridCraft\Capabilities" Name="ApplicationDescription" Value="Open-source spreadsheet for .xlsx, CSV and TSV files" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".xlsx" Value="GridCraft.Workbook" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".xlsm" Value="GridCraft.Workbook" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".csv" Value="GridCraft.TextData" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".tsv" Value="GridCraft.TextData" Type="string" />
-        <RegistryValue Root="HKLM" Key="Software\RegisteredApplications" Name="GridCraft" Value="Software\GridCraft\Capabilities" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Capabilities" Name="ApplicationName" Value="GridCraft" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Capabilities" Name="ApplicationDescription" Value="Open-source spreadsheet for .xlsx, CSV and TSV files" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".xlsx" Value="GridCraft.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".xlsm" Value="GridCraft.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".csv" Value="GridCraft.TextData" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Capabilities\FileAssociations" Name=".tsv" Value="GridCraft.TextData" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\RegisteredApplications" Name="GridCraft" Value="Software\GridCraft\Capabilities" Type="string" />
+      <RegistryValue Root="HKMU" Key="Software\GridCraft" Name="InstallDir" Value="[INSTALLFOLDER]" Type="string" />
       </Component>
 
       <Component Id="GridcraftCli">
@@ -205,16 +196,13 @@
       <!-- Persist both on and off, independently of the optional shortcut. AppSearch reads
            this before MajorUpgrade removes the previous product. -->
       <Component Id="DesktopShortcutPreference">
-        <RegistryValue Root="HKLM" Key="Software\GridCraft\Installer" Name="DesktopShortcut"
-            Value="[DESKTOPSHORTCUT]" Type="string" KeyPath="yes" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Installer" Name="DesktopShortcut" Value="[DESKTOPSHORTCUT]" Type="string" KeyPath="yes" />
       </Component>
       <Component Id="DesktopShortcutComponent" Directory="DesktopFolder" Condition="DESKTOPSHORTCUT = &quot;1&quot;">
-        <Shortcut Id="DesktopShortcut" Name="GridCraft" Description="GridCraft spreadsheet"
-            Target="[#GridcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="GridcraftIcon.ico" IconIndex="0" />
+        <Shortcut Id="DesktopShortcut" Name="GridCraft" Description="GridCraft spreadsheet" Target="[#GridcraftExe]" WorkingDirectory="INSTALLFOLDER" Icon="GridcraftIcon.ico" IconIndex="0" />
         <!-- HKMU resolves to HKLM for this per-machine package, so another account can
              uninstall the marker too. MSI root -1 also satisfies ICE43 for this shortcut. -->
-        <RegistryValue Root="HKMU" Key="Software\GridCraft\Installer" Name="DesktopShortcutComponent"
-            Value="1" Type="integer" KeyPath="yes" />
+        <RegistryValue Root="HKMU" Key="Software\GridCraft\Installer" Name="DesktopShortcutComponent" Value="1" Type="integer" KeyPath="yes" />
       </Component>
     </ComponentGroup>
   </Fragment>

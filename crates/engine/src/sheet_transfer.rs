@@ -19,6 +19,10 @@ pub(crate) fn run(s: &mut crate::Session, target: &serde_json::Value, sheet: usi
         let uid = target.as_u64().ok_or_else(|| refuse("choose an open workbook or 'new'."))?;
         Some(s.documents().iter().position(|d| d.uid == uid).ok_or_else(|| refuse("the destination workbook is no longer open."))?)
     };
+    let target_grouped = target_index.and_then(|index| s.docs.get(index)).is_some_and(|d| s.in_group(d.uid));
+    if s.in_group(s.doc()?.uid) || target_grouped {
+        return Err(refuse("finish grouped edits or the running macro in both workbooks first."));
+    }
     let mut blank = Workbook::new();
     blank.date_system = source.date_system;
     blank.theme = source.theme.clone();
@@ -51,7 +55,7 @@ pub(crate) fn run(s: &mut crate::Session, target: &serde_json::Value, sheet: usi
         index
     } else {
         let n = (1..).find(|n| !s.documents().iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
-        s.add_document(crate::DocState::new(blank, None, format!("Book{n}")))
+        s.add_document(crate::DocState::new(blank, None, format!("Book{n}"), crate::Trust::Local))
     };
     if let Some(calc) = remaining_calc
         && let Some(d) = s.docs.get_mut(source_index)
@@ -110,6 +114,9 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
     let name = unique_name(destination, &original.name)?;
     let mut output = destination.clone();
     let mut moved = original.clone();
+    if copy {
+        moved.uid = gridcraft_model::SheetUid::fresh();
+    }
     moved.name = name.clone();
     let table_names: HashSet<_> = original.tables.iter().map(|t| t.name.to_ascii_lowercase()).collect();
     for table in &moved.tables {
@@ -140,12 +147,7 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
         imported.push(DefinedName { formula, scope: old.scope.map(|_| before), ..old.clone() });
     }
     remap_styles(source, &mut output, &mut moved);
-    // Tables have workbook-wide ids, whereas drawing ids are local to their sheet.
-    let mut id = output.sheets.iter().flat_map(|s| &s.tables).map(|t| t.id).max().unwrap_or(0);
-    for table in &mut moved.tables {
-        id = id.checked_add(1).ok_or_else(|| refuse("there are too many table ids."))?;
-        table.id = id;
-    }
+    remap_object_ids(&output, &mut moved)?;
     for n in &mut output.names {
         if let Some(scope) = &mut n.scope
             && *scope >= before
@@ -156,7 +158,7 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
     output.names.extend(imported);
     let visible = moved.visibility == Visibility::Visible;
     output.sheets.insert(before, Arc::new(moved));
-    output.active_sheet = if visible { before } else { destination.active_sheet + usize::from(destination.active_sheet >= before) };
+    output.set_active_sheet(if visible { before } else { destination.active_sheet() + usize::from(destination.active_sheet() >= before) });
     let mut remaining = source.clone();
     if !copy {
         check_inbound(source, sheet, &table_names)?;
@@ -169,8 +171,9 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
                 *scope -= 1;
             }
         }
-        remaining.active_sheet =
-            remaining.active_sheet.saturating_sub(usize::from(remaining.active_sheet >= sheet)).min(remaining.sheets.len().saturating_sub(1));
+        remaining.set_active_sheet(
+            remaining.active_sheet().saturating_sub(usize::from(remaining.active_sheet() >= sheet)).min(remaining.sheets.len().saturating_sub(1)),
+        );
     }
     Ok((remaining, output, before))
 }
@@ -246,6 +249,29 @@ fn rewrite_formula(
         return Err(refuse(error));
     }
     Ok(gridcraft_formula::print(&mapped))
+}
+
+/// Object commands address workbook-wide ids, shared by tables and every drawing kind.
+fn remap_object_ids(destination: &Workbook, sheet: &mut Sheet) -> Result<()> {
+    let count = sheet.tables.len() + sheet.charts.len() + sheet.images.len() + sheet.shapes.len();
+    let mut ids = destination.free_object_ids(count).into_iter();
+    if ids.len() != count {
+        return Err(refuse("there are not enough free object ids in the destination."));
+    }
+    let mut next = || ids.next().ok_or_else(|| refuse("a destination object id is unavailable."));
+    for table in &mut sheet.tables {
+        table.id = next()?;
+    }
+    for chart in &mut sheet.charts {
+        chart.id = next()?;
+    }
+    for image in &mut sheet.images {
+        image.id = next()?;
+    }
+    for shape in &mut sheet.shapes {
+        shape.id = next()?;
+    }
+    Ok(())
 }
 
 fn remap_styles(source: &Workbook, destination: &mut Workbook, sheet: &mut Sheet) {
@@ -329,6 +355,11 @@ fn check_inbound(source: &Workbook, moving: usize, tables: &HashSet<String>) -> 
 }
 
 fn map_formulas(sheet: &mut Sheet, f: &mut impl FnMut(&str) -> Result<String>) -> Result<()> {
+    // These can reference other sheets through code or workbook-level actions that the
+    // formula walker cannot validate. Also refuse a move with such inbound dependencies.
+    if !sheet.controls.is_empty() || sheet.cells.iter().any(|(_, cell)| cell.py.is_some()) {
+        return Err(refuse("Python cells and form-control bindings cannot yet be checked safely."));
+    }
     let formulas: Vec<_> = sheet.cells.iter().filter_map(|(c, cell)| cell.formula.as_ref().map(|v| (c, v.clone()))).collect();
     for (c, old) in formulas {
         let text = f(&old.text)?;

@@ -25,6 +25,7 @@ fn copy_targets_another_workbook_and_keeps_the_source_unchanged() {
     assert!(Arc::ptr_eq(&s.documents()[0].wb, &source));
     let dest = &s.documents()[1].wb;
     assert_eq!(dest.sheets.len(), 2);
+    assert_ne!(dest.sheet(0).unwrap().uid.get(), source.sheet(0).unwrap().uid.get(), "a copy has its own runtime identity");
     assert_eq!(dest.sheet(0).unwrap().name, "Source");
     assert_eq!(dest.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
 }
@@ -49,16 +50,104 @@ fn movable_books() -> (Session, u64, u64) {
 #[test]
 fn move_undo_and_redo_restore_both_workbooks_from_either_side() {
     let (mut s, _, destination) = movable_books();
+    let identity = s.documents()[0].wb.sheet(0).unwrap().uid.get();
     s.execute("sheet.move", json!({"to":0,"targetWorkbook":destination})).unwrap();
     assert_eq!(s.documents()[0].wb.sheets.len(), 1);
     assert_eq!(s.documents()[1].wb.sheets.len(), 2);
+    assert_eq!(s.documents()[1].wb.sheet(0).unwrap().uid.get(), identity, "a move retains its identity");
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(s.documents()[0].wb.sheets.len(), 2);
     assert_eq!(s.documents()[1].wb.sheets.len(), 1);
+    assert_eq!(s.documents()[0].wb.sheet(0).unwrap().uid.get(), identity, "undo restores the same sheet");
     s.set_active(0);
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(s.documents()[0].wb.sheets.len(), 1);
     assert_eq!(s.documents()[1].wb.sheets.len(), 2);
+    assert_eq!(s.documents()[1].wb.sheet(0).unwrap().uid.get(), identity, "redo moves the same sheet");
+}
+
+#[test]
+fn transferred_tables_and_drawings_share_the_destinations_object_id_namespace() {
+    use gridcraft_model::Image;
+    let (mut s, _, destination) = books();
+    s.execute("cell.set", json!({"cell":"A1","input":"Qty"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A2","input":"3"})).unwrap();
+    s.execute("insert.table", json!({"range":"A1:A2","header":true,"name":"Sales"})).unwrap();
+    let table_id = s.active().unwrap().wb.sheet(0).unwrap().tables[0].id;
+    let image = |id| Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+    Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().images.push(image(table_id + 1));
+    s.set_active(1);
+    let target = Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap();
+    target.images.extend([image(table_id), image(table_id + 1)]);
+    s.set_active(0);
+    s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+    let ids: Vec<_> =
+        s.active().unwrap().wb.sheets.iter().flat_map(|sh| sh.tables.iter().map(|o| o.id).chain(sh.images.iter().map(|o| o.id))).collect();
+    assert_eq!(ids.len(), 4);
+    assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), ids.len(), "all object kinds use distinct workbook-wide ids");
+}
+
+#[test]
+fn uncheckable_python_and_control_bindings_refuse_transfer_without_mutation() {
+    use gridcraft_model::{Cell, FormControl, PyCode};
+    for python in [false, true] {
+        for on_source in [false, true] {
+            let (mut s, _, destination) = movable_books();
+            let sh = Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(if on_source { 0 } else { 1 }).unwrap();
+            if python {
+                sh.cells.set(
+                    CellRef::new(0, 0),
+                    Cell { py: Some(Arc::new(PyCode { code: "xl('Source!A1')".into(), ..Default::default() })), ..Default::default() },
+                );
+            } else {
+                sh.controls.push(FormControl::default());
+            }
+            let before: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+            assert!(
+                s.execute("sheet.move", json!({"to":0,"copy":on_source,"targetWorkbook":destination})).is_err(),
+                "python={python}, on_source={on_source}"
+            );
+            for (d, wb) in s.documents().iter().zip(before) {
+                assert!(Arc::ptr_eq(&d.wb, &wb));
+            }
+        }
+    }
+}
+
+#[test]
+fn transfer_refuses_an_open_undo_group_in_either_participant() {
+    for grouped in [0, 1] {
+        let (mut s, _, destination) = movable_books();
+        s.set_active(grouped);
+        let token = s.group_begin("Grouped edit").unwrap();
+        s.set_active(0);
+        let before: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+        assert!(s.execute("sheet.move", json!({"to":0,"targetWorkbook":destination})).is_err());
+        for (d, wb) in s.documents().iter().zip(before) {
+            assert!(Arc::ptr_eq(&d.wb, &wb));
+        }
+        s.group_end(token).unwrap();
+    }
+}
+
+#[test]
+fn multi_step_undo_and_redo_cross_a_linked_sheet_move() {
+    let (mut s, _, destination) = movable_books();
+    s.execute("sheet.move", json!({"to":0,"targetWorkbook":destination})).unwrap();
+    s.execute("cell.set", json!({"cell":"B1","input":"first"})).unwrap();
+    s.execute("cell.set", json!({"cell":"C1","input":"second"})).unwrap();
+
+    s.execute("edit.undo", json!({"steps":3})).unwrap();
+    assert_eq!(s.documents()[0].wb.sheets.len(), 2);
+    assert_eq!(s.documents()[1].wb.sheets.len(), 1);
+    assert_eq!(s.documents()[0].wb.sheet(0).unwrap().name, "Source");
+
+    s.execute("edit.redo", json!({"steps":3})).unwrap();
+    assert_eq!(s.documents()[0].wb.sheets.len(), 1);
+    assert_eq!(s.documents()[1].wb.sheets.len(), 2);
+    let restored = s.documents()[1].wb.sheet(0).unwrap();
+    assert_eq!(restored.value(CellRef::new(0, 1)), Value::from("first"));
+    assert_eq!(restored.value(CellRef::new(0, 2)), Value::from("second"));
 }
 
 #[test]
@@ -131,6 +220,29 @@ fn cross_sheet_formulas_are_refused_instead_of_binding_to_destination_sheets() {
     for (d, wb) in s.documents().iter().zip(before) {
         assert!(Arc::ptr_eq(&d.wb, &wb));
     }
+}
+
+#[test]
+fn chart_series_referring_to_another_sheet_refuse_transfer() {
+    let (mut s, _, destination) = movable_books();
+    s.execute("cell.set", json!({"cell":"A2","input":"43"})).unwrap();
+    s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+    let sh = Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.charts[0].series[0].values = "Keep!A1:A2".into();
+    let source = s.active().unwrap().wb.clone();
+    assert!(s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).is_err());
+    assert!(Arc::ptr_eq(&s.documents()[0].wb, &source));
+    assert_eq!(s.documents()[1].wb.sheets.len(), 1);
+}
+
+#[test]
+fn conditional_format_referring_to_another_sheet_refuses_transfer() {
+    let (mut s, _, destination) = movable_books();
+    s.execute("home.conditionalFormat", json!({"range":"A1","rule":{"type":"expression","formula":"=Keep!A1>0","preset":"greenFill"}})).unwrap();
+    let source = s.active().unwrap().wb.clone();
+    assert!(s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).is_err());
+    assert!(Arc::ptr_eq(&s.documents()[0].wb, &source));
+    assert_eq!(s.documents()[1].wb.sheets.len(), 1);
 }
 
 #[test]
@@ -209,7 +321,7 @@ fn a_reference_based_validation_list_without_equals_survives_rename_and_xlsx() {
     let bytes = gridcraft_engine::io::save_bytes(&s.active().unwrap().wb, "Copy.xlsx").unwrap();
     let (wb, _) = gridcraft_engine::io::open_bytes("Copy.xlsx", &bytes).unwrap();
     let dv = &wb.sheet(0).unwrap().validations[0];
-    assert_eq!(gridcraft_engine::cmd::data::list_items(&wb, 0, dv), vec!["42"]);
+    assert_eq!(gridcraft_engine::cmd::data::list_items(&wb, 0, CellRef::new(0, 1), dv), vec!["42"]);
 }
 
 #[test]
@@ -263,13 +375,13 @@ fn hidden_sheets_do_not_become_the_destinations_active_sheet() {
 fn commands_expose_stable_destination_ids_after_document_indices_shift() {
     let (mut s, _, destination) = books();
     let listed = s.execute("view.switchWindows", json!({})).unwrap();
-    assert_eq!(listed[1]["uid"].as_u64(), Some(destination));
+    assert_eq!(listed[1]["doc"].as_u64(), Some(destination));
     s.execute("file.new", json!({})).unwrap();
     s.close_document(0);
     let listed = s.execute("view.switchWindows", json!({})).unwrap();
-    assert_eq!(listed[0]["uid"].as_u64(), Some(destination));
+    assert_eq!(listed[0]["doc"].as_u64(), Some(destination));
     assert_eq!(listed[0]["index"], json!(0));
-    let result = s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":listed[0]["uid"]})).unwrap();
+    let result = s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":listed[0]["doc"]})).unwrap();
     assert_eq!(result["workbook"].as_u64(), Some(destination));
     assert_eq!(s.active().unwrap().wb.sheets.len(), 2);
 }

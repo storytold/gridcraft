@@ -12,7 +12,9 @@ hyperlinks, merges, views, print settings, ordinary tables, charts, pictures, sh
 sparklines, conditional formats and data validation. Sheet-local names and the
 workbook names used by formulas are carried across. Styles are interned into the
 destination, including the source Normal formatting of implicit empty cells.
-Table identifiers are allocated in the destination workbook.
+Table and drawing identifiers are allocated in the destination workbook's shared
+object namespace. A copied worksheet gets its own runtime identity; a move keeps
+the original identity through undo and redo.
 
 ## Safety limits
 
@@ -32,6 +34,11 @@ preserve a transfer safely. In particular:
 - VBA, retained package content, XML/connection-bound tables, PivotTables,
   PivotCharts and slicers require further integration and are refused.
 - Relative file hyperlinks are refused because their base folder would change.
+- Python cells and form controls are refused because their code or bindings cannot
+  yet be checked for dependencies. A move is also refused if a remaining source
+  sheet has such content, since it might depend on the moved sheet.
+- Finish open grouped edits or a running macro in either participant before a
+  transfer; linked transfers cannot be nested in a single-workbook undo group.
 
 These restrictions are explicit; formulas are never silently converted into values,
 unsupported objects are never discarded, and references are not rebound to an

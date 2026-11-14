@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub use axis::{Scale, format_number, nice_scale};
 pub use raster::rasterize;
 pub use render::{Swatch, legend_entries, render, supports_trendline};
-pub use resolve::{default_palette, resolve, series_color, series_plot_kind};
+pub use resolve::{default_palette, has_volatile_series, resolve, series_color, series_plot_kind};
 pub use sparkline::render_sparkline;
 
 /// Straight (non-premultiplied) RGBA colour.
@@ -123,6 +123,11 @@ impl Measure for ApproxMeasure {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartData {
     pub categories: Vec<String>,
+    /// Outer levels of a multi-level category axis (a category range two columns wide beside a
+    /// column of values: year beside month), nearest the labels first. One entry per category,
+    /// non-empty where a group starts: `["2023", "", "", "2024", "", ""]`.
+    #[serde(default)]
+    pub category_levels: Vec<Vec<String>>,
     pub series: Vec<SeriesData>,
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
