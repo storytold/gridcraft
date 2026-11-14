@@ -38,13 +38,6 @@ impl SheetApp {
                 keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
                 keytips::Action::CommandWith(id, params) => {
                     let params: Json = serde_json::from_str(params).unwrap_or_else(|_| json!({}));
-                    // A Borders preset picked by key tip becomes the split button's face, as a
-                    // click on the same menu item does.
-                    if id == "home.borders"
-                        && let Some(preset) = params.get("preset").and_then(Json::as_str)
-                    {
-                        self.grid.last_border = preset.to_string();
-                    }
                     self.run_or_alert(id, params);
                 }
                 keytips::Action::Dialog(name) => self.open_dialog(name, json!({})),
