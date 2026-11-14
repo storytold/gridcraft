@@ -221,6 +221,10 @@ impl SheetApp {
                 self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
                 Ok(json!({"on": self.ui.highlight_active_row}))
             }
+            "view.systemTitleBar" => {
+                self.ui.system_title_bar = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.system_title_bar);
+                Ok(json!({"on": self.ui.system_title_bar, "appDrawsFrame": self.draws_window_frame()}))
+            }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
                 let percent = match p.get("percent") {
