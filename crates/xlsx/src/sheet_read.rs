@@ -440,9 +440,18 @@ fn read_views(e: &El, sheet: &mut Sheet) {
             let rows = p.attr_f64("ySplit").unwrap_or(0.0).clamp(0.0, (MAX_ROWS - 1) as f64) as u32;
             if rows > 0 || cols > 0 {
                 sheet.freeze = Some((rows, cols));
-                // With frozen panes the scroll position is the scrolling pane's first cell.
+                // With frozen panes the scroll position is the scrolling pane's first cell. A pane
+                // frozen one way only scrolls with the sheet the other way: with frozen rows alone
+                // Excel takes the column from the sheet view's own `topLeftCell` and the row from
+                // the pane's, and the reverse with frozen columns alone (measured in Excel 365;
+                // LibreOffice writes the two apart).
                 if let Some(c) = p.attr("topLeftCell").and_then(CellRef::parse) {
-                    sheet.view_top_left = c;
+                    let view = sheet.view_top_left;
+                    sheet.view_top_left = match (rows > 0, cols > 0) {
+                        (true, false) => CellRef::new(c.row, view.col),
+                        (false, true) => CellRef::new(view.row, c.col),
+                        _ => c,
+                    };
                 }
             }
         }

@@ -713,8 +713,16 @@ fn write_sheet_views(s: &mut String, sheet: &Sheet, selected: bool) {
     if sheet.zoom != 100 && (10..=400).contains(&sheet.zoom) {
         let _ = write!(s, " zoomScale=\"{0}\" zoomScaleNormal=\"{0}\"", sheet.zoom);
     }
-    if sheet.view_top_left != CellRef::default() && sheet.freeze.is_none() {
-        let _ = write!(s, " topLeftCell=\"{}\"", sheet.view_top_left.a1());
+    // Excel scrolls a pane frozen one way only by the sheet view's `topLeftCell` the other way:
+    // the column with frozen rows alone, the row with frozen columns alone.
+    let view_top_left = match sheet.freeze {
+        None => sheet.view_top_left,
+        Some((rows, cols)) if rows > 0 && cols == 0 => CellRef::new(0, sheet.view_top_left.col),
+        Some((rows, cols)) if cols > 0 && rows == 0 => CellRef::new(sheet.view_top_left.row, 0),
+        Some(_) => CellRef::default(),
+    };
+    if view_top_left != CellRef::default() {
+        let _ = write!(s, " topLeftCell=\"{}\"", view_top_left.a1());
     }
     s.push_str(" workbookViewId=\"0\">");
     let active = sheet.view_active.a1();
