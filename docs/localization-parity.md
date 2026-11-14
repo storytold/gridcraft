@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-13 · **Change:** minor (Hungarian has 1,559 catalog entries; selected dialog, ribbon, macro, control, analysis, chart and status-bar strings use the catalog, including picture placement, shape and sparkline Insert dropdowns; visible ribbon labels were compared with Hungarian Excel; other dropdowns and File/contextual tabs remain unchecked; native-speaker and full terminology review remain outstanding); previously minor (Ukrainian Chart is Діаграма; Diagram and Decorative Text labels; CJK fallback baselines; Arabic bidi and number/date work) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-14 · **Change:** minor (Hungarian has 1,559 catalog entries; selected dialog, ribbon, macro, control, analysis, chart and status-bar strings use the catalog, including picture placement, shape and sparkline Insert dropdowns and translated Insert › Icons picker tooltips; visible ribbon labels were compared with Hungarian Excel; other dropdowns and File/contextual tabs remain unchecked; native-speaker and full terminology review remain outstanding); previously minor (Ukrainian Chart is Діаграма; Diagram and Decorative Text labels; CJK fallback baselines; Arabic bidi and number/date work) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -134,6 +134,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Hungarian Insert › Icons item tooltips now use localized names; the stable English names sent to `insert.icons` remain unchanged |
 | 2026-11-13 | minor | Hungarian UI localization covers 1,559 catalog entries; selected macro, control, analysis, chart-formatting, dialog, ribbon, status-bar and dynamic text now uses translations; picture placement, shape and sparkline Insert dropdowns use localized labels; visible Excel ribbon labels were compared across Home, Insert, Page Layout, Formulas, Data, Review, View and Help; several labels were aligned to Excel; full native-speaker and Excel terminology review remain outstanding |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |

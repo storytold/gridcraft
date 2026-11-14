@@ -426,6 +426,13 @@ mod tests {
     }
 
     #[test]
+    fn hungarian_insert_icon_tooltips_are_translated() {
+        for (name, _) in crate::icons::LIBRARY {
+            assert_ne!(Language::Hu.tr(name), *name, "Hungarian icon tooltip falls back to English: {name}");
+        }
+    }
+
+    #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).
