@@ -164,8 +164,9 @@ impl SheetApp {
         }
         let Some(d) = self.session.active() else { return };
         let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+        // The compiled identity is fixed: compare the workbook title before allocating its prefix.
         if self.grid.last_title.as_deref() != Some(title.as_str()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(crate::build_config::window_title(&title).into_owned()));
             self.grid.last_title = Some(title);
         }
     }
@@ -509,14 +510,14 @@ mod lifecycle_tests {
         let first = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
         let title = app.session.active().unwrap().display_title().to_string();
         let expected = format!("{title}{}", if app.session.active().unwrap().is_dirty() { " — Edited" } else { "" });
-        assert_eq!(titles(&first), [expected], "the first logic tick titles the window");
+        assert_eq!(titles(&first), [crate::build_config::window_title(&expected)], "the first logic tick titles the window");
         let second = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
         assert!(titles(&second).is_empty(), "an unchanged title is not sent every frame");
 
         app.session.active_mut().unwrap().title = "Renamed".into();
         let third = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
         let expected = format!("Renamed{}", if app.session.active().unwrap().is_dirty() { " — Edited" } else { "" });
-        assert_eq!(titles(&third), [expected], "a rename while hidden updates the title");
+        assert_eq!(titles(&third), [crate::build_config::window_title(&expected)], "a rename while hidden updates the title");
     }
 
     #[test]

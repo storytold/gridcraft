@@ -344,7 +344,7 @@ fn main() -> eframe::Result<()> {
     // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
     app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("GridCraft")
+        .with_title(gridcraft_ui_egui::build_config::app_name())
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([640.0, 420.0])
         .with_app_id("ai.storyteller.gridcraft")
@@ -396,7 +396,7 @@ fn main() -> eframe::Result<()> {
     let pending = std::cell::Cell::new(Some(app));
     let run = |options: eframe::NativeOptions| {
         eframe::run_native(
-            "GridCraft",
+            gridcraft_ui_egui::build_config::app_name(),
             options,
             Box::new(|cc| {
                 let Some(mut app) = pending.take() else {
