@@ -481,6 +481,37 @@ fn other_compound_files_are_not_called_encrypted() {
     assert!(!msg.contains("password"), "got: {msg}");
 }
 
+/// A workbook opened with its password is saved encrypted with that password, not as a plain
+/// package; it still has no path of its own, so Save never writes over the original.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_workbook_opened_with_a_password_is_saved_encrypted() {
+    use serde_json::json;
+    const PW: &str = "synthetic-pw-5523";
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-encrypted-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut src = crate::Session::new();
+    src.new_workbook();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    let original = dir.join("Secret.xlsx");
+    std::fs::write(&original, gridcraft_xlsx::testing::encrypt_workbook(&save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap(), PW)).unwrap();
+
+    let mut s = crate::Session::new();
+    s.execute("file.open", json!({"path": original, "password": PW})).unwrap();
+    assert!(s.doc().unwrap().path.is_none(), "a decrypted workbook has no save target");
+    assert!(!format!("{:?}", s.doc().unwrap()).contains(PW), "Debug never prints the password");
+    s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
+    let saved = dir.join("Saved.xlsx");
+    s.execute("file.save", json!({"path": saved})).unwrap();
+
+    let bytes = std::fs::read(&saved).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Encrypted);
+    let (wb, _) = open_bytes_with_password("Saved.xlsx", &bytes, Some(PW)).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(43.0));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Save As CSV/TSV writes cells as displayed: number formats applied, formula results,
 /// whole values in narrow columns (never `#####`), quoting unchanged.
 #[test]

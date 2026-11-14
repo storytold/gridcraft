@@ -1,7 +1,7 @@
 //! Value-axis scaling ("nice numbers") and label formatting.
 
-use gridcraft_core::{DateSystem, Value, number_to_text};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_core::{DateSystem, Region, Value, number_to_text};
+use gridcraft_numfmt::{NumberFormat, format_value_in};
 
 /// Largest magnitude we plot; bigger values are clamped so ranges stay finite.
 pub(crate) const MAX_ABS: f64 = 1e300;
@@ -113,13 +113,15 @@ pub fn nice_scale(lo: f64, hi: f64, force_zero: bool) -> Scale {
 pub(crate) struct Fmt {
     general: bool,
     fmt: NumberFormat,
+    /// The region whose decimal and thousands separators the label is written with.
+    region: &'static Region,
 }
 
 impl Fmt {
-    pub fn new(code: &str) -> Fmt {
+    pub fn new(code: &str, region: &'static Region) -> Fmt {
         let t = code.trim();
         let general = t.is_empty() || t.eq_ignore_ascii_case("general");
-        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }) }
+        Fmt { general, fmt: NumberFormat::parse_cached(if general { "General" } else { t }), region }
     }
     /// Formats `v`; `step` (axis labels) fixes the decimals for General.
     pub fn format(&self, v: f64, step: Option<f64>) -> String {
@@ -133,7 +135,7 @@ impl Fmt {
         if self.general {
             return general_text(v, step);
         }
-        let mut t = format_value(&Value::Number(v), &self.fmt, DateSystem::D1900).text;
+        let mut t = format_value_in(&Value::Number(v), &self.fmt, DateSystem::D1900, self.region).text;
         if t.chars().count() > 40 {
             t = t.chars().take(40).collect();
         }
@@ -157,5 +159,5 @@ fn general_text(v: f64, step: Option<f64>) -> String {
 
 /// Formats a number with a format code (General shows up to the precision implied by `step`).
 pub fn format_number(v: f64, code: &str, step: Option<f64>) -> String {
-    Fmt::new(code).format(v, step)
+    Fmt::new(code, &gridcraft_core::region::EN_US).format(v, step)
 }
