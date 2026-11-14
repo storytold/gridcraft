@@ -7,6 +7,7 @@ pub mod addr;
 pub mod color;
 pub mod date;
 pub mod parse;
+pub mod picture;
 pub mod region;
 pub mod value;
 
@@ -15,5 +16,6 @@ pub use addr::{
     split_areas, split_sheet, unquote_sheet,
 };
 pub use date::DateSystem;
+pub use picture::{MAX_PICTURE_PIXELS, PictureSizing};
 pub use region::Region;
 pub use value::{Array, CellError, Value, compare, compare_numbers, compare_text, number_to_text, sort_compare};

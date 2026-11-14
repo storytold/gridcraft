@@ -77,6 +77,11 @@ pub(super) struct PassHost<'a> {
     stack_top: usize,
     /// Whether an evaluation ran past the stack budget since the innermost formula started.
     out_of_stack: bool,
+    /// Answers IMAGE; `None` makes it `#BLOCKED!`.
+    pub(super) images: Option<std::sync::Arc<dyn gridcraft_functions::ImageFetcher>>,
+    /// Pictures IMAGE produced this pass, by the cell that holds the formula. Only the last one a
+    /// formula produced counts: it is cleared when the formula is evaluated again.
+    pub(super) pictures: HashMap<Key, gridcraft_functions::ImagePicture>,
     /// Sum and count of blocks that hold only constants, for `range_sum`. Keyed by sheet, first
     /// cell and last column; each value maps a last row to the block's result (`None`: the block
     /// has a formula, a Python cell, an error value or a spilled value, so every longer one has too).
@@ -121,6 +126,8 @@ impl<'a> PassHost<'a> {
             precision: wb.calc.precision_as_displayed.then(crate::DisplayedPrecision::new),
             stack_top: 0,
             out_of_stack: false,
+            images: None,
+            pictures: HashMap::default(),
             sums: HashMap::default(),
             python: HashMap::default(),
         }
@@ -318,6 +325,7 @@ impl PassHost<'_> {
             self.stack.push(k);
         }
         let expr = std::sync::Arc::clone(expr);
+        self.pictures.remove(&k);
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
@@ -759,6 +767,15 @@ impl Host for PassHost<'_> {
     }
     fn now_serial(&self) -> f64 {
         self.now
+    }
+    fn image_get(&mut self, url: &str) -> Result<Vec<u8>, CellError> {
+        match &self.images {
+            Some(fetcher) => fetcher.get(url).map_err(CellError::from),
+            None => Err(CellError::Blocked),
+        }
+    }
+    fn set_image(&mut self, sheet: usize, at: CellRef, picture: gridcraft_functions::ImagePicture) {
+        self.pictures.insert((sheet, at), picture);
     }
     fn random(&mut self) -> f64 {
         // xorshift64*
