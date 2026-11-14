@@ -17,6 +17,7 @@ mod cells;
 mod chart;
 mod data;
 mod objects;
+mod pdf;
 mod scripts;
 mod window;
 
@@ -192,6 +193,17 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("table.removeDuplicates", "Remove Duplicates", ["Table Design", "Tools"], None, "{table?, columns?}", has_doc, |s, p| s
             .execute("data.removeDuplicates", p.clone())),
         // Get & Transform
+        cmd!(query "data.pdfTables", "Preview PDF Tables", ["Data", "Get & Transform Data"], None,
+            "{path, page?: 1} → page count and bordered tables with text cells; no workbook changes", always, pdf::preview),
+        cmd!(
+            "data.fromPdf",
+            "From PDF",
+            ["Data", "Get & Transform Data"],
+            None,
+            "{path, page?: 1, table?: 1, sheet?, asTable?: true, headers?: true, numericColumns?: [zero-based indexes]} → imports a selected bordered table into a new sheet. rows?: text[][] loads a confirmed preview snapshot instead of rereading path. Text is never evaluated as formulas.",
+            has_doc,
+            pdf::load
+        ),
         cmd!(
             "data.fromTextCsv",
             "From Text/CSV",

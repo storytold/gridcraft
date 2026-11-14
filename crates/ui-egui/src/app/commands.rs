@@ -20,7 +20,7 @@ impl SheetApp {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));
-        if id.starts_with("file.") || switches_window {
+        if id.starts_with("file.") || switches_window || id == "data.fromPdf" {
             self.settle_drafts()?;
         }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
@@ -406,6 +406,7 @@ impl SheetApp {
             return;
         }
         match name {
+            "pdfImport" => crate::pdf_import::open(self, &params),
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();

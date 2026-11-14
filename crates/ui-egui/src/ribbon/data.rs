@@ -7,6 +7,10 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    let pdf = big_button(ui, Icon::Folder, "From\nPDF", "Import a bordered table from a PDF file", false);
+    if pdf.clicked() {
+        app.open_dialog("pdfImport", json!({}));
+    }
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);

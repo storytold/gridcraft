@@ -16,6 +16,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // arrow key would move the selection the menu fills from), and a macro's question.
     if editing
         || app.dialog.is_some()
+        || app.pdf_import.is_some()
         || other_focus
         || app.message.is_some()
         || app.grid.filter_menu.is_some()

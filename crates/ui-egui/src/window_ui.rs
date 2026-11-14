@@ -16,6 +16,7 @@ pub struct WindowUi {
     editor: Option<editor::EditState>,
     text_box_editor: Option<text_box::EditState>,
     dialog: Option<dialogs::Dialog>,
+    pdf_import: Option<crate::pdf_import::State>,
     backstage: Option<backstage::Backstage>,
     message: Option<(String, String)>,
     toast: Option<(String, f64)>,
@@ -60,6 +61,7 @@ impl SheetApp {
             editor,
             text_box_editor,
             dialog,
+            pdf_import,
             backstage,
             message,
             toast,
@@ -77,6 +79,7 @@ impl SheetApp {
         std::mem::swap(&mut self.editor, editor);
         std::mem::swap(&mut self.text_box_editor, text_box_editor);
         std::mem::swap(&mut self.dialog, dialog);
+        std::mem::swap(&mut self.pdf_import, pdf_import);
         std::mem::swap(&mut self.backstage, backstage);
         std::mem::swap(&mut self.message, message);
         std::mem::swap(&mut self.toast, toast);

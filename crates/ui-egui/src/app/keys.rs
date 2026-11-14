@@ -5,6 +5,7 @@ impl SheetApp {
         let before = self.keytips.prefix().map(str::to_string);
         let enabled = self.editor.is_none()
             && self.dialog.is_none()
+            && self.pdf_import.is_none()
             && self.message.is_none()
             && self.name_box.is_none()
             && !ctx.text_edit_focused()

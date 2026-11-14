@@ -42,6 +42,7 @@ impl SheetApp {
             notice: None,
             services,
             printing: Default::default(),
+            pdf_import: None,
             print_feedback_seen: None,
             synthetic: Default::default(),
             synthetic_pending: false,
@@ -250,6 +251,7 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        crate::pdf_import::show(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);

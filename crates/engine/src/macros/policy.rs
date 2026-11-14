@@ -45,7 +45,7 @@ const DENIED: &[(&str, &str)] = &[
 const ALLOWED: &[&str] = &["file.properties"];
 
 /// Commands that read a file when given a `path`.
-const READS_FILES: &[&str] = &["data.getData", "data.fromTextCsv", "insert.picture", "pageLayout.background"];
+const READS_FILES: &[&str] = &["data.pdfTables", "data.fromPdf", "data.getData", "data.fromTextCsv", "insert.picture", "pageLayout.background"];
 
 /// File commands that only produce bytes unless given a `path` (then they write a file).
 const EXPORTS: &[&str] = &["file.exportPdf", "file.exportCsv", "file.exportHtml", "file.print", "file.printPreview", "file.saveBytes"];
@@ -118,7 +118,17 @@ mod tests {
             assert!(matches!(macro_policy(id, &none, Trust::Local), Policy::Deny(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::Deny(_)), "{id}");
         }
-        for id in ["data.getData", "data.fromTextCsv", "insert.picture", "pageLayout.background", "file.exportPdf", "file.print", "file.exportCsv"] {
+        for id in [
+            "data.pdfTables",
+            "data.fromPdf",
+            "data.getData",
+            "data.fromTextCsv",
+            "insert.picture",
+            "pageLayout.background",
+            "file.exportPdf",
+            "file.print",
+            "file.exportCsv",
+        ] {
             assert!(matches!(macro_policy(id, &path, Trust::Local), Policy::NeedsPermission(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::NeedsPermission(_)), "{id}");
         }

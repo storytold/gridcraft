@@ -194,6 +194,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("data.getData", "Data", "Get & Transform Data", "Get Data"),
     ("data.fromTextCsv", "Data", "Get & Transform Data", "From Text/CSV"),
     ("data.fromWeb", "Data", "Get & Transform Data", "From Web"),
+    ("data.fromPdf", "Data", "Get & Transform Data", "From PDF"),
     ("data.fromTableRange", "Data", "Get & Transform Data", "From Table/Range"),
     ("data.refreshAll", "Data", "Queries & Connections", "Refresh All"),
     ("data.queriesConnections", "Data", "Queries & Connections", "Queries & Connections"),

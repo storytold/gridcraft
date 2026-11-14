@@ -235,6 +235,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     bs.text_edit_focused = ctx.text_edit_focused();
     if !typing
         && app.dialog.is_none()
+        && app.pdf_import.is_none()
         && app.message.is_none()
         && !egui::Popup::is_any_open(&ctx)
         && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))

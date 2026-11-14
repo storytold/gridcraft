@@ -48,6 +48,7 @@ pub mod objects;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
+mod pdf_import;
 pub mod pivot_pane;
 pub mod printing;
 pub mod ribbon;
@@ -253,6 +254,7 @@ pub struct SheetApp {
     pub notice: Option<Notice>,
     pub services: Services,
     pub printing: printing::State,
+    pub(crate) pdf_import: Option<pdf_import::State>,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
