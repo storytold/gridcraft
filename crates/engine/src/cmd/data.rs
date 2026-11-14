@@ -27,6 +27,7 @@ pub use filter::filter_values;
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
+pub use sort::sort_context;
 use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
@@ -212,7 +213,7 @@ fn data_target(s: &Session, p: &Json, cmd: &str) -> Result<(usize, RangeRef)> {
 /// Excel's header guess: the first row is text over a column of numbers, or is bold.
 fn guess_header(wb: &Workbook, sh: &Sheet, r: RangeRef) -> bool {
     if let Some(t) = sh.table_at(r.start) {
-        return t.header_row;
+        return t.header_row && r.start.row == t.range.start.row;
     }
     if r.height() < 2 {
         return false;

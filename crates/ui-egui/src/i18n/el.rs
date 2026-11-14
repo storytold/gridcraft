@@ -884,7 +884,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Χρώμα κελιού",
         "A to Z" => "Α έως Ω",
         "Z to A" => "Ω έως Α",
-        "+ Add Level" => "+ Προσθήκη επιπέδου",
+        "Add Level" => "Προσθήκη επιπέδου",
+        "Delete Level" => "Διαγραφή επιπέδου",
+        "Copy Level" => "Αντιγραφή επιπέδου",
+        "Move Up" => "Μετακίνηση πάνω",
+        "Move Down" => "Μετακίνηση κάτω",
+        "Order" => "Σειρά",
+        "Sort On" => "Ταξινόμηση ως προς",
+        "Sort|Column" => "Στήλη",
+        "Column {letters}" => "Στήλη {letters}",
+        "Smallest to Largest" => "Από το μικρότερο στο μεγαλύτερο",
+        "Largest to Smallest" => "Από το μεγαλύτερο στο μικρότερο",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Κλείστε το παράθυρο διαλόγου Ταξινόμηση πριν αλλάξετε ή τροποποιήσετε φύλλα εργασίας."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Επιστρέψτε στο αρχικό φύλλο εργασίας για να ταξινομήσετε ή ακυρώστε.",
         "New…" => "Νέο…",
         "Edit…" => "Επεξεργασία…",
         "Name" => "Όνομα",

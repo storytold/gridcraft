@@ -28,6 +28,19 @@ fn sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef)> {
     Ok((sheet, data_range(s, p)?))
 }
 
+/// The range the Custom Sort dialog works on and whether its first row looks like a header.
+pub fn sort_context(s: &Session, p: &Json) -> Result<(RangeRef, bool)> {
+    let d = s.doc()?;
+    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sel = d.selection.current();
+    // An explicit block wins over the table range, so a selected totals row can be sorted.
+    let r = match sh.used_range() {
+        Some(used) if p.get("range").is_none() && !sel.is_single() => sel.intersection(&used).unwrap_or(sel),
+        _ => data_range(s, p)?,
+    };
+    Ok((r, bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r))))
+}
+
 pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
     let (sheet, r) = sort_target(s, p)?;
     let col = col_param(p.get("column"), r.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
@@ -68,6 +81,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         });
     }
     if keys.is_empty() {
+        let (r, header) = sort_context(s, p)?;
         s.ui_requests.push(crate::UiRequest::Dialog("sort".into(), json!({"range": r.a1(), "header": header})));
         return ok();
     }

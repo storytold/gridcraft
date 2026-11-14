@@ -526,6 +526,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Contraer diálogo",
         "Expand dialog" => "Expandir diálogo",
+        "My list has headers" => "Mis datos tienen encabezados",
+        "Sort by" => "Ordenar por",
+        "Then by" => "Luego por",
+        "Cell Values" => "Valores de celda",
+        "Cell Color" => "Color de celda",
+        "A to Z" => "De A a Z",
+        "Z to A" => "De Z a A",
+        "Add Level" => "Agregar nivel",
+        "Delete Level" => "Eliminar nivel",
+        "Copy Level" => "Copiar nivel",
+        "Move Up" => "Subir",
+        "Move Down" => "Bajar",
+        "Order" => "Orden",
+        "Sort On" => "Ordenar según",
+        "Sort|Column" => "Columna",
+        "Column {letters}" => "Columna {letters}",
+        "Smallest to Largest" => "De menor a mayor",
+        "Largest to Smallest" => "De mayor a menor",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Cierre el cuadro de diálogo Ordenar antes de cambiar de hoja o modificar las hojas."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Vuelva a la hoja original para ordenar o cancele.",
         _ => return None,
     })
 }

@@ -326,6 +326,8 @@ fn active_sheet_name(app: &SheetApp) -> String {
 /// dialog about to run its command must not, since references without a sheet name would be
 /// read against the sheet still shown.
 pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String> {
+    // Custom Sort puts back the selection it changed whenever it lets go of the grid.
+    super::sort_dialog::restore_selection(app, d);
     d.refs.target = None;
     d.refs.collapsed = None;
     let Some(home) = d.refs.home.as_mut() else { return Ok(()) };
