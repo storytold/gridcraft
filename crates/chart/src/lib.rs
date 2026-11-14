@@ -143,7 +143,9 @@ pub struct SeriesData {
     /// Bubble sizes.
     pub sizes: Option<Vec<Option<f64>>>,
     pub color: Rgba,
-    /// Per-series kind (combo charts).
+    /// The kind this series is drawn as. `resolve` sets it from `Chart::series_kind`. `render`
+    /// reads it for every series of a vertical cartesian or scatter chart, so a hand-built
+    /// `ChartData` sets it too (`SeriesData::default()` gives `ColumnClustered`).
     pub kind: ChartKind,
     /// Plotted against the secondary (right) value axis.
     pub secondary: bool,
