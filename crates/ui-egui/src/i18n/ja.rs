@@ -1021,6 +1021,16 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Unprotect Sheet…", "シート保護の解除…"),
     ("Collapse dialog", "ダイアログを折りたたむ"),
     ("Expand dialog", "ダイアログを展開する"),
+    ("Regression Type:", "回帰の種類:"),
+    ("Regression method", "回帰方法"),
+    ("Regression options", "回帰オプション"),
+    ("Exponential", "指数近似"),
+    ("Logarithmic", "対数近似"),
+    ("Power / Geometric", "累乗 / 幾何"),
+    (
+        "Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1.",
+        "診断統計量と切片は ln(Y) の尺度で計算されます。切片を 0 にすると振幅は 1 に固定されます。",
+    ),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the

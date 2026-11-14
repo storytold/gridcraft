@@ -1,6 +1,9 @@
 use super::ref_edit::{RefLabel, SHEET_DELETED, current_area_ref, end_pick, home_sheet_deleted, ref_edit};
-use super::show::{build_params, form_fields, ok_cancel};
+use super::show::{build_params, form_fields, ok_cancel, ok_cancel_with_enter};
 use super::{Dialog, Field, Json, Map, SheetApp, json, vec2};
+
+#[cfg(test)]
+mod tests;
 
 /// Data › What-If Analysis › Goal Seek. OK runs `data.goalSeek` here; Cancel clears `open`, as
 /// the shared buttons do, so cancelling is never taken for a confirmation.
@@ -81,6 +84,11 @@ fn toolpak_fields(tool: &str, values: &Map<String, Json>) -> Vec<Field> {
             Ref { key: "inputY", label: "Input Y Range:" },
             Ref { key: "inputX", label: "Input X Range:" },
             labels(),
+            Choice {
+                key: "model",
+                label: "Regression Type:",
+                options: vec![("linear", "Linear"), ("exponential", "Exponential"), ("logarithmic", "Logarithmic"), ("power", "Power / Geometric")],
+            },
             Check { key: "constantZero", label: "Constant is Zero" },
             Text { key: "confidence", label: "Confidence Level (%):" },
             Check { key: "residuals", label: "Residuals" },
@@ -213,6 +221,7 @@ pub(super) fn toolpak_defaults(sel: &str, tool: &str) -> Map<String, Json> {
         v[k] = json!(x);
     }
     if tool == "regression" {
+        v["model"] = json!("linear");
         v["confidence"] = json!("95");
         v["inputY"] = json!(sel);
     }
@@ -273,7 +282,48 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
     // The tool's options scroll in a short window (the patterned Random Number Generation form
     // is taller than 600 points); the output options and OK below always stay in view.
     let room = (ui.ctx().content_rect().height() - TOOLPAK_CHROME).max(120.0);
-    egui::ScrollArea::vertical().id_salt("toolpakForm").max_height(room).show(ui, |ui| form_fields(app, ui, d));
+    egui::ScrollArea::vertical().id_salt("toolpakForm").max_height(room).show(ui, |ui| {
+        if tool == "regression" {
+            let lang = app.ui.language;
+            let fields = std::mem::take(&mut d.fields);
+            d.fields = fields.iter().take(3).cloned().collect();
+            ui.push_id("regression-inputs", |ui| form_fields(app, ui, d));
+            ui.separator();
+            ui.label(egui::RichText::new(lang.tr("Regression method")).strong());
+            if let Some(Field::Choice { key, label, options }) = fields.get(3) {
+                let label = ui.label(lang.tr(label));
+                let model_id = ui.make_persistent_id("regression-model");
+                let popup_was_open = craft_ui::ComboBox::is_open(ui.ctx(), model_id);
+                let mut selected = d.values.get(*key).cloned().unwrap_or_else(|| json!("linear"));
+                let text = selected
+                    .as_str()
+                    .and_then(|selected| options.iter().find(|(value, _)| *value == selected))
+                    .map(|(_, label)| lang.tr(label))
+                    .unwrap_or("");
+                let response = craft_ui::ComboBox::from_id_salt("regression-model")
+                    .selected_text(text)
+                    .show_ui(ui, |ui| {
+                        for (value, label) in options {
+                            ui.selectable_value(&mut selected, json!(*value), lang.tr(label));
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+                d.popup_owns_shortcuts |= popup_was_open || response.has_focus();
+                d.values.insert((*key).into(), selected);
+            }
+            ui.separator();
+            ui.label(egui::RichText::new(lang.tr("Regression options")).strong());
+            d.fields = fields.get(4..).unwrap_or_default().to_vec();
+            ui.push_id("regression-options", |ui| form_fields(app, ui, d));
+            d.fields = fields;
+            if matches!(d.values.get("model").and_then(Json::as_str), Some("exponential" | "power")) {
+                ui.add(egui::Label::new(lang.tr("Diagnostics and the intercept use ln(Y); a zero intercept fixes the amplitude to 1.")).wrap());
+            }
+        } else {
+            form_fields(app, ui, d);
+        }
+    });
     ui.separator();
     ui.label(egui::RichText::new("Output options").strong());
     let to = d.values.get("outputTo").and_then(Json::as_str).unwrap_or("newSheet").to_string();
@@ -306,7 +356,7 @@ pub(super) fn analysis_toolpak(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Di
             }
         });
     }
-    ok_cancel(ui, confirm, open);
+    ok_cancel_with_enter(ui, confirm, open, !d.popup_owns_shortcuts);
 }
 
 /// The Solver Options fields: (key, label, default).
