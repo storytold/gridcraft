@@ -454,9 +454,21 @@ fn table_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
             "firstCol" => t.first_col = on.unwrap_or(!t.first_col),
             "lastCol" => t.last_col = on.unwrap_or(!t.last_col),
             "header" => {
+                let v = on.unwrap_or(!t.header_row);
+                let changed = v != t.header_row;
+                if changed {
+                    t.header_row = v;
+                }
                 t.filter_button = on.unwrap_or(!t.filter_button);
                 if !t.filter_button {
                     t.filter.clear();
+                }
+                if changed {
+                    // The ranges structured references see change with the flag, and a
+                    // re-enabled header row names the columns again: a structural edit,
+                    // like the totals toggle — the commit resyncs the headers against
+                    // the cells and recalculates, so neither goes stale.
+                    cx.structural = true;
                 }
             }
             _ => {}

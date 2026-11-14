@@ -557,3 +557,143 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// A sheet shaped like #3544's workbook: a numeric header row over text, an AutoFilter on
+/// A1:E9, and the active cell at J16, outside the data, as the file was saved.
+fn numeric_header_filter_sheet() -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([[1, 2, 3, 4, 5], ["d", 4], ["z", 26], ["a", 1], ["n", 14], ["b", 2], ["g", 7], ["c", 3], ["f", 6]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:E9"})).unwrap();
+    s.execute("selection.set", json!({"range": "J16"})).unwrap();
+    s
+}
+
+fn column_text(s: &Session, col: &str, rows: std::ops::RangeInclusive<u32>) -> Vec<String> {
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    rows.map(|r| sh.value(CellRef::parse(&format!("{col}{r}")).unwrap()).display()).collect()
+}
+
+fn autofilter_a1(s: &Session) -> Option<String> {
+    s.doc().unwrap().wb.active().unwrap().autofilter.as_ref().map(|a| a.range.a1())
+}
+
+#[test]
+fn filter_menu_sort_sorts_the_autofilter_range_whatever_the_active_cell() {
+    // #3544: with the cursor outside the data, the drop-down's sort sorted the cursor's cell.
+    let mut s = numeric_header_filter_sheet();
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 2..=9), ["a", "b", "c", "d", "f", "g", "n", "z"]);
+    // Whole rows move: each letter keeps its number.
+    assert_eq!(column_text(&s, "B", 2..=9), ["1", "2", "3", "4", "6", "7", "14", "26"]);
+    s.execute("data.sortDescending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 2..=9), ["z", "n", "g", "f", "d", "c", "b", "a"]);
+    // As in Excel, the active cell does not move.
+    assert_eq!(s.doc().unwrap().selection.active, CellRef::parse("J16").unwrap());
+}
+
+#[test]
+fn filter_menu_sort_descending_keeps_a_numeric_header_row_in_place() {
+    // #3544: the header guess saw numbers over text, called row 1 data, and Sort Descending
+    // dragged it to the bottom. The cursor sits inside the data so the old range was right and
+    // only the header decision is under test.
+    let mut s = numeric_header_filter_sheet();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.sortDescending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=9), ["1", "z", "n", "g", "f", "d", "c", "b", "a"]);
+    assert_eq!(column_text(&s, "E", 1..=1), ["5"]);
+    assert_eq!(autofilter_a1(&s), Some("A1:E9".to_string()));
+}
+
+#[test]
+fn filter_menu_sort_includes_a_row_appended_below_the_filter() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["d", 4], ["b", 2], ["c", 3]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A5", "values": [["a", 1]]})).unwrap();
+    assert_eq!(autofilter_a1(&s), Some("A1:B5".to_string()));
+    // A selection still on the original block: the sort follows the filter, not the selection.
+    s.execute("selection.set", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=5), ["Name", "a", "b", "c", "d"]);
+    assert_eq!(column_text(&s, "B", 2..=5), ["1", "2", "3", "4"]);
+}
+
+#[test]
+fn sorts_outside_the_filter_menu_still_guess_the_header() {
+    // Only the drop-down's sort pins the filter's header; the ribbon's buttons keep sorting the
+    // region at the cursor and guessing, even on a sheet that has an AutoFilter.
+    let mut s = numeric_header_filter_sheet();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.sortDescending", json!({"column": "A"})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=9), ["z", "n", "g", "f", "d", "c", "b", "a", "1"], "numbers over text: no header");
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Qty"], ["b", 2], ["a", 1]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A"})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=3), ["Name", "a", "b"], "text over numbers: a header");
+}
+
+#[test]
+fn filter_menu_sort_without_an_autofilter_is_an_error_and_changes_nothing() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["b"], ["a"]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    let undo_before = s.doc().unwrap().undo.len();
+    assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true})).is_err());
+    assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true, "range": "A1:A3"})).is_err());
+    assert_eq!(column_text(&s, "A", 1..=3), ["Name", "b", "a"]);
+    // The refusal happens before anything is touched: no undo step, same selection, no filter.
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before);
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "A1");
+    assert_eq!(autofilter_a1(&s), None);
+}
+
+#[test]
+fn filter_menu_sort_with_a_range_is_an_error_even_with_a_filter() {
+    // The `range` guard, not the missing filter, must be what refuses this call: on a sheet
+    // with a filter it is the only error left, and it changes nothing either.
+    let mut s = numeric_header_filter_sheet();
+    let undo_before = s.doc().unwrap().undo.len();
+    assert!(s.execute("data.sortAscending", json!({"column": "A", "filter": true, "range": "A1:E9"})).is_err());
+    assert_eq!(column_text(&s, "A", 1..=9), ["1", "d", "z", "a", "n", "b", "g", "c", "f"]);
+    assert_eq!(autofilter_a1(&s).as_deref(), Some("A1:E9"));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before);
+    assert_eq!(s.doc().unwrap().selection.active.a1(), "J16");
+}
+
+#[test]
+fn filter_menu_sort_without_a_column_sorts_by_the_filters_first_column() {
+    // No column named: the filter's first column drives, not the active cell clamped into the
+    // filter (J16 would clamp to E, whose data cells are all empty and would sort nothing).
+    let mut s = numeric_header_filter_sheet();
+    s.execute("data.sortAscending", json!({"filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 2..=9), ["a", "b", "c", "d", "f", "g", "n", "z"]);
+}
+
+#[test]
+fn filter_menu_sort_on_a_table_keeps_the_totals_row_and_uses_the_tables_header_flag() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["zzz", "Qty"], ["b", 2], ["a", 1], ["c", 3]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B5"})).unwrap();
+    let made = s.execute("home.formatAsTable", json!({"range": "A1:B4"})).unwrap();
+    let tname = made["table"].as_str().unwrap().to_string();
+    s.execute("table.totalRow", json!({"table": tname, "on": true})).unwrap();
+    // The table now spans A1:B5, the same range as the filter, with a totals row at the bottom.
+    let totals_row = column_text(&s, "A", 5..=5);
+    s.execute("selection.set", json!({"range": "J16"})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    // The table's header row stays on top and the totals row at the bottom; the data sorts.
+    assert_eq!(column_text(&s, "A", 1..=4), ["zzz", "a", "b", "c"]);
+    assert_eq!(column_text(&s, "A", 5..=5), totals_row);
+    // With the table's header row off, the first row is data and sorts with the rest.
+    s.execute("table.headerRow", json!({"table": tname, "on": false})).unwrap();
+    s.execute("data.sortAscending", json!({"column": "A", "filter": true})).unwrap();
+    assert_eq!(column_text(&s, "A", 1..=4), ["a", "b", "c", "zzz"]);
+    assert_eq!(column_text(&s, "A", 5..=5), totals_row);
+}

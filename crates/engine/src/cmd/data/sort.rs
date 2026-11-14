@@ -28,12 +28,48 @@ fn sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef)> {
     Ok((sheet, data_range(s, p)?))
 }
 
-pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
-    let (sheet, r) = sort_target(s, p)?;
-    let col = col_param(p.get("column"), r.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
+/// The range and header of a sort issued from a column's filter drop-down (`filter: true`).
+///
+/// The drop-down belongs to the sheet's AutoFilter, so, as in Excel, it sorts that range whatever
+/// the active cell, and its first row is the header even when it holds numbers (#3544). Resolving
+/// this here, rather than in `data_range`, keeps the other data commands' range rules unchanged,
+/// and taking the range from the engine's own `autofilter` (rather than a range the UI sends)
+/// means a row appended below the filter, which `grow_autofilter` already took in, is sorted too.
+fn filter_sort_target(s: &Session, p: &Json, cmd: &str) -> Result<(usize, RangeRef, bool)> {
+    // The filter is the range; a second one would leave it unclear which the caller meant.
+    if p.get("range").is_some() {
+        return Err(bad(cmd, "`filter` sorts the AutoFilter range and takes no `range`"));
+    }
+    let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
-    let header = guess_header(&d.wb, sh, r);
+    let Some(af) = &sh.autofilter else { return Err(bad(cmd, "the sheet has no AutoFilter to sort")) };
+    // A table's filter covers the whole table: keep its totals row out and its own header flag,
+    // as the table rule in `data_range` does.
+    if let Some(t) = sh.tables.iter().find(|t| t.range == af.range) {
+        let r = t.data_range().map(|dr| RangeRef::new(t.range.start, dr.end)).unwrap_or(t.range);
+        return Ok((sheet, r, t.header_row));
+    }
+    Ok((sheet, af.range, true))
+}
+
+pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
+    let filter = bool_param(p, "filter").unwrap_or(false);
+    let (sheet, r, header) = if filter {
+        filter_sort_target(s, p, if asc { "data.sortAscending" } else { "data.sortDescending" })?
+    } else {
+        let (sheet, r) = sort_target(s, p)?;
+        let d = s.doc()?;
+        let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
+        (sheet, r, guess_header(&d.wb, sh, r))
+    };
+    // A filter sort names its column or takes the filter's first: the active cell is no guide
+    // there — it may sit outside the filter, where clamping it in would silently pick a column.
+    let col = match col_param(p.get("column"), r.start.col) {
+        Some(c) => c.clamp(r.start.col, r.end.col),
+        None if filter => r.start.col,
+        None => s.doc()?.selection.active.col.clamp(r.start.col, r.end.col),
+    };
     do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
 }
 

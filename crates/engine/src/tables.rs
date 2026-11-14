@@ -285,6 +285,49 @@ mod tests {
     }
 
     #[test]
+    fn header_row_toggle_resyncs_names_and_structured_references() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1", "input": "=SUM(Table1[a])"})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        let names = |s: &Session| -> Vec<String> { s.doc().unwrap().wb.sheet(0).unwrap().tables[0].columns.iter().map(|c| c.name.clone()).collect() };
+        assert_eq!(get(&mut s, "E1")["value"], json!(4.0));
+        // With the header row off, the first row is data: editing it renames nothing.
+        s.execute("table.headerRow", json!({"table": "Table1", "on": false})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "zz"})).unwrap();
+        assert_eq!(names(&s), ["a", "b"]);
+        assert_eq!(get(&mut s, "E1")["formula"], "=SUM(Table1[a])");
+        // Back on, the header row names the columns again: the name follows the cell,
+        // and the structured reference is rewritten to match.
+        s.execute("table.headerRow", json!({"table": "Table1", "on": true})).unwrap();
+        assert_eq!(names(&s), ["zz", "b"]);
+        assert_eq!(get(&mut s, "E1")["formula"], "=SUM(Table1[zz])");
+        assert_eq!(get(&mut s, "E1")["value"], json!(4.0));
+    }
+
+    #[test]
+    fn structured_reference_ranges_follow_the_header_flag() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2], [3, 4]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1", "input": "=SUM(Table1[a])"})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "E1")["value"], json!(4.0), "the header row is not data");
+        // Header off: the first row is data, and a number there joins the column's sum
+        // with no recalculation step in between — evaluation reads the live table.
+        s.execute("table.headerRow", json!({"table": "Table1", "on": false})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[10]]})).unwrap();
+        assert_eq!(get(&mut s, "E1")["value"], json!(14.0));
+        // Header back on: the row leaves the data range again (and becomes the
+        // column's name, per the header sync).
+        s.execute("table.headerRow", json!({"table": "Table1", "on": true})).unwrap();
+        assert_eq!(get(&mut s, "E1")["value"], json!(4.0));
+    }
+
+    #[test]
     fn go_to_a_table_selects_its_data() {
         let mut s = Session::new();
         s.new_workbook();
