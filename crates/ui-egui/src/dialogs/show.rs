@@ -121,6 +121,37 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// Back to the draft the refused-draft question was about, by its button or its X, to fix from the
+/// keyboard.
+fn return_to_refused_draft(app: &mut SheetApp, d: &Dialog, open: bool) {
+    if !open
+        && d.name == "refusedDraft"
+        && let Some(ed) = &mut app.editor
+    {
+        ed.request_focus = true;
+    }
+}
+
+/// Asks what to do with a draft that can't be entered when closing: both answers are commands.
+fn refused_draft_question(app: &mut SheetApp, ui: &mut egui::Ui, d: &Dialog, open: &mut bool) {
+    let reason = d.values.get("reason").and_then(Json::as_str).unwrap_or_default().to_owned();
+    let window = d.values.get("window").and_then(Json::as_u64);
+    ui.add(egui::Label::new(app.ui.language.tr_error(&reason)).wrap());
+    ui.add_space(4.0);
+    ui.label(app.ui.language.tr("Edit the cell, or exit and leave it as it was."));
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui.button(app.ui.language.tr("Edit the Cell")).clicked() {
+            app.run_or_alert("ui.editRefusedDraft", json!({}));
+            *open = false;
+        }
+        if ui.button(app.ui.language.tr("Exit Anyway")).clicked() {
+            app.run_or_alert("ui.exitAnyway", json!({"window": window}));
+            *open = false;
+        }
+    });
+}
+
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
@@ -338,18 +369,20 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "saveChanges" => {
-                    ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
+                    let title = d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook");
+                    ui.label(app.ui.language.tr("Do you want to save the changes you made to {title}?").replace("{title}", title));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
                     ui.horizontal(|ui| {
                         for (label, answer) in
                             [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
                         {
-                            if ui.button(label).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
+                            if ui.button(app.ui.language.tr(label)).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
                                 open = false;
                             }
                         }
                     });
                 }
+                "refusedDraft" => refused_draft_question(app, ui, &d, &mut open),
                 "start" => {
                     ui.heading("Start a new workbook");
                     ui.horizontal_wrapped(|ui| {
@@ -455,6 +488,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if confirm {
         open = false;
     }
+    return_to_refused_draft(app, &d, open);
     if !open
         && !confirm
         && let Err(e) = end_pick(app, &mut d)

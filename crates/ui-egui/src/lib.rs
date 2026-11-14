@@ -341,6 +341,9 @@ pub struct SheetApp {
     /// tests, embedding hosts) one window shows the active workbook window, and its close button
     /// quits.
     pub native_windows: bool,
+    /// An Exit Anyway waiting for the next frame: the native window being closed (`None` for
+    /// quitting) and the draft it answers.
+    pub(crate) pending_exit_anyway: Option<(Option<u64>, app::DraftId)>,
     /// View › Arrange All's layout and windows, waiting for the native windows to move.
     pub arrange_windows: Option<(String, Vec<u64>)>,
     /// The update check, the startup prompt and a running self-update (desktop only).

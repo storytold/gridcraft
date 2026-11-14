@@ -23,6 +23,7 @@ mod keys;
 mod prefs;
 mod print;
 mod quit;
+pub(crate) use quit::DraftId;
 mod view;
 
 impl SheetApp {
@@ -85,6 +86,7 @@ impl SheetApp {
             ui_window: None,
             parked: HashMap::new(),
             native_windows: false,
+            pending_exit_anyway: None,
             arrange_windows: None,
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: Default::default(),
@@ -108,6 +110,7 @@ impl SheetApp {
 
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        self.run_pending_exit_anyway(ctx);
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One

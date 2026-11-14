@@ -187,6 +187,8 @@ impl SheetApp {
                 self.check_for_updates();
                 Ok(Json::Null)
             }
+            "ui.editRefusedDraft" => self.edit_refused_draft(),
+            "ui.exitAnyway" => self.request_exit_anyway(p),
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {

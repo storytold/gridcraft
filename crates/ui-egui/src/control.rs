@@ -268,6 +268,12 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                     "Expand Formula Bar",
                     "{on?: bool} (toggles without it) → {on}; {lines: int} sets the expanded height (1 collapses) → {on, lines}",
                 ),
+                (
+                    "ui.editRefusedDraft",
+                    "Edit the Cell",
+                    "answers the question a refused draft asks on closing: back to the draft; an error with no draft",
+                ),
+                ("ui.exitAnyway", "Exit Anyway", "{window?: id} answers that question: drops the draft and goes on closing; an error with no draft"),
                 ("ui.pythonMode", "Python Mode", "{on?: bool} (toggles without it) → {on}; a refused start is an error"),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),

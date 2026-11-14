@@ -1,4 +1,15 @@
 use super::{SaveAnswer, SheetApp, json};
+use serde_json::Value as Json;
+
+/// What tells one cell draft from another: its workbook, window, sheet and cell.
+pub(crate) type DraftId = (u64, Option<u64>, u64, gridcraft_engine::core::CellRef);
+
+fn draft_id(ed: &crate::editor::EditState) -> DraftId {
+    (ed.doc, ed.window, ed.sheet_uid, ed.cell)
+}
+
+const NO_DRAFT: &str = "No cell is being edited.";
+const NO_WINDOW: &str = "That window is closed, or isn't the one editing the cell.";
 
 impl SheetApp {
     /// Holds back a window close (the close button, Alt+F4, the OS quitting the app) while a
@@ -10,6 +21,7 @@ impl SheetApp {
         // A cell still being edited is part of the workbook, as for File › Close.
         if !self.commit_edit(0, 0, false, false) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.ask_about_refused_draft(None);
             return;
         }
         // The macro step editor asks about its own unsaved steps and debug run first; once it has
@@ -29,6 +41,78 @@ impl SheetApp {
                 d.values.insert("quit".into(), json!(true));
             }
             _ => self.continue_quit(ctx),
+        }
+    }
+
+    /// The cell being edited can't be entered (a formula with an error, a validation alert) and it
+    /// holds up closing: the reason goes into a question instead, so a bad draft never keeps the
+    /// app from closing. `window` is the native window being closed; `None` is quitting.
+    pub(crate) fn ask_about_refused_draft(&mut self, window: Option<u64>) {
+        if self.editor.is_none() {
+            return;
+        }
+        let reason = self.message.take().map(|(_, reason)| reason).unwrap_or_default();
+        self.open_dialog("refusedDraft", json!({"reason": reason, "window": window}));
+    }
+
+    /// `ui.editRefusedDraft`: the question closes and the draft stays open to fix.
+    pub(super) fn edit_refused_draft(&mut self) -> Result<Json, String> {
+        let Some(ed) = self.editor.as_mut() else { return Err(NO_DRAFT.into()) };
+        ed.request_focus = true;
+        // The later answer wins over an Exit Anyway still waiting for its frame.
+        self.pending_exit_anyway = None;
+        if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
+            self.dialog = None;
+        }
+        Ok(Json::Null)
+    }
+
+    /// `ui.exitAnyway`: answers the question for its window (`window` when it isn't open, as while
+    /// its own button is drawn). Closing needs the frame's context, so the next `logic` goes on.
+    pub(super) fn request_exit_anyway(&mut self, p: &Json) -> Result<Json, String> {
+        let Some(draft) = self.editor.as_ref().map(draft_id) else { return Err(NO_DRAFT.into()) };
+        // An open question knows what it is closing, and no window there means quitting.
+        let window = match self.dialog.as_ref().filter(|d| d.name() == "refusedDraft") {
+            Some(question) => question.values.get("window").and_then(Json::as_u64),
+            None => p.get("window").and_then(Json::as_u64),
+        };
+        if !self.can_exit_anyway(window) {
+            return Err(NO_WINDOW.into());
+        }
+        if self.dialog.as_ref().is_some_and(|d| d.name() == "refusedDraft") {
+            self.dialog = None;
+        }
+        self.pending_exit_anyway = Some((window, draft));
+        Ok(Json::Null)
+    }
+
+    /// Whether Exit Anyway may drop the draft: its target window is still open and holds that draft.
+    fn can_exit_anyway(&self, window: Option<u64>) -> bool {
+        window.is_none_or(|window| {
+            self.session.window(window).is_some() && self.editor.as_ref().is_none_or(|ed| ed.window.is_none_or(|owner| owner == window))
+        })
+    }
+
+    /// Goes on with an Exit Anyway asked since the last frame.
+    pub(super) fn run_pending_exit_anyway(&mut self, ctx: &egui::Context) {
+        let Some((window, draft)) = self.pending_exit_anyway.take() else { return };
+        // A window switch since may have brought another window's draft forward: that one stays.
+        if self.editor.as_ref().map(draft_id) == Some(draft) {
+            self.exit_anyway(window, ctx);
+        }
+    }
+
+    /// Exit Anyway: drops the draft, leaving its cell as it was, and goes on closing. Unsaved
+    /// workbooks are still asked about.
+    pub(crate) fn exit_anyway(&mut self, window: Option<u64>, ctx: &egui::Context) {
+        // Asked a frame ago: the window may have closed since.
+        if !self.can_exit_anyway(window) {
+            return;
+        }
+        self.cancel_edit();
+        match window {
+            Some(window) => self.run_or_alert("window.close", json!({"window": window})),
+            None => self.request_quit(ctx),
         }
     }
 
@@ -83,16 +167,18 @@ impl SheetApp {
 
     /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, lets the
     /// macro step editor ask about its unsaved steps, then asks about each unsaved workbook in its
-    /// window; Cancel on any of them stops the quit. A draft its
-    /// workbook refuses stops the quit too, with its window in front and the reason shown.
+    /// window; Cancel on any of them stops the quit. A draft its workbook refuses brings its window
+    /// to the front and asks whether to edit it or exit anyway.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
         while let Some(window) = self.parked_window_with_draft() {
             self.enter_window(window);
             if self.settle_drafts().is_err() {
+                self.ask_about_refused_draft(None);
                 return;
             }
         }
         if self.settle_drafts().is_err() {
+            self.ask_about_refused_draft(None);
             return;
         }
         // The macro step editor asks about its own unsaved steps and debug run first, as for the
