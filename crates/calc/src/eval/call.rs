@@ -5,6 +5,8 @@ use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pip
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
+    /// Dispatch evaluator special forms before evaluating ordinary function arguments.
+    /// Reference-aware lookups retain their ranges so unrelated result cells stay unevaluated.
     pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
             "IF" => self.if_call(args),
@@ -70,6 +72,7 @@ impl<'h> Evaluator<'h> {
             "INDIRECT" => self.indirect(args),
             "INDEX" => self.index(args),
             "XLOOKUP" => self.xlookup(args),
+            "VLOOKUP" | "HLOOKUP" => self.vh_lookup(name, args),
             "CELL" => self.cell_info(args),
             "TRIMRANGE" => self.trimrange(args),
             "SUBTOTAL" | "AGGREGATE" => self.subtotal(name, args),
@@ -360,8 +363,7 @@ impl<'h> Evaluator<'h> {
         }
         // The function may go through every value it is given (a SUM inside each call of a
         // LAMBDA over a large array): the values count against the cell's work.
-        let values = evaluated.iter().fold(0u64, |n, a| n.saturating_add(if let Value::Array(x) = &a.value { x.data.len() as u64 } else { 1 }));
-        if !self.spend(values) {
+        if !self.spend_args(&evaluated) {
             return err(CellError::Calc);
         }
         let database = criteria.is_some();
