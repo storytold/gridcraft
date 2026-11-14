@@ -161,7 +161,7 @@ impl Server {
         };
         // A malformed envelope must not execute a tool or change notification state.
         if o.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return id.map(|_| error(Value::Null, INVALID_REQUEST, "`jsonrpc` must be \"2.0\""));
+            return Some(error(Value::Null, INVALID_REQUEST, "`jsonrpc` must be \"2.0\""));
         }
         let params = o.get("params").cloned().unwrap_or(Value::Null);
         let Some(id) = id else {
