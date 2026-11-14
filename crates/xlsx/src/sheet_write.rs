@@ -760,7 +760,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         let _ = write!(s, " s=\"{style}\"");
     }
     if let Some(picture) = picture {
-        let vm = out.cell_pictures.index(picture);
+        let vm = out.rich_values.picture(picture);
         let _ = write!(s, " t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
         return;
     }
@@ -785,15 +785,19 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         Value::Array(a) => a.get(0, 0).cloned().unwrap_or(Value::Empty),
         v => v,
     };
+    // #SPILL!, #CALC!, #BLOCKED!, #BUSY!, #TIMEOUT! and #PYTHON! are not error codes of the file
+    // format (Excel refuses a file that caches them): the cell caches #VALUE! for older readers
+    // and names the error as a rich value through its value metadata ([MS-XLSX] 2.3.6.1.3).
+    let vm = match value {
+        Value::Error(error) => out.rich_values.error(error),
+        _ => None,
+    };
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
-        // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
-        // caches them); Excel itself caches them as #VALUE!. The Python errors are the same kind.
-        Value::Error(CellError::Spill | CellError::Calc | CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked) => {
-            Value::Error(CellError::Value)
-        }
+        Value::Error(_) if vm.is_some() => Value::Error(CellError::Value),
         v => v,
     };
+    let vm = vm.map(|vm| format!(" vm=\"{vm}\"")).unwrap_or_default();
     // A formula read with dynamic-array metadata keeps it, even where the shape analysis would
     // not need it: Excel decided the formula is evaluated as an array.
     let own = formula.filter(|f| f.dynamic && f.array.is_none()).map(|_| RangeRef::cell(c));
@@ -812,6 +816,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
             _ => "",
         };
         s.push_str(t);
+        s.push_str(&vm);
         s.push('>');
         match (formula.and_then(|f| f.array), dynamic) {
             (Some(r), _) => {
@@ -855,7 +860,7 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
             let _ = write!(s, " t=\"b\"><v>{}</v></c>", *b as u8);
         }
         Value::Error(e) => {
-            let _ = write!(s, " t=\"e\"><v>{}</v></c>", e.as_str());
+            let _ = write!(s, " t=\"e\"{vm}><v>{}</v></c>", e.as_str());
         }
     }
 }

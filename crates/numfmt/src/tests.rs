@@ -31,6 +31,39 @@ fn t(code: &str, s: &str) -> String {
 }
 
 #[test]
+fn the_separators_come_from_the_region_and_a_typed_code_is_read_with_them() {
+    let pt = gridcraft_core::region::lookup("pt-BR");
+    let it = gridcraft_core::region::lookup("it-IT");
+    let n = Value::Number(334106.29);
+    assert_eq!(format_value(&n, &NumberFormat::parse("#,##0.00"), S).text, "334,106.29");
+    assert_eq!(format_value_in(&n, &NumberFormat::parse("#,##0.00"), S, pt).text, "334.106,29");
+    let typed = NumberFormat::parse_in("#.##0,00", it);
+    assert_eq!(typed.code(), "#,##0.00");
+    assert_eq!(format_value_in(&n, &typed, S, it).text, "334.106,29");
+    // fr-FR groups with a non-breaking space, which is neither `.` nor `,`: showing a stored code
+    // swaps both separators, and reading the typed code back puts the canonical ones in place.
+    let fr = gridcraft_core::region::lookup("fr-FR");
+    assert_eq!(regional_code("#,##0.00", fr), "#\u{a0}##0,00");
+    let typed_fr = NumberFormat::parse_in("#\u{a0}##0,00", fr);
+    assert_eq!(typed_fr.code(), "#,##0.00");
+    assert_eq!(format_value_in(&n, &typed_fr, S, fr).text, "334\u{a0}106,29");
+    // A separator is one only between digit placeholders, so a date keeps its own dots and a
+    // subsecond keeps the one before its digits.
+    assert_eq!(canonical_code("dd.mm.yyyy", it), "dd.mm.yyyy");
+    assert_eq!(regional_code("dd.mm.yyyy", it), "dd.mm.yyyy");
+    assert_eq!(regional_code("hh:mm:ss.000", it), "hh:mm:ss.000");
+    assert_eq!(canonical_code("dd/mm/yyyy", fr), "dd/mm/yyyy");
+    // A grouping separator right after the digits scales the value, and it has no digit after it,
+    // so both directions translate it as well, including a run of them.
+    assert_eq!(regional_code("0.0,", it), "0,0.");
+    assert_eq!(canonical_code("0,0.", it), "0.0,");
+    assert_eq!(regional_code("0.0,,", it), "0,0..");
+    assert_eq!(canonical_code("0,0..", it), "0.0,,");
+    let scaled = NumberFormat::parse_in("0,0.", it);
+    assert_eq!(scaled.code(), "0.0,");
+}
+
+#[test]
 fn numbers() {
     assert_eq!(f("0.00", 1234.567), "1234.57");
     assert_eq!(f("#,##0", 1234567.0), "1,234,567");
@@ -668,7 +701,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, &gridcraft_core::region::EN_US);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 

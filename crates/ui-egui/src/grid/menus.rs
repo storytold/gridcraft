@@ -444,8 +444,8 @@ pub(super) fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, 
     if app.editor.is_some() || app.dialog.is_some() || sh.show_formulas || app.grid.drag != Drag::None {
         return;
     }
-    let Some(active) = app.session.active().map(|d| d.selection.active) else { return };
-    if sh.cell(active).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_none() {
+    let Some((active, region)) = app.session.active().map(|d| (d.selection.active, d.wb.region)) else { return };
+    if sh.cell(active).and_then(|c| gridcraft_engine::cmd::formulas::number_stored_as_text(c, region)).is_none() {
         return;
     }
     let cell = geo.cell_rect(sh, active);
