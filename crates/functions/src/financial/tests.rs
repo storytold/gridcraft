@@ -138,6 +138,16 @@ fn depreciation() {
     close(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(0.15), n(1.0)]), 776.0);
 }
 
+/// Each period's charge is rounded, but the book value carries the unrounded charges (#3963).
+#[test]
+fn amordegrc_does_not_accumulate_rounding() {
+    let p = |period: f64| ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2023, 6, 30), n(0.0), n(period), n(0.1), n(1.0)]);
+    close(p(0.0), 123.0);
+    close(p(1.0), 219.0);
+    close(p(2.0), 164.0);
+    close(p(4.0), 92.0);
+}
+
 #[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
