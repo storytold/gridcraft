@@ -287,13 +287,19 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
     // The axes are the primary pair's (an axis of another pair, or of an empty group, holds
-    // another scale's titles), else the first of their kind in the file.
-    let primary = |a: &&El| a.child_val("axId").is_some_and(|id| primary_axes.iter().any(|p| p == id));
+    // another scale's titles), else the first of their kind in the file; a shown axis before a
+    // deleted one.
+    let primary = |a: &El| a.child_val("axId").is_some_and(|id| primary_axes.iter().any(|p| p == id));
+    let shown = |a: &El| !bool_val(a, "delete");
     let first_of = |tags: &[&str], pos: &[&str]| {
         let fits = |a: &&El| tags.contains(&a.name.as_str()) && (pos.is_empty() || a.child_val("axPos").is_some_and(|p| pos.contains(&p)));
-        plot.children.iter().filter(|a| fits(a)).find(primary).or_else(|| plot.children.iter().find(fits))
+        let axes = plot.children.iter().filter(fits);
+        let ranked: [&dyn Fn(&El) -> bool; 4] = [&|a| primary(a) && shown(a), &shown, &primary, &|_| true];
+        ranked.into_iter().find_map(|r| axes.clone().find(|a| r(a)))
     };
-    let scatter = matches!(first_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+    // The primary pair's group says whether its axes are both value axes (a scatter's).
+    let primary_kind = groups.iter().zip(&pairs).find(|(_, ids)| **ids == primary_axes).map_or(first_kind, |((_, k), _)| *k);
+    let scatter = matches!(primary_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
     let (x_ax, y_ax) = if scatter {
         (first_of(&["valAx"], &["b", "t"]), first_of(&["valAx"], &["l", "r"]))
     } else {

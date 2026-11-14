@@ -387,3 +387,50 @@ fn an_empty_group_sets_neither_axes_nor_secondary() {
     assert!(!ch.series[0].secondary);
     assert_eq!((ch.x_title.as_deref(), ch.y_title.as_deref()), (Some("SCX"), Some("SCY")));
 }
+
+/// An axis element (`tag` with id, crossing axis, side, title, and whether it is deleted).
+fn axis(tag: &str, id: u32, cross: u32, pos: &str, title: Option<&str>, deleted: bool) -> String {
+    let title = title.map_or(String::new(), |t| format!("<c:title><c:tx><c:rich><a:p><a:r><a:t>{t}</a:t></a:r></a:p></c:rich></c:tx></c:title>"));
+    format!(
+        "<c:{tag}><c:axId val=\"{id}\"/><c:delete val=\"{}\"/><c:axPos val=\"{pos}\"/>{title}<c:crossAx val=\"{cross}\"/></c:{tag}>",
+        u8::from(deleted)
+    )
+}
+
+fn titles_of(plot: &str) -> (Option<String>, Option<String>) {
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><c:chart><c:plotArea>{plot}</c:plotArea></c:chart></c:chartSpace>"
+    );
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    (ch.x_title, ch.y_title)
+}
+
+/// Axis titles come from shown axes before deleted ones, and the primary pair's group says
+/// whether they are a scatter's two value axes.
+#[test]
+fn titles_come_from_shown_axes_of_the_primary_pair() {
+    let some = |x: &str, y: &str| (Some(x.to_string()), Some(y.to_string()));
+    // Series only on axes 3/4 (whose category axis is deleted), beside an empty group on 1/2.
+    let plot = format!(
+        "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/>{AX}</c:barChart>\
+         <c:lineChart><c:grouping val=\"standard\"/>{}<c:axId val=\"3\"/><c:axId val=\"4\"/></c:lineChart>{}{}{}{}",
+        ser(0),
+        axis("catAx", 1, 2, "b", Some("PCAT"), false),
+        axis("valAx", 2, 1, "l", Some("PVAL"), false),
+        axis("catAx", 3, 4, "b", None, true),
+        axis("valAx", 4, 3, "r", Some("SVAL"), false),
+    );
+    assert_eq!(titles_of(&plot), some("PCAT", "SVAL"));
+    // A secondary line group before the primary scatter group.
+    let plot = format!(
+        "<c:lineChart><c:grouping val=\"standard\"/>{}<c:axId val=\"3\"/><c:axId val=\"4\"/></c:lineChart>\
+         <c:scatterChart><c:scatterStyle val=\"lineMarker\"/>{}{AX}</c:scatterChart>{}{}{}{}",
+        ser(0),
+        ser(1),
+        axis("catAx", 3, 4, "b", Some("SCAT"), true),
+        axis("valAx", 4, 3, "r", Some("SVAL"), false),
+        axis("valAx", 1, 2, "b", Some("X"), false),
+        axis("valAx", 2, 1, "l", Some("Y"), false),
+    );
+    assert_eq!(titles_of(&plot), some("X", "Y"));
+}
