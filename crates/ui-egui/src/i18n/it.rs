@@ -431,6 +431,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Options|Save" => "Salvataggio",
         "Options|Editing" => "Modifica",
         "Show formula bar" => "Mostra barra della formula",
+        "Display options for this workbook" => "Opzioni di visualizzazione per la cartella di lavoro",
+        "Show horizontal scroll bar" => "Mostra barra di scorrimento orizzontale",
+        "Show vertical scroll bar" => "Mostra barra di scorrimento verticale",
+        "Show sheet tabs" => "Mostra schede dei fogli",
+        "Maximum Iterations:" => "Numero massimo di iterazioni:",
+        "Maximum Change:" => "Scarto massimo:",
+        "Maximum Iterations must be a whole number from 1 to 32767." => {
+            "Il numero massimo di iterazioni deve essere un numero intero compreso tra 1 e 32767."
+        }
+        "Maximum Change must be a number of 0 or more." => "Lo scarto massimo deve essere un numero maggiore o uguale a 0.",
         "Highlight the active cell's row" => "Evidenzia la riga della cella attiva",
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",

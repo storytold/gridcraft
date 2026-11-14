@@ -219,6 +219,47 @@ fn translated_options_headings_show_no_context_prefix() {
     }
 }
 
+/// Options › General has the interface size beside the theme and language, and choosing a size
+/// there sets the same preference as the View tab.
+#[test]
+fn options_sets_the_interface_size() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    assert_eq!(page(&h), Some("options"));
+    let size = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.label().as_deref() == Some("Interface size")).next().map(|n| n.value())
+    };
+    assert_eq!(size(&h), Some(Some("Auto".to_string())), "Options shows the interface size");
+    h.query_all_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.label().as_deref() == Some("Interface size")).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("150%").click();
+    h.run_steps(3);
+    assert_eq!(h.state().ui.interface_scale, 150);
+    assert_eq!(page(&h), Some("options"), "the page stays open");
+}
+
+/// The Options page in Italian: the workbook's display options and the iteration limits are
+/// translated, with Excel's Italian wording.
+#[test]
+fn italian_options_are_translated() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("app.language.set", serde_json::json!({"language": Language::It.code()})).unwrap();
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    for text in [
+        "Opzioni di visualizzazione per la cartella di lavoro",
+        "Mostra barra di scorrimento orizzontale",
+        "Mostra schede dei fogli",
+        "Dimensione dell'interfaccia",
+    ] {
+        assert!(h.query_all_by_label(text).next().is_some(), "no {text}");
+    }
+    for text in ["Display options for this workbook", "Show sheet tabs", "Interface size"] {
+        assert!(h.query_all_by_label(text).next().is_none(), "{text} is still in English");
+    }
+}
+
 #[test]
 fn file_account_shows_the_version_and_opens_about() {
     let mut h = harness(Services::default());
@@ -714,4 +755,32 @@ fn control_requests_route_to_a_window_and_list_windows() {
     assert_eq!(rows[1]["active"].as_bool(), Some(true));
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
+}
+
+/// In GridCraft's smallest window (640×420) at the largest interface size (200%), the Options
+/// page scrolls sideways: the interface size drop-down can be scrolled whole into view, where
+/// before it was cut off at the window's edge.
+#[test]
+fn options_scroll_sideways_in_a_small_window_at_a_large_size() {
+    let app = crate::common::prepare(SheetApp::new(crate::support::blank_session(), Services::default()));
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(320.0, 420.0)), app, 4);
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    let size = |h: &egui_kittest::Harness<'static, SheetApp>| {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::ComboBox && n.label().as_deref() == Some("Interface size")).next().unwrap().rect()
+    };
+    assert!(size(&h).right() > 320.0, "the drop-down starts past the edge: {:?}", size(&h));
+    // Scroll the page sideways, over its content (the navigation pane is 196 wide).
+    h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(260.0, 300.0)));
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(-1000.0, 0.0),
+        phase: egui::TouchPhase::Move,
+        source: egui::MouseWheelSource::Unknown,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(30);
+    let r = size(&h);
+    assert!(r.left() >= 0.0 && r.right() <= 320.0, "the drop-down is in view: {r:?}");
 }

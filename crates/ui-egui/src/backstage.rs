@@ -30,6 +30,10 @@ use print::print;
 const NAV_W: f32 = 196.0;
 /// Width of the content column (pages are left-aligned like a document, not stretched).
 const CONTENT_W: f32 = 760.0;
+/// The narrowest the page content gets. Below it the page scrolls sideways instead, so a large
+/// interface size in a small window still shows each control whole: the Options page's label
+/// and drop-down columns fit in it.
+const MIN_CONTENT_W: f32 = 360.0;
 
 /// A Backstage page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,9 +217,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon)).show(ui, |ui| {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Frame::NONE.inner_margin(egui::Margin { left: 44, right: 32, top: 26, bottom: 32 }).show(ui, |ui| {
-                ui.set_max_width(CONTENT_W);
+        let margin = egui::Margin { left: 44, right: 32, top: 26, bottom: 32 };
+        // As wide as the panel allows, up to `CONTENT_W`; never narrower than `MIN_CONTENT_W`.
+        let width = (ui.available_width() - margin.sum().x).clamp(MIN_CONTENT_W, CONTENT_W);
+        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+            egui::Frame::NONE.inner_margin(margin).show(ui, |ui| {
+                ui.set_min_width(width);
+                ui.set_max_width(width);
                 ui.label(RichText::new(lang.tr(bs.page.label())).font(theme::ui_font(28.0)).color(t.text));
                 ui.add_space(18.0);
                 match bs.page {
