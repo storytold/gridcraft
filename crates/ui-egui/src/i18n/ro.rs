@@ -420,6 +420,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Pagina anterioară",
         "Next page" => "Pagina următoare",
         "Create PDF" => "Creare PDF",
+        "Nothing to export." => "Nimic de exportat.",
         "Save the sheet as a PDF document that keeps its page layout." => "Salvează foaia ca document PDF care își păstrează aspectul paginii.",
         "Change File Type" => "Schimbare tip de fișier",
         "CSV (Comma delimited)" => "CSV (delimitat prin virgulă)",
