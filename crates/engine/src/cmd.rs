@@ -442,7 +442,9 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if let Some(t0) = t0 {
         eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
-    if structural || recalc_all {
+    if structural {
+        d.calc.recalc_after_structural_edit(&mut wb);
+    } else if recalc_all {
         d.calc.recalc_all(&mut wb);
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);

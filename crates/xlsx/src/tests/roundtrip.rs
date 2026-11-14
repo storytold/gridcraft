@@ -1058,12 +1058,11 @@ fn legacy_and_dynamic_formulas_keep_their_kind() {
     let (xml, _) = sheet1_xml(&bytes);
     assert!(xml.contains("<c r=\"B2\"><f>TANH(A1:A3)+A1:A3</f>"), "{xml}");
     assert!(xml.contains("<c r=\"B3\"><f>SUM(A1:A3)</f>"), "{xml}");
-    // Uncalculated, the spill range is not known yet; the formula stays dynamic.
-    assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2\">TANH(A1:A3)</f>"), "{xml}");
-    assert!(xml.contains("<c r=\"D2\"><f t=\"array\" ref=\"D2:D4\">TANH(A1:A3)</f>"), "{xml}");
     let (back, _) = read_xlsx(&bytes).unwrap();
-    for a in ["B2", "B3", "C2", "D2"] {
+    for (a, dynamic) in [("B2", false), ("B3", false), ("C2", true), ("D2", false)] {
         assert_eq!(text(&back, a), text(&wb, a), "{a}");
+        let formula = back.sheet(0).unwrap().cell(at(a)).unwrap().formula.as_ref().unwrap();
+        assert_eq!(formula.dynamic, dynamic, "{a}: dynamic-array metadata survives saving");
     }
 }
 
