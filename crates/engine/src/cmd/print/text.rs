@@ -164,7 +164,8 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         color = rgb_of(st.font.color, wb).unwrap_or(color);
     }
     let is_num = matches!(v, Value::Number(_));
-    let wrap = st.align.wrap;
+    // Justified and distributed text folds as wrapped text does.
+    let wrap = st.align.folds();
     let mut text = if sh.show_formulas {
         crate::display::cell_text(wb, sh, c)
     } else if code == "General"

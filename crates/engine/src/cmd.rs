@@ -735,8 +735,9 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// Recomputes an automatic row height from its content: the largest font, and wrapped text.
 /// Rows with a user-set height keep it.
 ///
-/// Line breaks in a cell's text count only when the cell wraps, as in Excel: with Wrap Text off
-/// a multi-line value shows on one line and AutoFit gives a one-line row.
+/// Line breaks in a cell's text count only when the cell folds (wrapped, justified or distributed
+/// text), as in Excel: otherwise a multi-line value shows on one line and AutoFit gives a
+/// one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     let mut sweep = MergeSweep::new(MERGE_FIT_WORK);
     fit_row_height(wb, si, row, &mut sweep);
@@ -834,7 +835,7 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
     // Fast path: rows of default-size, unwrapped content keep the default height.
     let plain = sh.cells.row(row, 0, gridcraft_core::MAX_COLS - 1).all(|(_, cell)| {
         let st = wb.styles.get(cell.style);
-        st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE && !st.align.wrap
+        st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE && !st.align.folds()
     });
     if plain {
         if sh.rows.get(&row).is_some_and(|i| i.size.is_some())
@@ -874,9 +875,10 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
         let line = (size * 1.8).round().max(gridcraft_model::DEFAULT_ROW_HEIGHT * size / gridcraft_model::DEFAULT_FONT_SIZE);
         let mut lines = 1.0f32;
         if !cell.value.is_empty() || cell.formula.is_some() {
-            // Only a wrapping cell is laid out over several lines: each explicit line break
-            // starts one, and each line folds at the column width.
-            if st.align.wrap {
+            // Only a cell whose text folds (wrapped, justified or distributed) is laid out over
+            // several lines: each explicit line break starts one, and each line folds at the
+            // column width.
+            if st.align.folds() {
                 let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
                 let w = sh.col_width(c).max(1.0) - 6.0;
                 lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);

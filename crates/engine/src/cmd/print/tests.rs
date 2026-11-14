@@ -814,6 +814,37 @@ fn rotated_wrapped_text_prints_rotated() {
 }
 
 #[test]
+fn justified_and_distributed_text_prints_folded_like_wrapped_text() {
+    // Excel folds justified and distributed text, horizontal or vertical, without Wrap Text.
+    use gridcraft_model::{HAlign, VAlign};
+    let looks: [fn(&mut gridcraft_model::Style); 6] = [
+        |_| {},
+        |s| s.align.wrap = true,
+        |s| s.align.h = HAlign::Justify,
+        |s| s.align.h = HAlign::Distributed,
+        |s| s.align.v = VAlign::Justify,
+        |s| s.align.v = VAlign::Distributed,
+    ];
+    let lines: Vec<usize> = looks
+        .iter()
+        .map(|look| {
+            let mut s = s();
+            s.execute("cell.set", json!({"cell": "A1", "input": "alpha beta gamma delta epsilon zeta eta theta iota kappa"})).unwrap();
+            s.execute("home.columnWidth", json!({"cols": "A", "chars": 15})).unwrap();
+            s.execute("home.rowHeight", json!({"rows": "1:1", "height": 120})).unwrap();
+            let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+            let st = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, look);
+            wb.sheet_mut(0).unwrap().set_style(CellRef::new(0, 0), st);
+            let (pdf, _) = pdf_of(&mut s, json!({}));
+            String::from_utf8_lossy(&pdf).matches(" Tj").count()
+        })
+        .collect();
+    assert_eq!(lines[0], 1, "general text prints on one line");
+    assert!(lines[1] >= 3, "wrapped text folds, {lines:?}");
+    assert!(lines[2..].iter().all(|&n| n == lines[1]), "each folds as wrapped text does: {lines:?}");
+}
+
+#[test]
 fn checkbox_cells_print_as_boxes_not_true_false() {
     // #2972: a checkbox cell printed its value as TRUE or FALSE.
     let mut s = s();

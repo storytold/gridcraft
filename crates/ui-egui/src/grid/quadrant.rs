@@ -378,26 +378,28 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let pad = 2.5 * z;
     let rotated = st.align.rotation != 0 && st.align.rotation != 255;
     // Rotated text wraps along its own direction (below), not across the column width.
-    if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
+    if !rotated && st.align.folds() {
         let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
         let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
         job.direction = direction;
         job.halign_min_is_start = false;
         job.halign = match painted_halign(halign, geo.rtl) {
-            HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
+            HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => egui::Align::Center,
             HAlign::Right => egui::Align::RIGHT,
             _ => egui::Align::LEFT,
         };
         let galley = p.layout_job(job);
         let x = match halign {
-            HAlign::Center | HAlign::CenterAcross => rect.center().x - galley.rect.center().x,
+            HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => rect.center().x - galley.rect.center().x,
             HAlign::Right => rect.right() - pad - galley.rect.right(),
             _ => text_left + pad + indent - galley.rect.left(),
         };
         let (text_top, text_bottom) = galley_baseline_bounds(&galley);
         let y = wrapped_cell_text_y(st.align.v, *rect, text_bottom - text_top, z) - text_top;
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
-        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+        let cp = p.with_clip_rect(text_clip);
+        paint_folded_decorations(&cp, &galley, pos2(x, y), color, &st.font);
+        cp.galley(pos2(x, y), galley, color);
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -506,7 +508,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     if rotated {
         let angle = -(st.align.rotation as f32).to_radians();
         // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
-        let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
+        let galley = if st.align.folds() && st.align.rotation.abs() == 90 {
             let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, (rect.height() - 2.0 * pad).max(4.0));
             job.direction = direction;
             p.layout_job(job)
@@ -524,6 +526,19 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         &cp,
         TextDecoration { x, y: y + text_top, width: w, height: text_height, color, underline: st.font.underline, strike: st.font.strike },
     );
+}
+
+/// Underline and strikethrough under each line of folded text at `origin`, as long as the line.
+fn paint_folded_decorations(p: &Painter, galley: &egui::Galley, origin: Pos2, color: Color32, font: &gridcraft_engine::model::Font) {
+    if matches!(font.underline, Underline::None) && !font.strike {
+        return;
+    }
+    for row in galley.rows.iter().filter(|r| r.rect().width() > 0.0) {
+        let r = row.rect().translate(origin.to_vec2());
+        let line =
+            TextDecoration { x: r.left(), y: r.top(), width: r.width(), height: r.height(), color, underline: font.underline, strike: font.strike };
+        paint_text_decorations(p, line);
+    }
 }
 
 struct TextDecoration {

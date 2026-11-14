@@ -1954,6 +1954,40 @@ fn open_fits_big_font_rows_from_the_font_not_the_sheet_default() {
     assert!((28.0..30.0).contains(&h), "a 16pt row on a 28px-default sheet opens at about 28px, got {h}");
 }
 
+/// Excel folds justified and distributed text, horizontal or vertical, without Wrap Text, and
+/// fits the row to it as to wrapped text (Excel 365, synthetic workbook: each of the four takes
+/// the wrapped text's height). Rows the file leaves to fit on open grow to it here too.
+#[test]
+fn open_fits_rows_of_justified_and_distributed_text_like_wrapped_text() {
+    use gridcraft_model::{HAlign, VAlign};
+    let mut wb = gridcraft_model::Workbook::new();
+    let looks: [fn(&mut gridcraft_model::Style); 6] = [
+        |_| {},
+        |s| s.align.wrap = true,
+        |s| s.align.h = HAlign::Justify,
+        |s| s.align.h = HAlign::Distributed,
+        |s| s.align.v = VAlign::Justify,
+        |s| s.align.v = VAlign::Distributed,
+    ];
+    let styles: Vec<_> = looks.iter().map(|f| wb.styles.derive(gridcraft_model::StyleId::DEFAULT, f)).collect();
+    let sh = wb.sheet_mut(0).unwrap();
+    for (row, st) in styles.into_iter().enumerate() {
+        let at = CellRef::new(row as u32, 0);
+        sh.set_value(at, Value::text("alpha beta gamma delta epsilon zeta eta theta iota kappa"));
+        sh.set_style(at, st);
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "justified.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let wrapped = sh.row_height(1);
+    assert_eq!(sh.row_height(0), sh.default_row_height, "general text stays on one line");
+    assert!(wrapped > 2.0 * sh.default_row_height, "wrapped text folds, got {wrapped}");
+    for row in 2..6 {
+        assert_eq!(sh.row_height(row), wrapped, "row {row} folds as wrapped text does");
+    }
+}
+
 #[test]
 fn tables_and_structured_refs() {
     let mut s = s();
