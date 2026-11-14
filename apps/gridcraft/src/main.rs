@@ -14,6 +14,8 @@ mod apple_events;
 mod control_server;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
+#[cfg(any(target_os = "linux", test))]
+mod linux_gpu;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
@@ -372,6 +374,13 @@ fn main() -> eframe::Result<()> {
             use winit::platform::x11::EventLoopBuilderExtX11;
             b.with_x11();
         }));
+    }
+    // egui-wgpu draws on the discrete GPU by default; on a laptop whose integrated GPU drives the
+    // panel, that wakes the discrete GPU whenever the window redraws. Draw on the GPU that drives
+    // the screen; `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` still decide (see linux_gpu.rs).
+    #[cfg(target_os = "linux")]
+    if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+        setup.native_adapter_selector = Some(std::sync::Arc::new(linux_gpu::pick_adapter));
     }
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
