@@ -301,6 +301,25 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
     })
 }
 
+/// The formulas of a copied sheet: references that name the sheet `from` it was copied from point
+/// at the copy `to` instead, as in Excel (`=Source!A1*2` on the copy `Copied` becomes
+/// `=Copied!A1*2`). References to other sheets and 3-D spans are left as they are. `None` when
+/// the formula has no such reference.
+pub fn retarget_self_refs(e: &Expr, from: &str, to: &str) -> Option<Expr> {
+    let changed = e.clone().map(&mut |x| match x {
+        Expr::Ref(mut r) => {
+            if let SheetSel::Named(n) = &mut r.sheet
+                && n.eq_ignore_ascii_case(from)
+            {
+                *n = to.to_string();
+            }
+            Expr::Ref(r)
+        }
+        other => other,
+    });
+    (changed != *e).then_some(changed)
+}
+
 /// References to a deleted sheet become `#REF!`. `order` lists the sheet names (before the deletion) in tab order:
 /// a 3-D span that loses an end sheet shrinks to the neighbouring surviving sheet, as in Excel.
 pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
