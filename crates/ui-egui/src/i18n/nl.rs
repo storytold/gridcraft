@@ -3,6 +3,8 @@
 /// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Decoratieve tekst",
         "Paste" => "Plakken",
         "Paste Values" => "Waarden plakken",
         "Paste Formulas" => "Formules plakken",
@@ -362,6 +364,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Opslaan",
         "Save As" => "Opslaan als",
         "Export" => "Exporteren",
+        "Minimize" => "Minimaliseren",
+        "Maximize" => "Maximaliseren",
+        "Restore Down" => "Vorig formaat",
         "Close" => "Sluiten",
         "Options" => "Opties",
         "Blank workbook" => "Lege werkmap",

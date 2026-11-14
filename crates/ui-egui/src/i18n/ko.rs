@@ -3,6 +3,8 @@
 /// Returns the Korean translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "다이어그램",
+        "Decorative Text" => "장식 텍스트",
         "Paste" => "붙여넣기",
         "Paste Values" => "값 붙여넣기",
         "Paste Formulas" => "수식 붙여넣기",
@@ -368,6 +370,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "저장",
         "Save As" => "다른 이름으로 저장",
         "Export" => "내보내기",
+        "Minimize" => "최소화",
+        "Maximize" => "최대화",
+        "Restore Down" => "이전 크기로 복원",
         "Close" => "닫기",
         "Options" => "옵션",
         "Account" => "계정",

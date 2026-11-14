@@ -3,6 +3,8 @@
 /// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "图示",
+        "Decorative Text" => "装饰文字",
         "Paste" => "粘贴",
         "Paste Values" => "粘贴值",
         "Paste Formulas" => "粘贴公式",
@@ -366,6 +368,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "保存",
         "Save As" => "另存为",
         "Export" => "导出",
+        "Minimize" => "最小化",
+        "Maximize" => "最大化",
+        "Restore Down" => "向下还原",
         "Close" => "关闭",
         "Options" => "选项",
         "Account" => "账户",

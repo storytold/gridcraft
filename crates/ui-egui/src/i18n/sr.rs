@@ -3,6 +3,8 @@
 /// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Dijagram",
+        "Decorative Text" => "Ukrasni tekst",
         "Paste" => "Nalepi",
         "Paste Values" => "Nalepi vrednosti",
         "Paste Formulas" => "Nalepi formule",
@@ -361,6 +363,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Sačuvaj",
         "Save As" => "Sačuvaj kao",
         "Export" => "Izvezi",
+        "Minimize" => "Minimizuj",
+        "Maximize" => "Maksimizuj",
+        "Restore Down" => "Vrati",
         "Close" => "Zatvori",
         "Options" => "Opcije",
         "Account" => "Nalog",

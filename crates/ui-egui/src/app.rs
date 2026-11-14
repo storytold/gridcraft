@@ -71,6 +71,7 @@ impl SheetApp {
             capture_geometry: None,
             capture_geometry_from_raw: false,
             selected_object: None,
+            chart_cache: Default::default(),
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
@@ -78,6 +79,8 @@ impl SheetApp {
             started: now_ms(),
             allow_close: false,
             recovery_offered: false,
+            window_controls: false,
+            viewport_commands: Vec::new(),
             bring_forward: false,
             open_switch_windows: false,
             ui_window: None,
@@ -115,6 +118,7 @@ impl SheetApp {
         // Floating pictures' textures go with their workbook, even when no sheet is painted.
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);
+        self.chart_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).retain_docs(open.iter().copied());
         self.apply_font_state(ctx);
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
@@ -252,6 +256,9 @@ impl SheetApp {
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
+        // Last, so its resize cursors win over the widgets under the window edges.
+        ribbon::window_frame(self, &ctx);
+        self.flush_viewport_commands(&ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.
         if ctx.viewport_id() == egui::ViewportId::ROOT {
             control::issue_screenshots(self, &ctx);
@@ -303,6 +310,12 @@ impl SheetApp {
             return format!("{}R x {}C", cur.height(), cur.width());
         }
         sel.active.a1()
+    }
+
+    pub(crate) fn flush_viewport_commands(&mut self, ctx: &egui::Context) {
+        for command in self.viewport_commands.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
     }
 }
 

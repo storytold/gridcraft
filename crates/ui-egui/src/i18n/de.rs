@@ -4,6 +4,8 @@
 /// Returns the German translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Schema",
+        "Decorative Text" => "Dekorativer Text",
         "Paste" => "Einfügen",
         "Paste Values" => "Werte einfügen",
         "Paste Formulas" => "Formeln einfügen",
@@ -292,6 +294,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Speichern",
         "Save As" => "Speichern unter",
         "Export" => "Exportieren",
+        "Minimize" => "Minimieren",
+        "Maximize" => "Maximieren",
+        "Restore Down" => "Nach unten wiederherstellen",
         "Close" => "Schließen",
         "Options" => "Optionen",
         "Account" => "Konto",
