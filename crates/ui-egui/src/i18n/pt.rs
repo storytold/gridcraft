@@ -1167,7 +1167,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "↑  Sort Ascending" => "↑  Classificar em Ordem Crescente",
         "↓  Sort Descending" => "↓  Classificar em Ordem Decrescente",
         "Standard Colors" => "Cores Padrão",
-        "Step Into" => "Entrar",
+        "Step Into" => "Depurar",
         "Stop debugging" => "Parar a depuração",
         "Stop recording and save the macro" => "Parar a gravação e salvar a macro",
         "Table Name:" => "Nome da Tabela:",
