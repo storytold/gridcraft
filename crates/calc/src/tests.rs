@@ -46,9 +46,9 @@ fn spill_range_operator() {
     assert_eq!((t.num("C1"), t.num("C2")), (15.0, 5.0));
     t.set("A1", "2");
     assert_eq!((t.num("C1"), t.num("C2")), (3.0, 2.0));
-    // A blocked spill, or a cell that doesn't spill, gives #REF!.
+    // A blocked spill preserves its error; an ordinary scalar still gives #REF!.
     t.set("B2", "x");
-    assert_eq!(t.get("C1"), Value::Error(CellError::Ref));
+    assert_eq!(t.get("C1"), Value::Error(CellError::Spill));
     t.set("B2", "");
     assert_eq!(t.num("C1"), 3.0);
     t.set("D1", "=SUM(A1#)");
@@ -65,6 +65,113 @@ fn spill_range_operator() {
     assert_eq!(t.num("E1"), 30.0);
     t.set("A1", "4");
     assert_eq!(t.num("E1"), 100.0);
+}
+
+#[test]
+fn spill_references_preserve_single_cell_anchor_errors_and_reference_shape() {
+    for (input, error) in [
+        ("=1/0", CellError::Div0),
+        ("=NA()", CellError::NA),
+        ("=SQRT(-1)", CellError::Num),
+        ("=FIND(\"x\",\"a\")", CellError::Value),
+        ("=#REF!", CellError::Ref),
+        ("=#NAME?", CellError::Name),
+        ("=#NULL!", CellError::Null),
+        ("=#CALC!", CellError::Calc),
+    ] {
+        let mut t = T::new();
+        t.set("A1", input);
+        assert_eq!(t.get("A1"), Value::Error(error), "{input}: anchor precondition");
+        for formula in ["=SUM(A1#)", "=SUM(Sheet1!$A$1#)"] {
+            t.set("B1", formula);
+            assert_eq!(t.get("B1"), Value::Error(error), "{input}: {formula}");
+        }
+        t.set("B2", "=ROWS(A1#)");
+        t.set("B3", "=COLUMNS(A1#)");
+        t.set("B4", "=ISREF(A1#)");
+        t.set("B5", "=AREAS(A1#)");
+        assert_eq!((t.num("B2"), t.num("B3")), (1.0, 1.0), "{input}: single-cell reference shape");
+        assert_eq!(t.get("B4"), Value::Bool(true), "{input}: reference identity");
+        assert_eq!(t.num("B5"), 1.0);
+    }
+}
+
+#[test]
+fn spill_reference_errors_follow_lazy_recalculation_and_spill_transitions() {
+    let mut t = T::new();
+    for (at, formula) in [("A1", "=SUM(Z1#)"), ("A2", "=ROWS(Z1#)"), ("Z1", "=1/0")] {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(at), Cell::formula(Formula::new(formula)));
+    }
+    // The dependent sorts before its not-yet-evaluated source: the host must compute the error.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("A1"), Value::Error(CellError::Div0));
+    assert_eq!(t.num("A2"), 1.0);
+    t.set("Z1", "=SEQUENCE(3)");
+    assert_eq!((t.num("A1"), t.num("A2")), (6.0, 3.0));
+    t.set("Z2", "blocked");
+    assert_eq!(t.get("Z1"), Value::Error(CellError::Spill));
+    assert_eq!(t.get("A1"), Value::Error(CellError::Spill));
+    assert_eq!(t.num("A2"), 1.0);
+    t.set("Z2", "");
+    assert_eq!((t.num("A1"), t.num("A2")), (6.0, 3.0));
+    t.set("Z1", "=NA()");
+    assert_eq!(t.get("A1"), Value::Error(CellError::NA));
+    assert_eq!(t.num("A2"), 1.0);
+    t.set("Z1", "7");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Ref));
+}
+
+#[test]
+fn successful_spill_with_an_error_first_element_keeps_its_complete_reference() {
+    let mut t = T::new();
+    t.set("A1", "=IF(SEQUENCE(2)=1,NA(),7)");
+    assert_eq!(t.get("A1"), Value::Error(CellError::NA));
+    assert_eq!(t.num("A2"), 7.0);
+    assert_eq!(t.wb.sheet(0).unwrap().spill_ranges[&c("A1")].height(), 2);
+    t.set("C1", "=ROWS(A1#)");
+    t.set("C2", "=INDEX(A1#,2)");
+    t.set("C3", "=SUM(A1#)");
+    assert_eq!((t.num("C1"), t.num("C2")), (2.0, 7.0));
+    assert_eq!(t.get("C3"), Value::Error(CellError::NA));
+}
+
+#[test]
+fn spill_reference_nonanchors_keep_reference_errors() {
+    let mut t = T::new();
+    for input in ["", "7", "text", "TRUE"] {
+        t.set("A1", input);
+        t.set("B1", "=SUM(A1#)");
+        assert_eq!(t.get("B1"), Value::Error(CellError::Ref), "{input}");
+    }
+}
+
+#[test]
+fn spill_reference_error_constants_are_not_formula_anchors() {
+    for (error, input, error_type) in [(CellError::Div0, "#DIV/0!", 2.0), (CellError::NA, "#N/A", 7.0), (CellError::Ref, "#REF!", 4.0)] {
+        for typed in [false, true] {
+            let mut t = T::new();
+            if typed {
+                // Cell entry uses the same parser for error constants as the engine input path.
+                t.set("A1", input);
+            } else {
+                t.wb.sheet_mut(0).unwrap().cells.set(c("A1"), Cell::value(Value::Error(error)));
+                t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+            }
+            let anchor = t.wb.sheet(0).unwrap().cell(c("A1")).unwrap();
+            assert_eq!(anchor.value, Value::Error(error));
+            assert!(anchor.formula.is_none() && anchor.py.is_none(), "constant precondition");
+            t.set("B1", "=ERROR.TYPE(A1)");
+            assert_eq!(t.num("B1"), error_type, "genuine error constant precondition");
+            for formula in ["=SUM(A1#)", "=ROWS(A1#)", "=COLUMNS(A1#)", "=AREAS(A1#)"] {
+                t.set("B2", formula);
+                assert_eq!(t.get("B2"), Value::Error(CellError::Ref), "{input}, typed={typed}: {formula}");
+            }
+            t.set("B3", "=ISREF(A1#)");
+            t.set("B4", "=ERROR.TYPE(A1#)");
+            assert_eq!(t.get("B3"), Value::Bool(false));
+            assert_eq!(t.num("B4"), 4.0);
+        }
+    }
 }
 
 #[test]
@@ -722,7 +829,7 @@ fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
     t.calc.recalc_all(&mut t.wb);
     let spill = Value::Error(CellError::Spill);
     assert_eq!((t.num("B2"), t.get("A2"), t.get("D2")), (2.0, spill.clone(), spill));
-    assert_eq!((t.get("C2"), t.num("E2"), t.get("F2"), t.num("G2")), (Value::Empty, 0.0, Value::Error(CellError::Ref), 0.0));
+    assert_eq!((t.get("C2"), t.num("E2"), t.get("F2"), t.num("G2")), (Value::Empty, 0.0, Value::Error(CellError::Spill), 0.0));
 }
 
 #[test]

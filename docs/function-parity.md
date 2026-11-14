@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-03 · **Change:** minor (GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** minor (spill references distinguish errored formulas from constants and preserve reference shape; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -80,7 +80,7 @@ This improves series preparation; it does not change the model-fitting or season
 | 3-D references (`Sheet1:Sheet3!A1`) | done; deleting a span's end sheet keeps the rest (#140) |
 | Structured references (`Table1[Col]`, `[#Totals]`, `@`; the unbracketed `[[#This Row],Col]` some writers emit) | done |
 | Defined names (workbook and sheet scope), Create from Selection | done |
-| Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157) |
+| Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; `A1#` preserves a single-cell formula anchor's error, including blocked `#SPILL!`, and remains a one-cell reference for `ROWS`, `COLUMNS` and `ISREF` (#3952). Error constants still give `#REF!` and are not references. Successful spill ranges remain intact even when their first element is an error. Stale spills after a structural edit or a cleared blocker fixed (#133, #139; PRs #148, #157) |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |
 | SUBTOTAL / AGGREGATE input size | references trim to the used range; all areas, arrays and values of one call are charged against the 16-million-cell limit before any cell is read (skipped hidden, nested and error cells count), and `#NUM!` past it (#2175) |
 | Implicit intersection `@`, legacy CSE array formulas | done; formulas saved without dynamic-array metadata open with Excel's implicit `@` inserted where a range meets a single-value parameter, operator or cell result, and calculate like Excel's cached values (cells differing from Excel's cached values: POI's FormulaEvalTestData_Copy 197 → 3, StructuredReferences 2 → 0). T reads a reference's top-left cell |
@@ -136,6 +136,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Spill references preserve errored single-cell formula anchors as references: value readers see the original error, while shape/type readers retain a one-cell reference. Successful error-first spills keep their full range; ordinary scalar and error constants still give `#REF!` (#3952). |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
 | 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
