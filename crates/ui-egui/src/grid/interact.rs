@@ -7,8 +7,7 @@ use super::menus::set_fill_tag;
 use super::selection::select_ranges;
 use super::tables::{is_filter_button, table_headings};
 use super::{
-    CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens, Workbook,
-    json, pos2, vec2,
+    CellRef, Color32, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens, Workbook, json, pos2, vec2,
 };
 
 // ------------------------------------------------------------------ interaction
@@ -24,6 +23,8 @@ struct InteractionInput<'a> {
     any_pointer_down: bool,
     modifiers: egui::Modifiers,
     position: Option<Pos2>,
+    // The unmirrored pointer position: layer lookups (`popup_over`) work in screen coordinates.
+    screen_position: Option<Pos2>,
     primary_clicked: bool,
     in_cells: bool,
     in_column_header: bool,
@@ -92,6 +93,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         any_pointer_down: pointer.any_down(),
         modifiers: mods,
         position: pos,
+        screen_position: pointer.interact_pos().or(pointer.hover_pos()),
         primary_clicked,
         in_cells,
         in_column_header: in_col_header,
@@ -217,9 +219,23 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
         (input.in_cells, input.position, input.response, input.geo, input.sheet, input.primary_clicked);
     let ctx = input.context.clone();
     if !app.session.draw_tool.is_empty() && in_cells {
-        ctx.set_cursor_icon(CursorIcon::Crosshair);
+        // A menu or dialog above the sheet owns the pointer, so a stroke belongs to it and not to
+        // the cells underneath. egui already withholds the drag from a popup; this keeps the grid
+        // out of it on its own terms, as `update_cursor` does for the crosshair. The lookup is in
+        // screen coordinates: `layer_id_at` sees through the right-to-left mirror.
+        let over_popup = super::cursor::popup_over(&ctx, input.screen_position, input.ui.layer_id());
         if app.session.draw_tool == "pen" {
-            if let Some(p) = pos
+            if over_popup {
+                // A stroke that runs under the popup ends there: the committed line must not join
+                // the two sides across the covered cells. The pen starts a new stroke when the
+                // pointer comes back to the sheet.
+                if app.grid.ink.len() >= 2 {
+                    let pts: Vec<[f32; 2]> = std::mem::take(&mut app.grid.ink);
+                    let _ = app.run("draw.stroke", json!({"points": pts}));
+                } else {
+                    app.grid.ink.clear();
+                }
+            } else if let Some(p) = pos
                 && resp.dragged()
             {
                 // Through the cell under the pointer, so frozen panes and pages map right.
@@ -254,7 +270,10 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             return true;
         }
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
-            if let Some(p) = pos
+            // The eraser owns the gesture over a popup too: it deletes nothing there, but returning
+            // false let `handle_press` select the cells under the menu.
+            if !over_popup
+                && let Some(p) = pos
                 && let Some((ObjRef { kind: ObjKind::Shape, id }, _)) = crate::chartview::hit(app, geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {
