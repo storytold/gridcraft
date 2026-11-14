@@ -271,6 +271,27 @@ handling again for troubleshooting.
 | Fedora/RHEL/openSUSE | `gridcraft-<ver>-linux-x86_64.rpm` | `gridcraft-<ver>-linux-aarch64.rpm` | |
 | Tarball | `gridcraft-<ver>-linux-x86_64.tar.gz` | `gridcraft-<ver>-linux-aarch64.tar.gz` | Unpack anywhere |
 
+#### Community packages
+
+These packages are maintained by community members, not by the GridCraft team, and the project
+does not review them. An overlay's ebuilds run as root when you install a package, so read the
+ebuild before you emerge it.
+
+On Gentoo, the [::snakebyte overlay](https://github.com/switch87/snakebyte-overlay) packages the
+Linux release as `app-office/gridcraft-bin` (prebuilt) and `app-office/gridcraft` (built from source).
+`gridcraft-bin` downloads `gridcraft-<ver>-linux-x86_64.tar.gz` from this repository's releases, and
+Portage refuses the file unless it matches the overlay's `Manifest`. To check that it is the
+release's own file, run `sha256sum` on it in your `DISTDIR` and compare with the release's
+`SHA256SUMS.txt`.
+
+
+```sh
+eselect repository add snakebyte git https://github.com/switch87/snakebyte-overlay.git
+emaint sync -r snakebyte
+echo 'app-office/gridcraft-bin ~amd64' >> /etc/portage/package.accept_keywords/gridcraft
+emerge --ask app-office/gridcraft-bin
+```
+
 ### FreeBSD
 
 | Build | File |
