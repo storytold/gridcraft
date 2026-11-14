@@ -221,6 +221,7 @@ pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
     cx.edits.push((target.to_string(), e.clone()));
     let wb = &mut cx.wb;
     super::edit::rewrite_all_formulas(wb, target, e)?;
+    super::whatif::shift_scenarios(wb, target, e);
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };
