@@ -70,7 +70,9 @@
   <string>Copyright © the GridCraft authors. MIT OR Apache-2.0.</string>
 
   <!-- Files GridCraft opens. Rank Alternate: it's offered under "Open With" without taking
-       over the default app (Numbers, another spreadsheet) for these types. -->
+       over the default app (Numbers, another spreadsheet) for these types. Each type names the
+       app icon (CFBundleIconFile), so Finder draws GridCraft's icon on the files once GridCraft
+       is their default app, not the previous app's (#3671). -->
   <key>CFBundleDocumentTypes</key>
   <array>
     <dict>
@@ -78,6 +80,8 @@
       <string>Excel Workbook</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>GridCraft</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
@@ -94,6 +98,8 @@
       <string>Excel Macro-Enabled Workbook</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>GridCraft</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
@@ -108,6 +114,8 @@
       <string>CSV Document</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>GridCraft</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
@@ -124,6 +132,8 @@
       <string>TSV Document</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>GridCraft</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
@@ -141,6 +151,8 @@
       <string>Excel Binary Workbook</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>GridCraft</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
@@ -157,6 +169,8 @@
       <string>OpenDocument Spreadsheet</string>
       <key>CFBundleTypeRole</key>
       <string>Editor</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>GridCraft</string>
       <key>LSHandlerRank</key>
       <string>Alternate</string>
       <key>LSItemContentTypes</key>
