@@ -19,6 +19,58 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
+    let mut source = s();
+    source.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Forecast.v2.xltx").unwrap();
+    let mut s = s();
+    let result = s.execute("file.open", json!({"name": "Forecast.v2.xltx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+
+    assert_eq!(result["title"], "Forecast.v2");
+    assert_eq!(s.doc().unwrap().display_title(), "Forecast.v2");
+    assert_eq!(v(&s, "A1"), Value::text("kept"));
+    assert!(s.doc().unwrap().path.is_none(), "Save must ask for a destination instead of replacing the template");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "Forecast.v2.xlsx");
+    s.doc_mut().unwrap().path = Some("saved-template.xltx".into());
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "saved-template.xlsx");
+
+    let result = s.execute("file.open", json!({"name": "Starter.xlsx", "base64": crate::io::base64_encode(&bytes), "template": true})).unwrap();
+    assert_eq!(result["title"], "Starter");
+    assert!(s.doc().unwrap().path.is_none());
+    s.execute("file.save", json!({})).unwrap();
+    assert!(matches!(s.ui_requests.last(), Some(crate::UiRequest::Dialog(name, _)) if name == "saveAs"));
+}
+
+#[test]
+fn opening_a_template_path_twice_creates_two_unsaved_workbooks() {
+    struct RemoveFileOnDrop(std::path::PathBuf);
+    impl Drop for RemoveFileOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let mut source = s();
+    source.execute("cell.set", json!({"cell": "A1", "input": "from template"})).unwrap();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Template.XLTX").unwrap();
+    let path = std::env::temp_dir().join(format!("gridcraft-personal-template-{}.XLTX", std::process::id()));
+    let _cleanup = RemoveFileOnDrop(path.clone());
+    std::fs::write(&path, bytes).unwrap();
+
+    let mut s = s();
+    let path = path.to_string_lossy().into_owned();
+    let first = s.execute("file.open", json!({"path": &path})).unwrap();
+    let second = s.execute("file.open", json!({"path": &path})).unwrap();
+    assert!(first.get("alreadyOpen").is_none());
+    assert!(second.get("alreadyOpen").is_none());
+    assert_eq!(s.documents().len(), 2);
+    for document in s.documents() {
+        assert!(document.path.is_none(), "a template must never become its own save target");
+        assert_eq!(document.wb.active().unwrap().value(CellRef::parse("A1").unwrap()), Value::text("from template"));
+    }
+}
+
+#[test]
 fn format_cells_reading_order_survives_undo_and_xlsx() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();

@@ -241,6 +241,13 @@ impl SheetApp {
                 self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
                 Ok(json!({"on": self.ui.highlight_active_row}))
             }
+            "options.personalTemplatesLocation" => {
+                let Some(location) = p.get("location").and_then(Json::as_str) else {
+                    return Some(Err("personal templates location must be text".into()));
+                };
+                self.ui.personal_templates_location = location.trim().to_string();
+                Ok(json!({"location": self.ui.personal_templates_location}))
+            }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
                 let percent = match p.get("percent") {

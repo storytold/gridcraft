@@ -50,6 +50,14 @@ impl FileKind {
     }
 }
 
+/// Whether `path` identifies an Excel template rather than an ordinary workbook.
+pub fn is_template_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("xltx") || extension.eq_ignore_ascii_case("xltm"))
+}
+
 /// The error for an encrypted workbook opened without a password contains this. The interface
 /// asks for the password when it sees it; programmatic callers pass `password` instead.
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";

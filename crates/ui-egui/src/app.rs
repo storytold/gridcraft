@@ -333,6 +333,15 @@ mod lifecycle_tests {
         SheetApp::new(session, Services::default())
     }
 
+    #[test]
+    fn personal_templates_location_is_set_through_its_ui_command() {
+        let mut app = app();
+        let result = app.run("options.personalTemplatesLocation", json!({"location": " C:/Templates "})).unwrap();
+        assert_eq!(result["location"], "C:/Templates");
+        assert_eq!(app.ui.personal_templates_location, "C:/Templates");
+        assert!(app.run("options.personalTemplatesLocation", json!({})).is_err());
+    }
+
     /// One headless pass; a test has no renderer for the texture atlas delta (0.37 panics when it
     /// is dropped unapplied).
     fn ui_pass(ctx: &egui::Context, raw: egui::RawInput, f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {

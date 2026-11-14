@@ -1,5 +1,15 @@
 use super::*;
 
+#[test]
+fn template_extensions_are_case_insensitive() {
+    for path in ["Book.xltx", "Book.xltm", "Book.XLTX", "Book.XltM"] {
+        assert!(is_template_path(path), "{path}");
+    }
+    for path in ["Book.xlsx", "Book.xlsm", "xltx", "Book.xltx.txt"] {
+        assert!(!is_template_path(path), "{path}");
+    }
+}
+
 fn book(rtl: bool, cells: &[(&str, gridcraft_core::Value, gridcraft_model::HAlign)]) -> Workbook {
     let mut wb = Workbook::new();
     let ids: Vec<_> = cells.iter().map(|(_, _, h)| wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |st| st.align.h = *h)).collect();
