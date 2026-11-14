@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod cs;
 mod de;
 mod el;
+mod error_templates;
 mod es;
 mod es_functions;
 mod fr;
@@ -189,16 +190,8 @@ impl Language {
         if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
     }
 
-    /// Translates an interface label; untranslated labels fall back to English.
-    ///
-    /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
-    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
-    pub fn tr(self, text: &str) -> &str {
-        self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
-    }
-
-    /// The catalog's own translation of `text`, or `None` when it falls back to English.
-    fn translated(self, text: &str) -> Option<&'static str> {
+    /// Raw catalog lookup for contextual labels and shared message templates.
+    pub fn translation(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
@@ -222,13 +215,67 @@ impl Language {
         }
     }
 
+    /// Translates an interface label; untranslated labels fall back to English.
+    ///
+    /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
+    /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
+    pub fn tr(self, text: &str) -> &str {
+        self.translation(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    /// Translates an import warning for display in the interface. The file-format and engine
+    /// layers keep returning canonical English text to the CLI, control channel, and MCP.
+    ///
+    /// The text is looked up raw: `tr` splits a catalog key at `|` (the `context|label` form), and
+    /// a warning can carry a `|` of its own (a SYLK file name, a chart title).
+    pub(crate) fn open_warning(self, warning: &str) -> String {
+        if let Some(target) = warning.strip_prefix("missing picture ") {
+            return self.tr("missing picture {target}").replace("{target}", target);
+        }
+        if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
+            return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
+        }
+        const DRAWING_WARNINGS: [&str; 3] = [
+            "a histogram, waterfall, treemap… chart without its chart part was skipped",
+            "an embedded object (SmartArt, OLE…) was skipped",
+            "grouped shapes are not supported and were skipped",
+        ];
+        for base in DRAWING_WARNINGS {
+            if let Some(suffix) = warning.strip_prefix(base)
+                && suffix.starts_with(" (")
+                && suffix.ends_with(')')
+            {
+                let translated = self.translation(base).unwrap_or(base);
+                return format!("{translated}{suffix}");
+            }
+        }
+        self.translation(warning).unwrap_or(warning).to_owned()
+    }
+
+    /// Ribbon tabs can be nouns while their corresponding commands are verbs.
+    pub fn tr_tab(self, text: &str) -> &str {
+        self.translation(&format!("Tab|{text}")).unwrap_or_else(|| self.tr(text))
+    }
+
+    /// Translates known fixed or templated diagnostics after removing engine command wrappers.
+    /// Unmatched parameter errors retain their command context; other command wrappers are cleaned.
+    /// Captured user data stays literal.
     pub(crate) fn tr_error(self, message: &str) -> String {
-        let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
+        let original_parameters = message.starts_with("invalid parameters for `").then_some(message);
+        let message = if message.starts_with("command `") || message.starts_with("invalid parameters for `") {
+            crate::clean_error(message)
+        } else {
+            message.to_owned()
+        };
 
-        let translated = self.tr(&message);
-        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
-
-        if translated == fallback { message } else { translated.to_owned() }
+        // A hit in the catalog is the answer, even when the translation reads exactly like the
+        // English: a shared word (`Maximum`), or a `context|label` key whose translation is the
+        // label itself (`AutoSum|MAX` => `MAX`). Comparing the rendered text with the English
+        // would drop such a translation and show the raw `context|` key instead.
+        if let Some(translated) = self.translation(&message) {
+            return translated.to_owned();
+        }
+        error_templates::format_message(&message, self).unwrap_or_else(|| original_parameters.map_or(message, str::to_owned))
     }
 
     /// A worksheet function's description in this language, looked up by the English text of the
@@ -331,11 +378,11 @@ mod tests {
     fn every_catalog_has_distinct_diagram_and_decorative_text() {
         for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
             let code = language.code();
-            let diagram = language.translated("Diagram");
+            let diagram = language.translation("Diagram");
             assert!(diagram.is_some(), "{code}: Diagram");
-            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            assert!(language.translation("Decorative Text").is_some(), "{code}: Decorative Text");
             for chart in ["Chart", "Charts"] {
-                if let Some(chart_text) = language.translated(chart) {
+                if let Some(chart_text) = language.translation(chart) {
                     assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
                 }
             }
@@ -381,6 +428,18 @@ mod tests {
         assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
         assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::parse("xx"), None);
+    }
+
+    /// A catalog hit decides the answer, even when the translation reads like the English: a
+    /// shared word, or a `context|label` key whose translation is the label itself. Deciding by
+    /// comparing the rendered text with the English showed the raw `context|` key instead.
+    #[test]
+    fn a_translation_that_reads_like_english_is_still_a_translation() {
+        assert_eq!(Language::Es.tr_error("Options|General"), "General");
+        assert_eq!(Language::Cs.tr_error("AutoSum|MAX"), "MAX");
+        assert_eq!(Language::Uk.tr_error("Tab|Insert"), "Insert");
+        // An untranslated message is still shown whole, prefix and all.
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
     }
 
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
@@ -544,5 +603,37 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+}
+
+#[cfg(test)]
+mod open_warning_tests {
+    use super::*;
+
+    /// An import warning that carries a `|` of its own keeps its whole text: only a catalog key is
+    /// split at the bar (the `context|label` form), so the display path looks a warning up raw.
+    #[test]
+    fn an_import_warning_with_a_bar_keeps_its_text() {
+        let warning = "skipped record `A|B` in book.slk";
+        for language in [Language::En, Language::De, Language::Ru] {
+            assert_eq!(language.open_warning(warning), warning);
+        }
+    }
+
+    #[test]
+    fn drawing_warning_translation_preserves_its_location() {
+        let suffix = " (xl/drawings/drawing1.xml, object 7)";
+        let cases = [
+            (
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+                "Histogram, vodopádový nebo stromový graf… bez příslušné části grafu byl přeskočen.",
+            ),
+            ("an embedded object (SmartArt, OLE…) was skipped", "Vložený objekt (SmartArt, OLE…) byl přeskočen."),
+            ("grouped shapes are not supported and were skipped", "Seskupené obrazce nejsou podporovány a byly přeskočeny."),
+        ];
+
+        for (warning, translation) in cases {
+            assert_eq!(Language::Cs.open_warning(&format!("{warning}{suffix}")), format!("{translation}{suffix}"));
+        }
     }
 }

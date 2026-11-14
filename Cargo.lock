@@ -2298,6 +2298,7 @@ dependencies = [
 name = "gridcraft-ui-egui"
 version = "0.19.1"
 dependencies = [
+ "craft-i18n",
  "craft-ui",
  "craft-update",
  "craft-window",

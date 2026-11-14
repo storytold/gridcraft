@@ -53,7 +53,7 @@ impl SheetApp {
             self.notice = Some(Notice { text: text.into(), kind: NoticeKind::Warning, action: Some(("What this means".into(), "macros".into())) });
         } else {
             let text = if msgs.len() == 1 {
-                msgs[0].to_string()
+                self.ui.language.open_warning(msgs[0])
             } else {
                 format!("{} items in this file were handled differently. First: {}", msgs.len(), msgs[0])
             };
