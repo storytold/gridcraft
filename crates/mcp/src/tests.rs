@@ -236,6 +236,28 @@ fn sort_and_filter() {
 }
 
 #[test]
+fn sort_string_keys_validate_direction_before_sorting() {
+    let mut s = server();
+    let unsorted = json!([["b"], ["c"], ["a"]]);
+    ok(&mut s, "write_range", json!({"range": "A1", "values": unsorted}));
+    ok(&mut s, "select", json!({"range": "C5"}));
+    for keys in [json!(["A dsec"]), json!(["A desc extra"]), json!(["A", "A sideways"])] {
+        let error = fails(&mut s, "sort_range", json!({"range": "A1:A3", "keys": keys, "header": false}));
+        assert!(error.contains("invalid sort key"), "{error}");
+        assert_eq!(ok(&mut s, "read_range", json!({"range": "A1:A3"}))["values"], unsorted);
+        assert_eq!(ok(&mut s, "inspect_workbook", json!({}))["selection"], "C5");
+    }
+    for key in ["A", "A asc", "A ASCENDING"] {
+        ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": [key], "header": false}));
+        assert_eq!(ok(&mut s, "read_range", json!({"range": "A1:A3"}))["values"], json!([["a"], ["b"], ["c"]]));
+    }
+    for key in ["A desc", "A DeScEnDiNg"] {
+        ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": [key], "header": false}));
+        assert_eq!(ok(&mut s, "read_range", json!({"range": "A1:A3"}))["values"], json!([["c"], ["b"], ["a"]]));
+    }
+}
+
+#[test]
 fn save_and_open_roundtrip() {
     let mut s = server();
     ok(&mut s, "write_range", json!({"range": "B2", "values": [[1, 2], [3, "=SUM(B2:C2)+B3"]]}));
