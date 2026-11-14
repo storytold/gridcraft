@@ -1767,6 +1767,12 @@ fn cell_padding_is_dropped_by_xlsx_and_nothing_else_is() {
 
     let bytes = write_xlsx(&wb).unwrap();
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
+    // Only the full style writes `<alignment>`: the padding-only one differs from the default by
+    // nothing SpreadsheetML has, so it writes neither an empty `<alignment/>` nor `applyAlignment`.
+    let mut pkg = Package::open(&bytes).unwrap();
+    let styles = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert_eq!(styles.matches("<alignment").count(), 1, "{styles}");
+    assert_eq!(styles.matches("applyAlignment").count(), 1, "{styles}");
     let (back, _) = read_xlsx(&bytes).unwrap();
     let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
     for cell in ["A1", "B2"] {
