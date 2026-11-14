@@ -174,7 +174,7 @@ fn json_value(v: &Json, wb: &Workbook) -> Value {
         Json::Bool(b) => Value::Bool(*b),
         Json::Number(n) => n.as_f64().map(Value::number).unwrap_or_default(),
         Json::String(s) if s.is_empty() => Value::Empty,
-        Json::String(s) => gridcraft_core::parse::parse_input(s, wb.date_system).value,
+        Json::String(s) => gridcraft_core::parse::parse_input_in(s, wb.date_system, wb.region).value,
         other => Value::text(other.to_string()),
     }
 }

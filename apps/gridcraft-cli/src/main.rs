@@ -3,10 +3,10 @@
 //! ```text
 //! gridcraft-cli info <file> [--json]
 //! gridcraft-cli convert <in> <out> [--sheet NAME]
-//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
+//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--region TAG] [--json]
 //! gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
 //! gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
-//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
+//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--region TAG] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
@@ -39,12 +39,12 @@ use serde_json::{Value, json};
 const USAGE: &str = "usage:
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
   gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
-  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
+  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--region TAG] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
-                     [--out FILE] [--print RANGE] [--quiet]
+                     [--out FILE] [--print RANGE] [--region TAG] [--quiet]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
@@ -187,6 +187,21 @@ fn blank() -> Session {
     s
 }
 
+/// Applies `--region`, or the system locale without it, to the session and its open document;
+/// an unknown tag is an error.
+fn apply_region(s: &mut Session, a: &Args) -> Result<(), String> {
+    let Some(tag) = a.opt("region") else {
+        s.set_region(gridcraft_engine::core::region::system());
+        return Ok(());
+    };
+    let region = gridcraft_engine::core::region::find(tag).ok_or_else(|| {
+        let known: Vec<&str> = gridcraft_engine::core::region::all().iter().map(|r| r.tag).collect();
+        format!("unknown region {tag:?} (use one of {})", known.join(", "))
+    })?;
+    s.set_region(region);
+    Ok(())
+}
+
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {
     if let Some(name) = sheet {
         let p = match name.parse::<u64>() {
@@ -313,13 +328,14 @@ fn convert(args: &[String]) -> Result<(), String> {
 }
 
 fn eval(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sheet", "cell"], &["json"])?;
+    let a = Args::parse(args, &["in", "sheet", "cell", "region"], &["json"])?;
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
         Some(p) => open(p)?,
         None => blank(),
     };
+    apply_region(&mut s, &a)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     let formula = if formula.starts_with('=') { formula.to_string() } else { format!("={formula}") };
     let mut p = json!({"formula": formula});
@@ -422,7 +438,7 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
+    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet", "region"], &["quiet", "csv", "formulas"])?;
     a.no_extra(0)?;
     let mut s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
@@ -434,6 +450,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         (None, None) => blank(),
     };
+    apply_region(&mut s, &a)?;
     let quiet = a.has("quiet");
     let mut step = 0usize;
     for (name, value) in &a.opts {
