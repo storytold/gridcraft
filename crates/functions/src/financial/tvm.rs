@@ -397,26 +397,29 @@ pub(super) fn rri(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val((fv / pv).powf(1.0 / np) - 1.0)
 }
 
-fn dollar_digits(fraction: f64) -> R<f64> {
+/// The truncated fraction and the power of ten above it. The sign is checked before truncating:
+/// a fraction strictly between -1 and 0 truncates to -0.0 but is still `#NUM!`, as in Excel (#4068).
+fn dollar_digits(fraction: f64) -> R<(f64, f64)> {
     if fraction < 0.0 {
         return Err(CellError::Num);
     }
-    if fraction < 1.0 {
+    let f = fraction.trunc();
+    if f < 1.0 {
         return Err(CellError::Div0);
     }
-    Ok(10f64.powf(fraction.log10().ceil()))
+    Ok((f, 10f64.powf(f.log10().ceil())))
 }
 
 pub(super) fn dollarde(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, f) = (num(a, 0)?, num(a, 1)?.trunc());
-    let p = dollar_digits(f)?;
+    let x = num(a, 0)?;
+    let (f, p) = dollar_digits(num(a, 1)?)?;
     let int = x.trunc();
     num_val(int + (x - int) * p / f)
 }
 
 pub(super) fn dollarfr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, f) = (num(a, 0)?, num(a, 1)?.trunc());
-    let p = dollar_digits(f)?;
+    let x = num(a, 0)?;
+    let (f, p) = dollar_digits(num(a, 1)?)?;
     let int = x.trunc();
     num_val(int + (x - int) * f / p)
 }
