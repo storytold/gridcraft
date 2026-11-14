@@ -25,7 +25,9 @@ pub enum PasswordHash {
     /// An iterated, salted hash as stored in the file: algorithm name, base64 hash and salt.
     Iterated { algorithm: String, hash: String, salt: String, spin_count: u32 },
     /// The base64 SHA-256 digest of the password's UTF-8 bytes, unsalted: the form OpenDocument
-    /// stores (ODF 1.3 part 3 §19.699, `table:protection-key`).
+    /// stores in `table:protection-key` (ODF 1.3 part 3 §19.701) when
+    /// `table:protection-key-digest-algorithm` (§19.702) names SHA-256. A writer writes both
+    /// attributes; a key under any other or no digest algorithm is not this form.
     Sha256Digest(String),
     /// A password set in GridCraft, kept in the form each file format stores: Excel's hash
     /// (which verifies it) and the SHA-256 digest.
