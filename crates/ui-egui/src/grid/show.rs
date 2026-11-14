@@ -456,6 +456,7 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             active_row,
         });
         paint_selection(SelectionPaintInput { painter: &p, geo, sheet: sh, selection: sel, outline, tokens: t, app, rows: *rows, cols: *cols });
+        crate::collab::paint_presence(&p, geo, sh, app, *rows, *cols);
     }
     // Freeze lines.
     if geo.fr > 0 {

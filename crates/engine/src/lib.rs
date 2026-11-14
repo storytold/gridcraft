@@ -30,9 +30,9 @@ pub mod windows;
 use std::sync::Arc;
 
 use gridcraft_calc::Calc;
-use gridcraft_core::{CellRef, RangeRef};
+use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::Workbook;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
@@ -224,6 +224,15 @@ pub struct DocState {
     /// The references `edit.goTo` with `record: true` went to in this document, newest first,
     /// without names, each area written with its sheet (`Sheet1!B14:C22,Sheet1!F19:G30`).
     pub go_to_recent: Vec<String>,
+    /// Cells whose content the last command changed, as the recalculation saw them (sheet index
+    /// and address). Filled by [`cmd::commit`] for every command; [`Session::take_changed`] hands
+    /// it to a front end that has to tell another party what changed (the collaboration layer).
+    /// Not history and not saved.
+    pub last_changed: Vec<gridcraft_calc::Key>,
+    /// The cells the command itself wrote, without the formulas the recalculation evaluated
+    /// afterwards: what an undo has to put back, and what a step of the undo history may require
+    /// to still hold its result. [`Session::take_written`] hands it over the same way.
+    pub last_written: Vec<gridcraft_calc::Key>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -347,6 +356,8 @@ impl DocState {
             touched: None,
             edits: None,
             go_to_recent: vec![],
+            last_changed: vec![],
+            last_written: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -454,6 +465,27 @@ impl Default for Prefs {
     }
 }
 
+/// One cell as a snapshot holds it: the value, the formula text (without `=`) and the interned
+/// style id. Used by the shared session's undo to put a cell back exactly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CellState {
+    pub value: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
+    pub style: u32,
+    /// The code of a Python cell (which has no formula). An undo that kept only the value would
+    /// turn the cell into a constant and lose the code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub py: Option<String>,
+    /// The range of a legacy array formula (Ctrl+Shift+Enter) whose text this is. Restoring the
+    /// text alone would make it a single-cell formula, or a spill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub array: Option<RangeRef>,
+    /// The dynamic-array mark a file put on the formula; the writer keeps it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dynamic: bool,
+}
+
 /// Requests from commands to the UI (open a dialog, show a message…).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum UiRequest {
@@ -511,6 +543,11 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
+    /// How many of the running calls are remote operations applied for another participant
+    /// ([`Session::apply_remote`]). Such a call changes the workbook but leaves this session's
+    /// journal, undo/redo history and command recording alone: the operation belongs to the
+    /// journal and history of the session it came from.
+    remote: u32,
     /// The steps the last successful `automate.runScript` or `macro.run` ran while a recorder was
     /// on, for the recorder to keep with that step (see [`record::Recorder::ran`]); taken by the
     /// recording hook.
@@ -606,6 +643,29 @@ impl Session {
         self.activate_window(w);
         self.docs.len() - 1
     }
+    /// Replaces the content of an open document with a fresh state — the authoritative workbook a
+    /// session snapshot carries — without touching the other open workbooks, the windows or the
+    /// session's preferences. The document keeps its `uid`, so its windows still show it, and its
+    /// history starts empty: the snapshot is the room's state, and the steps behind it belong to
+    /// the room, not to this replica.
+    pub fn swap_document(&mut self, uid: u64, mut content: DocState) -> Result<()> {
+        let index = self.document_index(uid).ok_or(EngineError::NoDocument)?;
+        let Some(old) = self.docs.get(index) else { return Err(EngineError::NoDocument) };
+        content.uid = uid;
+        // The window's identity and where Save goes stay with the open document; only the
+        // workbook, its calculation state and its history are the snapshot's.
+        content.path = old.path.clone();
+        content.title = old.title.clone();
+        // Nothing that kept a copy of the old content may outlive it: an open undo group would put
+        // the previous workbook back, and a debugger would step through a document that is gone.
+        self.groups.retain(|group| group.doc != uid);
+        if self.macro_debug.as_ref().is_some_and(|debugger| debugger.doc == uid) {
+            self.macro_debug = None;
+        }
+        self.docs[index] = content;
+        Ok(())
+    }
+
     /// Closes a workbook and its windows; the most recently active remaining window comes forward.
     pub fn close_document(&mut self, i: usize) {
         if i < self.docs.len() {
@@ -685,6 +745,15 @@ impl Session {
     /// unless an undo group is open on the document (the group then makes the step).
     /// Panics inside commands are caught and reported; the workbook is restored.
     pub fn execute(&mut self, id: &str, params: Json) -> Result<Json> {
+        // The change list belongs to one top-level call: a command made of several commits
+        // reports every cell they changed, and a new call starts empty, even when the command is
+        // refused before it changes anything.
+        if self.depth == 0
+            && let Some(d) = self.active_mut()
+        {
+            d.last_changed.clear();
+            d.last_written.clear();
+        }
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         if let Err(why) = (spec.enabled)(self) {
             return Err(EngineError::Disabled(id.to_string(), why));
@@ -730,7 +799,7 @@ impl Session {
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
-        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+        let place = (self.depth == 0 && self.recorder.is_some() && self.remote == 0).then(|| match self.active() {
             Some(d) => (d.uid, d.wb.active_sheet(), d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
@@ -828,7 +897,7 @@ impl Session {
                     rec.attach_ran(ran);
                 }
             }
-            if self.journal_paused == 0 {
+            if self.journal_paused == 0 && self.remote == 0 {
                 self.push_journal(id, cmd::journal_params(&params));
                 recent::note(&mut self.prefs.recent_functions, id, &params);
             }
@@ -841,6 +910,7 @@ impl Session {
         let in_group_now = before.as_ref().is_some_and(|(uid, ..)| self.in_group(*uid));
         let was_open = start.is_some_and(|(was_open, _)| was_open);
         if spec.undoable
+            && self.remote == 0
             && let Some((uid, wb, sel)) = before
             && let Some(d) = self.docs.iter_mut().find(|d| d.uid == uid)
             && !Arc::ptr_eq(&d.wb, &wb)
@@ -1137,6 +1207,210 @@ impl Session {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg });
         }
         r
+    }
+
+    /// Applies a command that came from another participant of a shared session.
+    ///
+    /// The command changes the workbook exactly as [`Session::execute`] does — the same
+    /// `enabled` checks, sheet-protection and array checks, recalculation and panic guard — but
+    /// it leaves this session's journal, undo/redo history and command recording alone: the
+    /// operation is already journaled by the session that sent it, and undoing it here would
+    /// undo someone else's step. The cells it changed are available from
+    /// [`Session::take_changed`].
+    pub fn apply_remote(&mut self, id: &str, params: Json) -> Result<Json> {
+        self.remote = self.remote.saturating_add(1);
+        // The counter comes back even when a command escapes as a panic, so a later local
+        // command is not mistaken for a remote one.
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.execute(id, params)));
+        self.remote = self.remote.saturating_sub(1);
+        match r {
+            Ok(v) => v,
+            Err(p) => std::panic::resume_unwind(p),
+        }
+    }
+
+    /// Restores cells exactly as a shared session's undo remembers them: value, formula text and
+    /// its array flags, Python code and interned style. The graph nodes of the restored cells are
+    /// updated and only what depends on them is recalculated, as a command's own commit does: a
+    /// whole-workbook rebuild would hand every formula of the book to the delta of one undo. The
+    /// cells this call restored and every formula it re-evaluated are left in `last_changed`, so
+    /// the caller can tell another replica what the new document state is.
+    pub fn restore_cells(&mut self, sheet: usize, cells: &[(CellRef, CellState)]) -> Result<()> {
+        let Some(d) = self.active_mut() else { return Err(EngineError::NoDocument) };
+        {
+            let model = Arc::make_mut(&mut d.wb);
+            let Some(sh) = model.sheet_mut(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
+            for (at, state) in cells {
+                if state.value.is_empty() && state.formula.is_none() && state.py.is_none() {
+                    sh.remove_cell(*at);
+                    continue;
+                }
+                let formula = state.formula.as_deref().map(|text| {
+                    let mut formula = gridcraft_model::Formula::new(text);
+                    formula.array = state.array;
+                    formula.dynamic = state.dynamic;
+                    Arc::new(formula)
+                });
+                let py = state.py.as_deref().map(|code| Arc::new(gridcraft_model::PyCode::new(code)));
+                sh.set_cell(*at, gridcraft_model::Cell { value: state.value.clone(), formula, style: gridcraft_model::StyleId(state.style), py });
+            }
+        }
+        {
+            // Only the restored cells and their dependents: `cells_changed` also puts the graph
+            // nodes of the restored cells up to date, which is all a cell-level restore needs.
+            let model = Arc::make_mut(&mut d.wb);
+            let keys: Vec<gridcraft_calc::Key> = cells.iter().map(|(at, _)| (sheet, *at)).collect();
+            d.calc.cells_changed(model, &keys);
+        }
+        d.revision = d.revision.saturating_add(1);
+        let evaluated = d.calc.take_evaluated();
+        // What the caller has to report: the cells this call put back and every formula the
+        // recalculation evaluated again (their displayed values moved with the restored cells),
+        // spilled blocks included, exactly as `cmd::commit` reports a command's effect.
+        let mut changed: Vec<gridcraft_calc::Key> = cells.iter().map(|(at, _)| (sheet, *at)).collect();
+        let mut spilled = 0u64;
+        for (sh, at) in &evaluated {
+            changed.push((*sh, *at));
+            if let Some(range) = d.wb.sheet(*sh).and_then(|s| s.spill_ranges.get(at).copied())
+                && range.count() <= 100_000
+                && spilled.saturating_add(range.count()) <= 200_000
+            {
+                spilled = spilled.saturating_add(range.count());
+                for row in range.start.row..=range.end.row {
+                    for col in range.start.col..=range.end.col {
+                        changed.push((*sh, CellRef::new(row, col)));
+                    }
+                }
+            }
+        }
+        changed.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
+        changed.dedup();
+        d.last_changed = changed;
+        Ok(())
+    }
+
+    /// Replaces every sheet of the workbook with an image a shared session kept for a structural
+    /// undo or redo: a row insert moves every address below it and a sheet insert or delete changes
+    /// the set of sheets, so the operation restores whole sheets rather than a list of cells. The
+    /// dependency graph is rebuilt and the workbook recalculated; the caller keeps the authoritative
+    /// sheet keys, which follow the restored runtime identities.
+    ///
+    /// Images arrive from the session's room, which validates them against the engine it runs; a
+    /// serialized cell store is rebuilt from its cells rather than trusting its cached count.
+    pub fn restore_sheets(&mut self, sheets: Vec<gridcraft_model::Sheet>) -> Result<()> {
+        self.restore_structural(sheets, None)
+    }
+
+    /// Restores a whole structural boundary: the sheets and, when the image carries it, the
+    /// workbook-level state that belongs to the same boundary — defined names, structure
+    /// protection ([`gridcraft_model::WorkbookMeta`]), the unmodelled package-level content and
+    /// chart sheets, the VBA project, the style table and the calculation settings. Everything is
+    /// validated before the document is touched: an image whose name scopes do not fit its sheets,
+    /// whose style table has no default style, or whose calculation settings are not usable is
+    /// refused whole, and a caller that gets `Err` still holds the document it had.
+    pub fn restore_structural(&mut self, mut sheets: Vec<gridcraft_model::Sheet>, meta: Option<gridcraft_model::WorkbookMeta>) -> Result<()> {
+        if sheets.is_empty() {
+            return Err(EngineError::Other("a workbook needs at least one sheet".into()));
+        }
+        if let Some(meta) = &meta {
+            if meta.names.iter().any(|name| name.scope.is_some_and(|scope| scope >= sheets.len())) {
+                return Err(EngineError::Other("a defined name of this image names a sheet it does not hold".into()));
+            }
+            if meta.styles.as_ref().is_some_and(|styles| styles.is_empty()) {
+                return Err(EngineError::Other("a style table of this image has no default style".into()));
+            }
+            if let Some(calc) = &meta.calc
+                && (calc.max_iterations == 0
+                    || calc.max_iterations > gridcraft_model::CalcSettings::MAX_ITERATIONS
+                    || !calc.max_change.is_finite()
+                    || calc.max_change < 0.0)
+            {
+                return Err(EngineError::Other("the calculation settings of this image cannot be applied".into()));
+            }
+        }
+        if self.active().is_none() {
+            return Err(EngineError::NoDocument);
+        }
+        for sheet in &mut sheets {
+            sheet.cells.rebuild();
+        }
+        let Some(d) = self.active_mut() else { return Err(EngineError::NoDocument) };
+        let DocState { wb, calc, revision, sheet_selections, .. } = d;
+        let active = wb.active_sheet().min(sheets.len() - 1);
+        {
+            let model = Arc::make_mut(wb);
+            model.sheets = sheets.into_iter().map(Arc::new).collect();
+            model.set_active_sheet(active);
+            if let Some(meta) = meta {
+                model.names = meta.names;
+                model.protected_structure = meta.protected_structure;
+                model.structure_password = meta.structure_password;
+                // A field the image does not carry stays as the document has it: an old journal
+                // entry predates the field, and a boundary without kept content is `None` while the
+                // document's own content must not be dropped by a step that never touched it.
+                if let Some(preserved) = meta.preserved {
+                    model.preserved = Some(preserved);
+                }
+                if let Some(vba) = meta.vba_project {
+                    model.vba_project = Some(vba);
+                }
+                if let Some(styles) = meta.styles {
+                    model.styles = styles;
+                }
+                if let Some(calc) = meta.calc {
+                    model.calc = calc;
+                }
+            }
+            calc.rebuild(model);
+            calc.recalc_all(model);
+        }
+        sheet_selections.resize(wb.sheets.len(), Selection::default());
+        *revision = revision.saturating_add(1);
+        Ok(())
+    }
+
+    /// Replaces the cached values of cells with the authoritative ones another participant's
+    /// command produced. The formulas, styles and structure are already in place (the command
+    /// was applied through [`Session::apply_remote`]); only evaluation results can differ —
+    /// volatile functions, Python, precision as displayed — so only values are touched. No
+    /// journal, undo or change record: the operation belongs to the participant who made it.
+    pub fn apply_values(&mut self, sheet: usize, values: &[(CellRef, Value)]) -> Result<()> {
+        let Some(d) = self.active_mut() else { return Err(EngineError::NoDocument) };
+        let wb = Arc::make_mut(&mut d.wb);
+        let Some(sh) = wb.sheet_mut(sheet) else { return Err(EngineError::Other("no such sheet".into())) };
+        for (at, value) in values {
+            match sh.cell(*at) {
+                Some(cell) => {
+                    let mut updated = cell.clone();
+                    updated.value = value.clone();
+                    sh.set_cell(*at, updated);
+                }
+                // A spilled cell has no `Cell`: its value lives in the sheet's spill map and must
+                // stay there, or the formula that owns the block would no longer know its size.
+                None if sh.spill.contains_key(at) => {
+                    sh.spill.insert(*at, value.clone());
+                }
+                None if !value.is_empty() => sh.set_value(*at, value.clone()),
+                None => {}
+            }
+        }
+        d.revision = d.revision.saturating_add(1);
+        Ok(())
+    }
+
+    /// Takes the cells the last command changed, as `(sheet index, cell)`, leaving the list empty.
+    /// [`cmd::commit`] fills it for every command, local or remote; a front end that has to tell
+    /// another party what changed (the collaboration layer) reads it once per applied operation.
+    pub fn take_changed(&mut self) -> Vec<gridcraft_calc::Key> {
+        self.active_mut().map(|d| std::mem::take(&mut d.last_changed)).unwrap_or_default()
+    }
+
+    /// Takes the cells the last command itself wrote, leaving formulas the recalculation only
+    /// re-evaluated out. An undo step keeps these (that is what it puts back and what it requires
+    /// to still hold its result); the evaluated cells travel in the delta only, because the next
+    /// recalculation derives them again.
+    pub fn take_written(&mut self) -> Vec<gridcraft_calc::Key> {
+        self.active_mut().map(|d| std::mem::take(&mut d.last_written)).unwrap_or_default()
     }
 }
 

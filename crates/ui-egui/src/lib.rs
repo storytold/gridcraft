@@ -21,6 +21,7 @@ mod cell_pictures;
 mod chartcache;
 pub mod chartview;
 pub mod code_editor;
+pub mod collab;
 pub mod control;
 pub mod control_ui;
 mod craft_fonts_policy;
@@ -220,6 +221,10 @@ pub struct Perf {
     last: f64,
 }
 
+/// A web host's commit call: session id and, when the host does not hold the
+/// assembled file, its bytes.
+pub type HostCommit = Box<dyn Fn(&str, Option<&[u8]>) -> Result<(), String>>;
+
 pub struct SheetApp {
     pub session: Session,
     pub ui: UiState,
@@ -238,6 +243,20 @@ pub struct SheetApp {
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
+    /// The collaboration layer, when the build and the host provide one.
+    pub collab: Option<Box<dyn collab::Collab>>,
+    /// Where the other participants are, refreshed by [`SheetApp::poll_collab`].
+    pub collab_views: Vec<collab::PresenceView>,
+    pub collab_status: collab::SyncStatus,
+    /// Web behind a host bridge: asks the cabinet to commit the live session
+    /// (`gridcraft:commit`). The host owns the stored file, so Save in a shared
+    /// session is a commit, not a browser download.
+    pub host_commit: Option<HostCommit>,
+    /// The session the host opened, for [`SheetApp::host_commit`].
+    pub host_session_id: Option<String>,
+    /// The cabinet's answer to the last `gridcraft:commit`: the stored version
+    /// and etag.
+    pub host_committed: Option<(u64, String)>,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).

@@ -471,6 +471,38 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
+    // Kept for a front end that has to tell another party what the command changed (the
+    // collaboration layer reads it with `Session::take_changed`). A command made of several
+    // commits appends, so every cell it changed is reported; the formulas the recalculation
+    // evaluated are added because their displayed values change too, even though their content
+    // did not.
+    d.last_changed.extend(changed.iter().copied());
+    // The cells the command wrote, before the evaluated ones join the list: an undo keeps these.
+    d.last_written.extend(changed);
+    let evaluated = d.calc.take_evaluated();
+    // Spilled blocks are reported too, but the whole list stays bounded: a sheet of large arrays
+    // must not turn one edit into millions of delta entries.
+    let mut spilled = 0u64;
+    for (sheet, at) in &evaluated {
+        d.last_changed.push((*sheet, *at));
+        // A dynamic array is one formula and a block of values: the block is part of what the
+        // user sees, so the delta carries every spilled cell.
+        if let Some(range) = d.wb.sheet(*sheet).and_then(|s| s.spill_ranges.get(at).copied())
+            && range.count() <= 100_000
+            && spilled.saturating_add(range.count()) <= 200_000
+        {
+            spilled = spilled.saturating_add(range.count());
+            for row in range.start.row..=range.end.row {
+                for col in range.start.col..=range.end.col {
+                    d.last_changed.push((*sheet, CellRef::new(row, col)));
+                }
+            }
+        }
+    }
+    d.last_changed.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
+    d.last_changed.dedup();
+    d.last_written.sort_unstable_by_key(|(s, c)| (*s, c.row, c.col));
+    d.last_written.dedup();
     Ok(r)
 }
 

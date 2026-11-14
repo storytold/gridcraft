@@ -5,6 +5,9 @@ use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 
+use crate::host_session::{HostAction, HostInbox, HostSession, HostState};
+use gridcraft_collab_web::HostParticipant;
+
 const CANVAS_ID: &str = "gridcraft_canvas";
 const LOADING_ID: &str = "gridcraft_loading";
 
@@ -44,6 +47,10 @@ pub fn start() {
         // document and talks over DOM `CustomEvent`s on the canvas.
         let bridge = crate::host::Bridge::detect(&canvas);
         let app_bridge = bridge.clone();
+        // `gridcraft:session` / `gridcraft:committed` queued by the bridge callback
+        // and applied on the next frame, as the shell's other inboxes are.
+        let host_events: HostInbox = HostInbox::default();
+        let shell_events = host_events.clone();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -60,9 +67,15 @@ pub fn start() {
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
                     if let Some(bridge) = &app_bridge {
-                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone(), host_events.clone());
                     }
                     let mut app = SheetApp::new(session, services);
+                    // The host owns the stored file: Save in a live session asks the
+                    // cabinet to commit (`gridcraft:commit`), not the browser to download.
+                    if let Some(bridge) = &app_bridge {
+                        let commit_bridge = bridge.clone();
+                        app.host_commit = Some(Box::new(move |session_id: &str, bytes: Option<&[u8]>| commit_bridge.post_commit(session_id, bytes)));
+                    }
                     app.ui.system_theme = true;
                     // `?chrome=none|notitlebar|nofiletab`: a host that embeds the sheet in its own window and owns the files
                     // can leave the title bar and/or the File tab undrawn (`Chrome`, #1877). An unknown value keeps
@@ -100,7 +113,17 @@ pub fn start() {
                         bridge.post_ready();
                     }
                     crate::api::install(&mut app, cc.egui_ctx.clone());
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        bridge: app_bridge,
+                        host_session: None,
+                        prefs,
+                        host_events: shell_events,
+                        host_state: HostState::default(),
+                        last_host_state: None,
+                        last_presence_ms: 0.0,
+                    }))
                 }),
             )
             .await;
@@ -129,6 +152,16 @@ struct WebShell {
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
     prefs: crate::prefs::PrefsSync,
+    /// `gridcraft:session` / `gridcraft:committed` queued by the bridge callback.
+    host_events: HostInbox,
+    host_state: HostState,
+    /// The last `session-state` sent: status and participants, to send only changes.
+    last_host_state: Option<(String, Vec<HostParticipant>)>,
+    /// The room this window dialed, and the token it joined with: a repeated `gridcraft:session`
+    /// for it is a token update, not a new session.
+    host_session: Option<HostSession>,
+    /// Browser clock of the last presence post (5–10 Hz, ADR-0006).
+    last_presence_ms: f64,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -142,6 +175,7 @@ fn stored(key: &str) -> Option<String> {
 
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_host_events();
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         for f in dropped {
             let inbox = self.inbox.clone();
@@ -183,6 +217,93 @@ impl eframe::App for WebShell {
         self.app.ui(ui);
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);
+        }
+        // Polling happens in `SheetApp::ui`, so the session state posted here is
+        // the one this frame drew.
+        self.publish_host_state();
+    }
+}
+
+impl WebShell {
+    /// `gridcraft:session` opens the session; `gridcraft:committed` is the
+    /// cabinet's commit result. Nothing here runs without a session message.
+    fn apply_host_events(&mut self) {
+        let events = std::mem::take(&mut *self.host_events.borrow_mut());
+        for event in events {
+            match self.host_state.on_event(event) {
+                HostAction::Connect(session) => {
+                    // A repeated `gridcraft:session` for the room this window already dialed keeps
+                    // the client: its unconfirmed operations are still in the transport's resend
+                    // queue, and a new client could not send them again. Only the JWT is replaced
+                    // (the cabinet pushes a fresh one before the old expires).
+                    if let Some(current) = self.host_session.as_ref()
+                        && current.same_room(&session)
+                        && let Some(collab) = self.app.collab.as_mut()
+                    {
+                        if current.token() != session.token() {
+                            collab.renew_token(session.token());
+                            self.app.message = Some(("GridCraft".into(), "Collaboration token renewed".into()));
+                        }
+                        self.host_session = Some(session);
+                        continue;
+                    }
+                    // The window id (RFC §13.6): random, one per browser window's session, reused
+                    // by the link's reconnect. The cabinet's participant list keys a row by it.
+                    let client_id = format!("web-{}-{}", js_sys::Date::now() as u64, (js_sys::Math::random() * 1e9) as u64);
+                    let actor = self.app.session.prefs.user_name.clone();
+                    let actor = if actor.is_empty() { "User".to_string() } else { actor };
+                    let session_id = session.session_id().to_string();
+                    match gridcraft_collab_web::Collab::connect(&session, &actor, &client_id) {
+                        Ok(collab) => {
+                            self.app.collab = Some(Box::new(collab));
+                            self.app.host_session_id = Some(session_id.clone());
+                            self.host_session = Some(session);
+                            self.app.message = Some(("GridCraft".into(), format!("Joined collaboration session {session_id}")));
+                        }
+                        Err(message) => {
+                            // A failed dial must not unmake the session this window is already in:
+                            // Save would post the local replica as `gridcraft:save` and the bridge
+                            // would mark a stale copy saved. The previous client and its session id
+                            // stay; only the message says the new room was not opened.
+                            let kept = self.app.host_session_id.is_some();
+                            let suffix = if kept { "; the current session stays open" } else { "" };
+                            self.app.message = Some(("GridCraft".into(), format!("Collaboration is unavailable: {message}{suffix}")));
+                        }
+                    }
+                }
+                HostAction::Committed { version, etag } => {
+                    self.app.host_committed = Some((version, etag.clone()));
+                    self.app.message = Some(("GridCraft".into(), format!("Committed as version {version} · etag {etag}")));
+                }
+            }
+        }
+    }
+
+    /// `session-state` on a status or participant change (join, leave,
+    /// reconnect), `presence` at the sync server's 5–10 Hz.
+    fn publish_host_state(&mut self) {
+        let Some(bridge) = self.bridge.clone() else { return };
+        let Some(collab) = self.app.collab.as_ref() else { return };
+        let status = gridcraft_collab_web::host_status(&collab.status());
+        let participants: Vec<HostParticipant> = collab
+            .session_participants()
+            .into_iter()
+            .map(|participant| HostParticipant { client_id: participant.client_id, role: participant.role, color: participant.color })
+            .collect();
+        let signature = (status.to_string(), participants.clone());
+        if self.last_host_state.as_ref() != Some(&signature) {
+            if let Err(message) = bridge.post_session_state(status, &participants) {
+                log::warn!("session-state: {message}");
+            }
+            self.last_host_state = Some(signature);
+            self.host_state.mark_connected();
+        }
+        let now = js_sys::Date::now();
+        if now - self.last_presence_ms >= 100.0 {
+            self.last_presence_ms = now;
+            if let Err(message) = bridge.post_presence(&participants) {
+                log::warn!("presence: {message}");
+            }
         }
     }
 }

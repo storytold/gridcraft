@@ -11,6 +11,8 @@
 
 #[cfg(target_os = "macos")]
 mod apple_events;
+#[cfg(feature = "collab")]
+mod collab_ui;
 mod control_server;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
@@ -42,6 +44,8 @@ impl eframe::App for App {
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
         }
+        #[cfg(feature = "collab")]
+        collab_ui::tick(&mut self.0);
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
         if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
@@ -340,6 +344,8 @@ fn main() -> eframe::Result<()> {
     for f in &files {
         app.open_path(f);
     }
+    #[cfg(feature = "collab")]
+    collab_ui::start_from_env();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])

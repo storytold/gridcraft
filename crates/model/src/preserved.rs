@@ -3,15 +3,20 @@
 //! tables, form controls, OLE objects…).
 //!
 //! The data is opaque to everything except the file-format crate: the model only holds it, so a
-//! sheet's kept content disappears with the sheet. It is not part of the JSON format.
+//! sheet's kept content disappears with the sheet. It is not part of the workbook JSON; the
+//! shared session's structural image carries it in its own field, because an undo of a sheet
+//! delete must put the kept parts back on every replica.
 
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 use crate::sheet::Visibility;
 
 /// A relationship from an owning part (the package root, the workbook or a sheet, or a kept part)
 /// to a kept part or to an external target.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PreservedRel {
     /// The id in the source file (`rId7`). Ids of an owner GridCraft writes are reassigned on save.
     pub id: String,
@@ -24,11 +29,13 @@ pub struct PreservedRel {
 }
 
 /// A kept package part.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PreservedPart {
     /// Part name in the source file (no leading `/`).
     pub name: String,
     pub content_type: String,
+    #[serde(with = "crate::b64::arc_slice")]
     pub data: Arc<[u8]>,
     /// The part's own relationships, ids unchanged (the part's bytes refer to them).
     pub rels: Vec<PreservedRel>,
@@ -36,7 +43,8 @@ pub struct PreservedPart {
 
 /// A raw XML element of an owning part that refers to kept parts, re-emitted on save with its
 /// relationship ids rewritten, or that Excel needs back unchanged (the workbook's `fileVersion`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PreservedXml {
     /// Which slot of the owner it belongs in (`externalReferences`, `fileVersion`, `ext`,
     /// `oleObjects`, `controls`).
@@ -48,7 +56,8 @@ pub struct PreservedXml {
 /// A chart sheet (a sheet that holds one chart and no cells) kept as it was in the source file. Its
 /// part, drawing, chart, style and colour parts are in [`Preserved::parts`]; the workbook
 /// relationship to it is in [`Preserved::rels`].
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct PreservedSheet {
     pub name: String,
     pub visibility: Visibility,
@@ -62,7 +71,8 @@ pub struct PreservedSheet {
 
 /// Unmodelled content kept for one owner (the workbook, which also holds package-root content,
 /// or one sheet).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct Preserved {
     /// Relationships of the package root (`_rels/.rels`) to kept parts (workbook owner only).
     pub package_rels: Vec<PreservedRel>,
