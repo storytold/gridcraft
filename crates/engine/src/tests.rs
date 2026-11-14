@@ -1015,12 +1015,14 @@ fn autofill_refuses_an_invalid_source_instead_of_using_the_selection() {
     let before = s.doc().unwrap().wb.clone();
     let selection = s.doc().unwrap().selection.clone();
     let history = s.execute("history.list", json!({})).unwrap();
-    let err = s.execute("edit.autoFill", json!({"source": "A0", "target": "A1:A4"})).unwrap_err();
-    assert!(err.to_string().contains("`source`"), "{err}");
-    assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
-    assert_eq!(s.doc().unwrap().selection, selection);
-    assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
-    assert_eq!(v(&s, "A3"), Value::Empty);
+    for source in [json!("A0"), json!(null), json!(42), json!(true), json!([]), json!({})] {
+        let err = s.execute("edit.autoFill", json!({"source": &source, "target": "A1:A4"})).unwrap_err();
+        assert!(err.to_string().contains("`source`"), "{source}: {err}");
+        assert!(std::sync::Arc::ptr_eq(&before, &s.doc().unwrap().wb));
+        assert_eq!(s.doc().unwrap().selection, selection);
+        assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        assert_eq!(v(&s, "A3"), Value::Empty);
+    }
     s.execute("edit.autoFill", json!({"target": "A1:A4"})).unwrap();
     assert_eq!(v(&s, "A4"), Value::Number(7.0), "omitting source still uses the selection");
 }
