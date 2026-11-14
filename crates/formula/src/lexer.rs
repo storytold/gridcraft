@@ -6,7 +6,10 @@ use gridcraft_core::CellError;
 
 use crate::ast::TrimMode;
 
+/// A formula token. More kinds may be added (another syntax's tokenizer can need one), so a
+/// match outside this crate keeps a catch-all arm.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Tok {
     Number(f64),
     Text(String),
@@ -31,6 +34,9 @@ pub enum Tok {
     Colon,
     /// Trim reference range operator `.:`, `:.` or `.:.`.
     Trim(TrimMode),
+    /// A reference another syntax's tokenizer has already read (OpenFormula's `[.A1:.B2]`). The
+    /// A1 tokenizer never produces it.
+    Ref(crate::ast::Reference),
     Space,
     Eof,
 }

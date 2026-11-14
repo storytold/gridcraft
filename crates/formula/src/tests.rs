@@ -577,6 +577,226 @@ fn column_starting_with_at_round_trips() {
     }
 }
 
+/// Another syntax's tokens parse with this grammar: a reference its tokenizer already read, a
+/// space as the intersection, and the same errors as text.
+#[test]
+fn parse_tokens_reads_another_syntaxs_tokens() -> Result<(), ParseError> {
+    use crate::lexer::{Tok, Token};
+    let cell = |col| Reference { sheet: SheetSel::Current, kind: RefKind::Cell(Anchor { row: 0, col, row_abs: false, col_abs: false }) };
+    let toks = |ts: Vec<Tok>| ts.into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect::<Vec<_>>();
+    let e = crate::parse_tokens(toks(vec![Tok::Func("SUM".into()), Tok::Ref(cell(0)), Tok::Comma, Tok::Ref(cell(1)), Tok::RParen]))?;
+    assert_eq!(e, parse("SUM(A1,B1)")?);
+    assert_eq!(print(&e), "SUM(A1,B1)");
+    let e = crate::parse_tokens(toks(vec![Tok::Ref(cell(0)), Tok::Space, Tok::Ref(cell(1))]))?;
+    assert!(matches!(e, Expr::Binary(BinOp::Intersect, ..)));
+    // A trailing Eof is accepted; leftovers and an empty list are errors.
+    assert!(crate::parse_tokens(toks(vec![Tok::Number(1.0), Tok::Eof])).is_ok());
+    assert!(crate::parse_tokens(toks(vec![Tok::Number(1.0), Tok::Number(2.0)])).is_err());
+    assert!(crate::parse_tokens(Vec::new()).is_err());
+    // Hostile input: more tokens than a formula may have characters is refused up front.
+    let long = toks(std::iter::repeat_n(Tok::Number(1.0), crate::MAX_FORMULA_LEN + 1).collect());
+    assert!(crate::parse_tokens(long).is_err());
+    Ok(())
+}
+
+/// Tokens from another tokenizer are as hostile as text: a reference off the grid and text
+/// longer than a formula may be are refused; ends of a range keep their order, as in text.
+#[test]
+fn parse_tokens_refuses_hostile_tokens() -> Result<(), ParseError> {
+    use crate::lexer::{Tok, Token};
+    use gridcraft_core::{MAX_COLS, MAX_ROWS};
+    let one = |tok| crate::parse_tokens(vec![Token { tok, start: 0, end: 0 }]);
+    let anchor = |row, col| Anchor { row, col, row_abs: false, col_abs: false };
+    let reference = |kind| Tok::Ref(Reference { sheet: SheetSel::Current, kind });
+    for kind in [
+        RefKind::Cell(anchor(MAX_ROWS, 0)),
+        RefKind::Cell(anchor(0, MAX_COLS)),
+        RefKind::Cell(anchor(u32::MAX, u32::MAX)),
+        RefKind::Range(anchor(0, 0), anchor(MAX_ROWS, 0)),
+        RefKind::Rows(0, false, MAX_ROWS, false),
+        RefKind::Cols(MAX_COLS, false, 0, false),
+    ] {
+        assert!(one(reference(kind.clone())).is_err(), "{kind:?}");
+    }
+    // The last row and column are on the grid; reversed ends stay as given, as `B2:A1` parses.
+    let last = one(reference(RefKind::Cell(anchor(MAX_ROWS - 1, MAX_COLS - 1))))?;
+    assert_eq!(print(&last), "XFD1048576");
+    assert_eq!(one(reference(RefKind::Range(anchor(1, 1), anchor(0, 0))))?, parse("B2:A1")?);
+    // Text, names and sheet names count against the formula length.
+    let long = "x".repeat(crate::MAX_FORMULA_LEN + 1);
+    assert!(one(Tok::Text(long.clone())).is_err());
+    assert!(one(Tok::Word(long.clone())).is_err());
+    let sheet = Tok::Ref(Reference { sheet: SheetSel::Named(long), kind: RefKind::Cell(anchor(0, 0)) });
+    assert!(one(sheet).is_err());
+    // A string whose formula text, quotes included, fits the limit is read; one more is not, as
+    // that text would not parse.
+    let fits = "x".repeat(crate::MAX_FORMULA_LEN - 2);
+    assert_eq!(one(Tok::Text(fits.clone()))?, Expr::Text(fits.into()));
+    assert!(one(Tok::Text("x".repeat(crate::MAX_FORMULA_LEN - 1))).is_err());
+    // Many tokens that each fit still add up past the limit.
+    let half = "x".repeat(crate::MAX_FORMULA_LEN / 2 + 1);
+    let toks = [Tok::Text(half.clone()), Tok::Op("&"), Tok::Text(half)].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
+    // A number the text lexer would refuse (not finite) is refused, not printed as `0`.
+    for n in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        assert!(one(Tok::Number(n)).is_err(), "{n}");
+    }
+    // An end token before the last is an error, not the end of what is read.
+    let toks = [Tok::Number(1.0), Tok::Eof, Tok::Op("+"), Tok::Number(2.0)].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
+    // A sheet name is never empty.
+    let cell = RefKind::Cell(anchor(0, 0));
+    for sheet in [SheetSel::Named(String::new()), SheetSel::Span(String::new(), "S".into()), SheetSel::Span("S".into(), String::new())] {
+        assert!(one(Tok::Ref(Reference { sheet: sheet.clone(), kind: cell.clone() })).is_err(), "{sheet:?}");
+    }
+    let toks = [Tok::Sheet(String::new(), None), Tok::Word("A1".into())].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
+    let toks = [Tok::Sheet("S".into(), Some(String::new())), Tok::Word("A1".into())].into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect();
+    assert!(crate::parse_tokens(toks).is_err());
+    // A word or function name must be one the A1 tokenizer would read as that token: empty, or
+    // text that reads as something else (`A!1` is a sheet then a number, `TRUE` a boolean, `a b`
+    // two words), would print as text that does not parse back to it.
+    let words = |w: &str| vec![Token { tok: Tok::Word(w.into()), start: 0, end: 0 }];
+    for w in ["", "A!1", "TRUE", "a b", "A#", "1abc", "x(", "A1:B2", "\"x\""] {
+        assert!(crate::parse_tokens(words(w)).is_err(), "Word({w:?})");
+    }
+    for w in ["Total", "A1", "$A$1", "My.Name", "_xleta.SUM", "\\x"] {
+        assert_eq!(crate::parse_tokens(words(w))?, parse(w)?, "Word({w:?})");
+    }
+    let call = |f: &str| vec![Token { tok: Tok::Func(f.into()), start: 0, end: 0 }, Token { tok: Tok::RParen, start: 0, end: 0 }];
+    for f in ["", "A B", "1", "(", "S!F"] {
+        assert!(crate::parse_tokens(call(f)).is_err(), "Func({f:?})");
+    }
+    assert_eq!(crate::parse_tokens(call("SUM"))?, parse("SUM()")?);
+    // An empty structured reference body is what text reads for `[]` (the whole table).
+    assert_eq!(one(Tok::Struct(String::new()))?, parse("[]")?);
+    Ok(())
+}
+
+/// Every tree `parse_tokens` accepts prints as text that parses back to it: token shapes with no
+/// text form are refused, and the whole-tree nesting bound applies as it does to text.
+#[test]
+fn parse_tokens_accepts_only_what_prints_back() -> Result<(), ParseError> {
+    use crate::lexer::{Tok, Token};
+    let read = |toks: Vec<Tok>| crate::parse_tokens(toks.into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect());
+    let a1 = Tok::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Cell(Anchor { row: 0, col: 0, row_abs: false, col_abs: false }) });
+    // Wrappers stacked across levels: the text form is refused as a whole, and so are its tokens.
+    let mut toks = vec![Tok::LParen; 7];
+    toks.push(Tok::Number(1.0));
+    for _ in 0..7 {
+        toks.push(Tok::RParen);
+        toks.extend(std::iter::repeat_n(Tok::Op("%"), 40));
+    }
+    assert!(read(toks).is_err(), "7 x 41 wrappers on one path");
+    // A space is the intersection only between two operands; elsewhere it is dropped, as in text.
+    assert!(read(vec![Tok::Bool(true), Tok::Space, Tok::Number(1.0)]).is_err());
+    assert_eq!(read(vec![Tok::Number(1.0), Tok::Space, Tok::Op("+"), Tok::Space, Tok::Number(2.0)])?, parse("1+2")?);
+    assert_eq!(read(vec![a1.clone(), Tok::Space, Tok::Word("B1".into())])?, parse("A1 B1")?);
+    assert_eq!(read(vec![Tok::Word("B1".into()), Tok::Space, a1.clone()])?, parse("B1 A1")?);
+    // A negative number reads back from text as a negation, so a minus must be an operator.
+    for n in [-1.0, -0.0] {
+        assert!(read(vec![Tok::Number(n)]).is_err(), "{n}");
+    }
+    assert_eq!(read(vec![Tok::Op("-"), Tok::Number(1.0)])?, parse("-1")?);
+    // A `:` in a sheet name reads back as a span of sheets.
+    let at = |sheet| Tok::Ref(Reference { sheet, kind: RefKind::Cell(Anchor { row: 0, col: 0, row_abs: false, col_abs: false }) });
+    for sheet in [SheetSel::Named("a:b".into()), SheetSel::Span("a:b".into(), "c".into()), SheetSel::Span("a".into(), "b:c".into())] {
+        assert!(read(vec![at(sheet.clone())]).is_err(), "{sheet:?}");
+    }
+    assert!(read(vec![Tok::Sheet("a:b".into(), None), Tok::Word("C".into())]).is_err());
+    assert!(read(vec![Tok::Sheet("a".into(), Some("b:c".into())), Tok::Word("C".into())]).is_err());
+    assert_eq!(read(vec![at(SheetSel::Named("a b".into()))])?, parse("'a b'!A1")?);
+    // The trim operators are Excel's own: around anything but a plain range they have no text form.
+    assert!(read(vec![Tok::Bool(true), Tok::Trim(TrimMode::All), Tok::Bool(true)]).is_err());
+    assert!(read(vec![a1.clone(), Tok::Trim(TrimMode::All), Tok::Word("B2".into())]).is_err());
+    // A name directly before `(` is a function name to the A1 tokenizer.
+    assert!(read(vec![Tok::Word("_x".into()), Tok::LParen, Tok::RParen]).is_err());
+    assert_eq!(read(vec![Tok::Word("_x".into()), Tok::Space, Tok::LParen, a1.clone(), Tok::RParen])?, parse("_x (A1)")?);
+    // Operands of `:` that print as text which regroups, or reads as rows or a sheet span.
+    let cell = |row, col| Anchor { row, col, row_abs: false, col_abs: false };
+    let range = Tok::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Range(cell(1, 1), cell(2, 2)) });
+    let rows = Tok::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Rows(0, false, 2, false) });
+    for toks in [
+        vec![Tok::Number(1.0), Tok::Colon, Tok::Number(3.0)],
+        vec![a1.clone(), Tok::Colon, range.clone()],
+        vec![a1.clone(), Tok::Colon, at(SheetSel::Named("S".into()))],
+        vec![rows, Tok::Space, Tok::Word("A1".into())],
+    ] {
+        assert!(read(toks.clone()).is_err(), "{toks:?}");
+    }
+    // In parentheses they keep their shape.
+    let e = read(vec![a1.clone(), Tok::Colon, Tok::LParen, range, Tok::RParen])?;
+    assert_eq!(e, parse("A1:(B2:C3)")?);
+    // A number with more digits than text keeps is read as given, not refused.
+    assert_eq!(read(vec![Tok::Number(std::f64::consts::PI)])?, Expr::Number(std::f64::consts::PI));
+    Ok(())
+}
+
+/// A dialect changes only what it states; the rest prints as A1.
+#[test]
+fn print_with_a_dialect() -> Result<(), ParseError> {
+    use std::borrow::Cow;
+    struct Test;
+    impl crate::Dialect for Test {
+        fn separators(&self) -> (char, char, char) {
+            (';', ';', '|')
+        }
+        fn boolean(&self, b: bool) -> &'static str {
+            if b { "TRUE()" } else { "FALSE()" }
+        }
+        fn function<'a>(&self, name: &'a str) -> Cow<'a, str> {
+            Cow::Owned(format!("X.{name}"))
+        }
+        fn operator(&self, op: BinOp) -> &'static str {
+            if op == BinOp::Concat { " CONCAT " } else { op.symbol() }
+        }
+        fn unary_call(&self, op: UnOp) -> Option<&'static str> {
+            (op == UnOp::Spill).then_some("ANCHOR")
+        }
+        fn reference(&self, s: &mut String, r: &Reference, sep: &str) {
+            s.push('[');
+            s.push_str(&printer::reference_a1(r).replace(':', sep));
+            s.push(']');
+        }
+    }
+    let e = parse("IF(A1,{1,2;3,4},TRUE)&SUM(B1:C2,D1#)")?;
+    assert_eq!(crate::print_with(&e, &Test), "X.IF([A1];{1;2|3;4};TRUE()) CONCAT X.SUM([B1:C2];ANCHOR([D1]))");
+    assert_eq!(print(&e), "IF(A1,{1,2;3,4},TRUE)&SUM(B1:C2,D1#)");
+    // A trim with no operator form prints as the TRIMRANGE call, named through the dialect.
+    let e = Expr::Unary(UnOp::Trim(TrimMode::All), Box::new(parse("A1")?));
+    assert_eq!(crate::print_with(&e, &Test), "X.TRIMRANGE([A1];3;3)");
+    assert_eq!(print(&e), "TRIMRANGE(A1,3,3)");
+    Ok(())
+}
+
+/// `print` and `print_r1c1` go through the default dialect: Excel's text is unchanged.
+#[test]
+fn default_dialect_prints_excel_text_unchanged() -> Result<(), ParseError> {
+    let at = gridcraft_core::CellRef::new(4, 2);
+    for (a1, r1c1) in [
+        ("SUM(A1:B2,$C$3)", "SUM(R[-4]C[-2]:R[-3]C[-1],R3C3)"),
+        ("IF(TRUE,\"a\"\"b\",FALSE)", "IF(TRUE,\"a\"\"b\",FALSE)"),
+        ("{1,2;3,4}", "{1,2;3,4}"),
+        ("-A1%+@B:B", "-R[-4]C[-2]%+@C[-1]"),
+        ("A1#", "R[-4]C[-2]#"),
+        ("'My Sheet'!A1&Total", "'My Sheet'!R[-4]C[-2]&Total"),
+        ("'My Sheet'!Total", "'My Sheet'!Total"),
+        ("Table1[[#Headers],[Col]]", "Table1[[#Headers],[Col]]"),
+        ("SUM(A1:.B3)+SUM(A.:.B)", "SUM(R[-4]C[-2]:.R[-2]C[-1])+SUM(C[-2].:.C[-1])"),
+        ("TRIMRANGE(A1,1,1)", "TRIMRANGE(R[-4]C[-2],1,1)"),
+        ("(A1 B1)*2^3>=1<>0", "(R[-4]C[-2] R[-4]C[-1])*2^3>=1<>0"),
+        ("LAMBDA(x,x+1)(2)", "LAMBDA(x,x+1)(2)"),
+        ("Sheet1:Sheet3!B2", "Sheet1:Sheet3!R[-3]C[-1]"),
+        ("#REF!+1", "#REF!+1"),
+        ("SUM(,1)", "SUM(,1)"),
+    ] {
+        let e = parse(a1)?;
+        assert_eq!(print(&e), a1);
+        assert_eq!(printer::print_r1c1(&e, at), r1c1, "{a1}");
+    }
+    Ok(())
+}
+
 #[test]
 fn wrappers_stacked_across_levels_are_bounded_as_a_whole() {
     // Each level adds 40 percents inside the parser's per-level bound, so no level is too deep alone.
