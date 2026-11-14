@@ -920,6 +920,62 @@ fn an_anchor_given_a_formula_that_reads_its_old_spill_area_sees_it_empty() {
 }
 
 #[test]
+fn an_array_reading_its_own_new_spill_area_settles_like_a_full_recalc() {
+    // Issue #3401: B1 spills over B1:C2 and reads A2:B3, so C1 (A2:B3's B2) is the value B1
+    // spills into B2, which is A3. The first evaluation read B2 before the array was laid out
+    // (0); the anchor was not evaluated again, so C1 stayed 0 while B2 showed 9.
+    let mut t = T::new();
+    t.set("A2", "4");
+    t.set("A3", "9");
+    t.set("B1", "=A2:B3");
+    assert_eq!((t.num("B1"), t.num("B2"), t.num("C2")), (4.0, 9.0, 0.0));
+    assert_eq!(t.num("C1"), t.num("B2"), "C1 reads B2");
+    // A full recalculation from scratch agrees.
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    for at in ["B1", "C1", "B2", "C2"] {
+        assert_eq!(fresh.sheet(0).unwrap().value(c(at)), t.get(at), "{at}");
+    }
+    // Editing what it reads through its own spill settles again.
+    t.set("A3", "11");
+    assert_eq!((t.num("B2"), t.num("C1")), (11.0, 11.0));
+}
+
+#[test]
+fn an_array_reading_its_own_area_still_settles_when_its_spill_resizes() {
+    // eliets2 on #3417: the #3401 test keeps one spill size, so the changed_range branch
+    // is untested for a self-reading anchor. Grow the spill, then shrink it; after each
+    // step the settled values must match a full recalculation, and cells the spill
+    // vacated must be empty again.
+    let mut t = T::new();
+    t.set("A2", "4");
+    t.set("A3", "9");
+    t.set("B1", "=A2:B3");
+    assert_eq!(t.num("C1"), 9.0, "baseline: C1 reads B2, the value spilled from A3");
+    // Grow: the spill is now B1:D2 and still reads its own area (source B2 and C2 are
+    // spill cells). C1 reads B2 = 9 as before; D1 reads C2, spilled from B3 = 0.
+    t.set("B1", "=A2:C3");
+    assert_eq!((t.num("B1"), t.num("C1"), t.num("D1"), t.num("B2"), t.num("C2"), t.num("D2")), (4.0, 9.0, 0.0, 9.0, 0.0, 0.0));
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    for at in ["B1", "C1", "D1", "B2", "C2", "D2"] {
+        assert_eq!(fresh.sheet(0).unwrap().value(c(at)), t.get(at), "grown: {at}");
+    }
+    // Shrink: the spill is B1:B2 only. The cells it vacated are empty again.
+    t.set("B1", "=A2:A3");
+    assert_eq!((t.num("B1"), t.num("B2")), (4.0, 9.0));
+    for at in ["C1", "D1", "C2", "D2"] {
+        assert_eq!(t.get(at), Value::Empty, "shrunk: {at} vacated");
+    }
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    for at in ["B1", "B2", "C1", "D1", "C2", "D2"] {
+        assert_eq!(fresh.sheet(0).unwrap().value(c(at)), t.get(at), "shrunk: {at}");
+    }
+}
+
+
+#[test]
 fn references_keep_their_size_past_the_used_range() {
     let mut t = T::new();
     t.set("A1", "5");

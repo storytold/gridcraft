@@ -606,14 +606,14 @@ impl Calc {
                 }
             }
             if let Some(range) = changed_range {
+                // The anchor itself is listed when it reads its own spill area (`=I20:K27` in J24
+                // spills over J24:L31 and reads J24:K27): laying the array out, or taking it away,
+                // changed values it read while they weren't there yet, so it is evaluated again
+                // until it spills as before (`spills_as_before` above) or the rounds run out. A
+                // full recalculation, which starts with no spills, settles the same way (#3401).
                 let mut dependents = Vec::new();
                 self.graph.dependents_of_range(key.0, range, &mut dependents);
-                let freed_old_range = match (old, sheet.spill_ranges.get(&key.1)) {
-                    (Some(previous), Some(current)) => !(current.contains(previous.start) && current.contains(previous.end)),
-                    (_, None) => true,
-                    (None, Some(_)) => false,
-                };
-                spill_changes.extend(dependents.into_iter().filter(|dependent| dependent != key || freed_old_range));
+                spill_changes.extend(dependents);
             }
             if let Some(previous) = old
                 && !sheet.spill_ranges.get(&key.1).is_some_and(|current| current.contains(previous.start) && current.contains(previous.end))
