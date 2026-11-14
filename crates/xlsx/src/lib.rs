@@ -18,6 +18,7 @@ mod controls;
 mod crypto;
 mod csv;
 mod drawing;
+mod external;
 mod feature_bags;
 mod fmla;
 mod ods;

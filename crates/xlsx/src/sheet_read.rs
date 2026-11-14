@@ -611,7 +611,7 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     }
     let dynamic = c.attr("cm").is_some();
     st.shared_copy_refused = false;
-    let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
+    let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic)).map(|f| Formula { legacy: !dynamic, ..f });
     // A `PY(index,0|1)` formula is a Python cell whose code is a script of the Python part. The
     // older `PY("…",0|1)` form is read from the formula's own text: the formula parser would fold
     // line breaks in the code. A formula naming a script the part lacks keeps only its cached

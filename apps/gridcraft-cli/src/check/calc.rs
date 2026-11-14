@@ -44,7 +44,7 @@ pub(super) fn volatile_names(wb: &Workbook) -> HashSet<String> {
     let none = HashSet::new();
     for n in &wb.names {
         let name = n.name.to_ascii_uppercase();
-        let Ok(e) = gridcraft_engine::formula::parse(&n.formula) else { continue };
+        let Ok(e) = gridcraft_engine::formula::parse_name(&n.formula) else { continue };
         if is_volatile(&e, &none) {
             if set.insert(name.clone()) {
                 queue.push(name.clone());
