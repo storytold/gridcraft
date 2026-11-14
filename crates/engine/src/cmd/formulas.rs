@@ -819,10 +819,10 @@ fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// The number a cell's text stands for when Excel's background check flags it as a number stored
-/// as text: a constant (not a formula's result) that would be a number if typed.
-pub fn number_stored_as_text(cell: &gridcraft_model::Cell) -> Option<f64> {
+/// as text: a constant (not a formula's result) that would be a number if typed in `region`.
+pub fn number_stored_as_text(cell: &gridcraft_model::Cell, region: &gridcraft_core::Region) -> Option<f64> {
     match &cell.value {
-        Value::Text(t) if cell.formula.is_none() => gridcraft_core::parse::number_stored_as_text(t),
+        Value::Text(t) if cell.formula.is_none() => gridcraft_core::parse::number_stored_as_text_in(t, region),
         _ => None,
     }
 }
@@ -833,13 +833,14 @@ fn convert_to_number(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     edit(s, |cx| {
+        let region = cx.wb.region;
         let mut converted = 0;
         for r in &ranges {
             let Some(r) = cx.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| r.intersection(&u)) else { continue };
             let found: Vec<(CellRef, f64)> = cx
                 .wb
                 .sheet(sheet)
-                .map(|sh| sh.cells.iter_range(r).filter_map(|(c, x)| number_stored_as_text(x).map(|n| (c, n))).collect())
+                .map(|sh| sh.cells.iter_range(r).filter_map(|(c, x)| number_stored_as_text(x, region).map(|n| (c, n))).collect())
                 .unwrap_or_default();
             let sh = cx.sheet_mut(sheet)?;
             for (c, n) in &found {

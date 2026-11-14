@@ -4906,6 +4906,19 @@ fn editing_a_date_cell_shows_a_date_not_the_serial() {
     assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at), "42");
 }
 
+#[test]
+fn editing_a_number_uses_the_region_decimal_separator() {
+    let mut s = s();
+    let at = CellRef::parse("A1").unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1234.02"})).unwrap();
+    s.set_region(gridcraft_core::region::find("pt-BR").unwrap());
+    let d = s.doc().unwrap();
+    let edit = crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at);
+    assert_eq!(edit, "1234,02");
+    let back = gridcraft_core::parse::parse_input_in(&edit, d.wb.date_system, d.wb.region).value;
+    assert!(matches!(back, Value::Number(n) if (n - 1234.02).abs() < 1e-9), "{back:?}");
+}
+
 /// A workbook with 42 in A1, saved as `.xlsx` and encrypted with `password`.
 fn encrypted_book(password: &str) -> Vec<u8> {
     let mut src = s();
