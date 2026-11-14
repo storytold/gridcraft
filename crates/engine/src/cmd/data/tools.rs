@@ -5,6 +5,9 @@ use super::{
 
 // ---------------------------------------------------------------- tools
 
+/// Most cells (rows times compared columns) one Remove Duplicates call reads.
+const MAX_COMPARED_CELLS: u64 = 50_000_000;
+
 pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, r) = data_target(s, p, "data.removeDuplicates")?;
     let d = s.doc()?;
@@ -23,6 +26,10 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     // user didn't select. Excel refuses both.
     if cols.is_empty() || cols.iter().any(|c| !(r.start.col..=r.end.col).contains(c)) {
         return Err(bad("data.removeDuplicates", "`columns` must name at least one column of the range"));
+    }
+    // Rows are compared one by one, so a sparse sheet's enclosing rectangle is bounded like a list.
+    if r.count() > MAX_COMPARED_CELLS {
+        return Err(bad("data.removeDuplicates", "the range is too large"));
     }
     let start = r.start.row + header as u32;
     let mut removed = 0;
@@ -176,8 +183,11 @@ pub(super) fn split_delimited(text: &str, delims: &[char], consecutive: bool, qu
     let mut in_q = false;
     let mut last_delim = false;
     let mut chars = text.chars().peekable();
+    let mut at_start = true;
     while let Some(c) = chars.next() {
-        if c == quote {
+        if c == quote && (in_q || at_start) {
+            at_start = false;
+            last_delim = false;
             if in_q && chars.peek() == Some(&quote) {
                 cur.push(quote);
                 chars.next();
@@ -192,9 +202,11 @@ pub(super) fn split_delimited(text: &str, delims: &[char], consecutive: bool, qu
             }
             out.push(std::mem::take(&mut cur));
             last_delim = true;
+            at_start = true;
             continue;
         }
         last_delim = false;
+        at_start = false;
         cur.push(c);
     }
     out.push(cur);

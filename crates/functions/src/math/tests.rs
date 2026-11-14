@@ -230,6 +230,20 @@ fn combinatorics() {
 }
 
 #[test]
+fn gcd_and_lcm_reject_negative_fractions_before_truncation() {
+    for name in ["GCD", "LCM"] {
+        for x in [-0.1, -0.5, -0.999] {
+            is_err(ev2(name, x, 2.0), Num);
+            is_err(ev(name, vec![rf(row(&[2.0, x]))]), Num);
+            // A zero elsewhere must not hide an invalid negative argument.
+            is_err(ev2(name, 0.0, x), Num);
+        }
+        close(ev2(name, -0.0, 2.0), if name == "GCD" { 2.0 } else { 0.0 });
+        close(ev2(name, 12.9, 18.9), if name == "GCD" { 6.0 } else { 36.0 });
+    }
+}
+
+#[test]
 fn trig() {
     close(ev1("SIN", PI / 2.0), 1.0);
     close(ev1("COS", 0.0), 1.0);
