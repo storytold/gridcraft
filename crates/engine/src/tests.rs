@@ -4878,32 +4878,48 @@ fn copying_areas_that_do_not_line_up_is_refused_with_a_message() {
     assert!(v(&s, "E1").is_empty());
 }
 
+/// The formula bar shows a date the system's way, whatever the cell's format (#3510): the short
+/// date, the time with seconds when there is one, the time alone under 1. Committing it unchanged
+/// keeps the value.
 #[test]
-fn editing_a_date_cell_shows_a_date_not_the_serial() {
+fn editing_a_date_cell_shows_the_short_date_not_the_cell_format() {
     let mut s = s();
-    let at = CellRef::parse("A1").unwrap();
-    s.execute("cell.set", json!({"cell": "A1", "input": "2026-03-04"})).unwrap();
-    {
-        let d = s.doc().unwrap();
-        let sh = d.wb.active().unwrap();
-        assert_eq!(crate::display::edit_text(&d.wb, sh, at), "2026-03-04");
+    let cases = [
+        // (value, cell format, editor text)
+        (46085.0, "yyyy-mm-dd", "3/4/2026"),
+        (46266.0, r"[$-40C]mmmm\-yy;@", "9/1/2026"),
+        (46266.0, "mmmm-yy", "9/1/2026"),
+        // `1-Sep` would read back as September 1 of the current year, not of 2026.
+        (46266.0, "d-mmm", "9/1/2026"),
+        (46085.0, "dddd, mmmm d", "3/4/2026"),
+        (46266.5625, "m/d/yyyy h:mm", "9/1/2026 1:30:00 PM"),
+        (46266.5625, "m/d/yyyy", "9/1/2026 1:30:00 PM"),
+        // A time alone stays a time, with its minutes ("9 AM" would lose them).
+        (0.4, "h AM/PM", "9:36:00 AM"),
+        // A duration past a day is a date and a time, as in Excel.
+        (1.5, "[h]:mm", "1/1/1900 12:00:00 PM"),
+        // Fractions of a second would be lost: the serial.
+        (46290.123456789, "m/d/yyyy", "46290.123456789"),
+        // A negative number is no date.
+        (-1.25, "m/d/yyyy", "-1.25"),
+        // Plain numbers are untouched.
+        (42.0, "General", "42"),
+    ];
+    for (i, (n, code, _)) in cases.iter().enumerate() {
+        let a = format!("A{}", i + 1);
+        s.execute("cell.set", json!({"cell": a, "value": n})).unwrap();
+        s.execute("home.numberFormat", json!({"range": a, "code": code})).unwrap();
     }
-    // A format whose text cannot be typed back falls back to ISO.
-    s.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "dddd, mmmm d"}})).unwrap();
-    let d = s.doc().unwrap();
-    let sh = d.wb.active().unwrap();
-    assert_eq!(crate::display::edit_text(&d.wb, sh, at), "2026-03-04");
-    // A time alone falls back to a time, not to day 0 of 1900 ("9 AM" would lose the 36 minutes).
-    let mut s3 = self::s();
-    s3.execute("cell.set", json!({"cell": "A1", "input": "0.4"})).unwrap();
-    s3.execute("home.formatCells", json!({"range": "A1", "style": {"num_fmt": "h AM/PM"}})).unwrap();
-    let d = s3.doc().unwrap();
-    assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at), "09:36:00");
-    // Plain numbers are untouched.
-    let mut s2 = self::s();
-    s2.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
-    let d = s2.doc().unwrap();
-    assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at), "42");
+    for (i, (n, code, want)) in cases.iter().enumerate() {
+        let a = format!("A{}", i + 1);
+        let text = {
+            let d = s.doc().unwrap();
+            crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse(&a).unwrap())
+        };
+        assert_eq!(text, *want, "{code}");
+        s.execute("cell.set", json!({"cell": a, "input": text})).unwrap();
+        assert_eq!(v(&s, &a), Value::Number(*n), "{code}: committing the editor unchanged");
+    }
 }
 
 /// A workbook with 42 in A1, saved as `.xlsx` and encrypted with `password`.
