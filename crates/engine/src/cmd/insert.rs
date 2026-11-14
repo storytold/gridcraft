@@ -196,7 +196,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Symbol",
             ["Insert", "Symbols"],
             None,
-            "{char: \"€\"} (inserted at the end of the active cell's text)",
+            "{char: \"€\", caret?, anchor?} (inserted at char index `caret` of the active cell's text, replacing up to `anchor`; default: the end)",
             has_doc,
             insert_symbol
         ),
@@ -1488,7 +1488,14 @@ fn insert_symbol(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let at = d.selection.active;
     let cur = d.wb.active().and_then(|sh| sh.cell(at)).map(|c| c.input_text()).unwrap_or_default();
-    s.execute("cell.set", json!({"cell": at.a1(), "input": format!("{cur}{ch}")}))
+    // `caret` and `anchor` are char indexes into the text, clamped to its end.
+    let len = cur.chars().count();
+    let pos = |key: &str| p.get(key).and_then(Json::as_u64).map(|v| usize::try_from(v).unwrap_or(usize::MAX).min(len));
+    let caret = pos("caret").unwrap_or(len);
+    let anchor = pos("anchor").unwrap_or(caret);
+    let byte = |c: usize| cur.char_indices().nth(c).map_or(cur.len(), |(i, _)| i);
+    let (before, after) = (cur.get(..byte(caret.min(anchor))).unwrap_or(""), cur.get(byte(caret.max(anchor))..).unwrap_or(""));
+    s.execute("cell.set", json!({"cell": at.a1(), "input": format!("{before}{ch}{after}")}))
 }
 
 // ---------------------------------------------------------------- conditional formatting

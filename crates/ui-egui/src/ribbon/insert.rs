@@ -252,7 +252,11 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ] {
                 // No bundled face has ✓: the button paints a code-drawn check instead of a tofu box.
                 if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &format!("Insert {ch}")).clicked() {
-                    act(app, "insert.symbol", json!({"char": ch}));
+                    // While a cell is being edited the symbol goes into the edit, at its caret.
+                    match app.editor.as_mut() {
+                        Some(ed) => ed.insert_at_caret(ch),
+                        None => act(app, "insert.symbol", json!({"char": ch})),
+                    }
                 }
             }
         });
