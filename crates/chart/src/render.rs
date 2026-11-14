@@ -141,13 +141,20 @@ pub(crate) fn sanitize(d: &ChartData) -> ChartData {
             .series
             .iter()
             .take(MAX_SERIES)
-            .map(|s| SeriesData {
+            .enumerate()
+            .map(|(i, s)| SeriesData {
                 name: s.name.clone(),
                 values: sanitize_vals(&s.values),
                 x: s.x.as_deref().map(sanitize_vals),
                 sizes: s.sizes.as_deref().map(sanitize_vals),
                 color: s.color,
-                kind: s.kind,
+                // `resolve` gives each series the kind it is drawn as (`Chart::series_kind`); a
+                // caller's combo kind is drawn as a combo's defaults: a column first, then lines.
+                kind: match s.kind {
+                    ChartKind::Combo if i == 0 => ChartKind::ColumnClustered,
+                    ChartKind::Combo => ChartKind::Line,
+                    k => k,
+                },
                 secondary: s.secondary,
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
@@ -174,7 +181,8 @@ fn needs_sanitizing(d: &ChartData) -> bool {
         || d.series.len() > MAX_SERIES
         || d.series.iter().any(|s| {
             trendlines += s.trendlines.len();
-            long(s.values.len())
+            s.kind == ChartKind::Combo
+                || long(s.values.len())
                 || !s.values.iter().all(is_clean)
                 || s.x.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))
                 || s.sizes.as_ref().is_some_and(|x| long(x.len()) || !x.iter().all(is_clean))

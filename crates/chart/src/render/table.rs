@@ -1,7 +1,7 @@
 //! The chart data table uses the same primitives as the plot, including in print/PDF output.
 
 use super::frame::{Bx, CatAxis, level_groups};
-use super::legend::{Swatch, cat_label, draw_swatch, plot_kind};
+use super::legend::{Swatch, cat_label, draw_swatch};
 use super::{AXIS, Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, TEXT, VAlign};
 
 pub(super) struct Layout {
@@ -70,7 +70,7 @@ pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, lay
         let y = top + (layout.headers as f32 + i as f32 + 0.5) * layout.row_height;
         let name_x = if settings.show_keys { x0 + 25.0 } else { x0 + 4.0 };
         if settings.show_keys {
-            let swatch = match plot_kind(chart, series, i) {
+            let swatch = match series.kind {
                 ChartKind::Line | ChartKind::LineStacked => Swatch::Line,
                 ChartKind::LineMarkers => Swatch::LineMarker,
                 _ => Swatch::Box,

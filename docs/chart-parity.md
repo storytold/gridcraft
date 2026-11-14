@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-07 · **Change:** minor (chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-14 · **Change:** minor (combo series drawn and saved by their own kind; earlier: chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -32,7 +32,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Box & Whisker | 1 | 1 of 1 | |
 | Waterfall, Funnel | 2 | 2 of 2 | |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
-| Combo | custom combinations, secondary axis | yes (line on secondary axis) | |
+| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, area; bars stand upright as columns, pies, doughnuts, bubbles and chartex kinds are clustered columns, scatter series lines with markers, scatter-with-lines and radar series lines), secondary axis | |
 | **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
@@ -48,7 +48,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Axis options | min/max/units, log scale, reverse order, crossing point, display units, date axis, number format | **missing** (auto only) |
 | Multi-level category axis (a category range two or more columns wide beside the values: year beside month) | the outer levels grouped under the labels with separators | read (`multiLvlStrRef`), drawn (rows under the labels; columns beside them in bar charts; up to three outer levels), written back with Excel's level caches |
 | Doughnut hole size, first slice angle | 10–90% hole (Excel default 75%), 0–359° first slice | Format Chart pane sliders; read from and written to `c:holeSize` / `c:firstSliceAng`; documents saved before the setting existed keep their old 50% hole |
-| Secondary axis | any series | line series in combo charts |
+| Secondary axis | any series | any combo series; a one-kind chart's secondary series keep their axis in XLSX |
 | Trendlines | linear, exponential, logarithmic, polynomial, power, moving average, equation and R² | all six types, several per series, name, forward/backward forecast, set intercept, equation and R² label, line colour/width/dash; read, written and drawn on 2-D column, bar, line, area, scatter and bubble series; `chart.addElement` `trendline` adds/removes them. No Format Trendline pane, label position/number format not kept |
 | Error bars | fixed, %, standard deviation/error, custom | **missing** |
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
@@ -94,6 +94,37 @@ qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a
 (observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
 are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
+Each series is drawn and saved as the kind `Chart::series_kind` gives it: in a combo chart its
+own kind (by default the first a column and the rest lines), elsewhere the chart's kind, with a
+line's own markers or a scatter's own lines kept. A combo chart is drawn on category axes: its
+bars as columns, its pies, doughnuts, bubbles and chartex kinds (histogram, waterfall, funnel,
+treemap, sunburst, box & whisker) as clustered columns, its scatter and radar series as lines (a
+markers-only scatter with markers). In
+a combo chart the series of one type on one pair of axes share the first one's grouping, as Excel
+keeps them: a stacked column after a clustered one is drawn clustered, and a stacked line after
+an unstacked one unstacked. Changing the chart type (to any type but a combo) applies it to every
+series, dropping their own kinds; setting the type a chart already has keeps them.
+
+The XLSX writer writes one chart group per type on each pair of axes, with axes of the kind those
+groups need (category axes for a combo; category, horizontal-bar or value axes otherwise), a secondary pair whenever a series is on it, and a stock group only for 3
+or 4 series. A pie or doughnut chart has no axes, so its series are one group whatever their
+secondary flags. A chart without series is written with one empty group of its kind, so it
+reopens as that kind (an empty combo as clustered columns, an empty stock chart as a line chart)
+rather than vanishing; chartex charts (histogram, waterfall and the rest) without series are
+still not kept. The reader takes the primary axes from the value axis on the left or bottom, and
+orders series by `c:order`, then sets the chart's kind and each series' own kind with
+`Chart::set_drawn_kinds`, the rule any reader of per-series kinds shares. A combo whose series all draw as one type reopens as a chart of
+that type (it draws the same).
+
+Known gaps: a one-kind bar chart's secondary series get secondary axes in XLSX, which the
+renderer does not yet draw for horizontal charts; a stock series in a combo
+beside stacked lines is saved in the stacked line group but drawn unstacked; a stock series
+beside columns (other than a 3- or 4-series stock group) is saved as a line and reopens as one;
+a per-series line or scatter kind left in an older GridCraft JSON workbook by a type change is
+honoured (markers gained or lines lost) rather than migrated, since it can't be told from a
+file's own per-series kind; the Forecast Sheet's
+column chart draws and saves its forecast series as columns, not lines.
+
 ## Work (40–60 h)
 
 1. Preserve unmodelled chart XML on round-trip (keep the original part, patch only edited fields): 6–10 h.
@@ -107,6 +138,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Combo series drawn and saved by their own kind (`Chart::series_kind`): areas, stacked columns and marker lines in combos round-trip XLSX; the series of one type on one pair of axes share the first one's grouping on screen and in the file (as Excel keeps them); combo charts are drawn and saved on category axes (pies, doughnuts, bubbles and chartex kinds as columns, scatter and radar as lines); one-kind charts keep secondary-axis series (pie and doughnut charts stay one group); changing the type applies it to every series; charts without series survive XLSX. No readiness score change. |
 | 2026-11-07 | minor | Chart-data-table keys use the shared plot-kind helper with their series index after #1150. A focused regression checks the first combo series uses a column key and later series use line keys. No readiness score change. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |

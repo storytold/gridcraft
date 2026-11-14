@@ -166,6 +166,10 @@ fn stacked_hairline_bars_do_not_fill_the_gap_between_disjoint_spans() {
     c.data_labels = false;
     c.legend = LegendPos::None;
     let mut d = data_of(2, 20_000);
+    // Resolved series carry the kind they are drawn as (`Chart::series_kind`): stacked columns.
+    for s in &mut d.series {
+        s.kind = ChartKind::ColumnStacked;
+    }
     for v in d.series[0].values.iter_mut() {
         *v = Some(100.0);
     }

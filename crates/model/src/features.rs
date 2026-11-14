@@ -617,7 +617,141 @@ pub struct Chart {
     pub pivot: Option<String>,
 }
 
+/// Whether a series of kind `b` can be drawn in a chart of kind `a` without making it a combo:
+/// the same kind, or a line with or without markers, or a scatter with or without lines.
+pub fn same_family(a: ChartKind, b: ChartKind) -> bool {
+    use ChartKind::*;
+    a == b || matches!((a, b), (Line | LineMarkers, Line | LineMarkers) | (Scatter | ScatterLines, Scatter | ScatterLines))
+}
+
+/// The kind a combo chart's series `i` with its own kind `own` is drawn as.
+fn combo_series_kind(own: Option<ChartKind>, i: usize) -> ChartKind {
+    match own {
+        // A combination chart's bars stand upright: its categories run across.
+        Some(ChartKind::BarClustered) => ChartKind::ColumnClustered,
+        Some(ChartKind::BarStacked) => ChartKind::ColumnStacked,
+        Some(ChartKind::BarStacked100) => ChartKind::ColumnStacked100,
+        // A combination chart is drawn on category axes: its pies, doughnuts, bubbles and chartex
+        // kinds (histogram, waterfall, funnel, treemap, sunburst, box & whisker) as clustered
+        // columns, its scatter and radar series as lines (a markers-only scatter with markers).
+        Some(
+            ChartKind::Pie
+            | ChartKind::Doughnut
+            | ChartKind::Bubble
+            | ChartKind::Histogram
+            | ChartKind::Waterfall
+            | ChartKind::Funnel
+            | ChartKind::Treemap
+            | ChartKind::Sunburst
+            | ChartKind::BoxWhisker,
+        ) => ChartKind::ColumnClustered,
+        Some(ChartKind::Scatter) => ChartKind::LineMarkers,
+        Some(ChartKind::ScatterLines | ChartKind::Radar) => ChartKind::Line,
+        Some(k) if k != ChartKind::Combo => k,
+        _ if i == 0 => ChartKind::ColumnClustered,
+        _ => ChartKind::Line,
+    }
+}
+
+/// The types whose series on one pair of axes share one grouping (clustered or stacked).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Grouped {
+    Column,
+    Line,
+    Area,
+}
+
+fn grouped(k: ChartKind) -> Option<Grouped> {
+    use ChartKind::*;
+    match k {
+        ColumnClustered | ColumnStacked | ColumnStacked100 => Some(Grouped::Column),
+        Line | LineMarkers | LineStacked => Some(Grouped::Line),
+        Area | AreaStacked | AreaStacked100 => Some(Grouped::Area),
+        _ => None,
+    }
+}
+
+/// Kind `k` drawn in the grouping of `first`, the first series of its type on its axes: columns
+/// and areas take its kind; a line is stacked when it is, and unstacked (keeping its own
+/// markers) when it isn't.
+fn regroup(k: ChartKind, first: ChartKind) -> ChartKind {
+    match (grouped(k), first) {
+        (Some(Grouped::Line), ChartKind::LineStacked) => ChartKind::LineStacked,
+        (Some(Grouped::Line), _) if k == ChartKind::LineStacked => ChartKind::Line,
+        (Some(Grouped::Line), _) => k,
+        _ => first,
+    }
+}
+
 impl Chart {
+    /// The kind series `i` is drawn as, and saved as (the one rule the renderer and every file
+    /// format share).
+    ///
+    /// In a combo chart: the series' own kind, else a column for the first series and a line
+    /// for the rest. A combo is drawn on category axes, so bars stand upright as columns; pies,
+    /// doughnuts, bubbles and chartex kinds are clustered columns; scatter series are lines with
+    /// markers, and scatter-with-lines and radar series plain lines. The series of one type on
+    /// one pair of axes share the first one's grouping (as Excel keeps them): a stacked column
+    /// after a clustered one is clustered.
+    ///
+    /// In any other chart: the chart's kind, or the series' own kind where it is of the same
+    /// family ([`same_family`]: a line's own markers, a scatter's own lines).
+    pub fn series_kind(&self, i: usize) -> ChartKind {
+        let own = self.series.get(i).and_then(|s| s.kind).filter(|k| *k != ChartKind::Combo);
+        match (self.kind, own) {
+            (ChartKind::Combo, own) => {
+                let k = combo_series_kind(own, i);
+                let Some(t) = grouped(k) else { return k };
+                let secondary = self.series.get(i).is_some_and(|s| s.secondary);
+                let first = self.series.iter().enumerate().take(i).find_map(|(j, s)| {
+                    let kj = combo_series_kind(s.kind, j);
+                    (s.secondary == secondary && grouped(kj) == Some(t)).then_some(kj)
+                });
+                first.map_or(k, |f| regroup(k, f))
+            }
+            (k, Some(own)) if same_family(k, own) => own,
+            (k, _) => k,
+        }
+    }
+
+    /// The kind every series is drawn as ([`Chart::series_kind`]), in one pass.
+    pub fn series_kinds(&self) -> Vec<ChartKind> {
+        if self.kind != ChartKind::Combo {
+            return (0..self.series.len()).map(|i| self.series_kind(i)).collect();
+        }
+        let mut firsts: Vec<(Grouped, bool, ChartKind)> = Vec::new();
+        self.series
+            .iter()
+            .enumerate()
+            .map(|(i, s)| {
+                let k = combo_series_kind(s.kind, i);
+                let Some(t) = grouped(k) else { return k };
+                match firsts.iter().find(|(ft, sec, _)| *ft == t && *sec == s.secondary) {
+                    Some((_, _, f)) => regroup(k, *f),
+                    None => {
+                        firsts.push((t, s.secondary, k));
+                        k
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// Sets the chart's kind and each series' own kind from the kinds a file draws its series
+    /// as (XLSX chart groups, ODS `chart:class`), one per series in order; `empty` is the
+    /// chart's kind when it has no series. Series of one family make a chart of the first's
+    /// kind, a series keeping its own kind only where it differs (a line's own markers, a
+    /// scatter's own lines); series of other families make a combination chart, every series
+    /// keeping its kind. [`Chart::series_kinds`] then draws each series as `drawn` gives it.
+    pub fn set_drawn_kinds(&mut self, drawn: &[ChartKind], empty: ChartKind) {
+        let first = drawn.first().copied().unwrap_or(empty);
+        let combo = drawn.iter().any(|k| !same_family(*k, first));
+        self.kind = if combo { ChartKind::Combo } else { first };
+        for (s, k) in self.series.iter_mut().zip(drawn) {
+            s.kind = (combo || *k != first).then_some(*k);
+        }
+    }
+
     /// Data tables belong to category-axis column, bar, line and area charts.
     pub fn supports_data_table(&self) -> bool {
         let eligible = |kind| {
@@ -637,7 +771,7 @@ impl Chart {
                     | ChartKind::AreaStacked100
             )
         };
-        eligible(self.kind) || (self.kind == ChartKind::Combo && self.series.iter().all(|s| eligible(s.kind.unwrap_or(ChartKind::Line))))
+        eligible(self.kind) || (self.kind == ChartKind::Combo && self.series_kinds().into_iter().all(eligible))
     }
 }
 
@@ -1112,6 +1246,118 @@ pub struct Slicer {
     pub selected: Option<Vec<String>>,
     /// Number of button columns in the layout (Excel default 1).
     pub columns: u32,
+}
+
+#[cfg(test)]
+mod series_kind_tests {
+    use super::{Chart, ChartKind, Series};
+
+    fn chart(kind: ChartKind, own: &[Option<ChartKind>]) -> Chart {
+        Chart {
+            id: 1,
+            kind,
+            anchor: Default::default(),
+            title: None,
+            series: own.iter().map(|k| Series { kind: *k, ..Series::default() }).collect(),
+            legend: Default::default(),
+            data_labels: false,
+            data_table: None,
+            gridlines: true,
+            style: 2,
+            hole_size: 75,
+            first_slice_angle: 0,
+            x_title: None,
+            y_title: None,
+            source: None,
+            by_rows: false,
+            pivot: None,
+        }
+    }
+
+    fn drawn(c: &Chart) -> Vec<ChartKind> {
+        (0..c.series.len()).map(|i| c.series_kind(i)).collect()
+    }
+
+    #[test]
+    fn combo_series_default_to_a_column_then_lines_and_bars_and_pies_stand_upright() {
+        use ChartKind::*;
+        let c = chart(Combo, &[None, None, Some(Combo), Some(Area), Some(BarClustered), Some(Doughnut)]);
+        assert_eq!(drawn(&c), vec![ColumnClustered, Line, Line, Area, ColumnClustered, ColumnClustered]);
+        for (bar, column) in [(BarStacked, ColumnStacked), (BarStacked100, ColumnStacked100)] {
+            assert_eq!(drawn(&chart(Combo, &[Some(bar), Some(Line)])), vec![column, Line]);
+        }
+        // On a combo's category axes scatter and radar series are lines (a markers-only scatter
+        // keeps its markers) and bubbles are columns.
+        let c = chart(Combo, &[Some(Scatter), Some(ScatterLines), Some(Radar), Some(Bubble)]);
+        assert_eq!(drawn(&c), vec![LineMarkers, Line, Line, ColumnClustered]);
+        // Out of range: the default for that position, never a panic.
+        assert_eq!(c.series_kind(usize::MAX), Line);
+    }
+
+    #[test]
+    fn outside_a_combo_a_series_keeps_only_its_own_markers_or_lines() {
+        use ChartKind::*;
+        assert_eq!(drawn(&chart(Line, &[None, Some(LineMarkers), Some(Area)])), vec![Line, LineMarkers, Line]);
+        assert_eq!(drawn(&chart(ScatterLines, &[Some(Scatter), Some(Line)])), vec![Scatter, ScatterLines]);
+        assert_eq!(drawn(&chart(ColumnClustered, &[Some(Line)])), vec![ColumnClustered]);
+    }
+
+    #[test]
+    fn combo_series_of_one_type_on_one_axis_share_the_first_grouping() {
+        use ChartKind::*;
+        let c = chart(
+            Combo,
+            &[Some(ColumnStacked), Some(ColumnClustered), Some(Pie), Some(LineStacked), Some(LineMarkers), Some(Area), Some(AreaStacked100)],
+        );
+        assert_eq!(drawn(&c), vec![ColumnStacked, ColumnStacked, ColumnStacked, LineStacked, LineStacked, Area, Area]);
+        assert_eq!(c.series_kinds(), drawn(&c));
+        // An unstacked line keeps its own markers; a stacked one after it is unstacked.
+        let c = chart(Combo, &[Some(Line), Some(LineMarkers), Some(LineStacked)]);
+        assert_eq!(drawn(&c), vec![Line, LineMarkers, Line]);
+        // Each pair of axes has its own first.
+        let mut c = chart(Combo, &[Some(ColumnClustered), Some(ColumnStacked)]);
+        c.series[1].secondary = true;
+        assert_eq!(drawn(&c), vec![ColumnClustered, ColumnStacked]);
+        assert_eq!(c.series_kinds(), drawn(&c));
+    }
+
+    /// A series' own markers or lines outside a combo are honoured wherever they come from: an
+    /// XLSX file's per-series markers, or a kind left in an older GridCraft JSON workbook by a
+    /// type change made before `chart.set` cleared series kinds on a change of type (not
+    /// migrated: the two can't be told apart).
+    /// A file's per-series kinds make a chart of one family, or a combo, that draws them so.
+    #[test]
+    fn drawn_kinds_set_the_chart_and_its_series() {
+        use ChartKind::*;
+        let mut c = chart(ColumnClustered, &[None, None, None]);
+        c.set_drawn_kinds(&[Line, LineMarkers, Line], ColumnClustered);
+        assert_eq!((c.kind, c.series.iter().map(|s| s.kind).collect::<Vec<_>>()), (Line, vec![None, Some(LineMarkers), None]));
+        assert_eq!(c.series_kinds(), vec![Line, LineMarkers, Line]);
+        c.set_drawn_kinds(&[ColumnStacked, Line, Area], ColumnClustered);
+        assert_eq!(c.kind, Combo);
+        assert_eq!(c.series_kinds(), vec![ColumnStacked, Line, Area]);
+        let mut empty = chart(ColumnClustered, &[]);
+        empty.set_drawn_kinds(&[], Radar);
+        assert_eq!(empty.kind, Radar);
+    }
+
+    #[test]
+    fn a_leftover_kind_in_the_same_family_is_drawn() {
+        use ChartKind::*;
+        let json = serde_json::to_value(chart(Line, &[None, Some(LineMarkers)])).unwrap();
+        let c: Chart = serde_json::from_value(json).unwrap();
+        assert_eq!(drawn(&c), vec![Line, LineMarkers]);
+        assert_eq!(drawn(&chart(ScatterLines, &[Some(Scatter)])), vec![Scatter]);
+    }
+
+    #[test]
+    fn a_combo_supports_a_data_table_by_its_drawn_kinds() {
+        use ChartKind::*;
+        assert!(chart(Combo, &[None, None]).supports_data_table());
+        // Its scatter series are drawn as lines on its category axes; stock series have no table.
+        assert!(chart(Combo, &[None, Some(Scatter)]).supports_data_table());
+        assert!(!chart(Combo, &[None, Some(Stock)]).supports_data_table());
+    }
 }
 
 #[cfg(test)]

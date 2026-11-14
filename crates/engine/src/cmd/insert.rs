@@ -896,7 +896,15 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
-            c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            let kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            // A new type (other than a combo) applies to every series, as choosing it did before
+            // series kept their own: their markers or lines from a file go with the old type.
+            if kind != c.kind && kind != ChartKind::Combo {
+                for series in &mut c.series {
+                    series.kind = None;
+                }
+            }
+            c.kind = kind;
             if !c.supports_data_table() {
                 c.data_table = None;
             }
@@ -1909,6 +1917,38 @@ mod tests {
         let mut json = serde_json::to_value(get(&s)).unwrap();
         json.as_object_mut().unwrap().remove("data_table");
         assert_eq!(serde_json::from_value::<Chart>(json).unwrap().data_table, None);
+    }
+
+    #[test]
+    fn chart_type_change_drops_series_kinds_it_does_not_draw() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A", "B"], ["Q1", 10, 1], ["Q2", 20, 2]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:C3", "type": "combo"})).unwrap();
+        let chart = |s: &Session| s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let active = wb.active_sheet();
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[0].kind = Some(ChartKind::Area);
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        // A new type applies to every series: neither the area nor the markers stay.
+        s.execute("chart.set", json!({"type": "line"})).unwrap();
+        let c = chart(&s);
+        assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, None]);
+        assert_eq!((c.series_kind(0), c.series_kind(1)), (ChartKind::Line, ChartKind::Line));
+        // Setting the type a chart already has keeps a series' own markers (a file's).
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        s.execute("chart.set", json!({"type": "line", "subtype": ""})).unwrap();
+        assert_eq!(chart(&s).series_kinds(), vec![ChartKind::Line, ChartKind::LineMarkers]);
+        // Trendlines go by the kind each series is drawn as.
+        s.execute("chart.set", json!({"type": "pie"})).unwrap();
+        assert!(s.execute("chart.addElement", json!({"element": "trendline"})).is_err());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(chart(&s).series[1].kind, Some(ChartKind::LineMarkers));
     }
 
     #[test]
