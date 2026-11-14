@@ -37,6 +37,7 @@ use home::home;
 use insert::{draw, insert};
 use page_layout::page_layout;
 use review::review;
+pub(crate) use shortcuts::quick_analysis;
 pub use shortcuts::shortcut;
 pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
 use title_bar::{TITLE_BAR_H, TITLE_CONTROL_H};

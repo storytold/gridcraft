@@ -133,10 +133,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                         }
                     }
                     Key::Escape if app.selected_object.is_some() => app.selected_object = None,
-                    Key::Escape => {
-                        app.session.clipboard = None;
-                        app.session.format_painter = None;
-                    }
+                    Key::Escape => cancel_pending(app),
                     Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
                     Key::F8 if m.alt => {
                         app.open_dialog("macros", json!({}));
@@ -185,5 +182,14 @@ fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool 
             false
         }
         _ => false,
+    }
+}
+
+/// Esc with nothing else to dismiss drops the pending copy and the Format Painter. An open Quick
+/// Analysis popup owns the key: it closes and the pending copy stays.
+fn cancel_pending(app: &mut SheetApp) {
+    if app.grid.quick_analysis.open.take().is_none() {
+        app.session.clipboard = None;
+        app.session.format_painter = None;
     }
 }

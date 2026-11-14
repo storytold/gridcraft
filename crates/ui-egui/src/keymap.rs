@@ -41,6 +41,8 @@ pub enum Shortcut {
     Zoom(i32),
     /// Ctrl+Alt+Shift+P: edit the active cell as Python code (Python mode).
     PythonMode,
+    /// Excel for Mac Control+Q: Quick Analysis (Windows Ctrl+Q is in `ribbon::shortcut`).
+    QuickAnalysis,
 }
 
 fn run(id: &'static str) -> Shortcut {
@@ -139,6 +141,8 @@ fn lookup_control_shortcuts(ctx: LookupContext) -> Option<Shortcut> {
         // Windows Ctrl+; is in `ribbon::shortcut`; Excel for Mac uses Control+; and Command+;.
         Semicolon if mac && ctrl => Shortcut::Date,
         Semicolon if mac && cmd && !s => Shortcut::Time,
+        // Control+Q only: Command+Q is the native Quit item.
+        Q if mac && ctrl && !m.command && !s => Shortcut::QuickAnalysis,
         _ => return None,
     })
 }
@@ -349,6 +353,7 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
         }
         Shortcut::Edit => app.begin_edit(None, false),
         Shortcut::PythonMode => app.toggle_python_mode(),
+        Shortcut::QuickAnalysis => crate::ribbon::quick_analysis(app),
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),
         Shortcut::DropDown => {
             if sh.validations.iter().any(|d| d.in_cell_dropdown && d.ranges.iter().any(|r| r.contains(active))) {

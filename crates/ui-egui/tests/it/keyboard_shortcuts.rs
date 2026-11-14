@@ -303,3 +303,40 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
 }
+
+/// Only plain Ctrl+Q toggles Quick Analysis; Ctrl+Shift+Q and Ctrl+Alt+Q (AltGr+Q) do not.
+#[test]
+fn only_plain_ctrl_q_toggles_quick_analysis() {
+    let mut h = harness(book("A1:B3"));
+    key(&mut h, Key::Q, CTRL_SHIFT);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Ctrl+Shift+Q");
+    key(&mut h, Key::Q, Modifiers { alt: true, ..CTRL });
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Ctrl+Alt+Q");
+    key(&mut h, Key::Q, CTRL);
+    assert!(h.state().grid.quick_analysis.open.is_some(), "Ctrl+Q");
+}
+
+/// Excel for Mac: Control+Q (ctrl without command) opens Quick Analysis, Command+Q is left to the
+/// native Quit item, and a single cell still opens nothing without an alert.
+#[test]
+fn mac_control_q_toggles_quick_analysis_and_command_q_does_not() {
+    const MAC_CONTROL: Modifiers = Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false };
+    const MAC_COMMAND: Modifiers = Modifiers { alt: false, ctrl: false, shift: false, mac_cmd: true, command: true };
+    assert_eq!(lookup(Key::Q, Some(Key::Q), MAC_CONTROL, true), Some(Shortcut::QuickAnalysis));
+    assert_eq!(lookup(Key::Q, Some(Key::Q), MAC_COMMAND, true), None);
+    assert_eq!(lookup(Key::Q, Some(Key::Q), MAC_CONTROL, false), None, "Windows Ctrl+Q goes through ribbon::shortcut");
+    let mac = |sel: &str| crate::common::os_harness(book(sel), egui::os::OperatingSystem::Mac);
+    let mut h = mac("A1:B3");
+    key(&mut h, Key::Q, MAC_COMMAND);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Command+Q is Quit");
+    key(&mut h, Key::Q, Modifiers { shift: true, ..MAC_CONTROL });
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Control+Shift+Q");
+    key(&mut h, Key::Q, MAC_CONTROL);
+    assert!(h.state().grid.quick_analysis.open.is_some(), "Control+Q opens");
+    key(&mut h, Key::Q, MAC_CONTROL);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Control+Q again closes");
+    let mut h = mac("B2");
+    key(&mut h, Key::Q, MAC_CONTROL);
+    assert!(h.state().grid.quick_analysis.open.is_none());
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "no alert for a single cell");
+}
