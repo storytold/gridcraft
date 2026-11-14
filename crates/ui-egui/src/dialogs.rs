@@ -1113,6 +1113,11 @@ impl Dialog {
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
+            // A destination's Warning alert before a Ctrl+Enter fill: the rule's title, or ours.
+            crate::app::FILL_WARNING_DIALOG => {
+                let title = params.get("title").and_then(Json::as_str).filter(|t| !t.is_empty()).unwrap_or("GridCraft").to_string();
+                Dialog::custom(crate::app::FILL_WARNING_DIALOG, &title, params.clone())
+            }
             "comments" => {
                 app.grid.pane = None;
                 app.run_or_alert("review.showComments", json!({"on": true}));

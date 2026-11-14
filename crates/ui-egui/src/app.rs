@@ -14,6 +14,7 @@ use super::{
 mod clipboard;
 mod commands;
 mod editing;
+pub(crate) use editing::FILL_WARNING_DIALOG;
 #[cfg(test)]
 pub(crate) use editing::{DRAFT_CODE_HIDDEN, DRAFT_SHEET_GONE};
 mod files;
