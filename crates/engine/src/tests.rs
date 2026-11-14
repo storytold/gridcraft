@@ -1621,6 +1621,17 @@ fn case_sensitive_sort_puts_lowercase_first() {
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
 }
 
+/// #3949: Excel sorts values that are not in the custom list A to Z after the listed ones.
+#[test]
+fn custom_list_sort_puts_unlisted_values_after_the_list_in_order() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Priority"], ["Zulu"], ["Alpha"], ["Low"], ["High"], ["Medium"]]})).unwrap();
+    let key = json!({"column": "A", "order": "asc", "customList": ["High", "Medium", "Low"]});
+    s.execute("data.sort", json!({"range": "A1:A6", "header": true, "keys": [key]})).unwrap();
+    let col: Vec<Value> = (1..=6).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["Priority", "High", "Medium", "Low", "Alpha", "Zulu"].map(Value::from));
+}
+
 #[test]
 fn data_sort_orders_vowelled_arabic_by_letters() {
     let mut s = s();

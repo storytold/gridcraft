@@ -119,15 +119,26 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             for (ki, k) in keys.iter().enumerate() {
                 let (va, ca) = &keyed[a as usize][ki];
                 let (vb, cb) = &keyed[b as usize][ki];
+                let plain = || {
+                    if case && va.is_text() && vb.is_text() {
+                        sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
+                    } else {
+                        sort_compare(va, vb)
+                    }
+                };
                 let o = if k.by != "values" {
                     ca.cmp(cb)
                 } else if let Some(list) = &k.list {
-                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t))).unwrap_or(usize::MAX);
-                    pos(va).cmp(&pos(vb))
-                } else if case && va.is_text() && vb.is_text() {
-                    sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
+                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t)));
+                    match (pos(va), pos(vb)) {
+                        (Some(a), Some(b)) => a.cmp(&b),
+                        (Some(_), None) => Ordering::Less,
+                        (None, Some(_)) => Ordering::Greater,
+                        // Values not in the list follow the listed ones in the usual order, as in Excel.
+                        (None, None) => plain(),
+                    }
                 } else {
-                    sort_compare(va, vb)
+                    plain()
                 };
                 // Blanks always sort last, whatever the order.
                 let o = if k.desc && !(va.is_empty() || vb.is_empty()) { o.reverse() } else { o };
