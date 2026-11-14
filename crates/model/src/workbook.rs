@@ -300,7 +300,8 @@ pub struct Workbook {
     #[serde(skip)]
     pub macros_unread: Arc<Vec<serde_json::Value>>,
     /// The language and fonts the document gives text of each script by default (an
-    /// OpenDocument file's default cell style). Empty unless a file stated them.
+    /// OpenDocument file's default cell style). Empty until a reader for a format that states
+    /// them fills them.
     #[serde(default, skip_serializing_if = "TextDefaults::is_empty")]
     pub text_defaults: TextDefaults,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
