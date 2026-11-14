@@ -586,9 +586,20 @@ fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(t) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)).cloned() else { return Ok(Json::Null) };
         // Structured references to the table become ordinary cell references, as in Excel.
         let rewrites = plain_table_refs(&cx.wb, si, &t);
-        for (i, c, e) in rewrites {
+        let rewrites: Vec<_> = rewrites.into_iter().map(|(i, c, e)| (i, c, Formula::from_expr(e))).collect();
+        // Qualified references are longer than structured ones. Text past the parser's limit would
+        // not parse after saving and reopening, leaving a formula that never recalculates.
+        if rewrites.iter().any(|(_, _, f)| f.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN) {
+            return Err(EngineError::Other(format!(
+                "Converting to a range would make a formula longer than {} characters.",
+                gridcraft_formula::MAX_FORMULA_LEN
+            )));
+        }
+        for (i, c, f) in rewrites {
             if let Some(cell) = cx.wb.sheet_mut(i).and_then(|sh| sh.cells.get_mut(c)) {
-                cell.formula = Some(std::sync::Arc::new(Formula::from_expr(e)));
+                // Keep a legacy array's entered range and a dynamic-array mark.
+                let (array, dynamic) = cell.formula.as_ref().map_or((None, false), |old| (old.array, old.dynamic));
+                cell.formula = Some(std::sync::Arc::new(Formula { array, dynamic, ..f }));
             }
         }
         // Apply the table look as plain formatting, then drop the table.
@@ -623,8 +634,6 @@ fn plain_table_refs(wb: &Workbook, si: usize, t: &Table) -> Vec<(usize, CellRef,
     };
     let mut out = Vec::new();
     for (i, sh) in wb.sheets.iter().enumerate() {
-        // A bare name that is also a defined name resolves to the defined name, so it is not the table.
-        let shadowed = wb.name(&t.name, i).is_some();
         for (c, x) in sh.cells.iter() {
             let Some(e) = x.formula.as_ref().and_then(|f| f.expr()) else { continue };
             let mut hit = false;
@@ -636,7 +645,7 @@ fn plain_table_refs(wb: &Workbook, si: usize, t: &Table) -> Vec<(usize, CellRef,
                         Err(e) => Expr::Error(e),
                     }
                 }
-                Expr::Name(n) if !shadowed && n.eq_ignore_ascii_case(&t.name) => {
+                Expr::Name(n) if names_table(wb, i, &n, &t.name) => {
                     hit = true;
                     match t.data_range() {
                         Some(range) => plain(i, gridcraft_calc::Area { sheet: si, range }, false),
@@ -651,6 +660,20 @@ fn plain_table_refs(wb: &Workbook, si: usize, t: &Table) -> Vec<(usize, CellRef,
         }
     }
     out
+}
+
+/// Whether the name `n`, used on sheet `from`, denotes the table `table`. A sheet-qualified
+/// `Sheet1!Orders` is split at its last `!` as the calculator does. A defined name of the same
+/// name in scope wins over the table, so it is not the table.
+fn names_table(wb: &Workbook, from: usize, n: &str, table: &str) -> bool {
+    let (scope, bare) = match n.rsplit_once('!') {
+        Some((s, b)) => match wb.sheet_index(s) {
+            Some(i) => (i, b),
+            None => return false,
+        },
+        None => (from, n),
+    };
+    bare.eq_ignore_ascii_case(table) && wb.name(bare, scope).is_none()
 }
 
 // ---------------------------------------------------------------- charts
