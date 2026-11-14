@@ -119,6 +119,10 @@ pub struct UiState {
     /// Tint the active cell's whole row (File ▸ Options ▸ General), on every sheet and workbook, so
     /// the eye keeps its place across a wide table. A preference: nothing goes into the file.
     pub highlight_active_row: bool,
+    /// Rows the sheet moves per notch of a mouse wheel (File ▸ Options ▸ General). 0 keeps the speed
+    /// the wheel has everywhere else. A preference: nothing goes into the file.
+    #[serde(default)]
+    pub wheel_rows: u32,
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
@@ -171,6 +175,7 @@ impl Default for UiState {
             animations: true,
             autocomplete: true,
             highlight_active_row: false,
+            wheel_rows: 0,
             autosave: false,
             recent: vec![],
             keytip_invoke: None,

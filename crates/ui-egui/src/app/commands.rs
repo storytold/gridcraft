@@ -3,6 +3,9 @@ use super::{
     formula_locale, i18n, json, now_ms, printing,
 };
 
+/// The most rows the option for the mouse wheel takes.
+const MAX_WHEEL_ROWS: u64 = 20;
+
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
@@ -236,6 +239,12 @@ impl SheetApp {
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
+            }
+            "options.wheelRows" => {
+                if let Some(rows) = p.get("rows").and_then(Json::as_u64) {
+                    self.ui.wheel_rows = rows.min(MAX_WHEEL_ROWS) as u32;
+                }
+                Ok(json!({"rows": self.ui.wheel_rows}))
             }
             "options.highlightActiveRow" => {
                 self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
