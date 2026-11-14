@@ -1,3 +1,4 @@
+use super::group_key::GroupKey;
 use super::{Cell, CellRef, EngineError, HashSet, Json, RangeRef, Result, Session, Value, bad, bool_param, edit, json, parse_range, str_param};
 
 // ---------------------------------------------------------------- advanced filter
@@ -32,9 +33,11 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
     };
     let (op, operand) = split_op(&crit_text);
     if operand.is_empty() {
+        // Number formats and formulas returning empty text can look blank. These
+        // criteria test whether the source cell has a value.
         return match op {
-            "=" => v.is_empty() || text.is_empty(),
-            "<>" => !(v.is_empty() || text.is_empty()),
+            "=" => v.is_empty(),
+            "<>" => !v.is_empty(),
             _ => true,
         };
     }
@@ -161,13 +164,12 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
         })
     };
     let unique = bool_param(p, "unique").unwrap_or(false);
-    let mut seen: HashSet<Vec<String>> = HashSet::new();
+    let mut seen = HashSet::new();
     let mut keep: Vec<(u32, bool)> = Vec::new();
     for row in first_data..=list.end.row {
         let mut ok = matches_row(row);
         if ok && unique {
-            let key: Vec<String> =
-                (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(row, c)).to_lowercase()).collect();
+            let key: Vec<_> = (list.start.col..=list.end.col).map(|c| GroupKey::from_value(&sh.value(CellRef::new(row, c)))).collect();
             ok = seen.insert(key);
         }
         keep.push((row, ok));
