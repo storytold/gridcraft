@@ -250,6 +250,12 @@ pub struct SheetApp {
     /// yet. eframe retains that unconsumed input across hidden logic-only ticks; the flag makes
     /// the hook offer it once and asks for a hidden paint until a UI pass applies it.
     pub(crate) synthetic_pending: bool,
+    /// The numpad's decimal key was pressed and its `.` has not arrived yet. An input method
+    /// (IBus on GNOME) delivers that text in a later frame than the key press.
+    pub(crate) numpad_decimal_pending: bool,
+    /// Input held for the next frame because it followed a key that ends an edit in the same
+    /// batch (see `split_after_edit_key`).
+    pub(crate) deferred_input: Vec<egui::Event>,
     /// `cumulative_pass_nr` when the front batch was last injected. A completed egui pass that
     /// did not apply it (the font gate's early return) consumed the events with `begin_pass`
     /// without reaching input handling, so the hook must offer the same step again.
