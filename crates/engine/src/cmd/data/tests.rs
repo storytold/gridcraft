@@ -277,6 +277,30 @@ fn show_levels_collapses_and_expands_to_a_level() {
 }
 
 #[test]
+fn invalid_outline_ranges_do_not_fall_back_to_the_selection() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("selection.set", json!({"range": "A2:A3"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let selection = s.doc().unwrap().selection.clone();
+    let history = s.execute("history.list", json!({})).unwrap();
+    for command in ["data.group", "data.ungroup", "data.hideDetail", "data.showDetail"] {
+        for params in [json!({"rows": "0:0"}), json!({"cols": "not a range"})] {
+            let err = s.execute(command, params).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{command}: {err}");
+            assert!(Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+            assert_eq!(s.doc().unwrap().selection, selection);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+    }
+    // Valid cell ranges and the omitted-range selection fallback stay supported.
+    s.execute("data.group", json!({"rows": "B2:C3"})).unwrap();
+    s.execute("data.group", json!({})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!((1..=2).all(|r| sh.rows.get(&r).is_some_and(|l| l.outline == 2)));
+}
+
+#[test]
 fn group_by_columns_for_a_block_of_cells() {
     let mut s = Session::new();
     s.new_workbook();
