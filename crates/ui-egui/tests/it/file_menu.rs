@@ -195,6 +195,25 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     assert!(h.state().backstage.is_none());
 }
 
+/// The heading aligns with the action's top edge and its description follows directly below it.
+#[test]
+fn protect_workbook_info_text_is_aligned_with_its_button() {
+    let mut h = harness(Services::default());
+    h.state_mut().run("ui.backstage", serde_json::json!({"page": "info"})).unwrap();
+    h.run_steps(3);
+
+    let button = h.get_by_role_and_label(egui::accesskit::Role::Button, "Protect Workbook").rect();
+    let heading = h.get_by_role_and_label(egui::accesskit::Role::Label, "Protect Workbook").rect();
+    let description = h.get_by_label("Lock the sheet structure so sheets can't be added, moved, renamed or deleted.").rect();
+    let tolerance = heading.height() * 0.1;
+    assert!((heading.top() - button.top()).abs() <= tolerance, "the heading starts beside the button: button={button:?}, heading={heading:?}");
+    assert!(description.top() >= heading.bottom(), "the description follows the heading");
+    assert!(description.top() - heading.bottom() <= heading.height(), "no extra blank row separates the text");
+    assert!((description.left() - heading.left()).abs() <= tolerance, "heading and description share a left edge");
+    assert!(heading.left() > button.right(), "the text is beside the button");
+    assert!(description.bottom() <= button.bottom(), "the text fits within the action row");
+}
+
 #[test]
 fn translated_options_headings_show_no_context_prefix() {
     for language in [Language::Fr, Language::Sr, Language::Nl, Language::Ro] {
