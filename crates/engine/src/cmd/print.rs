@@ -13,13 +13,15 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
 use gridcraft_model::{Alignment, Image, SheetViewMode};
 use gridcraft_model::{
-    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId,
-    StyleTable, Underline, VAlign, Visibility, Workbook,
+    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ReadingOrder, ShapeKind, Sheet,
+    Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
 };
-use gridcraft_pdf::{Font, Page, PdfDoc, Point, Rect, Rgb};
+use gridcraft_pdf::{Baseline, Font, Page, PdfDoc, Point, Rect, Rgb, TextDirection};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param};
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param,
+};
 
 mod draw;
 mod header_footer;
@@ -151,8 +153,17 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 
+/// A rendered PDF and whether some of its Arabic text was set without an Arabic face.
+pub struct RenderedPdf {
+    pub bytes: Vec<u8>,
+    pub pages: usize,
+    pub missing_arabic_font: bool,
+}
+
+const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this PDF because no Noto Sans Arabic face was found for it.";
+
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -188,7 +199,16 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
-                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
+                    printed_blocks.push(PrintedBlock {
+                        page: page_index,
+                        sheet: lay.sheet,
+                        rows: *rs,
+                        cols: *cs,
+                        x,
+                        y,
+                        k,
+                        mirror_axis: sh.right_to_left.then_some(b.mirror_axis),
+                    });
                     if lay.settings.headings {
                         draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                     }
@@ -204,6 +224,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
+                let ox = if sh.right_to_left { lay.page_w - ox - lay.heading_w * k } else { ox };
                 pg.fill_rect(ox, oy, lay.heading_w * k, lay.heading_h * k, fill);
                 pg.rect_stroke(ox, oy, lay.heading_w * k, lay.heading_h * k, 0.3, [0xA0, 0xA0, 0xA0]);
             }
@@ -227,18 +248,24 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             page.link_page(Rect::new(lx, ly, w, h), target_page, Point::new(x, y));
         }
     }
-    let n = doc.page_count();
-    (doc.finish(), n)
+    let pages = doc.page_count();
+    let missing_arabic_font = doc.missing_arabic_font();
+    let bytes = doc.finish().map_err(|error| EngineError::Other(error.to_string()))?;
+    Ok(RenderedPdf { bytes, pages, missing_arabic_font })
 }
 
 // ---------------------------------------------------------------- commands
 
-fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
+fn build_pdf(s: &mut Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    let pdf = render_pdf(&d.wb, &lays, &d.display_title(), &path)?;
+    if pdf.missing_arabic_font {
+        s.ui_requests.push(crate::UiRequest::Message(MISSING_ARABIC_FONT.into()));
+    }
+    Ok((pdf.bytes, pdf.pages))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
