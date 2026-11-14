@@ -21,7 +21,7 @@ pub(super) fn about(ui: &mut egui::Ui, d: &mut Dialog) {
             ui.add_space(4.0);
             ui.label(lang.tr("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft."));
             ui.hyperlink_to("getartcraft.com/apps/gridcraft", "https://getartcraft.com/apps/gridcraft");
-            ui.hyperlink_to("Join the ArtCraft Discord", "https://discord.gg/artcraft");
+            ui.hyperlink_to(lang.tr("Join the ArtCraft Discord"), "https://discord.gg/artcraft");
         }
     }
 }

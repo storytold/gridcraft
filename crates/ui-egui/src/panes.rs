@@ -122,9 +122,9 @@ fn watch(app: &mut SheetApp, ui: &mut Ui) {
     }
     let list = app.session.run("formulas.watchWindow", json!({})).unwrap_or(Json::Null);
     egui::Grid::new("watch_grid").striped(true).num_columns(4).show(ui, |ui| {
-        ui.strong("Cell");
-        ui.strong("Value");
-        ui.strong("Formula");
+        ui.strong(lang.tr("Cell"));
+        ui.strong(lang.tr("Value"));
+        ui.strong(lang.tr("Formula"));
         ui.label("");
         ui.end_row();
         for w in list.as_array().cloned().unwrap_or_default() {
@@ -241,11 +241,11 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
     });
     ui.collapsing(lang.tr("Elements"), |ui| {
         let mut dl = chart.data_labels;
-        if ui.checkbox(&mut dl, "Data Labels").changed() {
+        if ui.checkbox(&mut dl, lang.tr("Data Labels")).changed() {
             app.run_or_alert("chart.set", json!({"chart": id, "dataLabels": dl}));
         }
         let mut gl = chart.gridlines;
-        if ui.checkbox(&mut gl, "Gridlines").changed() {
+        if ui.checkbox(&mut gl, lang.tr("Gridlines")).changed() {
             app.run_or_alert("chart.set", json!({"chart": id, "gridlines": gl}));
         }
         ui.horizontal(|ui| {

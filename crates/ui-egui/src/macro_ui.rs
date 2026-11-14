@@ -399,7 +399,7 @@ pub fn macros_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         .is_some_and(|items| items.iter().any(|it| it.get("trusted").and_then(Json::as_bool) == Some(false)));
     if untrusted {
         ui.horizontal(|ui| {
-            ui.weak("Scripts in this workbook came from a file and are disabled.");
+            ui.weak(lang.tr("Scripts in this workbook came from a file and are disabled."));
             if ui.button(lang.tr("Trust Scripts")).on_hover_text(lang.tr("Let this workbook's scripts run for the rest of this session")).clicked() {
                 let _ = app.run("automate.trustScripts", json!({"trusted": true}));
                 d.result = app.session.run("view.macros", json!({})).ok();
@@ -653,10 +653,10 @@ pub fn record_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     ui.add_space(4.0);
     let label = ui.label(lang.tr("Description:"));
     ui.add(egui::TextEdit::multiline(&mut desc).desired_rows(3).desired_width(f32::INFINITY).id_salt("record_description")).labelled_by(label.id);
-    ui.checkbox(&mut app.macros.relative, "Use Relative References");
+    ui.checkbox(&mut app.macros.relative, lang.tr("Use Relative References"));
     let problem = record_problem(app, &name, &key);
     if let Some(p) = &problem {
-        ui.label(egui::RichText::new(p).color(Tokens::get(ui.ctx()).danger));
+        ui.label(egui::RichText::new(lang.tr_error(p)).color(Tokens::get(ui.ctx()).danger));
     }
     ui.add_space(6.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

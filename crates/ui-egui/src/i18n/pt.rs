@@ -1189,6 +1189,62 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Use current selection as example" => "Usar a seleção atual como exemplo",
         "When results would land on cells that hold data:" => "Quando os resultados caírem em células que já têm dados:",
         "Write a new macro with this name" => "Escrever uma nova macro com este nome",
+        "All Methods" => "Todos os Métodos",
+        "Always run on this range" => "Sempre executar neste intervalo",
+        "Always this range:" => "Sempre este intervalo:",
+        "Answer" => "Resposta",
+        "Breakpoint" => "Ponto de interrupção",
+        "Cell" => "Célula",
+        "column" => "coluna",
+        "Convergence:" => "Convergência:",
+        "Data Labels" => "Rótulos de Dados",
+        "Enabled" => "Ativada",
+        "Every cell must hold something" => "Toda célula deve ter algum conteúdo",
+        "Evolutionary" => "Evolutionary",
+        "Evolutionary: a genetic search for models that aren't smooth; every variable cell needs bounds." => {
+            "Evolutionary: uma busca genética para modelos que não são suaves; toda célula variável precisa de limites."
+        }
+        "First row holds column names" => "A primeira linha contém os nomes das colunas",
+        "Formula" => "Fórmula",
+        "Grab bag" => "Misturado",
+        "GRG Nonlinear: a local optimum of a smooth model, from the current values." => {
+            "GRG Não Linear: um ótimo local de um modelo suave, a partir dos valores atuais."
+        }
+        "Integer Optimality (%):" => "Otimização de Números Inteiros (%):",
+        "Limits" => "Limites",
+        "Load/Save" => "Carregar/Salvar",
+        "Max Evaluations:" => "Máx. de Avaliações:",
+        "Maximum Generations without Improvement:" => "Máximo de Gerações sem Melhoria:",
+        "Mutation Rate:" => "Taxa de Mutação:",
+        "Needs an optimal or converged solution: Solver stopped before reaching one." => {
+            "Requer uma solução ótima ou convergida: o Solver parou antes de chegar a uma."
+        }
+        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints." => {
+            "Requer LP Simplex ou GRG Não Linear, um objetivo Máx ou Mín e nenhuma restrição de inteiro."
+        }
+        "Population Size:" => "Tamanho da População:",
+        "Random Seed:" => "Semente Aleatória:",
+        "range" => "intervalo",
+        "{range} already holds data. Replace it with the model?" => "{range} já contém dados. Substituir pelo modelo?",
+        "Require Bounds on Variables" => "Exigir Limites nas Variáveis",
+        "row" => "linha",
+        "Run a command" => "Executar um comando",
+        "Run a macro" => "Executar uma macro",
+        "Scripts in this workbook came from a file and are disabled." => {
+            "Os scripts desta pasta de trabalho vieram de um arquivo e estão desativados."
+        }
+        "Sensitivity" => "Sensibilidade",
+        "Simplex LP" => "LP Simplex",
+        "Simplex LP: for linear models; integer and binary constraints by branch and bound." => {
+            "LP Simplex: para modelos lineares; restrições de inteiro e binário por ramificação e limite."
+        }
+        "single cell" => "célula única",
+        "Solver Options" => "Opções do Solver",
+        "The model was loaded." => "O modelo foi carregado.",
+        "The model was saved to {range}." => "O modelo foi salvo em {range}.",
+        "The selection when the button is pressed" => "A seleção no momento em que o botão é pressionado",
+        "Undo what the macro did before stopping" => "Desfazer o que a macro fez antes de parar",
+        "Use a letter from A to Z for the shortcut." => "Use uma letra de A a Z para o atalho.",
         _ => return None,
     })
 }

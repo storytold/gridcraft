@@ -329,17 +329,17 @@ fn solver_options(ui: &mut egui::Ui, d: &mut Dialog, edit: impl Fn(&mut egui::Ui
     let mut done = false;
     egui::Grid::new("solverOptions").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         for (title, keys) in [("All Methods", &SOLVER_OPTIONS[..2]), ("Evolutionary", &SOLVER_OPTIONS[2..])] {
-            ui.label(egui::RichText::new(title).strong());
+            ui.label(egui::RichText::new(lang.tr(title)).strong());
             ui.end_row();
             for (key, label, _) in keys {
-                ui.label(*label);
+                ui.label(lang.tr(label));
                 edit(ui, d, key, 100.0, label);
                 ui.end_row();
             }
         }
     });
     let mut bounds = d.values.get("requireBounds").and_then(Json::as_bool).unwrap_or(true);
-    if ui.checkbox(&mut bounds, "Require Bounds on Variables").changed() {
+    if ui.checkbox(&mut bounds, lang.tr("Require Bounds on Variables")).changed() {
         d.values.insert("requireBounds".into(), json!(bounds));
     }
     ui.add_space(8.0);
@@ -430,7 +430,7 @@ fn at_home(app: &mut SheetApp, d: &mut Dialog) -> bool {
 fn save_solver_model(app: &mut SheetApp, d: &mut Dialog, range: &str, overwrite: bool) {
     d.values.remove("askModelOverwrite");
     let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d), "overwrite": overwrite})) {
-        Ok(r) => format!("The model was saved to {}.", r.get("range").and_then(Json::as_str).unwrap_or("")),
+        Ok(r) => app.ui.language.tr("The model was saved to {range}.").replace("{range}", r.get("range").and_then(Json::as_str).unwrap_or("")),
         Err(e) if !overwrite && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
             d.values.insert("askModelOverwrite".into(), json!(range.trim()));
             crate::clean_error(&e)
@@ -465,7 +465,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     ui.horizontal(|ui| {
         ui.label(lang.tr("To:"));
         for (g, label) in [("max", "Max"), ("min", "Min"), ("value", "Value Of:")] {
-            if ui.radio(goal == g, label).clicked() {
+            if ui.radio(goal == g, lang.tr(label)).clicked() {
                 d.values.insert("goal".into(), json!(g));
             }
         }
@@ -528,7 +528,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         }
     });
     let mut nonneg = d.values.get("nonNegative").and_then(Json::as_bool).unwrap_or(true);
-    if ui.checkbox(&mut nonneg, "Make Unconstrained Variables Non-Negative").changed() {
+    if ui.checkbox(&mut nonneg, lang.tr("Make Unconstrained Variables Non-Negative")).changed() {
         d.values.insert("nonNegative".into(), json!(nonneg));
     }
     let method = text(d, "method");
@@ -540,10 +540,10 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             _ => "GRG Nonlinear",
         };
         craft_ui::ComboBox::from_id_salt("solverMethod")
-            .selected_text(label(&method))
+            .selected_text(lang.tr(label(&method)))
             .show_ui(ui, |ui| {
                 for m in ["grg", "simplex", "evolutionary"] {
-                    if ui.selectable_label(method == m, label(m)).clicked() {
+                    if ui.selectable_label(method == m, lang.tr(label(m))).clicked() {
                         d.values.insert("method".into(), json!(m));
                     }
                 }
@@ -552,11 +552,11 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             .accessible_name(lang.tr("Select a Solving Method:"));
     });
     ui.label(
-        egui::RichText::new(match method.as_str() {
+        egui::RichText::new(lang.tr(match method.as_str() {
             "simplex" => "Simplex LP: for linear models; integer and binary constraints by branch and bound.",
             "evolutionary" => "Evolutionary: a genetic search for models that aren't smooth; every variable cell needs bounds.",
             _ => "GRG Nonlinear: a local optimum of a smooth model, from the current values.",
-        })
+        }))
         .small(),
     );
     ui.add_space(4.0);
@@ -589,7 +589,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
         let shown = d.values.get("modelArea").and_then(Json::as_bool).unwrap_or(false);
         // Hiding the area ends picking into Model Range, as a box that is not drawn is no longer
         // picked into (`ref_edit::window_shown`).
-        if ui.selectable_label(shown, "Load/Save").clicked() {
+        if ui.selectable_label(shown, lang.tr("Load/Save")).clicked() {
             d.values.insert("modelArea".into(), json!(!shown));
         }
         if ui.button(lang.tr("Options")).clicked() {
@@ -613,7 +613,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
                                 d.values.insert(k.clone(), if k == "value" { json!(x.to_string()) } else { x.clone() });
                             }
                         }
-                        d.values.insert("modelNote".into(), json!("The model was loaded."));
+                        d.values.insert("modelNote".into(), json!(lang.tr("The model was loaded.")));
                     }
                     Err(e) => {
                         d.values.insert("modelNote".into(), json!(crate::clean_error(&e)));
@@ -632,7 +632,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             d.values.remove("modelNote");
         } else if let Some(asked) = asked {
             ui.horizontal_wrapped(|ui| {
-                ui.label(format!("{asked} already holds data. Replace it with the model?"));
+                ui.label(lang.tr("{range} already holds data. Replace it with the model?").replace("{range}", &asked));
                 if ui.button(lang.tr("Replace")).clicked() && at_home(app, d) {
                     save_solver_model(app, d, &asked, true);
                 }
@@ -674,10 +674,10 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     let restore = d.values.get("restore").and_then(Json::as_bool).unwrap_or(false);
     if changed {
         ui.add_space(4.0);
-        if ui.radio(!restore, "Keep Solver Solution").clicked() {
+        if ui.radio(!restore, lang.tr("Keep Solver Solution")).clicked() {
             d.values.insert("restore".into(), json!(false));
         }
-        if ui.radio(restore, "Restore Original Values").clicked() {
+        if ui.radio(restore, lang.tr("Restore Original Values")).clicked() {
             d.values.insert("restore".into(), json!(true));
         }
     }
@@ -700,7 +700,7 @@ pub(super) fn solver_results(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         ui.label(lang.tr("Reports:"));
         for (key, label) in [("answerReport", "Answer"), ("sensitivityReport", "Sensitivity"), ("limitsReport", "Limits")] {
             let mut on = offered(key) && d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
-            let check = ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, label)).on_disabled_hover_text(why_not);
+            let check = ui.add_enabled(offered(key), egui::Checkbox::new(&mut on, lang.tr(label))).on_disabled_hover_text(lang.tr(why_not));
             if check.changed() {
                 d.values.insert(key.into(), json!(on));
             }

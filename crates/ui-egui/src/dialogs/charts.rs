@@ -135,7 +135,7 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
     };
     edit(ui, d, "range", "Chart data range:");
     ui.add_space(6.0);
-    ui.strong("Legend Entries (Series)");
+    ui.strong(lang.tr("Legend Entries (Series)"));
     let names: Vec<String> =
         d.values.get("names").and_then(Json::as_array).map(|a| a.iter().map(|n| n.as_str().unwrap_or("").to_string()).collect()).unwrap_or_default();
     let mut remove: Vec<u64> =
