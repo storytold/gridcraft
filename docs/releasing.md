@@ -1,5 +1,7 @@
 # Releasing GridCraft
 
+> **Last updated:** 2026-11-10 · **Change:** macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization; a named notarytool Keychain profile takes precedence over the existing three-variable authentication.
+
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
 signed installers for macOS, Windows, Linux, FreeBSD and the web, then creates or updates a
 **draft** GitHub Release named `GridCraft v<version>`. Nobody sees a draft until a maintainer
@@ -112,6 +114,13 @@ packaging/macos/package.sh                    # universal; needs both rustup tar
 packaging/macos/package.sh --arch aarch64     # quicker, host-only
 open dist/release/gridcraft-*-macos-*.dmg
 ```
+
+### macOS notarization authentication
+
+Set `APPLE_KEYCHAIN_PROFILE` to an existing `notarytool` Keychain profile to authenticate
+notarization without supplying account credentials to the script. The profile takes precedence
+over `APPLE_ID`, `APPLE_PASSWORD` and `APPLE_TEAM_ID`, and is used for both submissions and
+rejection logs. Ad-hoc signing still skips notarization.
 
 ### Windows
 
@@ -291,3 +300,11 @@ every push to `main` and every pull request. Release artifacts are built on `rel
 manually; manual runs from other branches are dry runs as described above. `packaging-lint.yml`
 also runs on `main` and PRs.
 - Locally: `cargo xtask ci` (fmt, clippy, tests, assets, layers, wasm, parity check).
+
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-11-10 | Document the Keychain-profile notarization option in the macOS section and keep its progress entry in the dated table. |
+| 2026-11-02 | macOS packaging accepts APPLE_KEYCHAIN_PROFILE for notarization; a named notarytool Keychain profile takes precedence over the existing three-variable authentication. |
