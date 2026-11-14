@@ -172,6 +172,8 @@ fn securities() {
     is_err(ev("TBILLPRICE", vec![d(2008, 3, 31), d(2009, 6, 1), n(0.09)]), CellError::Num);
     close_tol(ev("ACCRINTM", vec![d(2008, 4, 1), d(2008, 6, 15), n(0.1), n(1000.0), n(3.0)]), 20.54794521, 1e-9);
     is_err(ev("ACCRINTM", vec![d(2008, 6, 15), d(2008, 4, 1), n(0.1)]), CellError::Num);
+    // #4098: the actual/actual average year over 1900..=1901 is 365, not 365.5 (fictitious 29 Feb 1900).
+    close_tol(ev("ACCRINTM", vec![d(1900, 3, 1), d(1901, 3, 2), n(0.05), n(1000.0), n(1.0)]), 50.136_986_301_369_866, 1e-9);
     close_tol(ev("ACCRINT", vec![d(2008, 3, 1), d(2008, 8, 31), d(2008, 5, 1), n(0.1), n(1000.0), n(2.0), n(0.0)]), 16.66666667, 1e-9);
     close_tol(ev("ACCRINT", vec![d(2008, 3, 5), d(2008, 8, 31), d(2008, 5, 1), n(0.1), n(1000.0), n(2.0), n(0.0), b(false)]), 15.55555556, 1e-9);
     close_tol(ev("PRICEMAT", vec![d(2008, 2, 15), d(2008, 4, 13), d(2007, 11, 11), n(0.061), n(0.061), n(0.0)]), 99.98449888, 1e-9);
