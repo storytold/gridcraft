@@ -20,6 +20,7 @@ mod csv;
 mod drawing;
 mod feature_bags;
 mod fmla;
+mod hf_pictures;
 mod ods;
 mod omml;
 mod package;
