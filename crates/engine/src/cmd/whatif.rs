@@ -378,6 +378,9 @@ fn data_table(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let d = s.doc()?;
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
+    if sh.merges.iter().any(|m| !m.is_single() && m.intersects(&body)) {
+        return Err(EngineError::Other("Cannot change part of a merged cell.".into()));
+    }
     let (r0, c0) = (r.start.row, r.start.col);
     let mut trial = Trial::new(d);
     let mut out: Vec<(CellRef, Value)> = Vec::with_capacity(body.count() as usize);
