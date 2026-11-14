@@ -6,10 +6,12 @@ use super::{
 // ---------------------------------------------------------------- outline
 
 fn outline_lines(s: &Session, p: &Json) -> Result<(bool, u32, u32)> {
-    if let Some(r) = str_param(p, "rows").and_then(parse_lines) {
+    if let Some(text) = str_param(p, "rows") {
+        let r = parse_lines(text).ok_or_else(|| bad("rows", format!("not a range: {text}")))?;
         return Ok((true, r.start.row, r.end.row));
     }
-    if let Some(r) = str_param(p, "cols").and_then(parse_lines) {
+    if let Some(text) = str_param(p, "cols") {
+        let r = parse_lines(text).ok_or_else(|| bad("cols", format!("not a range: {text}")))?;
         return Ok((false, r.start.col, r.end.col));
     }
     let r = s.doc()?.selection.current();
