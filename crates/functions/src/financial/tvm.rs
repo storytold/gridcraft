@@ -85,7 +85,13 @@ pub(super) fn nper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if q <= 0.0 || rate <= -1.0 {
         return Err(CellError::Num);
     }
-    num_val(q.ln() / (1.0 + rate).ln())
+    // A nonzero rate below about 1E-16 still rounds `1 + rate` to 1, so the divisor is 0. Excel
+    // reports #DIV/0! there; dividing anyway gave infinity, which became #NUM!.
+    let ln_growth = (1.0 + rate).ln();
+    if ln_growth == 0.0 {
+        return Err(CellError::Div0);
+    }
+    num_val(q.ln() / ln_growth)
 }
 
 fn ipmt_calc(rate: f64, per: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 {
