@@ -319,10 +319,13 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
-                // The file's macros are read after this (`macros::load`), so they come along.
+                // The file's macros are read after this (`macros::load`), so they come along, and
+                // so do its text defaults: a save would otherwise lose them.
                 let macros = std::mem::take(&mut wb.macros_read);
+                let text_defaults = std::mem::take(&mut wb.text_defaults);
                 wb = Workbook::new();
                 wb.macros_read = macros;
+                wb.text_defaults = text_defaults;
             }
             // The file's band placement and cell count are derived state: rebuild them from the
             // cells themselves, dropping what is outside the sheet grid (#1008).
