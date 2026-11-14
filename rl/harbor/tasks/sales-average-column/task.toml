@@ -1,0 +1,28 @@
+schema_version = "1.3"
+
+[task]
+name = "gridcraft/sales-average-column"
+description = "Add a live Average column to the GridCraft sales workbook."
+keywords = ["gridcraft", "spreadsheet", "formulas"]
+
+[metadata]
+difficulty = "easy"
+category = "spreadsheet"
+
+[verifier]
+timeout_sec = 120
+
+[agent]
+timeout_sec = 600
+
+[environment]
+build_timeout_sec = 600
+cpus = 1
+memory_mb = 2048
+
+# Optional: give the agent GridCraft as an MCP tool instead of (or alongside) the CLI.
+# [[environment.mcp_servers]]
+# name = "gridcraft"
+# transport = "stdio"
+# command = "gridcraft-cli"
+# args = ["mcp", "--in", "/app/sales.xlsx"]
