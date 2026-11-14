@@ -181,7 +181,19 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             moved.dynamic = f.dynamic;
                             return Some(std::sync::Arc::new(moved));
                         }
-                        let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
+                        let moved = e.map(&mut |x| match x {
+                            gridcraft_formula::Expr::Struct(mut r) if r.table.is_empty() => {
+                                if let Some(table) = src_sheet.tables.iter().find(|t| t.range.contains(sc))
+                                    && (dest_sheet != clip.sheet || !table.range.contains(dest))
+                                {
+                                    r.table = table.name.clone();
+                                }
+                                gridcraft_formula::Expr::Struct(r)
+                            }
+                            other => other,
+                        });
+                        let moved =
+                            gridcraft_formula::adjust::shift_relative(moved, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
                         Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
