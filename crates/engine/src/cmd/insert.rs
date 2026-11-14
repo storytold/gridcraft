@@ -554,12 +554,14 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
             t.name = name.clone();
         }
         // Every reference to the table follows the rename. A bare name that is also a defined
-        // name where it is held resolves to the defined name, so it is not the table.
+        // name where it is held resolves to the defined name, so it is not the table; in a
+        // workbook name, that is a workbook-level defined name.
         let shadowed: Vec<bool> = (0..cx.wb.sheets.len()).map(|i| cx.wb.name(&old, i).is_some()).collect();
+        let shadowed_in_book = cx.wb.names.iter().any(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(&old));
         let sheet_of: std::collections::HashMap<String, usize> =
             cx.wb.sheets.iter().enumerate().map(|(i, s)| (s.name.to_ascii_lowercase(), i)).collect();
         let rename = |sheet: Option<usize>, e: gridcraft_formula::Expr| {
-            let shadow = sheet.is_some_and(|i| shadowed.get(i).copied().unwrap_or(false));
+            let shadow = sheet.map_or(shadowed_in_book, |i| shadowed.get(i).copied().unwrap_or(false));
             e.map(&mut |x| match x {
                 gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
                     st.table = name.clone();

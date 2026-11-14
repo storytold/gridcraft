@@ -84,6 +84,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         };
         let mut moved_formulas = std::collections::BTreeMap::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
+        // A cut moves the rules its cells hold now, not the clipboard's: rules cleared or added
+        // since the cut would otherwise come back or be lost.
+        let live_source = if cut_move { cx.wb.sheet(clip.sheet).cloned() } else { None };
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
             let source = cx.sheet_mut(clip.sheet)?;
@@ -372,8 +375,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
-        if cut_move {
-            move_cut_rules(cx, src_sheet, (clip.sheet, dest_sheet), src, at)?;
+        if let Some(live) = &live_source {
+            move_cut_rules(cx, live, (clip.sheet, dest_sheet), src, at)?;
             // References elsewhere to the moved block now point to its new place.
             let e = if dest_sheet == clip.sheet {
                 gridcraft_formula::adjust::Edit::Move { from: src, to_row: at.row, to_col: at.col }
