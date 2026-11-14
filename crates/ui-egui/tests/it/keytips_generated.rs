@@ -2031,10 +2031,7 @@ fn keytip_ag_() {
 fn keytip_aga_() {
     let mut h = harness(blank());
     sequence(&mut h, "AGA", false);
-    assert!(h.state().dialog.is_none(), "AGA must not open a dialog");
-    assert!(h.state().message.is_none(), "AGA must not open a message box");
-    assert!(h.state().toast.is_none(), "AGA must not raise a toast");
-    assert!(h.state().session.journal.is_empty(), "AGA must not journal");
+    assert!(h.state().message.is_some() || h.state().toast.is_some(), "AGA must invoke data.autoOutline and surface its missing-params error");
 }
 
 #[test]

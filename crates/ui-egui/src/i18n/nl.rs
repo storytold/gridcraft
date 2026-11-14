@@ -193,6 +193,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Ongeldige gegevens omcirkelen",
         "Clear Validation" => "Validatie wissen",
         "Group" => "Groeperen",
+        "Auto Outline" => "AutoOverzicht",
         "Ungroup" => "Groep opheffen",
         "Show Detail" => "Details weergeven",
         "Hide Detail" => "Details verbergen",

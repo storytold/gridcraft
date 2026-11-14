@@ -189,6 +189,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Zaokruži nevažeće podatke",
         "Clear Validation" => "Ukloni proveru",
         "Group" => "Grupiši",
+        "Auto Outline" => "Automatski prikaz strukture",
         "Ungroup" => "Razgrupiši",
         "Show Detail" => "Prikaži detalje",
         "Hide Detail" => "Sakrij detalje",

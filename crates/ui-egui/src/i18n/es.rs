@@ -177,6 +177,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Rodear con un círculo datos no válidos",
         "Clear Validation" => "Borrar círculos de validación",
         "Group" => "Agrupar",
+        "Auto Outline" => "Autoesquema",
         "Ungroup" => "Desagrupar",
         "Show Detail" => "Mostrar detalle",
         "Hide Detail" => "Ocultar detalle",
