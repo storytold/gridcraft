@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod he;
 mod it;
 mod ja;
 mod ko;
@@ -53,10 +54,11 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    He,
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -76,6 +78,7 @@ impl Language {
         Self::Nl,
         Self::Ro,
         Self::Tr,
+        Self::He,
     ];
 
     /// Every language in the order the switcher lists them: English first (the source language),
@@ -109,6 +112,7 @@ impl Language {
             Self::Vi => "Tiếng Việt",
             Self::Nl => "Nederlands",
             Self::Ro => "Română",
+            Self::He => "עברית",
         }
     }
 
@@ -134,6 +138,7 @@ impl Language {
             Self::Vi => "vi",
             Self::Nl => "nl",
             Self::Ro => "ro",
+            Self::He => "he",
         }
     }
 
@@ -168,6 +173,8 @@ impl Language {
             "vi" => Some(Self::Vi),
             "nl" => Some(Self::Nl),
             "ro" => Some(Self::Ro),
+            // `iw` is the code Hebrew had before ISO 639 changed it (1989); some systems still report it.
+            "he" | "iw" => Some(Self::He),
             _ => None,
         }
     }
@@ -219,6 +226,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
+            Self::He => he::translate(text),
         }
     }
 
@@ -544,5 +552,186 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+
+    #[test]
+    fn hebrew_is_offered_and_translated() {
+        for tag in ["he", "he-IL", "he_IL.UTF-8", "HE", "iw", "iw_IL"] {
+            assert_eq!(Language::parse(tag), Some(Language::He), "{tag}");
+        }
+        assert_eq!(Language::He.code(), "he");
+        assert_eq!(Language::He.name(), "עברית");
+        assert!(Language::for_picker().contains(&Language::He));
+        assert_eq!(Language::He.tr("Paste"), "הדבקה");
+        assert_eq!(Language::He.tr("Page Layout|Orientation"), "כיוון הדף");
+        // A key that reads the same in Hebrew falls back to the English.
+        assert_eq!(Language::He.tr("100%"), "100%");
+        // The saved code reads back as Hebrew.
+        let saved: Language = serde_json::from_value(serde_json::json!("he")).unwrap();
+        assert_eq!(saved, Language::He);
+    }
+
+    /// `{name}` placeholders, in order, so a repeated name has to survive too.
+    fn placeholder_names(text: &str) -> Vec<&str> {
+        text.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name)).collect()
+    }
+
+    /// The Rust string at the start of `src` (`"..."` with the escapes this catalog uses), and how
+    /// many bytes it occupied, quotes included.
+    fn cut_rust_string(src: &str) -> Option<(String, usize)> {
+        if !src.starts_with('"') {
+            return None;
+        }
+        let bytes = src.as_bytes();
+        let mut i = 1;
+        let mut out = String::new();
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' => {
+                    let escaped = *bytes.get(i + 1)?;
+                    let ch = match escaped {
+                        b'n' => '\n',
+                        b't' => '\t',
+                        b'r' => '\r',
+                        b'\\' => '\\',
+                        b'"' => '"',
+                        b'\'' => '\'',
+                        _ => return None,
+                    };
+                    out.push(ch);
+                    i += 2;
+                }
+                b'"' => return Some((out, i + 1)),
+                _ => {
+                    let ch = src[i..].chars().next()?;
+                    out.push(ch);
+                    i += ch.len_utf8();
+                }
+            }
+        }
+        None
+    }
+
+    /// The value after `=>`: a `"..."` or a braced `{ "..." }`, and the bytes from the start of
+    /// `after_arrow` through the value's closing quote.
+    fn cut_match_value(after_arrow: &str) -> Option<(String, usize)> {
+        if let Some(braced) = after_arrow.strip_prefix('{') {
+            let quote = braced.find('"')?;
+            let (value, len) = cut_rust_string(&braced[quote..])?;
+            Some((value, 1 + quote + len))
+        } else {
+            cut_rust_string(after_arrow)
+        }
+    }
+
+    /// Every `"english" => "hebrew"` arm in `he.rs`. The catalog is a `match`, not a table, so the
+    /// test reads the arms back; the count of `" =>` has to agree, or a new arm was skipped.
+    fn hebrew_catalog_pairs(src: &str) -> Vec<(String, String)> {
+        let start = src.find("Some(match text {").unwrap();
+        let end = src.find("_ => return None").unwrap();
+        let body = &src[start..end];
+        let mut pairs = Vec::new();
+        let mut i = 0;
+        while let Some(rel) = body[i..].find('"') {
+            let at = i + rel;
+            let (key, key_len) = cut_rust_string(&body[at..]).unwrap();
+            let after_key = &body[at + key_len..];
+            let trimmed = after_key.trim_start();
+            if !trimmed.starts_with("=>") {
+                i = at + 1;
+                continue;
+            }
+            let between = after_key.len() - trimmed.len();
+            let after_arrow = &trimmed[2..];
+            let after_arrow_trimmed = after_arrow.trim_start();
+            let arrow_gap = after_arrow.len() - after_arrow_trimmed.len();
+            let (value, value_span) = cut_match_value(after_arrow_trimmed).unwrap();
+            i = at + key_len + between + 2 + arrow_gap + value_span;
+            pairs.push((key, value));
+        }
+        let arms = body.matches("\" =>").count();
+        assert_eq!(pairs.len(), arms, "a Hebrew match arm was not read");
+        pairs
+    }
+
+    /// A mistyped `{name}` would still "translate" and then show the braces on screen. Every arm
+    /// keeps the English placeholder names; the samples name the ones the callsites fill in.
+    #[test]
+    fn hebrew_placeholders_match_their_keys() {
+        use std::collections::HashSet;
+
+        for english in ["{n} min ago", "Page {page} of {pages}", "{count} cell(s) found", "'{file}' is protected."] {
+            let hebrew = he::translate(english).unwrap();
+            assert_eq!(placeholder_names(hebrew), placeholder_names(english), "{english} => {hebrew}");
+            assert!(!placeholder_names(english).is_empty(), "{english}");
+        }
+        let pairs = hebrew_catalog_pairs(include_str!("i18n/he.rs"));
+        assert!(pairs.len() > 1_000, "{}", pairs.len());
+        let mut seen = HashSet::new();
+        for (english, hebrew) in &pairs {
+            assert!(seen.insert(english.as_str()), "duplicate Hebrew key {english:?}");
+            assert_eq!(he::translate(english), Some(hebrew.as_str()), "{english:?}");
+            assert_eq!(placeholder_names(hebrew), placeholder_names(english), "{english:?} => {hebrew:?}");
+        }
+        for sample in ["{n} min ago", "Page {page} of {pages}", "{count} cell(s) found", "'{file}' is protected."] {
+            assert!(seen.contains(sample), "{sample} is not an arm in he.rs");
+        }
+    }
+
+    /// The Hebrew table claims every Japanese `CORE` and `DIALOGS` string. `tr` would hide a
+    /// dropped key by showing English, so this calls `translate` and expects `Some`.
+    #[test]
+    fn hebrew_translates_japanese_core_and_dialogs() {
+        // These read the same in Hebrew, so the catalog omits them and `tr` shows the English.
+        const FALLS_BACK: &[&str] = &["100%", "PDF (*.pdf)"];
+        let mut translated = 0;
+        for (table, which) in [(ja::CORE, "CORE"), (ja::DIALOGS, "DIALOGS")] {
+            for (english, _) in table {
+                if FALLS_BACK.contains(english) {
+                    assert!(he::translate(english).is_none(), "{which} {english:?} should fall back to English");
+                    continue;
+                }
+                let hebrew = he::translate(english);
+                assert!(
+                    hebrew.is_some_and(|text| text.chars().any(|c| !c.is_whitespace())),
+                    "{which} key {english:?} has no Hebrew translation ({hebrew:?})"
+                );
+                translated += 1;
+            }
+        }
+        assert!(translated > 900, "{translated}");
+        for key in FALLS_BACK {
+            assert!(ja::CORE.iter().chain(ja::DIALOGS).any(|row| row.0 == *key), "{key} is not a Japanese reference key");
+        }
+    }
+
+    /// `ui.json` stores the language code; a serialize/deserialize mismatch would drop the preference.
+    #[test]
+    fn hebrew_serializes_to_he_and_back() {
+        let json = serde_json::to_string(&Language::He).unwrap();
+        assert_eq!(json, "\"he\"");
+        let restored: Language = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, Language::He);
+        assert_eq!(restored.code(), "he");
+    }
+
+    /// Ribbon buttons such as Top Align are two lines. Dropping the newline would change the layout.
+    #[test]
+    fn hebrew_keeps_newlines_in_two_line_labels() {
+        let hebrew = he::translate("Top\nAlign").unwrap();
+        assert_eq!(hebrew.matches('\n').count(), 1, "{hebrew:?}");
+        assert_eq!(Language::He.tr("Top\nAlign"), hebrew);
+        for (english, hebrew) in hebrew_catalog_pairs(include_str!("i18n/he.rs")) {
+            assert_eq!(hebrew.matches('\n').count(), english.matches('\n').count(), "newline count changed: {english:?} => {hebrew:?}");
+        }
+    }
+
+    /// `100%` and `PDF (*.pdf)` are left out of the catalog, so the interface shows the English.
+    #[test]
+    fn hebrew_pdf_filter_falls_back_to_english() {
+        for key in ["100%", "PDF (*.pdf)"] {
+            assert!(he::translate(key).is_none(), "{key} is omitted from the catalog");
+            assert_eq!(Language::He.tr(key), key, "{key}");
+        }
     }
 }
