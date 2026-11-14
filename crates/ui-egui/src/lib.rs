@@ -83,6 +83,20 @@ pub use services::{Chrome, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 
+fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
+    match value {
+        "north" => Some(egui::ResizeDirection::North),
+        "south" => Some(egui::ResizeDirection::South),
+        "east" => Some(egui::ResizeDirection::East),
+        "west" => Some(egui::ResizeDirection::West),
+        "northeast" => Some(egui::ResizeDirection::NorthEast),
+        "northwest" => Some(egui::ResizeDirection::NorthWest),
+        "southeast" => Some(egui::ResizeDirection::SouthEast),
+        "southwest" => Some(egui::ResizeDirection::SouthWest),
+        _ => None,
+    }
+}
+
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -308,6 +322,10 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// Linux/BSD: the window has no system frame; the title bar draws minimize, maximize and
+    /// close, and the window resizes from its edges (`ribbon::window_frame`).
+    pub window_controls: bool,
+    viewport_commands: Vec<egui::ViewportCommand>,
     /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
     /// to the front, also when the app is hidden or the window minimized (a Dock quit).
     pub bring_forward: bool,
@@ -340,4 +358,33 @@ pub fn clean_error(e: &str) -> String {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+#[cfg(test)]
+mod viewport_command_tests {
+    use super::parse_resize_direction;
+
+    #[test]
+    fn resize_direction_parser_accepts_all_edges_and_rejects_unknown_values() {
+        for name in ["north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest"] {
+            assert!(parse_resize_direction(name).is_some(), "{name}");
+        }
+        assert!(parse_resize_direction("middle").is_none());
+    }
+
+    #[test]
+    fn window_commands_queue_viewport_commands_without_a_workbook() {
+        use egui::ViewportCommand;
+        let mut a = crate::SheetApp::new(gridcraft_engine::Session::new(), crate::Services::default());
+        for (id, params, expected) in [
+            ("ui.window.minimize", serde_json::json!({}), ViewportCommand::Minimized(true)),
+            ("ui.window.maximize", serde_json::json!({"on": true}), ViewportCommand::Maximized(true)),
+            ("ui.window.close", serde_json::json!({}), ViewportCommand::Close),
+            ("ui.window.beginResize", serde_json::json!({"direction": "east"}), ViewportCommand::BeginResize(egui::ResizeDirection::East)),
+        ] {
+            assert!(a.run(id, params).is_ok(), "{id} should route without a workbook");
+            assert!(a.viewport_commands.contains(&expected), "{id} queues {expected:?}");
+        }
+        assert!(a.run("ui.window.beginResize", serde_json::json!({"direction": "diagonal"})).is_err());
+    }
 }
