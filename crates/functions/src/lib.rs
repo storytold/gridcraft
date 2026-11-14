@@ -78,6 +78,7 @@ pub(crate) mod stat;
 pub(crate) mod text;
 pub(crate) mod util;
 
+pub use criteria::TextCriteriaIndex;
 pub use ets::Timeline;
 pub use stat::{aggregate_values, aggregate_values_k};
 
