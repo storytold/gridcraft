@@ -28,6 +28,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{window} | {doc} | {index} (a window id, a workbook id, or the workbook's position in the list)", has_doc, activate_window),
         cmd!(noundo "window.close", "Close Window", ["Window"], None, "{window?, doc?, force?: bool} → {closed, document}: closes a window (the active one by default); its workbook closes with its last window, asking first when it has unsaved changes unless `force`", has_doc, close_window),
         cmd!(query "window.list", "Windows", ["Window"], None, "{} → [{window, doc, index, title, dirty, active, hidden}]", always, |s, _| Ok(s.window_list())),
+        cmd!(
+            query "options.userName",
+            "User Name",
+            ["File", "Options"],
+            None,
+            "{name?} → {name}: the user name that signs new notes and comments and becomes the author of new workbooks (File › Options › General; a preference kept in prefs.json, not in a workbook). Control characters become spaces, the ends are trimmed and at most 200 characters are kept; a blank or non-text `name` is refused and changes nothing; {} only reports it",
+            always,
+            user_name
+        ),
     ]
 }
 
@@ -267,4 +276,27 @@ fn close_window(s: &mut Session, p: &Json) -> Result<Json> {
     }
     s.close_window(id);
     Ok(json!({"closed": true, "document": true}))
+}
+
+/// The longest user name kept, in characters; `?author=` on the web takes the same.
+pub const MAX_USER_NAME_CHARS: usize = 200;
+
+/// A user name as it is kept: control characters (tabs, line breaks) become spaces, the ends are
+/// trimmed and at most [`MAX_USER_NAME_CHARS`] characters are kept. `None` when nothing but spaces
+/// is left. Only the kept characters are copied, however long `name` is.
+pub fn clean_user_name(name: &str) -> Option<String> {
+    let name = name.trim_matches(|c: char| c.is_whitespace() || c.is_control());
+    let kept: String = name.chars().take(MAX_USER_NAME_CHARS).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let kept = kept.trim_end();
+    (!kept.is_empty()).then(|| kept.to_string())
+}
+
+/// File › Options › General › User name: the name that signs new notes and comments and becomes
+/// the author of new workbooks. A preference, so no open workbook changes and there is no undo
+/// step; a refused name leaves the one there was.
+fn user_name(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(v) = p.get("name").filter(|v| !v.is_null()) {
+        s.prefs.user_name = v.as_str().and_then(clean_user_name).ok_or_else(|| bad("options.userName", "`name` must be text that isn't blank"))?;
+    }
+    Ok(json!({"name": s.prefs.user_name}))
 }

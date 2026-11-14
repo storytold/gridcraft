@@ -250,6 +250,11 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Light", "ライト"),
     ("Dark", "ダーク"),
     ("Interface language", "表示言語"),
+    ("User name", "ユーザー名"),
+    (
+        "Signs new notes and comments, and is the author of new workbooks.",
+        "新しいメモやコメントの作成者名として、また新しいブックの作成者として使われます。",
+    ),
     ("Interface size", "表示サイズ"),
     ("Auto", "自動"),
     ("Drag to freeze columns", "ドラッグして列を固定"),

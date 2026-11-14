@@ -1182,6 +1182,7 @@ fn the_policy_keeps_macros_away_from_files_and_the_app() {
         ("macro.run", json!({"name": "Self"})),
         ("view.newWindow", json!({})),
         ("view.hideWindow", json!({})),
+        ("options.userName", json!({"name": "Someone Else"})),
     ] {
         put(
             &mut s,
@@ -1191,6 +1192,7 @@ fn the_policy_keeps_macros_away_from_files_and_the_app() {
         assert!(err.contains(&format!("Step 2 ({id}) can't run in a macro")), "{err}");
         assert!(v(&s, "A1").is_empty(), "{id}: nothing ran");
     }
+    assert_eq!(s.prefs.user_name, "GridCraft User", "a macro doesn't change who signs notes");
     // A disabled step isn't checked.
     put(&mut s, json!({"name": "Bad", "steps": [{"command": "file.close", "enabled": false}]}));
     s.execute("macro.run", json!({"name": "Bad"})).unwrap();
