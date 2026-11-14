@@ -638,6 +638,16 @@ mod tests {
     }
 
     #[test]
+    fn nested_colours_are_kept_per_glyph() {
+        // Green a, + and c; black b and the plain +d are left to the equation's own colour.
+        let l = layout("{\\color{green}a+{\\color{black}b}+c}+d").unwrap();
+        let g = Some([0, 128, 0]);
+        let c: Vec<(char, Option<[u8; 3]>)> =
+            l.items.iter().filter_map(|i| if let Item::Glyph(g) = i { Some((g.ch, g.color)) } else { None }).collect();
+        assert_eq!(c, vec![('a', g), ('+', g), ('b', None), ('+', g), ('c', g), ('+', None), ('d', None)]);
+    }
+
+    #[test]
     fn errors_point_at_the_source() {
         let e = layout("a + \\frac{1}{").unwrap_err();
         assert!(!e.message.is_empty());
