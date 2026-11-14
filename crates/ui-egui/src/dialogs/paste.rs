@@ -74,6 +74,11 @@ pub(super) fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialo
             }
         });
     });
+    // Nothing copied in GridCraft: the text copied in another program is pasted instead.
+    if *confirm && app.paste_special_external() {
+        *confirm = false;
+        *open = false;
+    }
 }
 
 /// Set by the Paste Link access key for the next frame of the dialog, which then pastes.
