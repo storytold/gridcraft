@@ -480,3 +480,95 @@ fn chart_name_dependencies_are_checked_in_both_transfer_directions() {
     s.execute("sheet.move", json!({"to":0,"targetWorkbook":destination})).unwrap();
     assert_eq!(s.documents()[0].wb.sheet(0).unwrap().charts[0].series[0].name.as_deref(), Some("Source!Units"));
 }
+
+#[test]
+fn bubble_sizes_follow_a_renamed_copy_and_survive_xlsx() {
+    let (mut s, _, destination) = movable_books();
+    s.execute("cell.set", json!({"cell":"A2","input":"43"})).unwrap();
+    s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+    let chart = &mut Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0];
+    chart.kind = gridcraft_model::ChartKind::Bubble;
+    chart.series[0].bubble_sizes = Some("Source!A1:A2".into());
+    s.set_active(1);
+    s.execute("sheet.rename", json!({"name":"Source"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A1","input":"999"})).unwrap();
+    s.set_active(0);
+    s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+    let wb = &s.active().unwrap().wb;
+    let check = |wb: &gridcraft_model::Workbook| {
+        let chart = &wb.sheet(0).unwrap().charts[0];
+        let data = gridcraft_chart::resolve(wb, 0, chart);
+        assert_eq!(data.series[0].sizes, Some(vec![Some(42.0), Some(43.0)]));
+    };
+    check(wb);
+    let bytes = gridcraft_engine::io::save_bytes(wb, "Bubble.xlsx").unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("Bubble.xlsx", &bytes).unwrap();
+    check(&reopened);
+}
+
+#[test]
+fn bubble_size_dependencies_refuse_transfer_without_mutation() {
+    for inbound in [false, true] {
+        let (mut s, _, destination) = movable_books();
+        let sheet = if inbound { "Keep" } else { "Source" };
+        s.execute("sheet.activate", json!({"sheet":sheet})).unwrap();
+        s.execute("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+        s.execute("cell.set", json!({"cell":"A2","input":"2"})).unwrap();
+        s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+        let chart = &mut Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(usize::from(inbound)).unwrap().charts[0];
+        chart.kind = gridcraft_model::ChartKind::Bubble;
+        chart.series[0].bubble_sizes = Some(if inbound { "Source!A1:A2" } else { "Keep!A1:A2" }.into());
+        s.execute("sheet.activate", json!({"sheet":"Source"})).unwrap();
+        let before: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+        assert!(s.execute("sheet.move", json!({"to":0,"copy":!inbound,"targetWorkbook":destination})).is_err());
+        for (d, wb) in s.documents().iter().zip(before) {
+            assert!(Arc::ptr_eq(&d.wb, &wb));
+        }
+    }
+}
+
+#[test]
+fn transferred_literal_labels_resist_destination_collisions_and_xlsx_roundtrip() {
+    use gridcraft_model::DefinedName;
+    for copy in [false, true] {
+        for label in ["Missing!A1", "Title", "Missing!Title"] {
+            let (mut s, _, destination) = movable_books();
+            s.execute("cell.set", json!({"cell":"A2","input":"43"})).unwrap();
+            s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+            Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].name = Some(label.into());
+            s.set_active(1);
+            s.execute("sheet.rename", json!({"name":"Missing"})).unwrap();
+            s.execute("cell.set", json!({"cell":"A1","input":"Different label"})).unwrap();
+            let wb = Arc::make_mut(&mut s.active_mut().unwrap().wb);
+            for scope in [None, Some(0)] {
+                wb.names.push(DefinedName { name: "Title".into(), scope, formula: "Missing!A1".into(), comment: String::new(), hidden: false });
+            }
+            s.set_active(0);
+            s.execute("sheet.move", json!({"to":0,"copy":copy,"targetWorkbook":destination})).unwrap();
+            let wb = &s.active().unwrap().wb;
+            let check = |wb: &gridcraft_model::Workbook| {
+                let data = gridcraft_chart::resolve(wb, 0, &wb.sheet(0).unwrap().charts[0]);
+                assert_eq!(data.series[0].name, label);
+            };
+            check(wb);
+            let bytes = gridcraft_engine::io::save_bytes(wb, "Labels.xlsx").unwrap();
+            let (reopened, _) = gridcraft_engine::io::open_bytes("Labels.xlsx", &bytes).unwrap();
+            check(&reopened);
+        }
+    }
+}
+
+#[test]
+fn adding_a_sheet_does_not_activate_existing_destination_chart_labels() {
+    let (mut s, _, destination) = books();
+    s.set_active(1);
+    s.execute("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A2","input":"2"})).unwrap();
+    s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+    Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].name = Some("Source!A1".into());
+    s.set_active(0);
+    s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+    let wb = &s.active().unwrap().wb;
+    let data = gridcraft_chart::resolve(wb, 1, &wb.sheet(1).unwrap().charts[0]);
+    assert_eq!(data.series[0].name, "Source!A1");
+}

@@ -161,6 +161,10 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
     output.names.extend(imported);
     let visible = moved.visibility == Visibility::Visible;
     output.sheets.insert(before, Arc::new(moved));
+    preserve_literal_chart_names(source, sheet, &mut output, before);
+    for index in 0..destination.sheets.len() {
+        preserve_literal_chart_names(destination, index, &mut output, index + usize::from(index >= before));
+    }
     output.set_active_sheet(if visible { before } else { destination.active_sheet() + usize::from(destination.active_sheet() >= before) });
     let mut remaining = source.clone();
     if !copy {
@@ -186,6 +190,32 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
         remaining.set_active_sheet(active);
     }
     Ok((remaining, output, before))
+}
+
+/// A name or sheet added by transfer must not turn an existing literal label into a formula.
+/// Classify against the complete output, including imported names and the renamed sheet.
+fn preserve_literal_chart_names(source: &Workbook, sheet: usize, destination: &mut Workbook, at: usize) {
+    let mut labels = Vec::new();
+    for (chart_index, chart) in source.sheet(sheet).into_iter().flat_map(|s| &s.charts).enumerate() {
+        for (series_index, series) in chart.series.iter().enumerate() {
+            if let Some(name) = &series.name
+                && !gridcraft_chart::series_name_is_formula(source, sheet, name)
+                && gridcraft_chart::series_name_is_formula(destination, at, name)
+            {
+                labels.push((chart_index, series_index, format!("\"{}\"", name.trim().replace('"', "\"\""))));
+            }
+        }
+    }
+    if labels.is_empty() {
+        return;
+    }
+    if let Some(sheet) = destination.sheet_mut(at) {
+        for (chart, series, name) in labels {
+            if let Some(series) = sheet.charts.get_mut(chart).and_then(|c| c.series.get_mut(series)) {
+                series.name = Some(name);
+            }
+        }
+    }
 }
 
 fn unique_name(destination: &Workbook, base: &str) -> Result<String> {
@@ -400,6 +430,7 @@ fn map_formulas(sheet: &mut Sheet, workbook: &Workbook, sheet_index: usize, f: &
         for s in &mut c.series {
             s.values = f(&s.values)?;
             optional(&mut s.categories, f)?;
+            optional(&mut s.bubble_sizes, f)?;
             if s.name.as_deref().is_some_and(|name| gridcraft_chart::series_name_is_formula(workbook, sheet_index, name)) {
                 optional(&mut s.name, f)?;
             }

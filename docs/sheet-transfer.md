@@ -20,7 +20,10 @@ File provenance follows transferred content: a destination receiving a sheet fro
 an opened file retains the active-content safety checks, including in a new workbook
 and after undo/redo. Removing the active sheet selects a visible remaining tab.
 Literal chart series labels are preserved; evaluated names and references are checked
-and rewritten using the same classification as chart rendering.
+and rewritten using the same classification as chart rendering. Bubble-size references
+are checked and rewritten too. Literal chart labels in both workbooks stay literal
+when newly available sheets or names would otherwise turn them into references;
+XLSX save/reopen preserves that distinction, including embedded quotes.
 
 ## Safety limits
 
