@@ -711,6 +711,50 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
 
+const SIMPLE_TABLE: &str = r#"<pivotTableDefinition name="Sales"><location ref="C1:D4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Total" fld="1"/></dataFields></pivotTableDefinition>"#;
+const CACHE_PART: &str = "xl/pivotCache/pivotCacheDefinition1.xml";
+
+/// Rewrites the uncompressed size a zip's central directory declares for `name`.
+fn declare_size(mut zip: Vec<u8>, name: &str, size: u32) -> Vec<u8> {
+    let at = (0..zip.len().saturating_sub(46))
+        .find(|&i| {
+            zip[i..i + 4] == [0x50, 0x4b, 0x01, 0x02] && {
+                let len = u16::from_le_bytes([zip[i + 28], zip[i + 29]]) as usize;
+                zip.get(i + 46..i + 46 + len) == Some(name.as_bytes())
+            }
+        })
+        .unwrap();
+    zip[at + 24..at + 28].copy_from_slice(&size.to_le_bytes());
+    zip
+}
+
+#[test]
+fn unreadable_pivot_cache_warns() {
+    // Control: a readable cache gives a PivotTable and no cache warning.
+    let (wb, report) = read_xlsx(&with_pivot(SIMPLE_TABLE, Some(GOOD_CACHE))).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().pivots.len(), 1, "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w.contains("PivotTable's cache")), "{:?}", report.warnings);
+    // Malformed and missing caches: the workbook opens and the lost PivotTable is reported.
+    let lost = format!("a PivotTable's cache {CACHE_PART} is missing or could not be read; kept as plain cells");
+    for cache in [Some("garbage <<<"), None] {
+        let (wb, report) = read_xlsx(&with_pivot(SIMPLE_TABLE, cache)).unwrap();
+        assert!(wb.sheet(0).unwrap().pivots.is_empty());
+        assert!(report.warnings.contains(&lost), "{cache:?}: {:?}", report.warnings);
+    }
+}
+
+#[test]
+fn oversized_pivot_cache_warns() {
+    // The cache declares more than the per-part limit, so it is refused before it inflates.
+    let declared = u32::try_from(crate::package::MAX_PART + 1).unwrap();
+    let bytes = declare_size(with_pivot(SIMPLE_TABLE, Some(GOOD_CACHE)), CACHE_PART, declared);
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().name, "Data");
+    assert!(wb.sheet(0).unwrap().pivots.is_empty());
+    let lost = format!("a PivotTable's cache is too large to read ({CACHE_PART} expands to {declared} bytes); kept as plain cells");
+    assert!(report.warnings.contains(&lost), "{:?}", report.warnings);
+}
+
 /// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
 /// (header, values), `pt` the pivot built on `Data!A1:<last>`.
 fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
