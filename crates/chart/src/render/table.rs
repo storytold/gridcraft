@@ -71,8 +71,8 @@ pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, lay
         let name_x = if settings.show_keys { x0 + 25.0 } else { x0 + 4.0 };
         if settings.show_keys {
             let swatch = match plot_kind(chart, series, i) {
-                ChartKind::Line | ChartKind::LineStacked => Swatch::Line,
-                ChartKind::LineMarkers => Swatch::LineMarker,
+                ChartKind::Line | ChartKind::LineStacked | ChartKind::LineStacked100 => Swatch::Line,
+                ChartKind::LineMarkers | ChartKind::LineStacked100Markers => Swatch::LineMarker,
                 _ => Swatch::Box,
             };
             draw_swatch(ctx, swatch, x0 + 4.0, y, 7.0, series.color);

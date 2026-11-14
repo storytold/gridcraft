@@ -89,3 +89,14 @@ fn chart_type_marks_the_chart_s_current_type() {
         }
     }
 }
+
+#[test]
+fn chart_type_offers_and_marks_the_hundred_percent_stacked_line_types() {
+    let (mut h, id) = open_chart_type("line", "stacked100Markers");
+    assert!(marked(&h, "100% Stacked Line with Markers"));
+    assert!(!marked(&h, "100% Stacked Line"));
+    click(&mut h, "100% Stacked Line");
+    assert_eq!(kind(&h, id), ChartKind::LineStacked100);
+    click(&mut h, "100% Stacked Line with Markers");
+    assert_eq!(kind(&h, id), ChartKind::LineStacked100Markers);
+}

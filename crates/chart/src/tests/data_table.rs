@@ -148,3 +148,32 @@ fn dense_and_tiny_tables_are_bounded_and_explicit() {
         assert_sane(&render(&c, &d, w, h, &ApproxMeasure), w, h);
     }
 }
+
+#[test]
+fn table_keys_for_100_percent_stacked_lines_use_line_swatches() {
+    for (kind, marker) in [(ChartKind::LineStacked100, false), (ChartKind::LineStacked100Markers, true)] {
+        let mut c = chart(kind);
+        c.title = Some(String::new());
+        c.legend = LegendPos::None;
+        c.data_labels = false;
+        c.data_table = Some(ChartDataTable::default());
+        let color = [1, 2, 3, 255];
+        let d = ChartData {
+            categories: ["Jan", "Feb"].map(String::from).to_vec(),
+            series: vec![series("Rate", &[1.0, 3.0], color, kind)],
+            ..Default::default()
+        };
+        let p = render(&c, &d, 600.0, 400.0, &ApproxMeasure);
+        let header_y = p
+            .iter()
+            .find_map(|p| match p {
+                Prim::Text { text, y, .. } if text == "Jan" => Some(*y),
+                _ => None,
+            })
+            .unwrap();
+        let key_circles = p.iter().filter(|p| matches!(p, Prim::Circle { cy, fill: Some(f), .. } if *f == color && *cy > header_y)).count();
+        assert_eq!(key_circles, usize::from(marker), "{kind:?}");
+        let key_box = p.iter().any(|p| matches!(p, Prim::Rect { y, fill: Some(f), .. } if *f == color && *y > header_y));
+        assert!(!key_box, "{kind:?} key is a line swatch");
+    }
+}
