@@ -4,6 +4,7 @@ use super::{Dialog, Json, Key, SheetApp, json};
 pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
     let names = list.as_array().cloned().unwrap_or_default();
+    d.list_index = d.list_index.min(names.len().saturating_sub(1));
     let selected = names.get(d.list_index).cloned();
     let field = |n: &Json, k: &str| n.get(k).and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
