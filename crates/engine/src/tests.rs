@@ -3899,6 +3899,36 @@ fn image_cell(s: &Session, id: u32) -> Option<CellRef> {
     s.doc().unwrap().wb.active().unwrap().images.iter().find(|i| i.id == id).map(|i| i.anchor.cell)
 }
 
+/// Page Layout › Background asks for its picture through the picture dialog, and the request
+/// carries the background marker: the dialog must confirm through `pageLayout.background` again,
+/// or the picture lands unmarked and `clear` cannot remove it.
+#[test]
+fn background_marks_the_picture_dialog_request() {
+    let mut s = s();
+    s.execute("pageLayout.background", json!({})).unwrap();
+    let dialog = s
+        .take_ui_requests()
+        .into_iter()
+        .find_map(|r| match r {
+            crate::UiRequest::Dialog(name, params) if name == "insertPicture" => Some(params),
+            _ => None,
+        })
+        .expect("Background asks for a picture");
+    assert_eq!(dialog.get("background"), Some(&json!(true)), "{dialog}");
+}
+
+#[test]
+fn background_stores_a_marked_picture_at_a1_and_clear_removes_it() {
+    let mut s = s();
+    s.execute("pageLayout.background", json!({"base64": crate::io::base64_encode(&tiny_png())})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.images.len(), 1);
+    assert_eq!(sh.images[0].alt, "Sheet background");
+    assert_eq!(sh.images[0].anchor.cell, CellRef::parse("A1").unwrap());
+    s.execute("pageLayout.background", json!({"clear": true})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().images.is_empty(), "clear removes the sheet background");
+}
+
 /// Every undo step holds a copy of the workbook. A picture's bytes and the VBA project are shared
 /// between those copies instead of copied into each: a 20 MB picture used to cost another 20 MB
 /// for every cell typed on its sheet, up to 100 steps (2 GB).

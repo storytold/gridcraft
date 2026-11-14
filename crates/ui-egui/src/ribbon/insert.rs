@@ -1,21 +1,44 @@
-use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep};
+use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep, sep_wide};
 use super::{
     Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
 };
 
+/// The card width below which the Insert tab tightens its group separators and spacing. The tab
+/// carries Excel's full set of groups; with the CI fonts' wider labels the last ones (Equation,
+/// Symbol) would otherwise scroll past the card's edge at 1400 px.
+const INSERT_TAB_COMPACT_WIDTH: f32 = 1450.0;
+
 /// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
-pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
-    let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
-    control_keytip(app, ui, &__k, "insert.pivotTable");
-    if __k.clicked() {
+pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui, viewport: f32) {
+    let compact = viewport < INSERT_TAB_COMPACT_WIDTH;
+    if compact {
+        ui.spacing_mut().item_spacing.x = 0.0;
+    }
+    let break_width = if compact { 4.0 } else { 13.0 };
+    // Excel's PivotTable split button: the button inserts one, the menu offers Recommended
+    // PivotTables as well.
+    let (pt, pt_menu) = big_split_button(ui, Icon::PivotTable, "PivotTable", "PivotTable");
+    control_keytip(app, ui, &pt, "insert.pivotTable");
+    if pt.clicked() {
         act(app, "insert.pivotTable", json!({}));
     }
+    control_keytip(app, ui, &pt_menu, "insert.recommendedPivotTables");
+    egui::Popup::menu(&pt_menu).show(|ui| {
+        if ui.button(app.ui.language.tr("PivotTable")).clicked() {
+            act(app, "insert.pivotTable", json!({}));
+            ui.close();
+        }
+        if ui.button(app.ui.language.tr("Recommended PivotTables")).clicked() {
+            act(app, "insert.recommendedPivotTables", json!({}));
+            ui.close();
+        }
+    });
     let __k = big_button(ui, Icon::Table, "Table", "Table", false);
     control_keytip(app, ui, &__k, "insert.table");
     if __k.clicked() {
         act(app, "insert.table", json!({}));
     }
-    sep(ui);
+    sep_wide(ui, break_width);
     let pic = big_button(ui, Icon::Picture, "Pictures", "Insert a picture", true);
     anchor_keytip(app, ui, &pic, &["insert.picture"]);
     pic.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Pictures"));
@@ -65,7 +88,15 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    sep(ui);
+    sep_wide(ui, break_width);
+    // Cell Controls (Excel keeps them after Illustrations).
+    let cb = big_button(ui, Icon::Checkbox, "Checkbox", "Insert checkboxes in the selected cells", false);
+    cb.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Checkbox"));
+    control_keytip(app, ui, &cb, "insert.checkbox");
+    if cb.clicked() {
+        act(app, "insert.checkbox", json!({}));
+    }
+    sep_wide(ui, break_width);
     let __k = big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false);
     control_keytip(app, ui, &__k, "insert.recommendedCharts");
     if __k.clicked() {
@@ -102,6 +133,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                     ],
                 ),
                 (Icon::ChartPie, "Pie or Doughnut", "insert.chart.pie", vec![("Pie", "pie", ""), ("Doughnut", "doughnut", "")]),
+                (Icon::Theme, "Hierarchy", "insert.chart.hierarchy", vec![("Treemap", "treemap", ""), ("Sunburst", "sunburst", "")]),
             ] {
                 let r = small_button(ui, icon, "", tip, true);
                 control_keytip(app, ui, &r, cid);
@@ -125,19 +157,12 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 ),
                 (Icon::Chart, "Statistic", "insert.chart.statistic", vec![("Histogram", "histogram", ""), ("Box & Whisker", "boxWhisker", "")]),
                 (
-                    Icon::Theme,
-                    "Hierarchy & more",
-                    "insert.chart.hierarchy",
-                    vec![
-                        ("Treemap", "treemap", ""),
-                        ("Sunburst", "sunburst", ""),
-                        ("Waterfall", "waterfall", ""),
-                        ("Funnel", "funnel", ""),
-                        ("Radar", "radar", ""),
-                        ("Stock", "stock", ""),
-                        ("Combo", "combo", ""),
-                    ],
+                    Icon::ChartWaterfall,
+                    "Waterfall, Funnel, Stock or Radar",
+                    "insert.chart.waterfall",
+                    vec![("Waterfall", "waterfall", ""), ("Funnel", "funnel", ""), ("Stock", "stock", ""), ("Radar", "radar", "")],
                 ),
+                (Icon::ChartCombo, "Combo", "insert.chart.combo", vec![("Combo", "combo", "")]),
             ] {
                 let r = small_button(ui, icon, "", tip, true);
                 control_keytip(app, ui, &r, cid);
@@ -152,11 +177,17 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
-    sep(ui);
+    sep_wide(ui, break_width);
     if big_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false).clicked() {
         act(app, "insert.slicer", json!({}));
     }
-    sep(ui);
+    let __k = big_button(ui, Icon::Chart, "PivotChart", "PivotChart", false);
+    __k.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "PivotChart"));
+    control_keytip(app, ui, &__k, "insert.pivotChart");
+    if __k.clicked() {
+        act(app, "insert.pivotChart", json!({}));
+    }
+    sep_wide(ui, break_width);
     let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);
     anchor_keytip(app, ui, &sp, &["dialog:sparkline"]);
     egui::Popup::menu(&sp).show(|ui| {
@@ -166,7 +197,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    sep(ui);
+    sep_wide(ui, break_width);
     // Form controls: draw a button, slider or spin button on the sheet (a click places it at its
     // default size). Their key tips run the command at the active cell.
     use gridcraft_engine::model::ControlKind;
@@ -186,12 +217,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    sep(ui);
-    // Cell Controls.
-    if big_button(ui, Icon::Checkbox, "Checkbox", "Insert checkboxes in the selected cells", false).clicked() {
-        act(app, "insert.checkbox", json!({}));
-    }
-    sep(ui);
+    sep_wide(ui, break_width);
     let __k = big_button(ui, Icon::Link, "Link", "Insert Link", false);
     control_keytip(app, ui, &__k, "dialog:insertLink");
     if __k.clicked() {
@@ -202,7 +228,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("comment", json!({"threaded": true}));
     }
-    sep(ui);
+    sep_wide(ui, break_width);
     let __k = big_button(ui, Icon::TextBox, "Text\nBox", "Text Box", false);
     control_keytip(app, ui, &__k, "insert.textBox");
     if __k.clicked() {
@@ -221,7 +247,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         crate::paper_view::start_editing(app);
     }
     // Symbols: Equation, then Symbol.
-    sep(ui);
+    sep_wide(ui, break_width);
     let (eq, eq_menu) = big_split_button(ui, Icon::Equation, "Equation", "Insert an equation, or pick one from the gallery");
     control_keytip(app, ui, &eq, "dialog:equation");
     if eq.clicked() {

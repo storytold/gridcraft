@@ -265,8 +265,15 @@ fn keytip_han_() {
 #[test]
 fn keytip_has_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "HAS", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "HAS must run home.addIns cleanly");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("addIns"), "HAS must open the addIns dialog");
 }
 
 #[test]
@@ -545,7 +552,7 @@ fn keytip_hfdo_() {
 fn keytip_hfdp_() {
     let mut h = harness(blank());
     sequence(&mut h, "HFDP", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "HFDP must run arrange.selectionPane cleanly");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "HFDP must run view.selectionPane cleanly");
 }
 
 #[test]
@@ -1200,7 +1207,8 @@ fn keytip_nhi_() {
 fn keytip_ni1_() {
     let mut h = harness(blank());
     sequence(&mut h, "NI1", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.chart"), "NI1 must journal insert.chart");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "NI1 must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -1295,12 +1303,13 @@ fn keytip_nq_() {
 #[test]
 fn keytip_nr_() {
     let mut h = harness(blank());
-    // The dialog previews chart types for the selected data, so the sheet needs some.
+    // Some of these dialogs preview the selection, so the sheet has a small table.
     h.state_mut()
         .session
         .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
         .unwrap();
     h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "NR", false);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("recommendedCharts"), "NR must open the recommendedCharts dialog");
 }
@@ -1334,7 +1343,8 @@ fn keytip_nsc_() {
 fn keytip_nsd_() {
     let mut h = harness(blank());
     sequence(&mut h, "NSD", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "insert.chart"), "NSD must journal insert.chart");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "NSD must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -1361,11 +1371,15 @@ fn keytip_nsl_() {
 #[test]
 fn keytip_nsp_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "NSP", false);
-    assert!(
-        h.state().message.is_some() || h.state().toast.is_some(),
-        "NSP must invoke insert.recommendedPivotTables and surface its missing-params error"
-    );
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("recommendedPivotTables"), "NSP must open the recommendedPivotTables dialog");
 }
 
 #[test]
@@ -1381,8 +1395,15 @@ fn keytip_nst_() {
 #[test]
 fn keytip_nsz_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "NSZ", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "NSZ must invoke insert.pivotChart and surface its missing-params error");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pivotChart"), "NSZ must open the pivotChart dialog");
 }
 
 #[test]
@@ -1507,8 +1528,15 @@ fn keytip_pbr_() {
 #[test]
 fn keytip_pgb_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "PGB", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "pageLayout.background"), "PGB must journal pageLayout.background");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("insertPicture"), "PGB must open the insertPicture dialog");
 }
 
 #[test]
@@ -1585,21 +1613,24 @@ fn keytip_psz_() {
 fn keytip_ptc_() {
     let mut h = harness(blank());
     sequence(&mut h, "PTC", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "pageLayout.themeColors"), "PTC must journal pageLayout.themeColors");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "PTC must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
 fn keytip_pte_() {
     let mut h = harness(blank());
     sequence(&mut h, "PTE", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "pageLayout.themeEffects"), "PTE must journal pageLayout.themeEffects");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "PTE must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
 fn keytip_ptf_() {
     let mut h = harness(blank());
     sequence(&mut h, "PTF", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "pageLayout.themeFonts"), "PTF must journal pageLayout.themeFonts");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "PTF must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -1924,8 +1955,15 @@ fn keytip_ac_() {
 #[test]
 fn keytip_ad_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "AD", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "AD must invoke data.consolidate and surface its missing-params error");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("consolidate"), "AD must open the consolidate dialog");
 }
 
 #[test]
@@ -2061,8 +2099,15 @@ fn keytip_aj_() {
 #[test]
 fn keytip_ak_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "AK", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "AK must run data.queriesConnections cleanly");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("queriesConnections"), "AK must open the queriesConnections dialog");
 }
 
 #[test]
@@ -2075,8 +2120,15 @@ fn keytip_am_() {
 #[test]
 fn keytip_ao_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "AO", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "AO must run data.queriesConnections cleanly");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("queriesConnections"), "AO must open the queriesConnections dialog");
 }
 
 #[test]
@@ -2173,8 +2225,15 @@ fn keytip_apr_() {
 #[test]
 fn keytip_aps_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "APS", false);
-    assert!(h.state().message.is_none() && h.state().toast.is_none(), "APS must run data.queriesConnections cleanly");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("queriesConnections"), "APS must open the queriesConnections dialog");
 }
 
 #[test]
@@ -2490,8 +2549,15 @@ fn keytip_wa_() {
 #[test]
 fn keytip_wc_() {
     let mut h = harness(blank());
+    // Some of these dialogs preview the selection, so the sheet has a small table.
+    h.state_mut()
+        .session
+        .execute("range.setValues", serde_json::json!({"range": "A1", "values": [["Fruit", "Sales"], ["Apples", 5], ["Pears", 3]]}))
+        .unwrap();
+    h.state_mut().session.execute("selection.set", serde_json::json!({"range": "A1:B3"})).unwrap();
+    h.run_steps(2);
     sequence(&mut h, "WC", false);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "view.customViews"), "WC must journal view.customViews");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("customViews"), "WC must open the customViews dialog");
 }
 
 #[test]

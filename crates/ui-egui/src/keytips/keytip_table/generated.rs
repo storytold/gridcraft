@@ -74,7 +74,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HFDG", Entry::Finish(Action::Dialog("goTo"))),                 // Excel: Go To
     ("HFDM", Entry::Finish(Action::Command("edit.find"))),           // Excel: Find Notes; containment(Find)
     ("HFDO", Entry::Finish(Action::Pending("home.selectObjects"))), // pending; Excel: Select Objects; Select Objects; reserved until the command lands
-    ("HFDP", Entry::Finish(Action::Command("arrange.selectionPane"))), // Excel: Selection Pane
+    ("HFDP", Entry::Finish(Action::Command("view.selectionPane"))), // Excel: Selection Pane
     ("HFDR", Entry::Finish(Action::Dialog("find"))),                // Excel: Replace; opens Find and Replace
     ("HFDS", Entry::Finish(Action::Dialog("goToSpecial"))),         // Excel: Go To Special
     ("HFF", Entry::Finish(Action::Control("home.fontName"))),       // Excel: Font Selection; opens the font dropdown
@@ -166,7 +166,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NH1", Entry::Finish(Action::Dialog("headerFooter"))), // Excel: Header & Footer
     ("NHF", Entry::Finish(Action::Command("pageLayout.headerFooter"))), // Excel: Header & Footer
     ("NHI", Entry::Finish(Action::Control("insert.chart.hierarchy"))), // Excel: Hierarchy Chart; Hierarchy (kind TBD)
-    ("NI1", Entry::Finish(Action::Command("insert.chart"))), // Excel: Waterfall Chart; Waterfall (kind TBD)
+    ("NI1", Entry::Finish(Action::Control("insert.chart.waterfall"))), // Excel: Waterfall Chart; Waterfall (kind TBD)
     ("NI2", Entry::Finish(Action::Dialog("insertLink"))), // Excel: Link
     ("NJ", Entry::Finish(Action::Pending("insert.object"))), // pending; Excel: Object; insert.object missing; reserved until the command lands
     ("NM1T", Entry::Finish(Action::Command("insert.picture"))), // Excel: SmartArt Picture; containment(Picture)
@@ -183,7 +183,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("NSA", Entry::Finish(Action::Control("insert.chart.statistic"))), // Excel: Statistical Chart; Statistical chart (kind TBD)
     ("NSB", Entry::Finish(Action::Command("insert.spinButton"))), // Excel: Spin Button (Form Control)
     ("NSC", Entry::Finish(Action::Pending("insert.screenshot"))), // pending; Excel: Screenshot Menu; Screenshot; reserved until the command lands
-    ("NSD", Entry::Finish(Action::Command("insert.chart"))), // Excel: Combo Chart; Combo (kind TBD)
+    ("NSD", Entry::Finish(Action::Control("insert.chart.combo"))), // Excel: Combo Chart; Combo (kind TBD)
     ("NSF", Entry::Finish(Action::Command("insert.slicer"))), // Excel: Slicer; insert.slicer missing (gap #8); reserved until the command lands
     ("NSH", Entry::Finish(Action::Command("insert.shape"))), // Excel: Shapes
     ("NSL", Entry::Finish(Action::Command("insert.slider"))), // Excel: Scroll Bar (Form Control)
@@ -218,9 +218,9 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("PRS", Entry::Finish(Action::Command("pageLayout.printArea"))), // Excel: Set Print Area
     ("PSP", Entry::Finish(Action::Dialog("pageSetup"))),        // Excel: Page Setup
     ("PSZ", Entry::Finish(Action::Command("pageLayout.size"))), // Excel: Size
-    ("PTC", Entry::Finish(Action::Command("pageLayout.themeColors"))), // Excel: Theme Colors; containment(Colors)
-    ("PTE", Entry::Finish(Action::Command("pageLayout.themeEffects"))), // Excel: Theme Effects; containment(Effects)
-    ("PTF", Entry::Finish(Action::Command("pageLayout.themeFonts"))), // Excel: Theme Fonts; containment(Fonts)
+    ("PTC", Entry::Finish(Action::Control("pageLayout.themeColors"))), // Excel: Theme Colors; containment(Colors)
+    ("PTE", Entry::Finish(Action::Control("pageLayout.themeEffects"))), // Excel: Theme Effects; containment(Effects)
+    ("PTF", Entry::Finish(Action::Control("pageLayout.themeFonts"))), // Excel: Theme Fonts; containment(Fonts)
     ("PTH", Entry::Continue),                                   // Excel: Themes; group level:
     ("PTHB", Entry::Finish(Action::Command("pageLayout.theme"))), // Excel: Browse Themes; containment(Themes)
     ("PVG", Entry::Finish(Action::Command("view.gridlines"))),  // Excel: View Gridlines

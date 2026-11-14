@@ -1,8 +1,13 @@
 use super::{Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
 
 pub(super) fn sep(ui: &mut Ui) {
+    sep_wide(ui, 13.0);
+}
+
+/// A group separator of a given width, for a tab that tightens its spacing when space is short.
+pub(super) fn sep_wide(ui: &mut Ui, width: f32) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(width, 72.0), Sense::hover());
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
 }
 

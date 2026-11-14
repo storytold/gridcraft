@@ -92,31 +92,127 @@ fn summary_line() -> String {
 }
 
 #[cfg(feature = "engine")]
+/// Replaces the text between `start` (kept) and `end` (kept) with `value`. The marker pair has to
+/// appear exactly once in the file and `end` has to close the figure on the same line, so a doc
+/// edit that moves, duplicates or loses a marker fails loudly instead of quietly deleting the
+/// prose between the figure and the next occurrence of the marker.
+fn replace_between(text: &mut String, file: &str, start: &str, end: &str, value: &str) -> Result<(), String> {
+    let found = text.match_indices(start).collect::<Vec<_>>();
+    if found.len() != 1 {
+        return Err(format!("{file}: expected one `{start}`, found {}", found.len()));
+    }
+    let at = found[0].0 + start.len();
+    let line_end = text[at..].find('\n').map_or(text.len(), |i| at + i);
+    let len = text[at..line_end].find(end).ok_or_else(|| format!("{file}: `{start}` is not followed by `{end}` on the same line"))?;
+    text.replace_range(at..at + len, value);
+    Ok(())
+}
+
+/// The figures the docs quote, computed from the catalog and the command registry.
+#[cfg(feature = "engine")]
+fn figures() -> (usize, usize, usize) {
+    let (done, total) = gridcraft_engine::catalog::parity();
+    (done, total, gridcraft_engine::command_specs().len())
+}
+
+/// One figure in a doc: the kept text before it, the kept text after it, and the new middle.
+#[cfg(feature = "engine")]
+type Edit = (String, String, String);
+
+/// Rewrites the summary figures the docs quote from the computed catalog parity, so README,
+/// ROADMAP, target-app-parity and ui-parity never carry hand-edited numbers. With `check`, an
+/// out-of-date figure is an error instead of a rewrite. Returns the files that were stale.
+#[cfg(feature = "engine")]
+fn sync_docs(root: &Path, check: bool) -> Result<Vec<String>, String> {
+    let (done, total, registered) = figures();
+    let pct = format!("{:.1}", pct(done, total));
+    let ratio = format!("{done} / {total}");
+    let edits: [(&str, Vec<Edit>); 5] = [
+        ("README.md", vec![("It covers ".into(), " of standard ribbon commands".into(), format!("{pct}%"))]),
+        (
+            "ROADMAP.md",
+            vec![("ribbon catalog ".into(), " (".into(), ratio.clone()), (format!("ribbon catalog {ratio} ("), "%), worksheet".into(), pct.clone())],
+        ),
+        (
+            "docs/target-app-parity.md",
+            vec![
+                ("| Ribbon and menu catalog | **".into(), "** | measured".into(), format!("{ratio} ({pct}%)")),
+                ("`crates/engine/src/catalog.rs` (".into(), " unique ids".into(), total.to_string()),
+                ("against the\n  ".into(), " command ids registered".into(), registered.to_string()),
+                ("sub-menu items, so\n  ".into(), "% of it is roughly".into(), pct.clone()),
+            ],
+        ),
+        ("docs/ui-parity.md", vec![("[parity-checklist.md](parity-checklist.md) (".into(), ")".into(), ratio.clone())]),
+        ("docs/architecture.md", vec![("(`cmd/*`, ".into(), " commands)".into(), registered.to_string())]),
+    ];
+    let mut stale = Vec::new();
+    for (name, file_edits) in edits {
+        let path = root.join(name);
+        let before = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut after = before.clone();
+        for (start, end, value) in file_edits {
+            replace_between(&mut after, name, &start, &end, &value)?;
+        }
+        if after == before {
+            continue;
+        }
+        stale.push(name.to_string());
+        if !check {
+            std::fs::write(&path, after).map_err(|e| format!("write {}: {e}", path.display()))?;
+        }
+    }
+    Ok(stale)
+}
+
+#[cfg(feature = "engine")]
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let mut check = false;
     let mut out: PathBuf = root.join("docs/parity-checklist.md");
+    let mut custom_out = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match *a {
             "--check" => check = true,
-            "--out" => out = PathBuf::from(it.next().ok_or("--out needs a path")?),
+            "--out" => {
+                out = PathBuf::from(it.next().ok_or("--out needs a path")?);
+                custom_out = true;
+            }
             other => return Err(format!("parity: unknown argument `{other}` (usage: cargo xtask parity [--check] [--out PATH])")),
         }
     }
+    // The docs' figures belong to the repository's checklist: a run that writes somewhere else
+    // (`--out`) leaves the working tree alone.
+    let sync = !custom_out;
     let text = render(&entries());
     if check {
         let current = std::fs::read_to_string(&out).map_err(|e| format!("{}: {e}", out.display()))?;
         if current != text {
             return Err(format!("{} is out of date; run `cargo xtask parity`", out.display()));
         }
-        println!("{} ({} up to date)", summary_line(), out.display());
+        let stale = if sync { sync_docs(root, true)? } else { Vec::new() };
+        if !stale.is_empty() {
+            return Err(format!("{} quote an out-of-date catalog figure; run `cargo xtask parity`", stale.join(", ")));
+        }
+        // Only the default checklist is paired with the docs' figures; a custom `--out` run
+        // leaves them unchecked, so it must not claim they are up to date.
+        if sync {
+            println!("{} ({} and the docs' figures up to date)", summary_line(), out.display());
+        } else {
+            println!("{} ({} up to date)", summary_line(), out.display());
+        }
         return Ok(());
     }
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     }
     std::fs::write(&out, text).map_err(|e| format!("write {}: {e}", out.display()))?;
-    println!("{} -> {}", summary_line(), out.display());
+    let updated = if sync { sync_docs(root, false)? } else { Vec::new() };
+    println!(
+        "{} -> {}{}",
+        summary_line(),
+        out.display(),
+        if updated.is_empty() { String::new() } else { format!(" (figures updated in {})", updated.join(", ")) }
+    );
     Ok(())
 }
 
@@ -148,5 +244,29 @@ mod tests {
     #[test]
     fn empty_catalog_renders() {
         assert!(render(&[]).contains("0 / 0 commands implemented (0.0%)"));
+    }
+
+    #[cfg(feature = "engine")]
+    #[test]
+    fn replace_between_swaps_the_figure() {
+        let mut text = "figures in [parity-checklist.md](parity-checklist.md) (275 / 291).".to_string();
+        assert_eq!(replace_between(&mut text, "doc.md", "(parity-checklist.md) (", ")", "277 / 292"), Ok(()));
+        assert_eq!(text, "figures in [parity-checklist.md](parity-checklist.md) (277 / 292).");
+    }
+
+    #[cfg(feature = "engine")]
+    #[test]
+    fn replace_between_rejects_a_closing_marker_on_another_line() {
+        let mut text = "the figures (275 / 291\n\nSources: the catalog (see above).".to_string();
+        let before = text.clone();
+        assert!(replace_between(&mut text, "doc.md", "figures (", ")", "277 / 292").is_err());
+        assert_eq!(text, before);
+    }
+
+    #[cfg(feature = "engine")]
+    #[test]
+    fn replace_between_rejects_repeated_markers() {
+        let mut text = "figure (275 / 291) and again figure (275 / 291)".to_string();
+        assert!(replace_between(&mut text, "doc.md", "figure (", ")", "277 / 292").is_err());
     }
 }

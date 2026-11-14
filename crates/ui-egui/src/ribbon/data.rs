@@ -7,6 +7,27 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     if gd.clicked() {
         app.open_dialog("open", json!({}));
     }
+    ui.vertical(|ui| {
+        // Get Data above already imports a text/CSV file; From Table/Range is the other source.
+        let __k = small_button(ui, Icon::Table, "From Table/Range", "From Table/Range", false);
+        control_keytip(app, ui, &__k, "data.fromTableRange");
+        if __k.clicked() {
+            act(app, "data.fromTableRange", json!({}));
+        }
+    });
+    sep(ui);
+    // Queries & Connections
+    let __k = big_button(ui, Icon::Redo, "Refresh\nAll", "Refresh All", false);
+    control_keytip(app, ui, &__k, "data.refreshAll");
+    if __k.clicked() {
+        act(app, "data.refreshAll", json!({}));
+    }
+    let __k = big_button(ui, Icon::Book, "Queries &\nConnections", "Queries & Connections", false);
+    __k.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Queries & Connections"));
+    control_keytip(app, ui, &__k, "data.queriesConnections");
+    if __k.clicked() {
+        act(app, "data.queriesConnections", json!({}));
+    }
     sep(ui);
     ui.vertical(|ui| {
         let __k = small_button(ui, Icon::SortAsc, "", "Sort A to Z", false);
@@ -57,6 +78,12 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     control_keytip(app, ui, &__k, "edit.flashFill");
     if __k.clicked() {
         act(app, "edit.flashFill", json!({}));
+    }
+    let __k = big_button(ui, Icon::Merge, "Consolidate", "Consolidate", false);
+    __k.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Consolidate"));
+    control_keytip(app, ui, &__k, "data.consolidate");
+    if __k.clicked() {
+        act(app, "data.consolidate", json!({}));
     }
     let __k = big_button(ui, Icon::Duplicates, "Remove\nDuplicates", "Remove Duplicates", false);
     control_keytip(app, ui, &__k, "dialog:removeDuplicates");

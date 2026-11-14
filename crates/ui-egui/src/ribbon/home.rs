@@ -571,6 +571,14 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
+    sep(ui);
+    // Add-ins
+    let __k = big_button(ui, Icon::Theme, "Add-ins", "Add-ins", false);
+    __k.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Add-ins"));
+    control_keytip(app, ui, &__k, "home.addIns");
+    if __k.clicked() {
+        act(app, "home.addIns", json!({}));
+    }
 }
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
