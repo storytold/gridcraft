@@ -204,7 +204,7 @@ impl Parser<'_> {
     /// The token [`Self::next`] just returned, as typed.
     /// The argument separator the formula is written with (`;` in Spanish), for error messages.
     fn list_separator(&self) -> char {
-        if self.input { crate::FormulaLocale::Es.list_separator() } else { crate::FormulaLocale::En.list_separator() }
+        self.locale.list_separator()
     }
     fn typed_last(&self) -> String {
         self.typed(self.i.saturating_sub(1))
