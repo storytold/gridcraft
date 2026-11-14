@@ -11,6 +11,12 @@ Two backends:
 | Headless (default) | `gridcraft-cli mcp [--in book.xlsx \| --sample budget]` | An in-process engine session — no window. |
 | Remote | `gridcraft-cli mcp --connect 7979` | A running app started with `gridcraft --control 7979` (TCP JSON lines on `127.0.0.1`, authenticated with the app's token: it is read from the app's token file or `GRIDCRAFT_CONTROL_TOKEN`, see [`control-protocol.md`](control-protocol.md)). |
 
+The remote server keeps serving when the app isn't open yet: tool calls return "not reachable …
+will retry on each call" and succeed once the app's port opens, so a client that starts before
+GridCraft doesn't lose the server for its whole session. The token is looked up again for every new
+connection, so a restarted app (which makes a new token) is picked up too. A malformed `--connect`
+address (no numeric port) still fails at startup.
+
 ## Claude Code
 
 ```sh
