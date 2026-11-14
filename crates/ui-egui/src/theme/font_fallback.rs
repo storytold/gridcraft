@@ -53,6 +53,13 @@ pub(super) fn load_fallback(_fonts: &mut FontDefinitions, _han: HanOrder) -> Vec
     Vec::new()
 }
 
+/// Whether a fallback key is a text-script face rather than a symbol face. Symbol faces keep
+/// egui's centring, which suits glyphs that fill the row; script faces are moved onto the text
+/// baseline where the line is centred by a widget (see `font_setup::align_script_baselines`).
+pub(super) fn is_script_key(key: &str) -> bool {
+    key.starts_with("sys-cjk-") || matches!(key, "sys-thai" | "sys-lao" | "sys-hebrew" | "sys-arabic" | "sys-arabic-preferred")
+}
+
 /// The face fontconfig prefers for Arabic leads the script faces (#229), ahead of the system and
 /// bundled Arabic faces.
 #[cfg(not(target_arch = "wasm32"))]

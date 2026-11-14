@@ -15,6 +15,7 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
+//! - `ui.fonts` — the font list the app offers and the families installed on the OS
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
@@ -276,6 +277,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
+                ("ui.fonts", "Fonts", "→ {families, installed, scanning}"),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
                 (
                     "ui.printSettings",

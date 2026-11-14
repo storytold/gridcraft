@@ -1,6 +1,6 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::Blob;
-use super::font_fallback::{load_fallback, load_preferred_arabic};
+use super::font_fallback::{is_script_key, load_fallback, load_preferred_arabic};
 use super::{Arc, Color32, FontData, FontDefinitions, FontFamily, FontId};
 
 /// A font from the optional craft-fonts build input (`CRAFT_FONTS_DIR` at build time; see
@@ -503,8 +503,9 @@ pub(super) fn font_definitions_impl(
     let base_prop: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let base_mono: Vec<String> = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     let mut bound: Vec<String> = Vec::new();
-    // The non-Latin fallback faces have to sit at the end of each chain: a Latin font owns Latin,
-    // and epaint picks the first face that has the glyph, so they only catch their own scripts.
+    // The non-Latin fallback faces come after the Latin/default text faces and before the bundled
+    // emoji/icon faces: epaint picks the first face that has the glyph, so they catch their own
+    // scripts, and a full-width digit the icon font also carries stays with the text face.
     let fallback = if system {
         let mut fallback = load_preferred_arabic(&mut fonts);
         fallback.extend(load_fallback(&mut fonts, HanOrder::of(language)));
@@ -531,12 +532,14 @@ pub(super) fn font_definitions_impl(
     for (family, faces) in installed {
         bound.extend(crate::fonts::bind_faces(&mut fonts, &family, &faces));
     }
-    // The optional craft-fonts faces go at the very end of every family: a system or bundled face
-    // that has the script keeps its glyph shapes, while the permitted OFL faces cover scripts and
-    // symbols the host image lacks (Japanese, Korean, Thai, Arabic, Georgian and the UI symbols).
+    // The optional craft-fonts text faces go before egui's bundled emoji/icon faces: a full-width
+    // form the icon font also carries (U+FF11 `１`) belongs to the script face that draws its
+    // neighbours. They stay after a system or bundled face that has the script, so that face keeps
+    // its glyph shapes. The craft symbol faces stay last, behind the bundled emoji.
     // Chinese comes from the native-only OFL LXGW face when embedded; a system Han face still
     // leads, and the barred Noto CJK collection never enters.
     append_craft_faces(&mut fonts);
+    align_script_baselines(&mut fonts);
     drop_unparseable_fonts(&mut fonts);
     // Only families egui still has data for count as bound (a dropped face can empty a chain).
     bound.retain(|f| fonts.families.get(&FontFamily::Name(f.as_str().into())).is_some_and(|c| !c.is_empty()));
@@ -544,9 +547,20 @@ pub(super) fn font_definitions_impl(
     fonts
 }
 
+/// egui's bundled emoji and icon faces. They are last-resort faces: a text codepoint one of them
+/// happens to carry must come from the script's own font first. `emoji-icon-font` maps full-width
+/// forms (U+FF11 `１`, for one) and would draw them at its 0.90 scale and with its own metrics,
+/// beside Japanese drawn by the script face at the cell's size (#4).
+pub(super) const BUNDLED_EMOJI: [&str; 3] = ["egui-icons", "NotoEmoji-Regular", "emoji-icon-font"];
+
+/// Whether `key` is one of egui's bundled emoji/icon faces (see [`BUNDLED_EMOJI`]).
+pub(super) fn is_bundled_emoji(key: &str) -> bool {
+    BUNDLED_EMOJI.contains(&key)
+}
+
 /// Builds one role family's chain: the loaded system face (or its role fallback), egui's bundled
-/// proportional/monospace base, Hack's symbols, then the script fallbacks. Keys without font data
-/// are dropped, as before.
+/// text base, Hack's symbols, then the script fallbacks, then the bundled emoji/icon faces. Keys
+/// without font data are dropped, as before.
 fn build_role_chain(
     fonts: &mut FontDefinitions,
     role: &str,
@@ -582,17 +596,22 @@ fn build_role_chain(
     if role.starts_with("math") {
         chain.push(format!("sys-{SERIF}"));
     }
-    chain.extend(if role == MONO { base_mono.to_vec() } else { base_prop.to_vec() });
+    let (text_base, emoji_base): (Vec<&String>, Vec<&String>) =
+        (if role == MONO { base_mono } else { base_prop }).iter().partition(|k| !is_bundled_emoji(k));
+    chain.extend(text_base.into_iter().cloned());
     // egui bundles Hack, a monospace face rich in arrows, triangles and keyboard symbols, but
     // 0.37 only puts it in the Monospace family. The interface draws ↑, ▲, ▼, ▸, ▾ and ↳ as
-    // text (filter menus, ribbon, keytips), so add it behind the UI/cell and emoji faces; it
-    // only catches characters those do not have.
+    // text (filter menus, ribbon, keytips), so add it behind the UI/cell text faces; it only
+    // catches characters those do not have.
     if let Some(hack) = hack
         && !chain.iter().any(|k| k.as_str() == hack)
     {
         chain.push(hack.to_string());
     }
+    // The script faces come before egui's bundled emoji and icon faces: a full-width form the icon
+    // font also carries must be drawn by the text face of the cell/interface, not scaled to 0.90.
     chain.extend(fallback.iter().cloned());
+    chain.extend(emoji_base.into_iter().cloned());
     chain.retain(|k| fonts.font_data.contains_key(k));
     chain
 }
@@ -614,19 +633,99 @@ fn bind_cell_fallback(fonts: &mut FontDefinitions, fallback: &[String]) {
     }
 }
 
-/// Appends the permitted craft-fonts faces to every family, preserving the leading system or
-/// bundled face's glyph shapes.
+/// Inserts the permitted craft-fonts faces into every family, preserving the leading system or
+/// bundled face's glyph shapes. Text faces go before egui's bundled emoji/icon faces, because a
+/// full-width form the icon font also maps (U+FF11 `１`) must come from the script face that draws
+/// its neighbours; symbol faces stay after them, so emoji fallback is unchanged.
 fn append_craft_faces(fonts: &mut FontDefinitions) {
     let craft = add_craft_fonts(fonts);
     if craft.is_empty() {
         return;
     }
+    let craft_text: Vec<String> =
+        craft_font_faces().into_iter().filter(|(_, font)| font.scripts.iter().any(|script| *script != "Zsym")).map(|(key, _)| key).collect();
     for chain in fonts.families.values_mut() {
+        let mut at = chain.iter().position(|k| is_bundled_emoji(k)).unwrap_or(chain.len());
+        for key in &craft_text {
+            if !chain.contains(key) {
+                chain.insert(at, key.clone());
+                at += 1;
+            }
+        }
         for key in &craft {
             if !chain.contains(key) {
                 chain.push(key.clone());
             }
         }
+    }
+}
+
+/// A face's metrics as fractions of the em: `(ascent, row height)`.
+fn em_metrics(face: &FontData) -> Option<(f32, f32)> {
+    use skrifa::MetadataProvider as _;
+    let font = skrifa::FontRef::from_index(face.bytes(), face.index).ok()?;
+    let metrics = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    let em = f32::from(metrics.units_per_em);
+    (em > 0.0).then(|| (metrics.ascent / em, (metrics.ascent - metrics.descent + metrics.leading) / em))
+}
+
+/// How far a fallback face's glyphs move down, as a fraction of the font size, to sit on the
+/// primary face's baseline. epaint centres a fallback's box in the primary's line
+/// (`FallbackAlign::Center`), putting its baseline at `face_ascent + (row − face_row) / 2` instead
+/// of the primary's `ascent`.
+fn baseline_offset_factor(primary: &FontData, fallback: &FontData) -> Option<f32> {
+    let (primary_ascent, primary_row) = em_metrics(primary)?;
+    let (face_ascent, face_row) = em_metrics(fallback)?;
+    Some(primary_ascent - face_ascent - 0.5 * (primary_row - face_row))
+}
+
+/// Moves script fallback faces onto the primary's baseline with a visual `y_offset`, keeping
+/// egui's centring so the line's height stays the primary font's. `FallbackAlign::Baseline` would
+/// instead grow the row to fit the script font's descent, and anything that centres the line box
+/// (menu items, the Backstage sidebar, a cell's vertical alignment) would then draw the script text
+/// higher than the Latin text.
+fn align_script_baselines(fonts: &mut FontDefinitions) {
+    let craft_text: Vec<String> =
+        craft_font_faces().into_iter().filter(|(_, font)| font.scripts.iter().any(|script| *script != "Zsym")).map(|(key, _)| key).collect();
+    // Every named family carries the system and craft script faces, including workbook fonts bound
+    // under their own names: align each against that family's own primary face.
+    let names: Vec<_> = fonts
+        .families
+        .keys()
+        .filter_map(|family| match family {
+            FontFamily::Name(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect();
+    for name in names {
+        let family = FontFamily::Name(name.clone());
+        let Some(chain) = fonts.families.get(&family).cloned() else { continue };
+        let Some(primary) = chain.first().and_then(|key| fonts.font_data.get(key)).cloned() else { continue };
+        let mut adjusted: Vec<String> = Vec::with_capacity(chain.len());
+        for key in chain {
+            let script = is_script_key(&key) || craft_text.contains(&key);
+            let Some(face) = script.then(|| fonts.font_data.get(&key).cloned()).flatten() else {
+                adjusted.push(key);
+                continue;
+            };
+            let Some(factor) = baseline_offset_factor(&primary, &face) else {
+                adjusted.push(key);
+                continue;
+            };
+            let variant = format!("{key}@{name}");
+            if !fonts.font_data.contains_key(&variant) {
+                let mut fd = (*face).clone();
+                fd.tweak.y_offset_factor = factor;
+                fonts.font_data.insert(variant.clone(), Arc::new(fd));
+            }
+            adjusted.push(variant);
+        }
+        fonts.families.insert(family, adjusted);
+    }
+    // Default proportional text is the UI chain (see `font_definitions_impl`), so it needs the same
+    // alignment and the craft faces.
+    if let Some(ui) = fonts.families.get(&FontFamily::Name(UI.into())).cloned() {
+        fonts.families.insert(FontFamily::Proportional, ui);
     }
 }
 
@@ -691,5 +790,23 @@ mod font_binding_tests {
             let FontFamily::Name(fam) = cell_family(&name, seed % 2 == 0, seed % 3 == 0) else { continue };
             assert!(crate::fonts::is_bound(&fam), "{name:?} → unbound {fam:?}");
         }
+    }
+
+    #[test]
+    fn installed_named_families_align_their_script_fallbacks() {
+        let mut fonts = FontDefinitions::default();
+        let primary = "fnt:Test:nn";
+        let script = "sys-cjk-han-ja";
+        fonts.font_data.insert(primary.into(), Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
+        fonts.font_data.insert(script.into(), Arc::new(FontData::from_static(epaint_default_fonts::UBUNTU_LIGHT)));
+        let family = FontFamily::Name("fnt:Test:nn".into());
+        fonts.families.insert(family.clone(), vec![primary.into(), script.into()]);
+
+        align_script_baselines(&mut fonts);
+
+        let chain = fonts.families.get(&family).expect("the installed family stays");
+        let variant = chain.iter().find(|key| key.starts_with(script) && key.contains('@')).expect("the script face is aligned for this family");
+        let expected = baseline_offset_factor(&fonts.font_data[primary], &fonts.font_data[script]).expect("font metrics");
+        assert_eq!(fonts.font_data[variant.as_str()].tweak.y_offset_factor, expected);
     }
 }
