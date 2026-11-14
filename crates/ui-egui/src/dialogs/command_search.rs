@@ -1,7 +1,13 @@
 use super::{Dialog, Key, SheetApp, json, vec2};
 
+fn matches_command_query(query: &str, label: &str, id: &str, lang: crate::i18n::Language) -> bool {
+    let q = query.trim().to_lowercase();
+    q.is_empty() || label.to_lowercase().contains(&q) || id.to_lowercase().contains(&q) || lang.tr(label).to_lowercase().contains(&q)
+}
+
 /// Shows enabled commands and their shortcuts from engine metadata.
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let lang = app.ui.language;
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
         (
             i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
@@ -13,7 +19,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(lang.tr("Type a command, e.g. freeze, chart, bold…")));
 
     if !d.focus_initialized {
         r.request_focus();
@@ -21,13 +27,12 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let q = d.search.to_ascii_lowercase();
     let cmds: Vec<(String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
+        .filter(|c| matches_command_query(&d.search, c.label, c.id, lang))
         .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
         .take(40)
         .collect();
@@ -65,6 +70,8 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     egui::ScrollArea::vertical().max_height(LIST_HEIGHT).auto_shrink([true, false]).show(ui, |ui| {
         let scroll_area_width = ui.available_width();
         for (i, (id, label, menu, shortcut)) in cmds.iter().enumerate() {
+            let label = lang.tr(label);
+            let menu = menu.split(" › ").map(|part| lang.tr(part)).collect::<Vec<_>>().join(" › ");
             let text = match shortcut {
                 Some(keys) => format!("{label}  ({keys})    {menu}"),
                 None => format!("{label}    {menu}"),
@@ -90,5 +97,18 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         let id = id.clone();
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_search_matches_translated_labels_and_keeps_source_search() {
+        let hu = crate::i18n::Language::Hu;
+        assert!(matches_command_query("FÉLKÖVÉR", "Bold", "home.bold", hu));
+        assert!(matches_command_query("bold", "Bold", "home.bold", hu));
+        assert!(matches_command_query("home.bold", "Bold", "home.bold", hu));
     }
 }

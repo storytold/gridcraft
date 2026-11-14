@@ -5,6 +5,7 @@ use super::{
 
 /// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
 pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
     control_keytip(app, ui, &__k, "insert.pivotTable");
     if __k.clicked() {
@@ -21,7 +22,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     pic.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Pictures"));
     egui::Popup::menu(&pic).show(|ui| {
         for (label, placement) in [("Place in Cell", "cell"), ("Place over Cells", "overCells")] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 app.open_dialog("insertPicture", json!({"placement": placement}));
                 ui.close();
             }
@@ -39,6 +40,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             ("Arrow", "arrow"),
             ("Text Box", "textBox"),
         ] {
+            let label = if label == "Line" { lang.tr("Shape|Line") } else { lang.tr(label) };
             if ui.button(label).clicked() {
                 act(app, "insert.shape", json!({"kind": kind}));
             }
@@ -55,7 +57,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                     ui.painter().rect_filled(r, 4.0, Tokens::get(ui.ctx()).hover);
                 }
                 icons::paint(ui.painter(), r.shrink(6.0), *icon, Tokens::get(ui.ctx()).text);
-                if resp.on_hover_text(*name).clicked() {
+                if resp.on_hover_text(lang.tr(name)).clicked() {
                     act(app, "insert.icons", json!({"name": name}));
                     ui.close();
                 }
@@ -108,7 +110,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 let forced_c = invoke(app, cid);
                 egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
                     for (label, k, s) in &subs {
-                        if ui.button(*label).clicked() {
+                        if ui.button(lang.tr(label)).clicked() {
                             act(app, "insert.chart", json!({"type": k, "subtype": s}));
                         }
                     }
@@ -144,7 +146,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 let forced_c = invoke(app, cid);
                 egui::Popup::menu(&r).open_memory(popup_command(forced_c, r.clicked())).show(|ui| {
                     for (label, k, s) in &subs {
-                        if ui.button(*label).clicked() {
+                        if ui.button(lang.tr(label)).clicked() {
                             act(app, "insert.chart", json!({"type": k, "subtype": s}));
                         }
                     }
@@ -161,6 +163,11 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     anchor_keytip(app, ui, &sp, &["dialog:sparkline"]);
     egui::Popup::menu(&sp).show(|ui| {
         for (label, kind) in [("Line", "line"), ("Column", "column"), ("Win/Loss", "winLoss")] {
+            let label = match label {
+                "Line" => lang.tr("Sparkline|Line"),
+                "Column" => lang.tr("Sparkline|Column"),
+                _ => lang.tr(label),
+            };
             if ui.button(label).clicked() {
                 app.open_dialog("sparkline", json!({"type": kind}));
             }
@@ -251,7 +258,8 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
                 "✓", "★", "½", "¼",
             ] {
                 // No bundled face has ✓: the button paints a code-drawn check instead of a tofu box.
-                if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &format!("Insert {ch}")).clicked() {
+                let tip = app.ui.language.tr("Insert {symbol}").replace("{symbol}", ch);
+                if crate::widgets::glyph_button(ui, ch.chars().next().unwrap_or('?'), &tip).clicked() {
                     act(app, "insert.symbol", json!({"char": ch}));
                 }
             }
