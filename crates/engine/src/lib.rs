@@ -340,7 +340,7 @@ impl DocState {
         wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
-        let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        let sel = Selection::opening(wb.active());
         DocState {
             saved: wb.clone(),
             wb,
