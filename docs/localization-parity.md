@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** minor (merge upstream localization updates while retaining Thai wrapping scope and benchmark provenance); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-14 · **Change:** minor (Thai cell wrapping uses craft-text); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -57,7 +57,7 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   month 7) for `ddd`/`dddd` after `mmm`/`mmmm`; a `B2` section showing only the weekday uses
   the real weekday for serials 0–59 and gives `#VALUE!` for the last days of 9999. Excel's
   Buddhist-year `b`/`bb`/`bbbb` tokens are not supported.
-- **Thai cell wrapping.** Committed Thai cells with Wrap Text use ICU4X LSTM line breaks in
+- **Thai cell wrapping.** Committed Thai cells with Wrap Text use craft-text with ICU4X LSTM in
   `crates/ui-egui/src/thai_layout.rs`; row AutoFit and editing are not part of this support. The
   2026-10-27 snapshot's 500-visible-cell Windows release benchmark against upstream `63038650`
   measured warm p50/p95 4.0449/5.1826 ms versus 2.4476/2.8611 ms on baseline at 100% / 1x;
@@ -69,7 +69,10 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
   `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
   Noto CJK and WenQuanYi faces can render Chinese without a broad filesystem grant. This does
-  not change the installed-font catalogue or add bundled fonts. Lao falls back to Lao Sangam MN /
+  not change the installed-font catalogue or add bundled fonts. System CJK fallback faces and
+  embedded faces tagged with CJK scripts share the Latin baseline in cells, editors and titles
+  (#1265, #2621); other script, emoji and symbol fallbacks retain their alignment.
+  Lao falls back to Lao Sangam MN /
   Lao MN (macOS), Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux).
   Arabic has shared shaping/bidi display and editing, plus per-cell Context/LTR/RTL reading
   direction. It falls back to a system Arabic face, fontconfig's Arabic choice or craft-fonts'
@@ -137,6 +140,10 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
+| 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
+| 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
+| 2026-11-14 | minor | Thai cell wrapping uses the shared craft-text segmenter |
 | 2026-10-30 | minor | Preserve Thai wrapping through current grid extraction and distinguish the earlier measured snapshot; no parity score change |
 | 2026-10-28 | minor | Record post-integration Thai benchmark regression and scope; no parity score change |
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |

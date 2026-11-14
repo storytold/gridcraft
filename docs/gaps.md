@@ -57,7 +57,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Missing:** cross-platform script coverage, Thai cell AutoFit row height, Devanagari shaping,
   non-Latin PDF export and Arabic UI layout.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32). Thai
-  committed-cell wrapping uses ICU4X LSTM segmentation with greedy measurement, exact UTF-8 byte
+  committed-cell wrapping uses craft-text with ICU4X LSTM, greedy measurement, exact UTF-8 byte
   ranges and an LRU cache; AutoFit row-height measurement remains separate. Arabic shared
   shaping/bidi, editing and cell Context/LTR/RTL have focused regressions and full gates; Arabic
   font delivery and PDF output are separate PRs. #142 (Chinese text) awaits confirmation; #54
@@ -154,7 +154,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 17. Insert objects (F)
 - Ink strokes now survive XLSX save/reopen as editable polylines. Inserted icons still lose their
   identity/artwork on save (#551); native Office InkML import is not implemented.
-- SmartArt, WordArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
+- SmartArt, signature line, objects, 3-D models, screenshot; 8 shape kinds vs ~170;
   pictures in cells (#61, PR #105). Equations exist (LaTeX source with a live preview, Office Math in xlsx); there is
   no structured (WYSIWYG) equation editing and no ink equations. **Estimate:** 25–40 h.
 

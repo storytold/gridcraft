@@ -18,58 +18,23 @@ fn copied(wb: &Workbook, range: &str) -> String {
     range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
 }
 
-#[cfg(all(not(target_arch = "wasm32"), unix))]
-#[test]
-fn save_preserves_a_preexisting_legacy_temp_symlink() {
-    let dir = tempfile::tempdir().unwrap();
-    let victim = dir.path().join("victim.txt");
-    std::fs::write(&victim, b"original").unwrap();
-    let dest = dir.path().join("book.xlsx");
-    let temp = dir.path().join("book.xlsx.sctmp");
-    std::os::unix::fs::symlink(&victim, &temp).unwrap();
-    write_file(dest.to_str().unwrap(), b"new").unwrap();
-    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
-    assert!(std::fs::symlink_metadata(&temp).unwrap().file_type().is_symlink());
-    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
-fn save_preserves_a_preexisting_legacy_temp_file_and_can_save_again() {
-    let dir = tempfile::tempdir().unwrap();
-    let temp = dir.path().join("book.xlsx.sctmp");
-    std::fs::write(&temp, b"original").unwrap();
-    let dest = dir.path().join("book.xlsx");
-    write_file(dest.to_str().unwrap(), b"new").unwrap();
-    assert_eq!(std::fs::read(&temp).unwrap(), b"original");
-    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
-    write_file(dest.to_str().unwrap(), b"newer").unwrap();
-    assert_eq!(std::fs::read(&temp).unwrap(), b"original");
-    assert_eq!(std::fs::read(&dest).unwrap(), b"newer");
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "successful saves leave no new temp files");
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn save_ignores_an_abandoned_unique_temp_and_cleans_failed_replacement() {
-    let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("book.xlsx");
-    let abandoned = create_save_temp(&dest, None).unwrap();
-    assert_eq!(abandoned.path().parent(), Some(dir.path()));
-    let (mut file, abandoned_path) = abandoned.keep().unwrap();
-    use std::io::Write;
-    file.write_all(b"abandoned").unwrap();
-    drop(file);
-    write_file(dest.to_str().unwrap(), b"new").unwrap();
-    assert_eq!(std::fs::read(&abandoned_path).unwrap(), b"abandoned");
-    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
-    let blocked = dir.path().join("directory.xlsx");
-    std::fs::create_dir(&blocked).unwrap();
-    std::fs::write(blocked.join("marker"), b"original").unwrap();
-    assert!(write_file(blocked.to_str().unwrap(), b"new").is_err());
-    assert_eq!(std::fs::read(blocked.join("marker")).unwrap(), b"original");
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 3, "failed persist cleans only its owned temp");
+fn save_fails_upfront_when_the_temp_name_is_taken() {
+    // Another local user who can write the directory must not be able to point the
+    // save's predictable temporary name at their own file: creation is exclusive.
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-temp-name-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let victim = dir.join("victim.txt");
+    std::fs::write(&victim, b"original").unwrap();
+    let dest = dir.join("book.xlsx");
+    std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
+    let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
+    assert_eq!(std::fs::read(&victim).unwrap(), b"original");
+    assert!(!dir.join("book.xlsx").exists(), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -77,35 +42,51 @@ fn save_ignores_an_abandoned_unique_temp_and_cleans_failed_replacement() {
 #[test]
 fn save_keeps_the_destination_access_restrictions() {
     use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    let dest = dir.path().join("private.xlsx");
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-permissions-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dest = dir.join("private.xlsx");
     std::fs::write(&dest, b"v1").unwrap();
     std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o600)).unwrap();
     write_file(dest.to_str().unwrap(), b"v2").unwrap();
     let mode = std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
-
-    // A common 022 umask would strip group-write if applied while creating the temp file.
-    let shared = dir.path().join("shared.xlsx");
-    std::fs::write(&shared, b"v1").unwrap();
-    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o664)).unwrap();
-    write_file(shared.to_str().unwrap(), b"v2").unwrap();
-    let mode = std::fs::metadata(&shared).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o664);
-
+    // The mode is set outright from the old file's, not through the umask: group and other access
+    // it had stay as they were.
+    for old in [0o640, 0o664] {
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(old)).unwrap();
+        write_file(dest.to_str().unwrap(), b"v3").unwrap();
+        assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, old);
+    }
+    assert!(!dir.join("private.xlsx.sctmp").exists());
     // And a brand-new file is created with the restrictive, not permissive, default.
-    let fresh = dir.path().join("new.xlsx");
+    let fresh = dir.join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();
     let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
     assert!(mode & 0o022 == 0, "mode {mode:o}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Without the old group, a saved file keeps the old owner and other bits and nothing for a group.
+#[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
+    assert_eq!(super::restored_mode(0o100_664, true), 0o664);
+    assert_eq!(super::restored_mode(0o100_664, false), 0o604);
+    assert_eq!(super::restored_mode(0o102_444, false), 0o404, "an original read-only file stays read-only, setgid is dropped");
+    assert_eq!(super::restored_mode(0o104_755, false), 0o705, "setuid is dropped");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_refuses_directories_and_unknowable_lengths() {
-    let dir = tempfile::tempdir().unwrap();
-    assert!(read_file(dir.path().to_str().unwrap()).is_err(), "a directory is not a regular file");
-    assert!(read_file(dir.path().join("missing").to_str().unwrap()).is_err());
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-open-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(read_file(dir.to_str().unwrap()).is_err(), "a directory is not a regular file");
+    assert!(read_file(dir.join("missing").to_str().unwrap()).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]
@@ -344,20 +325,23 @@ fn csv_and_text_open_read_day_first_dates_and_report_a_guessed_order() {
 }
 
 /// A save that can't be put in place (here a folder already has the workbook's name, as
-/// with a file another app holds locked) fails without leaving any unique temporary file behind.
+/// with a file another app holds locked) fails without leaving `<name>.sctmp` behind.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn failed_save_leaves_no_temporary_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let blocked = dir.path().join("Book1.xlsx");
+    let dir = std::env::temp_dir().join(format!("gridcraft-write-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let blocked = dir.join("Book1.xlsx");
     std::fs::create_dir(&blocked).unwrap();
     assert!(write_file(blocked.to_str().unwrap(), b"workbook").is_err());
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1, "the temporary file is removed");
+    assert!(!dir.join("Book1.xlsx.sctmp").exists(), "the temporary file is removed");
     // An ordinary save still works and leaves only the workbook.
-    let ok = dir.path().join("Book2.xlsx");
+    let ok = dir.join("Book2.xlsx");
     write_file(ok.to_str().unwrap(), b"workbook").unwrap();
     assert_eq!(std::fs::read(&ok).unwrap(), b"workbook");
-    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+    assert!(!dir.join("Book2.xlsx.sctmp").exists());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// While a script runs (#2178), file reads and writes are refused whatever command or
@@ -365,10 +349,12 @@ fn failed_save_leaves_no_temporary_file() {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn script_sandbox_refuses_file_access_until_dropped() {
-    let dir = tempfile::tempdir().unwrap();
-    let existing = dir.path().join("in.csv");
+    let dir = std::env::temp_dir().join(format!("gridcraft-sandbox-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let existing = dir.join("in.csv");
     std::fs::write(&existing, b"a,b\n").unwrap();
-    let (existing, out) = (existing.to_string_lossy().to_string(), dir.path().join("out.xlsx").to_string_lossy().to_string());
+    let (existing, out) = (existing.to_string_lossy().to_string(), dir.join("out.xlsx").to_string_lossy().to_string());
     {
         let _outer = ScriptSandbox::enter();
         {
@@ -381,6 +367,20 @@ fn script_sandbox_refuses_file_access_until_dropped() {
     }
     assert_eq!(read_file(&existing).unwrap(), b"a,b\n");
     write_file(&out, b"ok").unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The guard's drop lowers the counter of the thread it runs on, so it must not move between threads:
+/// naming the trait's method is ambiguous (a compile error) if `ScriptSandbox` is `Send`.
+#[test]
+fn script_sandbox_is_not_send() {
+    trait AmbiguousIfSend<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+    struct IsSend;
+    impl<T: ?Sized + Send> AmbiguousIfSend<IsSend> for T {}
+    <ScriptSandbox as AmbiguousIfSend<_>>::check();
 }
 
 /// A minimal compound (CFB/OLE2) file — FAT in sector 0, directory in sector 1 — holding a
@@ -763,7 +763,7 @@ fn sylk_r1c1_formulas_become_a1() {
         ("R[-5]C", "#REF!"),
         ("\"RC\"&R1C1", "\"RC\"&$A$1"),
     ] {
-        assert_eq!(sylk::r1c1_formula_to_a1(r1c1, b2), a1, "{r1c1}");
+        assert_eq!(craft_csv::sylk::r1c1_formula_to_a1(r1c1, (b2.row, b2.col)), a1, "{r1c1}");
     }
 }
 
@@ -792,4 +792,92 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     flood.extend_from_slice(b"C;Y1;X1;K1\nE\n");
     let (wb, _) = open_bytes("widths.slk", &flood).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
+}
+
+/// A FIFO with no writer would block an open forever: it is refused before it is opened.
+#[cfg(unix)]
+#[test]
+fn reading_a_fifo_is_refused_without_blocking() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-fifo-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fifo = dir.join("pipe.xlsx");
+    if !std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return; // no mkfifo here
+    }
+    let err = read_file(fifo.to_str().unwrap()).unwrap_err().to_string();
+    assert!(err.contains("only regular files"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Merges far from what is copied or exported, in a hostile number, are indexed once instead of
+/// being scanned for every cell; a merge running past the table is clipped to it.
+#[test]
+fn html_merge_lookups_and_spans_stay_bounded() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for i in 0..200_000u32 {
+        sh.merges.push(RangeRef::new(CellRef::new(500_000 + i * 2, 5), CellRef::new(500_000 + i * 2, 6)));
+    }
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(gridcraft_core::MAX_ROWS - 1, 1)));
+    sh.set_value(CellRef::new(2, 1), gridcraft_core::Value::Number(2.0));
+    let html = copied(&wb, "A1:C50");
+    assert!(html.contains("rowspan=\"50\" colspan=\"2\""), "{html}");
+    let page = to_html(&wb, 0).unwrap();
+    // The table is A1:B3 (the used range): the whole-height merge spans its three rows only.
+    assert!(page.contains("rowspan=\"3\" colspan=\"2\""), "{page}");
+    // Merges stacked over one another past a few per cell are refused, not walked.
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(2, 1)); 100];
+    assert!(to_html(&wb, 0).is_err());
+    assert!(range_html(&wb, 0, RangeRef::parse("A1:B3").unwrap(), "").is_none());
+}
+
+/// Thousands of pictures over thousands of custom rows: each is placed through a row index.
+#[test]
+fn html_export_places_many_pictures_over_many_custom_rows() {
+    let mut wb = book_with_picture("A1", (0, 0));
+    let sh = wb.sheet_mut(0).unwrap();
+    for row in 0..50_000 {
+        sh.rows.insert(row, gridcraft_model::LineInfo { size: Some(30.0), ..Default::default() });
+    }
+    let image = sh.images[0].clone();
+    for i in 0..5_000u32 {
+        let mut im = image.clone();
+        im.anchor.cell = CellRef::new(40_000 + i, 0);
+        sh.images.push(im);
+    }
+    let page = to_html(&wb, 0).unwrap();
+    assert!(page.contains(&format!("top:{}px", 30 * 44_999)), "last picture placed by the index");
+}
+
+/// One long text shown by many cells: the page fails at its byte limit instead of growing on.
+#[test]
+fn html_export_refuses_a_page_past_its_byte_limit() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let text = gridcraft_core::Value::text("x".repeat(32_000));
+    for row in 0..10_000 {
+        sh.set_value(CellRef::new(row, 0), text.clone());
+    }
+    let err = to_html(&wb, 0).unwrap_err();
+    assert!(err.to_string().contains("MiB"), "{err}");
+}
+
+#[test]
+fn escaping_stops_at_the_room_left() {
+    assert_eq!(esc_within("a&b<c>\"d", 100).as_deref(), Some(esc("a&b<c>\"d").as_str()));
+    assert_eq!(esc_within("&&&", 14), None, "three `&amp;` are 15 bytes");
+    assert_eq!(esc_within("&&&", 15).as_deref(), Some("&amp;&amp;&amp;"));
+}
+
+#[test]
+fn the_merge_index_holds_a_bounded_number_of_cells() {
+    let mut sh = Sheet::new("S");
+    let rect = RangeRef::new(CellRef::new(0, 0), CellRef::new(1_100_000, 0));
+    sh.merges.push(RangeRef::new(CellRef::new(0, 0), CellRef::new(999_999, 0)));
+    assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
+    sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
+    assert!(merge_index(&sh, rect).is_none());
 }

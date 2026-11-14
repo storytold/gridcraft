@@ -1,7 +1,7 @@
 //! Thai text line wrapping for committed worksheet cells.
 //!
 //! Clean-room implementation providing word boundary-aware line wrapping for Thai script in
-//! spreadsheet cells. Uses ICU4X LSTM-based LineSegmenter for complex script boundary detection
+//! spreadsheet cells. Uses craft-text with the ICU4X LSTM model for break opportunities
 //! and egui's resolved font metrics for greedy line placement.
 //!
 //! Follows the strict repository safety policy: `#![deny(clippy::unwrap_used)]`, no panics,
@@ -13,14 +13,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
+use craft_text::segment::{Options, line_breaks};
 use egui::epaint::text::TextDirection;
 use egui::{Color32, FontId, Painter, Rect, Vec2, pos2, vec2};
 use gridcraft_engine::core::Value;
 use gridcraft_engine::model::{HAlign, Style, VAlign};
-use icu_segmenter::options::LineBreakOptions;
-use icu_segmenter::{LineSegmenter, LineSegmenterBorrowed};
 
 /// Maximum number of Unicode scalars permitted in a Thai text cell before falling back.
 pub const MAX_THAI_SCALARS: usize = 32_767;
@@ -343,13 +342,6 @@ fn set_frame_budget_limits(ctx: &egui::Context, limits: FrameBudgetLimits) {
     with_frame_budget(ctx, |state| state.limits = limits);
 }
 
-/// Thai script segmenter using ICU4X LSTM model with compiled complex scripts data.
-static THAI_SEGMENTER: OnceLock<LineSegmenterBorrowed<'static>> = OnceLock::new();
-
-fn segmenter() -> LineSegmenterBorrowed<'static> {
-    *THAI_SEGMENTER.get_or_init(|| LineSegmenter::new_lstm(LineBreakOptions::default()))
-}
-
 /// Returns true if `text` contains at least one character in the Thai Unicode block (U+0E00..=U+0E7F).
 #[inline]
 pub fn has_thai_chars(text: &str) -> bool {
@@ -473,7 +465,7 @@ fn split_hard_breaks(text: &str) -> Vec<(Range<usize>, Range<usize>, bool)> {
     out
 }
 
-/// Computes the break opportunity byte offsets within `para_text` using ICU4X line segmenter.
+/// Computes break opportunity byte offsets within `para_text` using craft-text.
 pub fn get_break_opportunities(para_text: &str) -> Vec<usize> {
     get_break_opportunities_with(para_text, || {})
 }
@@ -483,21 +475,7 @@ fn get_break_opportunities_with(para_text: &str, mut record: impl FnMut()) -> Ve
         return vec![0];
     }
     record();
-    let mut breaks = Vec::new();
-    let seg = segmenter();
-    for offset in seg.segment_str(para_text) {
-        if offset <= para_text.len() {
-            breaks.push(offset);
-        }
-    }
-    if breaks.first().copied() != Some(0) {
-        breaks.insert(0, 0);
-    }
-    if breaks.last().copied() != Some(para_text.len()) {
-        breaks.push(para_text.len());
-    }
-    breaks.dedup();
-    breaks
+    std::iter::once(0).chain(line_breaks(para_text, &Options::default()).into_iter().map(|brk| brk.offset)).collect()
 }
 
 enum CacheRequest {
@@ -978,7 +956,14 @@ pub fn layout_cell(p: &Painter, text: &str, font: &FontId, color: Color32, avail
 /// Executes Thai layout in the cell's resolved reading direction, returning its layout or fallback reason.
 ///
 /// The direction is used for candidate measurement and final line shaping and is part of the cache key.
-pub(crate) fn layout_cell_with_options(p: &Painter, text: &str, font: &FontId, color: Color32, avail_width: f32, options: ThaiLayoutOptions) -> ThaiLayoutResult {
+pub(crate) fn layout_cell_with_options(
+    p: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    avail_width: f32,
+    options: ThaiLayoutOptions,
+) -> ThaiLayoutResult {
     let ThaiLayoutOptions { halign, direction, zoom } = options;
     if !avail_width.is_finite() || avail_width < 1.0 || !zoom.is_finite() || zoom <= 0.0 {
         return ThaiLayoutResult::LegacyFallback(FallbackReason::InvalidWidth);
@@ -1281,9 +1266,14 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             begin_frame_budget(ui.ctx());
             for direction in directions {
-                let ThaiLayoutResult::Ready(layout) =
-                    layout_cell_with_options(ui.painter(), text, &font, Color32::WHITE, 160.0, ThaiLayoutOptions { halign: HAlign::Left, direction, zoom: 1.0 })
-                else {
+                let ThaiLayoutResult::Ready(layout) = layout_cell_with_options(
+                    ui.painter(),
+                    text,
+                    &font,
+                    Color32::WHITE,
+                    160.0,
+                    ThaiLayoutOptions { halign: HAlign::Left, direction, zoom: 1.0 },
+                ) else {
                     panic!("mixed Thai and RTL text should produce a Thai layout");
                 };
                 assert!(!layout.lines.is_empty());
@@ -1584,15 +1574,56 @@ mod tests {
         assert_eq!(ranges.len(), 1);
         assert_eq!(&text[ranges[0].source_range.clone()], text);
 
-        // Multi-word where each word and space is wider than cell
+        // Each word is wider than the cell; trailing spaces stay in the source ranges.
         let multi = "วัน วัน วัน";
         let multi_ranges = select_line_ranges(multi, 2.0, |_| Ok(50.0)).expect("multi-word oversized");
-        assert_eq!(multi_ranges.len(), 5);
+        let painted: Vec<_> = multi_ranges.iter().map(|line| &multi[line.paint_range.clone()]).collect();
+        assert_eq!(painted, ["วัน", "วัน", "วัน"]);
         let mut concat = String::new();
         for r in &multi_ranges {
             concat.push_str(&multi[r.source_range.clone()]);
         }
         assert_eq!(concat, multi);
+    }
+
+    #[test]
+    fn oversized_thai_galley_is_clipped_at_the_cell_edge() {
+        let ctx = egui::Context::default();
+        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(8.0, 80.0));
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let painter = ui.painter();
+            let font = FontId::proportional(30.0);
+            let ThaiLayoutResult::Ready(layout) = layout_cell(painter, "น้ำ", &font, Color32::WHITE, 6.0, HAlign::Left, 1.0) else {
+                panic!("oversized Thai word must produce a line");
+            };
+            assert_eq!(layout.lines.len(), 1);
+            assert!(layout.size.x > rect.width());
+            paint_thai_cell(
+                painter,
+                &layout,
+                ThaiCellPaint {
+                    rect,
+                    text_left: rect.left(),
+                    halign: HAlign::Left,
+                    valign: VAlign::Center,
+                    pad: 1.0,
+                    indent: 0.0,
+                    z: 1.0,
+                    color: Color32::WHITE,
+                },
+            );
+        });
+        output.textures_delta.clear();
+        let (line, clip) = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(line) if line.galley.job.text == "น้ำ" => Some((line, shape.clip_rect)),
+                _ => None,
+            })
+            .expect("the renderer submits the oversized line");
+        assert_eq!(clip, rect);
+        assert!(line.pos.x < clip.right() && line.pos.x + line.galley.size().x > clip.right());
     }
 
     #[test]
