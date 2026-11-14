@@ -246,6 +246,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     // Styles first (the style table is workbook-wide).
     let lk = look(&pt.style);
+    let normal = wb.styles.get(StyleId::DEFAULT).clone();
     let header_last = out.row_kinds.iter().rposition(|k| *k == RowKind::Header);
     let mut cache: HashMap<Style, StyleId> = HashMap::new();
     let mut cells: Vec<(CellRef, Cell)> = Vec::new();
@@ -266,7 +267,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
                 RowKind::Filter => ci == 0,
                 _ => false,
             };
-            let st = cell_style(&lk, rk, oc, flag);
+            let st = cell_style(&normal, &lk, rk, oc, flag);
             let id = match cache.get(&st) {
                 Some(id) => *id,
                 None => {

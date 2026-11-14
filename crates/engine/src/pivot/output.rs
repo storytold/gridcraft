@@ -411,8 +411,11 @@ pub(super) fn look(style: &str) -> Look {
     }
 }
 
-pub(super) fn cell_style(lk: &Look, rk: RowKind, cell: &OutCell, last_header: bool) -> Style {
-    let mut s = Style::default();
+/// A report cell's style: the workbook's Normal font with what the PivotTable style and the cell's
+/// kind add. Only the font comes from Normal, so a value without its own number format stays General
+/// when Normal has a date or percent format.
+pub(super) fn cell_style(normal: &Style, lk: &Look, rk: RowKind, cell: &OutCell, last_header: bool) -> Style {
+    let mut s = Style { font: normal.font.clone(), ..Style::default() };
     match rk {
         RowKind::Header => {
             s.font.bold = true;
