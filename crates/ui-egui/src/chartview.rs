@@ -16,6 +16,19 @@ fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
 
+fn text_font(format: &gridcraft_engine::model::ChartTextFormat, size: f32, bold: bool) -> FontId {
+    if format.name.is_some() || format.italic.unwrap_or(false) {
+        FontId::new(
+            size,
+            theme::cell_family(format.name.as_deref().unwrap_or(gridcraft_engine::model::DEFAULT_FONT), bold, format.italic.unwrap_or(false)),
+        )
+    } else if bold {
+        theme::ui_bold(size)
+    } else {
+        theme::ui_font(size)
+    }
+}
+
 struct EguiMeasure<'a> {
     painter: &'a Painter,
     z: f32,
@@ -120,8 +133,8 @@ pub fn paint_prims(p: &Painter, origin: Pos2, prims: &[Prim], z: f32) {
                     p.circle_stroke(pt(*cx, *cy), r * z, Stroke::new(w * z.max(0.5), rgba(*c)));
                 }
             }
-            Prim::Text { x, y, text, size, color, bold, align, valign, rotation } => {
-                let font: FontId = if *bold { theme::ui_bold(size * z) } else { theme::ui_font(size * z) };
+            Prim::Text { x, y, text, size, color, bold, format, align, valign, rotation, .. } => {
+                let font = text_font(format, size * z, *bold);
                 let galley = p.layout_no_wrap(text.clone(), font, rgba(*color));
                 let sz = galley.size();
                 let ax = match align {

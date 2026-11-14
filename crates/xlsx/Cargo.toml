@@ -25,6 +25,7 @@ craft-opc = { workspace = true }
 craft-xls = { workspace = true }
 thiserror = { workspace = true }
 quick-xml = { workspace = true }
+serde_json = { workspace = true }
 zip = { workspace = true }
 sha2 = { workspace = true }
 

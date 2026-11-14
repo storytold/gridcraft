@@ -454,6 +454,13 @@ pub(super) const CORE: &[(&str, &str)] = &[
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].
 pub(super) const DIALOGS: &[(&str, &str)] = &[
+    ("Save as Chart Template…", "グラフ テンプレートとして保存…"),
+    ("Chart Templates", "グラフ テンプレート"),
+    ("Use for new charts", "新しいグラフに使用"),
+    ("Save Chart Template", "グラフ テンプレートの保存"),
+    ("Template name", "テンプレート名"),
+    ("My Chart Template", "マイ グラフ テンプレート"),
+    ("Delete Template", "テンプレートの削除"),
     ("OK", "OK"),
     ("Cancel", "キャンセル"),
     ("Don't Save", "保存しない"),
