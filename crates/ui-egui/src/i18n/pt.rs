@@ -1041,6 +1041,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "unbalanced [" => "[ sem fechamento",
         "expected `)`, found {token}" => "esperado `)`, encontrado {token}",
         "expected `,` or `)`, found {token}" => "esperado `,` ou `)`, encontrado {token}",
+        "expected `;` or `)`, found {token}" => "esperado `;` ou `)`, encontrado {token}",
         "expected `,`, `;` or `}`, found {token}" => "esperado `,`, `;` ou `}`, encontrado {token}",
         "expected a reference after the sheet name, found {token}" => "esperada uma referência depois do nome da planilha, encontrado {token}",
         "expected a number in array, found {token}" => "esperado um número na matriz, encontrado {token}",

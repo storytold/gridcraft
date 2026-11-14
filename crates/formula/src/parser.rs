@@ -200,6 +200,10 @@ impl Parser<'_> {
         }
     }
     /// The token [`Self::next`] just returned, as typed.
+    /// The argument separator the formula is written with (`;` in Spanish), for error messages.
+    fn list_separator(&self) -> char {
+        if self.input { crate::FormulaLocale::Es.list_separator() } else { crate::FormulaLocale::En.list_separator() }
+    }
     fn typed_last(&self) -> String {
         self.typed(self.i.saturating_sub(1))
     }
@@ -327,7 +331,7 @@ impl Parser<'_> {
             match self.next() {
                 Tok::Comma => continue,
                 Tok::RParen => break,
-                _ => return Err(self.err(format!("expected `,` or `)`, found {}", self.typed_last()))),
+                _ => return Err(self.err(format!("expected `{}` or `)`, found {}", self.list_separator(), self.typed_last()))),
             }
         }
         if args.len() > 255 {
