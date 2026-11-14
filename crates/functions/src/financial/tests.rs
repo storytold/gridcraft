@@ -139,6 +139,14 @@ fn depreciation() {
 }
 
 #[test]
+fn amordegrc_first_period_stops_at_salvage() {
+    // #3964: the first charge never takes the book value below salvage.
+    close(ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2024, 1, 1), n(900.0), n(0.0), n(0.1), n(3.0)]), 100.0);
+    close(ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2023, 6, 30), n(900.0), n(0.0), n(0.1), n(1.0)]), 100.0);
+    close(ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2024, 1, 1), n(0.0), n(0.0), n(0.1), n(3.0)]), 250.0);
+}
+
+#[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
     close(args("COUPDAYBS"), 71.0);
