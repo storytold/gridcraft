@@ -126,8 +126,9 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some(at) = app.grid.context_menu else { return };
     let mut close = false;
     let resp = egui::Area::new(egui::Id::unique("cell_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_min_width(200.0);
+        let frame = egui::Frame::popup(ui.style());
+        let available_width = (ui.ctx().content_rect().width() - frame.total_margin().sum().x).max(1.0);
+        frame.show(ui, |ui| {
             let insert_copied = insert_copied_item(app);
             // On a cell with a link Excel offers to edit, open or remove it (#2120).
             let link =
@@ -172,12 +173,29 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 items.insert(i + 2, ("Show Details", "pivot.showDetails"));
             }
             let lang = crate::i18n::current(ui.ctx());
+            // Size the menu from its widest translated command, then keep every button on that
+            // same width. Otherwise a long item can wrap or expand only while hovered.
+            let menu_width = items
+                .iter()
+                .filter(|(label, _)| *label != "-")
+                .map(|(label, _)| {
+                    egui::WidgetText::from(lang.tr(label))
+                        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button)
+                        .size()
+                        .x
+                })
+                .fold(190.0_f32, f32::max)
+                + ui.spacing().button_padding.x * 2.0;
+            // The frame also needs room inside the viewport. Truncate labels when the user's
+            // font size or translation cannot fit, rather than growing the popup past the screen.
+            let menu_width = menu_width.min(available_width);
+            ui.set_width(menu_width);
             for (label, id) in items {
                 if label == "-" {
                     ui.separator();
                     continue;
                 }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0))).clicked() {
+                if ui.add(egui::Button::new(lang.tr(label)).truncate().frame_when_inactive(false).min_size(vec2(menu_width, 20.0))).clicked() {
                     close = true;
                     match id {
                         "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
