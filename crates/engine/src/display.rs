@@ -150,27 +150,55 @@ pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
     }
 }
 
-/// Tab-separated text of a range, as the system clipboard gets it.
-pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
-    let Some(sh) = wb.sheet(sheet) else { return String::new() };
+/// The most plain text a copy may produce. A bigger copy is refused, never cut short.
+const CLIPBOARD_TEXT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+/// Tab-separated text of a range, as the system clipboard gets it. Errors when the text would
+/// pass `CLIPBOARD_TEXT_MAX_BYTES`.
+pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> crate::Result<String> {
+    let Some(sh) = wb.sheet(sheet) else { return Ok(String::new()) };
     let mut out = String::new();
-    let r = clipboard_range(r);
+    let too_big = || {
+        crate::EngineError::Other(format!(
+            "The selection is too big to copy: its text is over the {} MiB limit. Select fewer cells.",
+            CLIPBOARD_TEXT_MAX_BYTES / (1024 * 1024)
+        ))
+    };
+    // The tabs and newlines alone cost this much; refuse before visiting any cell.
+    let width = u64::from(r.end.col.saturating_sub(r.start.col)) + 1;
+    let visible_rows = (r.start.row..=r.end.row).filter(|&row| !sh.is_row_hidden(row)).count() as u64;
+    if width.saturating_mul(visible_rows) > CLIPBOARD_TEXT_MAX_BYTES as u64 {
+        return Err(too_big());
+    }
     for row in r.start.row..=r.end.row {
         if sh.is_row_hidden(row) {
             continue;
         }
         let mut first = true;
         for col in r.start.col..=r.end.col {
+            let t = cell_text(wb, sh, CellRef::new(row, col));
+            // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
+            // `say "hi"` is copied as it is (#2225).
+            let quoted = t.contains(['\t', '\n', '\r']);
+            // Size the tab before the cell, its text as it will be written, and the line's closing
+            // newline, before appending anything.
+            let extra = if quoted { 2 + t.bytes().filter(|&b| b == b'"').count() } else { 0 };
+            let tab = usize::from(!first);
+            if out.len().saturating_add(tab).saturating_add(t.len()).saturating_add(extra).saturating_add(1) > CLIPBOARD_TEXT_MAX_BYTES {
+                return Err(too_big());
+            }
             if !first {
                 out.push('\t');
             }
             first = false;
-            let t = cell_text(wb, sh, CellRef::new(row, col));
-            // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
-            // `say "hi"` is copied as it is (#2225).
-            if t.contains(['\t', '\n', '\r']) {
+            if quoted {
                 out.push('"');
-                out.push_str(&t.replace('"', "\"\""));
+                for ch in t.chars() {
+                    if ch == '"' {
+                        out.push('"');
+                    }
+                    out.push(ch);
+                }
                 out.push('"');
             } else {
                 out.push_str(&t);
@@ -178,12 +206,7 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
         }
         out.push('\n');
     }
-    out
-}
-
-/// The existing plain-text clipboard limit, shared with its HTML representation.
-pub(crate) fn clipboard_range(r: RangeRef) -> RangeRef {
-    if r.count() > 2_000_000 { RangeRef::new(r.start, r.start.offset_clamped(1999, 999)) } else { r }
+    Ok(out)
 }
 
 /// Status-bar statistics for a selection: average, count (non-empty), numerical count, min,
