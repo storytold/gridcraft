@@ -101,7 +101,7 @@ pub struct PivotFilter {
 
 /// A PivotTable: its definition plus where its output was last written. The output itself is
 /// static cell values and styles on the sheet, rewritten on every refresh.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PivotTable {
     pub id: u32,
@@ -137,6 +137,34 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// Source column header names as of the last refresh or XLSX load, so saving before a
+    /// refresh preserves the cache fields if source headers were renamed.
+    pub cache_fields: Vec<String>,
+}
+
+impl PartialEq for PivotTable {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.name == other.name
+            && self.source == other.source
+            && self.anchor == other.anchor
+            && self.rows == other.rows
+            && self.columns == other.columns
+            && self.values == other.values
+            && self.filters == other.filters
+            && self.layout == other.layout
+            && self.enable_show_details == other.enable_show_details
+            && self.grand_totals_rows == other.grand_totals_rows
+            && self.grand_totals_cols == other.grand_totals_cols
+            && self.subtotals == other.subtotals
+            && self.subtotals_top == other.subtotals_top
+            && self.style == other.style
+            && self.show_headers == other.show_headers
+            && self.last_range == other.last_range
+            && self.calculated_fields == other.calculated_fields
+            && self.values_on_rows == other.values_on_rows
+            && self.values_position == other.values_position
+    }
 }
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
@@ -172,6 +200,7 @@ impl Default for PivotTable {
             calculated_fields: vec![],
             values_on_rows: false,
             values_position: None,
+            cache_fields: vec![],
         }
     }
 }

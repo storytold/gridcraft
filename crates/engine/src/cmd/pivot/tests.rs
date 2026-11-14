@@ -1094,3 +1094,42 @@ fn legacy_count_numbers_caption_follows_the_function() {
         assert_eq!(text(&s, "E3"), after, "{legacy}");
     }
 }
+
+#[test]
+fn saving_before_refresh_preserves_value_field_after_header_rename() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("sheet.rename", json!({"name": "Source"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Amount"], ["East", 10], ["West", 20]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Sales"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Report"})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({
+            "source": "Sales",
+            "destination": "Report!A1",
+            "name": "RegionPivot",
+            "rows": ["Region"],
+            "values": [{"field": "Amount", "func": "sum"}]
+        }),
+    )
+    .unwrap();
+    s.execute("cell.set", json!({"sheet": "Source", "cell": "B1", "input": "Net"})).unwrap();
+    let before = s.execute("pivot.list", json!({})).unwrap();
+    assert_eq!(before[0]["values"][0]["field"], "Amount");
+
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (wb, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let mut s2 = Session::new();
+    s2.add_document(crate::DocState::new(wb, None, "renamed.xlsx".into(), crate::Trust::Local));
+
+    let reopened = s2.execute("pivot.list", json!({})).unwrap();
+    assert_eq!(reopened[0]["values"].as_array().map(Vec::len), Some(1), "reopened pivot.list: {reopened}");
+    assert_eq!(reopened[0]["values"][0]["field"], "Amount");
+
+    s2.execute("cell.set", json!({"sheet": "Source", "cell": "B1", "input": "Amount"})).unwrap();
+    s2.execute("cell.set", json!({"sheet": "Source", "cell": "B2", "input": "12"})).unwrap();
+    s2.execute("pivot.refresh", json!({"pivot": "RegionPivot"})).unwrap();
+    let report = s2.execute("sheet.read", json!({"sheet": "Report", "range": "A1:B4"})).unwrap();
+    assert_eq!(report["values"][3][1], json!(32.0), "report: {report}");
+}

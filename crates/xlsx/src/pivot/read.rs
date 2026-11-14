@@ -397,5 +397,6 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     pt.anchor = loc.start;
     let above = if pages.is_empty() { 0 } else { pages.len() as u32 + 1 };
     pt.last_range = Some(RangeRef::new(CellRef::new(loc.start.row.saturating_sub(above), loc.start.col), loc.end));
+    pt.cache_fields = cache.fields.iter().filter(|f| f.database).map(|f| f.name.clone()).collect();
     Some(pt)
 }
