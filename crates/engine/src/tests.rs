@@ -1632,6 +1632,21 @@ fn custom_list_sort_puts_unlisted_values_after_the_list_in_order() {
     assert_eq!(col, ["Priority", "High", "Medium", "Low", "Alpha", "Zulu"].map(Value::from));
 }
 
+/// #3949 changes only an ascending custom-list key: with a descending one, two values not in the
+/// list still tie, so the next key orders them.
+#[test]
+fn descending_custom_list_sort_leaves_unlisted_values_to_the_next_key() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "N"], ["Zulu", 2], ["Alpha", 1], ["High", 3]]})).unwrap();
+    let keys = json!([
+        {"column": "A", "order": "desc", "customList": ["High", "Medium", "Low"]},
+        {"column": "B", "order": "asc"}
+    ]);
+    s.execute("data.sort", json!({"range": "A1:B4", "header": true, "keys": keys})).unwrap();
+    let col: Vec<Value> = (2..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["Alpha", "Zulu", "High"].map(Value::from));
+}
+
 #[test]
 fn data_sort_orders_vowelled_arabic_by_letters() {
     let mut s = s();
