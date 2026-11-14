@@ -1041,6 +1041,7 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// Save through an exclusively created temporary file without changing a pre-existing entry.
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
     script_sandbox_check(path)?;
@@ -1062,10 +1063,8 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut f = opts.open(&tmp).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        EngineError::Other(format!("{path}: {e}"))
-    })?;
+    // If exclusive creation fails, the entry belongs to someone else: leave it untouched.
+    let mut f = opts.open(&tmp).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // The replacement belongs to the saving user's primary group: restore the old file's group and
     // then its mode. When the group can't be restored its access is dropped rather than handed to a
     // different group; failing to read that back is a failed save.
