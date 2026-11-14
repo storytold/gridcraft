@@ -382,7 +382,7 @@ impl Pattern {
     /// The exponential curve y = b·m^x fitted to `nums` at positions 0, 1, 2… by least squares on
     /// the logarithms, as the GROWTH function fits positive numbers. Numbers below zero are fitted
     /// by their magnitudes and keep their sign. `None` when the numbers are not all above zero or
-    /// all below zero. A lone number is copied unchanged.
+    /// all below zero. A lone number, or the same number repeated, is copied unchanged.
     fn growth(nums: &[f64]) -> Option<Pattern> {
         let sign = if nums.iter().all(|y| *y > 0.0) {
             1.0
@@ -391,7 +391,7 @@ impl Pattern {
         } else {
             return None;
         };
-        if nums.len() == 1 {
+        if nums.windows(2).all(|w| w.first() == w.last()) {
             return Some(Pattern::Copy);
         }
         let logs: Vec<f64> = nums.iter().map(|y| (y * sign).ln()).collect();

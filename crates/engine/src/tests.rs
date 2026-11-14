@@ -1118,6 +1118,10 @@ fn linear_and_growth_trend_continue_the_fitted_line_or_curve() {
     s.execute("range.setValues", json!({"range": "Y1", "values": [[big, big14], [big, big14], [big, big14]]})).unwrap();
     fill(&mut s, "Y1:Z3", "Y1:Z4", "linearTrend").unwrap();
     assert_eq!(nums(&s, &["Y4", "Z4"]), n(&[big, big14]));
+    // Growth Trend repeats the same number exactly too, huge, tiny or below zero.
+    s.execute("range.setValues", json!({"range": "AA1", "values": [[1e300, 1e-300, -0.3], [1e300, 1e-300, -0.3]]})).unwrap();
+    fill(&mut s, "AA1:AC2", "AA1:AC4", "growthTrend").unwrap();
+    assert_eq!(nums(&s, &["AA4", "AB4", "AC4"]), n(&[1e300, 1e-300, -0.3]));
     s.execute("cell.set", json!({"cell": "N1", "input": "1/15/2026"})).unwrap();
     s.execute("cell.set", json!({"cell": "N2", "input": "2/15/2026"})).unwrap();
     fill(&mut s, "N1:N2", "N1:N3", "linearTrend").unwrap();
