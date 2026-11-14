@@ -159,6 +159,27 @@ fn coupons() {
 }
 
 #[test]
+fn yieldmat_survives_intermediate_overflow() {
+    // #4099: settlement 2025-01-02, issue 2025-01-01, actual/360. The final yields fit in binary64
+    // even though 1 + dim * rate (first case) or the return ratio before dividing by the
+    // remaining term (second case) does not.
+    let s = serial_from_ymd(DateSystem::D1900, 2025, 1, 2).unwrap();
+    let (issue, settle) = (d(2025, 1, 1), n(s));
+    let after = |days: f64| n(s + days);
+    let (a, t, r) = (1.0 / 360.0, 7200.0 / 360.0, 1e307);
+    let expected = (1.0 / r + 7201.0 / 360.0) / (1.0 / r + a) - 1.0;
+    close_tol(ev("YIELDMAT", vec![settle.clone(), after(7200.0), issue.clone(), n(r), n(100.0), n(2.0)]), expected / t, 1e-12);
+    close_tol(
+        ev("YIELDMAT", vec![settle.clone(), after(36000.0), issue.clone(), n(0.0), n(3e-308), n(2.0)]),
+        (100.0 - 3e-308) * 360.0 / (3e-308 * 36000.0),
+        1e-12,
+    );
+    // Controls from the report that were already finite stay finite.
+    close_tol(ev("YIELDMAT", vec![settle.clone(), after(7200.0), issue.clone(), n(1e306), n(100.0), n(2.0)]), 360.0, 1e-9);
+    close_tol(ev("YIELDMAT", vec![settle, after(36000.0), issue, n(0.0), n(1e-305), n(2.0)]), (100.0 - 1e-305) * 360.0 / (1e-305 * 36000.0), 1e-12);
+}
+
+#[test]
 fn securities() {
     close_tol(ev("DISC", vec![d(2007, 1, 25), d(2007, 6, 15), n(97.975), n(100.0), n(1.0)]), 0.052420213, 1e-8);
     close_tol(ev("PRICEDISC", vec![d(2008, 2, 16), d(2008, 3, 1), n(0.0525), n(100.0), n(2.0)]), 99.79583333, 1e-9);

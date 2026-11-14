@@ -187,7 +187,18 @@ pub(super) fn yieldmat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let base = pr / 100.0 + ai * rate;
-    num_val(((1.0 + dim * rate) - base) / base / dsm)
+    let direct = ((1.0 + dim * rate) - base) / base / dsm;
+    if direct.is_finite() {
+        return num_val(direct);
+    }
+    // Extreme inputs can overflow an intermediate while the yield itself fits (#4099): a huge
+    // coupon overflows 1 + dim * rate, and a tiny price overflows the return ratio before the
+    // remaining term scales it down. Normalise by the coupon rate and divide by the term first.
+    let k = rate.max(1.0);
+    let base_k = pr / 100.0 / k + ai * (rate / k);
+    let gain_k = (1.0 / k + dim * (rate / k)) - base_k;
+    let scaled = gain_k / base_k / dsm;
+    num_val(if scaled.is_finite() { scaled } else { gain_k / dsm / base_k })
 }
 
 struct Bond {
