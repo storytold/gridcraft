@@ -48,6 +48,7 @@ struct DocCharts {
 
 #[derive(Default)]
 pub(crate) struct ChartCache {
+    language: Option<crate::i18n::Language>,
     docs: HashMap<u64, DocCharts>,
     tick: u64,
     bytes: usize,
@@ -66,6 +67,14 @@ fn prim_bytes(p: &Prim) -> usize {
 }
 
 impl ChartCache {
+    /// Generated series captions depend on the interface language, even without workbook edits.
+    pub(crate) fn set_language(&mut self, language: crate::i18n::Language) {
+        if self.language != Some(language) {
+            self.clear();
+            self.language = Some(language);
+        }
+    }
+
     /// The primitives of chart `index` of `sheet` in document `uid` whose workbook is `wb`, for
     /// zoom and pixels per point `(z, ppp)`. `build` renders the chart when there is no valid entry.
     pub(crate) fn get(
@@ -367,6 +376,36 @@ mod tests {
 
     fn exec(h: &mut Harness, id: &str, params: serde_json::Value) {
         h.state_mut().session.execute(id, params).unwrap();
+    }
+
+    /// Language switches refresh generated labels without discarding the idle-frame cache benefit.
+    #[test]
+    fn cached_chart_labels_follow_the_interface_language() {
+        let mut session = two_charts();
+        session.execute("cell.set", json!({"cell":"B1","input":""})).unwrap();
+        let mut h = harness(session);
+        let n = rendered_after(&mut h, |h| {
+            h.state_mut().ui.language = crate::i18n::Language::Ru;
+        });
+        assert_eq!(n, 2);
+        let cache = h.state().chart_cache.lock().unwrap();
+        let expected = craft_i18n::fmt(crate::i18n::Language::Ru.tr("Series{n}"), &[("n", "1")]);
+        assert!(
+            cache
+                .docs
+                .values()
+                .flat_map(|doc| doc.charts.values())
+                .flat_map(|entry| entry.prims.iter())
+                .any(|prim| matches!(prim, Prim::Text { text, .. } if text == &expected))
+        );
+        drop(cache);
+        assert_eq!(rendered_after(&mut h, |h| h.run_steps(5)), 0);
+        assert_eq!(
+            rendered_after(&mut h, |h| {
+                h.state_mut().ui.language = crate::i18n::Language::En;
+            }),
+            2
+        );
     }
 
     #[test]

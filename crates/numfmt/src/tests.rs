@@ -668,7 +668,7 @@ fn text_uncached(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellE
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, &gridcraft_core::region::EN_US);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
@@ -895,6 +895,51 @@ fn closed_brackets_still_hold_their_semicolons() {
     assert_eq!(parse::parse_sections("[unknown;x]0;0").len(), 2);
     assert_eq!(f("0\\[0", 5.0), "0[5");
     assert_eq!(f("\"[\"0;0", 5.0), "[5");
+}
+
+/// Regional output changes separators and names while preserving explicit currency literals.
+#[test]
+fn explicit_region_renders_numbers_dates_and_currency_without_rewriting_codes() {
+    let german = gridcraft_core::region::lookup("de-DE");
+    let render = |n, code| format_value_with_region(&Value::Number(n), &NumberFormat::parse(code), DateSystem::D1900, german).text;
+    assert_eq!(render(1234.56, "#,##0.00"), "1.234,56");
+    assert_eq!(render(46310.0, "dddd, d. mmmm yyyy"), "Donnerstag, 15. Oktober 2026");
+    assert_eq!(render(46310.0, "[$-409]dddd, mmmm"), "Thursday, October");
+    assert_eq!(render(46310.0, "[$-407]mmmm"), "Oktober");
+    assert_eq!(render(46096.0, "d mmm yyyy"), "15 Mär 2026");
+    assert_eq!(render(1234.56, r##""$"#,##0.00"##), "$1.234,56");
+    assert_eq!(render(1234.56, r#"#,##0.00 "€""#), "1.234,56 €");
+}
+
+#[test]
+fn russian_month_case_depends_on_the_numeric_day() {
+    let region = gridcraft_core::region::lookup("ru-RU");
+    for (code, expected) in [
+        ("dddd, mmmm yyyy", "четверг, октябрь 2026"),
+        ("ddd, mmmm yyyy", "чт, октябрь 2026"),
+        ("d mmmm yyyy", "15 октября 2026"),
+        ("dddd, dd mmmm yyyy", "четверг, 15 октября 2026"),
+    ] {
+        assert_eq!(format_value_with_region(&Value::Number(46310.0), &NumberFormat::parse(code), S, region).text, expected);
+    }
+}
+
+/// Fractional seconds follow the output locale while format codes stay canonical.
+#[test]
+fn fractional_seconds_use_the_region_decimal_separator() {
+    let serial = 0.5 + 123.0 / 86_400_000.0;
+    for (region, expected) in [(&gridcraft_core::region::EN_US, "12:00:00.123"), (gridcraft_core::region::lookup("de-DE"), "12:00:00,123")] {
+        let fmt = NumberFormat::parse("hh:mm:ss.000");
+        assert_eq!(format_value_with_region(&Value::Number(serial), &fmt, DateSystem::D1900, region).text, expected);
+    }
+    for (code, expected) in [("hh:mm:ss.0", "12:00:00,1"), ("[h]:mm:ss.00", "36:00:00,12")] {
+        let serial = if code.starts_with('[') { serial + 1.0 } else { serial };
+        assert_eq!(
+            format_value_with_region(&Value::Number(serial), &NumberFormat::parse(code), DateSystem::D1900, gridcraft_core::region::lookup("de-DE"))
+                .text,
+            expected
+        );
+    }
 }
 
 const JAN_1_2001: f64 = 36892.0;
@@ -1246,4 +1291,24 @@ fn round_as_displayed_matches_excel() {
     assert_eq!(r("0%%%%%%%%%%%%%%%%%%%%%%%%", f64::MAX), f64::MAX);
     assert_eq!(r("0", f64::MAX), f64::MAX);
     assert_eq!(r("0.0E+0", f64::MIN_POSITIVE), 2.2e-308);
+}
+
+/// Display precision remains numeric while rendering uses the selected region.
+#[test]
+fn display_precision_and_regional_rendering_share_rounding() {
+    for (code, value, rounded, text) in [
+        ("0.00", 1.005, 1.01, "1,01"),
+        ("#,##0.00", 1234.5678, 1234.57, "1.234,57"),
+        ("0.0%", 0.123456, 0.123, "12,3%"),
+        ("# ?/?", 2.3, 16.0 / 7.0, "2 2/7"),
+        ("0.00E+00", 123456.789, 123000.0, "1,23E+05"),
+    ] {
+        let format = NumberFormat::parse(code);
+        assert_eq!(format.round_as_displayed(value), rounded, "{code}");
+        assert_eq!(
+            format_value_with_region(&Value::Number(value), &format, DateSystem::D1900, gridcraft_core::region::lookup("de-DE")).text,
+            text,
+            "{code}"
+        );
+    }
 }

@@ -58,3 +58,48 @@ fn right_clicking_the_status_bar_text_opens_the_menu() {
         assert!(h.query_by_label("Numerical Count").is_some(), "a right-click on {text:?} opens the statistics menu");
     }
 }
+
+#[test]
+fn selection_statistics_use_the_interface_language() {
+    for (language, labels, menu_labels) in [
+        ("en", ["Average: 4", "Count: 3", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Sum: 12"], ["Count", "Sum"]),
+        ("tr", ["Ortalama: 4", "Sayı: 3", "Sayısal Sayı: 3", "En Küçük: -1", "En Büyük: 9", "Toplam: 12"], ["Sayı", "Toplam"]),
+        ("pt-BR", ["Média: 4", "Contagem: 3", "Numerical Count: 3", "Mínimo: -1", "Máximo: 9", "Soma: 12"], ["Contagem", "Soma"]),
+    ] {
+        let mut h = harness();
+        h.state_mut().run("app.language.set", json!({"language": language})).unwrap();
+        h.state_mut().run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
+        h.run_steps(3);
+        for label in labels {
+            assert!(h.query_by_label(label).is_some(), "{language}: missing {label}");
+        }
+        right_click(&mut h, pos2(300.0, 787.0));
+        for label in menu_labels {
+            assert!(h.query_by_label(label).is_some(), "{language}: missing menu label {label}");
+        }
+    }
+}
+
+/// Status-bar statistics follow the workbook region, not the interface language.
+#[test]
+fn selection_statistics_format_values_with_the_workbook_region() {
+    use gridcraft_ui_egui::i18n::Language;
+    let mut h = harness();
+    let doc = h.state_mut().session.active_mut().unwrap();
+    std::sync::Arc::make_mut(&mut doc.wb).region = gridcraft_engine::core::region::lookup("de-DE");
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1000.25],[1001.25]]})).unwrap();
+    h.state_mut().run("selection.set", json!({"range":"A1:A2"})).unwrap();
+    for (language, code, expected) in [(Language::De, "General", "2.001,5"), (Language::En, "General", "2.001,5"), (Language::De, "0.00", "2001,50")]
+    {
+        h.state_mut().run("app.language.set", json!({"language":language.code()})).unwrap();
+        h.state_mut().run("home.numberFormat", json!({"range":"A1", "code":code})).unwrap();
+        h.run_steps(3);
+        let label = format!("{}: {expected}", language.tr("Sum"));
+        assert!(h.query_by_label(&label).is_some(), "missing {label}");
+    }
+    h.state_mut().run("range.setValues", json!({"range":"A1", "values":[[1000],[1001]]})).unwrap();
+    h.state_mut().run("home.numberFormat", json!({"range":"A1", "code":"General"})).unwrap();
+    h.run_steps(3);
+    let label = format!("{}: 2.001", Language::De.tr("Sum"));
+    assert!(h.query_by_label(&label).is_some(), "an integer statistic must not end in a decimal separator");
+}

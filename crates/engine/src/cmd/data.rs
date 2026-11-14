@@ -23,7 +23,7 @@ mod sort;
 mod tools;
 mod validation;
 
-pub use filter::filter_values;
+pub use filter::{FilterValue, filter_entries, filter_values};
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
@@ -31,7 +31,7 @@ use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub use validation::{check_validation, list_items};
+pub use validation::{check_literal_array_validation, check_literal_fill_validation, check_literal_validation, check_validation, list_items};
 use validation::{circle_invalid, validate_cmd, validation};
 pub(super) use validation::{move_rule_formula, remove_validation_cells};
 

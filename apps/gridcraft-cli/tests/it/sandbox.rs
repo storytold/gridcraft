@@ -105,6 +105,7 @@ fn a_confined_program_reads_only_what_it_is_given() {
 }
 
 #[test]
+#[cfg(unix)]
 fn a_launch_whose_check_fails_runs_nothing() {
     // A run that says it is already confined and isn't finds the canary readable and must refuse.
     // On macOS that is the second stage started without `sandbox-exec`; on Linux the launcher never

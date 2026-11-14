@@ -16,6 +16,18 @@ fn rgba(c: [u8; 4]) -> Color32 {
     Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])
 }
 
+/// Localizes generated series labels while preserving explicit names and workbook values.
+pub(crate) fn localized_chart_data(
+    wb: &Workbook,
+    sheet: usize,
+    chart: &gridcraft_engine::model::Chart,
+    language: crate::i18n::Language,
+) -> gridcraft_chart::ChartData {
+    gridcraft_chart::resolve_with_series_names(wb, sheet, chart, |index| {
+        craft_i18n::fmt(language.tr("Series{n}"), &[("n", &(index + 1).to_string())])
+    })
+}
+
 struct EguiMeasure<'a> {
     painter: &'a Painter,
     z: f32,
@@ -37,7 +49,7 @@ pub fn paint_chart(p: &Painter, rect: Rect, wb: &Workbook, sheet: usize, chart: 
         return;
     }
     let origin = rect.center() - vec2(w * z, h * z) / 2.0;
-    let data = gridcraft_chart::resolve(wb, sheet, chart);
+    let data = localized_chart_data(wb, sheet, chart, crate::i18n::current(p.ctx()));
     let m = EguiMeasure { painter: p, z };
     let prims = gridcraft_chart::render(chart, &data, w, h, &m);
     paint_prims(&p.with_clip_rect(rect.intersect(p.clip_rect())), origin, &prims, z);
@@ -252,7 +264,7 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
 fn render_chart(p: &Painter, z: f32, wb: &Workbook, si: usize, ch: &gridcraft_engine::model::Chart) -> Vec<Prim> {
     #[cfg(test)]
     tests::RENDERS.with(|c| c.set(c.get() + 1));
-    let data = gridcraft_chart::resolve(wb, si, ch);
+    let data = localized_chart_data(wb, si, ch, crate::i18n::current(p.ctx()));
     let m = EguiMeasure { painter: p, z };
     gridcraft_chart::render(ch, &data, ch.anchor.width, ch.anchor.height, &m)
 }
@@ -270,6 +282,7 @@ fn chart_prims(app: &SheetApp, p: &Painter, z: f32, wb: &Arc<Workbook>, si: usiz
         return render_chart(p, z, wb, si, ch).into();
     }
     let mut cache = app.chart_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    cache.set_language(crate::i18n::current(p.ctx()));
     cache.get(d.uid, wb, si, ci, (z, p.ctx().pixels_per_point()), || render_chart(p, z, wb, si, ch))
 }
 
@@ -292,6 +305,7 @@ pub(crate) fn objects_hidden(wb: &Workbook) -> bool {
     wb.show_objects == gridcraft_engine::model::ShowObjects::None
 }
 
+/// Paints visible sheet objects with interface-localized chart labels and returns their hit regions.
 pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Workbook>, si: usize, sh: &Sheet) -> Vec<PaintedObject> {
     let mut painted = Vec::new();
     if objects_hidden(wb) {
@@ -613,6 +627,45 @@ pub fn hit(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(ObjRef, Re
 /// width in points, so the live pen stroke and the committed ink agree at every zoom.
 pub(crate) fn ink_color(line: Color32, width_pt: f32) -> Color32 {
     if width_pt > 8.0 { line.gamma_multiply(0.45) } else { line }
+}
+
+#[cfg(test)]
+mod localized_name_tests {
+    use super::*;
+    use crate::i18n::Language;
+    use gridcraft_engine::Session;
+    use serde_json::json;
+
+    /// Only genuinely empty resolved names use the localized fallback, never explicit user text.
+    #[test]
+    fn resolved_empty_series_names_use_localized_fallbacks() {
+        let mut session = Session::new();
+        session.new_workbook();
+        session.execute("range.setValues", json!({"range":"A1", "values":[["Quarter", "Sales"],["Q1",1],["Q2",2]]})).unwrap();
+        session.execute("cell.set", json!({"cell":"D1", "input":"Series1"})).unwrap();
+        session.execute("insert.chart", json!({"range":"A1:B3", "type":"column"})).unwrap();
+        let wb = &session.active().unwrap().wb;
+        let mut chart = wb.active().unwrap().charts[0].clone();
+        let cases = [
+            (None, true),
+            (Some(""), true),
+            (Some("\"\""), true),
+            (Some("=Sheet1!C1"), true),
+            (Some("Sheet1!C1"), true),
+            (Some("=IF(TRUE,\"\",\"value\")"), true),
+            (Some("Series1"), false),
+            (Some("\"Series1\""), false),
+            (Some("=Sheet1!D1"), false),
+        ];
+        for (source, generated) in cases {
+            chart.series[0].name = source.map(str::to_string);
+            let canonical = gridcraft_chart::resolve(wb, 0, &chart);
+            assert_eq!(canonical.series[0].name, "Series1");
+            let shown = localized_chart_data(wb, 0, &chart, Language::Ru);
+            let expected = if generated { craft_i18n::fmt(Language::Ru.tr("Series{n}"), &[("n", "1")]) } else { "Series1".into() };
+            assert_eq!(shown.series[0].name, expected, "{source:?}");
+        }
+    }
 }
 
 #[cfg(test)]

@@ -557,3 +557,100 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// Custom rules see all proposed destinations, while validation preserves the original workbook.
+#[test]
+fn literal_fill_validation_keeps_the_original_workbook_unchanged() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range":"A1", "values":[["old","old"]]})).unwrap();
+    session.execute("data.validation", json!({"range":"A1", "type":"custom", "formula1":"=A1=\"new\""})).unwrap();
+    session.execute("data.validation", json!({"range":"B1", "type":"custom", "formula1":"=AND(A1=\"old\",B1=\"new\")"})).unwrap();
+    let range = RangeRef::parse("A1:B1").unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "new").is_some());
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "other").is_some());
+
+    // Direct command calls retain their existing behavior, independently of UI validation.
+    session.execute("range.fill", json!({"range":"A1:B1", "input":"other", "literal":true})).unwrap();
+    assert_eq!(session.doc().unwrap().wb.active().unwrap().value(CellRef::new(0, 1)), Value::text("other"));
+}
+
+#[test]
+fn literal_validation_rechecks_formula_destinations_and_dependents() {
+    let mut session = Session::default();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"A1", "input":"=\"same\""})).unwrap();
+    session.execute("data.validation", json!({"range":"A1", "type":"custom", "formula1":"=ISFORMULA(A1)"})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_validation(wb, 0, CellRef::parse("A1").unwrap(), "same").is_some());
+
+    session.execute("cell.set", json!({"cell":"A1", "input":"5"})).unwrap();
+    session.execute("cell.set", json!({"cell":"B1", "input":"=A1*1"})).unwrap();
+    session.execute("data.validation", json!({"range":"A1", "type":"custom", "formula1":"=B1>0"})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_validation(wb, 0, CellRef::parse("A1").unwrap(), "-1").is_some());
+}
+
+#[test]
+fn literal_fill_validation_ignores_filtered_rows() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute("range.setValues", json!({"range":"A1", "values":[["Value", "Tag"], ["old", "show"], ["old", "hide"], ["old", "show"]]}))
+        .unwrap();
+    session.execute("data.filter", json!({"range":"A1:B4"})).unwrap();
+    session.execute("data.filterBy", json!({"column":"B", "values":["show"]})).unwrap();
+    session.execute("data.validation", json!({"range":"A3", "type":"custom", "formula1":"=A3=\"allow\""})).unwrap();
+
+    let range = RangeRef::parse("A2:A4").unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "blocked").is_none());
+
+    session.execute("data.validation", json!({"range":"A4", "type":"custom", "formula1":"=A4=\"allow\""})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[range], "blocked").is_some());
+}
+
+#[test]
+fn formula_and_literal_with_the_same_filter_label_are_one_choice() {
+    let mut session = Session::new();
+    session.new_workbook();
+    for cell in ["A1", "A2"] {
+        session.execute("cell.set", json!({"cell":cell,"input":"=A1","literal":true})).unwrap();
+    }
+    session.execute("cell.set", json!({"cell":"A3","input":"=A1"})).unwrap();
+    session.execute("formulas.showFormulas", json!({"on":true})).unwrap();
+    session.execute("data.filter", json!({"range":"A1:A3"})).unwrap();
+    let rows = super::filter_entries(&session.doc().unwrap().wb, 0, 0);
+    assert_eq!(rows.iter().map(|row| row.label.as_str()).collect::<Vec<_>>(), ["=A1"]);
+}
+
+#[test]
+fn literal_fill_validates_the_completed_range() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range":"A1","values":[["x"]],"parse":false})).unwrap();
+    s.execute("data.validation", json!({"range":"A1:A3","type":"custom","formula1":"=COUNTIF($A$1:$A$3,\"x\")<=2"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("A1:A3").unwrap()], "x").is_some());
+}
+
+#[test]
+fn literal_fill_rejects_a_simple_stop_rule_before_snapshotting_a_column() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("data.validation", json!({"range":"A1","type":"custom","formula1":"=FALSE"})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("A1:A1048576").unwrap()], "x").is_some());
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty);
+}
+
+#[test]
+fn literal_empty_text_is_validated_even_when_blank_cells_are_allowed() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("data.validation", json!({"range":"B1","type":"custom","formula1":"=ISBLANK(B1)","allowBlank":true})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    assert!(super::check_literal_fill_validation(wb, 0, &[RangeRef::parse("B1").unwrap()], "").is_some());
+}

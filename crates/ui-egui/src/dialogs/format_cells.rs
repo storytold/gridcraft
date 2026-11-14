@@ -32,17 +32,29 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 for name in
                     ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"]
                 {
-                    let c = gridcraft_engine::cmd::format::format_code_for(name).to_string();
+                    let c = lang.format_locale().preset(name).to_string();
                     if cols[0].selectable_label(code == c, lang.tr(name)).clicked() {
                         code = c;
                     }
                 }
                 cols[1].label(egui::RichText::new(lang.tr("Sample")).strong());
-                let preview = app.session.active().map(|doc| gridcraft_engine::display::format(&sample, &code, &doc.wb).text).unwrap_or_default();
+                let preview = app
+                    .session
+                    .active()
+                    .map(|doc| {
+                        let format = gridcraft_engine::display::number_format(&code);
+                        crate::formula_locale::localized_constant(&sample, lang.formula_locale()).map(str::to_owned).unwrap_or_else(|| {
+                            gridcraft_engine::numfmt::format_value_with_region(&sample, &format, doc.wb.date_system, doc.wb.region).text
+                        })
+                    })
+                    .unwrap_or_default();
                 cols[1].label(egui::RichText::new(preview).font(theme::ui_font(15.0)));
                 cols[1].add_space(8.0);
                 let label = cols[1].label(lang.tr("Type (custom format code):"));
-                cols[1].text_edit_singleline(&mut code).labelled_by(label.id);
+                let mut shown = lang.format_locale().display(&code);
+                if cols[1].text_edit_singleline(&mut shown).labelled_by(label.id).changed() {
+                    code = lang.format_locale().canonical(&shown);
+                }
                 for c in [
                     "0",
                     "0.00",
@@ -61,7 +73,8 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     "[h]:mm:ss",
                     "@",
                 ] {
-                    if cols[1].small_button(c).clicked() {
+                    let c = lang.format_locale().suggestion(c);
+                    if cols[1].small_button(lang.format_locale().display(c)).clicked() {
                         code = c.to_string();
                     }
                 }
@@ -157,7 +170,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             use gridcraft_engine::model::{BorderLine, BorderStyle};
             let line = BorderLine { style: BorderStyle::Thin, color: gridcraft_engine::model::Color::Auto };
             ui.horizontal(|ui| {
-                if ui.button(lang.tr("None")).clicked() {
+                if ui.button(lang.translation("Borders|None").unwrap_or_else(|| lang.tr("None"))).clicked() {
                     st.borders = Default::default();
                 }
                 if ui.button(lang.tr("Outline")).clicked() {

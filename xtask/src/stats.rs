@@ -143,7 +143,9 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Counts, MAX_SOURCE_BYTES, count_tests, read_source, walk};
+    #[cfg(unix)]
+    use super::{Counts, walk};
+    use super::{MAX_SOURCE_BYTES, count_tests, read_source};
 
     /// A new, private directory: `create_dir` fails if the name exists (even as a link), so a
     /// directory somebody else made in advance is never used.
@@ -151,7 +153,10 @@ mod tests {
         let mut n = 0u32;
         loop {
             let dir = std::env::temp_dir().join(format!("xtask-stats-{tag}-{}-{n}", std::process::id()));
+            #[cfg(unix)]
             let mut b = std::fs::DirBuilder::new();
+            #[cfg(not(unix))]
+            let b = std::fs::DirBuilder::new();
             #[cfg(unix)]
             std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
             match b.create(&dir) {

@@ -59,6 +59,8 @@ pub struct EditState {
     /// The cell's text when an F2-style edit began. Committing it unchanged leaves the cell alone
     /// (no undo step, the workbook stays clean). `None` for an edit started by typing.
     pub original: Option<String>,
+    /// The literal text stored when the edit opened, independent of later workbook changes.
+    pub(crate) original_literal: Option<std::sync::Arc<str>>,
     /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
     /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
     pub python: bool,
@@ -99,6 +101,7 @@ impl EditState {
             caret_to_end: true,
             completion: None,
             original,
+            original_literal: None,
             python: false,
         }
     }
@@ -252,14 +255,14 @@ impl EditState {
         }
         let before = self.text.get(..self.byte_caret()).unwrap_or("");
         let word: String =
-            before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+            before.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
         if word.is_empty() || word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return;
         }
-        let u = word.to_ascii_uppercase();
+        let u = self.locale.fold_alias(&word);
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
-        self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
-        if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
+        self.autocomplete = names.iter().filter(|n| self.locale.fold_alias(n).starts_with(&u)).take(12).cloned().collect();
+        if self.autocomplete.len() == 1 && self.locale.fold_alias(&self.autocomplete[0]) == u {
             self.autocomplete.clear();
         }
         self.ac_index = self.ac_index.min(self.autocomplete.len().saturating_sub(1));
@@ -270,7 +273,7 @@ impl EditState {
         let Some(name) = self.autocomplete.get(self.ac_index).cloned() else { return false };
         let caret_b = self.byte_caret();
         let before = self.text.get(..caret_b).unwrap_or("");
-        let wlen: usize = before.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+        let wlen: usize = before.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
         let start = caret_b - wlen;
         let (Some(a), Some(b)) = (self.text.get(..start), self.text.get(caret_b..)) else { return false };
         self.text = format!("{a}{name}({b}");
@@ -300,7 +303,7 @@ impl EditState {
         }
         let head = before.strip_suffix('(').unwrap_or(before);
         let name: String =
-            head.chars().rev().take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
+            head.chars().rev().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').collect::<String>().chars().rev().collect();
         if name.is_empty() || name.starts_with(|c: char| c.is_ascii_digit()) {
             return false;
         }
@@ -348,7 +351,7 @@ impl EditState {
                         let name: String = chars[..i]
                             .iter()
                             .rev()
-                            .take_while(|c| c.is_ascii_alphanumeric() || **c == '.' || **c == '_')
+                            .take_while(|c| c.is_alphanumeric() || **c == '.' || **c == '_')
                             .collect::<String>()
                             .chars()
                             .rev()
@@ -356,7 +359,9 @@ impl EditState {
                         if name.is_empty() {
                             return None;
                         }
-                        return Some((name.to_ascii_uppercase(), arg));
+                        let explicit = name.get(..6).is_some_and(|prefix| prefix.eq_ignore_ascii_case("_xlfn."));
+                        let name = if explicit { name } else { self.locale.normalize_function_name(&name) };
+                        return Some((name, arg));
                     }
                     depth -= 1;
                 }
@@ -368,12 +373,18 @@ impl EditState {
     }
 }
 
-/// References in formula text with their byte spans and colour index (same reference text ⇒
+/// References in formula text with their byte spans and colour index (same reference text в‡’
 /// same colour), for colouring the editor and outlining ranges on the grid.
 pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
+    formula_refs_in(text, gridcraft_engine::formula::FormulaLocale::En)
+}
+
+/// Finds reference spans in the draft's formula language, preserving original UTF-8 byte offsets.
+/// Localized errors and separators must not prevent reference colouring or point-mode outlines.
+pub fn formula_refs_in(text: &str, locale: gridcraft_engine::formula::FormulaLocale) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
     let body = text.strip_prefix('=').or_else(|| text.strip_prefix('+')).unwrap_or(text);
     let offset = text.len() - body.len();
-    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
+    let Ok(toks) = gridcraft_engine::formula::lexer::tokenize_locale(body, locale) else { return vec![] };
     let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut i = 0;
@@ -469,7 +480,7 @@ pub fn column_completion(sheet: &gridcraft_engine::model::Sheet, at: CellRef, ty
 }
 
 /// The part of `full` after the `typed` prefix, counted in characters: case folding can change
-/// a character's byte length ("ß" is two bytes, "ẞ" three).
+/// a character's byte length ("Гџ" is two bytes, "бєћ" three).
 pub fn completion_rest<'a>(full: &'a str, typed: &str) -> Option<&'a str> {
     let start = full.char_indices().nth(typed.chars().count())?.0;
     full.get(start..)

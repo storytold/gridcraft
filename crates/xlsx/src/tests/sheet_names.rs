@@ -22,6 +22,15 @@ fn unrepresentable_sheet_names_are_refused() {
     assert!(write_xlsx(&book(&["Data", "Other"])).is_ok());
 }
 
+#[test]
+fn imported_unicode_case_variants_keep_their_exact_sheet_identity() {
+    let original = book(&["лист1", "ЛИСТ1"]);
+    let (opened, _) = crate::read_xlsx(&write_xlsx(&original).unwrap()).unwrap();
+    assert_eq!(opened.sheet_index("лист1"), Some(0));
+    assert_eq!(opened.sheet_index("ЛИСТ1"), Some(1));
+    assert_eq!(opened.sheet_index("ЛиСт1"), Some(0));
+}
+
 /// A saved sheet keeps its `sheetId`; a copied or new sheet gets one no other sheet asks for.
 #[test]
 fn sheet_ids_survive_a_save() {

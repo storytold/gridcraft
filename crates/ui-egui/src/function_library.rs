@@ -86,9 +86,9 @@ pub fn in_category(id: &str) -> impl Iterator<Item = &'static FnEntry> + '_ {
 }
 
 /// The name a function shows under in the interface language.
-fn display_name<'a>(app: &SheetApp, name: &'a str) -> &'a str {
+fn display_name<'a>(app: &SheetApp, name: &'a str) -> std::borrow::Cow<'a, str> {
     let locale = app.ui.language.formula_locale();
-    app.session.active().map(|d| crate::formula_locale::completion_name(name, locale, &d.wb, d.wb.active_sheet())).unwrap_or(name)
+    app.session.active().map(|d| crate::formula_locale::completion_name(name, locale, &d.wb, d.wb.active_sheet())).unwrap_or_else(|| name.into())
 }
 
 /// One menu row per function, with its description on hover; a click starts the formula.

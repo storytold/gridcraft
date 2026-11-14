@@ -59,6 +59,7 @@ pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Ex
     parse_top(src, locale, false)
 }
 
+/// Tokenizes and parses a complete formula with the selected syntax and top-level union policy.
 fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
@@ -66,7 +67,7 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { toks, i: 0, depth: 0, locale };
     let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof if wrapper_height(&e) > MAX_DEPTH => Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 }),
@@ -130,7 +131,7 @@ struct Parser {
     toks: Vec<Token>,
     i: usize,
     depth: usize,
-    input: bool,
+    locale: crate::FormulaLocale,
 }
 
 fn word_is_cols(w: &str) -> Option<(u32, bool)> {
@@ -301,6 +302,8 @@ impl Parser {
         Ok(args)
     }
 
+    /// Parses a prefix operand, including localized literals, calls, arrays, and references.
+    /// The surrounding expression controls whether top-level reference unions are permitted.
     fn prefix(&mut self, allow_union: bool) -> Result<Expr, ParseError> {
         match self.next() {
             Tok::Number(n) => Ok(Expr::Number(n)),
@@ -317,7 +320,8 @@ impl Parser {
             }
             Tok::LBrace => self.array(),
             Tok::Func(name) => {
-                let name = normalize_function_name(&name);
+                let explicit = name.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("_xlfn."));
+                let name = self.locale.normalize_function_name(&name);
                 let mut args = self.args()?;
                 // Files write `A1#` as `_xlfn.ANCHORARRAY(A1)`.
                 if name == "ANCHORARRAY"
@@ -350,6 +354,8 @@ impl Parser {
                 {
                     return Ok(Expr::Unary(UnOp::Trim(mode), Box::new(x)));
                 }
+                // Keep an explicitly canonical spelling through localized alias resolution.
+                let name = if explicit && self.locale.canonical_name(&name) != name { format!("_xlfn.{name}") } else { name };
                 Ok(Expr::Call(name, args))
             }
             Tok::Sheet(a, b) => {
@@ -369,11 +375,11 @@ impl Parser {
                 {
                     let pos = self.pos();
                     let Tok::Struct(body) = self.next() else { return Err(self.err("internal")) };
-                    return parse_struct(&w, &body).map(Expr::Struct).map_err(|msg| ParseError { msg, pos });
+                    return parse_struct(&w, &self.locale.canonical_struct_body(&body)).map(Expr::Struct).map_err(|msg| ParseError { msg, pos });
                 }
                 self.reference_from_word(SheetSel::Current, &w)
             }
-            Tok::Struct(body) => parse_struct("", &body).map(Expr::Struct).map_err(|msg| self.err(msg)),
+            Tok::Struct(body) => parse_struct("", &self.locale.canonical_struct_body(&body)).map(Expr::Struct).map_err(|msg| self.err(msg)),
             t => Err(self.err(format!("unexpected {}", describe(&t)))),
         }
     }
@@ -447,6 +453,7 @@ impl Parser {
         Ok(Expr::Name(w.to_string()))
     }
 
+    /// Parses an array literal using the locale row and column separators and validates its rectangular shape.
     fn array(&mut self) -> Result<Expr, ParseError> {
         let mut rows = vec![Vec::new()];
         loop {
@@ -462,7 +469,7 @@ impl Parser {
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
-                Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
+                Tok::Word(w) if self.locale != crate::FormulaLocale::En => crate::input::boolean_alias(&w, self.locale)
                     .map(Expr::Bool)
                     .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
                 Tok::Error(e) => Expr::Error(e),

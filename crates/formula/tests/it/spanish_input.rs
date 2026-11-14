@@ -40,10 +40,13 @@ fn spanish_input_preserves_reference_and_array_syntax() {
         ("SUM((A1:A3;C1:C3))", "SUM((A1:A3,C1:C3))"),
         ("\"SUMA;FALSO\"&\"a\"\"b\"", "\"SUMA;FALSO\"&\"a\"\"b\""),
         ("'SUMA;FALSO'!A1+SUMA!B2+SUMA!FALSO", "'SUMA;FALSO'!A1+SUMA!B2+SUMA!FALSO"),
-        ("SUMA[CONTAR.SI]+FALSO[SI]+CONTAR", "SUMA[CONTAR.SI]+FALSO[SI]+CONTAR"),
+        ("SUMA[CONTAR.SI]+FALSO[SI]+CONTAR", "SUMA[CONTAR.SI]+FALSO[SI]+COUNT"),
     ] {
         assert_eq!(input(src), expected, "{src}");
     }
+    // An unbound function alias normalizes as a callback, but an actual workbook name wins.
+    let named = parse_input("SUMA[CONTAR.SI]+FALSO[SI]+CONTAR", FormulaLocale::Es, |name| gridcraft_formula::same_name(name, "CONTAR")).unwrap();
+    assert_eq!(print(&named), "SUMA[CONTAR.SI]+FALSO[SI]+CONTAR");
     for bad in [r"SUMA({1;2\3})", "{SUMA(A1)}", "{FALSO;}"] {
         assert!(parse_input(bad, FormulaLocale::Es, |_| false).is_err(), "{bad}");
     }

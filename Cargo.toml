@@ -42,6 +42,8 @@ craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", version = "=0.1.0" }
+
 # foundation
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }

@@ -10,24 +10,49 @@
 use serde::{Deserialize, Serialize};
 
 mod cs;
+mod cs_functions;
+mod da;
 mod de;
+mod de_functions;
 mod el;
+mod el_functions;
+mod error_templates;
 mod es;
 mod es_functions;
 mod fr;
+mod fr_functions;
 mod it;
+mod it_functions;
 mod ja;
+mod ja_functions;
+mod ka;
 mod ko;
+mod ko_functions;
+mod lt;
 mod nl;
+mod nl_functions;
 mod pl;
+mod pl_functions;
 mod pt;
+mod pt_functions;
 mod ro;
+mod ro_functions;
 mod ru;
+mod ru_formats;
+mod ru_functions;
 mod sr;
+mod sr_functions;
+mod sv;
 mod tr;
+mod tr_functions;
 mod uk;
+mod uk_functions;
 mod vi;
+mod vi_functions;
 mod zh;
+mod zh_functions;
+mod zh_tw;
+mod zh_tw_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +62,8 @@ pub enum Language {
     Es,
     El,
     Zh,
+    #[serde(rename = "zh-tw")]
+    ZhTw,
     Ja,
     Ko,
     Ru,
@@ -53,14 +80,26 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    Lt,
+    Ka,
+    Sv,
+    Da,
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    /// Number-format spelling and presets for the UI; stored format codes remain canonical.
+    pub(crate) fn format_locale(self) -> &'static crate::format_locale::FormatLocale {
+        match self {
+            Self::Ru => &ru_formats::FORMAT,
+            _ => &crate::format_locale::EN,
+        }
+    }
+    pub const ALL: [Self; 24] = [
         Self::En,
         Self::Es,
         Self::El,
         Self::Zh,
+        Self::ZhTw,
         Self::Ja,
         Self::Ko,
         Self::Ru,
@@ -75,6 +114,10 @@ impl Language {
         Self::Vi,
         Self::Nl,
         Self::Ro,
+        Self::Lt,
+        Self::Ka,
+        Self::Sv,
+        Self::Da,
         Self::Tr,
     ];
 
@@ -91,9 +134,14 @@ impl Language {
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::Lt => "Lietuvių",
+            Self::Ka => "ქართული",
+            Self::Sv => "Svenska",
+            Self::Da => "Dansk",
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
+            Self::ZhTw => "繁體中文",
             Self::Ja => "日本語",
             Self::Ko => "한국어",
             Self::Ru => "Русский",
@@ -116,9 +164,14 @@ impl Language {
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::Lt => "lt",
+            Self::Ka => "ka",
+            Self::Sv => "sv",
+            Self::Da => "da",
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
+            Self::ZhTw => "zh-tw",
             Self::Ja => "ja",
             Self::Ko => "ko",
             Self::Ru => "ru",
@@ -148,11 +201,30 @@ impl Language {
     }
 
     fn from_tag(tag: &str) -> Option<Self> {
-        match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
+        let mut parts = tag.trim().split('.').next()?.split(['-', '_']);
+        match parts.next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
+            "lt" => Some(Self::Lt),
+            "ka" => Some(Self::Ka),
+            "sv" => Some(Self::Sv),
+            "da" => Some(Self::Da),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
-            "zh" => Some(Self::Zh),
+            "zh" => {
+                // A script subtag decides; the region only when no script is given. `zh-Hans-HK`
+                // and `zh-Hans-MO` are Simplified Chinese in Hong Kong and Macau, both valid macOS
+                // identifiers, so their `hk`/`mo` region must not select Traditional.
+                let parts: Vec<String> = parts.map(|part| part.to_ascii_lowercase()).collect();
+                let has = |p: &str| parts.iter().any(|part| part == p);
+                let traditional = if has("hant") {
+                    true
+                } else if has("hans") {
+                    false
+                } else {
+                    has("tw") || has("hk") || has("mo")
+                };
+                Some(if traditional { Self::ZhTw } else { Self::Zh })
+            }
             "ja" => Some(Self::Ja),
             "ko" => Some(Self::Ko),
             "ru" => Some(Self::Ru),
@@ -185,8 +257,19 @@ impl Language {
         }
     }
 
+    /// Selects formula syntax for the interface language; languages without alias tables use English.
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
-        if self == Self::Es { gridcraft_engine::formula::FormulaLocale::Es } else { gridcraft_engine::formula::FormulaLocale::En }
+        match self {
+            Self::Es => gridcraft_engine::formula::FormulaLocale::Es,
+            Self::De => gridcraft_engine::formula::FormulaLocale::De,
+            Self::Pl => gridcraft_engine::formula::FormulaLocale::Pl,
+            Self::Fr => gridcraft_engine::formula::FormulaLocale::Fr,
+            Self::It => gridcraft_engine::formula::FormulaLocale::It,
+            Self::PtBr => gridcraft_engine::formula::FormulaLocale::PtBr,
+            Self::Ru => gridcraft_engine::formula::FormulaLocale::Ru,
+            Self::Tr => gridcraft_engine::formula::FormulaLocale::Tr,
+            _ => gridcraft_engine::formula::FormulaLocale::En,
+        }
     }
 
     /// Translates an interface label; untranslated labels fall back to English.
@@ -197,6 +280,11 @@ impl Language {
         self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
 
+    /// Raw catalog lookup for contextual labels and shared message templates.
+    pub fn translation(self, text: &str) -> Option<&'static str> {
+        self.translated(text)
+    }
+
     /// The catalog's own translation of `text`, or `None` when it falls back to English.
     fn translated(self, text: &str) -> Option<&'static str> {
         match self {
@@ -205,6 +293,11 @@ impl Language {
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
+            Self::ZhTw => zh_tw::translate(text),
+            Self::Lt => lt::translate(text),
+            Self::Ka => ka::translate(text),
+            Self::Sv => sv::translate(text),
+            Self::Da => da::translate(text),
             Self::Ko => ko::translate(text),
             Self::Ru => ru::translate(text),
             Self::PtBr => pt::translate(text),
@@ -222,32 +315,93 @@ impl Language {
         }
     }
 
+    /// Translates an import warning for display in the interface. The file-format and engine
+    /// layers keep returning canonical English text to the CLI, control channel, and MCP.
+    pub(crate) fn open_warning(self, warning: &str) -> String {
+        if let Some(target) = warning.strip_prefix("missing picture ") {
+            return self.tr("missing picture {target}").replace("{target}", target);
+        }
+        if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
+            return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
+        }
+        const DRAWING_WARNINGS: [&str; 3] = [
+            "a histogram, waterfall, treemap… chart without its chart part was skipped",
+            "an embedded object (diagram, OLE…) was skipped",
+            "grouped shapes are not supported and were skipped",
+        ];
+        for base in DRAWING_WARNINGS {
+            if let Some(suffix) = warning.strip_prefix(base)
+                && suffix.starts_with(" (")
+                && suffix.ends_with(')')
+            {
+                let translated = self.translation(base).unwrap_or(base);
+                return format!("{translated}{suffix}");
+            }
+        }
+        self.translation(warning).unwrap_or(warning).to_owned()
+    }
+
+    /// Ribbon tabs can be nouns while their corresponding commands are verbs.
+    pub fn tr_tab(self, text: &str) -> &str {
+        self.translation(&format!("Tab|{text}")).unwrap_or_else(|| self.tr(text))
+    }
+
+    /// Translates known fixed or templated diagnostics after removing engine command wrappers.
+    /// Unmatched parameter errors retain their command context; other command wrappers are cleaned.
+    /// Captured user data stays literal.
     pub(crate) fn tr_error(self, message: &str) -> String {
-        let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
+        let original_parameters = message.starts_with("invalid parameters for `").then_some(message);
+        let message = if message.starts_with("command `") || message.starts_with("invalid parameters for `") {
+            crate::clean_error(message)
+        } else {
+            message.to_owned()
+        };
 
-        let translated = self.tr(&message);
-        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
-
-        if translated == fallback { message } else { translated.to_owned() }
+        // A hit in the catalog is the answer, even when the translation reads exactly like the
+        // English: a shared word (`Maximum`), or a `context|label` key whose translation is the
+        // label itself (`AutoSum|MAX` => `MAX`). Comparing the rendered text with the English
+        // would drop such a translation and show the raw `context|` key instead.
+        if let Some(translated) = self.translation(&message) {
+            return translated.to_owned();
+        }
+        error_templates::format_message(&message, self).unwrap_or_else(|| original_parameters.map_or(message, str::to_owned))
     }
 
     /// A worksheet function's description in this language, looked up by the English text of the
     /// function catalog; `None` when untranslated, and the help shows the English.
     pub fn function_description(self, english: &str) -> Option<&'static str> {
-        lookup(self.function_help()?.0, english)
+        self.function_help().and_then(|help| lookup(help.0, english))
     }
 
     /// A function argument name in this language, given as the catalog spells it without
     /// brackets or index (`number`, `logical_test`).
     pub fn function_argument(self, english: &str) -> Option<&'static str> {
-        lookup(self.function_help()?.1, english)
+        self.function_help().and_then(|help| lookup(help.1, english))
     }
 
-    /// The function help tables (descriptions, argument names) of the languages that have them.
+    /// Per-language function-help data, independent of formula aliases and message catalogs.
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
+            Self::Cs => Some((cs_functions::DESCRIPTIONS, cs_functions::ARGUMENTS)),
+            Self::De => Some((de_functions::DESCRIPTIONS, de_functions::ARGUMENTS)),
+            Self::El => Some((el_functions::DESCRIPTIONS, el_functions::ARGUMENTS)),
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
-            _ => None,
+            Self::Fr => Some((fr_functions::DESCRIPTIONS, fr_functions::ARGUMENTS)),
+            Self::It => Some((it_functions::DESCRIPTIONS, it_functions::ARGUMENTS)),
+            Self::Ja => Some((ja_functions::DESCRIPTIONS, ja_functions::ARGUMENTS)),
+            Self::Ko => Some((ko_functions::DESCRIPTIONS, ko_functions::ARGUMENTS)),
+            Self::Nl => Some((nl_functions::DESCRIPTIONS, nl_functions::ARGUMENTS)),
+            Self::Pl => Some((pl_functions::DESCRIPTIONS, pl_functions::ARGUMENTS)),
+            Self::PtBr => Some((pt_functions::DESCRIPTIONS, pt_functions::ARGUMENTS)),
+            Self::Ro => Some((ro_functions::DESCRIPTIONS, ro_functions::ARGUMENTS)),
+            Self::Sr => Some((sr_functions::DESCRIPTIONS, sr_functions::ARGUMENTS)),
+            Self::Tr => Some((tr_functions::DESCRIPTIONS, tr_functions::ARGUMENTS)),
+            Self::Uk => Some((uk_functions::DESCRIPTIONS, uk_functions::ARGUMENTS)),
+            Self::Vi => Some((vi_functions::DESCRIPTIONS, vi_functions::ARGUMENTS)),
+            Self::Zh => Some((zh_functions::DESCRIPTIONS, zh_functions::ARGUMENTS)),
+            Self::ZhTw => Some((zh_tw_functions::DESCRIPTIONS, zh_tw_functions::ARGUMENTS)),
+            Self::Ru => Some((ru_functions::DESCRIPTIONS, ru_functions::ARGUMENTS)),
+            Self::En | Self::Da | Self::Sv | Self::Ka | Self::Lt => None,
         }
     }
 }
@@ -325,6 +479,80 @@ fn name_sort_key(name: &str) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_translation_that_reads_like_english_is_still_a_translation() {
+        assert_eq!(Language::Es.tr_error("Options|General"), "General");
+        assert_eq!(Language::Cs.tr_error("AutoSum|MAX"), "MAX");
+        // An untranslated message is still shown whole, prefix and all.
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+    }
+
+    #[test]
+    fn drawing_warning_translation_preserves_its_location() {
+        let suffix = " (xl/drawings/drawing1.xml, object 7)";
+        let cases = [
+            (
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+                "Histogram, vodopádový nebo stromový graf… bez příslušné části grafu byl přeskočen.",
+            ),
+            ("an embedded object (diagram, OLE…) was skipped", "Vložený objekt (diagram, OLE…) byl přeskočen."),
+            ("grouped shapes are not supported and were skipped", "Seskupené obrazce nejsou podporovány a byly přeskočeny."),
+        ];
+
+        for (warning, translation) in cases {
+            assert_eq!(Language::Cs.open_warning(&format!("{warning}{suffix}")), format!("{translation}{suffix}"));
+        }
+    }
+
+    #[test]
+    fn unmatched_import_warnings_keep_pipe_delimited_data() {
+        assert_eq!(Language::Fr.open_warning("Archive|Open"), "Archive|Open");
+        assert_eq!(Language::Fr.open_warning("Open"), "Ouvrir");
+    }
+
+    /// Descriptions must not collapse distinct operations into the same translated operation.
+    #[test]
+    fn translated_help_keeps_distinct_math_and_statistics() {
+        let pairs = [
+            ("Arccosine in radians.", "Arcsine in radians."),
+            ("Arccotangent in radians (0 to pi).", "Arctangent in radians."),
+            ("Rounds a number down to a multiple of significance.", "Rounds a number up to a multiple of significance."),
+            ("Rounds a number down to the nearest integer or multiple.", "Rounds a number up to the nearest integer or multiple."),
+            ("Rounds a number toward negative infinity to a multiple.", "Rounds a number toward positive infinity to a multiple."),
+            ("Rounds a number away from zero to a given number of digits.", "Rounds a number toward zero to a given number of digits."),
+            ("Sample variance.", "Population variance."),
+            ("Sample standard deviation.", "Population standard deviation."),
+            ("Sample skewness.", "Population skewness."),
+        ];
+        for language in Language::ALL {
+            for (first, second) in pairs {
+                if let (Some(a), Some(b)) = (language.function_description(first), language.function_description(second)) {
+                    assert_ne!(a, b, "{language:?}: distinct operations collapsed: {first} / {second}");
+                }
+            }
+        }
+    }
+
+    /// Programmatic identifiers inside descriptions are mathematical notation, not words to translate.
+    #[test]
+    fn translated_help_preserves_mathematical_identifiers() {
+        let examples = [
+            ("Bessel function of the first kind, J_n(x).", "J_n(x)"),
+            ("Bessel function of the second kind, Y_n(x).", "Y_n(x)"),
+            ("Modified Bessel function of the first kind, I_n(x).", "I_n(x)"),
+            ("Modified Bessel function of the second kind, K_n(x).", "K_n(x)"),
+            ("Complementary error function, 1 - ERF(x).", "ERF(x)"),
+            ("Extracts data from XML with an XPath (not available; returns #VALUE!).", "XPath"),
+        ];
+        for language in Language::ALL {
+            for (english, identifier) in examples {
+                if let Some(translated) = language.function_description(english) {
+                    assert!(translated.contains(identifier), "{language:?}: missing {identifier} in {translated}");
+                }
+            }
+        }
+    }
+
     /// Every shipped catalog names GridCraft's own Diagram and Decorative Text features, and
     /// Diagram never repeats that catalog's chart word (both sit on the Insert tab).
     #[test]
@@ -359,8 +587,47 @@ mod tests {
                 assert!(table.windows(2).all(|pair| pair[0].0 < pair[1].0), "{language:?} function help is not sorted and unique");
                 for (english, translated) in table {
                     assert!(!translated.is_empty(), "{language:?}: empty translation of {english:?}");
+                    assert!(!translated.contains(['\n', '\r']), "{language:?}: multiline translation of {english:?}");
+                    assert!(
+                        !translated.contains(['\u{200b}', '\u{200c}', '\u{200d}', '\u{feff}']),
+                        "{language:?}: invisible formatting in {english:?}"
+                    );
                 }
             }
+        }
+    }
+
+    /// Dynamic UI messages must use the same placeholder names as their callers.
+    #[test]
+    fn dynamic_ui_messages_resolve_and_substitute_their_placeholders() {
+        let key = "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md.";
+        for (language, expected) in [
+            (Language::Pl, "Dostępne polecenia silnika: 368. Zobacz docs/mcp.md i docs/control-protocol.md."),
+            (Language::ZhTw, "當前可用 368 個引擎命令。參見 docs/mcp.md 與 docs/control-protocol.md。"),
+        ] {
+            assert_eq!(craft_i18n::fmt(language.tr(key), &[("count", "368")]), expected);
+        }
+        assert_eq!(
+            craft_i18n::fmt(Language::Pl.tr("{contributors} contributors · {commits} commits"), &[("contributors", "16"), ("commits", "148")]),
+            "Współtwórcy: 16 · commity: 148"
+        );
+    }
+
+    /// AppKit's system dialogs should recognize every language offered by the interface.
+    #[test]
+    fn macos_bundle_declares_every_interface_language() {
+        let plist = include_str!("../../../packaging/macos/Info.plist.in");
+        let array = plist.split_once("<key>CFBundleLocalizations</key>").unwrap().1.split_once("</array>").unwrap().0;
+        let tags: Vec<&str> = array.split("<string>").skip(1).map(|s| s.split_once("</string>").unwrap().0).collect();
+        assert_eq!(tags.len(), Language::ALL.len());
+        for language in Language::ALL {
+            let tag = match language {
+                Language::PtBr => "pt-BR",
+                Language::Zh => "zh-Hans",
+                Language::ZhTw => "zh-Hant",
+                _ => language.code(),
+            };
+            assert!(tags.contains(&tag), "{language:?} is missing from the macOS bundle");
         }
     }
 
@@ -403,6 +670,13 @@ mod tests {
         }
     }
 
+    #[test]
+    fn polish_icon_tooltips_cover_the_gallery() {
+        for (name, _) in crate::icons::LIBRARY {
+            assert!(Language::Pl.translation(&format!("Icon|{name}")).is_some(), "{name}");
+        }
+    }
+
     /// The screen-reader names for the formula-bar controls must be translated in every catalog
     /// (no silent English fallback) and stay single-line labels.
     #[test]
@@ -415,6 +689,36 @@ mod tests {
                     assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn paste_special_add_and_text_to_columns_comma_have_their_own_keys() {
+        // "Add" is also the Solver button and "Comma" also the cell style (Spanish Excel: Sumar
+        // vs Agregar, Coma vs Millares), so the two dialog options are keyed by context. English
+        // shows the plain label, and a catalog that translates the plain label translates the
+        // keyed one too, so the dialog option doesn't fall back to English.
+        for (keyed, plain) in [("Paste Special|Add", "Add"), ("Text to Columns|Comma", "Comma")] {
+            assert_eq!(Language::En.tr(keyed), plain);
+            for language in Language::ALL {
+                let shown = language.tr(keyed);
+                assert!(!shown.contains('|'), "{} shows a context prefix for {keyed}: {shown}", language.code());
+                if language.tr(plain) != plain {
+                    assert_ne!(shown, plain, "{} translates {plain:?} but not {keyed:?}", language.code());
+                }
+            }
+        }
+    }
+
+    /// Generated names should follow the interface language even in smaller catalogs.
+    #[test]
+    fn generated_names_have_translations_in_every_catalog() {
+        for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
+            for key in ["Book", "Sheet", "Generated|Column", "Generated|Row", "Series{n}"] {
+                let fallback = Language::En.tr(key);
+                assert_ne!(language.tr(key), fallback, "{language:?}: {key}");
+            }
+            assert_eq!(language.tr("Series{n}").matches("{n}").count(), 1, "{language:?}");
         }
     }
 
@@ -455,6 +759,13 @@ mod tests {
         assert_eq!(Language::from_tag("el_GR.UTF-8"), Some(Language::El));
         assert_eq!(Language::parse("el"), Some(Language::El));
         assert_eq!(Language::from_tag("zh-Hans-CN"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hant-TW"), Some(Language::ZhTw));
+        assert_eq!(Language::from_tag("zh_HK.UTF-8"), Some(Language::ZhTw));
+        // A script subtag outranks the region: Hong Kong and Macau are also valid macOS locales
+        // for Simplified Chinese.
+        assert_eq!(Language::from_tag("zh-Hans-HK"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hans-MO"), Some(Language::Zh));
+        assert_eq!(Language::from_tag("zh-Hant-HK"), Some(Language::ZhTw));
         assert_eq!(Language::from_tag("ko-KR"), Some(Language::Ko));
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
@@ -544,5 +855,52 @@ mod tests {
         let keys: Vec<String> = order[1..].iter().map(|l| name_sort_key(l.name())).collect();
         assert!(keys.windows(2).all(|w| w[0] <= w[1]), "{keys:?}");
         assert_eq!(name_sort_key("Čeština"), "cestina");
+    }
+}
+
+#[cfg(test)]
+mod russian_tests {
+    use super::*;
+    /// Unknown parameter errors retain the engine's command context without affecting translated details.
+    #[test]
+    fn unmatched_parameter_errors_keep_the_command_context() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let error = session.execute("data.showLevels", serde_json::json!({})).unwrap_err().to_string();
+        assert!(error.starts_with("invalid parameters for `data.showLevels`: "), "{error}");
+        for language in [Language::En, Language::Ru] {
+            assert_eq!(language.tr_error(&error), error);
+            assert_eq!(language.tr_error("command `data.showLevels`: Untranslated outline failure {value}"), "Untranslated outline failure {value}");
+        }
+        assert_eq!(Language::Ru.tr_error("invalid parameters for `chart`: Select a chart first."), Language::Ru.tr("Select a chart first."));
+        assert_eq!(Language::Ru.tr_error("invalid parameters for `cell.set`: missing `cell`"), "Не указан параметр `cell`");
+    }
+
+    /// Checks Russian diagnostics remove command wrappers while preserving captured names and unknown messages.
+    #[test]
+    fn russian_error_messages_preserve_data_and_clean_command_wrappers() {
+        let ru = Language::Ru;
+        let syntax = ru.tr_error("There's a problem with this formula: expected `,` or `)`, found Semicolon");
+        assert!(syntax.starts_with("Ошибка в формуле:"));
+        assert!(!syntax.contains("Semicolon"));
+        assert!(syntax.contains(ru.tr("Semicolon")));
+        assert_eq!(ru.tr_error("command `chart` is not available right now: Select a chart first."), ru.tr("Select a chart first."));
+        assert_eq!(
+            ru.tr_error("invalid parameters for `cell.set`: invalid cell reference `Лист{key}` for `cell`"),
+            "Неверная ссылка на ячейку `Лист{key}` в параметре `cell`"
+        );
+        assert_eq!(ru.tr_error("unexpected end of formula"), ru.tr("unexpected end of formula"));
+        assert_eq!(ru.tr_tab("Insert"), ru.tr("Tab|Insert"));
+        assert_eq!(ru.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let error = session.execute("cell.set", serde_json::json!({"cell":"A1","input":"=SUM()"})).unwrap_err().to_string();
+        let translated = ru.tr_error(&error);
+        assert!(translated.contains(ru.formula_locale().function_name("SUM")), "{translated}");
+        assert!(translated.contains(ru.function_argument("number").unwrap()), "{translated}");
+        let error = session.execute("cell.set", serde_json::json!({"cell":"Лист{key}","input":"1"})).unwrap_err().to_string();
+        let translated = ru.tr_error(&error);
+        assert!(translated.contains("Лист{key}"));
+        assert_ne!(translated, error);
     }
 }

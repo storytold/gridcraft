@@ -119,6 +119,7 @@ pub(crate) fn check_arg_counts(expr: &gridcraft_formula::Expr) -> Result<()> {
     }
 }
 
+/// Enters parsed input or an explicitly typed text value, including the legacy array-entry path.
 pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let at = match cell_param_on(s, p, "cell", sheet)? {
@@ -128,6 +129,11 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     // Both spellings take a string, number or boolean, as typed (#697).
     let input = p.get("input").or_else(|| p.get("value")).map(json_to_input).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
     let array = bool_param(p, "array").unwrap_or(false);
+    let literal = match p.get("literal") {
+        None | Some(Json::Null) => false,
+        Some(Json::Bool(value)) => *value,
+        Some(_) => return Err(bad("cell.set", "literal must be true or false")),
+    };
     let d = s.doc()?;
     if let Some(sh) = d.wb.sheet(sheet)
         && sh.is_protected()
@@ -147,23 +153,33 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            let mut cell = if literal {
+                literal_cell(&input, sheet, range.start, &mut cx.wb)
+            } else {
+                input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default()
+            };
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
             let sh = cx.sheet_mut(sheet)?;
             // The array takes the whole range: other cells in it lose their contents.
+            let mut cleared = Vec::new();
             for c in range.iter().skip(1).take(1_000_000) {
                 if let Some(old) = sh.cells.get(c).filter(|x| x.has_content()) {
                     let style = old.style;
                     sh.set_cell(c, Cell { style, ..Cell::default() });
+                    cleared.push(c);
                 }
             }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
+            // Dependents of cleared neighbours must see the completed array write too.
+            for at in cleared {
+                cx.touch(sheet, at);
+            }
             return Ok(Json::Null);
         }
-        let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+        let cell = if literal { Some(literal_cell(&input, sheet, at, &mut cx.wb)) } else { input_to_cell(&input, sheet, at, &mut cx.wb)? };
         let sh = cx.sheet_mut(sheet)?;
         match cell {
             Some(c) => sh.set_cell(at, c),
@@ -177,6 +193,13 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     })?;
     let v = s.doc()?.wb.sheet(sheet).map(|sh| sh.value(at)).unwrap_or_default();
     Ok(json!({"cell": at.a1(), "value": v.display()}))
+}
+
+/// Creates text without reparsing it, keeping the destination format and normal multiline wrapping.
+fn literal_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Cell {
+    let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+    let style = if input.contains('\n') && !wb.styles.get(style).align.wrap { wb.styles.derive(style, |s| s.align.wrap = true) } else { style };
+    Cell { value: Value::text(input), formula: None, style, py: None }
 }
 
 pub(crate) fn json_to_input(v: &Json) -> String {
@@ -314,10 +337,18 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"cells": count, "convertedCount": converted_count, "converted": reported}))
 }
 
+/// Fills the target ranges in one undoable edit, parsing input for each destination style.
+/// `literal: true` copies an already typed text value without numeric or formula conversion.
 pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
     let input = str_param(p, "input").unwrap_or("").to_string();
+    // An unchanged text draft is already a typed value: filling it must not parse it again.
+    let literal = match p.get("literal") {
+        None | Some(Json::Null) => false,
+        Some(Json::Bool(value)) => *value,
+        Some(_) => return Err(bad("range.fill", "literal must be true or false")),
+    };
     let origin = s.doc()?.selection.active;
     edit(s, |cx| {
         // Each cell gets what typing the input there gives: the automatic number format where
@@ -337,7 +368,16 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
                 let base = match by_style.get(&style) {
                     Some(c) => c.clone(),
                     None => {
-                        let c = input_to_cell(&input, sheet, at, &mut cx.wb)?;
+                        let c = if literal {
+                            let style = if input.contains('\n') && !cx.wb.styles.get(style).align.wrap {
+                                cx.wb.styles.derive(style, |s| s.align.wrap = true)
+                            } else {
+                                style
+                            };
+                            Some(Cell { value: Value::text(input.as_str()), formula: None, style, py: None })
+                        } else {
+                            input_to_cell(&input, sheet, at, &mut cx.wb)?
+                        };
                         by_style.insert(style, c.clone());
                         c
                     }

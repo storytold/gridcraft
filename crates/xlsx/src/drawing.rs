@@ -195,7 +195,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     } else if uri.contains("chartex") || uri.contains("chartEx") {
                         cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
                     } else {
-                        cx.warn(format!("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})"));
+                        cx.warn(format!("an embedded object (diagram, OLE…) was skipped ({part}, object {n})"));
                     }
                 }
                 "sp" | "cxnSp" => {

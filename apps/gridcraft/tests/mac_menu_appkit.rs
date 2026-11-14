@@ -19,7 +19,7 @@ fn main() {
     nsapp.finishLaunching();
 
     let ctx = egui::Context::default();
-    let mut menu = native_menu::NativeMenu::install(&ctx);
+    let mut menu = native_menu::NativeMenu::install(&ctx, gridcraft_ui_egui::i18n::Language::En);
 
     let bar = nsapp.mainMenu().expect("a main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
@@ -36,6 +36,14 @@ fn main() {
     assert_eq!(open.len(), 1, "one workbook window");
     let last = windows_menu.itemAtIndex(windows_menu.numberOfItems() - 1).expect("a Window menu item");
     assert_eq!(last.title().to_string(), open[0].label(), "the Window menu lists the open workbook");
+
+    // A contextual menu title remains a noun on a language switch, and refreshes back to English.
+    for (language, expected) in [("ru", "Вставка"), ("en", "Insert")] {
+        app.run("app.language.set", serde_json::json!({"language": language})).unwrap();
+        menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
+        let insert = bar.itemAtIndex(4).unwrap().submenu().unwrap();
+        assert_eq!(insert.title().to_string(), expected);
+    }
 
     println!("mac_menu_appkit: ok");
 }

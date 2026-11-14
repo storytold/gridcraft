@@ -4,6 +4,7 @@ use crate::theme::Tokens;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
 use egui::vec2;
 
+/// Draws macro, agent-control and update commands in the Automate ribbon tab.
 pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     // Macros: the Macros dialog; Record Macro (Stop Recording while recording), Use Relative
     // References; Run Macro, whose main part runs the last macro and whose menu lists them all.
@@ -55,7 +56,7 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
             ui.separator();
         }
         if macros.is_empty() {
-            ui.label(egui::RichText::new("No macros in this workbook").italics().color(t.text_dim));
+            ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("No macros in this workbook")).italics().color(t.text_dim));
         }
         for (n, desc, _) in macros.iter().take(30) {
             let r = ui.add(egui::Button::new(n.as_str()).frame(false).min_size(vec2(200.0, 22.0)));
