@@ -223,7 +223,11 @@ rule's top-left-relative formulas (`CfRule::relative_formulas_mut`, `Validation:
 are first re-hosted at the cell that takes its place (`rehost_rule`, given the ranges as they were
 before the edit), then moved once by the walker, so deleting a rule's first row leaves its formulas reading
 the same cells. A range moved whole or left in place keeps its formulas, and colour-scale, data-bar
-and icon-set thresholds are read as written. A cut, and Move Columns, take the rules on their
+and icon-set thresholds are read as written. A rule keeps one formula for all its cells, so when an
+edit shifts some of a rule's cells and not others (lines inserted or deleted inside its range, Move
+Columns across it), a relative reference read at cells on the far side of the shift lands where the
+top-left cell's reference puts it, not on the data that cell read before; rules whose cells read
+themselves, and absolute references, are unaffected. A cut, and Move Columns, take the rules on their
 cells with them (`move_cut_rules`, on the engine's `Rule` trait, `remove_rule_cells` and
 `moved_rule_parts`), so their ranges and formulas move together, once; a cut to another sheet qualifies their references with the source sheet. A cut is
 pasted as it is: Paste Special refuses to transpose it or tile it over a larger selection, as
