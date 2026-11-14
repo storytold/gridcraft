@@ -32,7 +32,20 @@ pub(crate) struct HtmlCell {
 /// from above holds an empty cell, so positions line up with the tab-separated text. Empty when
 /// there is no table.
 pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<Vec<HtmlCell>> {
-    let mut grid = Grid::new(max_rows, max_cols);
+    parse_table(html, max_rows, max_cols, None)
+}
+
+/// Clipboard metadata is bounded to each pasted row, including ragged rows. File imports
+/// still use the rectangular reader, as they have no separate plain-text shape.
+pub(crate) fn table_cells_for_rows(html: &str, row_widths: &[usize]) -> Vec<Vec<HtmlCell>> {
+    let max_cols = row_widths.iter().copied().max().unwrap_or(0);
+    parse_table(html, row_widths.len(), max_cols, Some(row_widths))
+}
+
+/// Parse the first table within the shared HTML and logical-cell work budgets.
+/// Per-row widths limit retained metadata while spans keep their logical positions.
+fn parse_table(html: &str, max_rows: usize, max_cols: usize, row_widths: Option<&[usize]>) -> Vec<Vec<HtmlCell>> {
+    let mut grid = Grid::new(max_rows, max_cols, row_widths);
     if html.len() > MAX_HTML {
         return grid.rows;
     }
@@ -41,12 +54,16 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
     let mut rest = html;
     while !rest.is_empty() && !grid.full {
         let Some(lt) = rest.find('<') else {
-            if let Some(c) = cell.as_mut() {
+            if let Some(c) = cell.as_mut()
+                && c.collect_text
+            {
                 c.cell.text.push_str(rest);
             }
             break;
         };
-        if let Some(c) = cell.as_mut() {
+        if let Some(c) = cell.as_mut()
+            && c.collect_text
+        {
             c.cell.text.push_str(rest.get(..lt).unwrap_or_default());
         }
         rest = rest.get(lt..).unwrap_or_default();
@@ -90,11 +107,18 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
+                cell = Some(OpenCell {
+                    collect_text: grid.collect_text(),
+                    cell: HtmlCell { text: String::new(), num, header: name == "th" },
+                    colspan,
+                    rowspan,
+                });
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("br", _) => {
-                if let Some(c) = cell.as_mut() {
+                if let Some(c) = cell.as_mut()
+                    && c.collect_text
+                {
                     c.cell.text.push(' ');
                 }
             }
@@ -113,13 +137,16 @@ fn span(attrs: &str, name: &str, max: usize) -> usize {
 
 /// A cell whose closing tag hasn't been seen yet.
 struct OpenCell {
+    collect_text: bool,
     cell: HtmlCell,
     colspan: usize,
     rowspan: usize,
 }
 
 /// The table being read, with its size limits.
-struct Grid {
+struct Grid<'a> {
+    row_widths: Option<&'a [usize]>,
+    column: usize,
     rows: Vec<Vec<HtmlCell>>,
     max_rows: usize,
     max_cols: usize,
@@ -131,12 +158,13 @@ struct Grid {
     full: bool,
 }
 
-impl Grid {
-    fn new(max_rows: usize, max_cols: usize) -> Self {
+impl<'a> Grid<'a> {
+    /// Clamp sheet bounds and establish one logical-cell work budget.
+    fn new(max_rows: usize, max_cols: usize, row_widths: Option<&'a [usize]>) -> Self {
         let max_rows = max_rows.min(MAX_ROW_SPAN);
         let max_cols = max_cols.min(MAX_SPAN);
         let budget = MAX_HTML_CELLS.min(max_rows.saturating_mul(max_cols));
-        Grid { rows: Vec::new(), max_rows, max_cols, budget, covered_until: Vec::new(), full: false }
+        Grid { rows: Vec::new(), max_rows, max_cols, budget, covered_until: Vec::new(), full: false, row_widths, column: 0 }
     }
 
     /// Opens a new row, or marks the grid full when the pasted text has no more rows.
@@ -145,13 +173,15 @@ impl Grid {
             self.full = true;
         } else {
             self.rows.push(Vec::new());
+            self.column = 0;
         }
     }
 
     /// Appends one cell to the current row; false when the row or the cell budget is used up.
     fn push(&mut self, cell: HtmlCell) -> bool {
+        let keep = self.column < self.row_width();
         let Some(row) = self.rows.last_mut() else { return false };
-        if row.len() >= self.max_cols {
+        if self.column >= self.max_cols {
             return false;
         }
         let Some(left) = self.budget.checked_sub(1) else {
@@ -159,14 +189,17 @@ impl Grid {
             return false;
         };
         self.budget = left;
-        row.push(cell);
+        if keep {
+            row.push(cell);
+        }
+        self.column += 1;
         true
     }
 
     /// Closes the open cell (if any) into the current row, decoding its text: first past the
     /// columns a `rowspan` above still covers, then the cell, then a placeholder per extra column.
     fn finish(&mut self, open: &mut Option<OpenCell>) {
-        let Some(OpenCell { mut cell, colspan, rowspan }) = open.take() else { return };
+        let Some(OpenCell { mut cell, colspan, rowspan, collect_text }) = open.take() else { return };
         if self.rows.is_empty() {
             self.start_row();
         }
@@ -177,7 +210,9 @@ impl Grid {
             }
         }
         let start = self.col();
-        cell.text = decode(&cell.text);
+        if collect_text {
+            cell.text = decode(&cell.text);
+        }
         if !self.push(cell) {
             return;
         }
@@ -199,7 +234,23 @@ impl Grid {
 
     /// The column the next cell of the current row lands in.
     fn col(&self) -> usize {
-        self.rows.last().map_or(0, Vec::len)
+        self.column
+    }
+
+    /// Number of metadata columns retained for the current clipboard or import row.
+    fn row_width(&self) -> usize {
+        let row = self.rows.len().saturating_sub(1);
+        self.row_widths.and_then(|widths| widths.get(row)).copied().unwrap_or(self.max_cols).min(self.max_cols)
+    }
+
+    /// Collect text when the next uncovered HTML column fits the current row.
+    fn collect_text(&self) -> bool {
+        let row = self.rows.len().saturating_sub(1);
+        let mut column = self.column;
+        while column < self.max_cols && self.covered_until.get(column).is_some_and(|&until| until > row) {
+            column += 1;
+        }
+        !self.full && column < self.row_width()
     }
 }
 
@@ -466,5 +517,30 @@ mod tests {
         assert_eq!(format_for("10.000,00 €", 10000.0), None, "comma decimals don't render back in en-US");
         assert_eq!(format_for("-Rp5", -5.0).as_deref(), Some("\"Rp\"0"));
         assert_eq!(format_for("12 EUR", 12.0).as_deref(), Some("0\" EUR\""));
+    }
+}
+
+#[cfg(test)]
+mod shape_tests {
+    use super::*;
+
+    /// Ragged TSV widths bound both cell metadata and colspan placeholders.
+    #[test]
+    fn ragged_rows_never_materialize_extra_html_cells() {
+        let html = "<table><tr><td colspan=16384>one</td></tr><tr><td>two</td><td>unused &amp;</td></tr><tr><td>unused row</td></tr></table>";
+        let rows = table_cells_for_rows(html, &[2, 1]);
+        assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1]);
+        assert_eq!(rows[1][0].text, "two");
+        assert!(table_cells_for_rows(html, &[]).is_empty());
+    }
+
+    /// A span omitted from a short row still occupies its logical columns below.
+    #[test]
+    fn a_rowspan_outside_a_short_row_still_aligns_the_next_row() {
+        let html = "<table><tr><td>a</td><td rowspan=2>hidden</td></tr><tr><td>b</td><td x:num='3'>3</td></tr></table>";
+        let rows = table_cells_for_rows(html, &[1, 3]);
+        assert_eq!(rows.iter().map(Vec::len).collect::<Vec<_>>(), [1, 3]);
+        assert_eq!(rows[1][1], HtmlCell::default());
+        assert_eq!(rows[1][2].num, Some(3.0));
     }
 }
