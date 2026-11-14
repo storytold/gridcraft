@@ -962,3 +962,40 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
+
+/// A rounded shape must leave its bounding corners empty in print, while an ordinary
+/// rectangle keeps them. Exercise page scaling and shapes smaller than the grid radius.
+#[test]
+fn rounded_rectangle_print_keeps_curved_corners_at_each_scale() {
+    fn outline(kind: &str, width: f32, height: f32, scale: u32) -> Vec<[f32; 2]> {
+        let mut session = s();
+        session.execute("insert.shape", json!({"kind": kind, "at": "B3", "width": width, "height": height})).unwrap();
+        session.execute("pageLayout.pageSetup", json!({"scale": scale})).unwrap();
+        let (pdf, pages) = pdf_of(&mut session, json!({"range": "A1:D8"}));
+        assert_eq!(pages, 1);
+        let text = String::from_utf8_lossy(&pdf);
+        let path = text.lines().find(|line| line.contains(" m ") && line.ends_with(" h B")).expect("filled shape outline");
+        let tokens: Vec<_> = path.split_whitespace().collect();
+        tokens
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .filter(|part| matches!(part[2], "m" | "l"))
+            .map(|part| [part[0].parse().unwrap(), part[1].parse().unwrap()])
+            .collect()
+    }
+    for scale in [50, 100, 200] {
+        for (width, height) in [(144.0, 96.0), (8.0, 4.0)] {
+            let rectangle = outline("rectangle", width, height, scale);
+            assert_eq!(rectangle.len(), 4);
+            let rounded = outline("roundedRectangle", width, height, scale);
+            assert!(rounded.len() > 4, "rounded rectangle printed as four square corners");
+            for axis in 0..2 {
+                let bounds =
+                    |points: &[[f32; 2]]| points.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| (lo.min(p[axis]), hi.max(p[axis])));
+                assert_eq!(bounds(&rounded), bounds(&rectangle), "rounding must preserve the shape extent");
+            }
+            assert!(rounded.iter().all(|point| !rectangle.contains(point)), "rounded outline must not touch a bounding-box corner");
+        }
+    }
+}
