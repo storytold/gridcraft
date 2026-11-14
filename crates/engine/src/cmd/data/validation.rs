@@ -225,7 +225,18 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
 pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -> Option<(Validation, String)> {
     let sh = wb.sheet(sheet)?;
     let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at)))?;
-    if dv.kind == ValidationKind::Any || !dv.show_error {
+    // With the error alert off, any entry is accepted.
+    if !dv.show_error {
+        return None;
+    }
+    check_rule(wb, sheet, at, dv, input)
+}
+
+/// Checks `input` at `at` against the rule `dv`, also when its error alert is off (Circle
+/// Invalid Data circles such cells). `None` = valid.
+fn check_rule(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation, input: &str) -> Option<(Validation, String)> {
+    let sh = wb.sheet(sheet)?;
+    if dv.kind == ValidationKind::Any {
         return None;
     }
     if input.is_empty() && dv.allow_blank {
@@ -341,15 +352,33 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
     let mut budget = 100_000usize;
     // Cells were left unchecked because the allowance ran out: said in the result.
     let mut truncated = false;
-    for dv in &sh.validations {
-        for r in &dv.ranges {
+    for (i, dv) in sh.validations.iter().enumerate() {
+        for (k, r) in dv.ranges.iter().enumerate() {
             let r = sh.used_range().and_then(|u| r.intersection(&u));
             let Some(r) = r else { continue };
             truncated |= r.count() > budget as u64;
+            if budget == 0 {
+                continue;
+            }
+            // A cell is checked once: where a file's rules overlap, against the rule typing uses
+            // (the first one holding it), and once where a rule's own ranges overlap. Only the
+            // earlier ranges that meet this one can hold one of its cells first. Each of them was
+            // scanned whole: a range the allowance cuts short leaves nothing for the later ones.
+            let earlier: Vec<&RangeRef> =
+                sh.validations.iter().take(i).flat_map(|e| &e.ranges).chain(dv.ranges.iter().take(k)).filter(|e| e.intersects(&r)).collect();
             for c in r.iter().take(budget) {
+                // A skipped cell is a visit too, so overlapping ranges can't stretch the allowance.
                 budget -= 1;
+                if earlier.iter().any(|e| e.contains(c)) {
+                    continue;
+                }
                 let text = sh.input_text(c);
-                if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
+                // A blank cell breaks a rule with Ignore blank off. A spilled value or a picture in
+                // the cell has no text of its own and stays out.
+                if text.is_empty() && !sh.value(c).is_empty() {
+                    continue;
+                }
+                if check_rule(&d.wb, sheet, c, dv, &text).is_some() {
                     bad_cells.push(c.a1());
                 }
             }
