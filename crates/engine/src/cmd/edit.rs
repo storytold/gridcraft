@@ -247,6 +247,29 @@ fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collectio
     sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && filtered(**r)).map(|(r, _)| *r).collect()
 }
 
+/// Whether the clear of `ranges` reaches every cell of `target`: rows an applied filter hides
+/// are not cleared, so they leave their cells uncovered.
+fn clear_covers(sh: &gridcraft_model::Sheet, ranges: &[RangeRef], target: RangeRef) -> bool {
+    let skips: Vec<_> = ranges.iter().map(|r| filtered_rows(sh, *r)).collect();
+    (target.start.row..=target.end.row).all(|row| {
+        let mut spans: Vec<(u32, u32)> = ranges
+            .iter()
+            .zip(&skips)
+            .filter(|(r, skip)| r.start.row <= row && row <= r.end.row && !skip.contains(&row))
+            .map(|(r, _)| (r.start.col, r.end.col))
+            .collect();
+        spans.sort_unstable();
+        let mut next = target.start.col;
+        for (lo, hi) in spans {
+            if lo > next {
+                break;
+            }
+            next = next.max(hi.saturating_add(1));
+        }
+        next > target.end.col
+    })
+}
+
 /// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
 /// are left as they are; rows hidden by hand are cleared.
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
@@ -283,6 +306,21 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                         return Err(EngineError::Other(m));
                     }
                 }
+            }
+        }
+    }
+    // Clearing a multi-cell legacy array's formula cell removes the whole array, so the cleared
+    // range must hold all of it (#3894). The commit can't tell this apart from clearing every
+    // cell: only the formula cell is stored either way.
+    if matches!(what, "all" | "contents") {
+        let d = s.doc()?;
+        if let Some(sh) = d.wb.sheet(sheet) {
+            let partial = sh.spill_ranges.keys().any(|&anchor| {
+                let cleared_anchor = ranges.iter().any(|r| r.contains(anchor) && !filtered_rows(sh, *r).contains(&anchor.row));
+                cleared_anchor && super::legacy_array_at(sh, anchor).is_some_and(|a| !clear_covers(sh, &ranges, a))
+            });
+            if partial {
+                return Err(EngineError::Other(super::PART_OF_ARRAY.into()));
             }
         }
     }

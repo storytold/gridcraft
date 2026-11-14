@@ -381,6 +381,10 @@ pub struct Ctx<'a> {
     /// The structural edits the command made, in order (the sheet's name, the edit), as
     /// references were rewritten for them.
     pub edits: Vec<(String, gridcraft_formula::adjust::Edit)>,
+    /// Ranges (sheet, cells) a command wrote in full, blank entries included, as `range.setValues`
+    /// does. A blank written over an unstored cell leaves no trace in the cell diff, so the
+    /// partial-array check reads what was covered from here. Ranges must not overlap.
+    pub written: Vec<(usize, RangeRef)>,
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
@@ -411,9 +415,10 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         fit_rows: Vec::new(),
         protection_checked: false,
         edits: Vec::new(),
+        written: Vec::new(),
     };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, mut changed, structural, recalc_all, mut fit_rows, protection_checked, edits, .. } = ctx;
+    let Ctx { mut wb, mut changed, structural, recalc_all, mut fit_rows, protection_checked, edits, written, .. } = ctx;
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
@@ -421,7 +426,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
     if !structural {
-        check_arrays(&d.wb, &wb)?;
+        check_arrays(&d.wb, &wb, &written)?;
     }
     if wb.calc.precision_as_displayed {
         round_edited_as_displayed(&d.wb, &mut wb, &mut changed, structural);
@@ -656,8 +661,8 @@ pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocke
 /// formula cell, while the array stays (Excel: "You can't change part of an array."). The array
 /// would show its value there while the file kept the new content. Cells shifted by row and
 /// column edits aren't edits of their content, so structural commits aren't checked.
-fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
-    for sh in &old.sheets {
+fn check_arrays(old: &Workbook, new: &Workbook, written: &[(usize, RangeRef)]) -> Result<()> {
+    for (si, sh) in old.sheets.iter().enumerate() {
         if sh.spill.is_empty() {
             continue;
         }
@@ -665,7 +670,11 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
         if std::sync::Arc::ptr_eq(sh, after) {
             continue;
         }
-        for c in sh.cells.diff(&after.cells) {
+        let diff = sh.cells.diff(&after.cells);
+        if replaced_part_of_array(sh, after, &diff, &written_on(written, si)) {
+            return Err(EngineError::Other(PART_OF_ARRAY.into()));
+        }
+        for c in diff {
             let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
             if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
                 continue;
@@ -675,11 +684,48 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
                     && after.cell(anchor).and_then(|x| x.formula.as_ref()).and_then(|f| f.array).is_some_and(|a| a.start == anchor && a.contains(c))
             });
             if in_array {
-                return Err(EngineError::Other("You can't change part of an array.".into()));
+                return Err(EngineError::Other(PART_OF_ARRAY.into()));
             }
         }
     }
     Ok(())
+}
+
+/// Excel's message for an edit of some, but not all, cells of a multi-cell legacy array.
+pub(crate) const PART_OF_ARRAY: &str = "You can't change part of an array.";
+
+/// The multi-cell legacy array anchored at `anchor` on `sh`: its range, when the cell there holds
+/// an array formula entered over more than one cell.
+pub(crate) fn legacy_array_at(sh: &gridcraft_model::Sheet, anchor: CellRef) -> Option<gridcraft_core::RangeRef> {
+    sh.cell(anchor).and_then(|x| x.formula.as_ref()).and_then(|f| f.array).filter(|a| a.start == anchor && !a.is_single())
+}
+
+/// Whether an edit put new content into a multi-cell legacy array's formula cell without writing
+/// the rest of its cells (#3894): the array would vanish, its other results with it, though only
+/// one cell was changed. Re-entering the array over at least its range, or writing every one of
+/// its cells, replaces the whole array and is fine. A formula cell left empty can't be told apart
+/// from the whole array cleared or moved here, so clearing is guarded by the commands that clear.
+fn replaced_part_of_array(sh: &gridcraft_model::Sheet, after: &gridcraft_model::Sheet, diff: &[CellRef], written: &[RangeRef]) -> bool {
+    sh.spill_ranges.keys().any(|&anchor| {
+        let Some(range) = legacy_array_at(sh, anchor) else { return false };
+        let now = after.cell(anchor);
+        if same_content(sh.cell(anchor), now) || !now.is_some_and(gridcraft_model::Cell::has_content) {
+            return false;
+        }
+        if now.and_then(|x| x.formula.as_ref()).and_then(|f| f.array).is_some_and(|a| a.start == anchor && a.contains_range(&range)) {
+            return false;
+        }
+        // The cells a command wrote in full (blanks too) plus the other changed cells inside the
+        // range: `diff` lists each changed cell once, and `written` ranges don't overlap.
+        let wrote: u64 = written.iter().filter_map(|w| w.intersection(&range)).map(|i| i.count()).sum();
+        let changed = diff.iter().filter(|c| range.contains(**c) && !written.iter().any(|w| w.contains(**c))).count() as u64;
+        wrote.saturating_add(changed) < range.count()
+    })
+}
+
+/// The ranges of `written` on sheet `si`.
+fn written_on(written: &[(usize, RangeRef)], si: usize) -> Vec<RangeRef> {
+    written.iter().filter(|(i, _)| *i == si).map(|(_, r)| *r).collect()
 }
 
 /// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
