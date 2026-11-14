@@ -68,3 +68,24 @@ fn cancel_does_not_change_either_workbook() {
         assert_eq!(*d.wb, *wb);
     }
 }
+
+#[test]
+fn named_source_sheet_is_inserted_before_the_selected_tab() {
+    let mut h = harness(false);
+    h.state_mut().dialog = None;
+    let app = h.state_mut();
+    app.session.execute("sheet.rename", json!({"name":"A"})).unwrap();
+    app.session.execute("home.insertSheet", json!({"name":"B","before":1})).unwrap();
+    app.session.execute("home.insertSheet", json!({"name":"C","before":2})).unwrap();
+    app.session.execute("sheet.activate", json!({"sheet":"A"})).unwrap();
+    app.open_dialog("moveSheet", json!({"sheet":"C"}));
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values["sourceSheetIndex"], json!(2));
+    h.get_by_label("B").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    let names: Vec<_> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["A", "C", "B"]);
+}

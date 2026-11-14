@@ -16,6 +16,12 @@ Table and drawing identifiers are allocated in the destination workbook's shared
 object namespace. A copied worksheet gets its own runtime identity; a move keeps
 the original identity through undo and redo.
 
+File provenance follows transferred content: a destination receiving a sheet from
+an opened file retains the active-content safety checks, including in a new workbook
+and after undo/redo. Removing the active sheet selects a visible remaining tab.
+Literal chart series labels are preserved; evaluated names and references are checked
+and rewritten using the same classification as chart rendering.
+
 ## Safety limits
 
 The command reports an error without changing either workbook when it cannot

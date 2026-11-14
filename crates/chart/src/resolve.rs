@@ -433,6 +433,16 @@ fn is_defined_name(wb: &Workbook, sheet: usize, t: &str) -> bool {
     defined_name(wb, sheet, t).is_some()
 }
 
+/// Whether a chart series name is evaluated rather than displayed as literal text.
+/// Share this classification with formula rewrites so literal labels never become dependencies.
+pub fn series_name_is_formula(wb: &Workbook, sheet: usize, name: &str) -> bool {
+    let t = name.trim();
+    if t.strip_prefix('"').and_then(|q| q.strip_suffix('"')).is_some() {
+        return false;
+    }
+    t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') || is_defined_name(wb, sheet, t)
+}
+
 /// A series name: a reference/formula or a defined name (`[0]!Title` in a file) is evaluated,
 /// a quoted or other bare literal is used as is.
 fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
@@ -440,7 +450,7 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     if let Some(q) = t.strip_prefix('"').and_then(|q| q.strip_suffix('"')) {
         return q.replace("\"\"", "\"");
     }
-    if t.starts_with('=') || parse_ref(wb, sheet, t).is_some() && t.contains('!') || is_defined_name(wb, sheet, t) {
+    if series_name_is_formula(wb, sheet, t) {
         let vals = eval_list(wb, sheet, t);
         let parts: Vec<String> = vals.iter().map(value_text).filter(|s| !s.is_empty()).take(8).collect();
         return parts.join(" ");

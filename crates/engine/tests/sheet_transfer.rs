@@ -385,3 +385,98 @@ fn commands_expose_stable_destination_ids_after_document_indices_shift() {
     assert_eq!(result["workbook"].as_u64(), Some(destination));
     assert_eq!(s.active().unwrap().wb.sheets.len(), 2);
 }
+
+#[test]
+fn transfers_preserve_file_provenance_for_existing_and_new_destinations() {
+    use gridcraft_engine::Trust;
+    for copy in [false, true] {
+        for new in [false, true] {
+            for source_trust in [Trust::Local, Trust::FromFile] {
+                for destination_trust in [Trust::Local, Trust::FromFile] {
+                    let (mut s, _, destination) = movable_books();
+                    s.active_mut().unwrap().trust = source_trust;
+                    s.set_active(1);
+                    s.active_mut().unwrap().trust = destination_trust;
+                    s.set_active(0);
+                    let target = if new { json!("new") } else { json!(destination) };
+                    s.execute("sheet.move", json!({"to":0,"copy":copy,"targetWorkbook":target})).unwrap();
+                    let expected = if new { Trust::Local } else { destination_trust }.receive(source_trust);
+                    assert_eq!(s.active().unwrap().trust, expected, "copy={copy}, new={new}");
+                    s.execute("edit.undo", json!({})).unwrap();
+                    assert_eq!(s.active().unwrap().trust, expected, "undo must not upgrade trust");
+                    s.execute("edit.redo", json!({})).unwrap();
+                    assert_eq!(s.active().unwrap().trust, expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn moving_the_active_sheet_selects_a_visible_remaining_sheet() {
+    use gridcraft_model::Visibility;
+    for visibility in [Visibility::Hidden, Visibility::VeryHidden] {
+        let (mut s, _, destination) = movable_books();
+        s.execute("home.insertSheet", json!({"name":"Hidden","before":0})).unwrap();
+        Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().visibility = visibility;
+        s.execute("sheet.activate", json!({"sheet":"Source"})).unwrap();
+        s.execute("sheet.move", json!({"to":0,"targetWorkbook":destination})).unwrap();
+        let source = &s.documents()[0].wb;
+        assert_eq!(source.active().unwrap().name, "Keep");
+        assert_eq!(source.active().unwrap().visibility, Visibility::Visible);
+    }
+}
+
+#[test]
+fn transfer_keeps_literal_chart_labels_and_rewrites_only_evaluated_names() {
+    for label in ["Sales revenue (net)", "Sales!Units", "Missing!A1", "\"Keep!A1\"", "Source!A1", "=Source!A1"] {
+        let (mut s, _, destination) = movable_books();
+        s.execute("cell.set", json!({"cell":"A2","input":"43"})).unwrap();
+        s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+        Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].name = Some(label.into());
+        s.set_active(1);
+        s.execute("sheet.rename", json!({"name":"Source"})).unwrap();
+        s.set_active(0);
+        s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination})).unwrap();
+        let name = s.active().unwrap().wb.sheet(0).unwrap().charts[0].series[0].name.as_deref().unwrap();
+        if label.contains("Source!A1") {
+            assert!(name.contains("Source (2)"), "self-reference should follow renamed sheet: {name}");
+        } else {
+            assert_eq!(name, label);
+        }
+    }
+}
+
+#[test]
+fn chart_name_dependencies_are_checked_in_both_transfer_directions() {
+    use gridcraft_model::DefinedName;
+    for (label, definition, allowed) in [("Title", "Source!A1", true), ("Title", "Keep!A1", false), ("Keep!A1", "", false), ("=Keep!A1", "", false)] {
+        let (mut s, _, destination) = movable_books();
+        s.execute("cell.set", json!({"cell":"A2","input":"43"})).unwrap();
+        s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+        let wb = Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        if !definition.is_empty() {
+            wb.names.push(DefinedName { name: "Title".into(), scope: None, formula: definition.into(), comment: String::new(), hidden: false });
+        }
+        wb.sheet_mut(0).unwrap().charts[0].series[0].name = Some(label.into());
+        let before: Vec<_> = s.documents().iter().map(|d| d.wb.clone()).collect();
+        let result = s.execute("sheet.move", json!({"to":0,"copy":true,"targetWorkbook":destination}));
+        assert_eq!(result.is_ok(), allowed, "label={label}, definition={definition}");
+        if allowed {
+            assert!(s.active().unwrap().wb.names.iter().any(|n| n.name == "Title"));
+        } else {
+            for (d, wb) in s.documents().iter().zip(before) {
+                assert!(Arc::ptr_eq(&d.wb, &wb));
+            }
+        }
+    }
+    let (mut s, _, destination) = movable_books();
+    s.execute("sheet.activate", json!({"sheet":"Keep"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A1","input":"1"})).unwrap();
+    s.execute("cell.set", json!({"cell":"A2","input":"2"})).unwrap();
+    s.execute("insert.chart", json!({"range":"A1:A2","type":"line"})).unwrap();
+    Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(1).unwrap().charts[0].series[0].name = Some("Source!Units".into());
+    s.execute("sheet.activate", json!({"sheet":"Source"})).unwrap();
+    s.execute("sheet.move", json!({"to":0,"targetWorkbook":destination})).unwrap();
+    assert_eq!(s.documents()[0].wb.sheet(0).unwrap().charts[0].series[0].name.as_deref(), Some("Source!Units"));
+}

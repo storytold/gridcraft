@@ -12,6 +12,7 @@ use crate::{EngineError, Result};
 pub(crate) fn run(s: &mut crate::Session, target: &serde_json::Value, sheet: usize, before: usize, copy: bool) -> Result<serde_json::Value> {
     let source_index = s.active_index();
     let source = s.doc()?.wb.clone();
+    let source_trust = s.doc()?.trust;
     let new = target.as_str() == Some("new");
     let target_index = if new {
         None
@@ -68,6 +69,8 @@ pub(crate) fn run(s: &mut crate::Session, target: &serde_json::Value, sheet: usi
         }
     }
     let d = s.docs.get_mut(index).ok_or(crate::EngineError::NoDocument)?;
+    // Receiving file-derived content must not bypass active-content safety prompts.
+    d.trust = d.trust.receive(source_trust);
     d.wb = Arc::new(destination);
     d.calc = destination_calc;
     d.sheet_selections.clear();
@@ -131,7 +134,7 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
     }
     let mut needed: BTreeSet<usize> = source.names.iter().enumerate().filter(|(_, n)| n.scope == Some(sheet)).map(|(i, _)| i).collect();
     let mut rewrite = |text: &str| rewrite_formula(text, source, &output, sheet, &name, &table_names, &mut needed);
-    map_formulas(&mut moved, &mut rewrite)?;
+    map_formulas(&mut moved, source, sheet, &mut rewrite)?;
     // Names can refer to other names. A set bounds traversal even for cyclic definitions.
     let mut done = BTreeSet::new();
     let mut imported = Vec::new();
@@ -171,9 +174,16 @@ pub(crate) fn prepare(source: &Workbook, destination: &Workbook, sheet: usize, b
                 *scope -= 1;
             }
         }
-        remaining.set_active_sheet(
-            remaining.active_sheet().saturating_sub(usize::from(remaining.active_sheet() >= sheet)).min(remaining.sheets.len().saturating_sub(1)),
-        );
+        let shifted =
+            remaining.active_sheet().saturating_sub(usize::from(remaining.active_sheet() >= sheet)).min(remaining.sheets.len().saturating_sub(1));
+        let active = remaining
+            .sheets
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.visibility == Visibility::Visible)
+            .min_by_key(|(i, _)| i.abs_diff(shifted))
+            .map_or(shifted, |(i, _)| i);
+        remaining.set_active_sheet(active);
     }
     Ok((remaining, output, before))
 }
@@ -337,7 +347,7 @@ fn check_inbound(source: &Workbook, moving: usize, tables: &HashSet<String>) -> 
     };
     for (index, sh) in source.sheets.iter().enumerate() {
         if index != moving {
-            map_formulas(&mut (**sh).clone(), &mut check)?;
+            map_formulas(&mut (**sh).clone(), source, index, &mut check)?;
             for pivot in &sh.pivots {
                 check(&pivot.source)?;
             }
@@ -354,7 +364,7 @@ fn check_inbound(source: &Workbook, moving: usize, tables: &HashSet<String>) -> 
     Ok(())
 }
 
-fn map_formulas(sheet: &mut Sheet, f: &mut impl FnMut(&str) -> Result<String>) -> Result<()> {
+fn map_formulas(sheet: &mut Sheet, workbook: &Workbook, sheet_index: usize, f: &mut impl FnMut(&str) -> Result<String>) -> Result<()> {
     // These can reference other sheets through code or workbook-level actions that the
     // formula walker cannot validate. Also refuse a move with such inbound dependencies.
     if !sheet.controls.is_empty() || sheet.cells.iter().any(|(_, cell)| cell.py.is_some()) {
@@ -390,7 +400,9 @@ fn map_formulas(sheet: &mut Sheet, f: &mut impl FnMut(&str) -> Result<String>) -
         for s in &mut c.series {
             s.values = f(&s.values)?;
             optional(&mut s.categories, f)?;
-            optional(&mut s.name, f)?;
+            if s.name.as_deref().is_some_and(|name| gridcraft_chart::series_name_is_formula(workbook, sheet_index, name)) {
+                optional(&mut s.name, f)?;
+            }
         }
     }
     for s in &mut sheet.sparklines {

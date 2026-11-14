@@ -360,7 +360,11 @@ impl Dialog {
                     json!({"to":0,"copy":false,"sourceWorkbook":doc.map(|d| d.uid),"targetWorkbook":doc.map(|d| d.uid)}),
                 );
                 let sheet = params.get("sheet").cloned().unwrap_or_else(|| json!(doc.map(|d| d.wb.active_sheet()).unwrap_or(0)));
-                let index = sheet.as_u64().and_then(|n| usize::try_from(n).ok()).unwrap_or_else(|| doc.map(|d| d.wb.active_sheet()).unwrap_or(0));
+                let index = sheet
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .or_else(|| sheet.as_str().and_then(|name| doc.and_then(|d| d.wb.sheet_index(name))))
+                    .unwrap_or_else(|| doc.map(|d| d.wb.active_sheet()).unwrap_or(0));
                 let name = sheet.as_str().map(str::to_string).or_else(|| doc.and_then(|d| d.wb.sheet(index)).map(|sh| sh.name.clone()));
                 d.values.insert("sheet".into(), json!(name));
                 d.values.insert("sourceSheetIndex".into(), json!(index));
