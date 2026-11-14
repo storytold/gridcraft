@@ -271,7 +271,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             let b = new.value.clone();
                             // Numbers stored as text take part (multiplying by 1 turns them into
                             // numbers); other text and errors stay as they are.
-                            if let (Ok(x), Ok(y)) = (a.to_number(), b.to_number())
+                            let (sys, region) = (cx.wb.date_system, cx.wb.region);
+                            if let (Ok(x), Ok(y)) = (a.to_number_region(sys, region), b.to_number_region(sys, region))
                                 && (a.is_number() || a.is_empty() || a.is_text())
                                 && (b.is_number() || b.is_empty())
                             {
@@ -293,7 +294,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             }
                             // A formula already there is kept and combined with the pasted number.
                             if let Some(f) = &old.formula
-                                && let Ok(y) = b.to_number()
+                                && let Ok(y) = b.to_number_region(sys, region)
                                 && (b.is_number() || b.is_empty())
                                 && let Some(sym) = match op.as_str() {
                                     "add" => Some('+'),

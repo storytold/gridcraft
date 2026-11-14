@@ -30,7 +30,7 @@ pub(super) fn zoom(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: 
         }
         // Whole percentages, as Excel shows them; the engine clamps to 10..400 as well.
         let mut percent = d.values.get("percent").and_then(Json::as_f64).unwrap_or(100.0).round() as i64;
-        if ui.add(egui::DragValue::new(&mut percent).range(10..=400).speed(1.0)).changed() {
+        if ui.add(super::region_drag_value(&mut percent, d.region).range(10..=400).speed(1.0)).changed() {
             d.set_value("percent", json!(percent));
         }
         ui.label("%");

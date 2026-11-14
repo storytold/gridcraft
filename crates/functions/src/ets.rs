@@ -81,11 +81,11 @@ impl Default for Options {
     }
 }
 
-fn whole(a: &[Arg], i: usize) -> R<Option<f64>> {
+fn whole(a: &[Arg], i: usize, c: &dyn Ctx) -> R<Option<f64>> {
     if !has(a, i) {
         return Ok(None);
     }
-    let v = num(a, i)?;
+    let v = num(a, i, c)?;
     if !v.is_finite() {
         return Err(CellError::Num);
     }
@@ -93,8 +93,8 @@ fn whole(a: &[Arg], i: usize) -> R<Option<f64>> {
 }
 
 /// `[seasonality]`: 1 (default) detects, 0 means none, 2–8,760 is the season length.
-pub(crate) fn season_arg(a: &[Arg], i: usize) -> R<Season> {
-    match whole(a, i)? {
+pub(crate) fn season_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<Season> {
+    match whole(a, i, c)? {
         None => Ok(Season::Detect),
         Some(1.0) => Ok(Season::Detect),
         Some(0.0) => Ok(Season::None),
@@ -104,8 +104,8 @@ pub(crate) fn season_arg(a: &[Arg], i: usize) -> R<Season> {
 }
 
 /// `[data_completion]`: 1 (default) interpolates, 0 fills zeros.
-fn completion_arg(a: &[Arg], i: usize) -> R<bool> {
-    match whole(a, i)? {
+fn completion_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<bool> {
+    match whole(a, i, c)? {
         None => Ok(true),
         Some(1.0) => Ok(true),
         Some(0.0) => Ok(false),
@@ -114,8 +114,8 @@ fn completion_arg(a: &[Arg], i: usize) -> R<bool> {
 }
 
 /// `[aggregation]`: 0 or 1 AVERAGE (default), 2 COUNT, 3 COUNTA, 4 MAX, 5 MEDIAN, 6 MIN, 7 SUM.
-fn aggregate_arg(a: &[Arg], i: usize) -> R<Aggregate> {
-    Ok(match whole(a, i)? {
+fn aggregate_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<Aggregate> {
+    Ok(match whole(a, i, c)? {
         None => Aggregate::Average,
         Some(v) => match v as i64 {
             0 | 1 => Aggregate::Average,
@@ -796,32 +796,32 @@ fn prepare(a: &[Arg], c: C, values: usize, timeline: usize, opts: Options) -> R<
     Ok(Prepared { series, m })
 }
 
-fn options(a: &[Arg], season: Option<usize>, completion: usize, aggregation: usize) -> R<Options> {
+fn options(a: &[Arg], season: Option<usize>, completion: usize, aggregation: usize, c: &dyn Ctx) -> R<Options> {
     Ok(Options {
         seasonality: match season {
-            Some(i) => season_arg(a, i)?,
+            Some(i) => season_arg(a, i, c)?,
             None => Season::Detect,
         },
-        interpolate: completion_arg(a, completion)?,
-        aggregate: aggregate_arg(a, aggregation)?,
+        interpolate: completion_arg(a, completion, c)?,
+        aggregate: aggregate_arg(a, aggregation, c)?,
     })
 }
 
 fn forecast_ets(a: &[Arg], c: C) -> R<Value> {
-    let target = num(a, 0)?;
-    let opts = options(a, Some(3), 4, 5)?;
+    let target = num(a, 0, c)?;
+    let opts = options(a, Some(3), 4, 5, c)?;
     let p = prepare(a, c, 1, 2, opts)?;
     let h = p.series.horizon(target)?;
     num_val(fit(&p.series.y, p.m).forecast(h))
 }
 
 fn forecast_ets_confint(a: &[Arg], c: C) -> R<Value> {
-    let target = num(a, 0)?;
-    let level = if has(a, 3) { num(a, 3)? } else { 0.95 };
+    let target = num(a, 0, c)?;
+    let level = if has(a, 3) { num(a, 3, c)? } else { 0.95 };
     if !(level > 0.0 && level < 1.0) {
         return Err(CellError::Num);
     }
-    let opts = options(a, Some(4), 5, 6)?;
+    let opts = options(a, Some(4), 5, 6, c)?;
     let p = prepare(a, c, 1, 2, opts)?;
     let h = p.series.horizon(target)?;
     let z = norm_inv((1.0 + level) / 2.0);
@@ -829,18 +829,18 @@ fn forecast_ets_confint(a: &[Arg], c: C) -> R<Value> {
 }
 
 fn forecast_ets_seasonality(a: &[Arg], c: C) -> R<Value> {
-    let opts = options(a, None, 2, 3)?;
+    let opts = options(a, None, 2, 3, c)?;
     let p = prepare(a, c, 0, 1, opts)?;
     num_val(p.m as f64)
 }
 
 fn forecast_ets_stat(a: &[Arg], c: C) -> R<Value> {
-    let kind = num(a, 2)?;
+    let kind = num(a, 2, c)?;
     if !kind.is_finite() || !(1.0..9.0).contains(&kind.trunc()) {
         return Err(CellError::Num);
     }
     let kind = kind.trunc() as u8;
-    let opts = options(a, Some(3), 4, 5)?;
+    let opts = options(a, Some(3), 4, 5, c)?;
     let p = prepare(a, c, 0, 1, opts)?;
     if kind == 8 {
         return num_val(p.series.step);

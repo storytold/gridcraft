@@ -5,25 +5,25 @@ use super::{Arg, CellError, Ctx, R, Value, num, num_val, opt_bool, opt_num};
 // Depreciation
 // ---------------------------------------------------------------------------------------------
 
-pub(super) fn sln(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (cost, salvage, life) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+pub(super) fn sln(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (cost, salvage, life) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     if life == 0.0 {
         return Err(CellError::Div0);
     }
     num_val((cost - salvage) / life)
 }
 
-pub(super) fn syd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (cost, salvage, life, per) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
+pub(super) fn syd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (cost, salvage, life, per) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?);
     if life <= 0.0 || per <= 0.0 || per > life || salvage < 0.0 {
         return Err(CellError::Num);
     }
     num_val((cost - salvage) * (life - per + 1.0) * 2.0 / (life * (life + 1.0)))
 }
 
-pub(super) fn db(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (cost, salvage, life, period) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?.trunc());
-    let month = opt_num(a, 4, 12.0)?.trunc();
+pub(super) fn db(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (cost, salvage, life, period) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?.trunc());
+    let month = opt_num(a, 4, 12.0, c)?.trunc();
     if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || !(1.0..=12.0).contains(&month) {
         return Err(CellError::Num);
     }
@@ -52,9 +52,9 @@ pub(super) fn db(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(dep)
 }
 
-pub(super) fn ddb(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (cost, salvage, life, period) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
-    let factor = opt_num(a, 4, 2.0)?;
+pub(super) fn ddb(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (cost, salvage, life, period) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?);
+    let factor = opt_num(a, 4, 2.0, c)?;
     if cost < 0.0 || salvage < 0.0 || life <= 0.0 || period <= 0.0 || factor <= 0.0 || period > life {
         return Err(CellError::Num);
     }
@@ -96,9 +96,9 @@ fn vdb_schedule(cost: f64, salvage: f64, life: f64, factor: f64, no_switch: bool
     out
 }
 
-pub(super) fn vdb(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (cost, salvage, life, start, end) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?, num(a, 4)?);
-    let factor = opt_num(a, 5, 2.0)?;
+pub(super) fn vdb(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (cost, salvage, life, start, end) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?, num(a, 3, c)?, num(a, 4, c)?);
+    let factor = opt_num(a, 5, 2.0, c)?;
     let no_switch = opt_bool(a, 6, false)?;
     if cost < 0.0 || salvage < 0.0 || life <= 0.0 || start < 0.0 || end < start || end > life || factor <= 0.0 {
         return Err(CellError::Num);
@@ -118,8 +118,8 @@ pub(super) fn vdb(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn amorlinc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (cost, purchased, first, salvage) = (num(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
-    let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, basis_arg(a, 6)?);
+    let (cost, purchased, first, salvage) = (num(a, 0, c)?, date(a, 1, c)?, date(a, 2, c)?, num(a, 3, c)?);
+    let (period, rate, basis) = (num(a, 4, c)?.trunc(), num(a, 5, c)?, basis_arg(a, 6, c)?);
     if cost < 0.0 || salvage < 0.0 || salvage > cost || period < 0.0 || rate <= 0.0 || first < purchased {
         return Err(CellError::Num);
     }
@@ -134,8 +134,8 @@ pub(super) fn amorlinc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let (cost, purchased, first, salvage) = (num(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
-    let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, basis_arg(a, 6)?);
+    let (cost, purchased, first, salvage) = (num(a, 0, c)?, date(a, 1, c)?, date(a, 2, c)?, num(a, 3, c)?);
+    let (period, rate, basis) = (num(a, 4, c)?.trunc(), num(a, 5, c)?, basis_arg(a, 6, c)?);
     if cost < 0.0 || salvage < 0.0 || salvage > cost || period < 0.0 || rate <= 0.0 || first < purchased || period > 1e6 {
         return Err(CellError::Num);
     }

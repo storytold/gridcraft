@@ -169,8 +169,8 @@ pub(super) fn minverse(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     to_value_array(n, n, inv)
 }
 
-pub(super) fn munit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+pub(super) fn munit(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
     let (r, _) = check_size(n, n)?;
     let mut data = vec![Value::Number(0.0); r * r];
     for i in 0..r {

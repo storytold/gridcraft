@@ -100,7 +100,8 @@ impl<'h> Evaluator<'h> {
             Err(e) => return err(e),
         };
         let two = args.len() == 2;
-        let num = |v: &Option<Value>| v.as_ref().map_or(Ok(0.0), |v| v.to_number()).map(|n| n.trunc() as i64);
+        let (sys, region) = (self.host.workbook().date_system, self.host.workbook().region);
+        let num = |v: &Option<Value>| v.as_ref().map_or(Ok(0.0), |v| v.to_number_region(sys, region)).map(|n| n.trunc() as i64);
         // Arrays of positions pick a value for each: INDEX(A1:C10,{1;2},{1,3}) is 2×2.
         if let (Some(Value::Array(_)), _) | (_, Some(Value::Array(_))) = (&rows, &cols) {
             let as_array = |v: &Option<Value>| match v {
@@ -430,10 +431,11 @@ impl<'h> Evaluator<'h> {
                 Input::Values(v) => values.push(v),
             }
         }
+        let ctx = FnCtx { ev: self, criteria: None, lambda: None };
         if let Some(k) = k {
-            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k));
+            return Ev::V(gridcraft_functions::aggregate_values_k(func, &values, &k, &ctx));
         }
-        Ev::V(gridcraft_functions::aggregate_values(func, &values))
+        Ev::V(gridcraft_functions::aggregate_values(func, &values, &ctx))
     }
 }
 

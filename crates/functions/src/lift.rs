@@ -101,7 +101,7 @@ fn scan_len(spec: &FnSpec, args: &[Arg]) -> usize {
 
 /// The work of one lifted call that depends on its own (lifted) scalar arguments: the number of
 /// periods a [`PERIOD_LOOPS`] function steps through. 0 for other functions.
-fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
+fn call_cost(spec: &FnSpec, cell_args: &[Arg], ctx: &dyn Ctx) -> usize {
     if !PERIOD_LOOPS.contains(&spec.name) {
         return 0;
     }
@@ -112,13 +112,13 @@ fn call_cost(spec: &FnSpec, cell_args: &[Arg]) -> usize {
         if let Value::Text(t) = &a.value {
             parse = parse.saturating_add(t.len());
         }
-        if crate::util::num(cell_args, i).is_err() {
+        if crate::util::num(cell_args, i, ctx).is_err() {
             break;
         }
     }
     // The function's own validation and coercion (text like "10000000" counts), so a call it
     // refuses before its loop costs nothing and no loop goes uncharged.
-    let periods = crate::financial::cumulative_args(cell_args).map_or(0, |(.., start, end, _)| (end - start + 1.0) as usize);
+    let periods = crate::financial::cumulative_args(cell_args, ctx).map_or(0, |(.., start, end, _)| (end - start + 1.0) as usize);
     parse.saturating_add(periods.saturating_mul(PERIOD_COST))
 }
 
@@ -177,7 +177,7 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
         for r in 0..rows {
             for c in 0..cols {
                 element_args(spec, args, r, c, &mut cell_args);
-                spent = spent.saturating_add(call_cost(spec, &cell_args));
+                spent = spent.saturating_add(call_cost(spec, &cell_args, &*ctx));
                 if spent > budget {
                     return Value::Error(CellError::Num);
                 }
@@ -215,8 +215,8 @@ mod tests {
     use crate::util::{R, num};
     use crate::{Arg, Ctx, FnSpec};
 
-    fn add(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-        Ok(Value::Number(num(a, 0)? + num(a, 1)?))
+    fn add(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+        Ok(Value::Number(num(a, 0, c)? + num(a, 1, c)?))
     }
 
     fn spec() -> FnSpec {

@@ -19,6 +19,15 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn set_region_reaches_every_open_workbook_and_keeps_them_clean() {
+    let mut s = s();
+    s.new_workbook();
+    s.set_region(gridcraft_core::region::find("pt-BR").unwrap());
+    let seen: Vec<_> = s.documents().iter().map(|d| (d.wb.region.tag, d.is_dirty())).collect();
+    assert_eq!(seen, vec![("pt-BR", false), ("pt-BR", false)]);
+}
+
+#[test]
 fn format_cells_reading_order_survives_undo_and_xlsx() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
@@ -4906,6 +4915,19 @@ fn editing_a_date_cell_shows_a_date_not_the_serial() {
     assert_eq!(crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at), "42");
 }
 
+#[test]
+fn editing_a_number_uses_the_region_decimal_separator() {
+    let mut s = s();
+    let at = CellRef::parse("A1").unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1234.02"})).unwrap();
+    s.set_region(gridcraft_core::region::find("pt-BR").unwrap());
+    let d = s.doc().unwrap();
+    let edit = crate::display::edit_text(&d.wb, d.wb.active().unwrap(), at);
+    assert_eq!(edit, "1234,02");
+    let back = gridcraft_core::parse::parse_input_in(&edit, d.wb.date_system, d.wb.region).value;
+    assert!(matches!(back, Value::Number(n) if (n - 1234.02).abs() < 1e-9), "{back:?}");
+}
+
 /// A workbook with 42 in A1, saved as `.xlsx` and encrypted with `password`.
 fn encrypted_book(password: &str) -> Vec<u8> {
     let mut src = s();
@@ -6684,6 +6706,7 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
 }
 
 #[test]
+
 fn circle_invalid_says_when_its_scan_allowance_ended_early() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
@@ -6717,4 +6740,150 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+#[test]
+fn a_typed_date_follows_the_region_order_and_keeps_the_canonical_short_date() {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::lookup("pt-BR"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "03/04/2026"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "25/09/2026"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(46115.0), "3 April 2026, day first");
+    assert_eq!(v(&s, "A2"), Value::Number(46290.0), "25 September 2026 is a date, not text");
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let a1 = CellRef::parse("A1").unwrap();
+    assert_eq!(d.wb.styles.get(sh.style_id(a1)).num_fmt.as_str(), "m/d/yyyy", "saved as numFmtId 14");
+    assert_eq!(crate::display::cell_text(&d.wb, sh, a1), "03/04/2026");
+    // en-US keeps month first.
+    let mut us = self::s();
+    us.set_region(&gridcraft_core::region::EN_US);
+    us.execute("cell.set", json!({"cell": "A1", "input": "3/4/2026"})).unwrap();
+    assert_eq!(v(&us, "A1"), Value::Number(46085.0), "4 March 2026");
+}
+
+/// A6: a number typed as text in a command's criterion (`12,5`) is read in the workbook's region
+/// by conditional formatting, Advanced Filter, Goal Seek and Solver; the en-US `.` the API sends
+/// still reads.
+#[test]
+fn command_criteria_read_numbers_in_the_workbook_region() {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::lookup("pt-BR"));
+    // Conditional formatting writes the number canonical in the rule's formula.
+    for (at, value, want) in [("J1", "12,5", "12.5"), ("J2", "12.5", "12.5"), ("J3", "1.200,5", "1200.5")] {
+        s.execute("home.conditionalFormat", json!({"range": at, "rule": {"type": "cellIs", "operator": "greater", "value": value}})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let rule = sh.cond_formats.iter().find(|c| c.ranges.first().is_some_and(|r| r.a1() == at)).map(|c| c.rule.clone());
+        assert!(matches!(&rule, Some(gridcraft_model::CfRule::CellIs { a, .. }) if a == want), "{value}: {rule:?}");
+    }
+    // Advanced Filter: `>12,5` keeps 13 and 20.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [10], [13], [20]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "H1", "values": [["Qty"], [">12,5"]]})).unwrap();
+    let r = s.execute("data.advancedFilter", json!({"range": "A1:A4", "criteria": "H1:H2"})).unwrap();
+    assert_eq!(r["matched"], 2, "{r}");
+    // Goal Seek to 12,5.
+    s.execute("cell.set", json!({"cell": "C1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=C1*2"})).unwrap();
+    s.execute("data.goalSeek", json!({"set": "D1", "to": "12,5", "changing": "C1"})).unwrap();
+    assert!((v(&s, "D1").as_f64().unwrap_or(f64::NAN) - 12.5).abs() < 1e-6, "{:?}", v(&s, "D1"));
+    // Solver: maximise E1 with E1 <= 12,5.
+    s.execute("cell.set", json!({"cell": "E1", "input": "0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "=E1"})).unwrap();
+    let r = s
+        .execute("data.solver", json!({"objective": "F1", "goal": "max", "variables": "E1", "constraints": ["E1 <= 12,5"], "method": "simplex"}))
+        .unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+    assert!((v(&s, "E1").as_f64().unwrap_or(f64::NAN) - 12.5).abs() < 1e-9, "{:?}", v(&s, "E1"));
+}
+
+/// A new workbook in the pt-BR region.
+fn pt_br() -> Session {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::find("pt-BR").unwrap());
+    s
+}
+
+#[test]
+fn offered_formats_follow_the_workbook_region() {
+    let mut s = pt_br();
+    let pick = |s: &mut Session, name: &str| {
+        s.execute("home.numberFormat", json!({"range": "A1", "format": name})).unwrap();
+        fmt_of(s, "A1")
+    };
+    assert_eq!(pick(&mut s, "Currency"), "\"R$\" #,##0.00");
+    assert_eq!(pick(&mut s, "Long Date"), "[$-F800]dddd, d \"de\" mmmm \"de\" yyyy");
+    assert_eq!(pick(&mut s, "Time"), "[$-F400]hh:mm:ss");
+    assert!(pick(&mut s, "Accounting").contains("\"R$\""));
+    // Short Date stays built-in format 14, which each region shows as its own short date.
+    assert_eq!(pick(&mut s, "Short Date"), "m/d/yyyy");
+    s.execute("home.accounting", json!({"range": "B1"})).unwrap();
+    assert!(fmt_of(&s, "B1").contains("\"R$\""), "{}", fmt_of(&s, "B1"));
+    // en-US offers the same codes as before.
+    let mut s = self::s();
+    assert_eq!(pick(&mut s, "Currency"), "\"$\"#,##0.00");
+    assert_eq!(pick(&mut s, "Long Date"), "[$-F800]dddd, mmmm dd, yyyy");
+    assert_eq!(pick(&mut s, "Time"), "[$-F400]h:mm:ss AM/PM");
+    assert_eq!(pick(&mut s, "Accounting"), crate::cmd::format::format_code_for("Accounting"));
+}
+
+#[test]
+fn autofill_extends_the_region_month_and_day_names() {
+    let mut s = pt_br();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["janeiro", "seg", "dez"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "A1:C1", "target": "A1:C3"})).unwrap();
+    assert_eq!([v(&s, "A2"), v(&s, "A3")], [Value::text("fevereiro"), Value::text("março")]);
+    assert_eq!([v(&s, "B2"), v(&s, "B3")], [Value::text("ter"), Value::text("qua")]);
+    assert_eq!([v(&s, "C2"), v(&s, "C3")], [Value::text("jan"), Value::text("fev")]);
+    // The English names still extend in pt-BR.
+    s.execute("range.setValues", json!({"range": "D1", "values": [["Monday"]]})).unwrap();
+    s.execute("edit.autoFill", json!({"source": "D1", "target": "D1:D2"})).unwrap();
+    assert_eq!(v(&s, "D2"), Value::text("Tuesday"));
+}
+
+#[test]
+fn generated_text_uses_the_region_decimal_separator() {
+    let mut s = pt_br();
+    let set = |s: &mut Session, cell: &str, input: &str| s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    set(&mut s, "A1", "=COMPLEX(1.5,2)");
+    set(&mut s, "A2", "=IMREAL(\"2,5+3i\")");
+    set(&mut s, "A3", "=VALUETOTEXT(1.5)");
+    assert_eq!(v(&s, "A1"), Value::text("1,5+2i"));
+    assert_eq!(v(&s, "A2"), Value::Number(2.5));
+    assert_eq!(v(&s, "A3"), Value::text("1,5"));
+    // A database field named by a number is found by the label pt-BR writes for it.
+    s.execute("range.setValues", json!({"range": "C1", "values": [[1.5], [10], [20]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "D1", "values": [[1.5], [10]]})).unwrap();
+    set(&mut s, "A5", "=DSUM(C1:C3,\"1,5\",D1:D2)");
+    assert_eq!(v(&s, "A5"), Value::Number(10.0));
+    // The Solver's Answer Report writes a number bound the same way.
+    set(&mut s, "F1", "0");
+    set(&mut s, "G1", "=F1");
+    s.execute("data.solver", json!({"objective": "G1", "variables": "F1", "constraints": ["F1 <= 1.5"], "method": "simplex", "reports": ["answer"]}))
+        .unwrap();
+    let d = s.doc().unwrap();
+    let report = d.wb.sheet(d.wb.sheet_index("Answer Report 1").unwrap()).unwrap();
+    let texts: Vec<String> = (0..40).flat_map(|r| (0..8).map(move |c| (r, c))).map(|(r, c)| report.value(CellRef::new(r, c)).display()).collect();
+    assert!(texts.iter().any(|t| t == "$F$1<=1,5"), "{texts:?}");
+}
+
+/// Numeric text is read in the workbook region by typing (a negative currency amount is not a
+/// formula), by a validation bound whose formula gives text and by Paste Special operations on
+/// numbers stored as text.
+#[test]
+fn typing_validation_and_paste_special_read_numeric_text_in_the_workbook_region() {
+    let mut s = s();
+    s.set_region(gridcraft_core::region::lookup("pt-BR"));
+    s.execute("cell.set", json!({"cell": "A1", "input": "-R$ 10"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(-10.0));
+    assert!(s.doc().unwrap().wb.active().unwrap().cells.get(CellRef::parse("A1").unwrap()).is_some_and(|c| c.formula.is_none()));
+    s.execute("data.validation", json!({"range": "B1", "type": "decimal", "operator": "lessOrEqual", "formula1": "=\"2,5\""})).unwrap();
+    let ok = |s: &mut Session, input: &str| s.execute("data.validate", json!({"cell": "B1", "input": input})).unwrap()["ok"] == true;
+    assert!(ok(&mut s, "2"));
+    assert!(!ok(&mut s, "3"));
+    s.execute("cell.set", json!({"cell": "C1", "input": "'1,5"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::text("1,5"));
+    s.execute("cell.set", json!({"cell": "D1", "input": "2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "C1", "operation": "multiply"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::Number(3.0));
 }

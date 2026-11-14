@@ -9,6 +9,16 @@ allow-indexing-slicing-in-tests = true
 disallowed-methods = [
     { path = "std::time::Instant::now", reason = "traps on wasm; read the clock only off wasm" },
     { path = "std::time::SystemTime::now", reason = "traps on wasm; read the clock only off wasm" },
+    # The region-free entry points fix en-US separators. Call the region-aware form, or allow the
+    # lint with `// en-US on purpose: <reason>` (file syntax, canonical formula, API, tests).
+    { path = "gridcraft_core::parse::parse_input", reason = "fixes en-US; use parse_input_in with the workbook region" },
+    { path = "gridcraft_core::parse::parse_number_text", reason = "fixes en-US; use parse_number_text_in_region with the workbook region" },
+    { path = "gridcraft_core::parse::parse_number_text_in", reason = "fixes en-US; use parse_number_text_in_region with the workbook region" },
+    { path = "gridcraft_core::value::Value::to_number", reason = "fixes en-US; use Value::to_number_region with the workbook region" },
+    { path = "gridcraft_core::value::Value::to_number_in", reason = "fixes en-US; use Value::to_number_region with the workbook region" },
+    { path = "gridcraft_numfmt::format_value", reason = "fixes en-US; use format_value_in with the workbook region" },
+    { path = "gridcraft_numfmt::text_function", reason = "fixes en-US; use text_function_in with the workbook region" },
+    { path = "gridcraft_numfmt::decimal::format_general_fit", reason = "fixes the en-US decimal point; use format_general_fit_in with the region's decimal" },
 ]
 
 disallowed-types = [

@@ -1,8 +1,8 @@
 use super::descriptive::{arg_pairs, intercept, moments, slope};
 use super::{Arg, C, CellError, R, Value, arg, array_val, as_array, boolean, has, num, num_val};
 
-pub(super) fn forecast(a: &[Arg], _: C) -> R<Value> {
-    let x = num(a, 0)?;
+pub(super) fn forecast(a: &[Arg], c: C) -> R<Value> {
+    let x = num(a, 0, c)?;
     let (ys, xs) = arg_pairs(a, 1, 2)?;
     if ys.is_empty() {
         return Err(CellError::Div0);

@@ -33,9 +33,14 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
         *confirm = false;
     }
     if *confirm {
-        match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
-            Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
-            Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
+        // The target is typed in the workbook's region, as a cell is ("25,5" in pt-BR). Text that
+        // is not a number is refused: a target of 0 would overwrite the changing cell for nothing.
+        match super::parse_in_region(&to, d.region) {
+            Some(to) => match app.run("data.goalSeek", json!({"set": set, "to": to, "changing": changing})) {
+                Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
+                Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
+            },
+            None => app.message = Some(("Goal Seek".into(), "To value must be a number.".into())),
         }
     }
 }

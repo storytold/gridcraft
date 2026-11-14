@@ -26,7 +26,7 @@ fn median_finite_midpoint_does_not_overflow() {
     ] {
         close(ev("MEDIAN", values.iter().copied().map(n).collect()), expected);
         close(ev("MEDIAN", vec![rf(col(&values))]), expected);
-        close(aggregate_values(12, &values.iter().copied().map(nv).collect::<Vec<_>>()), expected);
+        close(aggregate_values(12, &values.iter().copied().map(nv).collect::<Vec<_>>(), &TestCtx::default()), expected);
     }
 }
 
@@ -36,7 +36,7 @@ fn median_midpoint_keeps_small_values_and_argument_semantics() {
     // equality here: the usual aggregate-test tolerance would accept zero.
     for value in [f64::MIN_POSITIVE, -f64::MIN_POSITIVE, f64::from_bits(1), -f64::from_bits(1)] {
         assert_eq!(ev("MEDIAN", vec![n(value), n(value)]), nv(value));
-        assert_eq!(aggregate_values(12, &[nv(value), nv(value)]), nv(value));
+        assert_eq!(aggregate_values(12, &[nv(value), nv(value)], &TestCtx::default()), nv(value));
     }
     close(ev("MEDIAN", vec![c(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])]), 3.5);
     close(ev("MEDIAN", vec![c(&[1e308, -1e308, 3.0])]), 3.0);
@@ -46,8 +46,8 @@ fn median_midpoint_keeps_small_values_and_argument_semantics() {
     is_err(ev("MEDIAN", vec![t("invalid")]), CellError::Value);
     is_err(ev("MEDIAN", vec![e(CellError::NA), n(1e308)]), CellError::NA);
     is_err(ev("MEDIAN", vec![rf(arr(vec![vec![tv("ignored"), Value::Empty]]))]), CellError::Num);
-    is_err(aggregate_values(12, &[]), CellError::Num);
-    is_err(aggregate_values(12, &[nv(1e308), Value::Error(CellError::Div0)]), CellError::Div0);
+    is_err(aggregate_values(12, &[], &TestCtx::default()), CellError::Num);
+    is_err(aggregate_values(12, &[nv(1e308), Value::Error(CellError::Div0)], &TestCtx::default()), CellError::Div0);
 }
 
 #[test]
@@ -894,29 +894,29 @@ fn weibull_density_at_zero_is_zero() {
 #[test]
 fn aggregate_helper() {
     let vals = vec![nv(1.0), nv(2.0), tv("x"), Value::Empty, Value::Bool(true), nv(6.0)];
-    close(aggregate_values(1, &vals), 3.0);
-    close(aggregate_values(2, &vals), 3.0);
-    close(aggregate_values(3, &vals), 5.0);
-    close(aggregate_values(4, &vals), 6.0);
-    close(aggregate_values(105, &vals), 1.0);
-    close(aggregate_values(6, &vals), 12.0);
-    close(aggregate_values(9, &vals), 9.0);
-    close(aggregate_values(109, &vals), 9.0);
-    close(aggregate_values(11, &vals), 14.0 / 3.0);
-    close(aggregate_values(10, &vals), 7.0);
-    close(aggregate_values(12, &vals), 2.0);
-    is_err(aggregate_values(13, &vals), CellError::NA);
-    is_err(aggregate_values(14, &vals), CellError::Value);
-    is_err(aggregate_values(99, &vals), CellError::Value);
-    is_err(aggregate_values(9, &[nv(1.0), Value::Error(CellError::Div0)]), CellError::Div0);
-    close(aggregate_values_k(14, &vals, &nv(1.0)), 6.0);
-    close(aggregate_values_k(15, &vals, &nv(2.0)), 2.0);
-    close(aggregate_values_k(16, &vals, &nv(0.5)), 2.0);
-    close(aggregate_values_k(17, &vals, &nv(4.0)), 6.0);
-    close(aggregate_values_k(18, &vals, &nv(0.5)), 2.0);
-    close(aggregate_values_k(19, &vals, &nv(2.0)), 2.0);
-    close(aggregate_values_k(9, &vals, &nv(2.0)), 9.0);
-    is_err(aggregate_values_k(14, &vals, &nv(10.0)), CellError::Num);
+    close(aggregate_values(1, &vals, &TestCtx::default()), 3.0);
+    close(aggregate_values(2, &vals, &TestCtx::default()), 3.0);
+    close(aggregate_values(3, &vals, &TestCtx::default()), 5.0);
+    close(aggregate_values(4, &vals, &TestCtx::default()), 6.0);
+    close(aggregate_values(105, &vals, &TestCtx::default()), 1.0);
+    close(aggregate_values(6, &vals, &TestCtx::default()), 12.0);
+    close(aggregate_values(9, &vals, &TestCtx::default()), 9.0);
+    close(aggregate_values(109, &vals, &TestCtx::default()), 9.0);
+    close(aggregate_values(11, &vals, &TestCtx::default()), 14.0 / 3.0);
+    close(aggregate_values(10, &vals, &TestCtx::default()), 7.0);
+    close(aggregate_values(12, &vals, &TestCtx::default()), 2.0);
+    is_err(aggregate_values(13, &vals, &TestCtx::default()), CellError::NA);
+    is_err(aggregate_values(14, &vals, &TestCtx::default()), CellError::Value);
+    is_err(aggregate_values(99, &vals, &TestCtx::default()), CellError::Value);
+    is_err(aggregate_values(9, &[nv(1.0), Value::Error(CellError::Div0)], &TestCtx::default()), CellError::Div0);
+    close(aggregate_values_k(14, &vals, &nv(1.0), &TestCtx::default()), 6.0);
+    close(aggregate_values_k(15, &vals, &nv(2.0), &TestCtx::default()), 2.0);
+    close(aggregate_values_k(16, &vals, &nv(0.5), &TestCtx::default()), 2.0);
+    close(aggregate_values_k(17, &vals, &nv(4.0), &TestCtx::default()), 6.0);
+    close(aggregate_values_k(18, &vals, &nv(0.5), &TestCtx::default()), 2.0);
+    close(aggregate_values_k(19, &vals, &nv(2.0), &TestCtx::default()), 2.0);
+    close(aggregate_values_k(9, &vals, &nv(2.0), &TestCtx::default()), 9.0);
+    is_err(aggregate_values_k(14, &vals, &nv(10.0), &TestCtx::default()), CellError::Num);
 }
 
 // B1: BINOM.DIST and POISSON.DIST went through ln_gamma differences (relative error 1.1e-13 at

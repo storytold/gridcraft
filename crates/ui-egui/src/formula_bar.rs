@@ -309,7 +309,11 @@ fn active_input(app: &SheetApp) -> String {
             // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
             if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
-            gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            // A constant logical or error value reads in the formula language (`VERDADEIRO`).
+            match crate::formula_locale::value_name(&c.value, app.ui.language.formula_locale()) {
+                Some(name) => name.to_string(),
+                None => gridcraft_engine::display::edit_text(&d.wb, sh, a),
+            }
         };
     }
     String::new()

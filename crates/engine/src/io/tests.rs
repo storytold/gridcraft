@@ -481,6 +481,37 @@ fn other_compound_files_are_not_called_encrypted() {
     assert!(!msg.contains("password"), "got: {msg}");
 }
 
+/// A workbook opened with its password is saved encrypted with that password, not as a plain
+/// package; it still has no path of its own, so Save never writes over the original.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_workbook_opened_with_a_password_is_saved_encrypted() {
+    use serde_json::json;
+    const PW: &str = "synthetic-pw-5523";
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-encrypted-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut src = crate::Session::new();
+    src.new_workbook();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    let original = dir.join("Secret.xlsx");
+    std::fs::write(&original, gridcraft_xlsx::testing::encrypt_workbook(&save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap(), PW)).unwrap();
+
+    let mut s = crate::Session::new();
+    s.execute("file.open", json!({"path": original, "password": PW})).unwrap();
+    assert!(s.doc().unwrap().path.is_none(), "a decrypted workbook has no save target");
+    assert!(!format!("{:?}", s.doc().unwrap()).contains(PW), "Debug never prints the password");
+    s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
+    let saved = dir.join("Saved.xlsx");
+    s.execute("file.save", json!({"path": saved})).unwrap();
+
+    let bytes = std::fs::read(&saved).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Encrypted);
+    let (wb, _) = open_bytes_with_password("Saved.xlsx", &bytes, Some(PW)).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(43.0));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Save As CSV/TSV writes cells as displayed: number formats applied, formula results,
 /// whole values in narrow columns (never `#####`), quoting unchanged.
 #[test]
@@ -661,7 +692,7 @@ fn a_web_page_saved_as_xls_opens_its_table() {
     assert!(style("A1").font.bold && style("A1").align.h == gridcraft_model::HAlign::Center);
     assert!(!style("A2").font.bold);
     // Opened as text, codes keep their zeros; a page named .html gets no warning.
-    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true).unwrap();
+    let (wb, warnings) = open_bytes_with("orders.html", page.as_bytes(), None, true, gridcraft_core::region::default_region()).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C2").unwrap()), gridcraft_core::Value::text("007"));
     // Plain text that merely starts with a tag-like word is still read as CSV.
@@ -685,7 +716,7 @@ fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
     assert_ne!(b1.num_fmt.as_str(), "General", "the date keeps its date format");
     assert_eq!(sh.value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::number(4.5));
     // Opened as text, a cell keeps the text it shows, not the number the page recorded for it.
-    let (wb, _) = open_bytes_with("menu.xls", &page, None, true).unwrap();
+    let (wb, _) = open_bytes_with("menu.xls", &page, None, true, gridcraft_core::region::default_region()).unwrap();
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B2").unwrap()), gridcraft_core::Value::text("4,50"));
 }
 
@@ -880,4 +911,23 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
+}
+
+/// Save As CSV in a region whose decimal is a comma (pt-BR) separates with `;` and writes the
+/// comma decimal, as Excel does, and a pt-BR CSV opened in pt-BR reads its numbers.
+#[test]
+fn csv_save_in_a_comma_decimal_region_uses_semicolons() {
+    let pt_br = gridcraft_core::region::find("pt-BR").unwrap();
+    let mut wb = Workbook::new();
+    wb.region = pt_br;
+    if let Some(sh) = wb.sheet_mut(0) {
+        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("a"));
+        sh.set_value(CellRef::new(0, 1), gridcraft_core::Value::Number(1234.5));
+        sh.set_value(CellRef::new(0, 2), gridcraft_core::Value::Number(-0.25));
+    }
+    assert_eq!(String::from_utf8(save_bytes(&wb, "novo.csv").unwrap()).unwrap(), "a;1234,5;-0,25\r\n");
+    let (read, _) = open_bytes_with("valores.csv", b"a;1234,5\r\n", None, false, pt_br).unwrap();
+    assert_eq!(read.sheet(0).unwrap().value(CellRef::new(0, 1)), gridcraft_core::Value::Number(1234.5));
+    assert_eq!(read.region.tag, "pt-BR");
+    assert_eq!(String::from_utf8(save_bytes(&read, "valores.csv").unwrap()).unwrap(), "a;1234,5\r\n");
 }

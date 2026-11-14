@@ -178,6 +178,9 @@ impl Ctx for FnCtx<'_, '_> {
     fn date_system(&self) -> gridcraft_core::DateSystem {
         self.ev.host.workbook().date_system
     }
+    fn region(&self) -> &'static gridcraft_core::Region {
+        self.ev.host.workbook().region
+    }
     fn now_serial(&self) -> f64 {
         self.ev.host.now_serial()
     }
@@ -615,6 +618,7 @@ impl<'h> Evaluator<'h> {
             },
             op == UnOp::Plus,
             sys,
+            self.host.workbook().region,
         ))
     }
 
@@ -715,7 +719,8 @@ impl<'h> Evaluator<'h> {
                 let mut acc = self.value(left);
                 while let Some((o, r)) = rest.pop() {
                     let y = self.value(r);
-                    acc = binary_values(o, &acc, &y, self.host.workbook().date_system);
+                    let wb = self.host.workbook();
+                    acc = binary_values(o, &acc, &y, wb.date_system, wb.region);
                 }
                 Ev::V(acc)
             }
@@ -735,7 +740,8 @@ impl<'h> Evaluator<'h> {
             None | Some(Expr::Missing) => Ok(default),
             Some(e) => {
                 let v = self.value(e);
-                v.scalar().to_number()
+                let wb = self.host.workbook();
+                v.scalar().to_number_region(wb.date_system, wb.region)
             }
         }
     }

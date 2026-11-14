@@ -218,7 +218,8 @@ const COMMA: &str = "_(* #,##0.00_);_(* \\(#,##0.00\\);_(* \"-\"??_);_(@_)";
 /// Accounting Number Format with the currency symbol to use (Excel's own button takes the system
 /// currency; `symbol` is how the control channel picks another one, e.g. `"L"` for lempiras).
 fn accounting(s: &mut Session, p: &Json) -> Result<Json> {
-    let symbol = str_param(p, "symbol").unwrap_or("$");
+    let region = s.doc()?.wb.region;
+    let symbol = str_param(p, "symbol").unwrap_or(region.currency);
     // The symbol goes into a quoted literal: a quote or a backslash would end it, and a control
     // character would reach the format's text as-is.
     if symbol.contains(['"', '\\']) || symbol.chars().any(char::is_control) {
@@ -538,11 +539,13 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn format_cells(s: &mut Session, p: &Json) -> Result<Json> {
-    let Some(patch) = p.get("style").map(snake_case_keys) else {
+    let Some(style) = p.get("style") else {
         // Menu invocation without params: the UI opens the dialog.
         s.ui_requests.push(crate::UiRequest::Dialog("formatCells".into(), json!({})));
         return ok();
     };
+    let region = s.doc()?.wb.region;
+    let patch = canonical_num_fmt(snake_case_keys(style), region);
     // Validate by merging into the active style once.
     let base = serde_json::to_value(active_style(s)?).map_err(|e| EngineError::Other(e.to_string()))?;
     let merged = merge_json(base, &patch);
@@ -705,7 +708,8 @@ fn merge(s: &mut Session, p: &Json, how: &str) -> Result<Json> {
     ok()
 }
 
-/// Ribbon format names → codes.
+/// Ribbon format names → codes, as en-US offers them. [`format_code_in`] gives the codes a
+/// workbook's region offers.
 pub fn format_code_for(name: &str) -> &str {
     match name {
         "General" => "General",
@@ -724,17 +728,46 @@ pub fn format_code_for(name: &str) -> &str {
     }
 }
 
+/// Ribbon format names → codes in `region`: Currency, Accounting, Long Date and Time take the
+/// region's currency, long date and long time. Short Date stays `m/d/yyyy`, built-in format 14,
+/// which every region shows as its own short date.
+pub fn format_code_in(name: &str, region: &gridcraft_core::Region) -> String {
+    match name {
+        "Currency" => region.currency_format.to_string(),
+        "Accounting" => accounting_format(region.currency),
+        "Long Date" => format!("[$-F800]{}", region.long_date),
+        "Time" => format!("[$-F400]{}", region.long_time),
+        other => format_code_for(other).to_string(),
+    }
+}
+
 fn number_format(s: &mut Session, p: &Json) -> Result<Json> {
-    let code = str_param(p, "code")
-        .map(str::to_string)
-        .or_else(|| str_param(p, "format").map(|f| format_code_for(f).to_string()))
-        .ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?;
+    let region = s.doc()?.wb.region;
+    // A `code` is typed with the region's separators (`#.##0,00` in pt-BR) and is stored once in
+    // its canonical en-US spelling. A ribbon `format` name already maps to a canonical code, and
+    // rewriting it here would turn `#,##0.00` into `#,##0,00` in pt-BR.
+    let code = match str_param(p, "code") {
+        Some(c) => gridcraft_numfmt::canonical_code(c, region),
+        None => str_param(p, "format").map(|f| format_code_in(f, region)).ok_or_else(|| bad("home.numberFormat", "missing `format` or `code`"))?,
+    };
     set_fmt(s, p, &code)
 }
 
+/// Applies a number format code that is already canonical: every caller passes a built-in code or
+/// one that [`canonical_num_fmt`] converted. Canonicalizing here as well used to rewrite the
+/// canonical `#,##0.00` into `#,##0,00` in a region that writes a decimal comma.
 fn set_fmt(s: &mut Session, p: &Json, code: &str) -> Result<Json> {
     let nf = NumFmt::new(code);
     apply_style(s, p, |st| st.num_fmt = nf.clone())
+}
+
+/// The style patch with a `num_fmt` typed with the region's separators stored in its canonical
+/// en-US spelling, so `#.##0,00` in `pt-BR` is saved as `#,##0.00`.
+fn canonical_num_fmt(mut patch: Json, region: &gridcraft_core::Region) -> Json {
+    if let Some(Json::String(code)) = patch.get_mut("num_fmt") {
+        *code = gridcraft_numfmt::canonical_code(code, region);
+    }
+    patch
 }
 
 /// Adds or removes one decimal place in the number format (Increase/Decrease Decimal).

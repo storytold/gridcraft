@@ -7,7 +7,7 @@
 use egui::{Color32, Key, Sense, Stroke, StrokeKind, vec2};
 
 use crate::icons::{self, Icon};
-use gridcraft_engine::core::{CellRef, RangeRef};
+use gridcraft_engine::core::{CellRef, RangeRef, Region};
 use serde_json::{Map, Value as Json, json};
 
 use crate::SheetApp;
@@ -84,6 +84,28 @@ pub struct Dialog {
     original_link_text: Option<String>,
     /// The state of the dialog's reference boxes (RefEdit).
     refs: ref_edit::RefBoxes,
+    /// The workbook's region when the dialog opened: its number fields show and read that
+    /// region's decimal separator ("1,5" in pt-BR).
+    pub(crate) region: &'static Region,
+}
+
+/// The active workbook's region (the default region without a workbook).
+pub(crate) fn workbook_region(app: &SheetApp) -> &'static Region {
+    app.session.active().map_or_else(gridcraft_engine::core::region::default_region, |d| d.wb.region)
+}
+
+/// A number typed in `region` ("1,5" or "1.200,5" in pt-BR), read as a cell reads typed text.
+pub(crate) fn parse_in_region(text: &str, region: &Region) -> Option<f64> {
+    gridcraft_engine::core::parse::parse_number_text_in_region(text, gridcraft_engine::core::DateSystem::D1900, region).filter(|v| v.is_finite())
+}
+
+/// A number field in `region`: egui's own parser and formatter only know ".", so in pt-BR "1,5"
+/// would be refused and 1.5 shown with a point.
+pub(crate) fn region_drag_value<'a, N: egui::emath::Numeric>(value: &'a mut N, region: &'static Region) -> egui::DragValue<'a> {
+    let decimal = region.decimal.to_string();
+    egui::DragValue::new(value)
+        .custom_formatter(move |n, decimals| egui::emath::format_with_decimals_in_range(n, decimals).replace('.', &decimal))
+        .custom_parser(move |text| parse_in_region(text, region))
 }
 
 /// A formula box in point mode, as in Excel: a click on the grid writes the cell's absolute
@@ -244,6 +266,7 @@ impl Dialog {
             pick: None,
             original_link_text: None,
             refs: ref_edit::RefBoxes::default(),
+            region: gridcraft_engine::core::region::default_region(),
         }
     }
 
@@ -269,6 +292,7 @@ impl Dialog {
             pick: None,
             original_link_text: None,
             refs: ref_edit::RefBoxes::default(),
+            region: gridcraft_engine::core::region::default_region(),
         }
     }
 
@@ -1132,6 +1156,7 @@ impl Dialog {
             _ => return None,
         };
         ref_edit::record_home(app, &mut d);
+        d.region = workbook_region(app);
         Some(d)
     }
 }

@@ -355,9 +355,10 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // Digits fit by the cell's own font and size, not the default 11pt (9pt marks in narrow columns).
     let char_w = p.layout_no_wrap("0".to_string(), font.clone(), Color32::PLACEHOLDER).size().x.max(1.0);
     let avail_w = rect.right() - text_left;
-    let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w);
+    let locale = crate::i18n::current(p.ctx()).formula_locale();
+    let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, avail_w / z.max(0.1) * z, char_w, locale);
     if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
-        text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
+        text = crate::formula_locale::display(&text, locale, wb, si);
     }
     if text.is_empty() {
         return;
@@ -605,7 +606,7 @@ fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Optio
             ));
         }
         // Background error checking: a number stored as text gets Excel's green corner (#1994).
-        if !sh.show_formulas && sh.cell(*c).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_some() {
+        if !sh.show_formulas && sh.cell(*c).and_then(|cell| gridcraft_engine::cmd::formulas::number_stored_as_text(cell, wb.region)).is_some() {
             let s = 6.0 * z.max(0.7);
             p.add(egui::Shape::convex_polygon(
                 vec![rect.left_top(), pos2(rect.left() + s, rect.top()), pos2(rect.left(), rect.top() + s)],

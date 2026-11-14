@@ -1,5 +1,7 @@
 //! GridCraft number formats: Excel format codes (`#,##0.00;[Red](#,##0.00)`, dates, fractions,
-//! scientific…), the General display format and the `TEXT()` worksheet function. en-US only.
+//! scientific…), the General display format and the `TEXT()` worksheet function. The decimal
+//! point, the thousands separator, month and day names, AM/PM and the system long date and time
+//! come from a [`gridcraft_core::Region`]; [`format_value`] uses en-US.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -10,11 +12,11 @@ mod render;
 
 use std::sync::Arc;
 
-use gridcraft_core::{CellError, DateSystem, Value};
+use gridcraft_core::{CellError, DateSystem, Region, Value};
 
-pub use decimal::format_general_fit;
+pub use decimal::{format_general_fit, format_general_fit_in};
 
-use parse::{DatePart, SecKind, Section, Tok};
+use parse::{DatePart, LocaleTag, SecKind, Section, Tok};
 use render::Out;
 
 /// Width (in characters) of General output in a cell.
@@ -179,6 +181,15 @@ impl NumberFormat {
         NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section, invalid: false }) }
     }
 
+    /// Parses a format code typed with the region's own separators. Excel stores the canonical
+    /// `.` decimal and `,` grouping, but people type the code their region uses (`#.##0,00` in
+    /// it-IT, `# ##0,00` with a non-breaking space in fr-FR), so a code entered by hand is
+    /// translated with [`canonical_code`] before parsing. Quoted text, bracket tags and escaped
+    /// characters keep their own separators.
+    pub fn parse_in(code: &str, region: &Region) -> NumberFormat {
+        NumberFormat::parse(&canonical_code(code, region))
+    }
+
     pub fn general() -> NumberFormat {
         NumberFormat::parse("General")
     }
@@ -293,9 +304,9 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
+    fn format_number(&self, n: f64, sys: DateSystem, region: &Region) -> (Formatted, bool) {
         let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
+            text: format_general_fit_in(n, GENERAL_WIDTH, region.decimal).unwrap_or_else(|| OVERFLOW.into()),
             color: None,
             fill: None,
             numeric: true,
@@ -304,21 +315,40 @@ impl NumberFormat {
             return (general(n), false);
         }
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
+        // `[$-F800]` and `[$-F400]` show the region's long date or time instead of the section.
+        // The region's own codes carry no such tag, so this recurses once at most. A section
+        // that drops the sign (`0;[$-F800]` for a negative) hands over the absolute value.
+        let system_code = match sec.locale {
+            LocaleTag::LongDate => Some(region.long_date),
+            LocaleTag::LongTime => Some(region.long_time),
+            LocaleTag::None | LocaleTag::Lcid(_) => None,
+        };
+        if let Some(code) = system_code {
+            let shown = if drop_sign { n.abs() } else { n };
+            let (mut f, overflow) = NumberFormat::parse_cached(code).format_number(shown, sys, region);
+            f.color = sec.color.or(f.color);
+            return (f, overflow);
+        }
+        // `[$-416]` names months and days in the region with that locale id, or in `region`.
+        let names = match sec.locale {
+            LocaleTag::Lcid(id) => gridcraft_core::region::all().iter().copied().find(|r| r.lcid == id).unwrap_or(region),
+            _ => region,
+        };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &format_general_fit_in(n, GENERAL_WIDTH, region.decimal).unwrap_or_default())),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                Some(render::render_general(sec, n.abs(), width, region.decimal))
             }
             SecKind::Date => {
                 if minus {
                     None
                 } else {
-                    render::render_date(sec, n.abs(), sys)
+                    render::render_date(sec, n.abs(), sys, names)
                 }
             }
-            SecKind::Number => Some(render::render_number(sec, n.abs())),
+            SecKind::Number => Some(render::render_number(sec, n.abs(), region)),
         };
         let Some(mut out) = out else {
             return (Formatted { text: OVERFLOW.into(), color: sec.color, fill: None, numeric: true }, true);
@@ -403,20 +433,206 @@ impl NumberFormat {
     }
 }
 
-/// Formats a cell value for display.
-pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+/// `code` with the canonical separators replaced by the region's: `.` becomes the region's
+/// decimal and `,` its thousands separator, so a stored code shows the way the region writes it.
+/// Quoted text, bracket tags and escaped characters keep their own separators. A region that
+/// writes the canonical characters gets the code back unchanged.
+pub fn regional_code(code: &str, region: &Region) -> String {
+    let code = remap_separators(code, '.', region.decimal, ',', region.group);
+    if writes_year_as_a(region) { swap_year_letter(&code, 'y', 'a') } else { code }
+}
+
+/// `code` with the region's separators replaced by the canonical `,` thousands and `.` decimal,
+/// which is what Excel stores and what [`NumberFormat::parse`] reads. It covers the direction
+/// [`regional_code`] cannot: a region whose thousands separator is not `,` (fr-FR writes a
+/// non-breaking space) needs one function for showing a code and another for reading it back.
+pub fn canonical_code(code: &str, region: &Region) -> String {
+    let code = remap_separators(code, region.decimal, '.', region.group, ',');
+    if writes_year_as_a(region) { swap_year_letter(&code, 'a', 'y') } else { code }
+}
+
+/// Portuguese Excel writes the year as `a` (`dd/mm/aaaa`, for "ano"); the file stores `yyyy`.
+fn writes_year_as_a(region: &Region) -> bool {
+    region.tag.starts_with("pt")
+}
+
+/// `code` with the year letter `from` written as `to`, in either case. `AM/PM`, `A/P`,
+/// `General`, quoted text, `[...]` tags, `\` escapes and the character after a `*` fill or a
+/// `_` space are copied untouched, because their letters are not the year.
+fn swap_year_letter(code: &str, from: char, to: char) -> String {
+    const KEEP: [&str; 3] = ["am/pm", "a/p", "general"];
+    let chars: Vec<char> = code.chars().collect();
+    let mut out = String::with_capacity(code.len());
+    let mut quoted = false;
+    let mut bracketed = false;
+    let mut i = 0usize;
+    while let Some(&c) = chars.get(i) {
+        let free = !quoted && !bracketed;
+        let keep =
+            KEEP.iter().find(|w| free && w.chars().enumerate().all(|(k, wc)| chars.get(i + k).is_some_and(|cc| cc.to_ascii_lowercase() == wc)));
+        let take = match (c, keep) {
+            (_, Some(w)) => w.len(),
+            ('\\' | '*' | '_', None) if free => 2,
+            _ => 1,
+        };
+        match c {
+            '"' if !bracketed => quoted = !quoted,
+            '[' if !quoted => bracketed = true,
+            ']' if !quoted => bracketed = false,
+            _ => {}
+        }
+        if take == 1 && free && c.eq_ignore_ascii_case(&from) {
+            out.push(if c.is_ascii_uppercase() { to.to_ascii_uppercase() } else { to });
+        } else {
+            out.extend(chars.get(i..(i + take).min(chars.len())).unwrap_or(&[]));
+        }
+        i += take;
+    }
+    out
+}
+
+/// `code` with `from_decimal`/`from_group` written as `to_decimal`/`to_group`. A decimal counts
+/// next to a digit placeholder (`0`, `#`, `?`): between two of them, and in a number section also
+/// at its edges (`0.` and `.00`). A grouping separator also counts right after them, where it
+/// scales the value. A section with date or time parts keeps an edge `.`, so the `.` of
+/// `dd.mm.yyyy` and of `hh:mm:ss.000` stays a date
+/// separator. Quoted text, `[...]` tags and `\` escapes are copied untouched because theirs belong
+/// to the text, not to the format, and so is the character after `*` (fill) and `_` (space).
+fn remap_separators(code: &str, from_decimal: char, to_decimal: char, from_group: char, to_group: char) -> String {
+    if from_decimal == to_decimal && from_group == to_group {
+        return code.to_string();
+    }
+    let chars: Vec<char> = code.chars().collect();
+    let mut out = String::with_capacity(code.len());
+    let mut quoted = false;
+    let mut bracketed = false;
+    let mut escaped = false;
+    // The text of the `[...]` tag being copied, to tell `[h]`, `[mm]` and `[ss]` from a colour.
+    let mut tag = String::new();
+    // The current section has a date or time part (`d`, `m`, `y`, `h`, `s`, `[h]`).
+    let mut date = false;
+    // The last character copied outside quoted text, a `[...]` tag or an escape.
+    let mut prev: Option<char> = None;
+    // The previous character is a digit placeholder or a grouping separator already converted.
+    let mut scaling = false;
+    for (i, &c) in chars.iter().enumerate() {
+        let next = chars.get(i + 1).copied();
+        match c {
+            _ if escaped => {
+                escaped = false;
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            '\\' if !quoted && !bracketed => {
+                escaped = true;
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            '"' if !bracketed => {
+                quoted = !quoted;
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            '[' if !quoted => {
+                bracketed = true;
+                tag.clear();
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            ']' if !quoted => {
+                bracketed = false;
+                date |= !tag.is_empty() && tag.chars().all(|t| matches!(t.to_ascii_lowercase(), 'h' | 'm' | 's'));
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            _ if quoted || bracketed => {
+                if bracketed {
+                    tag.push(c);
+                }
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            '*' | '_' => {
+                escaped = true;
+                out.push(c);
+                prev = None;
+                scaling = false;
+            }
+            ';' => {
+                date = false;
+                out.push(c);
+                prev = Some(c);
+                scaling = false;
+            }
+            _ if (c == from_decimal || c == from_group) && prev.is_some_and(is_digit_placeholder) && next.is_some_and(is_digit_placeholder) => {
+                out.push(if c == from_decimal { to_decimal } else { to_group });
+                prev = Some(c);
+                scaling = false;
+            }
+            // A grouping separator right after the digits scales the value by 1,000 and a run of
+            // them stacks (`0.0,` divides by 1,000, `0.0,,` by 1,000,000). The parser reads those
+            // trailing commas without a digit after them, so a code typed with the region's
+            // separator converts them too instead of leaving a separator the region never shows.
+            _ if c == from_group && (prev.is_some_and(is_digit_placeholder) || scaling) => {
+                out.push(to_group);
+                prev = Some(c);
+                scaling = true;
+            }
+            // A decimal point at the edge of the digits (`0.` shows `1234.`, `.00` shows `.50`).
+            // Left alone, `0.` in it-IT would read back as a scaling separator.
+            _ if c == from_decimal && !date && (prev.is_some_and(is_digit_placeholder) || next.is_some_and(is_digit_placeholder)) => {
+                out.push(to_decimal);
+                prev = Some(c);
+                scaling = false;
+            }
+            _ => {
+                date |= matches!(c.to_ascii_lowercase(), 'd' | 'm' | 'y' | 'h' | 's');
+                out.push(c);
+                prev = Some(c);
+                scaling = false;
+            }
+        }
+    }
+    out
+}
+
+/// A digit placeholder in a format code: the characters a decimal or thousands separator sits
+/// between in a number, and the ones a date or time code never has around its own `.`.
+fn is_digit_placeholder(c: char) -> bool {
+    matches!(c, '0' | '#' | '?')
+}
+
+/// Formats a cell value for display in `region`. The built-in short date `m/d/yyyy` (id 14) and
+/// date-time `m/d/yyyy h:mm` (id 22) are the en-US spellings of the region's own short date and
+/// date-time ([MS-OI29500]), so they are shown in `region.short_date` and `region.datetime`.
+pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, region: &Region) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) => match fmt.code() {
+            "m/d/yyyy" => NumberFormat::parse_cached(region.short_date).format_number(*n, sys, region).0,
+            "m/d/yyyy h:mm" => NumberFormat::parse_cached(region.datetime).format_number(*n, sys, region).0,
+            _ => fmt.format_number(*n, sys, region).0,
+        },
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_value_in(first, fmt, sys, region),
         },
     }
+}
+
+/// Formats a cell value for display with the en-US separators.
+pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_in(v, fmt, sys, &gridcraft_core::region::EN_US)
 }
 
 /// A small per-thread cache of parsed format codes for callers that format many values with the
@@ -491,21 +707,29 @@ impl NumberFormat {
     }
 }
 
-/// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
-/// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
-/// section, or are returned as is.
 /// Longest text a cell holds, in UTF-16 code units (Excel's 32,767 characters, which XLSB also
 /// stores that way), and so the longest `TEXT` result.
 const MAX_CELL_TEXT_CHARS: usize = 32_767;
 
+/// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
+/// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
+/// section, or are returned as is. en-US: [`text_function_in`] with [`gridcraft_core::region::EN_US`].
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
+    text_function_in(v, code, sys, &gridcraft_core::region::EN_US)
+}
+
+/// `TEXT()` in a workbook's region, as Excel evaluates it there: the code is written with the
+/// region's separators (`#.##0,00` in pt-BR, translated with [`canonical_code`]), numeric text
+/// is read as the region writes numbers, and the result uses the region's separators, month
+/// and day names and AM/PM.
+pub fn text_function_in(v: &Value, code: &str, sys: DateSystem, region: &Region) -> Result<String, CellError> {
     if code.is_empty() {
         return Ok(String::new());
     }
     if too_long(code) {
         return Err(CellError::Value);
     }
-    let fmt = NumberFormat::parse_cached(code);
+    let fmt = NumberFormat::parse_cached(&canonical_code(code, region));
     if fmt.inner.invalid {
         return Err(CellError::Value);
     }
@@ -514,7 +738,7 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         Value::Empty => 0.0,
         Value::Number(n) => n,
         Value::Bool(b) => return Ok(fmt.format_text(if b { "TRUE" } else { "FALSE" }).text),
-        Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
+        Value::Text(t) => match gridcraft_core::parse::parse_number_text_in_region(&t, sys, region) {
             Some(n) => n,
             // Every `@` repeats the text: a result past a cell's limit is `#VALUE!`, so nested
             // TEXT calls can't multiply it further.
@@ -525,7 +749,7 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, region);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 

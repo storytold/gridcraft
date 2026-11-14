@@ -29,13 +29,13 @@ fn roman_tokens(form: u32) -> Vec<(String, u32)> {
     toks
 }
 
-pub(super) fn roman(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+pub(super) fn roman(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
     let form = match a.get(1).map(|x| x.value.scalar()) {
         None => 0.0,
         Some(Value::Bool(true)) => 0.0,
         Some(Value::Bool(false)) => 4.0,
-        Some(_) => num(a, 1)?.trunc(),
+        Some(_) => num(a, 1, c)?.trunc(),
     };
     if !(0.0..=3999.0).contains(&n) || !(0.0..=4.0).contains(&form) {
         return Err(CellError::Value);
@@ -78,10 +78,10 @@ pub(super) fn arabic(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(if neg { -total as f64 } else { total as f64 })
 }
 
-pub(super) fn base(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
-    let radix = num(a, 1)?.trunc();
-    let min_len = opt_num(a, 2, 0.0)?.trunc();
+pub(super) fn base(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
+    let radix = num(a, 1, c)?.trunc();
+    let min_len = opt_num(a, 2, 0.0, c)?.trunc();
     if !(0.0..9.007_199_254_740_992e15).contains(&n) || !(2.0..=36.0).contains(&radix) || !(0.0..=255.0).contains(&min_len) {
         return Err(CellError::Num);
     }
@@ -102,9 +102,9 @@ pub(super) fn base(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(digits.iter().rev().collect::<String>())
 }
 
-pub(super) fn decimal(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+pub(super) fn decimal(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let radix = num(a, 1)?.trunc();
+    let radix = num(a, 1, c)?.trunc();
     if !(2.0..=36.0).contains(&radix) || s.chars().count() > 255 {
         return Err(CellError::Num);
     }

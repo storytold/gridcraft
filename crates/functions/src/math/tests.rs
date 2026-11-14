@@ -10,6 +10,38 @@ fn ev2(name: &str, x: f64, y: f64) -> Value {
 }
 
 #[test]
+fn text_arguments_read_in_the_workbook_region() {
+    struct PtBr(TestCtx);
+    impl Ctx for PtBr {
+        fn date_system(&self) -> gridcraft_core::DateSystem {
+            self.0.date_system()
+        }
+        fn region(&self) -> &'static gridcraft_core::Region {
+            gridcraft_core::region::find("pt-BR").expect("pt-BR region")
+        }
+        fn now_serial(&self) -> f64 {
+            self.0.now_serial()
+        }
+        fn random(&mut self) -> f64 {
+            self.0.random()
+        }
+    }
+    let pt = |name: &str, args: Vec<Arg>| crate::call(crate::lookup(name).expect("registered"), &args, &mut PtBr(TestCtx::default()));
+    // pt-BR: `,` is the decimal and dates are day first, as `="1,5"+0` already reads them.
+    assert_eq!(pt("ABS", vec![t("-1,5")]), nv(1.5));
+    assert_eq!(pt("SUM", vec![t("1,5"), n(2.0)]), nv(3.5));
+    assert_eq!(pt("ROUND", vec![t("2,345"), t("2")]), nv(2.35));
+    assert_eq!(pt("ISEVEN", vec![t("4,0")]), Value::Bool(true));
+    assert_eq!(pt("DAY", vec![t("15/03/2026")]), nv(15.0));
+    // AGGREGATE(14;6;{1;2;3};"1,0") = LARGE(…;1).
+    assert_eq!(crate::aggregate_values_k(14, &[nv(1.0), nv(2.0), nv(3.0)], &tv("1,0"), &PtBr(TestCtx::default())), nv(3.0));
+    // en-US is unchanged.
+    assert_eq!(ev("ABS", vec![t("-1.5")]), nv(1.5));
+    assert_eq!(ev("SUM", vec![t("1.5"), n(2.0)]), nv(3.5));
+    assert_eq!(ev("DAY", vec![t("3/15/2026")]), nv(15.0));
+}
+
+#[test]
 fn percentof() {
     // SUM(subset) / SUM(all): text, booleans and blanks inside ranges are skipped like SUM.
     let all = arr(vec![vec![nv(10.0)], vec![nv(30.0)], vec![tv("x")], vec![Value::Empty], vec![nv(60.0)]]);
