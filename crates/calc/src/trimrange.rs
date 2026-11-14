@@ -65,7 +65,10 @@ impl Evaluator<'_> {
             None | Some(Expr::Missing) => Ok((true, true)),
             Some(e) => match self.value(e).scalar() {
                 Value::Error(e) => Err(e),
-                v => mode(v.to_number()?),
+                v => {
+                    let wb = self.host.workbook();
+                    mode(v.to_number_region(wb.date_system, wb.region)?)
+                }
             },
         }
     }

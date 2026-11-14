@@ -159,7 +159,8 @@ impl SheetApp {
         let text = match self.session.active().map(|d| formula_locale::canonical(&text, ed.locale, &d.wb, ed.sheet, ed.cell)) {
             Some(Ok(text)) => text,
             Some(Err(error)) => {
-                self.message = Some(("GridCraft".into(), error.to_string()));
+                // Worded as the engine words it (`cell.set`), not as the parser's bare token.
+                self.message = Some(("GridCraft".into(), self.ui.language.tr_error(&format!("There's a problem with this formula: {}", error.msg))));
                 self.editor = Some(ed);
                 self.session.mode = gridcraft_engine::Mode::Edit;
                 return false;

@@ -6,8 +6,8 @@ use super::{
 // Dates and day counts
 // ---------------------------------------------------------------------------------------------
 
-pub(super) fn date(a: &[Arg], i: usize) -> R<f64> {
-    let d = num(a, i)?.trunc();
+pub(super) fn date(a: &[Arg], i: usize, c: &dyn Ctx) -> R<f64> {
+    let d = num(a, i, c)?.trunc();
     if !(0.0..=2_958_465.0).contains(&d) {
         return Err(CellError::Num);
     }
@@ -23,16 +23,16 @@ fn serial(sys: DateSystem, y: i32, m: u32, d: u32) -> R<f64> {
     serial_from_ymd(sys, y as i64, m as i64, d as i64).ok_or(CellError::Num)
 }
 
-pub(super) fn basis_arg(a: &[Arg], i: usize) -> R<u32> {
-    let b = opt_num(a, i, 0.0)?.trunc();
+pub(super) fn basis_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<u32> {
+    let b = opt_num(a, i, 0.0, c)?.trunc();
     if !(0.0..=4.0).contains(&b) {
         return Err(CellError::Num);
     }
     Ok(b as u32)
 }
 
-pub(super) fn freq_arg(a: &[Arg], i: usize) -> R<f64> {
-    let f = num(a, i)?.trunc();
+pub(super) fn freq_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<f64> {
+    let f = num(a, i, c)?.trunc();
     if f != 1.0 && f != 2.0 && f != 4.0 {
         return Err(CellError::Num);
     }
@@ -182,35 +182,36 @@ pub(super) fn coup_daysnc(sys: DateSystem, c: &Coupon, settle: f64, freq: f64, b
 }
 
 /// settlement, maturity, frequency, basis at positions 0..=3 for the COUP* functions.
-fn coup_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, u32, Coupon)> {
-    let (s, m, f, b) = (date(a, 0)?, date(a, 1)?, freq_arg(a, 2)?, basis_arg(a, 3)?);
+fn coup_args(a: &[Arg], c: &dyn Ctx) -> R<(f64, f64, f64, u32, Coupon)> {
+    let sys = c.date_system();
+    let (s, m, f, b) = (date(a, 0, c)?, date(a, 1, c)?, freq_arg(a, 2, c)?, basis_arg(a, 3, c)?);
     let c = coupons(sys, s, m, f)?;
     Ok((s, m, f, b, c))
 }
 
 pub(super) fn coupdaybs(a: &[Arg], cx: &mut dyn Ctx) -> R<Value> {
-    let (s, _, _, b, c) = coup_args(a, cx.date_system())?;
+    let (s, _, _, b, c) = coup_args(a, cx)?;
     num_val(coup_daybs(cx.date_system(), &c, s, b)?)
 }
 
 pub(super) fn coupdays(a: &[Arg], cx: &mut dyn Ctx) -> R<Value> {
-    let (_, _, f, b, c) = coup_args(a, cx.date_system())?;
+    let (_, _, f, b, c) = coup_args(a, cx)?;
     num_val(coup_days(&c, f, b))
 }
 
 pub(super) fn coupdaysnc(a: &[Arg], cx: &mut dyn Ctx) -> R<Value> {
-    let (s, _, f, b, c) = coup_args(a, cx.date_system())?;
+    let (s, _, f, b, c) = coup_args(a, cx)?;
     num_val(coup_daysnc(cx.date_system(), &c, s, f, b)?)
 }
 
 pub(super) fn coupncd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(coup_args(a, c.date_system())?.4.ncd)
+    num_val(coup_args(a, c)?.4.ncd)
 }
 
 pub(super) fn couppcd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(coup_args(a, c.date_system())?.4.pcd)
+    num_val(coup_args(a, c)?.4.pcd)
 }
 
 pub(super) fn coupnum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val(coup_args(a, c.date_system())?.4.num)
+    num_val(coup_args(a, c)?.4.num)
 }

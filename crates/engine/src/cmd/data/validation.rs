@@ -214,9 +214,15 @@ pub fn list_items(wb: &Workbook, sheet: usize, at: CellRef, dv: &Validation) -> 
         return items.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect();
     }
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
+    // A number is listed with the region's decimal (`1,5` in pt-BR): the dropdown enters the item
+    // as typed input, which is read in the region, and typed input is matched against the list.
+    let item = |v: &Value| match v {
+        Value::Number(_) if wb.region.decimal != '.' => v.display().replace('.', wb.region.decimal.encode_utf8(&mut [0u8; 4])),
+        _ => v.display(),
+    };
     match gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at)) {
-        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(Value::display).collect(),
-        v if !v.is_empty() && !v.is_error() => vec![v.display()],
+        Value::Array(a) => a.data.iter().filter(|v| !v.is_empty()).map(item).collect(),
+        v if !v.is_empty() && !v.is_error() => vec![item(&v)],
         _ => vec![],
     }
 }
@@ -231,7 +237,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = gridcraft_core::parse::parse_input_in(input, wb.date_system, wb.region).value;
     // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
@@ -249,7 +255,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         &entered
     };
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
-    let num = |f: &str| eval(f).to_number().ok();
+    let num = |f: &str| eval(f).to_number_region(wb.date_system, wb.region).ok();
     let ok = match dv.kind {
         // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
         // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.

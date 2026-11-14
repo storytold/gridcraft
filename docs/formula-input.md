@@ -1,8 +1,21 @@
 # Formula language
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
-English and the other interface languages currently use the English formula table and separators.
+for Spanish or **Português (Brasil)** for Brazilian Portuguese formula entry and display. On first
+run the preference follows the system language. English and the other interface languages
+currently use the English formula table and separators.
+
+## Brazilian Portuguese
+
+Portuguese formulas use the Portuguese function names (`SOMA`, `MÉDIA`, `SE`, `PROCV`…),
+`VERDADEIRO` and `FALSO`, decimal commas, semicolon arguments and backslashes between array
+columns: `=SOMA(1;2,5)` is stored as `=SUM(1,2.5)` and shown again as `=SOMA(1;2,5)`. Names match
+in any case, accents included (`média` is `MÉDIA`). A function without a Portuguese name keeps its
+English one. Table specifiers are `[#Tudo]`, `[#Dados]`, `[#Cabeçalhos]`, `[#Totais]` and
+`[#Esta linha]`, separated by `;` (`Tabela1[[#Cabeçalhos];[Qtd]]`). `VERDADEIRO` or `FALSO` typed
+outside a formula enters the logical value. Common function help is in Portuguese.
+
+## Spanish
 
 | Spanish | Canonical English |
 | --- | --- |

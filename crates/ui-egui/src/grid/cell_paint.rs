@@ -96,7 +96,9 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
     (Look { style, fill, text_color }, cfl)
 }
 
-/// Text for a value with General narrowing to the available width.
+/// Text for a value with General narrowing to the available width. Logical and error values
+/// read in the formula language (`VERDADEIRO`, `#N/D` in Portuguese).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn display_text(
     wb: &Workbook,
     sh: &Sheet,
@@ -105,6 +107,7 @@ pub(super) fn display_text(
     st: &Style,
     width_px: f32,
     char_w: f32,
+    locale: gridcraft_engine::formula::FormulaLocale,
 ) -> (String, Option<Color32>, bool, Option<(char, usize)>) {
     if sh.show_formulas
         && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
@@ -119,11 +122,14 @@ pub(super) fn display_text(
     if code == "checkbox" && matches!(v, Value::Bool(_) | Value::Empty) {
         return (String::new(), None, false, None);
     }
+    if let Some(name) = crate::formula_locale::value_name(v, locale) {
+        return (name.to_string(), None, false, None);
+    }
     if code == "General"
         && let Value::Number(n) = v
     {
         let max_chars = ((width_px - 4.0) / char_w).floor().max(1.0) as usize;
-        return match gridcraft_engine::numfmt::format_general_fit(*n, max_chars.min(11)) {
+        return match gridcraft_engine::numfmt::format_general_fit_in(*n, max_chars.min(11), wb.region.decimal) {
             Some(t) => (t, None, true, None),
             None => ("#".repeat(max_chars.max(1)), None, true, None),
         };

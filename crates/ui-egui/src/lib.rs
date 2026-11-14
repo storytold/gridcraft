@@ -128,6 +128,9 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// The region chosen with `app.region.set` (File ▸ Options ▸ General), as a BCP 47 tag
+    /// (`pt-BR`). `None` until one is chosen: the desktop app then follows the system region.
+    pub region: Option<String>,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -163,6 +166,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            region: None,
         }
     }
 }
@@ -246,6 +250,12 @@ pub struct SheetApp {
     /// yet. eframe retains that unconsumed input across hidden logic-only ticks; the flag makes
     /// the hook offer it once and asks for a hidden paint until a UI pass applies it.
     pub(crate) synthetic_pending: bool,
+    /// The numpad's decimal key was pressed and its `.` has not arrived yet. An input method
+    /// (IBus on GNOME) delivers that text in a later frame than the key press.
+    pub(crate) numpad_decimal_pending: bool,
+    /// Input held for the next frame because it followed a key that ends an edit in the same
+    /// batch (see `split_after_edit_key`).
+    pub(crate) deferred_input: Vec<egui::Event>,
     /// `cumulative_pass_nr` when the front batch was last injected. A completed egui pass that
     /// did not apply it (the font gate's early return) consumed the events with `begin_pass`
     /// without reaching input handling, so the hook must offer the same step again.

@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use gridcraft_core::parse::parse_number_text_in;
+use gridcraft_core::parse::{parse_number_text_in, parse_number_text_in_region};
 use gridcraft_core::{CellError, Value, number_to_text};
 
 use crate::criteria::wildcard_find;
@@ -106,33 +106,33 @@ fn textjoin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     check_len(out)
 }
 
-fn count_arg(a: &[Arg], i: usize, default: f64) -> R<usize> {
-    let n = opt_num(a, i, default)?;
+fn count_arg(a: &[Arg], i: usize, default: f64, c: &dyn Ctx) -> R<usize> {
+    let n = opt_num(a, i, default, c)?;
     if n < 0.0 || n.is_nan() {
         return Err(CellError::Value);
     }
     Ok(if n > 1e9 { 1_000_000_000 } else { n.trunc() as usize })
 }
 
-fn left(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn left(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let n = count_arg(a, 1, 1.0)?;
+    let n = count_arg(a, 1, 1.0, c)?;
     text_val(s.chars().take(n).collect::<String>())
 }
 
-fn right(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn right(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = chars(&text(a, 0)?);
-    let n = count_arg(a, 1, 1.0)?.min(s.len());
+    let n = count_arg(a, 1, 1.0, c)?.min(s.len());
     text_val(s[s.len() - n..].iter().collect::<String>())
 }
 
-fn mid(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn mid(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let start = num(a, 1)?;
+    let start = num(a, 1, c)?;
     if start.is_nan() || start < 1.0 {
         return Err(CellError::Value);
     }
-    let n = count_arg(a, 2, 0.0)?;
+    let n = count_arg(a, 2, 0.0, c)?;
     let start = if start > 1e9 { 1_000_000_000 } else { start as usize };
     text_val(s.chars().skip(start - 1).take(n).collect::<String>())
 }
@@ -197,7 +197,7 @@ fn clean(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(text(a, 0)?.chars().filter(|c| (*c as u32) >= 32).collect::<String>())
 }
 
-fn substitute(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn substitute(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
     let old = text(a, 1)?;
     let new = text(a, 2)?;
@@ -205,7 +205,7 @@ fn substitute(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return text_val(s);
     }
     if has(a, 3) {
-        let inst = num(a, 3)?;
+        let inst = num(a, 3, c)?;
         if inst.is_nan() || inst < 1.0 {
             return Err(CellError::Value);
         }
@@ -229,13 +229,13 @@ fn substitute(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
 }
 
-fn replace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn replace(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = chars(&text(a, 0)?);
-    let start = num(a, 1)?;
+    let start = num(a, 1, c)?;
     if start.is_nan() || start < 1.0 {
         return Err(CellError::Value);
     }
-    let n = count_arg(a, 2, 0.0)?;
+    let n = count_arg(a, 2, 0.0, c)?;
     let new = text(a, 3)?;
     let start = (if start > 1e9 { 1_000_000_000 } else { start as usize } - 1).min(s.len());
     let end = start.saturating_add(n).min(s.len());
@@ -245,9 +245,9 @@ fn replace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     check_len(out)
 }
 
-fn rept(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn rept(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let n = num(a, 1)?;
+    let n = num(a, 1, c)?;
     if n.is_nan() || n < 0.0 {
         return Err(CellError::Value);
     }
@@ -259,10 +259,10 @@ fn rept(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(s.repeat(n as usize))
 }
 
-fn find_impl(a: &[Arg], wild: bool) -> R<Value> {
+fn find_impl(a: &[Arg], wild: bool, c: &dyn Ctx) -> R<Value> {
     let needle = text(a, 0)?;
     let hay = text(a, 1)?;
-    let start = opt_num(a, 2, 1.0)?;
+    let start = opt_num(a, 2, 1.0, c)?;
     let hc = chars(&hay);
     if (start.is_nan() || start < 1.0) || start > hc.len().max(1) as f64 {
         return Err(CellError::Value);
@@ -283,12 +283,12 @@ fn find_impl(a: &[Arg], wild: bool) -> R<Value> {
     }
 }
 
-fn find(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    find_impl(a, false)
+fn find(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    find_impl(a, false, c)
 }
 
-fn search(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    find_impl(a, true)
+fn search(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    find_impl(a, true, c)
 }
 
 fn exact(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -301,8 +301,8 @@ const CP1252: [u32; 32] = [
     0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
 ];
 
-fn char_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+fn char_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
     if !(1.0..=255.0).contains(&n) {
         return Err(CellError::Value);
     }
@@ -325,8 +325,8 @@ fn code(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(code as f64)
 }
 
-fn unichar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+fn unichar(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
     if !(1.0..=1_114_111.0).contains(&n) {
         return Err(CellError::Value);
     }
@@ -353,7 +353,8 @@ fn value(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         Value::Number(n) => num_val(n),
         Value::Empty => num_val(0.0),
         Value::Error(e) => Err(e),
-        Value::Text(t) => parse_number_text_in(&t, c.date_system()).ok_or(CellError::Value).and_then(num_val),
+        // Read in the workbook's region: 1,5 is one and a half in pt-BR.
+        Value::Text(t) => parse_number_text_in_region(&t, c.date_system(), c.region()).ok_or(CellError::Value).and_then(num_val),
         _ => Err(CellError::Value),
     }
 }
@@ -393,6 +394,7 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             out.push(c);
         }
     }
+    #[allow(clippy::disallowed_methods)] // en-US on purpose: NUMBERVALUE already rewrote the text with en-US separators
     let mut n = parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)?;
     for _ in 0..pct {
         n /= 100.0;
@@ -431,9 +433,9 @@ fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
     out
 }
 
-fn rounded(a: &[Arg], default_dec: f64) -> R<(f64, i64)> {
-    let x = num(a, 0)?;
-    let d = opt_num(a, 1, default_dec)?.trunc();
+fn rounded(a: &[Arg], default_dec: f64, c: &dyn Ctx) -> R<(f64, i64)> {
+    let x = num(a, 0, c)?;
+    let d = opt_num(a, 1, default_dec, c)?.trunc();
     if d > 127.0 {
         return Err(CellError::Value);
     }
@@ -445,8 +447,8 @@ fn rounded(a: &[Arg], default_dec: f64) -> R<(f64, i64)> {
     Ok((r, d))
 }
 
-fn fixed(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (r, d) = rounded(a, 2.0)?;
+fn fixed(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (r, d) = rounded(a, 2.0, c)?;
     let no_commas = opt_bool(a, 2, false)?;
     let body = format_fixed(r, d, !no_commas);
     if body.len() + if r < 0.0 { 1 } else { 0 } > 255 {
@@ -455,9 +457,9 @@ fn fixed(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(if r < 0.0 { format!("-{body}") } else { body })
 }
 
-fn dollar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (r, d) = rounded(a, 2.0)?;
-    let negative = r < 0.0 || (r == 0.0 && d >= 0 && num(a, 0)? < 0.0);
+fn dollar(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (r, d) = rounded(a, 2.0, c)?;
+    let negative = r < 0.0 || (r == 0.0 && d >= 0 && num(a, 0, c)? < 0.0);
     let body = format_fixed(r, d, true);
     let out = if negative { format!("(${body})") } else { format!("${body}") };
     if out.len() > 254 {
@@ -523,8 +525,8 @@ fn thai_number(digits: &str) -> String {
 
 /// BAHTTEXT(number): the amount in Thai words with บาท, rounded to satang (สตางค์); a whole
 /// number of baht ends in ถ้วน and a negative amount starts with ลบ.
-fn bahttext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = round_half_away(num(a, 0)?, 2);
+fn bahttext(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = round_half_away(num(a, 0, c)?, 2);
     if !x.is_finite() {
         return Err(CellError::Num);
     }
@@ -641,11 +643,11 @@ fn find_matches(text: &[char], delims: &[Vec<char>], insensitive: bool, from_end
     Ok(out)
 }
 
-fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
+fn text_before_after(a: &[Arg], before: bool, c: &dyn Ctx) -> R<Value> {
     let s = chars(&text(a, 0)?);
     let delims = delimiters(&arg(a, 1)?.value)?;
-    let inst = if has(a, 2) { int(a, 2)? } else { 1 };
-    let mode = opt_int(a, 3, 0)?;
+    let inst = if has(a, 2) { int(a, 2, c)? } else { 1 };
+    let mode = opt_int(a, 3, 0, c)?;
     let match_end = opt_bool(a, 4, false)?;
     if !(0..=1).contains(&mode) || inst == 0 || inst.unsigned_abs() as usize > s.len().max(1) {
         return Err(CellError::Value);
@@ -671,12 +673,12 @@ fn text_before_after(a: &[Arg], before: bool) -> R<Value> {
     }
 }
 
-fn textbefore(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_before_after(a, true)
+fn textbefore(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    text_before_after(a, true, c)
 }
 
-fn textafter(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_before_after(a, false)
+fn textafter(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    text_before_after(a, false, c)
 }
 
 fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> R<Vec<Vec<char>>> {
@@ -693,7 +695,7 @@ fn split_by(s: &[char], delims: &[Vec<char>], insensitive: bool) -> R<Vec<Vec<ch
     Ok(out)
 }
 
-fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn textsplit(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = chars(&text(a, 0)?);
     let col_d = if has(a, 1) { delimiters(&arg(a, 1)?.value)? } else { vec![] };
     let row_d = if has(a, 2) { delimiters(&arg(a, 2)?.value)? } else { vec![] };
@@ -701,7 +703,7 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Value);
     }
     let ignore = opt_bool(a, 3, false)?;
-    let mode = opt_int(a, 4, 0)?;
+    let mode = opt_int(a, 4, 0, c)?;
     if !(0..=1).contains(&mode) {
         return Err(CellError::Value);
     }
@@ -735,31 +737,37 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     array_val(nrows, ncols, data)
 }
 
-fn value_text(v: &Value, strict: bool) -> String {
+/// A value as VALUETOTEXT and ARRAYTOTEXT write it: numbers with the region's decimal separator.
+fn value_text(v: &Value, strict: bool, decimal: char) -> String {
     match v {
         Value::Text(t) if strict => format!("\"{}\"", t.replace('"', "\"\"")),
         Value::Text(t) => t.to_string(),
         Value::Error(e) => e.as_str().to_string(),
-        Value::Number(n) => number_to_text(*n),
+        Value::Number(n) => number_to_text(*n).replace('.', decimal.encode_utf8(&mut [0; 4])),
         other => other.to_text().unwrap_or_default(),
     }
 }
 
-fn format_arg(a: &[Arg], i: usize) -> R<bool> {
-    match opt_int(a, i, 0)? {
+fn format_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<bool> {
+    match opt_int(a, i, 0, c)? {
         0 => Ok(false),
         1 => Ok(true),
         _ => Err(CellError::Value),
     }
 }
 
-fn valuetotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let strict = format_arg(a, 1)?;
-    check_len(value_text(&scalar(arg(a, 0)?), strict))
+fn valuetotext(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let strict = format_arg(a, 1, c)?;
+    check_len(value_text(&scalar(arg(a, 0)?), strict, c.region().decimal))
 }
 
-fn arraytotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let strict = format_arg(a, 1)?;
+fn arraytotext(a: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
+    let strict = format_arg(a, 1, ctx)?;
+    // Strict output is an array constant, whose elements are split by `,`: a region decimal comma
+    // would make `{1,5,2,5}` read as four numbers, so it keeps the formula language's `.`.
+    let decimal = if strict { '.' } else { ctx.region().decimal };
+    // Concise items are separated as the region lists them: `1,5; 2` where the decimal is `,`.
+    let separator = if decimal == ',' { "; " } else { ", " };
     let arr = as_array(&arg(a, 0)?.value);
     let mut out = String::new();
     if strict {
@@ -768,11 +776,11 @@ fn arraytotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     for r in 0..arr.rows {
         for c in 0..arr.cols {
             if r > 0 && c == 0 {
-                out.push_str(if strict { ";" } else { ", " });
+                out.push_str(if strict { ";" } else { separator });
             } else if c > 0 {
-                out.push_str(if strict { "," } else { ", " });
+                out.push_str(if strict { "," } else { separator });
             }
-            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict))?;
+            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict, decimal))?;
         }
     }
     if strict {
@@ -794,24 +802,24 @@ fn build_regex(pattern: &str, insensitive: bool) -> R<regex::Regex> {
         .map_err(|_| CellError::Value)
 }
 
-fn case_arg(a: &[Arg], i: usize) -> R<bool> {
-    match opt_int(a, i, 0)? {
+fn case_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<bool> {
+    match opt_int(a, i, 0, c)? {
         0 => Ok(false),
         1 => Ok(true),
         _ => Err(CellError::Value),
     }
 }
 
-fn regextest(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn regextest(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let re = build_regex(&text(a, 1)?, case_arg(a, 2)?)?;
+    let re = build_regex(&text(a, 1)?, case_arg(a, 2, c)?)?;
     Ok(Value::Bool(re.is_match(&s)))
 }
 
-fn regexextract(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn regexextract(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
-    let mode = opt_int(a, 2, 0)?;
-    let re = build_regex(&text(a, 1)?, case_arg(a, 3)?)?;
+    let mode = opt_int(a, 2, 0, c)?;
+    let re = build_regex(&text(a, 1)?, case_arg(a, 3, c)?)?;
     match mode {
         0 => re.find(&s).map(|m| Value::from(m.as_str())).ok_or(CellError::NA),
         1 => {
@@ -922,11 +930,11 @@ fn expand_capped(cap: &regex::Captures, pieces: &[Piece], out: &mut String, limi
     Some(())
 }
 
-fn regexreplace(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn regexreplace(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let s = text(a, 0)?;
     let rep = template(&convert_replacement(&text(a, 2)?));
-    let occ = opt_int(a, 3, 0)?;
-    let re = build_regex(&text(a, 1)?, case_arg(a, 4)?)?;
+    let occ = opt_int(a, 3, 0, c)?;
+    let re = build_regex(&text(a, 1)?, case_arg(a, 4, c)?)?;
     // Built match by match within a bound past which the text can only be too long (a character
     // is at most four bytes), instead of building every replacement first (#2162).
     let limit = MAX_TEXT * 4;

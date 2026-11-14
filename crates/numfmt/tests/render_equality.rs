@@ -7,6 +7,7 @@
 //! after an intended behaviour change run with `NUMFMT_BLESS=1`.
 
 #![allow(clippy::approx_constant, clippy::excessive_precision)] // values are test data, not constants
+#![allow(clippy::disallowed_methods)] // en-US on purpose: the golden digests were recorded in en-US
 
 use std::fmt::Write as _;
 

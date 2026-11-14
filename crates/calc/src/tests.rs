@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods)] // en-US on purpose: tests pin the en-US entry points
+
 use gridcraft_core::{CellError, CellRef, Value};
 use gridcraft_model::{Cell, Formula, Workbook};
 
@@ -1275,6 +1277,20 @@ fn text_function() {
     let mut t = T::new();
     t.set("A1", "=TEXT(1234.5,\"#,##0.00\")");
     assert_eq!(t.get("A1"), Value::from("1,234.50"));
+}
+
+/// In a pt-BR workbook TEXT reads the code and numeric text with pt-BR separators and shows
+/// pt-BR names, as Excel does in that region.
+#[test]
+fn text_uses_the_workbook_region() {
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "=TEXT(1234.5,\"#.##0,00\")");
+    t.set("A2", "=TEXT(DATE(2026,11,11),\"dddd\")");
+    t.set("A3", "=TEXT(\"1.234,5\",\"0,0\")");
+    assert_eq!(t.get("A1"), Value::from("1.234,50"));
+    assert_eq!(t.get("A2"), Value::from("quarta-feira"));
+    assert_eq!(t.get("A3"), Value::from("1234,5"));
 }
 
 #[test]
@@ -2895,4 +2911,69 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("N47", "=DCOUNT($F$2:$G$7,\"age\",$N$46:$N$47)>0");
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
+}
+
+/// A4: numeric text inside a formula is read in the workbook's region, by the operators and by
+/// VALUE. In en-US the same text is not a number, as before.
+#[test]
+fn numeric_text_in_formulas_reads_in_the_workbook_region() {
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "=\"1.200,00\"+0");
+    t.set("A2", "=-\"1,5\"");
+    t.set("A3", "=VALUE(\"1,5\")");
+    t.set("A4", "=\"2,5\"*{1,2}");
+    assert_eq!((t.num("A1"), t.num("A2"), t.num("A3"), t.num("A4")), (1200.0, -1.5, 1.5, 2.5));
+    let mut t = T::new();
+    t.set("A1", "=\"1.200,00\"+0");
+    t.set("A2", "=VALUE(\"1,5\")");
+    t.set("A3", "=\"1,200.00\"+0");
+    assert_eq!((t.get("A1"), t.get("A2"), t.num("A3")), (Value::Error(CellError::Value), Value::Error(CellError::Value), 1200.0));
+}
+
+/// A7: DATEVALUE and TIMEVALUE read the text in the workbook's region: its month names and its
+/// AM/PM markers, with the English ones still read.
+#[test]
+fn datevalue_and_timevalue_read_in_the_workbook_region() {
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "=DATEVALUE(\"4-mai-2026\")");
+    t.set("A2", "=DATE(2026,5,4)");
+    t.set("A3", "=DATEVALUE(\"4-May-2026\")");
+    assert_eq!((t.num("A1"), t.num("A3")), (t.num("A2"), t.num("A2")));
+    // COUNT counts literal text that is a number in the region; en-US keeps "1,5" as text.
+    t.set("A4", "=COUNT(\"1,5\")");
+    assert_eq!(t.num("A4"), 1.0);
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("es-ES");
+    t.set("A1", "=TIMEVALUE(\"10:30 p. m.\")");
+    t.set("A2", "=TIMEVALUE(\"10:30 PM\")");
+    assert_eq!((t.num("A1"), t.num("A2")), (0.9375, 0.9375));
+}
+
+/// Numeric text given as a CHOOSE index, an INDEX row or column, an OFFSET argument or a
+/// TRIMRANGE mode is read in the workbook region; en-US keeps it an error.
+#[test]
+fn position_arguments_read_numeric_text_in_the_workbook_region() {
+    let formulas = [
+        ("B1", "=CHOOSE(\"2,5\",10,20,30)"),
+        ("B2", "=INDEX({1,2,3},1,\"2,5\")"),
+        ("B3", "=OFFSET(A1,\"1,5\",0)"),
+        ("B4", "=ROWS(TRIMRANGE(A1:A9,\"2,5\"))"),
+    ];
+    let mut t = T::new();
+    t.wb.region = gridcraft_core::region::lookup("pt-BR");
+    t.set("A1", "1");
+    t.set("A2", "7");
+    for (at, f) in formulas {
+        t.set(at, f);
+    }
+    assert_eq!((t.num("B1"), t.num("B2"), t.num("B3"), t.num("B4")), (20.0, 2.0, 7.0, 2.0));
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("A2", "7");
+    for (at, f) in formulas {
+        t.set(at, f);
+        assert_eq!(t.get(at), Value::Error(CellError::Value), "{f} in en-US");
+    }
 }

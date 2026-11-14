@@ -206,9 +206,9 @@ impl LnCosh for f64 {
     }
 }
 
-fn bessel_args(a: &[Arg]) -> R<(f64, u32)> {
-    let x = num(a, 0)?;
-    let n = num(a, 1)?.trunc();
+fn bessel_args(a: &[Arg], c: &dyn Ctx) -> R<(f64, u32)> {
+    let x = num(a, 0, c)?;
+    let n = num(a, 1, c)?.trunc();
     if n < 0.0 {
         return Err(CellError::Num);
     }
@@ -218,26 +218,26 @@ fn bessel_args(a: &[Arg]) -> R<(f64, u32)> {
     Ok((x, n as u32))
 }
 
-pub(super) fn besselj(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+pub(super) fn besselj(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(a, c)?;
     num_val(bessel_j(n, x).ok_or(CellError::Num)?)
 }
 
-pub(super) fn bessely(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+pub(super) fn bessely(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(a, c)?;
     if x <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(bessel_y(n, x).ok_or(CellError::Num)?)
 }
 
-pub(super) fn besseli(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+pub(super) fn besseli(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(a, c)?;
     num_val(bessel_i(n, x).ok_or(CellError::Num)?)
 }
 
-pub(super) fn besselk(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n) = bessel_args(a)?;
+pub(super) fn besselk(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n) = bessel_args(a, c)?;
     if x <= 0.0 {
         return Err(CellError::Num);
     }

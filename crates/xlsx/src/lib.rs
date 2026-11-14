@@ -46,7 +46,7 @@ mod tests;
 use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
-pub use crypto::{DecryptError, check_encryption, decrypt};
+pub use crypto::{DecryptError, EncryptError, check_encryption, decrypt, encrypt};
 pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use package::MAX_PART;
@@ -233,11 +233,21 @@ pub struct CsvOptions {
     /// Refuse (with [`IoError::TooLarge`], while reading) a file whose used range, from its first to
     /// its last non-empty cell, would pass this many cells; `None` for no limit.
     pub max_used_cells: Option<u64>,
+    /// The region numbers and ambiguous dates are read in (`1.234,56` is a number in `pt-BR`),
+    /// and the region of the workbook read.
+    pub region: &'static gridcraft_core::Region,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None }
+        CsvOptions {
+            delimiter: b',',
+            quote: b'"',
+            date_system: DateSystem::D1900,
+            parse_values: true,
+            max_used_cells: None,
+            region: gridcraft_core::region::default_region(),
+        }
     }
 }
 

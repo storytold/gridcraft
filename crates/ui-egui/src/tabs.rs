@@ -384,6 +384,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
 
 /// Draws status mode/messages, zoom controls/view-mode buttons and selection statistics.
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status_bar").exact_size(26.0).frame(egui::Frame::NONE.fill(t.status_bar).inner_margin(egui::Margin::symmetric(12, 0))).show(
         ui,
@@ -407,7 +408,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(ui, egui::RichText::new(lang.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger));
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -514,7 +515,11 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
     let fmt = |v: f64| {
         let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
-        gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
+        // The format writes the region's decimal separator: a whole number leaves it bare ("4,").
+        gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb)
+            .text
+            .trim_end_matches(d.wb.region.decimal)
+            .to_string()
     };
     let mut parts = Vec::new();
     if on.average

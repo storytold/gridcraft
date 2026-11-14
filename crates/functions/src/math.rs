@@ -43,8 +43,8 @@ const IF2: &[bool] = &[false, true, false];
 
 const TRIG_LIMIT: f64 = 134_217_728.0; // 2^27: Excel's argument limit for trig functions
 
-fn unary(a: &[Arg], f: impl Fn(f64) -> R<f64>) -> R<Value> {
-    num_val(f(num(a, 0)?)?)
+fn unary(a: &[Arg], c: &dyn Ctx, f: impl Fn(f64) -> R<f64>) -> R<Value> {
+    num_val(f(num(a, 0, c)?)?)
 }
 
 fn trig_arg(x: f64) -> R<f64> {
@@ -60,8 +60,8 @@ fn clean(x: f64) -> f64 {
     to_sig_digits(x, 15)
 }
 
-fn digits_arg(a: &[Arg], i: usize) -> R<i32> {
-    let d = opt_num(a, i, 0.0)?.trunc();
+fn digits_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<i32> {
+    let d = opt_num(a, i, 0.0, c)?.trunc();
     Ok(d.clamp(-400.0, 400.0) as i32)
 }
 
@@ -98,27 +98,27 @@ fn round_dir(x: f64, digits: i32, up: bool) -> f64 {
 // ---------------------------------------------------------------------------------------------
 // Sums and products
 
-fn sum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(numbers(a)?.iter().sum())
+fn sum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(numbers(a, c)?.iter().sum())
 }
 
 /// PERCENTOF(data_subset, data_all) = SUM(data_subset) / SUM(data_all).
-fn percentof(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn percentof(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let part = a.get(..1).ok_or(CellError::Value)?;
     let all = a.get(1..2).ok_or(CellError::Value)?;
-    let (part, all): (f64, f64) = (numbers(part)?.iter().sum(), numbers(all)?.iter().sum());
+    let (part, all): (f64, f64) = (numbers(part, c)?.iter().sum(), numbers(all, c)?.iter().sum());
     if all == 0.0 {
         return Err(CellError::Div0);
     }
     num_val(part / all)
 }
 
-fn sumsq(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(numbers(a)?.iter().map(|x| x * x).sum())
+fn sumsq(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(numbers(a, c)?.iter().map(|x| x * x).sum())
 }
 
-fn product(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = numbers(a)?;
+fn product(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = numbers(a, c)?;
     if v.is_empty() {
         return Ok(Value::Number(0.0));
     }
@@ -190,24 +190,24 @@ fn sumxmy2(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // ---------------------------------------------------------------------------------------------
 // Rounding
 
-fn round(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_half_away(num(a, 0)?, digits_arg(a, 1)?))
+fn round(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_half_away(num(a, 0, c)?, digits_arg(a, 1, c)?))
 }
-fn roundup(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_dir(num(a, 0)?, digits_arg(a, 1)?, true))
+fn roundup(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_dir(num(a, 0, c)?, digits_arg(a, 1, c)?, true))
 }
-fn rounddown(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_dir(num(a, 0)?, digits_arg(a, 1)?, false))
+fn rounddown(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_dir(num(a, 0, c)?, digits_arg(a, 1, c)?, false))
 }
-fn trunc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(round_dir(num(a, 0)?, digits_arg(a, 1)?, false))
+fn trunc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(round_dir(num(a, 0, c)?, digits_arg(a, 1, c)?, false))
 }
-fn int_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.floor()))
+fn int_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.floor()))
 }
 
-fn mround(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, m) = (num(a, 0)?, num(a, 1)?);
+fn mround(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, m) = (num(a, 0, c)?, num(a, 1, c)?);
     if m == 0.0 || x == 0.0 {
         return Ok(Value::Number(0.0));
     }
@@ -218,9 +218,9 @@ fn mround(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(clean(q * m))
 }
 
-fn ceiling(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = num(a, 1)?;
+fn ceiling(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let s = num(a, 1, c)?;
     if x == 0.0 || s == 0.0 {
         return Ok(Value::Number(0.0));
     }
@@ -230,9 +230,9 @@ fn ceiling(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(clean(clean(x / s).ceil() * s))
 }
 
-fn floor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = num(a, 1)?;
+fn floor(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let s = num(a, 1, c)?;
     if s == 0.0 {
         return if x == 0.0 { Ok(Value::Number(0.0)) } else { Err(CellError::Div0) };
     }
@@ -263,27 +263,27 @@ fn ceil_floor_math(x: f64, s: f64, up: bool, away: bool) -> R<Value> {
     num_val(clean(r * s))
 }
 
-fn ceiling_math(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
-    let mode = opt_num(a, 2, 0.0)?;
+fn ceiling_math(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let s = if has(a, 1) { num(a, 1, c)? } else { 1.0 };
+    let mode = opt_num(a, 2, 0.0, c)?;
     ceil_floor_math(x, s, true, mode != 0.0)
 }
-fn floor_math(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
-    let mode = opt_num(a, 2, 0.0)?;
+fn floor_math(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let s = if has(a, 1) { num(a, 1, c)? } else { 1.0 };
+    let mode = opt_num(a, 2, 0.0, c)?;
     // Negative numbers: mode 0 rounds away from zero (down), non-zero rounds toward zero.
     ceil_floor_math(x, s, false, mode == 0.0)
 }
-fn ceiling_precise(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
+fn ceiling_precise(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let s = if has(a, 1) { num(a, 1, c)? } else { 1.0 };
     ceil_floor_math(x, s, true, false)
 }
-fn floor_precise(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let s = if has(a, 1) { num(a, 1)? } else { 1.0 };
+fn floor_precise(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let s = if has(a, 1) { num(a, 1, c)? } else { 1.0 };
     ceil_floor_math(x, s, false, true)
 }
 
@@ -300,11 +300,11 @@ fn even_odd(x: f64, odd: bool) -> f64 {
     }
     sign * v
 }
-fn even(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(even_odd(x, false)))
+fn even(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(even_odd(x, false)))
 }
-fn odd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(even_odd(x, true)))
+fn odd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(even_odd(x, true)))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -327,18 +327,18 @@ fn modulo(x: f64, d: f64) -> R<f64> {
     }
     Ok(clean(r))
 }
-fn mod_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(modulo(num(a, 0)?, num(a, 1)?)?)
+fn mod_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(modulo(num(a, 0, c)?, num(a, 1, c)?)?)
 }
-fn quotient(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, d) = (num(a, 0)?, num(a, 1)?);
+fn quotient(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, d) = (num(a, 0, c)?, num(a, 1, c)?);
     num_val(clean(x / nonzero(d)?).trunc())
 }
-fn abs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.abs()))
+fn abs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.abs()))
 }
-fn sign(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| {
+fn sign(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| {
         Ok(if x > 0.0 {
             1.0
         } else if x < 0.0 {
@@ -348,11 +348,11 @@ fn sign(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         })
     })
 }
-fn sqrt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok(x.sqrt()) })
+fn sqrt(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x < 0.0 { Err(CellError::Num) } else { Ok(x.sqrt()) })
 }
-fn sqrtpi(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x < 0.0 { Err(CellError::Num) } else { Ok((x * PI).sqrt()) })
+fn sqrtpi(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x < 0.0 { Err(CellError::Num) } else { Ok((x * PI).sqrt()) })
 }
 
 fn power_of(x: f64, y: f64) -> R<f64> {
@@ -371,21 +371,21 @@ fn power_of(x: f64, y: f64) -> R<f64> {
     let r = x.powf(y);
     if r.is_finite() { Ok(r) } else { Err(CellError::Num) }
 }
-fn power(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(power_of(num(a, 0)?, num(a, 1)?)?)
+fn power(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(power_of(num(a, 0, c)?, num(a, 1, c)?)?)
 }
-fn exp(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.exp()))
+fn exp(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.exp()))
 }
-fn ln(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.ln()) })
+fn ln(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.ln()) })
 }
-fn log10(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.log10()) })
+fn log10(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x <= 0.0 { Err(CellError::Num) } else { Ok(x.log10()) })
 }
-fn log(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let base = opt_num(a, 1, 10.0)?;
+fn log(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let base = opt_num(a, 1, 10.0, c)?;
     if x <= 0.0 || base <= 0.0 {
         return Err(CellError::Num);
     }
@@ -408,8 +408,8 @@ fn rand(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(c.random())
 }
 fn randbetween(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let lo = num(a, 0)?.ceil();
-    let hi = num(a, 1)?.floor();
+    let lo = num(a, 0, c)?.ceil();
+    let hi = num(a, 1, c)?.floor();
     if lo > hi {
         return Err(CellError::Num);
     }
@@ -437,11 +437,11 @@ fn fact_of(n: f64) -> R<f64> {
     }
     Ok(f)
 }
-fn fact(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(fact_of(num(a, 0)?)?)
+fn fact(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(fact_of(num(a, 0, c)?)?)
 }
-fn factdouble(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let n = num(a, 0)?.trunc();
+fn factdouble(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let n = num(a, 0, c)?.trunc();
     if n < -1.0 {
         return Err(CellError::Num);
     }
@@ -478,11 +478,11 @@ fn combin_of(n: f64, k: f64) -> R<f64> {
     }
     Ok(if r < 9e15 { r.round() } else { r })
 }
-fn combin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(combin_of(num(a, 0)?, num(a, 1)?)?)
+fn combin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(combin_of(num(a, 0, c)?, num(a, 1, c)?)?)
 }
-fn combina(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (n, k) = (num(a, 0)?.trunc(), num(a, 1)?.trunc());
+fn combina(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (n, k) = (num(a, 0, c)?.trunc(), num(a, 1, c)?.trunc());
     if n < 0.0 || k < 0.0 || n < k && n == 0.0 && k > 0.0 {
         return Err(CellError::Num);
     }
@@ -491,8 +491,8 @@ fn combina(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     num_val(combin_of(n + k - 1.0, k)?)
 }
-fn permut(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (n, k) = (num(a, 0)?.trunc(), num(a, 1)?.trunc());
+fn permut(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (n, k) = (num(a, 0, c)?.trunc(), num(a, 1, c)?.trunc());
     if n < 0.0 || k < 0.0 || k > n {
         return Err(CellError::Num);
     }
@@ -507,16 +507,16 @@ fn permut(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     num_val(r)
 }
-fn permutationa(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (n, k) = (num(a, 0)?.trunc(), num(a, 1)?.trunc());
+fn permutationa(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (n, k) = (num(a, 0, c)?.trunc(), num(a, 1, c)?.trunc());
     if n < 0.0 || k < 0.0 {
         return Err(CellError::Num);
     }
     num_val(n.powf(k))
 }
 
-fn integer_args(a: &[Arg]) -> R<Vec<u64>> {
-    let v = numbers(a)?;
+fn integer_args(a: &[Arg], c: &dyn Ctx) -> R<Vec<u64>> {
+    let v = numbers(a, c)?;
     v.iter()
         .map(|x| {
             let t = x.trunc();
@@ -532,12 +532,12 @@ fn gcd2(mut a: u64, mut b: u64) -> u64 {
     }
     a
 }
-fn gcd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = integer_args(a)?;
+fn gcd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = integer_args(a, c)?;
     num_val(v.iter().fold(0u64, |acc, &x| gcd2(acc, x)) as f64)
 }
-fn lcm(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = integer_args(a)?;
+fn lcm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = integer_args(a, c)?;
     let mut acc = 1f64;
     for &x in &v {
         if x == 0 {
@@ -552,8 +552,8 @@ fn lcm(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
     num_val(acc)
 }
-fn multinomial(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = numbers(a)?;
+fn multinomial(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = numbers(a, c)?;
     let mut total = 0.0;
     let mut r = 1.0f64;
     for x in v {
@@ -573,82 +573,82 @@ fn multinomial(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // ---------------------------------------------------------------------------------------------
 // Trigonometry
 
-fn sin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(trig_arg(x)?.sin()))
+fn sin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(trig_arg(x)?.sin()))
 }
-fn cos(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(trig_arg(x)?.cos()))
+fn cos(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(trig_arg(x)?.cos()))
 }
-fn tan(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(trig_arg(x)?.tan()))
+fn tan(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(trig_arg(x)?.tan()))
 }
-fn asin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.asin()) })
+fn asin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.asin()) })
 }
-fn acos(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.acos()) })
+fn acos(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x.abs() > 1.0 { Err(CellError::Num) } else { Ok(x.acos()) })
 }
-fn atan(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.atan()))
+fn atan(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.atan()))
 }
-fn atan2(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, y) = (num(a, 0)?, num(a, 1)?);
+fn atan2(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, y) = (num(a, 0, c)?, num(a, 1, c)?);
     if x == 0.0 && y == 0.0 {
         return Err(CellError::Div0);
     }
     num_val(y.atan2(x))
 }
-fn sinh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.sinh()))
+fn sinh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.sinh()))
 }
-fn cosh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.cosh()))
+fn cosh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.cosh()))
 }
-fn tanh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.tanh()))
+fn tanh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.tanh()))
 }
-fn asinh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.asinh()))
+fn asinh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x.asinh()))
 }
-fn acosh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x < 1.0 { Err(CellError::Num) } else { Ok(x.acosh()) })
+fn acosh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x < 1.0 { Err(CellError::Num) } else { Ok(x.acosh()) })
 }
-fn atanh(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() >= 1.0 { Err(CellError::Num) } else { Ok(x.atanh()) })
+fn atanh(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x.abs() >= 1.0 { Err(CellError::Num) } else { Ok(x.atanh()) })
 }
-fn cot(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tan()))
+fn cot(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tan()))
 }
-fn coth(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tanh()))
+fn coth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.tanh()))
 }
-fn csc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sin()))
+fn csc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sin()))
 }
-fn csch(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sinh()))
+fn csch(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(1.0 / nonzero(trig_arg(x)?)?.sinh()))
 }
-fn sec(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / trig_arg(x)?.cos()))
+fn sec(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(1.0 / trig_arg(x)?.cos()))
 }
-fn sech(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(1.0 / trig_arg(x)?.cosh()))
+fn sech(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(1.0 / trig_arg(x)?.cosh()))
 }
-fn acot(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(PI / 2.0 - x.atan()))
+fn acot(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(PI / 2.0 - x.atan()))
 }
-fn acoth(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| if x.abs() <= 1.0 { Err(CellError::Num) } else { Ok(0.5 * ((x + 1.0) / (x - 1.0)).ln()) })
+fn acoth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| if x.abs() <= 1.0 { Err(CellError::Num) } else { Ok(0.5 * ((x + 1.0) / (x - 1.0)).ln()) })
 }
-fn degrees(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x * 180.0 / PI))
+fn degrees(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x * 180.0 / PI))
 }
-fn radians(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x * PI / 180.0))
+fn radians(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    unary(a, c, |x| Ok(x * PI / 180.0))
 }
 
-fn seriessum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (x, n, m) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+fn seriessum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let (x, n, m) = (num(a, 0, c)?, num(a, 1, c)?, num(a, 2, c)?);
     let coeffs = as_array(&crate::util::arg(a, 3)?.value);
     let mut total = 0.0;
     for (i, c) in coeffs.iter().enumerate() {

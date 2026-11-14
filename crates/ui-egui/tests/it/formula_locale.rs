@@ -183,14 +183,21 @@ fn canonical_engine_templates_enter_the_selected_formula_language() {
 }
 
 #[test]
-fn portuguese_interface_retains_its_canonical_formula_fallback() {
+fn portuguese_interface_enters_and_shows_portuguese_formulas() {
     let mut app = app();
     app.run("app.language.set", json!({"code":"pt-BR"})).unwrap();
     assert_eq!(app.ui.language, Language::PtBr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=SOMA(1;2,5)"));
+    assert_eq!(formula(&app), "SUM(1,2.5)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=SUMA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SOMA(1;2,5)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "SUM(1,2.5)");
+    // The API keeps the English syntax.
+    assert!(app.run("cell.set", json!({"cell":"B1","input":"=SOMA(1;2)"})).is_err());
+    // A typed VERDADEIRO outside a formula is the logical value.
+    enter(&mut app, "verdadeiro");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Bool(true));
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::PtBr);
 }

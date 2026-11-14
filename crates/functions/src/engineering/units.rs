@@ -263,8 +263,8 @@ fn from_kelvin(name: &str, k: f64) -> f64 {
     }
 }
 
-pub(super) fn convert(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
+pub(super) fn convert(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
     let from = text(a, 1)?;
     let to = text(a, 2)?;
     let (fu, fp) = resolve(&from).ok_or(CellError::NA)?;

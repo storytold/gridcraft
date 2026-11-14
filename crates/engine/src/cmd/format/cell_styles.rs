@@ -176,12 +176,15 @@ pub const CELL_STYLE_NAMES: &[&str] = &[
 pub(super) fn cell_style(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").unwrap_or("Normal").to_string();
     let d = s.doc()?;
-    let style =
-        d.wb.cell_styles
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(&name))
-            .map(|(_, s)| s.clone())
-            .or_else(|| builtin_cell_style(&name, &d.wb.theme));
+    let style = d.wb.cell_styles.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)).map(|(_, s)| s.clone()).or_else(|| {
+        let mut st = builtin_cell_style(&name, &d.wb.theme)?;
+        // Currency is the Accounting format in the workbook region's currency (`R$` in
+        // pt-BR); en-US keeps the `$` code.
+        if name.eq_ignore_ascii_case("Currency") {
+            st.num_fmt = NumFmt::new(&super::accounting_format(d.wb.region.currency));
+        }
+        Some(st)
+    });
     let Some(style) = style else { return Err(bad("home.cellStyle", format!("unknown cell style `{name}`"))) };
     // Number-format styles only change the number format.
     let only_fmt = matches!(name.as_str(), "Comma" | "Comma [0]" | "Currency" | "Currency [0]" | "Percent");

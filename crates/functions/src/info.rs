@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use gridcraft_core::{Array, CellError, Value, compare_text};
 
-use crate::util::{A, MAX_CELLS, R, S, has, scalar, text};
+use crate::util::{A, MAX_CELLS, R, S, has, scalar, text, to_num};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 // ---------------------------------------------------------------------------------------------
@@ -39,11 +39,11 @@ fn is_logical(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Ok(Value::Bool(matches!(first(a), Value::Bool(_))))
 }
 
-fn parity(a: &[Arg]) -> R<f64> {
+fn parity(a: &[Arg], c: &dyn Ctx) -> R<f64> {
     match first(a) {
         Value::Bool(_) => Err(CellError::Value),
         v => {
-            let n = v.to_number()?;
+            let n = to_num(&v, c)?;
             if n.abs() > 9.007_199_254_740_992e15 {
                 return Err(CellError::Num);
             }
@@ -51,11 +51,11 @@ fn parity(a: &[Arg]) -> R<f64> {
         }
     }
 }
-fn is_even(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(parity(a)? == 0.0))
+fn is_even(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(parity(a, c)? == 0.0))
 }
-fn is_odd(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Bool(parity(a)? == 1.0))
+fn is_odd(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Bool(parity(a, c)? == 1.0))
 }
 
 fn type_of(v: &Value) -> f64 {
@@ -286,9 +286,10 @@ fn switch(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     })
 }
 
-fn choose(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn choose(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let c: &dyn Ctx = c;
     drive(a, &|i| i == 0, &|v| {
-        let idx = v.first().cloned().unwrap_or(Value::Empty).to_number()?.trunc();
+        let idx = to_num(&v.first().cloned().unwrap_or(Value::Empty), c)?.trunc();
         if idx < 1.0 || idx >= v.len() as f64 {
             return Err(CellError::Value);
         }

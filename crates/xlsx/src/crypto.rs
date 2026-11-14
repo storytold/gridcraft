@@ -1,7 +1,7 @@
 //! Password-encrypted workbooks. Excel wraps the ordinary OOXML package in a compound file with
 //! two streams, `EncryptionInfo` and `EncryptedPackage`. `craft-offcrypto` reads them (Agile and
 //! Standard encryption; RC4, Extensible, certificate-only and rights-managed files are named as
-//! unsupported); this module keeps GridCraft's error type.
+//! unsupported) and writes Agile encryption; this module keeps GridCraft's error types.
 
 /// Why an encrypted workbook couldn't be decrypted.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -25,6 +25,17 @@ impl From<craft_offcrypto::Error> for DecryptError {
             e => DecryptError::Malformed(e.to_string()),
         }
     }
+}
+
+/// Why a workbook couldn't be encrypted.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the workbook couldn't be encrypted ({0})")]
+pub struct EncryptError(String);
+
+/// `package` (a plain OOXML zip) encrypted with `password` as Excel saves it: Agile encryption
+/// with AES-256 and SHA-512 and fresh random keys.
+pub fn encrypt(package: &[u8], password: &str) -> Result<Vec<u8>, EncryptError> {
+    craft_offcrypto::encrypt(package, password).map_err(|e| EncryptError(e.to_string()))
 }
 
 /// The plain OOXML package (a zip) inside an encrypted workbook.

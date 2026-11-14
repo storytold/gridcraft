@@ -166,7 +166,7 @@ fn threshold(wb: &Workbook, sheet: usize, at: CellRef, st: &RuleStats, k: &CfVal
         CfValueKind::Number(n) => *n,
         CfValueKind::Percent(p) => min + (max - min) * p / 100.0,
         CfValueKind::Percentile(p) => percentile(&st.sorted, *p),
-        CfValueKind::Formula(f) => gridcraft_calc::evaluate(wb, sheet, at, f).to_number().unwrap_or(0.0),
+        CfValueKind::Formula(f) => gridcraft_calc::evaluate(wb, sheet, at, f).to_number_region(wb.date_system, wb.region).unwrap_or(0.0),
     }
 }
 

@@ -6,7 +6,7 @@ use std::f64::consts::PI;
 use gridcraft_core::{CellError, Value, number_to_text};
 
 use crate::special::{erf, erfc};
-use crate::util::{A, R, S, flatten, has, num, num_val, opt_num, scalar, text, text_val};
+use crate::util::{A, R, S, flatten, has, num, num_val, opt_num, scalar, text, text_val, to_num};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 // ---------------------------------------------------------------------------------------------
@@ -100,42 +100,42 @@ fn to_radix(mut v: i64, radix: u32) -> String {
     out.iter().rev().collect()
 }
 
-fn places_arg(a: &[Arg]) -> R<Option<f64>> {
+fn places_arg(a: &[Arg], c: &dyn Ctx) -> R<Option<f64>> {
     if !has(a, 1) {
         return Ok(None);
     }
     if matches!(a.get(1).map(scalar), Some(Value::Bool(_))) {
         return Err(CellError::Value);
     }
-    Ok(Some(num(a, 1)?))
+    Ok(Some(num(a, 1, c)?))
 }
 
-fn convert_base(a: &[Arg], from: u32, to: u32) -> R<Value> {
+fn convert_base(a: &[Arg], from: u32, to: u32, c: &dyn Ctx) -> R<Value> {
     let s = base_source(a)?;
     let v = parse_base(&s, from)?;
-    let places = places_arg(a)?;
+    let places = places_arg(a, c)?;
     if to == 10 {
         return Ok(Value::Number(v as f64));
     }
     format_base(v, to, places)
 }
 
-fn dec_to(a: &[Arg], to: u32) -> R<Value> {
+fn dec_to(a: &[Arg], to: u32, c: &dyn Ctx) -> R<Value> {
     let v = a.first().map(scalar).unwrap_or(Value::Empty);
     if matches!(v, Value::Bool(_)) {
         return Err(CellError::Value);
     }
-    let n = v.to_number()?.trunc();
+    let n = to_num(&v, c)?.trunc();
     if n.abs() > 1e15 {
         return Err(CellError::Num);
     }
-    format_base(n as i64, to, places_arg(a)?)
+    format_base(n as i64, to, places_arg(a, c)?)
 }
 
 macro_rules! base_fn {
     ($name:ident, $from:expr, $to:expr) => {
-        fn $name(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-            convert_base(a, $from, $to)
+        fn $name(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+            convert_base(a, $from, $to, c)
         }
     };
 }
@@ -149,14 +149,14 @@ base_fn!(oct2bin, 8, 2);
 base_fn!(oct2dec, 8, 10);
 base_fn!(oct2hex, 8, 16);
 
-fn dec2bin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    dec_to(a, 2)
+fn dec2bin(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    dec_to(a, 2, c)
 }
-fn dec2oct(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    dec_to(a, 8)
+fn dec2oct(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    dec_to(a, 8, c)
 }
-fn dec2hex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    dec_to(a, 16)
+fn dec2hex(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    dec_to(a, 16, c)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -164,27 +164,27 @@ fn dec2hex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 const BIT_LIMIT: f64 = 281_474_976_710_656.0; // 2^48
 
-fn bit_operand(a: &[Arg], i: usize) -> R<u64> {
-    let n = num(a, i)?;
+fn bit_operand(a: &[Arg], i: usize, c: &dyn Ctx) -> R<u64> {
+    let n = num(a, i, c)?;
     if !(0.0..BIT_LIMIT).contains(&n) || n != n.trunc() {
         return Err(CellError::Num);
     }
     Ok(n as u64)
 }
 
-fn bitand(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Number((bit_operand(a, 0)? & bit_operand(a, 1)?) as f64))
+fn bitand(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Number((bit_operand(a, 0, c)? & bit_operand(a, 1, c)?) as f64))
 }
-fn bitor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Number((bit_operand(a, 0)? | bit_operand(a, 1)?) as f64))
+fn bitor(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Number((bit_operand(a, 0, c)? | bit_operand(a, 1, c)?) as f64))
 }
-fn bitxor(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    Ok(Value::Number((bit_operand(a, 0)? ^ bit_operand(a, 1)?) as f64))
+fn bitxor(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    Ok(Value::Number((bit_operand(a, 0, c)? ^ bit_operand(a, 1, c)?) as f64))
 }
 
-fn shift(a: &[Arg], left: bool) -> R<Value> {
-    let n = bit_operand(a, 0)?;
-    let s = num(a, 1)?.trunc();
+fn shift(a: &[Arg], left: bool, c: &dyn Ctx) -> R<Value> {
+    let n = bit_operand(a, 0, c)?;
+    let s = num(a, 1, c)?.trunc();
     if n == 0 {
         return Ok(Value::Number(0.0));
     }
@@ -203,45 +203,45 @@ fn shift(a: &[Arg], left: bool) -> R<Value> {
     };
     Ok(Value::Number(r as f64))
 }
-fn bitlshift(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    shift(a, true)
+fn bitlshift(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    shift(a, true, c)
 }
-fn bitrshift(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    shift(a, false)
+fn bitrshift(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    shift(a, false, c)
 }
 
 // ---------------------------------------------------------------------------------------------
 // DELTA, GESTEP, ERF
 
-fn delta(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let y = opt_num(a, 1, 0.0)?;
+fn delta(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let y = opt_num(a, 1, 0.0, c)?;
     Ok(Value::Number(if x == y { 1.0 } else { 0.0 }))
 }
-fn gestep(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let x = num(a, 0)?;
-    let y = opt_num(a, 1, 0.0)?;
+fn gestep(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let x = num(a, 0, c)?;
+    let y = opt_num(a, 1, 0.0, c)?;
     Ok(Value::Number(if x >= y { 1.0 } else { 0.0 }))
 }
-fn erf_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let lo = num(a, 0)?;
+fn erf_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let lo = num(a, 0, c)?;
     if has(a, 1) {
-        let hi = num(a, 1)?;
+        let hi = num(a, 1, c)?;
         return num_val(erf(hi) - erf(lo));
     }
     num_val(erf(lo))
 }
-fn erf_precise(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(erf(num(a, 0)?))
+fn erf_precise(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(erf(num(a, 0, c)?))
 }
-fn erfc_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    num_val(erfc(num(a, 0)?))
+fn erfc_fn(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    num_val(erfc(num(a, 0, c)?))
 }
 
 macro_rules! im1 {
     ($name:ident, $f:expr) => {
-        fn $name(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-            im_unary(a, $f)
+        fn $name(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+            im_unary(a, $f, c.region().decimal)
         }
     };
 }
@@ -398,7 +398,7 @@ mod tests {
     #[track_caller]
     fn cx(v: Value, re: f64, im: f64) {
         let Value::Text(s) = &v else { panic!("expected complex text, got {v:?}") };
-        let (z, _) = parse_complex(s).unwrap();
+        let (z, _) = parse_complex(s, '.').unwrap();
         let tol = 1e-12;
         assert!((z.re - re).abs() <= tol * re.abs().max(1.0), "{s}: re {} vs {re}", z.re);
         assert!((z.im - im).abs() <= tol * im.abs().max(1.0), "{s}: im {} vs {im}", z.im);

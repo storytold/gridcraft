@@ -3,13 +3,13 @@
 //! ```text
 //! gridcraft-cli info <file> [--json]
 //! gridcraft-cli convert <in> <out> [--sheet NAME]
-//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
+//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--region TAG] [--json]
 //! gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
 //! gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
-//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
+//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--region TAG] [--quiet]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--region TAG]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
 //! gridcraft-cli version | --version
@@ -39,17 +39,17 @@ use serde_json::{Value, json};
 const USAGE: &str = "usage:
   gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
   gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
-  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
+  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--region TAG] [--json]
   gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
-                     [--out FILE] [--print RANGE] [--quiet]
+                     [--out FILE] [--print RANGE] [--region TAG] [--quiet]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--region TAG]
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
                      whether this system confines programs (no program: a confined self-test)
@@ -175,8 +175,10 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// Opens `path` in `region`, set before the file is read so its text (CSV, HTML) is read in it.
+fn open(path: &str, region: &'static gridcraft_engine::core::Region) -> Result<Session, String> {
     let mut s = Session::new();
+    s.set_region(region);
     exec(&mut s, "file.open", json!({"path": path}))?;
     Ok(s)
 }
@@ -185,6 +187,23 @@ fn blank() -> Session {
     let mut s = Session::new();
     s.new_workbook();
     s
+}
+
+/// The region `--region` names, or the system locale without it; an unknown tag is an error.
+fn region_arg(a: &Args) -> Result<&'static gridcraft_engine::core::Region, String> {
+    let Some(tag) = a.opt("region") else {
+        return Ok(gridcraft_engine::core::region::system());
+    };
+    gridcraft_engine::core::region::find(tag).ok_or_else(|| {
+        let known: Vec<&str> = gridcraft_engine::core::region::all().iter().map(|r| r.tag).collect();
+        format!("unknown region {tag:?} (use one of {})", known.join(", "))
+    })
+}
+
+/// Applies `--region`, or the system locale without it, to the session and its open document.
+fn apply_region(s: &mut Session, a: &Args) -> Result<(), String> {
+    s.set_region(region_arg(a)?);
+    Ok(())
 }
 
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {
@@ -252,7 +271,7 @@ fn info(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &[], &["json"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, gridcraft_engine::core::region::default_region())?;
     let v = exec(&mut s, "document.inspect", json!({}))?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -298,7 +317,7 @@ fn convert(args: &[String]) -> Result<(), String> {
     if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
         return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
-    let mut s = open(input)?;
+    let mut s = open(input, gridcraft_engine::core::region::default_region())?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
         let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
@@ -313,13 +332,14 @@ fn convert(args: &[String]) -> Result<(), String> {
 }
 
 fn eval(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sheet", "cell"], &["json"])?;
+    let a = Args::parse(args, &["in", "sheet", "cell", "region"], &["json"])?;
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
-        Some(p) => open(p)?,
+        Some(p) => open(p, region_arg(&a)?)?,
         None => blank(),
     };
+    apply_region(&mut s, &a)?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     let formula = if formula.starts_with('=') { formula.to_string() } else { format!("={formula}") };
     let mut p = json!({"formula": formula});
@@ -386,7 +406,7 @@ fn cat(args: &[String]) -> Result<(), String> {
     let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, gridcraft_engine::core::region::default_region())?;
     print_range(&mut s, a.opt("range"), a.opt("sheet"), a.has("formulas"), a.has("csv"))
 }
 
@@ -422,11 +442,11 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
+    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet", "region"], &["quiet", "csv", "formulas"])?;
     a.no_extra(0)?;
     let mut s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
-        (Some(p), None) => open(p)?,
+        (Some(p), None) => open(p, region_arg(&a)?)?,
         (None, Some(name)) => {
             let mut s = Session::new();
             exec(&mut s, "file.new", json!({"sample": name}))?;
@@ -434,6 +454,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         (None, None) => blank(),
     };
+    apply_region(&mut s, &a)?;
     let quiet = a.has("quiet");
     let mut step = 0usize;
     for (name, value) in &a.opts {
@@ -536,7 +557,7 @@ fn functions(args: &[String]) -> Result<(), String> {
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
-    let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
+    let a = Args::parse(args, &["connect", "in", "sample", "region"], &[])?;
     a.no_extra(0)?;
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
@@ -547,8 +568,8 @@ fn mcp(args: &[String]) -> Result<(), String> {
             )
         }
         None => {
-            let session = match (a.opt("in"), a.opt("sample")) {
-                (Some(p), _) => open(p)?,
+            let mut session = match (a.opt("in"), a.opt("sample")) {
+                (Some(p), _) => open(p, region_arg(&a)?)?,
                 (None, Some(name)) => {
                     let mut s = Session::new();
                     exec(&mut s, "file.new", json!({"sample": name}))?;
@@ -556,6 +577,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 }
                 (None, None) => blank(),
             };
+            apply_region(&mut session, &a)?;
             Box::new(Headless::with_session(session))
         }
     };
@@ -621,6 +643,21 @@ mod tests {
             parse_command(r#"{"command":"home.insertSheet","params":{"name":"R"}}"#).unwrap(),
             Some(("home.insertSheet".into(), json!({"name": "R"})))
         );
+    }
+
+    /// The region is set before the file is read, so a CSV's numbers are read in it.
+    #[test]
+    fn a_file_opens_in_the_requested_region() {
+        let dir = std::env::temp_dir().join(format!("gc-cli-region-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("br.csv");
+        std::fs::write(&path, "valor;data\n1.234,56;25/09/2026\n").unwrap();
+        let pt = gridcraft_engine::core::region::find("pt-BR").unwrap();
+        let s = open(path.to_str().unwrap(), pt).unwrap();
+        let wb = &s.active().unwrap().wb;
+        let a2 = wb.sheets[0].value(gridcraft_engine::core::CellRef::parse("A2").unwrap());
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(a2, gridcraft_engine::core::Value::Number(1234.56));
     }
 
     #[test]

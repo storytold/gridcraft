@@ -242,6 +242,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Descongelar Painéis",
         "Dark Mode" => "Modo Escuro",
         "Interface language" => "Idioma da interface",
+        "Regional format" => "Formato regional",
         "Interface size" => "Tamanho da interface",
         "Auto" => "Automático",
         "Drag to freeze columns" => "Arraste para congelar colunas",
@@ -1024,6 +1025,263 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        // Conditional Formatting menu (Home)
+        "Highlight Cells Rules" => "Realçar Regras das Células",
+        "Greater Than…" => "É Maior do que…",
+        "Less Than…" => "É Menor do que…",
+        "Between…" => "Está Entre…",
+        "Equal To…" => "É Igual a…",
+        "Text that Contains…" => "Texto que Contém…",
+        "Text that Contains" => "Texto que Contém",
+        "A Date Occurring…" => "Uma Data que Ocorre…",
+        "A Date Occurring" => "Uma Data que Ocorre",
+        "Duplicate Values…" => "Valores Duplicados…",
+        "Top/Bottom Rules" => "Regras de Primeiros/Últimos",
+        "Blue" => "Azul",
+        "Green" => "Verde",
+        "Red" => "Vermelho",
+        "Orange" => "Laranja",
+        "Light Blue" => "Azul-Claro",
+        "Purple" => "Roxo",
+        "Green - Yellow - Red" => "Verde - Amarelo - Vermelho",
+        "Red - Yellow - Green" => "Vermelho - Amarelo - Verde",
+        "Green - White - Red" => "Verde - Branco - Vermelho",
+        "Blue - White - Red" => "Azul - Branco - Vermelho",
+        "White - Green" => "Branco - Verde",
+        "White - Red" => "Branco - Vermelho",
+        "3 Arrows" => "3 Setas",
+        "3 Traffic Lights" => "3 Semáforos",
+        "3 Symbols" => "3 Símbolos",
+        "4 Ratings" => "4 Classificações",
+        "5 Arrows" => "5 Setas",
+        "5 Quarters" => "5 Quartos",
+        "New Rule…" => "Nova Regra…",
+        "New Formatting Rule" => "Nova Regra de Formatação",
+        "Clear Rules" => "Limpar Regras",
+        "Manage Rules…" => "Gerenciar Regras…",
+        "More Borders…" => "Mais Bordas…",
+        "There's a problem with this formula" => "Há um problema com esta fórmula",
+        // Title bar menus
+        "New Workbook" => "Nova Pasta de Trabalho",
+        "Save As…" => "Salvar Como…",
+        "Print…" => "Imprimir…",
+        "Export as PDF…" => "Exportar como PDF…",
+        "Save a Copy as Excel Workbook (.xlsx)…" => "Salvar uma Cópia como Pasta de Trabalho do Excel (.xlsx)…",
+        "Export as CSV…" => "Exportar como CSV…",
+        "Export as Web Page (.html)…" => "Exportar como Página da Web (.html)…",
+        "There's a problem with this formula: {error}" => "Há um problema com esta fórmula: {error}",
+        "unexpected {token}" => "{token} inesperado",
+        "unexpected character {token}" => "caractere {token} inesperado",
+        "unexpected {token} in structured reference" => "{token} inesperado na referência estruturada",
+        "unterminated text" => "texto sem aspas de fechamento",
+        "unterminated sheet name" => "nome de planilha sem aspas de fechamento",
+        "unexpected end of formula" => "fim inesperado da fórmula",
+        "formula is nested too deeply" => "a fórmula tem níveis demais",
+        "the clipboard is empty" => "a área de transferência está vazia",
+        "too many arguments" => "argumentos demais",
+        "invalid 3-D reference" => "referência 3D inválida",
+        "array rows must have the same length" => "as linhas da matriz devem ter o mesmo tamanho",
+        "expected ! after sheet name" => "esperado ! depois do nome da planilha",
+        "unknown error literal" => "valor de erro desconhecido",
+        "unbalanced [" => "[ sem fechamento",
+        "expected `)`, found {token}" => "esperado `)`, encontrado {token}",
+        "expected `,` or `)`, found {token}" => "esperado `,` ou `)`, encontrado {token}",
+        "expected `;` or `)`, found {token}" => "esperado `;` ou `)`, encontrado {token}",
+        "expected `,`, `;` or `}`, found {token}" => "esperado `,`, `;` ou `}`, encontrado {token}",
+        "expected a reference after the sheet name, found {token}" => "esperada uma referência depois do nome da planilha, encontrado {token}",
+        "expected a number in array, found {token}" => "esperado um número na matriz, encontrado {token}",
+        "array constants may only contain constants, found {token}" => "constantes de matriz só podem conter constantes, encontrado {token}",
+        "Absolute: always these cells" => "Absoluto: sempre estas células",
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
+            "Uma planilha de código aberto, nativa em Rust e feita em sala limpa. Parte do ArtCraft."
+        }
+        "Add Watch (active cell)" => "Adicionar Inspeção (célula ativa)",
+        "Agents and other programs that run the macro get an error instead of the question." => {
+            "Agentes e outros programas que executam a macro recebem um erro em vez da pergunta."
+        }
+        "Apply" => "Aplicar",
+        "At most" => "No máximo",
+        "Available for column, bar, line, area and compatible combo charts." => {
+            "Disponível para gráficos de colunas, barras, linhas, áreas e combinação compatíveis."
+        }
+        "Breakpoint: the debugger stops before this step" => "Ponto de interrupção: o depurador para antes desta etapa",
+        "Bring Forward" => "Avançar",
+        "Can't Undo" => "Não É Possível Desfazer",
+        "Change…" => "Alterar…",
+        "Chart Type" => "Tipo de Gráfico",
+        "Check shows on the grid what the macro reads and writes. Click a step's gutter to set a breakpoint." => {
+            "Verificar mostra na grade o que a macro lê e grava. Clique na margem de uma etapa para definir um ponto de interrupção."
+        }
+        "Colors & Layout" => "Cores e Layout",
+        "Columns:" => "Colunas:",
+        "Command:" => "Comando:",
+        "Create" => "Criar",
+        "Data rows:" => "Linhas de dados:",
+        "Data Table" => "Tabela de Dados",
+        "Description:" => "Descrição:",
+        "Don't Replace" => "Não Substituir",
+        "Each column must hold:" => "Cada coluna deve conter:",
+        "Elements" => "Elementos",
+        "Example (what Check, Run and Debug use here):" => "Exemplo (o que Verificar, Executar e Depurar usam aqui):",
+        "Fill…" => "Preenchimento…",
+        "For each" => "Para cada",
+        "GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:" => {
+            "O GridCraft pode ser controlado inteiramente por agentes. Cada item de menu, botão e gesto é um comando:"
+        }
+        "If cell" => "Se a célula",
+        "Inside, Row (or Column) stands for the current one, e.g. Row.right." => {
+            "Dentro dele, Row (ou Column) representa a atual, por exemplo Row.right."
+        }
+        "Keep Changes" => "Manter Alterações",
+        "Keep the changes the macro has made so far? They are one undo step either way." => {
+            "Manter as alterações que a macro fez até agora? De qualquer forma, elas são uma única etapa de desfazer."
+        }
+        "Leave it empty when no step uses Output. A token such as Input.right keeps it beside the data." => {
+            "Deixe vazio quando nenhuma etapa usar Output. Um token como Input.right o mantém ao lado dos dados."
+        }
+        "Legend" => "Legenda",
+        "Let this workbook's scripts run for the rest of this session" => {
+            "Permitir que os scripts desta pasta de trabalho sejam executados até o fim desta sessão"
+        }
+        "Load" => "Carregar",
+        "Macro name:" => "Nome da macro:",
+        "Macros preserved (not executed)" => "Macros preservadas (não executadas)",
+        "Message:" => "Mensagem:",
+        "Model Range:" => "Intervalo do Modelo:",
+        "More Colors…" => "Mais Cores…",
+        "No command matches." => "Nenhum comando corresponde.",
+        "No comments on this sheet yet. Select a cell and choose New Comment." => {
+            "Ainda não há comentários nesta planilha. Selecione uma célula e escolha Novo Comentário."
+        }
+        "No contributor data was built into this copy." => "Nenhum dado de colaboradores foi incluído nesta cópia.",
+        "No inputs: the macro works on fixed cells only." => "Sem entradas: a macro trabalha somente em células fixas.",
+        "No macros in this workbook" => "Nenhuma macro nesta pasta de trabalho",
+        "No model credits were built into this copy." => "Nenhum crédito de modelos foi incluído nesta cópia.",
+        "No steps yet. Add Step picks a command, or record one with Automate › Record Macro." => {
+            "Ainda não há etapas. Adicionar Etapa escolhe um comando, ou grave uma em Automatizar › Gravar Macro."
+        }
+        "of:" => "de:",
+        "Open the macro in the step editor" => "Abrir a macro no editor de etapas",
+        "Open the macro in the step editor and stop before its first step" => "Abrir a macro no editor de etapas e parar antes da primeira etapa",
+        "Options…" => "Opções…",
+        "Orientation:" => "Orientação:",
+        "Otherwise the macro runs on the selection" => "Caso contrário, a macro é executada na seleção",
+        "Output anchor (what the Output token stands for):" => "Âncora de saída (o que o token Output representa):",
+        "Output to (optional):" => "Saída para (opcional):",
+        "Parameters (JSON):" => "Parâmetros (JSON):",
+        "Preview" => "Visualização",
+        "Recent Colors" => "Cores Recentes",
+        "Relative: a token that follows the input the macro runs on" => "Relativo: um token que acompanha a entrada em que a macro é executada",
+        "Reports:" => "Relatórios:",
+        "Reset All" => "Redefinir Tudo",
+        "Resolved" => "Resolvido",
+        "Reverse the order" => "Inverter a ordem",
+        "Run" => "Executar",
+        "Run it on:" => "Executar em:",
+        "Runs with:" => "Executa com:",
+        "Run this step (a disabled step is skipped)" => "Executar esta etapa (uma etapa desativada é ignorada)",
+        "Select a chart to format it." => "Selecione um gráfico para formatá-lo.",
+        "Select a step to see its settings." => "Selecione uma etapa para ver as configurações dela.",
+        "Send" => "Enviar",
+        "Send Backward" => "Recuar",
+        "Shape:" => "Forma:",
+        "Shortcut key:" => "Tecla de atalho:",
+        "Show Data Table" => "Mostrar Tabela de Dados",
+        "↑  Sort Ascending" => "↑  Classificar em Ordem Crescente",
+        "↓  Sort Descending" => "↓  Classificar em Ordem Decrescente",
+        "Standard Colors" => "Cores Padrão",
+        "Step Into" => "Depurar",
+        "Stop debugging" => "Parar a depuração",
+        "Stop recording and save the macro" => "Parar a gravação e salvar a macro",
+        "Table Name:" => "Nome da Tabela:",
+        "Text:" => "Texto:",
+        "The chart no longer exists." => "O gráfico não existe mais.",
+        "Theme Colors" => "Cores do Tema",
+        "The ranges the macro works on. Each is checked before the macro runs." => {
+            "Os intervalos em que a macro trabalha. Cada um é verificado antes de a macro ser executada."
+        }
+        "There are no shapes, pictures or charts on this sheet." => "Não há formas, imagens ou gráficos nesta planilha.",
+        "This workbook also has a VBA project. GridCraft keeps it when you save but does not run it." => {
+            "Esta pasta de trabalho também tem um projeto VBA. O GridCraft o mantém ao salvar, mas não o executa."
+        }
+        "This workbook has no macros yet." => "Esta pasta de trabalho ainda não tem macros.",
+        "times" => "vezes",
+        "Tokens" => "Tokens",
+        "Trust Scripts" => "Confiar nos Scripts",
+        "Undo Changes" => "Desfazer Alterações",
+        "Use current selection as example" => "Usar a seleção atual como exemplo",
+        "When results would land on cells that hold data:" => "Quando os resultados caírem em células que já têm dados:",
+        "Write a new macro with this name" => "Escrever uma nova macro com este nome",
+        "All Methods" => "Todos os Métodos",
+        "Always run on this range" => "Sempre executar neste intervalo",
+        "Always this range:" => "Sempre este intervalo:",
+        "Answer" => "Resposta",
+        "Breakpoint" => "Ponto de interrupção",
+        "Cell" => "Célula",
+        "column" => "coluna",
+        "Convergence:" => "Convergência:",
+        "Data Labels" => "Rótulos de Dados",
+        "Enabled" => "Ativada",
+        "Every cell must hold something" => "Toda célula deve ter algum conteúdo",
+        "Evolutionary" => "Evolutionary",
+        "Evolutionary: a genetic search for models that aren't smooth; every variable cell needs bounds." => {
+            "Evolutionary: uma busca genética para modelos que não são suaves; toda célula variável precisa de limites."
+        }
+        "First row holds column names" => "A primeira linha contém os nomes das colunas",
+        "Formula" => "Fórmula",
+        "Grab bag" => "Misturado",
+        "GRG Nonlinear: a local optimum of a smooth model, from the current values." => {
+            "GRG Não Linear: um ótimo local de um modelo suave, a partir dos valores atuais."
+        }
+        "Integer Optimality (%):" => "Otimização de Números Inteiros (%):",
+        "Limits" => "Limites",
+        "Load/Save" => "Carregar/Salvar",
+        "Max Evaluations:" => "Máx. de Avaliações:",
+        "Maximum Generations without Improvement:" => "Máximo de Gerações sem Melhoria:",
+        "Mutation Rate:" => "Taxa de Mutação:",
+        "Needs an optimal or converged solution: Solver stopped before reaching one." => {
+            "Requer uma solução ótima ou convergida: o Solver parou antes de chegar a uma."
+        }
+        "Needs Simplex LP or GRG Nonlinear, a Max or Min objective and no integer constraints." => {
+            "Requer LP Simplex ou GRG Não Linear, um objetivo Máx ou Mín e nenhuma restrição de inteiro."
+        }
+        "Population Size:" => "Tamanho da População:",
+        "Random Seed:" => "Semente Aleatória:",
+        "range" => "intervalo",
+        "{range} already holds data. Replace it with the model?" => "{range} já contém dados. Substituir pelo modelo?",
+        "Require Bounds on Variables" => "Exigir Limites nas Variáveis",
+        "row" => "linha",
+        "Run a command" => "Executar um comando",
+        "Run a macro" => "Executar uma macro",
+        "Scripts in this workbook came from a file and are disabled." => {
+            "Os scripts desta pasta de trabalho vieram de um arquivo e estão desativados."
+        }
+        "Sensitivity" => "Sensibilidade",
+        "Simplex LP" => "LP Simplex",
+        "Simplex LP: for linear models; integer and binary constraints by branch and bound." => {
+            "LP Simplex: para modelos lineares; restrições de inteiro e binário por ramificação e limite."
+        }
+        "single cell" => "célula única",
+        "Solver Options" => "Opções do Solver",
+        "The model was loaded." => "O modelo foi carregado.",
+        "The model was saved to {range}." => "O modelo foi salvo em {range}.",
+        "The selection when the button is pressed" => "A seleção no momento em que o botão é pressionado",
+        "Undo what the macro did before stopping" => "Desfazer o que a macro fez antes de parar",
+        "Use a letter from A to Z for the shortcut." => "Use uma letra de A a Z para o atalho.",
+        "Click to copy" => "Clique para copiar",
+        "Insert Function…" => "Inserir Função…",
+        "No functions match." => "Nenhuma função corresponde.",
+        "Or select a category:" => "Ou selecione uma categoria:",
+        "Paste List" => "Colar Lista",
+        "Paste name" => "Colar nome",
+        "Paste Names…" => "Colar Nomes…",
+        "Reading direction" => "Direção da leitura",
+        "Sort On" => "Classificar Por",
+        "Split tabs" => "Dividir guias",
+        "Auto Fill Options" => "Opções de AutoPreenchimento",
+        "Locking cells or hiding formulas has no effect until you protect the worksheet (Review › Protect Sheet)." => {
+            "Bloquear células ou ocultar fórmulas não tem efeito até você proteger a planilha (Revisão › Proteger Planilha)."
+        }
         _ => return None,
     })
 }

@@ -10,11 +10,19 @@ pub(crate) const PY_FORMULA: &str = "Python cells are made with the python.set c
 
 /// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
 /// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+/// Reads numbers in en-US: it only serves finding the functions a formula calls, and a number
+/// calls none.
 pub(crate) fn is_formula_input(input: &str) -> bool {
+    is_formula_input_in(input, gridcraft_core::DateSystem::D1900, &gridcraft_core::region::EN_US)
+}
+
+/// Like is_formula_input, with numbers read in the workbook region: a negative amount in the
+/// region currency, typed in pt-BR, is a number and not a formula.
+pub(crate) fn is_formula_input_in(input: &str, sys: gridcraft_core::DateSystem, region: &gridcraft_core::Region) -> bool {
     input.starts_with('=')
         || (input.len() > 1
             && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
+            && gridcraft_core::parse::parse_number_text_in_region(input, sys, region).is_none()
             && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
 }
 
@@ -31,7 +39,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if fmt_is_text {
         return Ok(Some(Cell { value: Value::text(input), formula: None, style, py: None }));
     }
-    let is_formula = is_formula_input(input);
+    let is_formula = is_formula_input_in(input, wb.date_system, wb.region);
     if is_formula && gridcraft_model::python::is_py_formula(input) {
         return Err(EngineError::Other(PY_FORMULA.into()));
     }
@@ -64,7 +72,8 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         return Ok(Some(cell));
     }
-    let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let region = wb.region;
+    let mut parsed = gridcraft_core::parse::parse_input_in(input, wb.date_system, region);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
     // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
     if parsed.format.is_none()
@@ -126,7 +135,12 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         None => s.doc()?.selection.active,
     };
     // Both spellings take a string, number or boolean, as typed (#697).
-    let input = p.get("input").or_else(|| p.get("value")).map(json_to_input).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
+    let region = s.doc()?.wb.region;
+    let input = p
+        .get("input")
+        .or_else(|| p.get("value"))
+        .map(|v| json_to_input_in(v, region))
+        .ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
     let array = bool_param(p, "array").unwrap_or(false);
     let d = s.doc()?;
     if let Some(sh) = d.wb.sheet(sheet)
@@ -192,6 +206,19 @@ pub(crate) fn json_to_input(v: &Json) -> String {
         Json::Number(n) => n.to_string(),
         Json::String(s) => s.clone(),
         other => other.to_string(),
+    }
+}
+
+/// The same text as [`json_to_input`], but written the way `region` reads a number: the dot that
+/// JSON gives a number is the decimal separator there, unless the region writes a comma.
+pub(crate) fn json_to_input_in(v: &Json, region: &gridcraft_core::Region) -> String {
+    let text = json_to_input(v);
+    if region.decimal == '.' {
+        return text;
+    }
+    match v {
+        Json::Number(_) => text.replace('.', &region.decimal.to_string()),
+        _ => text,
     }
 }
 

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use gridcraft_core::{Array, CellError, Value, sort_compare};
 
-use crate::util::{A, MAX_CELLS, R, arg, array_val, as_array, has, num, opt_bool, scalar};
+use crate::util::{A, MAX_CELLS, R, arg, array_val, as_array, has, num, opt_bool, scalar, to_num};
 use crate::{Arg, Ctx, FnSpec, VAR};
 
 // ---------------------------------------------------------------------------------------------
@@ -52,11 +52,11 @@ fn from_rows(rows: Vec<Vec<Value>>, pad: &Value) -> R<Value> {
 }
 
 /// An optional integer argument where a missing or blank argument means `None`.
-fn opt_count(args: &[Arg], i: usize) -> R<Option<i64>> {
+fn opt_count(args: &[Arg], i: usize, c: &dyn Ctx) -> R<Option<i64>> {
     if !has(args, i) {
         return Ok(None);
     }
-    let n = num(args, i)?;
+    let n = num(args, i, c)?;
     if !n.is_finite() || n.abs() > 1e15 {
         return Err(CellError::Num);
     }
@@ -154,23 +154,23 @@ fn cmp_keys(a: &[Value], b: &[Value], orders: &[i64]) -> Ordering {
     Ordering::Equal
 }
 
-fn int_list(v: &Value) -> R<Vec<i64>> {
+fn int_list(v: &Value, c: &dyn Ctx) -> R<Vec<i64>> {
     let a = as_array(v);
     a.data
         .iter()
         .map(|x| {
-            let n = x.to_number()?;
+            let n = to_num(x, c)?;
             if !n.is_finite() || n.abs() > 1e15 { Err(CellError::Value) } else { Ok(n.trunc() as i64) }
         })
         .collect()
 }
 
-fn sort(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn sort(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
     let by_col = opt_bool(args, 3, false)?;
     let a = if by_col { a.transpose() } else { a };
-    let idx = if has(args, 1) { int_list(&arg(args, 1)?.value)? } else { vec![1] };
-    let ord = if has(args, 2) { int_list(&arg(args, 2)?.value)? } else { vec![1] };
+    let idx = if has(args, 1) { int_list(&arg(args, 1)?.value, c)? } else { vec![1] };
+    let ord = if has(args, 2) { int_list(&arg(args, 2)?.value, c)? } else { vec![1] };
     if idx.is_empty() || idx.iter().any(|&i| i < 1 || i > a.cols as i64) || ord.iter().any(|&o| o != 1 && o != -1) {
         return Err(CellError::Value);
     }
@@ -189,14 +189,14 @@ fn sort(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Ok(Value::from(if by_col { out.transpose() } else { out }))
 }
 
-fn sortby(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn sortby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
     let mut keys: Vec<Array> = Vec::new();
     let mut orders: Vec<i64> = Vec::new();
     let mut i = 1;
     while i < args.len() {
         keys.push(arr_arg(args, i)?);
-        let o = if has(args, i + 1) { num(args, i + 1)?.trunc() as i64 } else { 1 };
+        let o = if has(args, i + 1) { num(args, i + 1, c)?.trunc() as i64 } else { 1 };
         if o != 1 && o != -1 {
             return Err(CellError::Value);
         }
@@ -262,9 +262,9 @@ fn unique(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 // SEQUENCE / RANDARRAY
 
 /// Result dimensions for SEQUENCE/RANDARRAY: blank means 1; 0 → `#CALC!`; negative → `#VALUE!`.
-fn dims(args: &[Arg], ri: usize, ci: usize) -> R<(usize, usize)> {
-    let r = if has(args, ri) { num(args, ri)?.trunc() } else { 1.0 };
-    let c = if has(args, ci) { num(args, ci)?.trunc() } else { 1.0 };
+fn dims(args: &[Arg], ri: usize, ci: usize, c: &dyn Ctx) -> R<(usize, usize)> {
+    let r = if has(args, ri) { num(args, ri, c)?.trunc() } else { 1.0 };
+    let c = if has(args, ci) { num(args, ci, c)?.trunc() } else { 1.0 };
     if r < 0.0 || c < 0.0 || !r.is_finite() || !c.is_finite() {
         return Err(CellError::Value);
     }
@@ -277,18 +277,18 @@ fn dims(args: &[Arg], ri: usize, ci: usize) -> R<(usize, usize)> {
     Ok((r as usize, c as usize))
 }
 
-fn sequence(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (r, c) = dims(args, 0, 1)?;
-    let start = if has(args, 2) { num(args, 2)? } else { 1.0 };
-    let step = if has(args, 3) { num(args, 3)? } else { 1.0 };
+fn sequence(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
+    let (r, c) = dims(args, 0, 1, ctx)?;
+    let start = if has(args, 2) { num(args, 2, ctx)? } else { 1.0 };
+    let step = if has(args, 3) { num(args, 3, ctx)? } else { 1.0 };
     let data = (0..r * c).map(|i| Value::number(start + step * i as f64)).collect();
     array_val(r, c, data)
 }
 
 fn randarray(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
-    let (r, c) = dims(args, 0, 1)?;
-    let lo = if has(args, 2) { num(args, 2)? } else { 0.0 };
-    let hi = if has(args, 3) { num(args, 3)? } else { 1.0 };
+    let (r, c) = dims(args, 0, 1, ctx)?;
+    let lo = if has(args, 2) { num(args, 2, ctx)? } else { 0.0 };
+    let hi = if has(args, 3) { num(args, 3, ctx)? } else { 1.0 };
     let whole = if has(args, 4) { opt_bool(args, 4, false)? } else { false };
     if lo > hi {
         return Err(CellError::Value);
@@ -357,9 +357,9 @@ fn hstack(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Flattened values for TOROW/TOCOL with the ignore filter applied.
-fn flat_filtered(args: &[Arg]) -> R<Vec<Value>> {
+fn flat_filtered(args: &[Arg], c: &dyn Ctx) -> R<Vec<Value>> {
     let a = arr_arg(args, 0)?;
-    let ignore = if has(args, 1) { num(args, 1)?.trunc() as i64 } else { 0 };
+    let ignore = if has(args, 1) { num(args, 1, c)?.trunc() as i64 } else { 0 };
     if !(0..=3).contains(&ignore) {
         return Err(CellError::Value);
     }
@@ -375,28 +375,28 @@ fn flat_filtered(args: &[Arg]) -> R<Vec<Value>> {
         .collect())
 }
 
-fn torow(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = flat_filtered(args)?;
+fn torow(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = flat_filtered(args, c)?;
     if v.is_empty() {
         return Err(CellError::Calc);
     }
     array_val(1, v.len(), v)
 }
 
-fn tocol(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let v = flat_filtered(args)?;
+fn tocol(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let v = flat_filtered(args, c)?;
     if v.is_empty() {
         return Err(CellError::Calc);
     }
     array_val(v.len(), 1, v)
 }
 
-fn wrap(args: &[Arg], rows: bool) -> R<Value> {
+fn wrap(args: &[Arg], rows: bool, c: &dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
     if a.rows != 1 && a.cols != 1 {
         return Err(CellError::Value);
     }
-    let n = num(args, 1)?.trunc();
+    let n = num(args, 1, c)?.trunc();
     if n < 1.0 || !n.is_finite() {
         return Err(CellError::Num);
     }
@@ -417,12 +417,12 @@ fn wrap(args: &[Arg], rows: bool) -> R<Value> {
     Ok(v)
 }
 
-fn wraprows(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    wrap(args, true)
+fn wraprows(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    wrap(args, true, c)
 }
 
-fn wrapcols(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    wrap(args, false)
+fn wrapcols(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    wrap(args, false, c)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -446,29 +446,29 @@ fn span(len: usize, n: Option<i64>, take: bool) -> R<(usize, usize)> {
     }
 }
 
-fn take_drop(args: &[Arg], take: bool) -> R<Value> {
+fn take_drop(args: &[Arg], take: bool, c: &dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
-    let (r0, r1) = span(a.rows, opt_count(args, 1)?, take)?;
-    let (c0, c1) = span(a.cols, opt_count(args, 2)?, take)?;
+    let (r0, r1) = span(a.rows, opt_count(args, 1, c)?, take)?;
+    let (c0, c1) = span(a.cols, opt_count(args, 2, c)?, take)?;
     let rows: Vec<Vec<Value>> = (r0..r1).map(|r| (c0..c1).map(|c| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()).collect();
     from_rows(rows, &Value::Empty)
 }
 
-fn take_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    take_drop(args, true)
+fn take_fn(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    take_drop(args, true, c)
 }
 
-fn drop_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    take_drop(args, false)
+fn drop_fn(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    take_drop(args, false, c)
 }
 
-fn choose_lines(args: &[Arg], rows: bool) -> R<Value> {
+fn choose_lines(args: &[Arg], rows: bool, c: &dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
     let base = if rows { a } else { a.transpose() };
     let grid = rows_of(&base);
     let mut out = Vec::new();
     for i in 1..args.len() {
-        for k in int_list(&arg(args, i)?.value)? {
+        for k in int_list(&arg(args, i)?.value, c)? {
             let len = grid.len() as i64;
             let idx = if k > 0 && k <= len {
                 k - 1
@@ -490,18 +490,18 @@ fn choose_lines(args: &[Arg], rows: bool) -> R<Value> {
     Ok(v)
 }
 
-fn chooserows(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    choose_lines(args, true)
+fn chooserows(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    choose_lines(args, true, c)
 }
 
-fn choosecols(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    choose_lines(args, false)
+fn choosecols(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    choose_lines(args, false, c)
 }
 
-fn expand(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn expand(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let a = arr_arg(args, 0)?;
-    let r = opt_count(args, 1)?.unwrap_or(a.rows as i64);
-    let c = opt_count(args, 2)?.unwrap_or(a.cols as i64);
+    let r = opt_count(args, 1, c)?.unwrap_or(a.rows as i64);
+    let c = opt_count(args, 2, c)?.unwrap_or(a.cols as i64);
     if r < a.rows as i64 || c < a.cols as i64 {
         return Err(CellError::Value);
     }
@@ -760,11 +760,11 @@ fn groupby(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let rf = arr_arg(args, 0)?;
     let vals = arr_arg(args, 1)?;
     let f = agg_arg(args, 2, c)?;
-    let fh = opt_count(args, 3)?;
-    let total = opt_count(args, 4)?.unwrap_or(1);
-    let sort = opt_count(args, 5)?.unwrap_or(1);
+    let fh = opt_count(args, 3, c)?;
+    let total = opt_count(args, 4, c)?.unwrap_or(1);
+    let sort = opt_count(args, 5, c)?.unwrap_or(1);
     let filter = opt_arr(args, 6)?;
-    let relationship = opt_count(args, 7)?.unwrap_or(0);
+    let relationship = opt_count(args, 7, c)?.unwrap_or(0);
     // A total depth of N adds subtotals for the first N - 1 key columns, so it can't exceed the
     // key columns, and a flat table (field_relationship 1) has no levels to subtotal.
     let depth = total.unsigned_abs() as usize;
@@ -921,11 +921,11 @@ fn pivotby(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let cf = arr_arg(args, 1)?;
     let vals = arr_arg(args, 2)?;
     let f = agg_arg(args, 3, ctx)?;
-    let fh = opt_count(args, 4)?;
-    let row_total = opt_count(args, 5)?.unwrap_or(1);
-    let row_sort = opt_count(args, 6)?.unwrap_or(1);
-    let col_total = opt_count(args, 7)?.unwrap_or(1);
-    let col_sort = opt_count(args, 8)?.unwrap_or(1);
+    let fh = opt_count(args, 4, ctx)?;
+    let row_total = opt_count(args, 5, ctx)?.unwrap_or(1);
+    let row_sort = opt_count(args, 6, ctx)?.unwrap_or(1);
+    let col_total = opt_count(args, 7, ctx)?.unwrap_or(1);
+    let col_sort = opt_count(args, 8, ctx)?.unwrap_or(1);
     let filter = opt_arr(args, 9)?;
     let p = prepare(&[&rf, &cf], &vals, fh, filter.as_ref())?;
     let rkeys: Vec<Vec<Value>> = p.rows.iter().map(|&r| key_row(&rf, r)).collect();

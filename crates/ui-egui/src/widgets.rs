@@ -384,6 +384,7 @@ pub fn color_palette_fixed(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &s
 /// egui temp storage, and More Colors… OK falls back to the picker colour for an invalid typed hex and
 /// records the result as the newest recent colour (capped at `RECENT_COLORS`).
 fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors: bool) -> Option<String> {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let mut picked = None;
     const ROWS: usize = 7; // 6 tint rows + 1 standard row
@@ -466,7 +467,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     if ui.button(none_label).clicked() {
         picked = Some("none".to_string());
     }
-    ui.label(egui::RichText::new("Theme Colors").small());
+    ui.label(egui::RichText::new(lang.tr("Theme Colors")).small());
     let order = [0usize, 1, 2, 3, 4, 5, 6, 7, 8, 9];
     let tints = [0.0f64, 0.8, 0.6, 0.4, -0.25, -0.5];
     egui::Grid::new(ui.scope_id().with("theme_grid")).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
@@ -489,7 +490,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             ui.end_row();
         }
     });
-    ui.label(egui::RichText::new("Standard Colors").small());
+    ui.label(egui::RichText::new(lang.tr("Standard Colors")).small());
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         for (col, hex) in std_hex.iter().enumerate() {
@@ -510,7 +511,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     // Recent Colors: the custom colours picked below, newest first.
     let mut recent: Vec<String> = ui.ctx().data(|d| d.get_temp(recent_colors_id())).unwrap_or_default();
     if !recent.is_empty() {
-        ui.label(egui::RichText::new("Recent Colors").small());
+        ui.label(egui::RichText::new(lang.tr("Recent Colors")).small());
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for hex in &recent {
@@ -530,7 +531,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
     if more_colors {
         ui.separator();
     }
-    if more_colors && ui.button("More Colors…").clicked() {
+    if more_colors && ui.button(lang.tr("More Colors…")).clicked() {
         let start = recent.first().and_then(|h| parse_hex(h)).unwrap_or([0x44, 0x72, 0xC4]);
         more = Some(MoreColors::new(start));
     }
@@ -553,10 +554,10 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
             let (sw, _) = ui.allocate_exact_size(vec2(36.0, 18.0), Sense::hover());
             ui.painter().rect_filled(sw, 1.0, Color32::from_rgb(c[0], c[1], c[2]));
             ui.painter().rect_stroke(sw, 1.0, Stroke::new(1.0, Color32::from_gray(160)), StrokeKind::Inside);
-            ui.label(egui::RichText::new("New").small());
+            ui.label(egui::RichText::new(lang.tr("New")).small());
         });
         ui.horizontal(|ui| {
-            if ui.button("  OK  ").clicked() {
+            if ui.button(format!("  {}  ", lang.tr("OK"))).clicked() {
                 // A hex still being typed that is not a colour falls back to the picker's.
                 let c = parse_hex(&m.hex).unwrap_or_else(|| m.hsva.to_srgb());
                 let hex = hex_of(c);
@@ -564,7 +565,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
                 picked = Some(hex);
                 done = true;
             }
-            if ui.button("Cancel").clicked() {
+            if ui.button(lang.tr("Cancel")).clicked() {
                 done = true;
             }
         });
@@ -580,6 +581,7 @@ fn palette(ui: &mut Ui, theme_colors: &[u32; 12], none_label: &str, more_colors:
 
 /// Draws the modal warning/error message; OK, Enter or Esc clears it and restores editor focus when an edit exists.
 pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
+    let lang = crate::i18n::current(ctx);
     let Some((title, msg)) = app.message.clone() else { return };
     let title = app.ui.language.tr(&title).to_owned();
     let msg = app.ui.language.tr_error(&msg);
@@ -598,7 +600,9 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button(format!("  {}  ", lang.tr("OK"))).clicked()
+                || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+            {
                 close = true;
             }
         });

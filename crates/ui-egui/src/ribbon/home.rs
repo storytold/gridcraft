@@ -25,6 +25,7 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
 
 /// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
     // Clipboard
@@ -189,7 +190,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
                 ui.separator();
-                let more = ui.button("More Borders…");
+                let more = ui.button(lang.tr("More Borders…"));
                 if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
                     keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
                 }
@@ -609,7 +610,9 @@ pub const FONTS: &[&str] = &[
 fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let t = Tokens::get(ui.ctx());
     let size = st.font.size;
-    let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}") };
+    // Sizes are shown and typed with the workbook region's decimal separator ("10,5" in pt-BR).
+    let region = crate::dialogs::workbook_region(app);
+    let current = if size.fract() == 0.0 { format!("{}", size as i32) } else { format!("{size}").replace('.', &region.decimal.to_string()) };
     let field = egui::Id::unique("gridcraft.font_size_box");
     let draft = field.with("draft");
     let mut text = ui.data_mut(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| current.clone());
@@ -647,7 +650,7 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
         ui.data_mut(|d| d.remove::<String>(draft));
         // Consume the Enter so the grid behind does not also move the active cell down.
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter))
-            && let Some(v) = text.trim().parse::<f64>().ok().filter(|v| v.is_finite())
+            && let Some(v) = crate::dialogs::parse_in_region(text.trim(), region)
         {
             act(app, "home.fontSize", json!({"size": v}));
         }
@@ -686,8 +689,7 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let items: Vec<(&str, String)> = names
         .iter()
         .map(|n| {
-            let code = gridcraft_engine::cmd::format::format_code_for(n);
-            let preview = app.session.active().map(|d| gridcraft_engine::display::format(&sample, code, &d.wb).text).unwrap_or_default();
+            let preview = app.session.active().map(|d| format_preview(&sample, n, &d.wb)).unwrap_or_default();
             (*n, format!("{:<12}   {preview}", lang.tr(n)))
         })
         .chain(std::iter::once(("__more", format!("{:>12}", lang.tr("More Number Formats…")))))
@@ -700,24 +702,32 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     }
 }
 
+/// The sample cell shown in the format `name` the workbook's region offers, as the command
+/// applies it (`R$ 1.234,50` for Currency in pt-BR).
+fn format_preview(sample: &gridcraft_engine::core::Value, name: &str, wb: &gridcraft_engine::model::Workbook) -> String {
+    let code = gridcraft_engine::cmd::format::format_code_in(name, wb.region);
+    gridcraft_engine::display::format(sample, &code, wb).text
+}
+
 fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
-    ui.menu_button("Highlight Cells Rules", |ui| {
+    let lang = app.ui.language;
+    ui.menu_button(lang.tr("Highlight Cells Rules"), |ui| {
         for (label, op) in [("Greater Than…", "greater"), ("Less Than…", "less"), ("Between…", "between"), ("Equal To…", "equal")] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 app.open_dialog("cfQuick", json!({"type": "cellIs", "operator": op, "title": label}));
             }
         }
-        if ui.button("Text that Contains…").clicked() {
+        if ui.button(lang.tr("Text that Contains…")).clicked() {
             app.open_dialog("cfQuick", json!({"type": "containsText", "title": "Text that Contains"}));
         }
-        if ui.button("A Date Occurring…").clicked() {
+        if ui.button(lang.tr("A Date Occurring…")).clicked() {
             app.open_dialog("cfQuick", json!({"type": "timePeriod", "title": "A Date Occurring"}));
         }
-        if ui.button("Duplicate Values…").clicked() {
+        if ui.button(lang.tr("Duplicate Values…")).clicked() {
             act(app, "home.conditionalFormat", json!({"rule": {"type": "duplicate"}}));
         }
     });
-    ui.menu_button("Top/Bottom Rules", |ui| {
+    ui.menu_button(lang.tr("Top/Bottom Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -731,16 +741,16 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.menu_button("Data Bars", |ui| {
+    ui.menu_button(lang.tr("Data Bars"), |ui| {
         for (label, c) in
             [("Blue", "#638EC6"), ("Green", "#63BE7B"), ("Red", "#F8696B"), ("Orange", "#FFB628"), ("Light Blue", "#008AEF"), ("Purple", "#D6007B")]
         {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "dataBar", "color": c}}));
             }
         }
     });
-    ui.menu_button("Color Scales", |ui| {
+    ui.menu_button(lang.tr("Color Scales"), |ui| {
         for (label, cols) in [
             ("Green - Yellow - Red", vec!["#63BE7B", "#FFEB84", "#F8696B"]),
             ("Red - Yellow - Green", vec!["#F8696B", "#FFEB84", "#63BE7B"]),
@@ -749,12 +759,12 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("White - Green", vec!["#FCFCFF", "#63BE7B"]),
             ("White - Red", vec!["#FCFCFF", "#F8696B"]),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "colorScale", "colors": cols}}));
             }
         }
     });
-    ui.menu_button("Icon Sets", |ui| {
+    ui.menu_button(lang.tr("Icon Sets"), |ui| {
         for (label, set) in [
             ("3 Arrows", "3Arrows"),
             ("3 Traffic Lights", "3TrafficLights1"),
@@ -763,16 +773,16 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ("5 Arrows", "5Arrows"),
             ("5 Quarters", "5Quarters"),
         ] {
-            if ui.button(label).clicked() {
+            if ui.button(lang.tr(label)).clicked() {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "iconSet", "set": set}}));
             }
         }
     });
     ui.separator();
-    if ui.button("New Rule…").clicked() {
+    if ui.button(lang.tr("New Rule…")).clicked() {
         app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
     }
-    ui.menu_button("Clear Rules", |ui| {
+    ui.menu_button(lang.tr("Clear Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -782,13 +792,14 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    if ui.button("Manage Rules…").clicked() {
+    if ui.button(lang.tr("Manage Rules…")).clicked() {
         app.open_dialog("manageRules", json!({}));
     }
 }
 
 #[cfg(test)]
 mod accounting_symbol_tests {
+    #![allow(clippy::disallowed_methods)] // en-US on purpose: test pins the en-US samples of the dropdown
     use super::*;
     use gridcraft_engine::core::{DateSystem, Value};
     use gridcraft_engine::numfmt::{NumberFormat, format_value};
@@ -812,5 +823,15 @@ mod accounting_symbol_tests {
             let symbol = tag.trim_start_matches("[$").split('-').next().unwrap_or_default();
             assert_eq!(out.fill.map(|(c, at)| (c, out.text[..at].trim_start())), Some((' ', symbol)), "{label}");
         }
+    }
+
+    #[test]
+    fn format_preview_uses_the_region_codes() {
+        let mut wb = gridcraft_engine::model::Workbook::new();
+        let sample = Value::Number(1234.5);
+        assert_eq!(format_preview(&sample, "Currency", &wb), "$1,234.50");
+        let Some(pt) = gridcraft_engine::core::region::find("pt-BR") else { panic!("pt-BR region") };
+        wb.region = pt;
+        assert_eq!(format_preview(&sample, "Currency", &wb), "R$ 1.234,50");
     }
 }

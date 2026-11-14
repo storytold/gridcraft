@@ -61,6 +61,7 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+#[allow(clippy::disallowed_methods)] // en-US on purpose: criteria are stored with the separators XLSX writes
 pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
@@ -82,6 +83,20 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad("data.filterBy", "column outside the filter range"));
     }
     let off = col - af.range.start.col;
+    // Criteria are stored with en-US separators, the way XLSX writes them, so a saved filter means
+    // the same number in every region. A JSON number already is; a custom operand typed the way
+    // only the region reads a number (`1,5` in pt-BR) is stored as that number.
+    let region = s.doc()?.wb.region;
+    let to_operand = |v: &Json| {
+        let text = crate::cmd::edit::json_to_input(v);
+        match v {
+            Json::String(t) if gridcraft_core::parse::parse_number_text(t).is_none() => {
+                gridcraft_core::parse::parse_number_text_in_region(t, gridcraft_core::DateSystem::D1900, region)
+                    .map_or(text, |n| crate::cmd::edit::json_to_input(&json!(n)))
+            }
+            _ => text,
+        }
+    };
     let crit = if bool_param(p, "clear").unwrap_or(false) {
         None
     } else if let Some(vals) = p.get("values").and_then(Json::as_array) {
@@ -90,10 +105,8 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
             blanks: bool_param(p, "blanks").unwrap_or(false),
         })
     } else if let Some(c) = p.get("custom") {
-        let a =
-            (c.get("op").and_then(Json::as_str).unwrap_or("=").to_string(), c.get("value").map(crate::cmd::edit::json_to_input).unwrap_or_default());
-        let b =
-            c.get("op2").and_then(Json::as_str).map(|o| (o.to_string(), c.get("value2").map(crate::cmd::edit::json_to_input).unwrap_or_default()));
+        let a = (c.get("op").and_then(Json::as_str).unwrap_or("=").to_string(), c.get("value").map(to_operand).unwrap_or_default());
+        let b = c.get("op2").and_then(Json::as_str).map(|o| (o.to_string(), c.get("value2").map(to_operand).unwrap_or_default()));
         Some(FilterCriterion::Custom { a, b, and: c.get("and").and_then(Json::as_bool).unwrap_or(true) })
     } else if let Some(t) = p.get("top") {
         Some(FilterCriterion::Top10 {
@@ -121,6 +134,7 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Does a value pass a custom comparison (`>`, `=*abc*`, `<>x`…)?
+#[allow(clippy::disallowed_methods)] // en-US on purpose: criteria are stored with the separators XLSX writes
 fn custom_ok(v: &Value, text: &str, op: &str, crit: &str) -> bool {
     let num = gridcraft_core::parse::parse_number_text(crit);
     let cmp = match (v.as_f64(), num) {

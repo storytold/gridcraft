@@ -145,11 +145,37 @@ fn conditional_number_format_reaches_the_cell_text() {
     let text = |row: u32, cf: &mut CfCache| {
         let c = CellRef::new(row, 0);
         let (lk, _) = look(&wb, 0, sh, c, cf);
-        display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0).0
+        display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0, Default::default()).0
     };
     assert_eq!(text(0, &mut cf), "1");
     assert_eq!(text(1, &mut cf), "3.00");
     assert_eq!(text(2, &mut cf), "4.00");
+}
+
+#[test]
+fn logical_and_error_values_read_in_the_portuguese_formula_language() {
+    use gridcraft_engine::formula::FormulaLocale;
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "A1", "values": [[true], [false], ["=1/0"], ["=NA()"], ["=ZZZ()"]]})).unwrap();
+    let wb = session.active().unwrap().wb.clone();
+    let sh = wb.sheet(0).unwrap();
+    let mut cf = CfCache::new();
+    let shown = |locale: FormulaLocale, cf: &mut CfCache| {
+        (0..5)
+            .map(|row| {
+                let c = CellRef::new(row, 0);
+                let (lk, _) = look(&wb, 0, sh, c, cf);
+                display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0, locale).0
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(shown(FormulaLocale::Pt, &mut cf), ["VERDADEIRO", "FALSO", "#DIV/0!", "#N/D", "#NOME?"]);
+    for locale in [FormulaLocale::En, FormulaLocale::Es] {
+        assert_eq!(shown(locale, &mut cf), ["TRUE", "FALSE", "#DIV/0!", "#N/A", "#NAME?"]);
+    }
+    // The stored value does not change.
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::Bool(true));
 }
 
 #[test]

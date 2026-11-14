@@ -309,7 +309,11 @@ fn active_input(app: &SheetApp) -> String {
             // A legacy array formula shows in braces (`{=A1:A2*2}`), as `Cell::bar_text` does.
             if f.array.is_some() { format!("{{{shown}}}") } else { shown }
         } else {
-            gridcraft_engine::display::edit_text(&d.wb, sh, a)
+            // A constant logical or error value reads in the formula language (`VERDADEIRO`).
+            match crate::formula_locale::value_name(&c.value, app.ui.language.formula_locale()) {
+                Some(name) => name.to_string(),
+                None => gridcraft_engine::display::edit_text(&d.wb, sh, a),
+            }
         };
     }
     String::new()
@@ -377,6 +381,7 @@ fn python_badge(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Option<Rec
 
 /// Draws the Name Box and its name dropdown; Enter jumps to a reference or known name (or defines a new name) and is consumed so the grid does not move down.
 fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
+    let lang = crate::i18n::current(ui.ctx());
     let id = egui::Id::unique("gridcraft.name_box");
     let shown = app.name_box_text();
     let mut text = app.name_box.clone().unwrap_or(shown.clone());
@@ -429,7 +434,7 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(lang.tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {
@@ -663,6 +668,10 @@ fn editor_shortcuts(
     if !has_focus || !mine || app.message.is_some() || app.dialog.is_some() {
         return outcome;
     }
+    // The editor owns Tab and the arrows (its `event_filter`), but egui applies a widget's filter
+    // only from its second focused frame on: a Tab or an arrow in the frame the editor got focus
+    // would also move egui's focus to the next widget, where it stays and every later key is lost.
+    ui.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     // Ctrl+Alt+Shift+P turns the edit into Python code.
     outcome.to_python = ui.input_mut(take_python_shortcut);
     let (action, cancel, py_trigger) = editor_confirm_keys(ui, ed);

@@ -135,13 +135,13 @@ fn row(a: &Array, r: usize) -> Vec<Value> {
 // ---------------------------------------------------------------------------------------------
 // VLOOKUP / HLOOKUP / LOOKUP / MATCH
 
-fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
+fn vh_lookup(args: &[Arg], vertical: bool, c: &dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let table = as_array(&arg(args, 1)?.value);
     if let Value::Error(e) = &arg(args, 1)?.value {
         return Err(*e);
     }
-    let idx = num(args, 2)?;
+    let idx = num(args, 2, c)?;
     // NaN too: it would pass `idx < 1.0` and become index 0 (#2163).
     if idx.is_nan() || idx < 1.0 {
         return Err(CellError::Value);
@@ -160,12 +160,12 @@ fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     Ok(v.cloned().unwrap_or(Value::Empty))
 }
 
-fn vlookup(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    vh_lookup(a, true)
+fn vlookup(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    vh_lookup(a, true, c)
 }
 
-fn hlookup(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    vh_lookup(a, false)
+fn hlookup(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    vh_lookup(a, false, c)
 }
 
 fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -205,14 +205,14 @@ fn lookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
 }
 
-fn match_fn(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn match_fn(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let av = &arg(args, 1)?.value;
     if let Value::Error(e) = av {
         return Err(*e);
     }
     let hay = vector(&as_array(av)).ok_or(CellError::NA)?;
-    let mt = opt_num(args, 2, 1.0)?;
+    let mt = opt_num(args, 2, 1.0, c)?;
     let pos = if mt == 0.0 {
         find_exact(&x, &hay, true, false)
     } else if mt > 0.0 {
@@ -297,7 +297,7 @@ fn bsearch_exact(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
     if binary_order(v, x, desc) == Ordering::Equal { Some(p) } else { None }
 }
 
-fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn xlookup(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let lv = &arg(args, 1)?.value;
     if let Value::Error(e) = lv {
@@ -315,8 +315,8 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if vertical && ra.rows != la.rows || !vertical && ra.cols != la.cols {
         return Err(CellError::Value);
     }
-    let mm = if has(args, 4) { opt_int(args, 4, 0)? } else { 0 };
-    let sm = if has(args, 5) { opt_int(args, 5, 1)? } else { 1 };
+    let mm = if has(args, 4) { opt_int(args, 4, 0, c)? } else { 0 };
+    let sm = if has(args, 5) { opt_int(args, 5, 1, c)? } else { 1 };
     match xsearch(&x, &hay, mm, sm)? {
         Some(p) => {
             if vertical {
@@ -343,30 +343,30 @@ fn xlookup(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
 }
 
-fn xmatch(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn xmatch(args: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let x = needle(args, 0)?;
     let lv = &arg(args, 1)?.value;
     if let Value::Error(e) = lv {
         return Err(*e);
     }
     let hay = vector(&as_array(lv)).ok_or(CellError::Value)?;
-    let mm = if has(args, 2) { int(args, 2)? } else { 0 };
-    let sm = if has(args, 3) { int(args, 3)? } else { 1 };
+    let mm = if has(args, 2) { int(args, 2, c)? } else { 0 };
+    let sm = if has(args, 3) { int(args, 3, c)? } else { 1 };
     xsearch(&x, &hay, mm, sm)?.map(|p| Value::Number((p + 1) as f64)).ok_or(CellError::NA)
 }
 
 // ---------------------------------------------------------------------------------------------
 // INDEX / ROWS / COLUMNS / TRANSPOSE / ADDRESS
 
-fn index(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+fn index(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let av = &arg(args, 0)?.value;
     if let Value::Error(e) = av {
         return Err(*e);
     }
     let a = as_array(av);
-    let r = if has(args, 1) { num(args, 1)? } else { 0.0 };
-    let c = if has(args, 2) { num(args, 2)? } else { 0.0 };
-    if has(args, 3) && num(args, 3)?.trunc() != 1.0 {
+    let r = if has(args, 1) { num(args, 1, ctx)? } else { 0.0 };
+    let c = if has(args, 2) { num(args, 2, ctx)? } else { 0.0 };
+    if has(args, 3) && num(args, 3, ctx)?.trunc() != 1.0 {
         return Err(CellError::Ref);
     }
     if r < 0.0 || c < 0.0 {
@@ -437,10 +437,10 @@ fn quote_sheet(s: &str) -> String {
     if plain { s.to_string() } else { format!("'{}'", s.replace('\'', "''")) }
 }
 
-fn address(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let r = num(args, 0)?.trunc();
-    let c = num(args, 1)?.trunc();
-    let abs = if has(args, 2) { int(args, 2)? } else { 1 };
+fn address(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
+    let r = num(args, 0, ctx)?.trunc();
+    let c = num(args, 1, ctx)?.trunc();
+    let abs = if has(args, 2) { int(args, 2, ctx)? } else { 1 };
     let a1 = if has(args, 3) { opt_bool(args, 3, true)? } else { true };
     if !(1.0..=1_048_576.0).contains(&r) || !(1.0..=16_384.0).contains(&c) || !(1..=4).contains(&abs) {
         return Err(CellError::Value);
