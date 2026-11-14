@@ -893,6 +893,70 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// A picture drawn on every page keeps only as many copies as the document-wide image budget
+/// holds, and the running byte counts stay in step as pages are added and reopened.
+#[test]
+fn image_bytes_are_bounded_across_pages() -> Result<(), Box<dyn Error>> {
+    // Each page keeps its own copy of a picture it draws, so a picture repeated on every page of
+    // a long export grew without bound (a 3 KB workbook reached 2 GiB). The document-wide budget
+    // stops adding copies once it is spent.
+    let mut d = PdfDoc::new();
+    assert_eq!(d.add_page(100.0, 100.0).image_room(), MAX_DOC_IMAGE_BYTES);
+    d.set_image_budget(u64::MAX);
+    assert_eq!(d.add_page(100.0, 100.0).image_room(), MAX_DOC_IMAGE_BYTES, "the budget is never raised");
+
+    let mut d = PdfDoc::new();
+    d.set_image_budget(10_000);
+    // Opaque 32×32: 4096 bytes of room needed, 3072 bytes (RGB, no mask) kept.
+    let px = [200u8, 200, 200, 255].repeat(32 * 32);
+    for _ in 0..50 {
+        let p = d.add_page(100.0, 100.0);
+        p.image_rgba(Rect::new(0.0, 0.0, 50.0, 50.0), &px, [32, 32]);
+    }
+    let kept: u64 = d.pages.iter().map(Page::image_bytes).sum();
+    assert_eq!(kept, 2 * 3072);
+    assert_eq!(d.pages.iter().filter(|p| !p.images.is_empty()).count(), 2);
+    assert!(d.pages.iter().skip(2).all(|p| p.images.is_empty() && p.content.is_empty()));
+    // A page reopened later sees what the whole document already holds.
+    let p = d.page_mut(0).ok_or_else(|| io::Error::other("missing page"))?;
+    assert_eq!(p.image_room(), 10_000 - 2 * 3072);
+    // The copy page 0 already holds is drawn again past the budget; a new picture of the same
+    // size is refused; a small one still fits.
+    p.image_rgba(Rect::new(0.0, 0.0, 50.0, 50.0), &px, [32, 32]);
+    p.image_rgba(Rect::new(0.0, 0.0, 50.0, 50.0), &[100u8, 100, 100, 255].repeat(32 * 32), [32, 32]);
+    p.image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &[255; 4 * 4 * 4], [4, 4]);
+    assert_eq!(d.pages[0].images.len(), 2, "the new big picture is refused, the small one still fits");
+    assert_eq!(d.pages[0].content.matches(" Do Q").count(), 3, "the held copy is drawn twice, the small one once");
+    // The running per-page counts match the images each page holds, and a page handed out next
+    // sees what the reopened page added.
+    assert!(d.pages.iter().all(|p| p.image_kept == p.image_bytes()));
+    assert_eq!(d.add_page(100.0, 100.0).image_room(), 10_000 - 2 * 3072 - 4 * 4 * 3);
+    assert!(d.page_mut(10_000).is_none());
+    assert_eq!(d.page_mut(1).map(|p| p.image_room()), Some(10_000 - 2 * 3072 - 4 * 4 * 3));
+    let pdf = d.finish();
+    check_xref(&pdf)?;
+    // The identical 32×32 copies on pages 0 and 1 are written once; the 4×4 picture is the other.
+    assert_eq!(String::from_utf8_lossy(&pdf).matches("/Subtype /Image").count(), 2);
+    Ok(())
+}
+
+#[test]
+fn a_picture_the_page_holds_is_drawn_again_after_the_budget_is_spent() -> Result<(), Box<dyn Error>> {
+    let mut d = PdfDoc::new();
+    // Room for exactly one translucent 1×1 picture (3 bytes of RGB plus 1 of alpha).
+    d.set_image_budget(4);
+    let p = d.add_page(100.0, 100.0);
+    let pixel = [10u8, 20, 30, 128];
+    p.image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &pixel, [1, 1]);
+    assert_eq!(p.image_room(), 0);
+    p.image_rgba(Rect::new(20.0, 0.0, 10.0, 10.0), &pixel, [1, 1]);
+    p.image_rgba(Rect::new(40.0, 0.0, 10.0, 10.0), &[10u8, 20, 30, 64], [1, 1]);
+    assert_eq!(p.images.len(), 1, "a new picture past the budget is refused");
+    assert_eq!(p.content.matches("/Im1 Do Q").count(), 2, "the picture the page holds is drawn both times");
+    check_xref(&d.finish())?;
+    Ok(())
+}
+
 #[test]
 fn many_alternating_runs_share_one_text_matrix() {
     let mut doc = PdfDoc::new();

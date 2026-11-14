@@ -528,6 +528,92 @@ fn charts_and_images_are_drawn() {
     }
 }
 
+/// Bytes of pixel data the pages of a PDF hold: 3 per RGB pixel plus 1 per soft-mask pixel, for
+/// every image each page references. The writer shares identical images across pages, but each
+/// page kept its own copy while the document was built, so a shared image counts once per page.
+fn image_bytes(pdf: &[u8]) -> u64 {
+    let text = String::from_utf8_lossy(pdf);
+    let num_after = |s: &str, key: &str| -> u64 {
+        let at = s.find(key).unwrap() + key.len();
+        s[at..].split_whitespace().next().unwrap().parse().unwrap()
+    };
+    // Object id → (pixel bytes, soft mask id).
+    let mut images = std::collections::HashMap::new();
+    let mut pages = vec![];
+    for obj in text.split("endobj").filter(|o| o.contains(" 0 obj")) {
+        let head = &obj[..obj.find(" 0 obj").unwrap()];
+        let id: u64 = head.split_whitespace().last().unwrap().parse().unwrap();
+        let dict = &obj[..obj.find(">>").unwrap_or(obj.len())];
+        if dict.contains("/Subtype /Image") {
+            let bytes = num_after(dict, "/Width ") * num_after(dict, "/Height ") * if dict.contains("/DeviceRGB") { 3 } else { 1 };
+            let smask = dict.contains("/SMask ").then(|| num_after(dict, "/SMask "));
+            images.insert(id, (bytes, smask));
+        } else if obj.contains("/Type /Page /Parent") {
+            pages.push(obj);
+        }
+    }
+    let with_mask = |id: u64| -> u64 {
+        let (bytes, smask) = images[&id];
+        bytes + smask.map_or(0, |m| images[&m].0)
+    };
+    pages
+        .iter()
+        .filter_map(|page| page.find("/XObject << ").map(|at| &page[at + "/XObject << ".len()..]))
+        .map(|refs| {
+            let refs = &refs[..refs.find(">>").unwrap()];
+            let tokens: Vec<&str> = refs.split_whitespace().collect();
+            tokens.chunks(4).map(|c| with_mask(c[1].parse().unwrap())).sum::<u64>()
+        })
+        .sum()
+}
+
+/// A picture anchored across many pages keeps no more copies in the PDF than the image budget
+/// allows, and the export still succeeds.
+#[test]
+fn picture_copies_across_pages_stay_within_the_image_budget() {
+    // Each page a picture overlaps kept its own decoded copy in the PDF with no document-wide
+    // bound: a 3 KB workbook with one tall picture reached 2 GiB before running out of pages.
+    let mut s = s();
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 120, 200, 255]));
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Title"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"titleRows": "1:1"})).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    let sh = wb.sheet_mut(0).unwrap();
+    // A floating picture over some 20 pages, and a cell picture in the title row on every page.
+    sh.images.push(Image {
+        id,
+        anchor: Anchor { cell: CellRef::new(1, 1), dx: 0.0, dy: 0.0, width: 200.0, height: 19_990.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
+        data: std::sync::Arc::new(png.clone()),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    sh.cell_pictures.insert(CellRef::new(0, 2), std::sync::Arc::new(CellPicture { data: png, mime: "image/png".into(), alt: String::new() }));
+    let d = s.doc().unwrap();
+    let lays = layouts(&d.wb, &PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap());
+
+    let (full, pages) = render_pdf(&d.wb, &lays, "t", "");
+    assert!(pages >= 15, "{pages} pages");
+    // Within the default budget every page draws (and holds while the PDF is built) its own copy.
+    // Identical copies are written to the file once, so the draws are what to count.
+    let draws = |pdf: &[u8]| String::from_utf8_lossy(pdf).matches(" Do Q").count();
+    let full_draws = draws(&full);
+    assert!(full_draws >= pages - 1, "{full_draws} picture draws on {pages} pages");
+
+    // 64×64 RGB is 12,288 bytes: a 64 KiB budget holds a handful of page copies, not one per page.
+    let budget = 64 * 1024;
+    let (capped, capped_pages) = render_pdf_with_image_budget(&d.wb, &lays, "t", "", budget);
+    assert_eq!(capped_pages, pages, "pages past the budget still print, without the pictures");
+    let capped_draws = draws(&capped);
+    assert!((1..full_draws / 2).contains(&capped_draws), "{capped_draws} of {full_draws} picture draws kept with a {budget}-byte budget");
+    let kept = image_bytes(&capped);
+    assert!((1..=budget).contains(&kept), "{kept} bytes of images kept with a {budget}-byte budget");
+    assert!(contains(&capped, "%%EOF"));
+}
+
 #[test]
 fn page_setup_edits_settings() {
     let mut s = s();
@@ -946,7 +1032,8 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     // A smoothed line is its points, not one unit.
     assert_eq!(chart_cost(&[line(4000), Prim::Circle { cx: 0.0, cy: 0.0, r: 1.0, fill: None, stroke: None }]), 4002);
     // Room for exactly two copies of a 1,000-point chart.
-    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 2002, ..Default::default() };
+    let mut pics = PicCache::default();
+    pics.chart_prims = MAX_CHART_PRIMS - 2002;
     let mut renders = 0;
     for expect in [true, true, false, false] {
         let got = pics.chart((0, 0), || {
@@ -958,7 +1045,8 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert_eq!(renders, 1, "a rejected chart is not rendered again");
     assert!(pics.charts.is_empty(), "and its primitives are not kept");
     // A chart too big for what is left is dropped without being cached at all.
-    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 10, ..Default::default() };
+    let mut pics = PicCache::default();
+    pics.chart_prims = MAX_CHART_PRIMS - 10;
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
