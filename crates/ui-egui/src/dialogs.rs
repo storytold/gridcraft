@@ -934,6 +934,8 @@ impl Dialog {
                 d.tab = p("tab").as_str().unwrap_or("Number").to_string();
                 if let Ok(st) = app.session.run("cell.get", json!({})) {
                     d.values.insert("style".into(), st["style"].clone());
+                    // What the dialog opened with: OK sends only the properties changed from it.
+                    d.values.insert("baseStyle".into(), st["style"].clone());
                 }
                 d
             }
