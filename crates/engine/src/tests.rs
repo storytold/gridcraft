@@ -5660,6 +5660,23 @@ fn paste_into_a_narrower_selection_repeats_the_copy_down_its_rows() {
     }
 }
 
+/// #3934: repeating a wide copy down a narrow selection writes the copy's width on every row, so
+/// the 4,000,000-cell limit on a tiled paste counts that area, not the selection's. Past it the
+/// copy is pasted once, as a tiled paste over too large a selection already is.
+#[test]
+fn a_row_repeated_down_a_narrow_selection_is_bounded_by_the_area_it_fills() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "P1", "values": [[2]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:P1"})).unwrap();
+    // 300,000 rows selected, 4,800,000 cells once the copy's 16 columns are repeated down them.
+    s.execute("selection.set", json!({"range": "A3:A300002"})).unwrap();
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["pasted"], json!("A3:P3"));
+    assert_eq!(v(&s, "P3"), Value::Number(2.0));
+    assert_eq!(v(&s, "A4"), Value::Empty);
+}
+
 /// Excel refuses a paste that would run off the sheet rather than pasting part of it: whole
 /// columns below row 1, whole rows right of column A, a whole column transposed, or a block at
 /// the last row or column.
