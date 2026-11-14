@@ -164,8 +164,8 @@ impl ScriptDefault {
 }
 
 /// Default language and fonts of Western, Asian (CJK) and complex (right-to-left, Indic) text.
-/// An OpenDocument file states them on its default cell style; Excel has no equivalent, so
-/// XLSX neither reads nor writes them.
+/// Empty unless a reader for a format that states them fills them (OpenDocument puts them on
+/// its default cell style); Excel has no equivalent, so XLSX neither reads nor writes them.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TextDefaults {
     #[serde(default, skip_serializing_if = "ScriptDefault::is_empty")]
