@@ -70,7 +70,8 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
                 None
             }
         },
-        Key::Semicolon => {
+        // Ctrl+Shift+; (the time) is in `keymap::lookup`; Cmd+Shift+; on a Mac does nothing.
+        Key::Semicolon if !shift => {
             // Insert today's date.
             let text = app
                 .session
