@@ -162,6 +162,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 | 2026-10-31 | minor | BINOM.DIST and BINOM.DIST.RANGE reject trial counts above 2,147,483,646 after truncation |
 | 2026-10-31 | minor | BETA.DIST density returns `#NUM!` at the lower endpoint with alpha less than or equal to 1 and upper endpoint with beta less than or equal to 1; cumulative behavior is unchanged |
 | 2026-10-31 | minor | HARMEAN returns `#N/A` when array or reference inputs contain no numbers; nonpositive numeric observations remain `#NUM!` |
+| 2026-10-30 | minor | BESSELI and BESSELK order 0 and 1 return Excel's values (A&S polynomials, tested against a table measured in Excel); higher-order BESSELI retains its existing series; BESSELJ and BESSELY still differ in the 7th to 9th digit, see Depth |
 | 2026-10-31 | minor | YEARFRAC basis 0 tests the end-31 rule against the original start day; MOD returns `#NUM!` from a quotient of 1.1259E12; PERCENTRANK returns `#DIV/0!` from significance 309 and 15 significant digits from 15 (Excel 16) |
 | 2026-10-27 | minor | ECMA.CEILING added to the functions that are in our library but not on Microsoft's list (with USDOLLAR), so the counts don't change |
 | 2026-10-26 | minor | IMSQRT uses Excel's polar route with its cosine reduction, so `IMSQRT("-4")` is `1.22514845490862E-16+2i` as in Excel (exact `2i` before); the rows list the IM* differences still open |
