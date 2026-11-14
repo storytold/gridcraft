@@ -315,7 +315,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                             }
                         }
-                        What::All => {
+                        What::All | What::AllExceptBorders => {
                             if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
                                 cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                             }
@@ -353,16 +353,24 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         // Merged areas inside the copied block travel with it.
-        if matches!(what, What::All | What::Formats) && !transpose {
+        if matches!(what, What::All | What::AllExceptBorders | What::Formats) && !transpose {
             let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|m| src.contains_range(m)).copied().collect();
+            // Every tile of a tiled paste gets its own copy; a row a filter hides keeps its merges.
             for m in merges {
-                let dr = at.row as i64 - src.start.row as i64;
-                let dc = at.col as i64 - src.start.col as i64;
-                if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
-                    let nm = RangeRef::new(a, b);
-                    let sh = cx.sheet_mut(dest_sheet)?;
-                    sh.merges.retain(|x| !x.intersects(&nm));
-                    sh.merges.push(nm);
+                for tr in 0..tiles_r {
+                    for tc in 0..tiles_c {
+                        let dr = at.row as i64 + i64::from(tr * h) - src.start.row as i64;
+                        let dc = at.col as i64 + i64::from(tc * w) - src.start.col as i64;
+                        if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
+                            if (a.row..=b.row).any(|r| skip_rows.contains(&r)) {
+                                continue;
+                            }
+                            let nm = RangeRef::new(a, b);
+                            let sh = cx.sheet_mut(dest_sheet)?;
+                            sh.merges.retain(|x| !x.intersects(&nm));
+                            sh.merges.push(nm);
+                        }
+                    }
                 }
             }
         }
