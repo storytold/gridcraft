@@ -2,8 +2,8 @@
 
 use std::cmp::Ordering;
 
-use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
+use gridcraft_core::parse::parse_number_text_in_region;
+use gridcraft_core::{CellError, DateSystem, Region, Value, compare_numbers, compare_text};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
@@ -46,18 +46,21 @@ pub(crate) struct Criterion {
     operand: Operand,
     /// The criterion was a bare `""` (or empty cell text): matches blanks and empty strings.
     bare_empty: bool,
+    /// The region whose separators the criterion's number, and numeric text in a cell, are read
+    /// with: `"1.200,00"` is a number in `pt-BR` and not in `en-US`.
+    region: &'static Region,
 }
 
 impl Criterion {
     /// Parses a criterion value the way COUNTIF does.
-    pub(crate) fn parse(v: &Value) -> Criterion {
+    pub(crate) fn parse(v: &Value, region: &'static Region) -> Criterion {
         match v {
-            Value::Number(n) => Criterion { op: Op::Eq, operand: Operand::Number(*n), bare_empty: false },
-            Value::Bool(b) => Criterion { op: Op::Eq, operand: Operand::Bool(*b), bare_empty: false },
-            Value::Error(e) => Criterion { op: Op::Eq, operand: Operand::Error(*e), bare_empty: false },
-            Value::Empty => Criterion { op: Op::Eq, operand: Operand::Number(0.0), bare_empty: false },
-            Value::Array(a) => Criterion::parse(a.data.first().unwrap_or(&Value::Empty)),
-            Value::Text(t) => Criterion::parse_text(t),
+            Value::Number(n) => Criterion { op: Op::Eq, operand: Operand::Number(*n), bare_empty: false, region },
+            Value::Bool(b) => Criterion { op: Op::Eq, operand: Operand::Bool(*b), bare_empty: false, region },
+            Value::Error(e) => Criterion { op: Op::Eq, operand: Operand::Error(*e), bare_empty: false, region },
+            Value::Empty => Criterion { op: Op::Eq, operand: Operand::Number(0.0), bare_empty: false, region },
+            Value::Array(a) => Criterion::parse(a.data.first().unwrap_or(&Value::Empty), region),
+            Value::Text(t) => Criterion::parse_text(t, region),
         }
     }
 
@@ -65,14 +68,14 @@ impl Criterion {
     /// functions: like `parse`, but text longer than 255 UTF-16 code units is `#VALUE!`, as in
     /// Excel (checked on Excel 2016 and Microsoft 365: `"a"×254 & "😀"` is 255 characters but
     /// 256 units, and is `#VALUE!`).
-    pub(crate) fn parse_arg(v: &Value) -> Result<Criterion, CellError> {
+    pub(crate) fn parse_arg(v: &Value, region: &'static Region) -> Result<Criterion, CellError> {
         match v {
-            Value::Array(a) => Criterion::parse_arg(a.data.first().unwrap_or(&Value::Empty)),
+            Value::Array(a) => Criterion::parse_arg(a.data.first().unwrap_or(&Value::Empty), region),
             // A UTF-8 string has at least as many bytes as UTF-16 units, so short text skips the count.
             Value::Text(t) if t.len() > MAX_CRITERION_UTF16_UNITS && t.encode_utf16().nth(MAX_CRITERION_UTF16_UNITS).is_some() => {
                 Err(CellError::Value)
             }
-            other => Ok(Criterion::parse(other)),
+            other => Ok(Criterion::parse(other, region)),
         }
     }
 
@@ -80,36 +83,36 @@ impl Criterion {
     /// doesn't reject a longer text criterion there: it matches its first 255 UTF-16 code units
     /// (checked on Excel 2016 and Microsoft 365 with COUNTIFS, SUMIFS, AVERAGEIFS, MAXIFS and
     /// MINIFS). A cut through a surrogate pair matches nothing; see `Operand::CutText`.
-    pub(crate) fn parse_arg_truncated(v: &Value) -> Criterion {
+    pub(crate) fn parse_arg_truncated(v: &Value, region: &'static Region) -> Criterion {
         match v {
-            Value::Array(a) => Criterion::parse_arg_truncated(a.data.first().unwrap_or(&Value::Empty)),
+            Value::Array(a) => Criterion::parse_arg_truncated(a.data.first().unwrap_or(&Value::Empty), region),
             Value::Text(t) if t.len() > MAX_CRITERION_UTF16_UNITS => {
                 let mut units = 0;
                 for (i, c) in t.char_indices() {
                     if units + c.len_utf16() > MAX_CRITERION_UTF16_UNITS {
                         if units == MAX_CRITERION_UTF16_UNITS {
-                            return Criterion::parse_text(&t[..i]);
+                            return Criterion::parse_text(&t[..i], region);
                         }
                         // The cut falls between the two halves of `c`.
                         let (op, rest) = split_op(&t[..i]);
-                        return Criterion { op, operand: Operand::CutText(rest.to_string()), bare_empty: false };
+                        return Criterion { op, operand: Operand::CutText(rest.to_string()), bare_empty: false, region };
                     }
                     units += c.len_utf16();
                 }
-                Criterion::parse_text(t)
+                Criterion::parse_text(t, region)
             }
-            other => Criterion::parse(other),
+            other => Criterion::parse(other, region),
         }
     }
 
-    fn parse_text(t: &str) -> Criterion {
+    fn parse_text(t: &str, region: &'static Region) -> Criterion {
         if t.is_empty() {
-            return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true };
+            return Criterion { op: Op::Eq, operand: Operand::Blank, bare_empty: true, region };
         }
         let (op, rest) = split_op(t);
         let operand = if rest.is_empty() {
             Operand::Blank
-        } else if let Some(n) = parse_number_text(rest) {
+        } else if let Some(n) = parse_number_text_in_region(rest, DateSystem::D1900, region) {
             Operand::Number(n)
         } else if rest.eq_ignore_ascii_case("TRUE") {
             Operand::Bool(true)
@@ -120,7 +123,7 @@ impl Criterion {
         } else {
             Operand::Text(rest.to_string())
         };
-        Criterion { op, operand, bare_empty: false }
+        Criterion { op, operand, bare_empty: false, region }
     }
 
     fn matches_blank(&self, v: &Value) -> bool {
@@ -141,7 +144,7 @@ impl Criterion {
         let cell = match v {
             Value::Number(x) => Some(*x),
             // Numeric text matches only for equality (COUNTIF("1") counts text "1").
-            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text(t),
+            Value::Text(t) if matches!(self.op, Op::Eq | Op::Ne) => parse_number_text_in_region(t, DateSystem::D1900, self.region),
             _ => None,
         };
         match cell {
@@ -383,9 +386,10 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_core::region::EN_US;
 
     fn m(c: &str, v: Value) -> bool {
-        Criterion::parse(&Value::from(c)).matches(&v)
+        Criterion::parse(&Value::from(c), &EN_US).matches(&v)
     }
 
     #[test]
@@ -424,8 +428,8 @@ mod tests {
         assert!(m("<b", Value::from("apple")));
         assert!(!m("<b", Value::Number(1.0)));
         assert!(m("#N/A", Value::Error(CellError::NA)));
-        assert!(Criterion::parse(&Value::Number(3.0)).matches(&Value::Number(3.0)));
-        assert!(Criterion::parse(&Value::Number(0.3)).matches(&Value::Number(0.1 + 0.2)));
+        assert!(Criterion::parse(&Value::Number(3.0), &EN_US).matches(&Value::Number(3.0)));
+        assert!(Criterion::parse(&Value::Number(0.3), &EN_US).matches(&Value::Number(0.1 + 0.2)));
         assert!(!lookup_equal(&Value::Number(0.3), &Value::Number(0.1 + 0.2), false));
         assert!(lookup_equal(&Value::Number(0.0), &Value::Number(-0.0), false));
         assert!(m("<>a*", Value::from("bcd")));
