@@ -335,7 +335,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, cut_move, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -438,6 +438,7 @@ fn paste_validations(
     src: RangeRef,
     dest_sheet: usize,
     pasted: RangeRef,
+    cut_move: bool,
     mode: PasteMode<'_>,
 ) -> Result<()> {
     let PasteMode { transpose, skip_blanks, skip_rows } = mode;
@@ -530,10 +531,36 @@ fn paste_validations(
         let ranges: Vec<RangeRef> = ranges.into_iter().flat_map(|r| without_rows(r, skip_rows)).collect();
         let Some(anchor) = ranges.first().map(|r| r.start) else { continue };
         let mut rule = dv.clone();
-        // Relative references move with the rule, as pasted formulas do: they are written for the
-        // rule's first cell.
-        rule.f1 = super::super::data::move_rule_formula(&dv.f1, first, anchor);
-        rule.f2 = dv.f2.as_ref().map(|f| super::super::data::move_rule_formula(f, first, anchor));
+        // A cut moves references inside the source block while references left behind keep
+        // pointing at their original cells. A copy instead shifts all relative references.
+        let move_formula = |formula: &str| {
+            if cut_move {
+                let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.as_str()).unwrap_or("");
+                let edit = if src_sheet.name.eq_ignore_ascii_case(dest_name) {
+                    gridcraft_formula::adjust::Edit::Move { from: src, to_row: anchor.row, to_col: anchor.col }
+                } else {
+                    gridcraft_formula::adjust::Edit::MoveToSheet {
+                        from: src,
+                        to_sheet: dest_name.to_string(),
+                        to_row: anchor.row,
+                        to_col: anchor.col,
+                    }
+                };
+                let prefix = if formula.starts_with('=') { "=" } else { "" };
+                gridcraft_formula::parse(formula.trim_start_matches('='))
+                    .map(|expr| {
+                        format!(
+                            "{prefix}{}",
+                            gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &src_sheet.name, &src_sheet.name, &edit))
+                        )
+                    })
+                    .unwrap_or_else(|_| formula.to_string())
+            } else {
+                super::super::data::move_rule_formula(formula, first, anchor)
+            }
+        };
+        rule.f1 = move_formula(&dv.f1);
+        rule.f2 = dv.f2.as_ref().map(|f| move_formula(f));
         rule.ranges = ranges;
         rules.push(rule);
     }

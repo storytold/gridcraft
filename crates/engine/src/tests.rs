@@ -2941,6 +2941,27 @@ fn validation_formulas_are_relative_and_see_the_new_value() {
 }
 
 #[test]
+fn cut_paste_validation_moves_only_references_inside_the_cut_range() {
+    let mut moved = s();
+    moved.execute("range.setValues", json!({"range": "A3", "values": [[100, 200]]})).unwrap();
+    moved.execute("cell.set", json!({"cell": "D6", "input": "1000"})).unwrap();
+    moved.execute("data.validation", json!({"range": "B3", "type": "custom", "formula1": "=B3>A3"})).unwrap();
+    moved.execute("edit.cut", json!({"range": "B3"})).unwrap();
+    moved.execute("edit.paste", json!({"at": "E6"})).unwrap();
+    assert_eq!(moved.doc().unwrap().wb.active().unwrap().validations.last().unwrap().f1, "E6>A3");
+    let ok = |s: &mut Session, input: &str| s.execute("data.validate", json!({"cell": "E6", "input": input})).unwrap()["ok"] == true;
+    assert!(ok(&mut moved, "500"));
+    assert!(!ok(&mut moved, "50"));
+
+    let mut copied = s();
+    copied.execute("range.setValues", json!({"range": "A3", "values": [[100, 200]]})).unwrap();
+    copied.execute("data.validation", json!({"range": "B3", "type": "custom", "formula1": "=B3>A3"})).unwrap();
+    copied.execute("edit.copy", json!({"range": "B3"})).unwrap();
+    copied.execute("edit.paste", json!({"at": "E6"})).unwrap();
+    assert_eq!(copied.doc().unwrap().wb.active().unwrap().validations.last().unwrap().f1, "E6>D6");
+}
+
+#[test]
 fn multi_area_rule_formulas_are_relative_to_the_top_left_cell_of_all_areas() {
     // Issue #3152: Excel writes the formula for the top-left cell of all the areas (H26), whatever
     // order they are listed in, not for the first area listed (H62).
