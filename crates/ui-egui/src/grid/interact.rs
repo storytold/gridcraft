@@ -1209,12 +1209,14 @@ pub fn follow_link(app: &mut SheetApp, target: &str) {
 pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool, jump: bool) {
     let Some(d) = app.session.active() else { return };
     let Some(sheet) = d.wb.active() else { return };
-    let from = ed.point_cell.unwrap_or(ed.cell);
+    let active_sheet = d.wb.active_sheet();
+    // After switching sheets in point mode, start from that sheet's selected cell.
+    let from = ed.point_cell.unwrap_or(if ed.sheet == active_sheet { ed.cell } else { d.selection.active });
     let to = if jump { gridcraft_engine::selection::jump(sheet, from, dr.signum(), dc.signum()) } else { from.offset_clamped(dr, dc) };
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
-        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
+        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(|t| RangeRef::parse(t.rsplit('!').next().unwrap_or(t)));
         let inferred_anchor = pointed
             .map(|r| {
                 CellRef::new(
@@ -1228,11 +1230,24 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
         to
     };
     let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
-    let text = if ed.sheet != d.wb.active_sheet() { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sheet.name)) } else { text };
-    let sheet = d.wb.active_sheet();
+    // Pointing on another sheet than the one the edit started on names it, as a click there does.
+    let text = if ed.sheet != active_sheet { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sheet.name)) } else { text };
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
-    ed.point_anchor = Some((sheet, anchor));
+    ed.point_anchor = Some((active_sheet, anchor));
+    app.grid.ensure_visible = true;
+}
+
+/// Switches sheets while a formula waits for a reference.
+pub fn point_sheet(app: &mut SheetApp, ed: &mut EditState, command: &str, params: serde_json::Value) {
+    let before = app.session.active().map(|d| d.wb.active_sheet());
+    if app.session.run(command, params).is_err() {
+        return;
+    }
+    let Some(d) = app.session.active().filter(|d| Some(d.wb.active_sheet()) != before) else { return };
+    ed.point_cell = Some(d.selection.active);
+    ed.point_anchor = Some((d.wb.active_sheet(), d.selection.active));
+    ed.request_focus = true;
     app.grid.ensure_visible = true;
 }
 
@@ -1269,7 +1284,6 @@ mod tests {
         assert_eq!(pen_ink("#C00000", 3.0, &theme), (Color32::from_rgb(0xC0, 0, 0), 3.0));
         assert_eq!(pen_ink("", 0.0, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 2.0), "no pen chosen yet: pen blue, 2 pt");
         assert_eq!(pen_ink("not a colour", 0.2, &theme), (Color32::from_rgb(0x1F, 0x5F, 0xC9), 1.0));
-        // A highlighter is wide and translucent, as the committed ink is painted.
         let (c, w) = pen_ink("#FFFF00", 12.0, &theme);
         assert_eq!((c, w), (Color32::from_rgb(0xFF, 0xFF, 0).gamma_multiply(0.45), 12.0));
     }
