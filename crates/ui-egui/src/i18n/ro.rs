@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Schemă",
+        "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
         "Paste Values" => "Lipire valori",
         "Paste Formulas" => "Lipire formule",
@@ -63,6 +65,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Panou\nformatare",
         "Format" => "Format",
         "Insert" => "Inserare",
+        "Header Menu|Insert" => "Inserare",
         "Insert Cells…" => "Inserare celule…",
         "Delete" => "Ștergere",
         "Delete Cells…" => "Ștergere celule…",
@@ -116,6 +119,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Diagrame sparkline",
         "Checkbox" => "Casetă de selectare",
         "Insert checkboxes in the selected cells" => "Inserați casete de selectare în celulele selectate",
+        "Button" => "Buton",
+        "Slider" => "Glisor",
+        "Spin Button" => "Buton rotativ",
+        "Draw a button that runs a macro or a command" => "Desenați un buton care rulează o macrocomandă sau o comandă",
+        "Draw a slider that sets a whole number in a linked cell" => "Desenați un glisor care setează un număr întreg într-o celulă legată",
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Desenați un buton rotativ care modifică pas cu pas un număr întreg într-o celulă legată"
+        }
+        "Edit Text" => "Editare text",
+        "Assign Action…" => "Atribuire acțiune…",
+        "Format Control…" => "Formatare control…",
         "Header & Footer" => "Antet și subsol",
         "Draw with ink" => "Desenare cu cerneală",
         "Eraser" => "Radieră",
@@ -247,6 +261,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legendă: jos",
         "Legend: Top" => "Legendă: sus",
         "Legend: Right" => "Legendă: dreapta",
+        "First slice angle" => "Unghiul primei felii",
+        "Doughnut hole size" => "Dimensiunea găurii gogoașei",
         "Gridlines: None" => "Linii de grilă: niciuna",
         "Gridlines: Show" => "Linii de grilă: afișare",
         "Chart\nTitle" => "Titlu\ndiagramă",

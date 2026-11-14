@@ -270,6 +270,11 @@ pub struct Workbook {
     /// `preserved` are relative to. Saving into another folder rewrites them from there. Not in JSON.
     #[serde(skip)]
     pub source_dir: Option<std::path::PathBuf>,
+    /// The region whose formats this workbook is typed and shown in (Options › Region). A runtime
+    /// setting of the application, not of the file: it is not saved, and the engine session sets
+    /// it on every document it holds. en-US until then.
+    #[serde(skip, default = "gridcraft_core::region::default_region")]
+    pub region: &'static gridcraft_core::Region,
     /// The file this workbook reports as its own, which is what `CELL("filename")` returns.
     /// `None` = no file yet, which Excel reports as an empty string until the workbook has been
     /// saved once. Deliberately separate from `source_dir`: that one names the folder relative
@@ -367,6 +372,7 @@ impl Workbook {
             macros_unread: Arc::default(),
             preserved: None,
             source_dir: None,
+            region: gridcraft_core::region::default_region(),
             source_path: None,
         }
     }
@@ -508,7 +514,7 @@ impl Workbook {
         }
     }
 
-    /// A free id for a new chart, picture, shape, table or slicer: one more than the largest in
+    /// A free id for a new chart, picture, shape, table, slicer or form control: one more than the largest in
     /// use, or, when that is `u32::MAX` (a file can carry any id), the lowest free one.
     pub fn next_object_id(&self) -> u32 {
         self.free_object_ids(1).first().copied().unwrap_or(u32::MAX)
@@ -529,6 +535,7 @@ impl Workbook {
                     .chain(s.shapes.iter().map(|o| o.id))
                     .chain(s.tables.iter().map(|o| o.id))
                     .chain(s.slicers.iter().map(|o| o.id))
+                    .chain(s.controls.iter().map(|o| o.id))
             })
             .collect();
         used.sort_unstable();
@@ -616,6 +623,10 @@ mod tests {
         }
         assert_eq!(wb.next_object_id(), 8);
         if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 12, ..Default::default() });
+        }
+        assert_eq!(wb.next_object_id(), 13, "form controls take ids from the same sequence");
+        if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
         }
         // An id read from a file at the maximum: the lowest free id, not the maximum again.
@@ -631,6 +642,19 @@ mod tests {
             sh.images.push(image(u32::MAX - 1));
         }
         assert_eq!(wb.free_object_ids(3), vec![1, 2, u32::MAX], "the top first, then from 1");
+    }
+
+    /// A form control's id is in use like any object's: the free ids skip it, also when it is the
+    /// largest id a file could carry.
+    #[test]
+    fn free_object_ids_skip_a_form_controls_id() {
+        let mut wb = Workbook::new();
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.controls.push(crate::FormControl { id: 3, ..Default::default() });
+            sh.controls.push(crate::FormControl { id: u32::MAX, ..Default::default() });
+        }
+        assert_eq!(wb.free_object_ids(4), vec![1, 2, 4, 5], "3 and the largest id are taken");
+        assert_eq!(wb.next_object_id(), 1);
     }
 
     /// A file can use the largest id and the one below it: nothing is free above them, so the free
