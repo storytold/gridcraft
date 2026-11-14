@@ -145,8 +145,12 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
             && let Some((obj, _, _)) = under
         {
             app.selected_object = Some(obj);
-            if resp.double_clicked() && app.open_object(obj) != crate::objects::OpenAction::Select {
-                return;
+            if resp.double_clicked() && handle.is_none() {
+                let open_target =
+                    if obj.kind == ObjKind::Group { crate::chartview::hit_object(app, geo, sh, p).map_or(obj, |(leaf, _)| leaf) } else { obj };
+                if app.open_object(open_target) != crate::objects::OpenAction::Select {
+                    return;
+                }
             }
             if primary_drag && let Some(a) = sh.object_anchor(obj) {
                 app.grid.drag = Drag::Object { obj, start: p, orig: (a.cell, a.dx, a.dy, a.width, a.height), handle, stepped: false };
@@ -254,11 +258,12 @@ fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {
             return true;
         }
         if app.session.draw_tool == "eraser" && (primary_clicked || resp.dragged()) {
+            // The eraser rubs out the stroke itself, grouped or not; the rest of a group stays.
             if let Some(p) = pos
-                && let Some((ObjRef { kind: ObjKind::Shape, id }, _)) = crate::chartview::hit(app, geo, sh, p)
+                && let Some((ObjRef { kind: ObjKind::Shape, id }, _)) = crate::chartview::hit_object(app, geo, sh, p)
                 && sh.shapes.iter().any(|s| s.id == id && s.kind == gridcraft_engine::model::ShapeKind::Ink)
             {
-                let _ = app.run("object.delete", json!({"kind": "shape", "id": id}));
+                let _ = app.run("object.delete", json!({"kind": "shape", "id": id, "member": true}));
             }
             return true;
         }

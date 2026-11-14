@@ -4,9 +4,9 @@
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
 use gridcraft_model::{
-    Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat, Fill,
-    Formula, Hyperlink, Image, LegendPos, ObjKind, ObjRef, Series, Shape, ShapeKind, Sheet, Sparkline, SparklineKind, Style, Table, TableColumn,
-    TotalsFn, Underline, Workbook,
+    Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat,
+    DrawingRef, Fill, Formula, Hyperlink, Image, LegendPos, ObjKind, ObjRef, Series, Shape, ShapeKind, Sheet, Sparkline, SparklineKind, Style, Table,
+    TableColumn, TotalsFn, Underline, Workbook,
 };
 use serde_json::{Value as Json, json};
 
@@ -1245,12 +1245,29 @@ fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// If `(kind, id)` is a group or belongs to one, returns `(outermost_group_id, target_ref)`.
+fn group_target(sh: &Sheet, o: ObjRef) -> Option<(u32, DrawingRef)> {
+    let r = match o.kind {
+        ObjKind::Chart => DrawingRef::Chart(o.id),
+        ObjKind::Image => DrawingRef::Image(o.id),
+        ObjKind::Shape | ObjKind::Equation => DrawingRef::Shape(o.id),
+        ObjKind::Group => {
+            sh.drawing_group(o.id)?;
+            DrawingRef::Group(o.id)
+        }
+        ObjKind::Slicer | ObjKind::Control => return None,
+    };
+    let outer = sh.outer_group(r).or(if o.kind == ObjKind::Group { Some(o.id) } else { None })?;
+    Some((outer, r))
+}
+
 /// The floating object a `{kind, id}` command names on the active sheet. Unknown kinds and
 /// objects are errors, so a stale id never succeeds silently.
 fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
     let id = u32_param(p, "id").ok_or_else(|| bad(cmd, "missing `id`"))?;
-    let kind =
-        str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer, equation or control"))?;
+    let kind = str_param(p, "kind")
+        .and_then(ObjKind::parse)
+        .ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer, equation, control or group"))?;
     let d = s.doc()?;
     let sheet = d.wb.active_sheet();
     let o = ObjRef::new(kind, id);
@@ -1264,8 +1281,20 @@ fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
 
 fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, o) = object_param(s, p, "object.delete")?;
+    let member = bool_param(p, "member").unwrap_or(false);
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.remove_object(o);
+        let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, r)) = group_target(sh, o) {
+            if !member {
+                sh.delete_group(gid);
+                return Ok(json!({"deleted": o}));
+            }
+            sh.remove_from_group(r);
+            if let DrawingRef::Group(g) = r {
+                sh.delete_group(g);
+            }
+        }
+        sh.remove_object(o);
         Ok(json!({"deleted": o}))
     })
 }
@@ -1285,38 +1314,62 @@ fn size_cap(current: f32) -> f64 {
     MAX_OBJECT_SIZE.max(f64::from(current))
 }
 
+fn move_anchor(a: &mut Anchor, p: &Json, at: Option<CellRef>) {
+    if let Some(at) = at {
+        a.cell = at;
+    }
+    if let Some(v) = f64_param(p, "dx") {
+        a.dx = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
+    }
+    if let Some(v) = f64_param(p, "dy") {
+        a.dy = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
+    }
+    if let Some(v) = f64_param(p, "width") {
+        a.width = v.clamp(1.0, size_cap(a.width)) as f32;
+    }
+    if let Some(v) = f64_param(p, "height") {
+        a.height = v.clamp(0.0, size_cap(a.height)) as f32;
+    }
+}
+
 fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, o) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
     edit(s, |cx| {
-        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
-        if let Some(at) = at {
-            a.cell = at;
+        let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, r)) = group_target(sh, o) {
+            // The named object goes where it's asked to, and its outermost group moves (and
+            // sizes) with it by the same map.
+            let a = match r {
+                DrawingRef::Group(g) => sh.group_anchor(g),
+                leaf => sh.drawing_anchor(leaf),
+            };
+            let Some(mut a) = a else { return Err(bad("object.move", "no such object")) };
+            let from = sh.anchor_rect(&a);
+            move_anchor(&mut a, p, at);
+            let to = sh.anchor_rect(&a);
+            sh.transform_group(gid, from, to);
+            return Ok(Json::Null);
         }
-        if let Some(v) = f64_param(p, "dx") {
-            a.dx = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
-        }
-        if let Some(v) = f64_param(p, "dy") {
-            a.dy = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
-        }
-        if let Some(v) = f64_param(p, "width") {
-            a.width = v.clamp(1.0, size_cap(a.width)) as f32;
-        }
-        if let Some(v) = f64_param(p, "height") {
-            a.height = v.clamp(0.0, size_cap(a.height)) as f32;
-        }
+        let Some(a) = sh.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
+        move_anchor(a, p, at);
         Ok(Json::Null)
     })
 }
 
 /// Sets an object's anchor mode (Excel's "Move and size with cells" / "Move but don't size with
 /// cells" / "Don't move or size with cells"), so it follows — or ignores — its rows and columns
-/// when the sheet is sorted or edited structurally.
+/// when the sheet is sorted or edited structurally. A grouped object's group takes the mode.
 fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, o) = object_param(s, p, "object.setAnchorMode")?;
     let mode = anchor_mode_param(p).ok_or_else(|| bad("object.setAnchorMode", "mode must be moveAndSize, moveOnly or absolute"))?;
     edit(s, |cx| {
-        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.setAnchorMode", "no such object")) };
+        let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, _)) = group_target(sh, o) {
+            sh.set_group_anchor_mode(gid, mode);
+            return Ok(json!({"mode": anchor_mode_name(mode)}));
+        }
+        let Some(a) = sh.object_anchor_mut(o) else { return Err(bad("object.setAnchorMode", "no such object")) };
         a.mode = mode;
         Ok(json!({"mode": anchor_mode_name(mode)}))
     })

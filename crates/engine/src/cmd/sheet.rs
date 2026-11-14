@@ -438,6 +438,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 .map(|o| &mut o.anchor)
                 .chain(sh.images.iter_mut().map(|o| &mut o.anchor))
                 .chain(sh.shapes.iter_mut().map(|o| &mut o.anchor))
+                .chain(sh.groups.iter_mut().map(|g| &mut g.anchor))
             {
                 if object.mode != AnchorMode::Absolute && (moved_from..moved_from + count).contains(&object.cell.col) {
                     object.cell.col = destination + (object.cell.col - moved_from);

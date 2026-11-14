@@ -147,6 +147,9 @@ pub struct Sheet {
     /// On-sheet slicer widgets (filter a table column by clicking value tiles).
     #[serde(default)]
     pub slicers: Vec<Slicer>,
+    /// Groups of floating objects (members back to front; nested groups too).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<crate::DrawingGroup>,
     /// Form controls (buttons, sliders, spin buttons). They paint above every other object and
     /// take clicks first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -223,6 +226,7 @@ impl Sheet {
             shapes: vec![],
             sparklines: vec![],
             slicers: vec![],
+            groups: vec![],
             controls: vec![],
             pivots: vec![],
             protection: None,
@@ -290,6 +294,8 @@ impl Sheet {
             if s.kind == ShapeKind::Equation { ObjKind::Equation } else { ObjKind::Shape }
         } else if self.slicers.iter().any(|o| o.id == id) {
             ObjKind::Slicer
+        } else if self.drawing_group(id).is_some() {
+            ObjKind::Group
         } else if self.controls.iter().any(|o| o.id == id) {
             ObjKind::Control
         } else {
@@ -312,6 +318,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Slicer => self.slicers.iter().find(|c| c.id == o.id).map(|c| c.anchor),
             ObjKind::Equation => self.shapes.iter().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| c.anchor),
+            ObjKind::Group => self.group_anchor(o.id).or_else(|| self.drawing_group(o.id).map(|g| g.anchor)),
             ObjKind::Control => self.controls.iter().find(|c| c.id == o.id).map(|c| c.anchor),
         }
     }
@@ -323,6 +330,7 @@ impl Sheet {
             ObjKind::Shape => self.shapes.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Slicer => self.slicers.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
             ObjKind::Equation => self.shapes.iter_mut().find(|c| c.id == o.id && c.kind == ShapeKind::Equation).map(|c| &mut c.anchor),
+            ObjKind::Group => self.groups.iter_mut().find(|g| g.id == o.id).map(|g| &mut g.anchor),
             ObjKind::Control => self.controls.iter_mut().find(|c| c.id == o.id).map(|c| &mut c.anchor),
         }
     }
@@ -340,6 +348,13 @@ impl Sheet {
             ObjKind::Shape => take(&mut self.shapes, |c| c.id == o.id),
             ObjKind::Slicer => take(&mut self.slicers, |c| c.id == o.id),
             ObjKind::Equation => take(&mut self.shapes, |c| c.id == o.id && c.kind == ShapeKind::Equation),
+            ObjKind::Group => {
+                let had = self.drawing_group(o.id).is_some();
+                if had {
+                    self.delete_group(o.id);
+                }
+                had
+            }
             ObjKind::Control => take(&mut self.controls, |c| c.id == o.id),
         }
     }
@@ -354,6 +369,7 @@ impl Sheet {
             .chain(self.images.iter().map(|o| &o.anchor))
             .chain(self.shapes.iter().map(|o| &o.anchor))
             .chain(self.slicers.iter().map(|o| &o.anchor))
+            .chain(self.groups.iter().map(|g| &g.anchor))
             .chain(self.controls.iter().map(|o| &o.anchor))
     }
 
@@ -364,6 +380,7 @@ impl Sheet {
             .chain(self.images.iter_mut().map(|o| &mut o.anchor))
             .chain(self.shapes.iter_mut().map(|o| &mut o.anchor))
             .chain(self.slicers.iter_mut().map(|o| &mut o.anchor))
+            .chain(self.groups.iter_mut().map(|g| &mut g.anchor))
             .chain(self.controls.iter_mut().map(|o| &mut o.anchor))
     }
     /// Displayed value of a cell: its own value, or a spilled value.
@@ -952,6 +969,18 @@ mod tests {
             ObjKind::Slicer => {
                 s.slicers.push(Slicer { id, table: String::new(), column: String::new(), caption: String::new(), anchor, selected: None, columns: 1 })
             }
+            ObjKind::Group => s.groups.push(crate::DrawingGroup {
+                id,
+                name: String::new(),
+                anchor,
+                child_offset: (0, 0),
+                child_extent: (1, 1),
+                flip: (false, false),
+                rotation: 0,
+                member_rotations: Vec::new(),
+                members: Vec::new(),
+                file: None,
+            }),
             ObjKind::Control => s.controls.push(FormControl { id, anchor, ..Default::default() }),
         }
     }

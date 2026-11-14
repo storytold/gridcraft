@@ -132,7 +132,7 @@ pub fn open_action(sh: &Sheet, o: ObjRef) -> OpenAction {
             OpenAction::EditText(o.id)
         }
         ObjKind::Control => OpenAction::EditControl(o.id),
-        ObjKind::Shape | ObjKind::Image | ObjKind::Slicer => OpenAction::Select,
+        ObjKind::Shape | ObjKind::Image | ObjKind::Slicer | ObjKind::Group => OpenAction::Select,
     }
 }
 

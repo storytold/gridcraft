@@ -533,6 +533,16 @@ impl Workbook {
                     .chain(s.shapes.iter().map(|o| o.id))
                     .chain(s.tables.iter().map(|o| o.id))
                     .chain(s.slicers.iter().map(|o| o.id))
+                    // Members too: an id a group still lists (its object deleted) isn't handed out again.
+                    .chain(s.groups.iter().flat_map(|g| {
+                        std::iter::once(g.id).chain(g.members.iter().map(|r| {
+                            let (crate::DrawingRef::Chart(id)
+                            | crate::DrawingRef::Image(id)
+                            | crate::DrawingRef::Shape(id)
+                            | crate::DrawingRef::Group(id)) = *r;
+                            id
+                        }))
+                    }))
                     .chain(s.controls.iter().map(|o| o.id))
             })
             .collect();
