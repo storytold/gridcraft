@@ -318,6 +318,32 @@ fn a_python_cell_without_its_code_keeps_its_whole_cached_result_as_values() {
 }
 
 #[test]
+fn long_text_in_a_python_spill_is_kept_and_warned_about() {
+    // A Python cell's spilled values are its result, kept and saved, so text in them longer than
+    // Excel allows in a cell is kept whole with the warning a plain cell's gets; at the limit, no warning.
+    let most = gridcraft_core::MAX_CELL_CHARS as usize;
+    let book = |n: usize| {
+        let data = format!(
+            "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A2\">_xlfn._xlws.PY(0,0)</f><v>1</v></c></row>\
+             <row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>{}</t></is></c></row></sheetData>",
+            "a".repeat(n)
+        );
+        crate::io::open_bytes("long.xlsx", &excel_shaped(&data, Some(&["[1, 'text']"]))).unwrap()
+    };
+    let long = |warnings: &[String]| warnings.iter().filter(|w| w.contains("longer than Excel's")).cloned().collect::<Vec<_>>();
+    let (wb, warnings) = book(most);
+    assert!(long(&warnings).is_empty(), "{warnings:?}");
+    assert_eq!(wb.sheet(0).unwrap().spill.get(&CellRef::parse("A2").unwrap()), Some(&Value::Text("a".repeat(most).into())));
+    let (wb, warnings) = book(most + 1);
+    assert_eq!(
+        long(&warnings),
+        ["sheet \"Sheet1\": 1 cell text(s) longer than Excel's 32767 characters are saved as they are; Excel may refuse or repair the saved file"],
+        "{warnings:?}"
+    );
+    assert_eq!(wb.sheet(0).unwrap().spill.get(&CellRef::parse("A2").unwrap()), Some(&Value::Text("a".repeat(most + 1).into())));
+}
+
+#[test]
 fn a_python_spill_whose_blank_cells_have_no_records_is_still_a_spill() {
     // A1's result spills over A1:A3, and the file holds no records for the blank A2 and A3.
     let data = "<sheetData><row r=\"1\"><c r=\"A1\" cm=\"1\"><f t=\"array\" ref=\"A1:A3\">_xlfn._xlws.PY(0,0)</f><v>1</v></c></row></sheetData>";
