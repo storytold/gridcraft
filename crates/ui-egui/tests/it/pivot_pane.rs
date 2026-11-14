@@ -42,7 +42,9 @@ fn field_button_fill(shapes: &[Shape], label: &str) -> Color32 {
     shapes
         .iter()
         .filter_map(|shape| match shape {
-            Shape::Rect(rect) if rect.rect.contains(text_rect.center()) => Some(rect),
+            // Drag-and-drop adds a transparent rect at the same bounds as the
+            // painted button; inspect the visible surface, not that hit target.
+            Shape::Rect(rect) if rect.rect.contains(text_rect.center()) && rect.fill.a() != 0 => Some(rect),
             _ => None,
         })
         .min_by(|a, b| a.rect.area().total_cmp(&b.rect.area()))
