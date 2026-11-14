@@ -397,6 +397,20 @@ pub struct Hyperlink {
 
 // ---------------------------------------------------------------- drawing objects
 
+/// A drawing object's imported click link. Retaining this metadata does not activate it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DrawingHyperlink {
+    /// Original relationship target, including any fragment or relative file path.
+    pub target: String,
+    #[serde(default)]
+    pub external: bool,
+    pub tooltip: Option<String>,
+    pub action: Option<String>,
+    /// Worksheet destination for an internal part target, remapped on save and sheet rename.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub internal_sheet: Option<String>,
+}
+
 /// How a floating object is pinned to the grid when its cells move or resize. Mirrors Excel's
 /// Format ▸ Size and Properties ▸ Properties, stored in the file as the anchor's `editAs`:
 /// `twoCell` (absent `editAs`), `oneCell` and `absolute`.
@@ -643,6 +657,8 @@ impl Chart {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Image {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<DrawingHyperlink>,
     pub id: u32,
     pub anchor: Anchor,
     /// Encoded bytes (PNG/JPEG), base64 in JSON. Shared, so a copy of the sheet (an undo step)
@@ -678,6 +694,8 @@ pub enum ShapeKind {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Shape {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hyperlink: Option<DrawingHyperlink>,
     pub id: u32,
     pub kind: ShapeKind,
     pub anchor: Anchor,

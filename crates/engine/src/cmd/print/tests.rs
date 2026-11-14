@@ -499,6 +499,7 @@ fn rich_sheet_renders() {
     assert!(contains(&pdf, "(A long piece of text that overflows into neighbours) Tj"));
 }
 
+/// Print rendering includes charts and pictures at their worksheet anchors.
 #[test]
 fn charts_and_images_are_drawn() {
     let mut s = s();
@@ -513,6 +514,7 @@ fn charts_and_images_are_drawn() {
     let wb = std::sync::Arc::make_mut(&mut d.wb);
     let id = wb.next_object_id();
     wb.sheet_mut(0).unwrap().images.push(Image {
+        hyperlink: None,
         id,
         anchor: Anchor { cell: CellRef::new(5, 5), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
         data: png.into(),

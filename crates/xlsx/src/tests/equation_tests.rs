@@ -10,8 +10,10 @@ use gridcraft_model::*;
 
 use crate::{read_xlsx, write_xlsx};
 
+/// Build an original equation shape with the supplied source and text colour.
 fn equation(id: u32, cell: &str, latex: &str, ink: Color) -> Shape {
     Shape {
+        hyperlink: None,
         id,
         kind: ShapeKind::Equation,
         anchor: Anchor { cell: CellRef::parse(cell).unwrap(), width: 200.0, height: 60.0, mode: AnchorMode::MoveOnly, ..Default::default() },
@@ -148,11 +150,13 @@ fn office_math_without_a_source_is_converted_to_latex() {
     }
 }
 
+/// Ordinary text boxes keep their kind and hostile equation text remains safe on roundtrip.
 #[test]
 fn a_text_box_stays_a_text_box_and_hostile_sources_survive() {
     let mut wb = book(vec![equation(1, "B2", &"{".repeat(40), Color::Auto), equation(2, "B6", "\u{0}\u{1F600} & ]]> <!-- -->", Color::Auto)]);
     let mut sh = (*wb.sheets[0]).clone();
     sh.shapes.push(Shape {
+        hyperlink: None,
         id: 3,
         kind: ShapeKind::TextBox,
         anchor: Anchor { cell: CellRef::parse("D2").unwrap(), width: 80.0, height: 30.0, ..Default::default() },

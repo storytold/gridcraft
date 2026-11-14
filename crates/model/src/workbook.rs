@@ -611,10 +611,12 @@ mod tests {
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
     }
 
+    /// Object ID allocation remains unique at integer limits and with existing IDs.
     #[test]
     fn object_ids_never_overflow_or_repeat() {
         let mut wb = Workbook::new();
-        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        let image =
+            |id| crate::Image { hyperlink: None, id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
         assert_eq!(wb.next_object_id(), 1);
         if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(7));
@@ -661,7 +663,8 @@ mod tests {
     #[test]
     fn free_object_ids_come_from_below_when_nothing_is_free_above() {
         let mut wb = Workbook::new();
-        let image = |id| crate::Image { id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
+        let image =
+            |id| crate::Image { hyperlink: None, id, anchor: Default::default(), data: Default::default(), mime: String::new(), alt: String::new() };
         if let Some(sh) = wb.sheet_mut(0) {
             sh.images.push(image(u32::MAX));
             sh.images.push(image(u32::MAX - 1));

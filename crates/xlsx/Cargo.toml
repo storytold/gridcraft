@@ -29,5 +29,6 @@ zip = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
+serde_json = { workspace = true }
 # Every registered function name, for the formula file-spelling test.
 gridcraft-functions = { workspace = true }

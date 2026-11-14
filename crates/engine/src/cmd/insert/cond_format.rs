@@ -318,6 +318,7 @@ pub(super) fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Insert a generated icon shape without imported click metadata.
 pub(super) fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").unwrap_or("check").to_string();
     let size = f64_param(p, "size").unwrap_or(48.0).clamp(8.0, 1000.0) as f32;
@@ -326,6 +327,7 @@ pub(super) fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let color = crate::cmd::format::color_param(p.get("color")).unwrap_or(Color::Theme(1, 0));
     let shape = Shape {
+        hyperlink: None,
         id,
         kind: ShapeKind::Icon,
         anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },

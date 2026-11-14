@@ -328,6 +328,18 @@ fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::pas
     s.push_str(&kept.elements(&controls));
 }
 
+/// Create a click relationship, remapping internal worksheet identities to current output part paths.
+fn drawing_link(link: Option<&gridcraft_model::DrawingHyperlink>, wb: &Workbook, rels: &mut Rels) -> Option<String> {
+    let link = link.filter(|l| !l.target.is_empty())?;
+    if let Some(name) = &link.internal_sheet {
+        let index = wb.sheets.iter().position(|s| s.name.eq_ignore_ascii_case(name))?;
+        let fragment = link.target.split_once('#').map(|(_, f)| format!("#{f}")).unwrap_or_default();
+        return Some(rels.add("hyperlink", &format!("../worksheets/sheet{}.xml{fragment}", index + 1)));
+    }
+    Some(if link.external { rels.add_external("hyperlink", &link.target) } else { rels.add("hyperlink", &link.target) })
+}
+
+/// Write drawing objects with shared media and individual click relationships.
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {
     // Drawing: pictures, charts, shapes.
     if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
@@ -343,7 +355,7 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
             out.default_type(ext, image_content_type(ext));
             let file = out.image_part(ext, &img.data);
             let rid = drels.add("image", &format!("../media/{file}"));
-            objs.push(Obj::Image(img, rid));
+            objs.push(Obj::Image(img, rid, drawing_link(img.hyperlink.as_ref(), wb, &mut drels)));
         }
         for ch in &sheet.charts {
             out.charts += 1;
@@ -367,7 +379,7 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
             objs.push(Obj::Chart(ch, rid));
         }
         for sh in &sheet.shapes {
-            objs.push(Obj::Shape(sh));
+            objs.push(Obj::Shape(sh, drawing_link(sh.hyperlink.as_ref(), wb, &mut drels)));
         }
         out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());
         if !drels.is_empty() {
