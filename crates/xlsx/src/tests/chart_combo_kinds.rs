@@ -313,14 +313,38 @@ fn combo_chartex_series_are_columns() {
     }
 }
 
-/// A chart without series keeps a group of its kind, so it is read back rather than dropped.
+/// A chart without series keeps a group of its kind, so it is read back as that kind rather
+/// than dropped (an empty combo as clustered columns, an empty stock chart as a line chart: a
+/// stock group must hold series).
 #[test]
 fn a_chart_without_series_survives_a_round_trip() {
     use ChartKind::*;
-    for kind in [ColumnClustered, BarStacked, Line, Pie, Doughnut, Area, Scatter, Bubble, Radar, Stock, Combo, Waterfall] {
+    let kinds = [
+        ColumnClustered,
+        ColumnStacked100,
+        BarStacked,
+        Line,
+        LineMarkers,
+        LineStacked,
+        Pie,
+        Doughnut,
+        Area,
+        AreaStacked,
+        Scatter,
+        ScatterLines,
+        Bubble,
+        Radar,
+        Stock,
+        Combo,
+    ];
+    for kind in kinds {
         let (xml, back) = round_trip(&chart_of(kind, &[]));
-        assert!(back.series.is_empty(), "{kind:?}: {xml}");
-        assert!(!xml.contains("<c:stockChart>"), "{kind:?}: {xml}");
+        let want = match kind {
+            Combo => ColumnClustered,
+            Stock => Line,
+            k => k,
+        };
+        assert_eq!((back.kind, back.series.len()), (want, 0), "{kind:?}: {xml}");
     }
 }
 

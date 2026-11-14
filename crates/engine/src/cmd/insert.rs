@@ -903,7 +903,6 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             c.kind = kind;
-            c.drop_foreign_series_kinds();
             if !c.supports_data_table() {
                 c.data_table = None;
             }
@@ -1916,15 +1915,13 @@ mod tests {
         let c = chart(&s);
         assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, None]);
         assert_eq!((c.series_kind(0), c.series_kind(1)), (ChartKind::Line, ChartKind::Line));
-        // Setting the type a chart already has keeps a series' own markers (a file's), not
-        // kinds the type doesn't draw.
+        // Setting the type a chart already has keeps a series' own markers (a file's).
         let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
         if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
-            c.series[0].kind = Some(ChartKind::Area);
             c.series[1].kind = Some(ChartKind::LineMarkers);
         }
         s.execute("chart.set", json!({"type": "line", "subtype": ""})).unwrap();
-        assert_eq!(chart(&s).series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, Some(ChartKind::LineMarkers)]);
+        assert_eq!(chart(&s).series_kinds(), vec![ChartKind::Line, ChartKind::LineMarkers]);
         // Trendlines go by the kind each series is drawn as.
         s.execute("chart.set", json!({"type": "pie"})).unwrap();
         assert!(s.execute("chart.addElement", json!({"element": "trendline"})).is_err());

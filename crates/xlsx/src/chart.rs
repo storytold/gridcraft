@@ -259,32 +259,25 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         .or_else(|| pairs.iter().find(|ids| !ids.is_empty()))
         .cloned()
         .unwrap_or_default();
-    // Groups of kinds drawn alike (columns on both axes, lines with and without markers) are one
-    // chart; groups of other kinds make a combination chart.
-    let combo = groups.iter().any(|(_, k)| !gridcraft_model::same_family(*k, first_kind));
-    let mut series = vec![];
+    // Each series with the kind its group draws it as (a line's markers and a scatter's lines
+    // are the series' own).
+    let mut series: Vec<(Series, ChartKind)> = vec![];
     for ((g, k), ids) in groups.iter().zip(&pairs) {
         for s in g.kids("ser") {
             let mut ser = read_series(s);
-            // Every series of a combo chart keeps its own kind; elsewhere a series states one
-            // only where it differs from its chart's.
-            let own = series_kind_in(g, *k, s);
-            if combo || own != first_kind {
-                ser.kind = Some(own);
-            }
             ser.secondary = !ids.is_empty() && *ids != primary_axes;
-            series.push(ser);
+            series.push((ser, series_kind_in(g, *k, s)));
         }
     }
     // Series in the order the file gives them (`c:order`), whichever group holds them.
     let order = |s: &El| s.child_val("order").and_then(|v| v.parse::<u32>().ok()).unwrap_or(u32::MAX);
     let orders: Vec<u32> = groups.iter().flat_map(|(g, _)| g.kids("ser").map(order)).collect();
     if orders.len() == series.len() {
-        let mut keyed: Vec<(u32, Series)> = orders.into_iter().zip(series).collect();
+        let mut keyed: Vec<(u32, (Series, ChartKind))> = orders.into_iter().zip(series).collect();
         keyed.sort_by_key(|(o, _)| *o);
         series = keyed.into_iter().map(|(_, s)| s).collect();
     }
-    let kind = if combo { ChartKind::Combo } else { first_kind };
+    let (series, drawn): (Vec<Series>, Vec<ChartKind>) = series.into_iter().unzip();
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
     let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
@@ -306,9 +299,9 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
-    Some(Chart {
+    let mut ch = Chart {
         id: 0,
-        kind,
+        kind: first_kind,
         anchor: Default::default(),
         title: chart.child("title").and_then(rich_title),
         series,
@@ -327,7 +320,10 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
-    })
+    };
+    // Series of one family are one chart; series of other families make a combination chart.
+    ch.set_drawn_kinds(&drawn, first_kind);
+    Some(ch)
 }
 
 // ---------------------------------------------------------------- writing
@@ -768,16 +764,22 @@ fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart,
                 if bar { "bar" } else { "col" }
             )
         }
-        G::Line { stacked, .. } => format!(
-            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
-            if stacked { "stacked" } else { "standard" }
+        // Each series states its own markers; an empty group's say whether the chart has them.
+        G::Line { stacked, markers } => format!(
+            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"{}\"/>{ax}</c:lineChart>",
+            if stacked { "stacked" } else { "standard" },
+            u8::from(markers || !series.is_empty())
         ),
         G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/></c:pieChart>"),
         G::Doughnut => {
             format!("<c:doughnutChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"0\"/><c:holeSize val=\"50\"/></c:doughnutChart>")
         }
         G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>"),
-        G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
+        // Each series states its own lines; an empty group's style says whether the chart has them.
+        G::Scatter { lines } => {
+            let style = if lines || !series.is_empty() { "lineMarker" } else { "marker" };
+            format!("<c:scatterChart><c:scatterStyle val=\"{style}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>")
+        }
         G::Bubble => {
             format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")
         }

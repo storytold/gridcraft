@@ -647,10 +647,18 @@ fn regroup(k: ChartKind, first: ChartKind) -> ChartKind {
 }
 
 impl Chart {
-    /// The kind series `i` is drawn as: its own kind; else in a combo chart column for the first
-    /// series and line for the rest, and in any other chart the chart's kind. In a combo chart
-    /// the series of one type on one pair of axes share the first one's grouping (as Excel keeps
-    /// them): a stacked column beside clustered ones before it is clustered.
+    /// The kind series `i` is drawn as, and saved as (the one rule the renderer and every file
+    /// format share).
+    ///
+    /// In a combo chart: the series' own kind, else a column for the first series and a line
+    /// for the rest. A combo is drawn on category axes, so bars stand upright as columns; pies,
+    /// doughnuts, bubbles and chartex kinds are clustered columns; scatter series are lines with
+    /// markers, and scatter-with-lines and radar series plain lines. The series of one type on
+    /// one pair of axes share the first one's grouping (as Excel keeps them): a stacked column
+    /// after a clustered one is clustered.
+    ///
+    /// In any other chart: the chart's kind, or the series' own kind where it is of the same
+    /// family ([`same_family`]: a line's own markers, a scatter's own lines).
     pub fn series_kind(&self, i: usize) -> ChartKind {
         let own = self.series.get(i).and_then(|s| s.kind).filter(|k| *k != ChartKind::Combo);
         match (self.kind, own) {
@@ -692,17 +700,18 @@ impl Chart {
             .collect()
     }
 
-    /// Drops the series' own kinds the chart's kind doesn't draw (after a change of type):
-    /// outside a combo, a series keeps only its own markers or lines.
-    pub fn drop_foreign_series_kinds(&mut self) {
-        if self.kind == ChartKind::Combo {
-            return;
-        }
-        let kind = self.kind;
-        for s in &mut self.series {
-            if s.kind.is_some_and(|k| !same_family(kind, k)) {
-                s.kind = None;
-            }
+    /// Sets the chart's kind and each series' own kind from the kinds a file draws its series
+    /// as (XLSX chart groups, ODS `chart:class`), one per series in order; `empty` is the
+    /// chart's kind when it has no series. Series of one family make a chart of the first's
+    /// kind, a series keeping its own kind only where it differs (a line's own markers, a
+    /// scatter's own lines); series of other families make a combination chart, every series
+    /// keeping its kind. [`Chart::series_kinds`] then draws each series as `drawn` gives it.
+    pub fn set_drawn_kinds(&mut self, drawn: &[ChartKind], empty: ChartKind) {
+        let first = drawn.first().copied().unwrap_or(empty);
+        let combo = drawn.iter().any(|k| !same_family(*k, first));
+        self.kind = if combo { ChartKind::Combo } else { first };
+        for (s, k) in self.series.iter_mut().zip(drawn) {
+            s.kind = (combo || *k != first).then_some(*k);
         }
     }
 
@@ -1103,8 +1112,24 @@ mod series_kind_tests {
 
     /// A series' own markers or lines outside a combo are honoured wherever they come from: an
     /// XLSX file's per-series markers, or a kind left in an older GridCraft JSON workbook by a
-    /// type change made before `drop_foreign_series_kinds` (not migrated: the two can't be told
-    /// apart).
+    /// type change made before `chart.set` cleared series kinds on a change of type (not
+    /// migrated: the two can't be told apart).
+    /// A file's per-series kinds make a chart of one family, or a combo, that draws them so.
+    #[test]
+    fn drawn_kinds_set_the_chart_and_its_series() {
+        use ChartKind::*;
+        let mut c = chart(ColumnClustered, &[None, None, None]);
+        c.set_drawn_kinds(&[Line, LineMarkers, Line], ColumnClustered);
+        assert_eq!((c.kind, c.series.iter().map(|s| s.kind).collect::<Vec<_>>()), (Line, vec![None, Some(LineMarkers), None]));
+        assert_eq!(c.series_kinds(), vec![Line, LineMarkers, Line]);
+        c.set_drawn_kinds(&[ColumnStacked, Line, Area], ColumnClustered);
+        assert_eq!(c.kind, Combo);
+        assert_eq!(c.series_kinds(), vec![ColumnStacked, Line, Area]);
+        let mut empty = chart(ColumnClustered, &[]);
+        empty.set_drawn_kinds(&[], Radar);
+        assert_eq!(empty.kind, Radar);
+    }
+
     #[test]
     fn a_leftover_kind_in_the_same_family_is_drawn() {
         use ChartKind::*;
@@ -1112,17 +1137,6 @@ mod series_kind_tests {
         let c: Chart = serde_json::from_value(json).unwrap();
         assert_eq!(drawn(&c), vec![Line, LineMarkers]);
         assert_eq!(drawn(&chart(ScatterLines, &[Some(Scatter)])), vec![Scatter]);
-    }
-
-    #[test]
-    fn a_change_of_type_drops_the_kinds_it_does_not_draw() {
-        use ChartKind::*;
-        let mut c = chart(Combo, &[Some(ColumnClustered), Some(LineMarkers), Some(Scatter)]);
-        c.drop_foreign_series_kinds();
-        assert_eq!(c.series.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![Some(ColumnClustered), Some(LineMarkers), Some(Scatter)]);
-        c.kind = Line;
-        c.drop_foreign_series_kinds();
-        assert_eq!(c.series.iter().map(|s| s.kind).collect::<Vec<_>>(), vec![None, Some(LineMarkers), None]);
     }
 
     #[test]

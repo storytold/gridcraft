@@ -30,7 +30,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Box & Whisker | 1 | 1 of 1 | |
 | Waterfall, Funnel | 2 | 2 of 2 | |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
-| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, area; bars stand upright as columns, scatter series are lines with markers), secondary axis | |
+| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, area; bars stand upright as columns, pies, doughnuts, bubbles and chartex kinds are clustered columns, scatter series lines with markers, scatter-with-lines and radar series lines), secondary axis | |
 | **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
@@ -100,15 +100,17 @@ markers-only scatter with markers). In
 a combo chart the series of one type on one pair of axes share the first one's grouping, as Excel
 keeps them: a stacked column after a clustered one is drawn clustered, and a stacked line after
 an unstacked one unstacked. Changing the chart type (to any type but a combo) applies it to every
-series, dropping their own kinds; setting the type a chart already has drops only the kinds it
-does not draw.
+series, dropping their own kinds; setting the type a chart already has keeps them.
 
 The XLSX writer writes one chart group per type on each pair of axes, with axes of the kind those
 groups need (category axes for a combo; category, horizontal-bar or value axes otherwise), a secondary pair whenever a series is on it, and a stock group only for 3
 or 4 series. A pie or doughnut chart has no axes, so its series are one group whatever their
-secondary flags. A chart without series is written with one empty group of its kind (a line
-group for a stock chart), so it reopens rather than vanishing. The reader takes the primary axes from the value axis on the left or bottom, and
-orders series by `c:order`. A combo whose series all draw as one type reopens as a chart of
+secondary flags. A chart without series is written with one empty group of its kind, so it
+reopens as that kind (an empty combo as clustered columns, an empty stock chart as a line chart)
+rather than vanishing; chartex charts (histogram, waterfall and the rest) without series are
+still not kept. The reader takes the primary axes from the value axis on the left or bottom, and
+orders series by `c:order`, then sets the chart's kind and each series' own kind with
+`Chart::set_drawn_kinds`, the rule any reader of per-series kinds shares. A combo whose series all draw as one type reopens as a chart of
 that type (it draws the same).
 
 Known gaps: a one-kind bar chart's secondary series get secondary axes in XLSX, which the
