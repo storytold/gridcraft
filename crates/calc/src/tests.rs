@@ -2018,6 +2018,19 @@ fn implicit_intersection_operator() {
     assert_eq!((t.num("F1"), t.num("F2"), t.num("F3")), (1f64.tanh(), 2f64.tanh(), 3f64.tanh()));
 }
 
+#[test]
+fn round_digits_are_rounded_to_fifteen_digits_before_truncating() {
+    // excel-probe.00286 and 00292: 2.9999999999999996 digits is 3 digits, not 2.
+    let mut t = T::new();
+    t.set("A1", "2.9999999999999996");
+    t.set("B1", "=ROUND(1234.5678,A1)");
+    t.set("B2", "=ROUND(0.125,A1)");
+    t.set("B3", "=ROUND(1234.5678,1.5)");
+    assert_eq!(t.get("B1"), Value::Number(1234.568));
+    assert_eq!(t.get("B2"), Value::Number(0.125));
+    assert_eq!(t.get("B3"), Value::Number(1234.6));
+}
+
 /// "Set precision as displayed": results are rounded to their cell's format before they are
 /// stored and before other formulas read them. Values observed in Excel (COM,
 /// `Workbook.PrecisionAsDisplayed = True`) with the same synthetic formulas.
