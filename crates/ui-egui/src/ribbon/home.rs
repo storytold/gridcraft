@@ -23,7 +23,11 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
     ("₽ Russian", "_-[$₽-419]* #,##0.00_-;-[$₽-419]* #,##0.00_-;_-[$₽-419]* \"-\"??_-;_-@_-"),
 ];
 
-/// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
+/// Draws Home's editing controls: clipboard, font, alignment, number, style, cell and editing commands.
+///
+/// Font, size and colour controls collect their parameters before dispatching commands; clipboard
+/// actions use the host clipboard hooks. Narrow windows use the same horizontal scroll and edge
+/// arrows as the other ribbon tabs.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
@@ -200,6 +204,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             let fill = app.grid.last_fill.clone();
             let fill_c = gridcraft_engine::model::Color::from_hex(&fill).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (f, fa) = split_button(ui, Icon::Fill, fill_c, "Fill Color");
+            fa.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Fill Color")));
             control_keytip(app, ui, &fa, "home.fillColor");
             if f {
                 act(app, "home.fillColor", json!({"color": fill}));
@@ -220,6 +225,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
             let fc = app.grid.last_font_color.clone();
             let fc_c = gridcraft_engine::model::Color::from_hex(&fc).and_then(|c| c.resolve(&Default::default())).map(theme::color32);
             let (c, ca) = split_button(ui, Icon::FontColor, fc_c, "Font Color");
+            ca.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Font Color")));
             control_keytip(app, ui, &ca, "home.fontColor");
             if c {
                 act(app, "home.fontColor", json!({"color": fc}));

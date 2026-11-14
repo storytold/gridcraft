@@ -1,6 +1,11 @@
 use super::controls::{act, control_keytip, keytip, menu_items, sep};
 use super::{Icon, SheetApp, Ui, big_button, json, keytip_table, small_button};
 
+/// Draws Data's import, filtering, outline and analysis controls in the current ribbon layout.
+///
+/// Actions needing user input open their existing dialogs. In particular, Data Analysis opens
+/// the ToolPak chooser rather than running a report; its translated accessible name is exposed
+/// to assistive technology while the tab's controls are horizontally scrolled.
 pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
     let gd = big_button(ui, Icon::Folder, "Get Data\n(Text/CSV)", "Import a text or CSV file", false);
     control_keytip(app, ui, &gd, "data.getData");
@@ -129,7 +134,9 @@ pub(super) fn data(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    if big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false).clicked() {
+    let analysis = big_button(ui, Icon::ChartBar, "Data\nAnalysis", "Data Analysis", false);
+    analysis.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Data Analysis")));
+    if analysis.clicked() {
         app.open_dialog("analysisToolPak", json!({}));
     }
     sep(ui);
