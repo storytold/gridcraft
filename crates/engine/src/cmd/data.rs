@@ -23,7 +23,7 @@ mod sort;
 mod tools;
 mod validation;
 
-pub use filter::filter_values;
+pub use filter::{DATE_PERIODS, FilterColumn, FilterKind, date_period, filter_column, filter_values};
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sort…",
             ["Data", "Sort & Filter"],
             None,
-            "{range?, header?: bool, keys: [{column: \"B\", order: asc|desc, by?: values|cellColor|fontColor, customList?: [..]}], orientation?: rows|columns, matchCase?}",
+            "{range?, header?: bool, keys: [{column: \"B\", order: asc|desc, by?: values|cellColor|fontColor, color?: \"#FFFF00\" | \"none\" | {theme, tint} (with by cellColor/fontColor: that colour on top, or at the bottom with order desc), customList?: [..]}], orientation?: rows|columns, matchCase?}",
             has_doc,
             sort
         ),
@@ -64,7 +64,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter Column",
             [],
             None,
-            "{column: \"B\" (or 0-based offset), values?: [..], blanks?: bool, custom?: {op: \">\", value: \"10\", op2?, value2?, and?}, top?: {count, bottom?, percent?}, aboveAverage?: bool, clear?: bool}",
+            "{column: \"B\" (or 0-based offset), values?: [..], blanks?: bool, custom?: {op: \">\", value: \"10\", op2?, value2?, and?}, top?: {count, bottom?, percent?}, aboveAverage?: bool (false: below average), period?: today|yesterday|tomorrow|thisWeek|lastWeek|nextWeek|thisMonth|lastMonth|nextMonth|thisQuarter|lastQuarter|nextQuarter|thisYear|lastYear|nextYear|yearToDate (dates in that period as of today, kept as a fixed range), fillColor?: \"#FFC7CE\" | \"none\" | {theme, tint}, fontColor?: \"#9C0006\" | \"auto\" | {theme, tint}, clear?: bool}",
             has_doc,
             filter_by
         ),

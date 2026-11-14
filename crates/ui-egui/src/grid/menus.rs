@@ -2,6 +2,7 @@ use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
+use gridcraft_engine::cmd::data::FilterKind;
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -41,22 +42,87 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let on_button = ui.ctx().memory(|m| m.focused()).is_some_and(|f| buttons.contains(&f));
     let enter = !on_button && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
     let mut close = false;
+    // What the column holds decides the sort labels and which Filters submenu shows.
+    let info = gridcraft_engine::cmd::data::filter_column(&wb, si, col);
+    let kind = info.as_ref().map_or(FilterKind::Text, |i| i.kind);
+    let header = info.as_ref().map(|i| i.header.clone()).unwrap_or_default();
+    let filtered = info.as_ref().is_some_and(|i| i.filtered);
+    let (fills, fonts) = info.map(|i| (i.fills, i.fonts)).unwrap_or_default();
+    let has_colors = fills.len() > 1 || fonts.len() > 1;
+    let filter_range = wb.sheet(si).and_then(|s| s.autofilter.as_ref().map(|a| a.range.a1()));
+    let letters = col_to_letters(col);
+    let theme = wb.theme.clone();
+    // A Filters item that needs more input opens its dialog once the menu has closed.
+    let mut open_dialog: Option<(&'static str, serde_json::Value)> = None;
     let area = egui::Area::new(egui::Id::unique("filter_menu")).fixed_pos(at + vec2(-180.0, 10.0)).order(egui::Order::Foreground);
     let response = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.set_width(230.0);
-            let ascending = ui.button("↑  Sort Ascending");
-            if ascending.clicked() {
-                let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
-                close = true;
-            }
-            let descending = ui.button("↓  Sort Descending");
-            if descending.clicked() {
-                let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
-                close = true;
-            }
+            ui.set_width(250.0);
+            let (up, down) = match kind {
+                FilterKind::Number => ("Sort Smallest to Largest", "Sort Largest to Smallest"),
+                FilterKind::Text => ("Sort A to Z", "Sort Z to A"),
+                FilterKind::Date => ("Sort Oldest to Newest", "Sort Newest to Oldest"),
+            };
+            let mut items = Vec::new();
+            ui.with_layout(egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                let ascending = ui.add(egui::Button::new(format!("↑  {up}")).frame(false));
+                if ascending.clicked() {
+                    let _ = app.run("data.sortAscending", json!({"column": letters}));
+                    close = true;
+                }
+                let descending = ui.add(egui::Button::new(format!("↓  {down}")).frame(false));
+                if descending.clicked() {
+                    let _ = app.run("data.sortDescending", json!({"column": letters}));
+                    close = true;
+                }
+                let sort_color =
+                    ui.add_enabled_ui(has_colors, |ui| submenu(ui, "Sort by Color", |ui| color_choices(ui, &fills, &fonts, &theme)).flatten());
+                if let Some((by, color)) = sort_color.inner {
+                    let _ =
+                        app.run("data.sort", json!({"range": filter_range, "header": true, "keys": [{"column": letters, "by": by, "color": color}]}));
+                    close = true;
+                }
+                ui.separator();
+                let clear = ui.add_enabled(filtered, egui::Button::new(format!("Clear Filter From “{header}”")).frame(false));
+                if clear.clicked() {
+                    let _ = app.run("data.filterBy", json!({"column": letters, "clear": true}));
+                    close = true;
+                }
+                let filter_color =
+                    ui.add_enabled_ui(has_colors, |ui| submenu(ui, "Filter by Color", |ui| color_choices(ui, &fills, &fonts, &theme)).flatten());
+                if let Some((by, color)) = filter_color.inner {
+                    let key = if by == "cellColor" { "fillColor" } else { "fontColor" };
+                    let _ = app.run("data.filterBy", json!({"column": letters, key: color}));
+                    close = true;
+                }
+                let title = match kind {
+                    FilterKind::Number => "Number Filters",
+                    FilterKind::Text => "Text Filters",
+                    FilterKind::Date => "Date Filters",
+                };
+                match submenu(ui, title, |ui| kind_filters(ui, kind)).flatten() {
+                    Some(FilterAction::Run(extra)) => {
+                        let mut p = json!({"column": letters});
+                        if let (Some(m), Some(e)) = (p.as_object_mut(), extra.as_object()) {
+                            m.extend(e.clone());
+                        }
+                        let _ = app.run("data.filterBy", p);
+                        close = true;
+                    }
+                    Some(FilterAction::Dialog(name, op, op2)) => {
+                        let kind_name = match kind {
+                            FilterKind::Number => "number",
+                            FilterKind::Text => "text",
+                            FilterKind::Date => "date",
+                        };
+                        open_dialog = Some((name, json!({"column": letters, "header": header, "kind": kind_name, "op": op, "op2": op2})));
+                        close = true;
+                    }
+                    None => {}
+                }
+                items.extend([ascending.id, descending.id, clear.id]);
+            });
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
             let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
@@ -87,16 +153,18 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             });
             let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
             ui.separator();
-            ui.horizontal(|ui| {
-                let clear = ui.button("Clear Filter");
-                if clear.clicked() {
-                    let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
+            // One row high: `with_layout` would centre the buttons in all the height left over.
+            let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let cancel = ui.button("Cancel");
+                if cancel.clicked() {
                     close = true;
                 }
-                // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
+                // Nothing checked would hide every row, so OK is off then, as is Enter.
                 let any = checks.iter().any(|(_, on)| *on);
-                let apply = ui.button("Apply");
-                ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
+                let apply = ui.add_enabled(any, egui::Button::new("OK"));
+                items.extend([cancel.id, apply.id]);
+                ui.ctx().data_mut(|d| d.insert_temp(buttons_key, items.clone()));
                 if apply.clicked() || (enter && any) {
                     let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
                     let vals: Vec<String> = checks.iter().filter(|(v, on)| *on && v != "(Blanks)").map(|(v, _)| v.clone()).collect();
@@ -119,6 +187,165 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         });
         app.grid.filter_menu = None;
     }
+    if let Some((name, params)) = open_dialog {
+        app.open_dialog(name, params);
+    }
+}
+
+/// What a Number / Text / Date Filters item asks for: `data.filterBy` with these parameters
+/// added to the column, or a dialog (Custom AutoFilter with its two operators preset, Top 10).
+enum FilterAction {
+    Run(serde_json::Value),
+    Dialog(&'static str, &'static str, &'static str),
+}
+
+/// The Number / Text / Date Filters submenu for a column of `kind`; the item chosen, if any.
+fn kind_filters(ui: &mut egui::Ui, kind: FilterKind) -> Option<FilterAction> {
+    use FilterAction::{Dialog, Run};
+    const CUSTOM: &str = "customAutoFilter";
+    // (label, action); a `None` label is a separator.
+    let items: Vec<(Option<&str>, Option<FilterAction>)> = match kind {
+        FilterKind::Number => vec![
+            (Some("Equals…"), Some(Dialog(CUSTOM, "=", ""))),
+            (Some("Does Not Equal…"), Some(Dialog(CUSTOM, "<>", ""))),
+            (Some("Greater Than…"), Some(Dialog(CUSTOM, ">", ""))),
+            (Some("Greater Than Or Equal To…"), Some(Dialog(CUSTOM, ">=", ""))),
+            (Some("Less Than…"), Some(Dialog(CUSTOM, "<", ""))),
+            (Some("Less Than Or Equal To…"), Some(Dialog(CUSTOM, "<=", ""))),
+            (Some("Between…"), Some(Dialog(CUSTOM, ">=", "<="))),
+            (None, None),
+            (Some("Top 10…"), Some(Dialog("top10AutoFilter", "", ""))),
+            (Some("Above Average"), Some(Run(json!({"aboveAverage": true})))),
+            (Some("Below Average"), Some(Run(json!({"aboveAverage": false})))),
+            (None, None),
+            (Some("Custom Filter…"), Some(Dialog(CUSTOM, "=", ""))),
+        ],
+        FilterKind::Text => vec![
+            (Some("Equals…"), Some(Dialog(CUSTOM, "=", ""))),
+            (Some("Does Not Equal…"), Some(Dialog(CUSTOM, "<>", ""))),
+            (None, None),
+            (Some("Begins With…"), Some(Dialog(CUSTOM, "beginsWith", ""))),
+            (Some("Ends With…"), Some(Dialog(CUSTOM, "endsWith", ""))),
+            (None, None),
+            (Some("Contains…"), Some(Dialog(CUSTOM, "contains", ""))),
+            (Some("Does Not Contain…"), Some(Dialog(CUSTOM, "notContains", ""))),
+            (None, None),
+            (Some("Custom Filter…"), Some(Dialog(CUSTOM, "=", ""))),
+        ],
+        FilterKind::Date => {
+            let mut v = vec![
+                (Some("Equals…"), Some(Dialog(CUSTOM, "=", ""))),
+                (Some("Before…"), Some(Dialog(CUSTOM, "<", ""))),
+                (Some("After…"), Some(Dialog(CUSTOM, ">", ""))),
+                (Some("Between…"), Some(Dialog(CUSTOM, ">=", "<="))),
+            ];
+            // Periods, in Excel's groups: days, weeks, months, quarters, years, year to date.
+            let periods = [
+                ("Tomorrow", "tomorrow"),
+                ("Today", "today"),
+                ("Yesterday", "yesterday"),
+                ("", ""),
+                ("Next Week", "nextWeek"),
+                ("This Week", "thisWeek"),
+                ("Last Week", "lastWeek"),
+                ("", ""),
+                ("Next Month", "nextMonth"),
+                ("This Month", "thisMonth"),
+                ("Last Month", "lastMonth"),
+                ("", ""),
+                ("Next Quarter", "nextQuarter"),
+                ("This Quarter", "thisQuarter"),
+                ("Last Quarter", "lastQuarter"),
+                ("", ""),
+                ("Next Year", "nextYear"),
+                ("This Year", "thisYear"),
+                ("Last Year", "lastYear"),
+                ("", ""),
+                ("Year to Date", "yearToDate"),
+            ];
+            v.push((None, None));
+            for (label, period) in periods {
+                v.push(if label.is_empty() { (None, None) } else { (Some(label), Some(Run(json!({"period": period})))) });
+            }
+            v.push((None, None));
+            v.push((Some("Custom Filter…"), Some(Dialog(CUSTOM, "=", ""))));
+            v
+        }
+    };
+    let mut chosen = None;
+    for (label, action) in items {
+        match label {
+            None => {
+                ui.separator();
+            }
+            Some(label) => {
+                if ui.add(egui::Button::new(label).frame(false)).clicked() {
+                    chosen = action;
+                    ui.close();
+                }
+            }
+        }
+    }
+    chosen
+}
+
+/// Sort / Filter by Color: the cell colours, then the font colours, the column uses (each list
+/// only when it has more than one). The choice: `("cellColor" | "fontColor", colour)`.
+fn color_choices(
+    ui: &mut egui::Ui,
+    fills: &[gridcraft_engine::model::Color],
+    fonts: &[gridcraft_engine::model::Color],
+    theme: &gridcraft_engine::model::Theme,
+) -> Option<(&'static str, serde_json::Value)> {
+    let mut chosen = None;
+    for (by, title, none, list) in [("cellColor", "Cell Color", "No Fill", fills), ("fontColor", "Font Color", "Automatic", fonts)] {
+        if list.len() < 2 {
+            continue;
+        }
+        ui.label(egui::RichText::new(title).strong());
+        for c in list {
+            let rgb = c.resolve(theme);
+            let (rect, resp) = ui.allocate_exact_size(vec2(170.0, 22.0), Sense::click());
+            // The swatch alone says nothing to a screen reader, nor tells two close shades
+            // apart: each choice is named by its kind and hex value, also shown on hover.
+            let name = match c.hex(theme) {
+                Some(hex) => format!("{title} {hex}"),
+                None => none.to_string(),
+            };
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
+            let resp = if rgb.is_some() { resp.on_hover_text(&name) } else { resp };
+            let t = Tokens::get(ui.ctx());
+            if resp.hovered() {
+                ui.painter().rect_filled(rect, 2.0, ui.visuals().widgets.hovered.weak_bg_fill);
+            }
+            let swatch = Rect::from_min_size(rect.min + vec2(6.0, 4.0), vec2(40.0, 14.0));
+            match rgb {
+                Some([r, g, b]) => {
+                    ui.painter().rect_filled(swatch, 2.0, egui::Color32::from_rgb(r, g, b));
+                    ui.painter().rect_stroke(swatch, 2.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+                }
+                _ => {
+                    ui.painter().rect_stroke(swatch, 2.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+                    ui.painter().text(
+                        swatch.right_center() + vec2(8.0, 0.0),
+                        egui::Align2::LEFT_CENTER,
+                        none,
+                        egui::FontId::proportional(13.0),
+                        ui.visuals().text_color(),
+                    );
+                }
+            }
+            if resp.clicked() {
+                let value = match c.hex(theme) {
+                    Some(hex) => json!(hex),
+                    None => json!(if by == "cellColor" { "none" } else { "auto" }),
+                };
+                chosen = Some((by, value));
+                ui.close();
+            }
+        }
+    }
+    chosen
 }
 
 /// Draws and dispatches the cell context menu, including Show Details when offered, clipboard and insert/format actions; closes on Esc or an outside press.
@@ -575,4 +802,13 @@ fn insert_copied_item(app: &SheetApp) -> Option<(&'static str, &'static str)> {
 pub(super) fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
     let Some(d) = app.session.active() else { return false };
     d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str() == "checkbox"
+}
+
+/// A menu item that opens a submenu: frameless like the items around it, with the arrow on the
+/// side the submenu opens (`ui.menu_button` outside a menu is a framed button without one).
+/// The submenu's result while it is open.
+fn submenu<R>(ui: &mut egui::Ui, label: &str, content: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    use egui::containers::menu::SubMenuButton;
+    let button = egui::Button::new(label).frame(false).right_text(SubMenuButton::arrow_atom(None));
+    SubMenuButton::from_button(button).ui(ui, content).1.map(|r| r.inner)
 }
