@@ -359,11 +359,17 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 let (r0, c0) = (i64::from(m.start.row - src.start.row), i64::from(m.start.col - src.start.col));
                 let (r1, c1) = (i64::from(m.end.row - src.start.row), i64::from(m.end.col - src.start.col));
                 let (dr0, dc0, dr1, dc1) = if transpose { (c0, r0, c1, r1) } else { (r0, c0, r1, c1) };
-                if let (Some(a), Some(b)) = (at.offset(dr0, dc0), at.offset(dr1, dc1)) {
-                    let nm = RangeRef::new(a, b);
-                    let sh = cx.sheet_mut(dest_sheet)?;
-                    sh.merges.retain(|x| !x.intersects(&nm));
-                    sh.merges.push(nm);
+                // Every tile of a tiled paste gets its own copy of the merge.
+                for tr in 0..tiles_r {
+                    for tc in 0..tiles_c {
+                        let (tro, tco) = (i64::from(tr * h), i64::from(tc * w));
+                        if let (Some(a), Some(b)) = (at.offset(tro + dr0, tco + dc0), at.offset(tro + dr1, tco + dc1)) {
+                            let nm = RangeRef::new(a, b);
+                            let sh = cx.sheet_mut(dest_sheet)?;
+                            sh.merges.retain(|x| !x.intersects(&nm));
+                            sh.merges.push(nm);
+                        }
+                    }
                 }
             }
         }

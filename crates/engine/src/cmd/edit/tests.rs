@@ -803,4 +803,16 @@ fn paste_special_transpose_preserves_merged_cells() {
     assert_eq!(merge_of(&mut s, "D2"), json!("D1:D2"));
     assert_eq!(merge_of(&mut s, "E1"), json!(null));
     assert_eq!(merge_of(&mut s, "E2"), json!(null));
+
+    // Tiled: a vertical A1:A2 merge pasted transposed over D1:G1 merges both tiles.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:G1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(merge_of(&mut s, "E1"), json!("D1:E1"));
+    assert_eq!(merge_of(&mut s, "F1"), json!("F1:G1"));
+    assert_eq!(merge_of(&mut s, "G1"), json!("F1:G1"));
 }
