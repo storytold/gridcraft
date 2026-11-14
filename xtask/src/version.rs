@@ -75,6 +75,7 @@ fn find_line(manifest: &str) -> Result<(usize, &str), String> {
     Err("no `version = \"…\"` in [workspace.package] of the root Cargo.toml".into())
 }
 
+/// Applies the requested version operation and reports contributor snapshot staleness.
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let path = root.join("Cargo.toml");
     let text = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
@@ -100,6 +101,12 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
                 crate::run(c, "cargo update --workspace")?;
             }
             println!("version: {old} -> {new}");
+            // A release credits everyone: nudge (don't block) when the About list is stale.
+            match crate::contributors::warning(root) {
+                Ok(Some(msg)) => eprintln!("warning: {msg}"),
+                Ok(None) => {}
+                Err(e) => eprintln!("warning: couldn't check contributors/contributors.json freshness: {e}"),
+            }
             Ok(())
         }
         _ => Err("usage: cargo xtask version [set X.Y.Z[-pre]]".into()),
