@@ -2975,3 +2975,20 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
 }
+
+#[test]
+fn a_subnormal_number_is_zero() {
+    // out-of-range.00001 to 00009, power.00021: Excel holds no number below 2.2250738585072014e-308.
+    let mut t = T::new();
+    t.set("A1", "1e-310");
+    t.set("A2", "2.2250738585072e-308");
+    t.set("B1", "=IF(A1>0,1,2)");
+    t.set("B2", "=IF(A2>0,1,2)");
+    t.set("B3", "=SUM(A1:A2)*2");
+    t.set("B4", "=2^-1074");
+    assert_eq!(t.get("A1"), Value::Number(0.0));
+    assert_eq!(t.num("B1"), 2.0);
+    assert_eq!(t.num("B2"), 2.0);
+    assert_eq!(t.get("B3"), Value::Number(0.0));
+    assert_eq!(t.get("B4"), Value::Number(0.0));
+}
