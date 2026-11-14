@@ -216,15 +216,17 @@ fn outside_text_cells(q: &mut QuadrantPaint<'_>, merges: &[RangeRef]) -> Vec<(Ce
     let in_merge = |c: CellRef| merges.iter().find(|m| m.contains(c)).copied();
     let empty_ok = |c: CellRef| sh.value_ref(c).is_none_or(Value::is_empty) && in_merge(c).is_none();
     // Text cells just outside the quadrant whose text may overflow into it: the nearest non-empty
-    // cell left of `c0` and right of `c1` in each row (within the same frozen / scrolled pane).
+    // cell left of `c0` and right of `c1` in each row, in either pane.
     let mut outside: Vec<(CellRef, Rect, Look, Option<CfLook>)> = Vec::new();
     for r in geo.shown_rows(r0, r1) {
         let left = (c0.saturating_sub(20)..c0).rev().map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         let right = (c1.saturating_add(1)..=c1.saturating_add(20).min(MAX_COLS - 1)).map(|col| CellRef::new(r, col)).find(|&n| !empty_ok(n));
         for n in [left, right].into_iter().flatten() {
-            if geo.same_col_pane(n.col, c0) && sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
+            if sh.col_width(n.col) > 0.0 && in_merge(n).is_none() {
                 let (lk, cfl) = look(wb, si, sh, n, cf);
-                outside.push((n, geo.cell_rect(sh, n), lk, cfl));
+                let rect = geo.cell_rect(sh, n);
+                let rect = rect.translate(egui::vec2(geo.x_in_pane(sh, c0, n.col) - rect.left(), 0.0));
+                outside.push((n, rect, lk, cfl));
             }
         }
     }
@@ -306,6 +308,19 @@ fn text_overflows_cell(numeric: bool, value: &Value, rotation: i16, width: f32, 
     !numeric && !matches!(value, Value::Number(_)) && rotation.abs() != 90 && width > rect_width - 2.0 * pad
 }
 
+/// Paints over the gridlines that text overflowing `rect` into `clip` passes through.
+fn cover_gridlines(q: &QuadrantPaint<'_>, clip: Rect, rect: Rect) {
+    let inner = Rect::from_min_max(pos2(clip.left() + 1.0, clip.top() + 0.5), pos2(clip.right() - 1.0, clip.bottom() - 1.0));
+    let extra_l = Rect::from_min_max(inner.min, pos2(rect.left() + 1.0, inner.bottom()));
+    let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
+    for extra in [extra_l, extra_r] {
+        if extra.width() > 0.0 {
+            q.painter.rect_filled(extra, 0.0, q.tokens.grid_bg);
+            paint_active_row(q, Some(extra));
+        }
+    }
+}
+
 fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: u32, in_merge: bool) -> bool {
     filter_space == 0.0 && (overflows || across_end > col) && !in_merge
 }
@@ -322,13 +337,11 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let wb = q.workbook;
     let si = q.sheet_index;
     let sh = q.sheet;
-    let t = q.tokens;
     let z = geo.z;
     let (c0, c1) = q.cols;
     let in_merge = |cell| merges.iter().find(|m| m.contains(cell)).copied();
-    // Text overflows only into empty cells of its own pane: the frozen and scrolled columns move
-    // apart when scrolling (#2544).
-    let empty_ok = |cell: CellRef| geo.same_col_pane(cell.col, c.col) && sh.value_ref(cell).is_none_or(Value::is_empty) && in_merge(cell).is_none();
+    // Text overflows into empty cells, across the freeze line too: each pane draws its own part.
+    let empty_ok = |cell: CellRef| sh.value_ref(cell).is_none_or(Value::is_empty) && in_merge(cell).is_none();
     if paint_cell_decorations(q, c, *rect, lk, cfl.as_ref()) {
         return;
     }
@@ -461,12 +474,12 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let mut right = rect.right();
         let mut left = rect.left();
         if across_end > c.col {
-            right = geo.x_end(sh, across_end);
+            right = geo.x_in_pane(sh, c0, across_end) + sh.col_width(across_end) * z;
         }
         if matches!(halign, HAlign::Left | HAlign::Center | HAlign::Justify) {
             let mut cc = c.col + 1;
             while right - rect.left() < w + 2.0 * pad && cc < MAX_COLS && empty_ok(CellRef::new(c.row, cc)) && cc <= c1 + 20 {
-                right = geo.x_end(sh, cc);
+                right = geo.x_in_pane(sh, c0, cc) + sh.col_width(cc) * z;
                 cc += 1;
             }
         }
@@ -474,24 +487,17 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
             let mut cc = c.col;
             while rect.right() - left < w + 2.0 * pad && cc > 0 && empty_ok(CellRef::new(c.row, cc - 1)) && cc + 20 > c0 {
                 cc -= 1;
-                left = geo.x(sh, cc);
+                left = geo.x_in_pane(sh, c0, cc);
             }
         }
         clip = Rect::from_min_max(pos2(left, rect.top()), pos2(right, rect.bottom()));
-        // Paint over the gridlines the text passes through.
         if lk.fill.is_none() {
-            let inner = Rect::from_min_max(pos2(clip.left() + 1.0, clip.top() + 0.5), pos2(clip.right() - 1.0, clip.bottom() - 1.0));
-            let extra_l = Rect::from_min_max(inner.min, pos2(rect.left() + 1.0, inner.bottom()));
-            let extra_r = Rect::from_min_max(pos2(rect.right() - 1.0, inner.top()), inner.max);
-            if extra_l.width() > 0.0 {
-                p.rect_filled(extra_l, 0.0, t.grid_bg);
-                paint_active_row(q, Some(extra_l));
-            }
-            if extra_r.width() > 0.0 {
-                p.rect_filled(extra_r, 0.0, t.grid_bg);
-                paint_active_row(q, Some(extra_r));
-            }
+            cover_gridlines(q, clip, *rect);
         }
+    }
+    // Only part of the text may fall in this pane, or none of it.
+    if !clip.intersect(p.clip_rect()).is_positive() {
+        return;
     }
     let x = match halign {
         HAlign::CenterAcross => clip.center().x - w / 2.0,
