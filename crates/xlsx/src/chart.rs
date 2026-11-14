@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{Chart, ChartEmptyCells, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -287,6 +287,15 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        // Without the element empty cells are gaps; with it, its `val` defaults to zero.
+        empty_cells: match chart.child("dispBlanksAs") {
+            None => ChartEmptyCells::Gap,
+            Some(e) => match e.attr("val") {
+                Some("gap") => ChartEmptyCells::Gap,
+                Some("span") => ChartEmptyCells::Span,
+                _ => ChartEmptyCells::Zero,
+            },
+        },
     })
 }
 
@@ -903,6 +912,11 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if let Some(p) = pos {
         let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
     }
-    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
+    let blanks = match ch.empty_cells {
+        ChartEmptyCells::Gap => "gap",
+        ChartEmptyCells::Zero => "zero",
+        ChartEmptyCells::Span => "span",
+    };
+    let _ = write!(s, "<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"{blanks}\"/></c:chart></c:chartSpace>");
     s
 }

@@ -148,3 +148,23 @@ fn dense_and_tiny_tables_are_bounded_and_explicit() {
         assert_sane(&render(&c, &d, w, h, &ApproxMeasure), w, h);
     }
 }
+
+/// A cell empty in the source stays empty in the data table when the chart draws it as zero, as
+/// Excel does: only the plot shows the zero.
+#[test]
+fn a_blank_shown_as_zero_stays_blank_in_the_table() {
+    use gridcraft_model::ChartEmptyCells;
+    let mut d = sample(ChartKind::ColumnClustered);
+    d.series[0].values[1] = None;
+    let zeros = |empty_cells| {
+        let mut c = chart(ChartKind::ColumnClustered);
+        c.legend = LegendPos::None;
+        c.data_labels = false;
+        c.data_table = Some(ChartDataTable::default());
+        c.empty_cells = empty_cells;
+        let p = render(&c, &d, 900.0, 500.0, &ApproxMeasure);
+        p.iter().filter(|p| matches!(p, Prim::Text { text, .. } if text.trim().trim_start_matches('$') == "0")).count()
+    };
+    // The axis's own 0 is the only one either way: the table adds none for the blank.
+    assert_eq!(zeros(ChartEmptyCells::Zero), zeros(ChartEmptyCells::Gap));
+}

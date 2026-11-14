@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartEmptyCells, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, points_per_series, series_color};
@@ -56,6 +56,9 @@ pub(crate) const MAX_WEDGES: usize = 2_048;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    /// The (series, point) cells empty in the source and drawn as zero, sorted: a data table shows
+    /// them empty, as Excel does.
+    zero_filled: Vec<(usize, usize)>,
 }
 
 #[cfg(test)]
@@ -212,8 +215,20 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
-    let data = sanitized(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut data = sanitized(data);
+    let mut zero_filled = Vec::new();
+    if chart.empty_cells == ChartEmptyCells::Zero && data.series.iter().any(|s| s.values.iter().any(Option::is_none)) {
+        // Shown as zero: every empty point is a 0, labelled like any other.
+        for (i, s) in data.to_mut().series.iter_mut().enumerate() {
+            for (j, v) in s.values.iter_mut().enumerate() {
+                if v.is_none() {
+                    zero_filled.push((i, j));
+                    *v = Some(0.0);
+                }
+            }
+        }
+    }
+    let mut ctx = Ctx { out: Vec::new(), m, zero_filled };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };

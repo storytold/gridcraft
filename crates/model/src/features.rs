@@ -570,6 +570,18 @@ fn default_hole_size() -> u8 {
     50
 }
 
+/// How a chart shows a series' empty cells (`c:dispBlanksAs`), as Excel's "Hidden and Empty Cells".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChartEmptyCells {
+    /// Nothing drawn there; a line breaks.
+    #[default]
+    Gap,
+    /// As zero: a column of 0, a line down to 0, and a value label of 0.
+    Zero,
+    /// A line joins the points on either side; columns show nothing.
+    Span,
+}
+
 /// A chart's data table (`c:dTable`), independent of the chart legend.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -615,6 +627,9 @@ pub struct Chart {
     /// whenever the PivotTable is refreshed or its layout changes.
     #[serde(default)]
     pub pivot: Option<String>,
+    /// How empty cells show.
+    #[serde(default)]
+    pub empty_cells: ChartEmptyCells,
 }
 
 impl Chart {
@@ -1154,6 +1169,7 @@ mod tests {
             source: None,
             by_rows: false,
             pivot: None,
+            empty_cells: Default::default(),
         };
         let mut json = serde_json::to_value(&chart).expect("serialize chart");
         json.as_object_mut().expect("chart object").remove("hole_size");
