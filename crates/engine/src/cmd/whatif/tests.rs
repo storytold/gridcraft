@@ -50,6 +50,20 @@ fn goal_seek_linear_and_nonlinear() {
 }
 
 #[test]
+fn goal_seek_reports_the_value_stored_with_precision_as_displayed() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    let r = s.execute("data.goalSeek", json!({"set": "B1", "to": 1, "changing": "A1"})).unwrap();
+    assert_eq!(r["converged"], true, "{r}");
+    assert_eq!(n(&s, "A1"), 1.0, "{r}");
+    assert_eq!(r["value"].as_f64(), Some(n(&s, "A1")), "{r}");
+    assert_eq!(r["result"].as_f64(), Some(1.0), "{r}");
+}
+
+#[test]
 fn goal_seek_errors() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();

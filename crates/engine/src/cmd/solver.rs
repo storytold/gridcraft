@@ -182,6 +182,11 @@ fn optimise(ev: &mut Evaluator, m: &Model, goal: Goal, x0: &[f64], bounds: Bound
 
 /// Rounds `x` to each variable cell's displayed precision when enabled and verifies that the
 /// committed values still satisfy every bound, integrality and general constraint.
+///
+/// A point rounding leaves alone keeps the method's own verdict. A rounded point is checked with
+/// an absolute tolerance (Constraint Precision, plus floating-point noise in proportion to the
+/// bound): one relative to the bound grows to a whole displayed step at large values (1 at a
+/// million) and would accept the very violations rounding causes.
 fn verify_displayed_solution(wb: &Workbook, sheet: usize, ev: &mut Evaluator, prob: &problem::Problem, x: Vec<f64>) -> Option<Vec<f64>> {
     if !wb.calc.precision_as_displayed {
         return Some(x);
@@ -191,13 +196,17 @@ fn verify_displayed_solution(wb: &Workbook, sheet: usize, ev: &mut Evaluator, pr
     if rounded.iter().any(|v| !v.is_finite()) {
         return None;
     }
+    if rounded.iter().zip(&x).all(|(r, v)| r.to_bits() == v.to_bits()) {
+        return Some(x);
+    }
+    let tol = |b: f64| PRECISION + 1e-12 * b.abs();
     for ((&v, &lo), &hi) in rounded.iter().zip(&prob.lo).zip(&prob.hi) {
-        if v < lo - PRECISION * (1.0 + lo.abs()) || v > hi + PRECISION * (1.0 + hi.abs()) {
+        if v < lo - tol(lo) || v > hi + tol(hi) {
             return None;
         }
     }
     for (&v, &is_int) in rounded.iter().zip(&prob.integer) {
-        if is_int && (v - v.round()).abs() > PRECISION * (1.0 + v.abs()) {
+        if is_int && (v - v.round()).abs() > tol(v) {
             return None;
         }
     }
@@ -213,7 +222,7 @@ fn verify_displayed_solution(wb: &Workbook, sheet: usize, ev: &mut Evaluator, pr
                 lp::Sense::Ge => -*g,
                 lp::Sense::Eq => g.abs(),
             };
-            if viol > PRECISION * (1.0 + r.rhs_const.abs()) {
+            if viol > tol(r.rhs_const) {
                 return None;
             }
         }

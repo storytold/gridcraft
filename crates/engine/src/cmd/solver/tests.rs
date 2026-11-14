@@ -1957,6 +1957,9 @@ fn precision_as_displayed_does_not_certify_a_committed_constraint_violation() {
         ("min", "=A1*2", "A1 >= 0.4", "0", "simplex"),
         ("max", "=A1*3", "B1 <= 1", "0", "simplex"),
         ("min", "=A1*2", "A1 >= 0.34", "0.0", "simplex"),
+        // Large values: a tolerance relative to the bound would be a whole displayed step.
+        ("min", "=A1*2", "B1 >= 2000000.06", "0.0", "simplex"),
+        ("min", "=A1*2", "A1 >= 1000000.04", "0.0", "simplex"),
         ("max", "=A1*2", "A1 <= 0.5", "0", "grg"),
         ("max", "=A1*2", "A1 <= 0.5", "0", "evolutionary"),
     ];
@@ -1968,12 +1971,9 @@ fn precision_as_displayed_does_not_certify_a_committed_constraint_violation() {
         let r = s
             .execute("data.solver", json!({"objective": "C1", "goal": goal, "variables": "A1", "constraints": [constraint], "method": method}))
             .unwrap();
-        let status = r["status"].as_str().unwrap_or("");
-        if matches!(status, "optimal" | "converged") {
+        if r["changed"].as_bool() == Some(true) {
             let check = s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("D1").unwrap());
             assert_eq!(check, Value::Bool(true), "{method} {goal} {constraint}: {r}");
-        }
-        if r["changed"].as_bool() == Some(true) {
             let committed_a1 = n(&s, "A1");
             let committed_c1 = n(&s, "C1");
             assert_eq!(r["values"]["A1"].as_f64(), Some(committed_a1), "{method} {goal} {constraint}: {r}");

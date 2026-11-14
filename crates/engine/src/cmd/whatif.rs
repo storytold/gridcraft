@@ -346,15 +346,21 @@ fn goal_seek(s: &mut Session, p: &Json) -> Result<Json> {
         trial.run(&[(csi, chg, Value::number(x))], &[(ssi, set)]).first().and_then(Value::as_f64).map(|v| v - target).unwrap_or(f64::NAN)
     };
     let r = seek(x0, &mut f, max_iter, tol);
+    // With Precision as displayed the trials saw the input rounded, and the commit stores it
+    // rounded: report that value.
+    let x = match trial.precision.as_mut() {
+        Some(prec) => prec.round(&trial.base, csi, chg, r.x),
+        None => r.x,
+    };
     edit(s, |cx| {
         let sh = cx.sheet_mut(csi)?;
         let style = sh.style_id(chg);
-        sh.set_cell(chg, Cell { value: Value::number(r.x), formula: None, style, py: None });
+        sh.set_cell(chg, Cell { value: Value::number(x), formula: None, style, py: None });
         cx.touch(csi, chg);
         Ok(())
     })?;
     let result = s.doc()?.wb.sheet(ssi).map(|sh| sh.value(set)).unwrap_or_default();
-    Ok(json!({"value": r.x, "result": value_json(&result), "iterations": r.iterations, "converged": r.converged}))
+    Ok(json!({"value": x, "result": value_json(&result), "iterations": r.iterations, "converged": r.converged}))
 }
 
 // ---------------------------------------------------------------- data tables
