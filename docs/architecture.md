@@ -230,8 +230,8 @@ top-left cell's reference puts it, not on the data that cell read before; rules 
 themselves, and absolute references, are unaffected. A cut, and Move Columns, take the rules on their
 cells with them (`move_cut_rules`, on the engine's `Rule` trait, `remove_rule_cells` and
 `moved_rule_parts`), so their ranges and formulas move together, once; a cut to another sheet qualifies their references with the source sheet. A cut is
-pasted as it is: Paste Special refuses to transpose it or tile it over a larger selection, as
-Excel does.
+pasted as it is: Paste Special refuses to transpose it, tile it over a larger selection or skip its
+blanks, as Excel offers none of those for a cut.
 
 ## Equations
 

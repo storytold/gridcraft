@@ -67,10 +67,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
-    // A cut moves its block as it is, as Excel's does: it can't be transposed or tiled over a
-    // larger selection (the move's references, rules and arrays follow the block unturned).
-    if cut_move && (transpose || tiles_r > 1 || tiles_c > 1) {
-        return Err(EngineError::Other("The cut area can only be pasted as it is: paste it without Transpose, into one cell.".into()));
+    // A cut moves its block as it is, as Excel's does: it can't be transposed, tiled over a
+    // larger selection or pasted skipping blanks (the move's references, rules and arrays follow
+    // the whole block unturned, and its rules replace the destination's under every cell).
+    if cut_move && (transpose || skip_blanks || tiles_r > 1 || tiles_c > 1) {
+        return Err(EngineError::Other("The cut area can only be pasted as it is: paste it without Transpose or Skip Blanks, into one cell.".into()));
     }
     edit(s, |cx| {
         // Styles from another workbook must be re-interned.

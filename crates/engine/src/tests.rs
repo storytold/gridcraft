@@ -7008,8 +7008,9 @@ fn rules_rehost_from_the_top_left_of_all_their_ranges() {
     }
 }
 
-/// A cut is pasted as it is: a transposed or tiled paste of it is refused and changes nothing,
-/// so its rules never land on a block of another shape than its cells.
+/// A cut is pasted as it is: a transposed, tiled or skip-blanks paste of it is refused and
+/// changes nothing, so its rules never land on a block of another shape than its cells, nor
+/// replace a destination rule under a cell the paste leaves alone.
 #[test]
 fn a_cut_is_not_transposed_or_tiled() {
     let mut s = s();
@@ -7018,6 +7019,7 @@ fn a_cut_is_not_transposed_or_tiled() {
         .unwrap();
     s.execute("edit.cut", json!({"range": "A1:C1"})).unwrap();
     assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E1"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "E1"})).is_err());
     s.execute("selection.set", json!({"range": "E1:G2"})).unwrap();
     assert!(s.execute("edit.pasteSpecial", json!({"what": "all"})).is_err());
     let sh = s.doc().unwrap().wb.sheets[0].clone();
