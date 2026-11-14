@@ -28,6 +28,8 @@ const MAX_OBJECTS: usize = 2_000_000;
 const MAX_CELLS: u64 = 2_000_000;
 const MAX_SHEETS: usize = 1024;
 const MAX_CELL_TEXT: usize = 32_767;
+/// Most decoded text kept for one import.
+const MAX_TEXT_BYTES: usize = 256 * 1024 * 1024;
 /// Serial of 2001-01-01 (the Numbers date origin) in the 1900 date system.
 const ORIGIN_SERIAL: f64 = 36_892.0;
 const SECONDS_PER_DAY: f64 = 86_400.0;
@@ -370,38 +372,60 @@ struct Import {
     report: ReadReport,
     cells: u64,
     formats: Vec<(&'static str, StyleId)>,
+    texts: Texts,
 }
 
 const MALFORMED: &str = "Some Numbers data was truncated or malformed; what could be read was imported and the rest was skipped.";
 
-/// One table's lookup lists. Text is decoded once and shared by every cell that uses it.
-struct Lists {
-    objects: Arc<Objects>,
-    strings: HashMap<u32, Arc<str>>,
-    rich: HashMap<u32, u64>,
+/// Text decoded so far, shared by the whole import: a data list that many tables reference is
+/// decoded once, every cell shares its strings, and the total kept is capped.
+#[derive(Default)]
+struct Texts {
+    strings: HashMap<u64, Arc<HashMap<u32, Arc<str>>>>,
+    rich_lists: HashMap<u64, Arc<HashMap<u32, u64>>>,
     rich_text: HashMap<u64, Option<Arc<str>>>,
+    bytes: usize,
     clipped: bool,
 }
 
-impl Lists {
-    fn rich(&mut self, key: u32) -> Option<Arc<str>> {
-        let payload = *self.rich.get(&key)?;
-        if let Some(text) = self.rich_text.get(&payload) {
-            return text.clone();
+impl Texts {
+    /// Keeps `text` (shortened to the cell limit) against the import-wide text budget.
+    fn add(&mut self, text: &str) -> Result<Arc<str>, IoError> {
+        let text = match text.char_indices().nth(MAX_CELL_TEXT) {
+            Some((end, _)) => {
+                self.clipped = true;
+                text.get(..end).unwrap_or(text)
+            }
+            None => text,
+        };
+        self.bytes = self.bytes.saturating_add(text.len());
+        if self.bytes > MAX_TEXT_BYTES {
+            return Err(IoError::TooLarge("Numbers document has more than 256 MiB of text".into()));
         }
-        let text = rich_text(&self.objects, payload).map(|t| clip_text(&t, &mut self.clipped));
-        self.rich_text.insert(payload, text.clone());
-        text
+        Ok(Arc::from(text))
     }
 }
 
-fn clip_text(text: &str, clipped: &mut bool) -> Arc<str> {
-    match text.char_indices().nth(MAX_CELL_TEXT) {
-        Some((end, _)) => {
-            *clipped = true;
-            Arc::from(text.get(..end).unwrap_or(text))
+/// One table's lookup lists, backed by the import's shared [`Texts`].
+struct Lists {
+    objects: Arc<Objects>,
+    texts: Texts,
+    strings: Arc<HashMap<u32, Arc<str>>>,
+    rich: Arc<HashMap<u32, u64>>,
+}
+
+impl Lists {
+    fn rich(&mut self, key: u32) -> Result<Option<Arc<str>>, IoError> {
+        let Some(payload) = self.rich.get(&key).copied() else { return Ok(None) };
+        if let Some(text) = self.texts.rich_text.get(&payload) {
+            return Ok(text.clone());
         }
-        None => Arc::from(text),
+        let text = match rich_text(&self.objects, payload) {
+            Some(t) => Some(self.texts.add(&t)?),
+            None => None,
+        };
+        self.texts.rich_text.insert(payload, text.clone());
+        Ok(text)
     }
 }
 
@@ -411,28 +435,48 @@ fn rich_text(objects: &Objects, payload: u64) -> Option<String> {
     Some(parts.concat())
 }
 
-fn build_lists(objects: &Arc<Objects>, store: &[u8], report: &mut ReadReport) -> Lists {
-    let mut lists = Lists { objects: Arc::clone(objects), strings: HashMap::new(), rich: HashMap::new(), rich_text: HashMap::new(), clipped: false };
-    let key = |entry: &[u8]| varint_field(entry, 1).and_then(|k| u32::try_from(k).ok());
-    if let Some(list) = reference_field(store, 4).and_then(|id| objects.get(id, T_DATA_LIST)) {
-        if !well_formed(list) {
-            report.warn(MALFORMED);
-        }
-        for entry in bytes_fields(list, 3) {
-            if let (Some(key), Some(text)) = (key(entry), bytes_field(entry, 3)) {
-                let text = clip_text(&String::from_utf8_lossy(text), &mut lists.clipped);
-                lists.strings.insert(key, text);
+fn entry_key(entry: &[u8]) -> Option<u32> {
+    varint_field(entry, 1).and_then(|k| u32::try_from(k).ok())
+}
+
+fn build_lists(objects: &Arc<Objects>, store: &[u8], mut texts: Texts, report: &mut ReadReport) -> Result<Lists, IoError> {
+    let mut strings = Arc::new(HashMap::new());
+    if let Some(id) = reference_field(store, 4)
+        && let Some(list) = objects.get(id, T_DATA_LIST)
+    {
+        strings = match texts.strings.get(&id) {
+            Some(done) => Arc::clone(done),
+            None => {
+                if !well_formed(list) {
+                    report.warn(MALFORMED);
+                }
+                let mut map = HashMap::new();
+                for entry in bytes_fields(list, 3) {
+                    if let (Some(key), Some(text)) = (entry_key(entry), bytes_field(entry, 3)) {
+                        map.insert(key, texts.add(&String::from_utf8_lossy(text))?);
+                    }
+                }
+                let map = Arc::new(map);
+                texts.strings.insert(id, Arc::clone(&map));
+                map
             }
-        }
+        };
     }
-    if let Some(list) = reference_field(store, 17).and_then(|id| objects.get(id, T_DATA_LIST)) {
-        for entry in bytes_fields(list, 3) {
-            if let (Some(key), Some(payload)) = (key(entry), reference_field(entry, 9)) {
-                lists.rich.insert(key, payload);
+    let mut rich = Arc::new(HashMap::new());
+    if let Some(id) = reference_field(store, 17)
+        && let Some(list) = objects.get(id, T_DATA_LIST)
+    {
+        rich = match texts.rich_lists.get(&id) {
+            Some(done) => Arc::clone(done),
+            None => {
+                let map: HashMap<u32, u64> = bytes_fields(list, 3).filter_map(|e| Some((entry_key(e)?, reference_field(e, 9)?))).collect();
+                let map = Arc::new(map);
+                texts.rich_lists.insert(id, Arc::clone(&map));
+                map
             }
-        }
+        };
     }
-    lists
+    Ok(Lists { objects: Arc::clone(objects), texts, strings, rich })
 }
 
 /// The decoded optional fields of one packed cell.
@@ -452,7 +496,7 @@ impl Import {
         wb.sheets.clear();
         let mut report = ReadReport::default();
         report.warn("Numbers data-only import: formulas become their saved results and will not recalculate. Source formatting, merged cells, charts, images and other features are not imported. Save a new .xlsx file; Numbers saving is not supported.");
-        Self { objects: Arc::new(objects), wb, report, cells: 0, formats: vec![] }
+        Self { objects: Arc::new(objects), wb, report, cells: 0, formats: vec![], texts: Texts::default() }
     }
 
     fn run(&mut self) -> Result<(), IoError> {
@@ -502,7 +546,16 @@ impl Import {
 
     fn read_table(&mut self, objects: &Arc<Objects>, model: &[u8], sheet: &mut Sheet) -> Result<(), IoError> {
         let Some(store) = bytes_field(model, 4) else { return Ok(()) };
-        let mut lists = build_lists(objects, store, &mut self.report);
+        let mut lists = build_lists(objects, store, std::mem::take(&mut self.texts), &mut self.report)?;
+        let result = self.read_tiles(objects, store, &mut lists, sheet);
+        if lists.texts.clipped {
+            self.report.warn("Some Numbers text was longer than 32,767 characters and was shortened.");
+        }
+        self.texts = std::mem::take(&mut lists.texts);
+        result
+    }
+
+    fn read_tiles(&mut self, objects: &Objects, store: &[u8], lists: &mut Lists, sheet: &mut Sheet) -> Result<(), IoError> {
         let Some(tiles) = bytes_field(store, 3) else { return Ok(()) };
         let height = varint_field(tiles, 2).and_then(|h| u32::try_from(h).ok()).filter(|h| (1..=65_536).contains(h)).unwrap_or(256);
         let mut seen = HashSet::new();
@@ -513,11 +566,8 @@ impl Import {
                 self.report.warn(MALFORMED);
             }
             for info in bytes_fields(tile, 5) {
-                self.read_row(info, index, height, &mut lists, sheet)?;
+                self.read_row(info, index, height, lists, sheet)?;
             }
-        }
-        if lists.clipped {
-            self.report.warn("Some Numbers text was longer than 32,767 characters and was shortened.");
         }
         Ok(())
     }
@@ -545,7 +595,11 @@ impl Import {
             let Some(packed) = buffer.get(usize::from(stored) * scale..).and_then(unpack) else { continue };
             let col =
                 u32::try_from(col).ok().filter(|c| *c < MAX_COLS).ok_or_else(|| IoError::TooLarge("Numbers table exceeds worksheet width".into()))?;
-            if let Some(cell) = self.convert(&packed, lists) {
+            let rich = match (packed.kind, packed.rich) {
+                (K_RICH, Some(key)) => lists.rich(key)?,
+                _ => None,
+            };
+            if let Some(cell) = self.convert(&packed, lists, rich) {
                 self.cells += 1;
                 if self.cells > MAX_CELLS {
                     return Err(IoError::TooLarge("Numbers document has more than 2,000,000 cells".into()));
@@ -556,7 +610,7 @@ impl Import {
         Ok(())
     }
 
-    fn convert(&mut self, p: &Packed, lists: &mut Lists) -> Option<Cell> {
+    fn convert(&mut self, p: &Packed, lists: &Lists, rich: Option<Arc<str>>) -> Option<Cell> {
         let number = p.decimal.map(decimal_to_f64).or(p.double);
         let mut format = None;
         let value = match p.kind {
@@ -574,7 +628,7 @@ impl Import {
             }
             K_ERROR => Value::Error(CellError::Value),
             K_TEXT => Value::Text(Arc::clone(lists.strings.get(&p.string?)?)),
-            K_RICH => Value::Text(lists.rich(p.rich?)?),
+            K_RICH => Value::Text(rich?),
             _ => {
                 self.report.warn("Some Numbers cells have a type that is not supported and were skipped.");
                 return None;
@@ -671,6 +725,35 @@ mod tests {
         assert!(!well_formed(&[0x08]));
         assert!(!well_formed(&[0x0B]));
         assert_eq!(varint_field(&[0x08, 5, 0x12, 9, 7], 1), Some(5));
+    }
+
+    fn field_bytes(number: u32, data: &[u8]) -> Vec<u8> {
+        [&[(number as u8) << 3 | 2, data.len() as u8][..], data].concat()
+    }
+
+    #[test]
+    fn a_text_list_shared_by_tables_is_decoded_once() {
+        // List 7 holds one entry: key 1, string "shared".
+        let entry = [&[0x08, 1][..], &field_bytes(3, b"shared")].concat();
+        let list = field_bytes(3, &entry);
+        let mut items = HashMap::new();
+        items.insert(7, (T_DATA_LIST, list));
+        let objects = Arc::new(Objects { items });
+        // A table store whose string table (field 4) is a reference to object 7.
+        let store = field_bytes(4, &[0x08, 7]);
+        let mut report = ReadReport::default();
+        let first = build_lists(&objects, &store, Texts::default(), &mut report).unwrap();
+        let second = build_lists(&objects, &store, first.texts, &mut report).unwrap();
+        assert_eq!(&*second.strings[&1], "shared");
+        assert_eq!(second.texts.bytes, "shared".len(), "the second table reused the first table's text");
+        assert_eq!(second.texts.strings.len(), 1);
+    }
+
+    #[test]
+    fn retained_text_is_capped_for_the_whole_import() {
+        let mut texts = Texts { bytes: MAX_TEXT_BYTES - 3, ..Texts::default() };
+        assert!(texts.add("abc").is_ok());
+        assert!(matches!(texts.add("d"), Err(IoError::TooLarge(_))));
     }
 
     #[test]
