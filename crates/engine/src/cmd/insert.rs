@@ -662,6 +662,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
     if !by_rows {
         for c in data.start.col..=data.end.col {
             out.push(Series {
+                line_width: None,
                 name: header_row.then(|| abs1(CellRef::new(r.start.row, c))),
                 categories: label_col.then(|| abs(RangeRef::new(CellRef::new(data.start.row, r.start.col), CellRef::new(data.end.row, r.start.col)))),
                 values: abs(RangeRef::new(CellRef::new(data.start.row, c), CellRef::new(data.end.row, c))),
@@ -677,6 +678,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
     } else {
         for row in data.start.row..=data.end.row {
             out.push(Series {
+                line_width: None,
                 name: label_col.then(|| abs1(CellRef::new(row, r.start.col))),
                 categories: header_row
                     .then(|| abs(RangeRef::new(CellRef::new(r.start.row, data.start.col), CellRef::new(r.start.row, data.end.col)))),

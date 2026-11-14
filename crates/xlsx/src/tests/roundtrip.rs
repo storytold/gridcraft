@@ -407,6 +407,7 @@ fn sample() -> Workbook {
         anchor: Anchor { cell: at("J5"), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, ..Default::default() },
         title: Some("Sales".into()),
         series: vec![Series {
+            line_width: None,
             name: Some("'Data & Stuff'!$B$1".into()),
             categories: Some("'Data & Stuff'!$A$2:$A$3".into()),
             values: "'Data & Stuff'!$B$2:$B$3".into(),

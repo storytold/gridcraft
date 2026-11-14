@@ -529,6 +529,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             smooth: s.smooth,
             trendlines,
             number_format: ref_format(wb, sheet, &s.values),
+            line_width: s.line_width,
         });
     }
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
