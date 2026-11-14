@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::date::{DateSystem, datetime_from_serial};
 use gridcraft_core::{CellRef, RangeRef, Value, split_sheet};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_numfmt::{MAX_FORMAT_CODE_CHARS, NumberFormat, format_value};
 
 use crate::{PivotDateGroup, Workbook};
 
@@ -14,6 +14,34 @@ const INVALID: &str = "The reference isn't valid.";
 
 /// Month names of grouped dates' items.
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/// The number format a source column's items are labelled in, parsed once for the column. It is
+/// opaque so that a file writer can label items without depending on `numfmt` itself.
+#[derive(Clone, Debug)]
+pub struct ItemFormat(NumberFormat);
+
+impl ItemFormat {
+    /// Parses a format code as [`column_format`] gives it. A code too long to be valid is
+    /// General without being scanned, as the grid shows it.
+    pub fn new(code: &str) -> Self {
+        Self(parse_code(code))
+    }
+}
+
+impl From<NumberFormat> for ItemFormat {
+    fn from(f: NumberFormat) -> Self {
+        Self(f)
+    }
+}
+
+/// `NumberFormat::parse`, except that a code of more bytes than 4 × the character limit (so
+/// certainly over it, and General) is not copied or scanned.
+fn parse_code(code: &str) -> NumberFormat {
+    if code.len() > 4 * MAX_FORMAT_CODE_CHARS {
+        return NumberFormat::parse("General");
+    }
+    NumberFormat::parse(code)
+}
 
 /// The sheet and range (header row included) a source names: a table (without its totals row),
 /// a range (whole columns or rows cut to the sheet's used range; one without a sheet is on
@@ -79,10 +107,14 @@ pub fn headers(wb: &Workbook, sheet: usize, range: RangeRef) -> Result<Vec<Strin
     // that thousands of equal headers don't take cubic time.
     let mut taken: HashSet<String> = HashSet::new();
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
+    // Each style's format is parsed once, however many headers share it.
+    let mut formats = HashMap::new();
     for c in range.start.col..=range.end.col {
         let at = CellRef::new(range.start.row, c);
-        let fmt = NumberFormat::parse(wb.styles.get(sh.style_id(at)).num_fmt.as_str());
-        let h = format_value(&sh.value(at).scalar(), &fmt, wb.date_system).plain().trim().to_string();
+        let style = sh.style_id(at);
+        let fmt = formats.entry(style).or_insert_with(|| parse_code(wb.styles.get(style).num_fmt.as_str()));
+        // `format_value` reads an array's first element, and no deeper, as items do.
+        let h = format_value(&sh.value(at), fmt, wb.date_system).plain().trim().to_string();
         if h.is_empty() {
             return Err(
                 "The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a list with labeled columns."
@@ -125,13 +157,13 @@ pub fn date_group_item(sys: DateSystem, n: f64, group: PivotDateGroup) -> Option
 /// repeat fill left out, as the report has always shown items), `(blank)` for an empty cell, else
 /// the value's text. An array stands for its first element; an array nested in that is no value
 /// an item can hold, so it is `(blank)` (no recursion).
-pub fn item_label(v: &Value, group: PivotDateGroup, fmt: &NumberFormat, sys: DateSystem) -> String {
+pub fn item_label(v: &Value, group: PivotDateGroup, fmt: &ItemFormat, sys: DateSystem) -> String {
     let v = &v.scalar();
     match v {
         Value::Empty | Value::Array(_) => "(blank)".into(),
         Value::Number(n) => match date_group_item(sys, *n, group) {
             Some((label, _)) => label,
-            None => format_value(v, fmt, sys).text,
+            None => format_value(v, &fmt.0, sys).text,
         },
         Value::Text(t) => t.to_string(),
         Value::Bool(b) => (if *b { "TRUE" } else { "FALSE" }).into(),
@@ -165,9 +197,13 @@ mod tests {
     #[test]
     fn headers_are_trimmed_numbered_and_formatted() {
         let mut wb = book(&[&[Value::text(" Amount "), Value::text("amount"), Value::Number(5.0), Value::text("Amount2")]]);
-        set_format(&mut wb, "C1", "0.0* ");
+        set_format(&mut wb, "C1", "$* 0.0");
         let r = RangeRef::parse("A1:D1").unwrap();
-        assert_eq!(headers(&wb, 0, r).unwrap(), ["Amount", "amount2", "5.0", "Amount22"]);
+        // A header shows its repeat fill as one space, as the cell's text does.
+        assert_eq!(headers(&wb, 0, r).unwrap(), ["Amount", "amount2", "$ 5.0", "Amount22"]);
+        // A code too long to be valid is General.
+        set_format(&mut wb, "C1", &"0".repeat(5000));
+        assert_eq!(headers(&wb, 0, r).unwrap()[2], "5");
         let empty = book(&[&[Value::text("A"), Value::text("  ")]]);
         assert!(headers(&empty, 0, RangeRef::parse("A1:B1").unwrap()).is_err());
         assert!(headers(&wb, 7, r).is_err());
@@ -180,7 +216,7 @@ mod tests {
         let r = RangeRef::parse("A1:B2").unwrap();
         assert_eq!(column_format(&wb, 0, r, 1), "$0.00");
         assert_eq!(column_format(&wb, 0, RangeRef::parse("A1:B1").unwrap(), 1), "General");
-        let fmt = NumberFormat::parse(&column_format(&wb, 0, r, 1));
+        let fmt = ItemFormat::new(&column_format(&wb, 0, r, 1));
         let sys = wb.date_system;
         let cost = |v: &Value| item_label(v, PivotDateGroup::None, &fmt, sys);
         assert_eq!(cost(&Value::Number(3.5)), "$3.50");
@@ -188,10 +224,11 @@ mod tests {
         assert_eq!(cost(&Value::Bool(true)), "TRUE");
         assert_eq!(cost(&Value::text("x")), "x");
         // 46037 is 15 Jan 2026.
-        let general = NumberFormat::parse("General");
+        let general = ItemFormat::new("General");
         assert_eq!(item_label(&Value::Number(46037.0), PivotDateGroup::Quarters, &general, sys), "Qtr1");
         // A repeat fill is left out of a label, as the report has always shown it.
-        assert_eq!(item_label(&Value::Number(1234.0), PivotDateGroup::None, &NumberFormat::parse("$* #,##0"), sys), "$1,234");
+        assert_eq!(item_label(&Value::Number(1234.0), PivotDateGroup::None, &ItemFormat::new("$* #,##0"), sys), "$1,234");
+        assert_eq!(item_label(&Value::Number(5.0), PivotDateGroup::None, &ItemFormat::new(&"0".repeat(5000)), sys), "5");
         // An array is its first element; an array inside that is no item value.
         let one = |v: Value| Value::Array(std::sync::Arc::new(gridcraft_core::Array::scalar(v)));
         assert_eq!(item_label(&one(Value::Number(5.0)), PivotDateGroup::None, &general, sys), "5");

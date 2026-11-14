@@ -37,7 +37,7 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
     };
     // The label is the model's, which file writers list items by too. It takes the value as the
     // cell holds it and reads an array's first element the same way as the match below.
-    let label = gridcraft_model::pivot_source::item_label(v, group, &crate::display::number_format(fmt), wb.date_system);
+    let label = gridcraft_model::pivot_source::item_label(v, group, &crate::display::parsed(fmt).into(), wb.date_system);
     let v = &v.scalar();
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),

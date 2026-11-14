@@ -88,7 +88,7 @@ pub struct Formatted {
 
 impl Formatted {
     /// The text as it reads at no particular width: a repeat fill (`*x`) shows as one space.
-    /// What text exports and labels use.
+    /// What text exports and PivotTable headers use (PivotTable items keep `text`).
     pub fn plain(self) -> String {
         let mut t = self.text;
         if let Some((_, pos)) = self.fill
