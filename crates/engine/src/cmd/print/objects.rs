@@ -134,7 +134,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         // As for pictures, each page gets its own copy of the drawing commands.
         let prims = pics.chart((si, chi), || {
             let data = gridcraft_chart::resolve(wb, si, ch);
-            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+            gridcraft_chart::render_in(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure, wb.region, wb.date_system)
         });
         if let Some(prims) = prims {
             draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });

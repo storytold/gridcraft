@@ -49,20 +49,24 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
 }
 
 /// One criteria cell as a matcher. Plain text becomes a "begins with" pattern.
-fn cell_criterion(v: &Value) -> Option<Criterion> {
+fn cell_criterion(v: &Value, region: &'static gridcraft_core::Region) -> Option<Criterion> {
     match v {
         Value::Empty => None,
         Value::Text(t) => {
             let s: &str = t;
             let has_op = s.starts_with(['=', '<', '>']);
             let plain_text = !has_op
-                && gridcraft_core::parse::parse_number_text(s).is_none()
+                && gridcraft_core::parse::parse_number_text_in_region(s, gridcraft_core::DateSystem::D1900, region).is_none()
                 && !s.eq_ignore_ascii_case("TRUE")
                 && !s.eq_ignore_ascii_case("FALSE")
                 && CellError::parse(s).is_none();
-            if plain_text && !s.ends_with('*') { Some(Criterion::parse(&Value::from(format!("{s}*")))) } else { Some(Criterion::parse(v)) }
+            if plain_text && !s.ends_with('*') {
+                Some(Criterion::parse(&Value::from(format!("{s}*")), region))
+            } else {
+                Some(Criterion::parse(v, region))
+            }
         }
-        other => Some(Criterion::parse(other)),
+        other => Some(Criterion::parse(other, region)),
     }
 }
 
@@ -94,7 +98,7 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>
         let mut conds = Vec::new();
         for c in 0..crit.cols {
             let Some(cell) = crit.get(r, c) else { continue };
-            let Some(cr) = cell_criterion(cell) else { continue };
+            let Some(cr) = cell_criterion(cell, ctx.region()) else { continue };
             conds.push((c, columns.get(c).copied().flatten(), cr));
         }
         tests = tests.saturating_add(conds.len().max(1));
