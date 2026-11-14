@@ -174,6 +174,10 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        // Validation rules are sheet-level settings, so cell-lock protection does not guard them.
+        if sh.is_protected() {
+            return Err(EngineError::Other("You can't change data validation on a protected sheet. Unprotect it first.".into()));
+        }
         remove_validation_cells(&mut sh.validations, &ranges);
         sh.validations.push(dv.clone());
         Ok(Json::Null)
