@@ -594,9 +594,20 @@ fn combo_series_kind(own: Option<ChartKind>, i: usize) -> ChartKind {
         Some(ChartKind::BarClustered) => ChartKind::ColumnClustered,
         Some(ChartKind::BarStacked) => ChartKind::ColumnStacked,
         Some(ChartKind::BarStacked100) => ChartKind::ColumnStacked100,
-        // A combination chart is drawn on category axes: its pies, doughnuts and bubbles as
+        // A combination chart is drawn on category axes: its pies, doughnuts, bubbles and chartex
+        // kinds (histogram, waterfall, funnel, treemap, sunburst, box & whisker) as clustered
         // columns, its scatter and radar series as lines (a markers-only scatter with markers).
-        Some(ChartKind::Pie | ChartKind::Doughnut | ChartKind::Bubble) => ChartKind::ColumnClustered,
+        Some(
+            ChartKind::Pie
+            | ChartKind::Doughnut
+            | ChartKind::Bubble
+            | ChartKind::Histogram
+            | ChartKind::Waterfall
+            | ChartKind::Funnel
+            | ChartKind::Treemap
+            | ChartKind::Sunburst
+            | ChartKind::BoxWhisker,
+        ) => ChartKind::ColumnClustered,
         Some(ChartKind::Scatter) => ChartKind::LineMarkers,
         Some(ChartKind::ScatterLines | ChartKind::Radar) => ChartKind::Line,
         Some(k) if k != ChartKind::Combo => k,

@@ -894,7 +894,15 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
-            c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            let kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            // A new type (other than a combo) applies to every series, as choosing it did before
+            // series kept their own: their markers or lines from a file go with the old type.
+            if kind != c.kind && kind != ChartKind::Combo {
+                for series in &mut c.series {
+                    series.kind = None;
+                }
+            }
+            c.kind = kind;
             c.drop_foreign_series_kinds();
             if !c.supports_data_table() {
                 c.data_table = None;
@@ -1903,11 +1911,20 @@ mod tests {
             c.series[0].kind = Some(ChartKind::Area);
             c.series[1].kind = Some(ChartKind::LineMarkers);
         }
-        // A line chart keeps a series' own markers, not its area.
+        // A new type applies to every series: neither the area nor the markers stay.
         s.execute("chart.set", json!({"type": "line"})).unwrap();
         let c = chart(&s);
-        assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, Some(ChartKind::LineMarkers)]);
-        assert_eq!((c.series_kind(0), c.series_kind(1)), (ChartKind::Line, ChartKind::LineMarkers));
+        assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, None]);
+        assert_eq!((c.series_kind(0), c.series_kind(1)), (ChartKind::Line, ChartKind::Line));
+        // Setting the type a chart already has keeps a series' own markers (a file's), not
+        // kinds the type doesn't draw.
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[0].kind = Some(ChartKind::Area);
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        s.execute("chart.set", json!({"type": "line", "subtype": ""})).unwrap();
+        assert_eq!(chart(&s).series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, Some(ChartKind::LineMarkers)]);
         // Trendlines go by the kind each series is drawn as.
         s.execute("chart.set", json!({"type": "pie"})).unwrap();
         assert!(s.execute("chart.addElement", json!({"element": "trendline"})).is_err());

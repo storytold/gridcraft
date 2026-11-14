@@ -30,7 +30,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Box & Whisker | 1 | 1 of 1 | |
 | Waterfall, Funnel | 2 | 2 of 2 | |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
-| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, area, scatter; bars stand upright as columns), secondary axis | |
+| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, area; bars stand upright as columns, scatter series are lines with markers), secondary axis | |
 | **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
@@ -94,21 +94,25 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 Each series is drawn and saved as the kind `Chart::series_kind` gives it: in a combo chart its
 own kind (by default the first a column and the rest lines), elsewhere the chart's kind, with a
 line's own markers or a scatter's own lines kept. A combo chart is drawn on category axes: its
-bars, pies, doughnuts and bubbles as columns, its scatter and radar series as lines (a
+bars as columns, its pies, doughnuts, bubbles and chartex kinds (histogram, waterfall, funnel,
+treemap, sunburst, box & whisker) as clustered columns, its scatter and radar series as lines (a
 markers-only scatter with markers). In
 a combo chart the series of one type on one pair of axes share the first one's grouping, as Excel
 keeps them: a stacked column after a clustered one is drawn clustered, and a stacked line after
-an unstacked one unstacked. Changing the chart type drops the kinds the new type does not draw.
+an unstacked one unstacked. Changing the chart type (to any type but a combo) applies it to every
+series, dropping their own kinds; setting the type a chart already has drops only the kinds it
+does not draw.
 
 The XLSX writer writes one chart group per type on each pair of axes, with axes of the kind those
 groups need (category axes for a combo; category, horizontal-bar or value axes otherwise), a secondary pair whenever a series is on it, and a stock group only for 3
 or 4 series. A pie or doughnut chart has no axes, so its series are one group whatever their
-secondary flags. The reader takes the primary axes from the value axis on the left or bottom, and
+secondary flags. A chart without series is written with one empty group of its kind (a line
+group for a stock chart), so it reopens rather than vanishing. The reader takes the primary axes from the value axis on the left or bottom, and
 orders series by `c:order`. A combo whose series all draw as one type reopens as a chart of
 that type (it draws the same).
 
 Known gaps: a one-kind bar chart's secondary series get secondary axes in XLSX, which the
-renderer does not yet draw for horizontal charts; a scatter, radar or stock series in a combo
+renderer does not yet draw for horizontal charts; a stock series in a combo
 beside stacked lines is saved in the stacked line group but drawn unstacked; a stock series
 beside columns (other than a 3- or 4-series stock group) is saved as a line and reopens as one;
 a per-series line or scatter kind left in an older GridCraft JSON workbook by a type change is
@@ -129,7 +133,7 @@ column chart draws and saves its forecast series as columns, not lines.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-11 | minor | Combo series drawn and saved by their own kind (`Chart::series_kind`): areas, stacked columns and marker lines in combos round-trip XLSX; the series of one type on one pair of axes share the first one's grouping on screen and in the file (as Excel keeps them); combo charts are drawn and saved on category axes (pies, doughnuts and bubbles as columns, scatter and radar as lines); one-kind charts keep secondary-axis series (pie and doughnut charts stay one group); changing the type drops kinds it doesn't draw. No readiness score change. |
+| 2026-11-11 | minor | Combo series drawn and saved by their own kind (`Chart::series_kind`): areas, stacked columns and marker lines in combos round-trip XLSX; the series of one type on one pair of axes share the first one's grouping on screen and in the file (as Excel keeps them); combo charts are drawn and saved on category axes (pies, doughnuts, bubbles and chartex kinds as columns, scatter and radar as lines); one-kind charts keep secondary-axis series (pie and doughnut charts stay one group); changing the type applies it to every series; charts without series survive XLSX. No readiness score change. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |

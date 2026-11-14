@@ -298,3 +298,42 @@ fn a_combo_stays_on_category_axes() {
         assert!(xml.contains("<c:catAx>"), "{kinds:?}: {xml}");
     }
 }
+
+/// A combination chart's chartex series (histogram, waterfall, funnel, treemap, sunburst, box &
+/// whisker) are drawn and saved as clustered columns, sharing the first column's grouping.
+#[test]
+fn combo_chartex_series_are_columns() {
+    use ChartKind::*;
+    for k in [Histogram, Waterfall, Funnel, Treemap, Sunburst, BoxWhisker] {
+        let xml = assert_round_trips(Combo, &[(Some(ColumnStacked), false), (Some(k), false), (None, false)]);
+        assert_eq!(xml.matches("<c:barChart>").count(), 1, "{k:?}: {xml}");
+        assert_round_trips(Combo, &[(Some(k), false), (Some(ColumnStacked), false), (Some(Line), false)]);
+        let chart = chart_of(Combo, &[(Some(Bubble), false), (Some(k), false)]);
+        assert_eq!(round_trip(&chart).1.supports_data_table(), chart.supports_data_table(), "{k:?}");
+    }
+}
+
+/// A chart without series keeps a group of its kind, so it is read back rather than dropped.
+#[test]
+fn a_chart_without_series_survives_a_round_trip() {
+    use ChartKind::*;
+    for kind in [ColumnClustered, BarStacked, Line, Pie, Doughnut, Area, Scatter, Bubble, Radar, Stock, Combo, Waterfall] {
+        let (xml, back) = round_trip(&chart_of(kind, &[]));
+        assert!(back.series.is_empty(), "{kind:?}: {xml}");
+        assert!(!xml.contains("<c:stockChart>"), "{kind:?}: {xml}");
+    }
+}
+
+/// The primary axes are found in one pass over the value axes, however many groups a file has.
+#[test]
+fn many_groups_are_read_in_linear_time() {
+    let groups =
+        "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:axId val=\"1\"/><c:axId val=\"2\"/></c:barChart>".repeat(20_000);
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{groups}{}</c:plotArea></c:chart></c:chartSpace>",
+        bar(&ser(0))
+    );
+    // Quadratic lookups took minutes here in a debug build.
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(ch.series.len(), 1);
+}

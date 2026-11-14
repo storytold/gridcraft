@@ -1,6 +1,7 @@
 //! DrawingML charts (`xl/charts/chartN.xml`): reading the common 2-D/3-D chart groups into the
 //! model, and writing model charts (with cached series values) from scratch.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
@@ -242,7 +243,14 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let (_, first_kind) = *groups.first()?;
     // The primary axes are the pair whose value axis sits left or bottom (a secondary pair is on
     // the right or top), else the first group's; groups on other axes are secondary.
-    let val_pos = |id: &str| plot.kids("valAx").find(|a| a.child_val("axId") == Some(id)).and_then(|a| a.child_val("axPos"));
+    // Collected once: a file may hold many groups, each looked up here.
+    let mut val_axes: HashMap<&str, &str> = HashMap::new();
+    for a in plot.kids("valAx") {
+        if let (Some(id), Some(pos)) = (a.child_val("axId"), a.child_val("axPos")) {
+            val_axes.entry(id).or_insert(pos);
+        }
+    }
+    let val_pos = |id: &str| val_axes.get(id).copied();
     let pairs: Vec<Vec<String>> = groups.iter().map(|(g, _)| axis_ids(g)).collect();
     // A pair's value axis is its second (for scatter, the y axis): the one whose side tells.
     let primary_axes = pairs
@@ -912,6 +920,15 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     // With every series on the secondary axis, that axis is the only one.
     if primary.is_empty() {
         std::mem::swap(&mut primary, &mut sec);
+    }
+    // A chart without series still has a group of its kind, or it would not be read back (a
+    // stock group must hold series, so an empty stock chart has a line group).
+    if primary.is_empty() {
+        let g = match group_for(ch.kind) {
+            G::Stock => G::Line { stacked: false, markers: false },
+            g => g,
+        };
+        primary.push((g, Vec::new()));
     }
     for (g, members) in &primary {
         s.push_str(&group_xml(*g, members, &kinds, ch, (1, 2), wb, si));
