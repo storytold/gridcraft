@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 pub mod eval;
+mod pivotdata;
 mod precision;
 pub mod recalc;
 mod spill_index;

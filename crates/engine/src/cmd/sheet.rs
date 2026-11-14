@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility};
+use gridcraft_model::{Anchor, AnchorMode, PivotDataCell, PivotLookup, Sheet, Visibility};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -211,7 +211,31 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
             Axis::Rows => CellRef::new(at, pt.anchor.col),
             Axis::Cols => CellRef::new(pt.anchor.row, at),
         });
-        pt.last_range = pt.last_range.and_then(map_range);
+        let old = pt.last_range;
+        pt.last_range = old.and_then(map_range);
+        // GETPIVOTDATA's value cells are stored as offsets from the report's top-left cell, so
+        // lines inserted or deleted inside the report move them as well. The moved cells go into
+        // a new index (the shared one stays with the undo snapshots); a value cell deleted with
+        // its line drops out, so it is #REF! rather than read from whatever took its place.
+        let index = pt.data_index.clone();
+        if let (Some(o), Some(n), Some(cells)) = (old, pt.last_range, index.cells()) {
+            let (lo, hi) = if axis == Axis::Rows { (o.start.row, o.end.row) } else { (o.start.col, o.end.col) };
+            let inside = at <= hi && if insert { at > lo } else { at.saturating_add(count) > lo };
+            if inside {
+                let moved: Vec<PivotDataCell> = cells
+                    .iter()
+                    .filter_map(|c| {
+                        let to = map_cell(CellRef::new(o.start.row.checked_add(c.row)?, o.start.col.checked_add(c.col)?))?;
+                        Some(PivotDataCell { row: to.row.checked_sub(n.start.row)?, col: to.col.checked_sub(n.start.col)?, ..c.clone() })
+                    })
+                    .collect();
+                let lookup = PivotLookup::default();
+                if !moved.is_empty() {
+                    lookup.set_cells(moved);
+                }
+                pt.data_index = lookup;
+            }
+        }
     }
 }
 
