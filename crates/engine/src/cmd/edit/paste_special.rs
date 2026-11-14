@@ -337,6 +337,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
             paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
         }
+        if matches!(what, What::All | What::AllExceptBorders | What::Formats) {
+            cx.sheet_mut(dest_sheet)?.merges.retain(|m| !pasted.contains_range(m));
+        }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
             // copied rows land in columns and all take the last copied column's width).
