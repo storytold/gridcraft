@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-03 · **Change:** minor (GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** minor (referenced errors remain elements in VSTACK and HSTACK; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -54,6 +54,10 @@ By the Excel version that introduced them (working / total): before 2010 346 / 3
 56 / 56, 2013 49 / 51, 2016 1 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 5 / 11.
 Dynamic-array and LAMBDA-era functions (FILTER, SORT, UNIQUE, XLOOKUP, VSTACK, TAKE, GROUPBY,
 PIVOTBY, REGEXTEST…) are all present.
+
+VSTACK and HSTACK preserve errors from referenced cells as elements of their spilled output
+(#4088). Direct error expressions still propagate as scalar errors; the other array functions
+retain their own error rules.
 
 FORECAST.ETS missing-point interpolation walks known points once, so filling a long gap takes
 linear work in the completed timeline length (#1042). Interpolation values, nearest-value
@@ -136,6 +140,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | VSTACK and HSTACK keep referenced scalar errors in their output arrays while direct error expressions still propagate; other dynamic-array input policies are unchanged (#4088). |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
 | 2026-11-01 | minor | Python in cells (stored, not run): `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!` done, with their `ERROR.TYPE` numbers; `PY` still counted as missing |
