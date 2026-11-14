@@ -95,30 +95,27 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
     Ok((wb, warnings))
 }
 
-/// Excel auto-fits rows to their tallest font when opening a file: rows without a user-set
-/// height grow to fit their content. Rows the file made taller keep their height — our
-/// line-height estimate can differ from Excel's, and shrinking files that already look
-/// right would be a visible regression. Custom-height rows are left alone entirely.
+/// Excel auto-fits every row without a user-set height when it opens a file: a height the file
+/// saves without `customHeight` is only a cache. Checked in Excel on synthetic workbooks: a row
+/// saved 30 pt tall holding one line of text opens 14.4 pt tall, an empty one at the default, and
+/// one saved too short grows. So rows are fitted to their content both ways. (They used to keep a
+/// taller saved height, in case our estimate came out short; that left rows twice as tall as
+/// Excel's.) Custom-height rows are left alone, and so are empty rows with a style of their own,
+/// whose font this doesn't measure.
 fn fit_imported_rows(wb: &mut Workbook) {
     // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
     let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
+        // Rows saved with a height but no cells: the default, unless set by hand or styled.
+        rows.extend(sh.rows.iter().filter(|(_, i)| i.size.is_some() && !i.custom && i.style.is_none()).map(|(r, _)| *r));
         rows.sort_unstable();
         rows.dedup();
         // One sweep over the sheet's merges for all of its rows, in ascending order.
         let mut sweep = crate::cmd::MergeSweep::new(left);
         for row in rows {
-            let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             crate::cmd::fit_row_height(wb, si, row, &mut sweep);
-            let Some(before) = before else { continue };
-            let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            if after.is_none_or(|a| before > a + 0.5)
-                && let Some(sh) = wb.sheet_mut(si)
-            {
-                sh.rows.entry(row).or_default().size = Some(before);
-            }
         }
         left = sweep.left();
     }
