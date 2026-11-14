@@ -631,6 +631,48 @@ fn page_setup_paper_sizes_reach_the_pdf_page() {
     assert!(s.execute("pageLayout.pageSetup", json!({"paper": "Napkin"})).is_err());
 }
 
+/// An empty paper name means no paper is stated; it prints on Letter.
+#[test]
+fn an_unstated_paper_prints_on_letter() {
+    let mut wb = gridcraft_model::Workbook::new();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.paper = String::new();
+    let layouts = super::layout::layouts(&wb, &super::layout::PrintOptions::default());
+    let l = &layouts[0];
+    assert_eq!((l.page_w, l.page_h), (612.0, 792.0));
+    assert_eq!(paper_size(""), (612.0, 792.0));
+}
+
+/// Both commands that set the paper store a known one under its table name, so every file
+/// format finds it.
+#[test]
+fn paper_size_commands_store_the_table_name() {
+    let mut s = s();
+    s.execute("pageLayout.size", json!({"paper": "b5-jis"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "B5");
+    s.execute("pageLayout.pageSetup", json!({"paper": "11x17"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "Tabloid");
+    // Statement and the envelopes XLSX names are accepted by both commands (Page Setup refused
+    // them before), stored under their table name and printed on their own size.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"]]})).unwrap();
+    let close = |v: &Json, want: f64| (v.as_f64().unwrap() - want).abs() < 0.01;
+    for (cmd, given, stored, w, h) in [
+        ("pageLayout.pageSetup", "statement", "Statement", 396.0, 612.0),
+        ("pageLayout.pageSetup", "envelope #10", "Envelope #10", 297.0, 684.0),
+        ("pageLayout.pageSetup", "Envelope-DL", "Envelope DL", 311.81, 623.62),
+        ("pageLayout.size", "Statement", "Statement", 396.0, 612.0),
+        ("pageLayout.size", "envelope dl", "Envelope DL", 311.81, 623.62),
+    ] {
+        s.execute(cmd, json!({"paper": given})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, stored, "{cmd} {given}");
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        let page = &pv["pageList"][0];
+        assert!(close(&page["width"], w) && close(&page["height"], h), "{cmd} {given}: {page}");
+    }
+    // A new workbook still prints on Letter.
+    assert_eq!(gridcraft_model::Workbook::new().sheets[0].print.paper, "Letter");
+}
+
 #[test]
 fn hostile_settings_never_panic_and_cap_pages() {
     let mut s = s();

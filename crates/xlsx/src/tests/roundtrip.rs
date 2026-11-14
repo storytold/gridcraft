@@ -1679,6 +1679,25 @@ fn japanese_paper_sizes_round_trip() {
     assert_eq!(back.sheet(0).unwrap().print.paper, "B5");
 }
 
+/// The paper names every spelling folds onto keep their file id: `11x17` is Tabloid (3), and
+/// ISO B5 is id 34 (ECMA-376's 176×250 mm "B5 envelope"), read back as `B5 (ISO)`. An empty
+/// paper (none stated) writes no `paperSize`, so the reader's own paper applies.
+#[test]
+fn paper_names_keep_their_xlsx_id_and_an_unstated_paper_writes_none() {
+    for (paper, id, back_as) in [("11x17", 3, "Tabloid"), ("US Legal", 5, "Legal"), ("B5 (ISO)", 34, "B5 (ISO)"), ("Envelope B5", 34, "B5 (ISO)")] {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().print.paper = paper.into();
+        let bytes = write_xlsx(&wb).unwrap();
+        assert!(sheet1_xml(&bytes).0.contains(&format!("paperSize=\"{id}\"")), "{paper}");
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(back.sheet(0).unwrap().print.paper, back_as);
+    }
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().print.paper = String::new();
+    let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+    assert!(!xml.contains("paperSize"), "{xml}");
+}
+
 /// A table's dropdown filter lives in `sheet.autofilter` (the engine's only live filter state),
 /// not in `Table::filter`. Writing used to suppress the sheet `<autoFilter>` because a table
 /// intersects it and write the table part from `Table::filter`, which was empty: the criteria

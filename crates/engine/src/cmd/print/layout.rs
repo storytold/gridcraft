@@ -9,43 +9,10 @@ pub(super) const DENSE_BLOCK: u64 = 60_000;
 
 // ---------------------------------------------------------------- paper
 
-/// Paper size in points (portrait) for a paper name; unknown names fall back to Letter.
+/// Paper size in points, as named (see `gridcraft_model::paper`); unknown names, and the empty
+/// name of a file that stated no paper, fall back to Letter.
 pub fn paper_size(name: &str) -> (f32, f32) {
-    known_paper(name).unwrap_or((612.0, 792.0))
-}
-
-/// Paper sizes in points, portrait. `B4`/`B5`/`B6` are the **JIS** sizes Japanese Excel and its
-/// e-mail attachments use (257×364, 182×257 and 128×182 mm); the ISO B series stays reachable as
-/// `B4 (ISO)`/`B5 (ISO)`/`B6 (ISO)`. The Japanese postcards and envelopes are the JIS ones too.
-pub(super) fn known_paper(name: &str) -> Option<(f32, f32)> {
-    // Spaces, hyphens, underscores and parentheses don't matter: `B5 (JIS)`, `b5-jis` and `b5`
-    // are one name.
-    let n = name.trim().to_ascii_lowercase().replace([' ', '-', '_', '(', ')'], "");
-    Some(match n.as_str() {
-        "letter" | "usletter" => (612.0, 792.0),
-        "legal" | "uslegal" => (612.0, 1008.0),
-        "a4" => (595.28, 841.89),
-        "a3" => (841.89, 1190.55),
-        "a5" => (419.53, 595.28),
-        "a6" => (297.64, 419.53),
-        "tabloid" | "11x17" => (792.0, 1224.0),
-        "ledger" => (1224.0, 792.0),
-        "executive" => (522.0, 756.0),
-        "b4" | "b4jis" => (728.50, 1031.81),
-        "b5" | "b5jis" => (515.91, 728.50),
-        "b6" | "b6jis" => (362.83, 515.91),
-        "b4iso" => (708.66, 1000.63),
-        "b5iso" => (498.90, 708.66),
-        "b6iso" => (354.33, 498.90),
-        "japanesepostcard" | "postcard" => (283.46, 419.53),
-        "japanesedoublepostcard" | "doublepostcard" => (419.53, 566.93),
-        "japaneseenvelope#3" | "chou#3" => (340.16, 666.14),
-        // 長形4号 is 90×205 mm; 90×225 mm is 長形40号, a different envelope, so it stays out.
-        "japaneseenvelope#4" | "chou#4" => (255.12, 581.10),
-        "japaneseenvelopekaku#2" | "kaku#2" => (680.31, 941.10),
-        "japaneseenvelopekaku#3" | "kaku#3" => (612.28, 785.20),
-        _ => return None,
-    })
+    gridcraft_model::paper::size_pt(name).unwrap_or((612.0, 792.0))
 }
 
 // ---------------------------------------------------------------- layout
