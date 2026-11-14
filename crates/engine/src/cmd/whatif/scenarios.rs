@@ -155,10 +155,10 @@ pub(super) fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
     let (_, cells) = cell_list(&d.wb, &sc.changing, CMD, MAX_SCENARIO_CELLS)?;
     // A changing cell merged after capture (anchor or covered) is refused, as Excel does, so no
     // value is hidden beneath a merge. Checked before any write: the workbook stays unchanged.
-    if let Some(sh) = d.wb.sheet(si) {
-        if cells.iter().any(|c| sh.merge_at(*c).is_some()) {
-            return Err(EngineError::Other("Cannot show this scenario: a changing cell is in a merged range.".into()));
-        }
+    if let Some(sh) = d.wb.sheet(si)
+        && cells.iter().any(|c| sh.merge_at(*c).is_some())
+    {
+        return Err(EngineError::Other("Cannot show this scenario: a changing cell is in a merged range.".into()));
     }
     edit(s, |cx| {
         for (c, v) in cells.iter().zip(sc.values.iter()) {
