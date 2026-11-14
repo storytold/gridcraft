@@ -1068,6 +1068,127 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save a Copy as Excel Workbook (.xlsx)…" => "Salvar uma Cópia como Pasta de Trabalho do Excel (.xlsx)…",
         "Export as CSV…" => "Exportar como CSV…",
         "Export as Web Page (.html)…" => "Exportar como Página da Web (.html)…",
+        "Absolute: always these cells" => "Absoluto: sempre estas células",
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => {
+            "Uma planilha de código aberto, nativa em Rust e feita em sala limpa. Parte do ArtCraft."
+        }
+        "Add Watch (active cell)" => "Adicionar Inspeção (célula ativa)",
+        "Agents and other programs that run the macro get an error instead of the question." => {
+            "Agentes e outros programas que executam a macro recebem um erro em vez da pergunta."
+        }
+        "Apply" => "Aplicar",
+        "At most" => "No máximo",
+        "Available for column, bar, line, area and compatible combo charts." => {
+            "Disponível para gráficos de colunas, barras, linhas, áreas e combinação compatíveis."
+        }
+        "Breakpoint: the debugger stops before this step" => "Ponto de interrupção: o depurador para antes desta etapa",
+        "Bring Forward" => "Avançar",
+        "Can't Undo" => "Não É Possível Desfazer",
+        "Change…" => "Alterar…",
+        "Chart Type" => "Tipo de Gráfico",
+        "Check shows on the grid what the macro reads and writes. Click a step's gutter to set a breakpoint." => {
+            "Verificar mostra na grade o que a macro lê e grava. Clique na margem de uma etapa para definir um ponto de interrupção."
+        }
+        "Colors & Layout" => "Cores e Layout",
+        "Columns:" => "Colunas:",
+        "Command:" => "Comando:",
+        "Create" => "Criar",
+        "Data rows:" => "Linhas de dados:",
+        "Data Table" => "Tabela de Dados",
+        "Description:" => "Descrição:",
+        "Don't Replace" => "Não Substituir",
+        "Each column must hold:" => "Cada coluna deve conter:",
+        "Elements" => "Elementos",
+        "Example (what Check, Run and Debug use here):" => "Exemplo (o que Verificar, Executar e Depurar usam aqui):",
+        "Fill…" => "Preenchimento…",
+        "For each" => "Para cada",
+        "GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:" => {
+            "O GridCraft pode ser controlado inteiramente por agentes. Cada item de menu, botão e gesto é um comando:"
+        }
+        "If cell" => "Se a célula",
+        "Inside, Row (or Column) stands for the current one, e.g. Row.right." => {
+            "Dentro dele, Row (ou Column) representa a atual, por exemplo Row.right."
+        }
+        "Keep Changes" => "Manter Alterações",
+        "Keep the changes the macro has made so far? They are one undo step either way." => {
+            "Manter as alterações que a macro fez até agora? De qualquer forma, elas são uma única etapa de desfazer."
+        }
+        "Leave it empty when no step uses Output. A token such as Input.right keeps it beside the data." => {
+            "Deixe vazio quando nenhuma etapa usar Output. Um token como Input.right o mantém ao lado dos dados."
+        }
+        "Legend" => "Legenda",
+        "Let this workbook's scripts run for the rest of this session" => {
+            "Permitir que os scripts desta pasta de trabalho sejam executados até o fim desta sessão"
+        }
+        "Load" => "Carregar",
+        "Macro name:" => "Nome da macro:",
+        "Macros preserved (not executed)" => "Macros preservadas (não executadas)",
+        "Message:" => "Mensagem:",
+        "Model Range:" => "Intervalo do Modelo:",
+        "More Colors…" => "Mais Cores…",
+        "No command matches." => "Nenhum comando corresponde.",
+        "No comments on this sheet yet. Select a cell and choose New Comment." => {
+            "Ainda não há comentários nesta planilha. Selecione uma célula e escolha Novo Comentário."
+        }
+        "No contributor data was built into this copy." => "Nenhum dado de colaboradores foi incluído nesta cópia.",
+        "No inputs: the macro works on fixed cells only." => "Sem entradas: a macro trabalha somente em células fixas.",
+        "No macros in this workbook" => "Nenhuma macro nesta pasta de trabalho",
+        "No model credits were built into this copy." => "Nenhum crédito de modelos foi incluído nesta cópia.",
+        "No steps yet. Add Step picks a command, or record one with Automate › Record Macro." => {
+            "Ainda não há etapas. Adicionar Etapa escolhe um comando, ou grave uma em Automatizar › Gravar Macro."
+        }
+        "of:" => "de:",
+        "Open the macro in the step editor" => "Abrir a macro no editor de etapas",
+        "Open the macro in the step editor and stop before its first step" => "Abrir a macro no editor de etapas e parar antes da primeira etapa",
+        "Options…" => "Opções…",
+        "Orientation:" => "Orientação:",
+        "Otherwise the macro runs on the selection" => "Caso contrário, a macro é executada na seleção",
+        "Output anchor (what the Output token stands for):" => "Âncora de saída (o que o token Output representa):",
+        "Output to (optional):" => "Saída para (opcional):",
+        "Parameters (JSON):" => "Parâmetros (JSON):",
+        "Preview" => "Visualização",
+        "Recent Colors" => "Cores Recentes",
+        "Relative: a token that follows the input the macro runs on" => "Relativo: um token que acompanha a entrada em que a macro é executada",
+        "Reports:" => "Relatórios:",
+        "Reset All" => "Redefinir Tudo",
+        "Resolved" => "Resolvido",
+        "Reverse the order" => "Inverter a ordem",
+        "Run" => "Executar",
+        "Run it on:" => "Executar em:",
+        "Runs with:" => "Executa com:",
+        "Run this step (a disabled step is skipped)" => "Executar esta etapa (uma etapa desativada é ignorada)",
+        "Select a chart to format it." => "Selecione um gráfico para formatá-lo.",
+        "Select a step to see its settings." => "Selecione uma etapa para ver as configurações dela.",
+        "Send" => "Enviar",
+        "Send Backward" => "Recuar",
+        "Shape:" => "Forma:",
+        "Shortcut key:" => "Tecla de atalho:",
+        "Show Data Table" => "Mostrar Tabela de Dados",
+        "↑  Sort Ascending" => "↑  Classificar em Ordem Crescente",
+        "↓  Sort Descending" => "↓  Classificar em Ordem Decrescente",
+        "Standard Colors" => "Cores Padrão",
+        "Step Into" => "Entrar",
+        "Stop debugging" => "Parar a depuração",
+        "Stop recording and save the macro" => "Parar a gravação e salvar a macro",
+        "Table Name:" => "Nome da Tabela:",
+        "Text:" => "Texto:",
+        "The chart no longer exists." => "O gráfico não existe mais.",
+        "Theme Colors" => "Cores do Tema",
+        "The ranges the macro works on. Each is checked before the macro runs." => {
+            "Os intervalos em que a macro trabalha. Cada um é verificado antes de a macro ser executada."
+        }
+        "There are no shapes, pictures or charts on this sheet." => "Não há formas, imagens ou gráficos nesta planilha.",
+        "This workbook also has a VBA project. GridCraft keeps it when you save but does not run it." => {
+            "Esta pasta de trabalho também tem um projeto VBA. O GridCraft o mantém ao salvar, mas não o executa."
+        }
+        "This workbook has no macros yet." => "Esta pasta de trabalho ainda não tem macros.",
+        "times" => "vezes",
+        "Tokens" => "Tokens",
+        "Trust Scripts" => "Confiar nos Scripts",
+        "Undo Changes" => "Desfazer Alterações",
+        "Use current selection as example" => "Usar a seleção atual como exemplo",
+        "When results would land on cells that hold data:" => "Quando os resultados caírem em células que já têm dados:",
+        "Write a new macro with this name" => "Escrever uma nova macro com este nome",
         _ => return None,
     })
 }

@@ -190,6 +190,7 @@ pub fn open_question(params: &Json) -> Option<Dialog> {
 
 /// The prompt [`press`] opens: the question, a button per answer, and Cancel.
 pub fn question_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
     ui.label(val(d, "text"));
     ui.add_space(8.0);
     let choices: Vec<(String, Json)> = d
@@ -200,7 +201,7 @@ pub fn question_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &m
         .unwrap_or_default();
     let mut answer = None;
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.button(" Cancel ").clicked() {
+        if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
             *open = false;
         }
         for (label, extra) in choices.iter().rev() {
@@ -326,6 +327,7 @@ fn text_field(ui: &mut Ui, d: &mut Dialog, key: &str, width: f32) {
 }
 
 pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let mut mode = val(d, "mode");
     ui.horizontal(|ui| {
@@ -337,13 +339,13 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     if mode == "macro" {
         let macros = macros(app);
         let mut name = val(d, "macro");
-        ui.label("Macro name:");
+        ui.label(lang.tr("Macro name:"));
         ui.add(egui::TextEdit::singleline(&mut name).desired_width(f32::INFINITY).id_salt("assign_macro"));
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 110.0));
             egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
                 if macros.is_empty() {
-                    ui.label(egui::RichText::new("This workbook has no macros yet.").italics().color(t.text_dim));
+                    ui.label(egui::RichText::new(lang.tr("This workbook has no macros yet.")).italics().color(t.text_dim));
                 }
                 for (n, desc) in &macros {
                     let r =
@@ -358,7 +360,7 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         d.values.insert("macro".into(), json!(name));
         ui.add_space(4.0);
         let mut input = val(d, "input");
-        ui.label("Run it on:");
+        ui.label(lang.tr("Run it on:"));
         ui.radio_value(&mut input, "selection".to_string(), "The selection when the button is pressed");
         ui.horizontal(|ui| {
             ui.radio_value(&mut input, "fixed".to_string(), "Always this range:");
@@ -368,13 +370,13 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         });
         d.values.insert("input".into(), json!(input));
         ui.horizontal(|ui| {
-            ui.label("Output to (optional):");
+            ui.label(lang.tr("Output to (optional):"));
             text_field(ui, d, "output", 120.0);
         });
     } else {
         let mut search = val(d, "search");
         let command = val(d, "command");
-        ui.label("Command:");
+        ui.label(lang.tr("Command:"));
         ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search commands").desired_width(f32::INFINITY).id_salt("assign_search"));
         egui::Frame::NONE.fill(t.input_bg).stroke(Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_size(vec2(ui.available_width(), 130.0));
@@ -392,7 +394,7 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         if !doc.is_empty() {
             ui.label(egui::RichText::new(doc).small().color(t.text_dim));
         }
-        ui.label("Parameters (JSON):");
+        ui.label(lang.tr("Parameters (JSON):"));
         let mut params = val(d, "params");
         ui.add(egui::TextEdit::multiline(&mut params).code_editor().desired_rows(3).desired_width(f32::INFINITY).id_salt("assign_params"));
         d.values.insert("params".into(), json!(params));
@@ -410,12 +412,15 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
 /// OK (offered while `enabled`) and Cancel at the bottom right, as the other dialogs place them:
 /// (OK clicked, Cancel clicked).
 fn ok_cancel(ui: &mut Ui, enabled: bool) -> (bool, bool) {
+    let lang = crate::i18n::current(ui.ctx());
     let (mut ok, mut cancel) = (false, false);
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let t = Tokens::get(ui.ctx());
-        ok = ui.add_enabled(enabled, egui::Button::new(egui::RichText::new("   OK   ").color(t.on_accent)).fill(t.accent)).clicked();
-        cancel = ui.button(" Cancel ").clicked();
+        ok = ui
+            .add_enabled(enabled, egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent))
+            .clicked();
+        cancel = ui.button(format!(" {} ", lang.tr("Cancel"))).clicked();
     });
     (ok, cancel)
 }
@@ -504,6 +509,7 @@ pub fn format_params(app: &SheetApp, d: &Dialog) -> Result<Json, String> {
 }
 
 pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut bool) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let Some(c) = d.values.get("id").and_then(Json::as_u64).and_then(|i| u32::try_from(i).ok()).and_then(|id| control(app, id)) else {
         *open = false;
@@ -512,7 +518,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     let text_only = d.values.get("textOnly").and_then(Json::as_bool) == Some(true);
     if c.kind == ControlKind::Button {
         let mut text = val(d, "text");
-        ui.label("Text:");
+        ui.label(lang.tr("Text:"));
         ui.add(egui::TextEdit::multiline(&mut text).desired_rows(2).desired_width(f32::INFINITY).id_salt("control_text"));
         d.values.insert("text".into(), json!(text));
     } else {
@@ -531,7 +537,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         if c.kind == ControlKind::Slider {
             let mut h = d.values.get("horizontal").and_then(Json::as_bool).unwrap_or(true);
             ui.horizontal(|ui| {
-                ui.label("Orientation:");
+                ui.label(lang.tr("Orientation:"));
                 ui.radio_value(&mut h, true, "Horizontal");
                 ui.radio_value(&mut h, false, "Vertical");
             });
@@ -541,7 +547,7 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     if !text_only {
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label("Name:");
+            ui.label(lang.tr("Name:"));
             let mut name = val(d, "name");
             ui.add(egui::TextEdit::singleline(&mut name).hint_text(c.display_name()).desired_width(200.0).id_salt("control_name"));
             d.values.insert("name".into(), json!(name));

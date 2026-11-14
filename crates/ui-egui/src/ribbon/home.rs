@@ -25,6 +25,7 @@ const ACCOUNTING_SYMBOLS: &[(&str, &str)] = &[
 
 /// Draws the Home tab: clipboard/paste menu, font, alignment, number, style, cell and editing commands with keytips.
 pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = crate::i18n::current(ui.ctx());
     let t = Tokens::get(ui.ctx());
     let st = active_style(app);
     // Clipboard
@@ -189,7 +190,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                     }
                 }
                 ui.separator();
-                let more = ui.button(app.ui.language.tr("More Borders…"));
+                let more = ui.button(lang.tr("More Borders…"));
                 if let Some(sequence) = keytip_table::item_letter(&prefix, "dialog:formatCells") {
                     keytip(app, ui, sequence, egui::pos2(more.rect.right() - 10.0, more.rect.center().y));
                 }
