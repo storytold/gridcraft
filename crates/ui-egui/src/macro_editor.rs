@@ -1834,8 +1834,8 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
     let mut enabled = st.enabled;
     let mut bp = st.breakpoint;
     ui.horizontal(|ui| {
-        let a = ui.checkbox(&mut enabled, "Enabled").changed();
-        let b = ui.checkbox(&mut bp, "Breakpoint").changed();
+        let a = ui.checkbox(&mut enabled, lang.tr("Enabled")).changed();
+        let b = ui.checkbox(&mut bp, lang.tr("Breakpoint")).changed();
         if (a || b)
             && let Some(s) = step_mut(&mut ed.draft.steps, &path)
         {
@@ -1854,8 +1854,8 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
             ui.label(lang.tr("For each"));
             let mut of2 = of;
             ui.horizontal(|ui| {
-                ui.radio_value(&mut of2, RepeatOf::Rows, "row");
-                ui.radio_value(&mut of2, RepeatOf::Columns, "column");
+                ui.radio_value(&mut of2, RepeatOf::Rows, lang.tr("row"));
+                ui.radio_value(&mut of2, RepeatOf::Columns, lang.tr("column"));
                 ui.label(lang.tr("of:"));
             });
             ref_field(app, ui, d, ed, (&path, "over"), &over, in_repeat);
@@ -1919,7 +1919,7 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
             let (mut m, mut rb) = (message.clone(), rollback);
             ui.label(lang.tr("Message:"));
             let a = ui.add(egui::TextEdit::singleline(&mut m).desired_width(f32::INFINITY).id_salt(("me_stop", &path))).changed();
-            let b = ui.checkbox(&mut rb, "Undo what the macro did before stopping").changed();
+            let b = ui.checkbox(&mut rb, lang.tr("Undo what the macro did before stopping")).changed();
             if (a || b)
                 && let Some(StepKind::Stop { message, rollback }) = step_mut(&mut ed.draft.steps, &path).map(|s| &mut s.kind)
             {
@@ -2086,8 +2086,8 @@ fn inputs_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
         ui.end_row();
         ui.label(lang.tr("Shape:"));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut i.kind, InputKind::Range, "range");
-            ui.radio_value(&mut i.kind, InputKind::Cell, "single cell");
+            ui.radio_value(&mut i.kind, InputKind::Range, lang.tr("range"));
+            ui.radio_value(&mut i.kind, InputKind::Cell, lang.tr("single cell"));
         });
         ui.end_row();
         if i.kind == InputKind::Range {
@@ -2114,11 +2114,11 @@ fn inputs_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
             });
             ui.end_row();
             ui.label("");
-            ui.checkbox(&mut i.header, "First row holds column names");
+            ui.checkbox(&mut i.header, lang.tr("First row holds column names"));
             ui.end_row();
         }
         ui.label("");
-        ui.checkbox(&mut i.non_empty, "Every cell must hold something");
+        ui.checkbox(&mut i.non_empty, lang.tr("Every cell must hold something"));
         ui.end_row();
     });
     // Column types, one per column of the example (or of the list so far).
@@ -2166,7 +2166,10 @@ fn inputs_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
                 use_selection_as_example(app, ed);
             }
             let mut fixed = ed.draft.inputs.first().is_some_and(|i| i.default_ref.is_some());
-            if ui.checkbox(&mut fixed, "Always run on this range").on_hover_text(lang.tr("Otherwise the macro runs on the selection")).changed()
+            if ui
+                .checkbox(&mut fixed, lang.tr("Always run on this range"))
+                .on_hover_text(lang.tr("Otherwise the macro runs on the selection"))
+                .changed()
                 && let Some(first) = ed.draft.inputs.first_mut()
             {
                 first.default_ref = fixed.then(|| ed.example.clone());

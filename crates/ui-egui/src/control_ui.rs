@@ -331,8 +331,8 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
     let t = Tokens::get(ui.ctx());
     let mut mode = val(d, "mode");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut mode, "macro".to_string(), "Run a macro");
-        ui.radio_value(&mut mode, "command".to_string(), "Run a command");
+        ui.radio_value(&mut mode, "macro".to_string(), lang.tr("Run a macro"));
+        ui.radio_value(&mut mode, "command".to_string(), lang.tr("Run a command"));
     });
     d.values.insert("mode".into(), json!(mode));
     ui.add_space(4.0);
@@ -361,9 +361,9 @@ pub fn assign_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
         ui.add_space(4.0);
         let mut input = val(d, "input");
         ui.label(lang.tr("Run it on:"));
-        ui.radio_value(&mut input, "selection".to_string(), "The selection when the button is pressed");
+        ui.radio_value(&mut input, "selection".to_string(), lang.tr("The selection when the button is pressed"));
         ui.horizontal(|ui| {
-            ui.radio_value(&mut input, "fixed".to_string(), "Always this range:");
+            ui.radio_value(&mut input, "fixed".to_string(), lang.tr("Always this range:"));
             if input == "fixed" {
                 text_field(ui, d, "range", 160.0);
             }
@@ -538,8 +538,8 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
             let mut h = d.values.get("horizontal").and_then(Json::as_bool).unwrap_or(true);
             ui.horizontal(|ui| {
                 ui.label(lang.tr("Orientation:"));
-                ui.radio_value(&mut h, true, "Horizontal");
-                ui.radio_value(&mut h, false, "Vertical");
+                ui.radio_value(&mut h, true, lang.tr("Horizontal"));
+                ui.radio_value(&mut h, false, lang.tr("Vertical"));
             });
             d.values.insert("horizontal".into(), json!(h));
         }
