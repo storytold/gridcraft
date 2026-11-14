@@ -151,6 +151,14 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         && src_val.is_empty()
                         && src_cell.as_ref().is_none_or(|x| x.formula.is_none() && x.py.is_none())
                     {
+                        // A note on an otherwise blank cell still pastes in Comments and All modes,
+                        // while leaving the destination cell's value and formula untouched.
+                        if matches!(what, What::Comments | What::All)
+                            && let Some(cm) = src_sheet.comments.get(&sc).cloned()
+                        {
+                            cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
+                            cx.touch(dest_sheet, dest);
+                        }
                         continue;
                     }
                     let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
