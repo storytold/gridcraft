@@ -1,5 +1,7 @@
 use super::day_count::{basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, day_count, freq_arg, shift_months, year_basis, year_frac, ymd};
+use super::scaled::Scaled;
 use super::{Arg, CellError, Ctx, DateSystem, R, Value, days_in_month, has, num, num_val, opt_bool};
+use std::cmp::Ordering;
 
 // ---------------------------------------------------------------------------------------------
 // Securities
@@ -209,22 +211,32 @@ fn bond(sys: DateSystem, settle: f64, mat: f64, freq: f64, basis: u32) -> R<Bond
     Ok(Bond { n: c.num, e, a, dsc, freq })
 }
 
-fn bond_price(b: &Bond, rate: f64, yld: f64, red: f64) -> f64 {
-    let f = b.freq;
-    let coupon = 100.0 * rate / f;
-    let accrued = coupon * b.a / b.e;
-    if b.n == 1.0 {
-        return (red + coupon) / (1.0 + b.dsc / b.e * yld / f) - accrued;
-    }
-    let base = 1.0 + yld / f;
+/// Shared positive cash flows for price, yield comparisons and duration. Neither a cash
+/// payment nor a discount factor is rounded to a worksheet number before forming the result.
+fn bond_cashflows(b: &Bond, coupon: Scaled, red: Scaled, log_discount: f64) -> (Scaled, Scaled) {
+    let (mut present, mut weighted) = (Scaled::from(0.0), Scaled::from(0.0));
     let frac = b.dsc / b.e;
-    let mut sum = red / base.powf(b.n - 1.0 + frac);
     let mut k = 1.0;
     while k <= b.n {
-        sum += coupon / base.powf(k - 1.0 + frac);
+        let t = k - 1.0 + frac;
+        let payment = if k == b.n { coupon + red } else { coupon };
+        let pv = payment * Scaled::exp(-t * log_discount);
+        present = present + pv;
+        weighted = weighted + pv * Scaled::from(t);
         k += 1.0;
     }
-    sum - accrued
+    (present, weighted)
+}
+
+fn bond_price(b: &Bond, rate: f64, yld: f64, red: f64) -> f64 {
+    let coupon = Scaled::from(rate) * Scaled::from(100.0 / b.freq);
+    let accrued = coupon * Scaled::from(b.a / b.e);
+    if b.n == 1.0 {
+        let discount = Scaled::from(1.0) + Scaled::from(yld) * Scaled::from(b.dsc / b.e / b.freq);
+        return ((Scaled::from(red) + coupon) / discount - accrued).value();
+    }
+    let (present, _) = bond_cashflows(b, coupon, Scaled::from(red), (yld / b.freq).ln_1p());
+    (present - accrued).value()
 }
 
 pub(super) fn price(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
@@ -244,30 +256,39 @@ pub(super) fn yield_(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let b = bond(c.date_system(), s, m, f, basis)?;
+    let coupon = Scaled::from(rate) * Scaled::from(100.0 / f);
+    let dirty = Scaled::from(pr) + coupon * Scaled::from(b.a / b.e);
     if b.n == 1.0 {
-        let base = pr / 100.0 + b.a / b.e * rate / f;
-        return num_val(((red / 100.0 + rate / f) - base) / base * f * b.e / b.dsc);
+        if b.dsc == 0.0 {
+            return Err(CellError::Num);
+        }
+        return num_val(((Scaled::from(red) + coupon - dirty) / dirty * Scaled::from(f * b.e / b.dsc)).value());
     }
-    // Price is decreasing in yield: bisect on [0, hi].
-    let g = |y: f64| bond_price(&b, rate, y, red) - pr;
-    let (mut lo, mut hi) = (-0.999_999 * f, 1.0);
-    let mut guard = 0;
-    while g(hi) > 0.0 && guard < 60 {
-        hi *= 2.0;
-        guard += 1;
+    // Compare positive gross cash flows, avoiding subtraction of accrued interest and price.
+    // log(1 + yield/frequency) covers every representable positive yield in a bounded search.
+    // Keep the established negative-yield lower bound; changing its policy is separate.
+    let compare = |z: f64| bond_cashflows(&b, coupon, Scaled::from(red), z).0.compare(dirty);
+    let at_zero = compare(0.0);
+    if at_zero == Ordering::Equal {
+        return num_val(0.0);
     }
-    if !(g(lo) >= 0.0 && g(hi) <= 0.0) {
+    let (mut lo, mut hi) = if at_zero == Ordering::Greater { (0.0, (f64::MAX / f).ln_1p()) } else { ((-0.999_999_f64).ln_1p(), 0.0) };
+    if compare(lo) == Ordering::Less || compare(hi) == Ordering::Greater {
         return Err(CellError::Num);
     }
     for _ in 0..200 {
         let mid = 0.5 * (lo + hi);
-        if g(mid) > 0.0 {
+        if mid == lo || mid == hi {
+            break;
+        }
+        if compare(mid) == Ordering::Greater {
             lo = mid;
         } else {
             hi = mid;
         }
     }
-    num_val(0.5 * (lo + hi))
+    let log_yield = 0.5 * (lo + hi);
+    num_val(log_yield.exp_m1() * f)
 }
 
 fn duration_calc(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64)> {
@@ -277,23 +298,9 @@ fn duration_calc(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64)> {
         return Err(CellError::Num);
     }
     let b = bond(sys, s, m, f, basis)?;
-    let c = coupon * 100.0 / f;
-    let y = 1.0 + yld / f;
-    let frac = b.dsc / b.e;
-    let (mut wsum, mut psum) = (0.0, 0.0);
-    let mut k = 1.0;
-    while k <= b.n {
-        let t = k - 1.0 + frac;
-        let cf = if k == b.n { c + 100.0 } else { c };
-        let pv = cf / y.powf(t);
-        wsum += t * pv;
-        psum += pv;
-        k += 1.0;
-    }
-    if psum == 0.0 {
-        return Err(CellError::Num);
-    }
-    Ok((wsum / psum / f, yld, f))
+    let c = Scaled::from(coupon) * Scaled::from(100.0 / f);
+    let (present, weighted) = bond_cashflows(&b, c, Scaled::from(100.0), (yld / f).ln_1p());
+    Ok(((weighted / present / Scaled::from(f)).value(), yld, f))
 }
 
 pub(super) fn duration(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
