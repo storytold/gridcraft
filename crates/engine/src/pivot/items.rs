@@ -1,3 +1,5 @@
+use gridcraft_model::pivot_source::ItemFormat;
+
 use super::{CellError, HashMap, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook};
 
 // ---------------------------------------------------------------- items
@@ -25,7 +27,7 @@ fn cmp_items(a: &Item, b: &Item) -> Ordering {
 }
 
 /// (identity key, item) for a source value under a field's date grouping.
-fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> (String, Item) {
+fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &ItemFormat, first: usize) -> (String, Item) {
     let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item {
         text: label.to_lowercase(),
         value,
@@ -35,9 +37,10 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
         first,
         formatted,
     };
-    // The label is the model's, which file writers list items by too. It takes the value as the
-    // cell holds it and reads an array's first element the same way as the match below.
-    let label = gridcraft_model::pivot_source::item_label(v, group, &crate::display::parsed(fmt).into(), wb.date_system);
+    // The label is the model's, which file writers list items by too. It takes the source record's
+    // value (already its cell's first element) and reads an array's first element the same way as
+    // the match below.
+    let label = gridcraft_model::pivot_source::item_label(v, group, fmt, wb.date_system);
     let v = &v.scalar();
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
@@ -54,7 +57,7 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
 }
 
 impl FieldItems {
-    pub(super) fn intern(&mut self, wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> u32 {
+    pub(super) fn intern(&mut self, wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &ItemFormat, first: usize) -> u32 {
         let (key, item) = make_item(wb, v, group, fmt, first);
         if let Some(i) = self.index.get(&key) {
             return *i;
@@ -74,16 +77,21 @@ impl FieldItems {
 
 /// The label of a source value under a date grouping (for filters and field lists).
 pub fn item_label(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str) -> String {
-    make_item(wb, v, group, fmt, 0).1.label
+    make_item(wb, v, group, &item_format(fmt), 0).1.label
+}
+
+/// A source column's item format, parsed once for all its records (through the format cache).
+pub(super) fn item_format(code: &str) -> ItemFormat {
+    crate::display::parsed(code).into()
 }
 
 /// Distinct item labels of a source column, sorted like the field list shows them.
 pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: PivotDateGroup, limit: usize) -> Vec<String> {
     let mut fi = FieldItems::default();
-    let fmt = src.formats.get(col).map(String::as_str).unwrap_or("General");
+    let fmt = item_format(src.formats.get(col).map(String::as_str).unwrap_or("General"));
     for (i, r) in src.rows.iter().enumerate() {
         if let Some(v) = r.get(col) {
-            fi.intern(wb, v, group, fmt, i);
+            fi.intern(wb, v, group, &fmt, i);
         }
         if fi.items.len() > 100_000 {
             break;
@@ -268,11 +276,11 @@ mod tests {
         let wb = Workbook::new();
         let one = |v: Value| Value::Array(Arc::new(Array::scalar(v)));
         // An array is its first element.
-        let (key, item) = make_item(&wb, &one(Value::Number(5.0)), PivotDateGroup::None, "General", 0);
+        let (key, item) = make_item(&wb, &one(Value::Number(5.0)), PivotDateGroup::None, &item_format("General"), 0);
         assert_eq!(key, format!("n{}", 5f64.to_bits()));
         assert_eq!((item.label.as_str(), &item.value), ("5", &Value::Number(5.0)));
         // An array inside that is no value an item can hold: blank throughout.
-        let (key, item) = make_item(&wb, &one(one(Value::Number(5.0))), PivotDateGroup::None, "General", 0);
+        let (key, item) = make_item(&wb, &one(one(Value::Number(5.0))), PivotDateGroup::None, &item_format("General"), 0);
         assert_eq!(key, "b");
         assert_eq!((item.label.as_str(), &item.value), ("(blank)", &Value::text("(blank)")));
     }

@@ -156,7 +156,8 @@ pub fn date_group_item(sys: DateSystem, n: f64, group: PivotDateGroup) -> Option
 /// The label an item shows: a grouped date's group, a number in its column's format `fmt` (a
 /// repeat fill left out, as the report has always shown items), `(blank)` for an empty cell, else
 /// the value's text. An array stands for its first element; an array nested in that is no value
-/// an item can hold, so it is `(blank)` (no recursion).
+/// an item can hold, so it is `(blank)` (no recursion). The report passes each record as its
+/// cell's first element (`sheet.value(cell).scalar()`); a caller listing the same items does too.
 pub fn item_label(v: &Value, group: PivotDateGroup, fmt: &ItemFormat, sys: DateSystem) -> String {
     let v = &v.scalar();
     match v {
@@ -207,6 +208,12 @@ mod tests {
         let empty = book(&[&[Value::text("A"), Value::text("  ")]]);
         assert!(headers(&empty, 0, RangeRef::parse("A1:B1").unwrap()).is_err());
         assert!(headers(&wb, 7, r).is_err());
+        // A header is read one array level deep, as an item is: an array inside an array is no
+        // name.
+        let one = |v: Value| Value::Array(std::sync::Arc::new(gridcraft_core::Array::scalar(v)));
+        let nested = book(&[&[one(Value::text("A")), one(one(Value::text("B")))]]);
+        assert_eq!(headers(&nested, 0, RangeRef::parse("A1:A1").unwrap()).unwrap(), ["A"]);
+        assert!(headers(&nested, 0, RangeRef::parse("A1:B1").unwrap()).is_err());
     }
 
     #[test]
