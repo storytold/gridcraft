@@ -371,7 +371,8 @@ fn write_expr(s: &mut String, e: &Expr, d: &dyn Dialect) {
                     Expr::Error(_) => write_expr(s, x, d),
                     // No operator form (e.g. a range shrunk to one cell): the equivalent call.
                     other => {
-                        s.push_str("TRIMRANGE(");
+                        s.push_str(&d.function("TRIMRANGE"));
+                        s.push('(');
                         write_expr(s, other, d);
                         let _ = write!(s, "{arg_sep}{0}{arg_sep}{0})", mode.code());
                     }

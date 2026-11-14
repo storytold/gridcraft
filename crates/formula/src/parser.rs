@@ -56,17 +56,21 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
 }
 
 /// Parses tokens another syntax's tokenizer produced (OpenFormula, say) with this grammar, so a
-/// caller with its own lexer builds the same [`Expr`]. Spaces are taken as the tokenizer gave
-/// them: a [`Tok::Space`] is the intersection operator. A [`Tok::Ref`] is a reference the
-/// tokenizer has already read; it must lie on the grid (rows and columns within Excel's limits)
-/// or the tokens are refused. Its ends are kept in the order given, as the text parser keeps
-/// `B2:A1`. The token list need not end with [`Tok::Eof`]; one anywhere else is an error.
+/// caller with its own lexer builds the same [`Expr`]. A [`Tok::Space`] is the intersection
+/// operator where it stands between the end of one operand and the start of another; anywhere
+/// else it is dropped, as the text parser drops it. A [`Tok::Ref`] is a reference the tokenizer
+/// has already read; it must lie on the grid (rows and columns within Excel's limits) or the
+/// tokens are refused. Its ends are kept in the order given, as the text parser keeps `B2:A1`.
+/// The token list need not end with [`Tok::Eof`]; one anywhere else is an error.
 ///
-/// The tokens are bounded as text is: at most [`MAX_FORMULA_LEN`] tokens, and at most
+/// The tokens are bounded as text is: at most [`MAX_FORMULA_LEN`] tokens, at most
 /// [`MAX_FORMULA_LEN`] characters of text, names, sheet names and structured-reference bodies
-/// in all. A number must be finite, as the A1 tokenizer reads it, and a sheet name non-empty. A
-/// [`Tok::Word`] or [`Tok::Func`] must be one the A1 tokenizer would read from its text (so not
-/// empty, and `A!1` is not a word), so that the printed formula parses back.
+/// in all, and the same nesting limits. Every token must print as text that parses back to the
+/// same tree, so these are refused: a number that is negative (a minus is [`Tok::Op`]) or not
+/// finite; a sheet name that is empty or holds `:`; a [`Tok::Word`] or [`Tok::Func`] the A1
+/// tokenizer would not read from its text (an empty one, `A!1`, or a row number such as the `1`
+/// of `1:3`: pass rows as a [`Tok::Ref`]); a word directly before `(`; and [`Tok::Trim`], which
+/// only Excel's syntax has.
 ///
 /// Only this grammar's operators are read: OpenFormula's `~` union is not handled here, so a
 /// tokenizer for that syntax translates it itself.
@@ -82,10 +86,13 @@ pub fn parse_tokens(toks: Vec<Token>) -> Result<Expr, ParseError> {
         }
         let bad = match &t.tok {
             Tok::Ref(r) if !reference_on_grid(r) => Some("reference is outside the sheet"),
-            Tok::Ref(Reference { sheet: SheetSel::Named(a), .. }) if a.is_empty() => Some("empty sheet name"),
-            Tok::Ref(Reference { sheet: SheetSel::Span(a, b), .. }) if a.is_empty() || b.is_empty() => Some("empty sheet name"),
-            Tok::Sheet(a, b) if a.is_empty() || b.as_deref().is_some_and(str::is_empty) => Some("empty sheet name"),
+            Tok::Ref(Reference { sheet: SheetSel::Named(a), .. }) if !sheet_name_ok(a) => Some(BAD_SHEET),
+            Tok::Ref(Reference { sheet: SheetSel::Span(a, b), .. }) if !sheet_name_ok(a) || !sheet_name_ok(b) => Some(BAD_SHEET),
+            Tok::Sheet(a, b) if !sheet_name_ok(a) || b.as_deref().is_some_and(|b| !sheet_name_ok(b)) => Some(BAD_SHEET),
             Tok::Number(n) if !n.is_finite() => Some("number too large"),
+            // `-1` prints as text that reads back as negation of 1, a different tree.
+            Tok::Number(n) if n.is_sign_negative() => Some("negative number (a minus is an operator)"),
+            Tok::Trim(_) => Some("trim range operator"),
             Tok::Word(w) if !lexes_as(w, &t.tok) => Some("not a name or reference"),
             Tok::Func(f) if !lexes_as(&format!("{f}("), &t.tok) => Some("not a function name"),
             _ => None,
@@ -100,12 +107,22 @@ pub fn parse_tokens(toks: Vec<Token>) -> Result<Expr, ParseError> {
     {
         return Err(ParseError { msg: "tokens after the end of the formula".into(), pos: toks.get(i + 1).map_or(0, |t| t.start) });
     }
+    // A name before `(` is a function name to the A1 tokenizer, so `Word` + `(` has no text form.
+    if let Some(w) = toks.windows(2).find(|w| matches!(w, [a, b] if matches!(a.tok, Tok::Word(_)) && b.tok == Tok::LParen)) {
+        return Err(ParseError { msg: "name directly before `(`".into(), pos: w.first().map_or(0, |t| t.start) });
+    }
+    let toks = significant_spaces(toks);
     let mut p = Parser { toks, i: 0, depth: 0, input: false };
     let e = p.expr(0, false)?;
-    match p.peek() {
-        Tok::Eof => Ok(e),
-        t => Err(p.err(format!("unexpected {}", describe(t)))),
-    }
+    finish(&mut p, e)
+}
+
+const BAD_SHEET: &str = "sheet name empty or holding `:`";
+
+/// A sheet name prints as text that reads back as the same name: not empty, and no `:`, which
+/// would read back as a span of sheets.
+fn sheet_name_ok(name: &str) -> bool {
+    !name.is_empty() && !name.contains(':')
 }
 
 /// The characters of text a token carries (its strings and sheet names).
@@ -156,6 +173,11 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     let toks = significant_spaces(toks);
     let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
     let e = p.expr(0, allow_union)?;
+    finish(&mut p, e)
+}
+
+/// Checks that the parser stopped at the end and that `e` is not nested too deeply as a whole.
+fn finish(p: &mut Parser, e: Expr) -> Result<Expr, ParseError> {
     match p.peek() {
         Tok::Eof if wrapper_height(&e) > MAX_DEPTH => Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 }),
         Tok::Eof => Ok(e),
@@ -201,9 +223,11 @@ fn significant_spaces(toks: Vec<Token>) -> Vec<Token> {
     let mut out: Vec<Token> = Vec::with_capacity(toks.len());
     for (i, t) in toks.iter().enumerate() {
         if t.tok == Tok::Space {
-            let prev_end = out.last().is_some_and(|p| matches!(p.tok, Tok::Word(_) | Tok::RParen | Tok::Struct(_) | Tok::Error(_)));
-            let next_start =
-                toks.get(i + 1).is_some_and(|n| matches!(n.tok, Tok::Word(_) | Tok::Sheet(..) | Tok::LParen | Tok::Func(_) | Tok::Error(_)));
+            // `Tok::Ref` only comes from another syntax's tokenizer (see `parse_tokens`).
+            let prev_end = out.last().is_some_and(|p| matches!(p.tok, Tok::Word(_) | Tok::RParen | Tok::Struct(_) | Tok::Error(_) | Tok::Ref(_)));
+            let next_start = toks
+                .get(i + 1)
+                .is_some_and(|n| matches!(n.tok, Tok::Word(_) | Tok::Sheet(..) | Tok::LParen | Tok::Func(_) | Tok::Error(_) | Tok::Ref(_)));
             if prev_end && next_start {
                 out.push(t.clone());
             }

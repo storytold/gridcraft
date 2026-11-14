@@ -670,6 +670,48 @@ fn parse_tokens_refuses_hostile_tokens() -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Every tree `parse_tokens` accepts prints as text that parses back to it: token shapes with no
+/// text form are refused, and the whole-tree nesting bound applies as it does to text.
+#[test]
+fn parse_tokens_accepts_only_what_prints_back() -> Result<(), ParseError> {
+    use crate::lexer::{Tok, Token};
+    let read = |toks: Vec<Tok>| crate::parse_tokens(toks.into_iter().map(|tok| Token { tok, start: 0, end: 0 }).collect());
+    let a1 = Tok::Ref(Reference { sheet: SheetSel::Current, kind: RefKind::Cell(Anchor { row: 0, col: 0, row_abs: false, col_abs: false }) });
+    // Wrappers stacked across levels: the text form is refused as a whole, and so are its tokens.
+    let mut toks = vec![Tok::LParen; 7];
+    toks.push(Tok::Number(1.0));
+    for _ in 0..7 {
+        toks.push(Tok::RParen);
+        toks.extend(std::iter::repeat_n(Tok::Op("%"), 40));
+    }
+    assert!(read(toks).is_err(), "7 x 41 wrappers on one path");
+    // A space is the intersection only between two operands; elsewhere it is dropped, as in text.
+    assert!(read(vec![Tok::Bool(true), Tok::Space, Tok::Number(1.0)]).is_err());
+    assert_eq!(read(vec![Tok::Number(1.0), Tok::Space, Tok::Op("+"), Tok::Space, Tok::Number(2.0)])?, parse("1+2")?);
+    assert_eq!(read(vec![a1.clone(), Tok::Space, Tok::Word("B1".into())])?, parse("A1 B1")?);
+    assert_eq!(read(vec![Tok::Word("B1".into()), Tok::Space, a1.clone()])?, parse("B1 A1")?);
+    // A negative number reads back from text as a negation, so a minus must be an operator.
+    for n in [-1.0, -0.0] {
+        assert!(read(vec![Tok::Number(n)]).is_err(), "{n}");
+    }
+    assert_eq!(read(vec![Tok::Op("-"), Tok::Number(1.0)])?, parse("-1")?);
+    // A `:` in a sheet name reads back as a span of sheets.
+    let at = |sheet| Tok::Ref(Reference { sheet, kind: RefKind::Cell(Anchor { row: 0, col: 0, row_abs: false, col_abs: false }) });
+    for sheet in [SheetSel::Named("a:b".into()), SheetSel::Span("a:b".into(), "c".into()), SheetSel::Span("a".into(), "b:c".into())] {
+        assert!(read(vec![at(sheet.clone())]).is_err(), "{sheet:?}");
+    }
+    assert!(read(vec![Tok::Sheet("a:b".into(), None), Tok::Word("C".into())]).is_err());
+    assert!(read(vec![Tok::Sheet("a".into(), Some("b:c".into())), Tok::Word("C".into())]).is_err());
+    assert_eq!(read(vec![at(SheetSel::Named("a b".into()))])?, parse("'a b'!A1")?);
+    // The trim operators are Excel's own: around anything but a plain range they have no text form.
+    assert!(read(vec![Tok::Bool(true), Tok::Trim(TrimMode::All), Tok::Bool(true)]).is_err());
+    assert!(read(vec![a1.clone(), Tok::Trim(TrimMode::All), Tok::Word("B2".into())]).is_err());
+    // A name directly before `(` is a function name to the A1 tokenizer.
+    assert!(read(vec![Tok::Word("_x".into()), Tok::LParen, Tok::RParen]).is_err());
+    assert_eq!(read(vec![Tok::Word("_x".into()), Tok::Space, Tok::LParen, a1, Tok::RParen])?, parse("_x (A1)")?);
+    Ok(())
+}
+
 /// A dialect changes only what it states; the rest prints as A1.
 #[test]
 fn print_with_a_dialect() -> Result<(), ParseError> {
@@ -700,6 +742,10 @@ fn print_with_a_dialect() -> Result<(), ParseError> {
     let e = parse("IF(A1,{1,2;3,4},TRUE)&SUM(B1:C2,D1#)")?;
     assert_eq!(crate::print_with(&e, &Test), "X.IF([A1];{1;2|3;4};TRUE()) CONCAT X.SUM([B1:C2];ANCHOR([D1]))");
     assert_eq!(print(&e), "IF(A1,{1,2;3,4},TRUE)&SUM(B1:C2,D1#)");
+    // A trim with no operator form prints as the TRIMRANGE call, named through the dialect.
+    let e = Expr::Unary(UnOp::Trim(TrimMode::All), Box::new(parse("A1")?));
+    assert_eq!(crate::print_with(&e, &Test), "X.TRIMRANGE([A1];3;3)");
+    assert_eq!(print(&e), "TRIMRANGE(A1,3,3)");
     Ok(())
 }
 
