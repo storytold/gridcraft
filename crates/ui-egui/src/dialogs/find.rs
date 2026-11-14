@@ -156,8 +156,13 @@ pub(super) fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm {
-        app.run_or_alert("edit.goTo", json!({"reference": r, "record": true}));
-        app.grid.ensure_visible = true;
+        match app.run("edit.goTo", json!({"reference": r, "record": true})) {
+            Ok(_) => app.grid.ensure_visible = true,
+            Err(e) => {
+                app.message = Some((d.title.clone(), crate::clean_error(&e)));
+                *confirm = false;
+            }
+        }
     }
     if !open {
         *confirm = true;
