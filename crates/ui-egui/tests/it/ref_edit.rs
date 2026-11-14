@@ -1589,6 +1589,12 @@ fn solver_reset_all_after_a_cross_sheet_pick_clears_the_dialogs_sheets_model() {
     assert_eq!(field(&h, "objective"), "", "the form is reset");
 }
 
+/// Clicks the Solver dialog's Save: the lowest on screen, since the title bar's Quick Access
+/// Toolbar has a Save too.
+fn click_save(h: &H) {
+    h.get_all_by_label("Save").max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click();
+}
+
 #[test]
 fn solver_save_model_after_a_cross_sheet_pick_writes_the_dialogs_sheet() {
     let mut h = harness(two_sheets());
@@ -1599,7 +1605,7 @@ fn solver_save_model_after_a_cross_sheet_pick_writes_the_dialogs_sheet() {
     h.state_mut().dialog.as_mut().unwrap().values.insert("modelRange".into(), json!("H1"));
     h.run_steps(2);
     pick_on_rates(&mut h, "C3");
-    h.get_by_label("Save").click();
+    click_save(&h);
     h.run_steps(3);
     let h1 = |h: &H, sheet: usize| h.state().session.active().unwrap().wb.sheets[sheet].value(CellRef::parse("H1").unwrap());
     assert!(!h1(&h, 0).is_empty(), "the model is written on the dialog's sheet");
@@ -1607,7 +1613,7 @@ fn solver_save_model_after_a_cross_sheet_pick_writes_the_dialogs_sheet() {
     assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
     // Saving where the model already is asks first; Replace, after another cross-sheet pick,
     // writes the dialog's sheet too.
-    h.get_by_label("Save").click();
+    click_save(&h);
     h.run_steps(3);
     assert!(h.query_by_label("Replace").is_some(), "the range holds the model: asked before replacing");
     pick_on_rates(&mut h, "C4");

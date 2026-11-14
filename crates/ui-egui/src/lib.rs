@@ -25,6 +25,7 @@ pub mod control;
 pub mod control_ui;
 mod craft_fonts_policy;
 pub mod credits;
+pub mod customize;
 pub mod dialogs;
 pub mod dnd;
 #[cfg(not(target_arch = "wasm32"))]
@@ -128,6 +129,10 @@ pub struct UiState {
     /// [`INTERFACE_SCALE_MIN`]..=[`INTERFACE_SCALE_MAX`]; a malformed saved value reads as 100.
     #[serde(deserialize_with = "lenient_interface_scale")]
     pub interface_scale: u16,
+    /// Customize the Ribbon and the Quick Access Toolbar: tabs shown and their order, the user's
+    /// tabs and groups, the toolbar's commands. A malformed saved value reads as the default.
+    #[serde(deserialize_with = "customize::lenient")]
+    pub ribbon: customize::RibbonLayout,
 }
 
 pub const INTERFACE_SCALE_MIN: u16 = 75;
@@ -163,6 +168,7 @@ impl Default for UiState {
             keytip_invoke_next: None,
             language: i18n::Language::En,
             interface_scale: 100,
+            ribbon: customize::RibbonLayout::default(),
         }
     }
 }
