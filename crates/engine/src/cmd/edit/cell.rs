@@ -152,15 +152,21 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
             let sh = cx.sheet_mut(sheet)?;
-            // The array takes the whole range: other cells in it lose their contents.
+            // The array takes the whole range: other cells in it lose their contents, and are
+            // changed cells too, so a formula there takes its spill and legacy range with it.
+            let mut emptied = Vec::new();
             for c in range.iter().skip(1).take(1_000_000) {
                 if let Some(old) = sh.cells.get(c).filter(|x| x.has_content()) {
                     let style = old.style;
                     sh.set_cell(c, Cell { style, ..Cell::default() });
+                    emptied.push(c);
                 }
             }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
+            for c in emptied {
+                cx.touch(sheet, c);
+            }
             return Ok(Json::Null);
         }
         let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;

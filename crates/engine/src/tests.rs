@@ -2469,6 +2469,172 @@ fn part_of_a_legacy_array_cant_be_changed() {
 }
 
 #[test]
+fn a_legacy_array_over_a_spill_area_takes_its_range_and_blocks_the_spill() {
+    // #2949: with its top-left cell outside the spill area, the legacy array showed #SPILL! and
+    // the dynamic array kept spilling, so the saved file held two overlapping array ranges.
+    let row = |s: &Session, cells: &[&str]| cells.iter().map(|c| v(s, c)).collect::<Vec<_>>();
+    let ones = vec![Value::Number(1.0); 3];
+    let spill = Value::Error(gridcraft_core::CellError::Spill);
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H1", "input": "=SUM(D1:D5)"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:E3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=1", "array": true})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(row(&s, &["D1", "D2", "D4", "D5", "H1"]), vec![spill.clone(), Value::Empty, Value::Empty, Value::Empty, spill.clone()]);
+    // A full recalculation agrees, whatever order it evaluates the two formulas in.
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(v(&s, "D1"), spill);
+    // Saved and reopened, the sheet holds one array over C3:E3 and no spill over it.
+    reopen(&mut s);
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(v(&s, "D1"), spill);
+    assert!(!s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.contains_key(&CellRef::parse("D1").unwrap()));
+    // Deleting the array lets the dynamic array spill again.
+    s.execute("edit.clearContents", json!({"range": "C3:E3"})).unwrap();
+    assert_eq!(row(&s, &["D1", "D3", "D5", "H1"]), vec![Value::Number(1.0), Value::Number(3.0), Value::Number(5.0), Value::Number(15.0)]);
+    // Undo brings the array back over the spill, and Redo deletes it again.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3"]), ones);
+    assert_eq!(v(&s, "D1"), spill);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "D3"), Value::Number(3.0));
+
+    // One array over two spill areas blocks both.
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(5)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "=SEQUENCE(5,1,10)"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:G3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=1", "array": true})).unwrap();
+    assert_eq!(row(&s, &["C3", "D3", "E3", "F3", "G3"]), vec![Value::Number(1.0); 5]);
+    assert_eq!(row(&s, &["D1", "F1", "F2"]), vec![spill.clone(), spill.clone(), Value::Empty]);
+    s.execute("edit.clearContents", json!({"range": "C3:G3"})).unwrap();
+    assert_eq!(row(&s, &["D3", "F3"]), vec![Value::Number(3.0), Value::Number(12.0)]);
+}
+
+#[test]
+fn a_dynamic_array_recalculated_later_stays_off_a_legacy_array() {
+    // #2949 review: the dynamic array is recalculated without the legacy array (only its
+    // precedent changed), when it was blocked and when it grows into the legacy array's range.
+    let spill = Value::Error(gridcraft_core::CellError::Spill);
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5], [2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "G1", "input": "=SEQUENCE(A2)"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:E3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=1", "array": true})).unwrap();
+    s.execute("selection.set", json!({"range": "F5:H5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F5", "input": "=2", "array": true})).unwrap();
+    assert_eq!([v(&s, "D1"), v(&s, "G1"), v(&s, "G2")], [spill.clone(), Value::Number(1.0), Value::Number(2.0)]);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[6], [8]]})).unwrap();
+    assert_eq!([v(&s, "D1"), v(&s, "G1"), v(&s, "G3")], [spill.clone(), spill.clone(), Value::Empty]);
+    assert_eq!([v(&s, "D3"), v(&s, "G5"), v(&s, "H5")], [Value::Number(1.0), Value::Number(2.0), Value::Number(2.0)]);
+    let d = s.doc().unwrap();
+    let ranges: Vec<_> = d.wb.sheet(0).unwrap().spill_ranges.values().map(|r| r.a1()).collect();
+    assert_eq!(ranges.len(), 2, "{ranges:?}");
+    assert!(ranges.contains(&"C3:E3".to_string()) && ranges.contains(&"F5:H5".to_string()), "{ranges:?}");
+    // Back within bounds, G1 spills again; D1's area still overlaps C3:E3.
+    s.execute("range.setValues", json!({"range": "A2", "values": [[3]]})).unwrap();
+    assert_eq!([v(&s, "D1"), v(&s, "G3")], [spill.clone(), Value::Number(3.0)]);
+}
+
+#[test]
+fn a_legacy_array_too_large_to_lay_out_still_blocks_a_spill() {
+    // #2949 review: a legacy array over more cells than a result may hold shows #NUM! and lays
+    // nothing out, but it still takes its range, so a dynamic array can't spill into it.
+    let mut s = s();
+    s.execute("selection.set", json!({"range": "B2:Q1048576"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1", "array": true})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Error(gridcraft_core::CellError::Num));
+    // C1:C3 overlaps the range below its anchor B2, which holds the only stored cell.
+    s.execute("cell.set", json!({"cell": "C1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(
+        [v(&s, "C1"), v(&s, "C2"), v(&s, "B2")],
+        [Value::Error(gridcraft_core::CellError::Spill), Value::Empty, Value::Error(gridcraft_core::CellError::Num)]
+    );
+    assert!(s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.is_empty());
+    // Outside its range, a dynamic array spills.
+    s.execute("cell.set", json!({"cell": "S1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(v(&s, "S3"), Value::Number(3.0));
+}
+
+#[test]
+fn deleting_or_shrinking_a_legacy_array_too_large_to_lay_out_unblocks_a_spill() {
+    // #2949 review: the #NUM! array had laid out no spill range, so nothing marked its cells as
+    // freed, and C1 (to the right of its formula cell) stayed #SPILL! until Calculate Now.
+    for shrink in [true, false] {
+        let mut s = s();
+        s.execute("selection.set", json!({"range": "B2:Q1048576"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B2", "input": "=1", "array": true})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": "=SEQUENCE(3)"})).unwrap();
+        assert_eq!(v(&s, "C1"), Value::Error(gridcraft_core::CellError::Spill));
+        if shrink {
+            s.execute("selection.set", json!({"range": "B2:B4"})).unwrap();
+            s.execute("cell.set", json!({"cell": "B2", "input": "=1", "array": true})).unwrap();
+            assert_eq!(v(&s, "B4"), Value::Number(1.0));
+        } else {
+            s.execute("edit.clearContents", json!({"range": "B2"})).unwrap();
+        }
+        assert_eq!([v(&s, "C1"), v(&s, "C3")], [Value::Number(1.0), Value::Number(3.0)], "shrink: {shrink}");
+    }
+}
+
+#[test]
+fn a_legacy_array_entered_over_formulas_recalculates_what_they_fed() {
+    // #2949 review: the formulas the array overwrote (other than its own top-left cell) weren't
+    // marked as changed. An overwritten dynamic array was evaluated again as if still there and
+    // emptied its old spill area, the array's value included, and an overwritten legacy array
+    // kept its range, which blocked a spill there until Calculate Now.
+    let array = |s: &mut Session, range: &str, input: &str| {
+        s.execute("selection.set", json!({"range": range})).unwrap();
+        let at = range.split(':').next().unwrap();
+        s.execute("cell.set", json!({"cell": at, "input": input, "array": true})).unwrap();
+    };
+
+    // What read a formula or a value there reads the array's value (this already worked).
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "6"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "=B1*10+C1"})).unwrap();
+    array(&mut s, "A1:C1", "={1,2,3}");
+    assert_eq!([v(&s, "B1"), v(&s, "C1"), v(&s, "E1")], [Value::Number(2.0), Value::Number(3.0), Value::Number(23.0)]);
+
+    // A dynamic array's spill goes with its formula, and the array's value is shown in its place.
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=SEQUENCE(3)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SUM(B1:B3)"})).unwrap();
+    array(&mut s, "A1:B1", "=1");
+    assert_eq!([v(&s, "B1"), v(&s, "B2"), v(&s, "B3"), v(&s, "D1")], [Value::Number(1.0), Value::Empty, Value::Empty, Value::Number(1.0)]);
+    assert!(!s.doc().unwrap().wb.sheet(0).unwrap().spill_ranges.contains_key(&CellRef::parse("B1").unwrap()));
+
+    // A legacy array's range is freed: once the new array goes too, a dynamic array spills there.
+    let mut s = self::s();
+    array(&mut s, "B1:B2", "=7");
+    array(&mut s, "A1:B3", "=1");
+    s.execute("cell.set", json!({"cell": "A1", "input": "0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=SEQUENCE(1,2)"})).unwrap();
+    assert_eq!([v(&s, "A2"), v(&s, "B2"), v(&s, "B1")], [Value::Number(1.0), Value::Number(2.0), Value::Empty]);
+}
+
+#[test]
+fn clearing_or_overwriting_a_dynamic_array_unblocks_the_one_it_blocked() {
+    // #2340: F13's area overlaps C14's spill, and stayed #SPILL! after C14 was cleared (or a value
+    // typed over it) until Calculate Now, because F13 is to the right of C14.
+    for replace in [None, Some(5)] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "C14", "input": "=SEQUENCE(1,7)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "F13", "input": "=SEQUENCE(5,2)"})).unwrap();
+        assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+        match replace {
+            None => s.execute("edit.clearContents", json!({"range": "C14"})).unwrap(),
+            Some(n) => s.execute("cell.set", json!({"cell": "C14", "input": n})).unwrap(),
+        };
+        assert_eq!([v(&s, "F13"), v(&s, "G17")], [Value::Number(1.0), Value::Number(10.0)], "{replace:?}");
+    }
+}
+
+#[test]
 fn create_names_from_selection() {
     let names = |s: &Session| -> Vec<(String, String)> {
         let mut v: Vec<_> = s.doc().unwrap().wb.names.iter().map(|n| (n.name.clone(), n.formula.clone())).collect();

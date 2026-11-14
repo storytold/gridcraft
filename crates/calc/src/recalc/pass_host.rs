@@ -85,6 +85,10 @@ pub(super) struct PassHost<'a> {
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
     python: HashMap<Key, Value>,
+    /// The sheet and range of every multi-cell legacy array formula in the workbook. Each takes
+    /// its whole range, so a dynamic array spilling over one is blocked, whichever of the two is
+    /// evaluated first and whether or not the legacy array's result could be laid out.
+    legacy: Vec<(usize, RangeRef)>,
 }
 
 impl<'a> PassHost<'a> {
@@ -123,6 +127,7 @@ impl<'a> PassHost<'a> {
             out_of_stack: false,
             sums: HashMap::default(),
             python: HashMap::default(),
+            legacy: Vec::new(),
         }
     }
 
@@ -133,6 +138,17 @@ impl<'a> PassHost<'a> {
         self.python = python;
         self
     }
+
+    /// Adds the multi-cell legacy array formulas of the workbook (see `legacy`).
+    pub(super) fn with_legacy(mut self, legacy: Vec<(usize, RangeRef)>) -> Self {
+        self.legacy = legacy;
+        self
+    }
+}
+
+/// The range of the multi-cell legacy (Ctrl+Shift+Enter) array formula at `at`, if it holds one.
+pub(super) fn legacy_range(sh: &gridcraft_model::Sheet, at: CellRef) -> Option<RangeRef> {
+    sh.cell(at).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).filter(|r| r.start == at && !r.is_single())
 }
 
 /// Most spill areas a range read meets before they are checked for overlapping one another by
@@ -161,9 +177,12 @@ fn spill_hits_overlap(index: &SpillIndex, sheet: usize, hits: &[CellRef], range:
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
 /// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
-/// recalculated in this pass, and so may spill elsewhere now).
+/// recalculated in this pass, and so may spill elsewhere now). A legacy array takes its whole
+/// range as typed content does: another formula's spill never blocks it, and a dynamic array
+/// whose area overlaps one is blocked (#2949).
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
+    let legacy = legacy_range(sh, anchor).is_some();
     let end =
         CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
     let range = RangeRef::new(anchor, end);
@@ -180,7 +199,8 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
         || sh.merges.iter().any(|m| m.intersects(&range))
         || sh.tables.iter().any(|t| t.range.contains(anchor))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
-        || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
+        || (!legacy && sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c)))
+        || (!legacy && host.legacy.iter().any(|(s, r)| *s == sheet && r.start != anchor && r.intersects(&range)))
 }
 
 /// Whether `arr`, anchored at `anchor`, would spill exactly what the sheet already holds over
