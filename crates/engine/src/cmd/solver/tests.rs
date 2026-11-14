@@ -1787,6 +1787,40 @@ fn infeasible_unbounded_and_nonlinear_models_are_reported() {
     assert_eq!(r["status"], "notLinear");
 }
 
+/// #3857: a large constant does not hide a curved objective from Simplex LP's linearity check.
+/// The issue's model starts at its maximum (A1 = 2), and each offset it lists, a negative one,
+/// the convex counterpart minimised, and the model scaled by 100,000, is refused as not linear and
+/// leaves A1 as it was. A linear model with the same or larger constants still solves.
+#[test]
+fn a_large_constant_does_not_hide_a_nonlinear_objective_from_simplex() {
+    let mut s = s();
+    let mut curved: Vec<(String, &str)> =
+        ["10000000", "100000000", "200000000", "300000000", "1000000000", "-10000000"].iter().map(|c| (format!("={c}-(A1-2)^2"), "max")).collect();
+    curved.push(("=10000000+(A1-2)^2".into(), "min"));
+    curved.push(("=1000000000000-100000*(A1-2)^2".into(), "max"));
+    for (formula, goal) in &curved {
+        set(&mut s, &[("A1", "2"), ("B1", formula)]);
+        let r = s
+            .execute("data.solver", json!({"objective": "B1", "goal": goal, "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex"}))
+            .unwrap();
+        assert_eq!((r["status"].as_str(), r["changed"].as_bool()), (Some("notLinear"), Some(false)), "{formula} ({goal}): {r}");
+        assert_eq!(n(&s, "A1"), 2.0, "{formula}: A1 is left as it was");
+    }
+    for (formula, want) in [("=10000000+3*A1", 10000012.0), ("=1000000000000000+A1", 1000000000000004.0), ("=-1000000000+0.5*A1", -999999998.0)] {
+        set(&mut s, &[("A1", "2"), ("B1", formula)]);
+        let r = s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex"})).unwrap();
+        assert_eq!(r["status"], "optimal", "{formula}: {r}");
+        assert_eq!((n(&s, "A1"), n(&s, "B1")), (4.0, want), "{formula}");
+    }
+    // Linear, but a value this large is rounded in its last bits at the check's point: that
+    // rounding is not curvature.
+    for formula in ["=123456789012345+0.7*A1", "=1000000000000+A1/3"] {
+        set(&mut s, &[("A1", "2"), ("B1", formula)]);
+        let r = s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4"], "method": "simplex"})).unwrap();
+        assert_eq!((r["status"].as_str(), n(&s, "A1")), (Some("optimal"), 4.0), "{formula}: {r}");
+    }
+}
+
 #[test]
 fn hostile_models_are_refused_without_panicking() {
     let mut s = s();
