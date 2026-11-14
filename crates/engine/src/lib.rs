@@ -413,6 +413,12 @@ pub struct Prefs {
     /// After pressing Enter, move the selection: "down", "right", "up", "left", "none".
     pub enter_direction: String,
     pub autocomplete: bool,
+    /// File › Options › Editing › Automatically insert a decimal point, and its Places: a whole
+    /// number typed into a cell gets a decimal point that many digits from its right
+    /// (`options.fixedDecimal`, [`cmd::edit::fixed_decimal_entry`]).
+    pub fixed_decimal: bool,
+    #[serde(deserialize_with = "cmd::file::lenient_places")]
+    pub fixed_decimal_places: i32,
     pub user_name: String,
     pub default_font: String,
     pub default_font_size: f32,
@@ -454,6 +460,8 @@ impl Default for Prefs {
         Prefs {
             enter_direction: "down".into(),
             autocomplete: true,
+            fixed_decimal: false,
+            fixed_decimal_places: cmd::file::DEFAULT_FIXED_DECIMAL_PLACES,
             user_name: "GridCraft User".into(),
             default_font: gridcraft_model::DEFAULT_FONT.into(),
             default_font_size: gridcraft_model::DEFAULT_FONT_SIZE,
