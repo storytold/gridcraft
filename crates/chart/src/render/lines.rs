@@ -254,7 +254,7 @@ mod smooth_tests {
         let pts: Vec<Option<[f32; 2]>> =
             (0..100_000).map(|i| if i % 4 == 3 { None } else { Some([i as f32, if i % 2 == 0 { 20.0 } else { 80.0 }]) }).collect();
         let m = crate::ApproxMeasure;
-        let mut ctx = Ctx { out: Vec::new(), m: &m };
+        let mut ctx = Ctx { out: Vec::new(), m: &m, plot: None };
         draw_runs(&mut ctx, &pts, WHITE, 1.0, Some(plot));
         let total: usize = ctx.out.iter().map(|p| if let Prim::Line { pts, .. } = p { pts.len() } else { 0 }).sum();
         // 75,000 data points, plus at most the budget added by interpolation.

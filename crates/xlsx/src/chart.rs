@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartKind, ChartLayout, ChartRect, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -167,6 +169,25 @@ fn bool_val(e: &El, tag: &str) -> bool {
     e.child(tag).is_some_and(|c| c.flag("val", true))
 }
 
+/// A part's hand-placed rectangle (`layout/manualLayout`), when measured from the chart's edges.
+/// Positions relative to where the part would go by itself (`factor`, the default mode) aren't
+/// kept. Width and height are 0 where the file leaves them out. With `wMode` or `hMode` set to
+/// `edge`, `w` and `h` are where the right and bottom edges fall, and become a size here.
+fn manual_layout(e: Option<&El>) -> Option<(ChartRect, bool)> {
+    let m = e?.path(&["layout", "manualLayout"])?;
+    if m.child_val("xMode") != Some("edge") || m.child_val("yMode") != Some("edge") {
+        return None;
+    }
+    let v = |k: &str| f64_val(m, k).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0) as f32);
+    let (x, y) = (v("x")?, v("y")?);
+    let size = |k: &str, mode: &str, from: f32| {
+        let s = v(k).unwrap_or(0.0);
+        if m.child_val(mode) == Some("edge") { (s - from).max(0.0) } else { s }
+    };
+    let rect = ChartRect { x, y, w: size("w", "wMode", x), h: size("h", "hMode", y) };
+    Some((rect, m.child_val("layoutTarget") == Some("inner")))
+}
+
 fn f64_val(e: &El, tag: &str) -> Option<f64> {
     e.child(tag).and_then(|c| c.attr_f64("val"))
 }
@@ -260,6 +281,12 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
+    let plot_layout = manual_layout(Some(plot)).filter(|(r, _)| r.w > 0.0 && r.h > 0.0);
+    let layout = ChartLayout {
+        plot: plot_layout.map(|(r, _)| r),
+        plot_inner: plot_layout.is_some_and(|(_, inner)| inner),
+        title: manual_layout(chart.child("title")).map(|(r, _)| [r.x, r.y]),
+    };
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
     let first_slice_angle =
@@ -287,6 +314,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        layout,
     })
 }
 
