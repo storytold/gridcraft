@@ -144,22 +144,34 @@ pub struct DefinedName {
     pub hidden: bool,
 }
 
-/// The language, country and font a document gives one script's text by default, each `None`
-/// when unstated. Codes are as files spell them (`de`/`DE`; ODF's `zxx`/`none` for no language).
+/// The language, script, country and font a document gives one script's text by default, each
+/// `None` when unstated. Codes are as files spell them (`de`/`DE`; ODF states "no language" as
+/// language `zxx` with country `none`). ODF 1.2 and later can also state a script code (`Latn` in `sr-Latn-RS`) and a full
+/// BCP 47 tag for locales the separate codes cannot express (`ca-ES-valencia`); both are kept so
+/// such a locale survives open and save.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ScriptDefault {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
+    /// ISO 15924 script code (ODF `fo:script`, `style:script-asian`, `style:script-complex`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub country: Option<String>,
-    /// Asian and complex text only: Western text takes the default style's font.
+    /// BCP 47 language tag (ODF `style:rfc-language-tag`, `-asian`, `-complex`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rfc_language_tag: Option<String>,
+    /// The font family name (not an ODF `style:font-face` declaration name: a reader resolves
+    /// `style:font-name-asian`/`-complex` to its family, a writer declares a face for it). Read
+    /// for Asian and complex text only; Western text takes the default style's font, so
+    /// `western.font` is unused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font: Option<String>,
 }
 
 impl ScriptDefault {
     pub fn is_empty(&self) -> bool {
-        self.language.is_none() && self.country.is_none() && self.font.is_none()
+        self.language.is_none() && self.script.is_none() && self.country.is_none() && self.rfc_language_tag.is_none() && self.font.is_none()
     }
 }
 
@@ -649,9 +661,20 @@ mod tests {
         assert!(serde_json::from_str::<Workbook>(&json)?.text_defaults.is_empty());
 
         wb.text_defaults = TextDefaults {
-            western: ScriptDefault { language: Some("de".into()), country: Some("DE".into()), font: None },
-            asian: ScriptDefault { language: Some("ja".into()), country: Some("JP".into()), font: Some("Noto Sans CJK JP".into()) },
-            complex: ScriptDefault { language: None, country: None, font: Some("Noto Naskh Arabic".into()) },
+            western: ScriptDefault {
+                language: Some("sr".into()),
+                script: Some("Latn".into()),
+                country: Some("RS".into()),
+                rfc_language_tag: Some("sr-Latn-RS".into()),
+                font: None,
+            },
+            asian: ScriptDefault {
+                language: Some("ja".into()),
+                country: Some("JP".into()),
+                font: Some("Noto Sans CJK JP".into()),
+                ..Default::default()
+            },
+            complex: ScriptDefault { font: Some("Noto Naskh Arabic".into()), ..Default::default() },
         };
         assert!(!wb.text_defaults.is_empty());
         let json = serde_json::to_string(&wb)?;
@@ -661,6 +684,12 @@ mod tests {
         let td = value.get("text_defaults").ok_or("text_defaults written")?;
         assert!(td["western"].get("font").is_none());
         assert!(td["complex"].get("language").is_none());
+        assert!(td["asian"].get("script").is_none() && td["asian"].get("rfc_language_tag").is_none());
+        assert_eq!(td["western"]["script"], "Latn");
+        assert_eq!(td["western"]["rfc_language_tag"], "sr-Latn-RS");
+        // A script that states only a script code or only a language tag is not empty.
+        assert!(!ScriptDefault { script: Some("Latn".into()), ..Default::default() }.is_empty());
+        assert!(!ScriptDefault { rfc_language_tag: Some("ca-ES-valencia".into()), ..Default::default() }.is_empty());
 
         // Only one script stated: the others are skipped and load back empty.
         wb.text_defaults =
