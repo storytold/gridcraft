@@ -237,6 +237,29 @@ fn draw_shape(
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
             ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
         };
+        // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
+        if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
+            let off = (size * 0.06).max(0.5);
+            if unicode {
+                draw_shaped_text(pg, catalog, lx + off, yy + off, size, family, fm.bold, fm.italic, sc, l, 0.0)?;
+            } else {
+                pg.text(lx + off, yy + off, size, font, sc, l);
+            }
+        }
+        // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
+        // directions by half the outline width, under the filled text.
+        if let Some((c, ow)) = fm.text_outline
+            && let Some(oc) = rgb_of(c, wb)
+        {
+            let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
+            for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+                if unicode {
+                    draw_shaped_text(pg, catalog, lx + dx * d, yy + dy * d, size, family, fm.bold, fm.italic, oc, l, 0.0)?;
+                } else {
+                    pg.text(lx + dx * d, yy + dy * d, size, font, oc, l);
+                }
+            }
+        }
         if unicode {
             draw_shaped_text(pg, catalog, lx, yy, size, family, fm.bold, fm.italic, color, l, 0.0)?;
         } else {
