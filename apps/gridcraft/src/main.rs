@@ -154,6 +154,7 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
+/// What the UI asks of the platform: the clipboard, file panels, links and printers.
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
@@ -173,21 +174,18 @@ fn services() -> Services {
             image::RgbaImage::from_raw(u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?, image.bytes.into_owned())
         })),
         pick_open: Some(Box::new(|| {
-            rfd::FileDialog::new()
+            let dialog = rfd::FileDialog::new()
                 .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
                 .add_filter("Excel Workbook", &["xlsx", "xlsm"])
                 .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
                 .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
                 .add_filter("OpenDocument Spreadsheet (data import)", &["ods"])
-                .add_filter("CSV", &["csv"])
-                .pick_file()
-                .and_then(|p| p.to_str().map(str::to_string))
+                .add_filter("CSV", &["csv"]);
+            with_panel_menu(|| dialog.pick_file()).and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_picture: Some(Box::new(|| {
-            rfd::FileDialog::new()
-                .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
-                .pick_file()
-                .and_then(|p| p.to_str().map(str::to_string))
+            let dialog = rfd::FileDialog::new().add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"]);
+            with_panel_menu(|| dialog.pick_file()).and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_save: Some(Box::new(|suggested: &str| {
             let path = std::path::Path::new(suggested);
@@ -201,13 +199,24 @@ fn services() -> Services {
             for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
                 dialog = dialog.add_filter(*label, &[*x]);
             }
-            dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
+            with_panel_menu(|| dialog.save_file()).and_then(|p| p.to_str().map(str::to_string))
         })),
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
         ..Default::default()
     }
+}
+
+#[cfg(target_os = "macos")]
+mod panel_menu;
+
+/// Run a blocking system file panel; on macOS with the Edit menu its text boxes need.
+fn with_panel_menu<T>(pick: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "macos")]
+    return panel_menu::while_open(pick);
+    #[cfg(not(target_os = "macos"))]
+    pick()
 }
 
 /// Opens a URL or file with the system's default application.

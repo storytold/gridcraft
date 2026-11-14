@@ -60,7 +60,7 @@ fmv-macos-events = "=0.1.0"
 # apple_events.rs brings the app forward for a Dock quit's question. Already in Cargo.lock (muda,
 # winit); pinned exactly to the same versions.
 objc2 = "=0.6.5"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSMenu"] }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back. Already in Cargo.lock (muda, winit);
 # pinned exactly to the same versions.
@@ -70,4 +70,8 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 
 [[test]]
 name = "mac_menu_appkit"
+harness = false
+
+[[test]]
+name = "mac_panel_menu_appkit"
 harness = false
