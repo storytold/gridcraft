@@ -98,13 +98,34 @@ fn wrapper_height(e: &Expr) -> usize {
     most
 }
 
+/// The token as the user typed it, in backticks, for error messages. No wildcard arm, so a new
+/// token kind has to choose its own text.
 fn describe(t: &Tok) -> String {
-    match t {
-        Tok::RParen => "`)`".into(),
-        Tok::Comma => "`,`".into(),
-        Tok::Eof => "end of formula".into(),
-        other => format!("{other:?}"),
-    }
+    let typed = match t {
+        Tok::Number(n) => n.to_string(),
+        Tok::Text(s) => format!("\"{}\"", s.replace('"', "\"\"")),
+        Tok::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
+        Tok::Error(e) => e.as_str().into(),
+        Tok::Word(w) => w.clone(),
+        Tok::Sheet(first, None) => format!("{first}!"),
+        Tok::Sheet(first, Some(last)) => format!("{first}:{last}!"),
+        Tok::Func(name) => format!("{name}("),
+        Tok::Struct(body) => format!("[{body}]"),
+        Tok::Op(op) => (*op).into(),
+        Tok::LParen => "(".into(),
+        Tok::RParen => ")".into(),
+        Tok::LBrace => "{".into(),
+        Tok::RBrace => "}".into(),
+        Tok::Comma => ",".into(),
+        Tok::Semicolon => ";".into(),
+        Tok::Colon => ":".into(),
+        Tok::Trim(TrimMode::Leading) => ".:".into(),
+        Tok::Trim(TrimMode::Trailing) => ":.".into(),
+        Tok::Trim(TrimMode::All) => ".:.".into(),
+        Tok::Space => " ".into(),
+        Tok::Eof => return "end of formula".into(),
+    };
+    format!("`{typed}`")
 }
 
 /// Keeps a space token only where it is the intersection operator: between the end of an
