@@ -132,6 +132,7 @@ pub(crate) struct PagePaintInput<'a> {
     pub(crate) tokens: &'a Tokens,
 }
 
+/// Paints visible worksheet pages and shares one Thai layout budget across their cell regions.
 pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<grid::PaneQuad> {
     let PagePaintInput { app, painter: p, geo, workbook: wb, sheet_index: si, sheet: sh, selection: sel, outline, tokens: t } = input;
     let mut quads = Vec::new();

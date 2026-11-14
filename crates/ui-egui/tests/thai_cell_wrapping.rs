@@ -86,6 +86,7 @@ struct PaintedText {
     direction: egui::epaint::text::TextDirection,
 }
 
+/// Collects text geometry, clip rectangles, and paragraph directions from the latest painted frame.
 fn painted_text_shapes(h: &Harness) -> Vec<PaintedText> {
     h.output()
         .shapes
@@ -107,6 +108,7 @@ fn assert_near(actual: f32, expected: f32, context: &str) {
     assert!((actual - expected).abs() < 0.75, "{context}: actual={actual:.3}, expected={expected:.3}");
 }
 
+/// Keeps diagnostic snapshots in a run-specific directory so concurrent test processes cannot overwrite them.
 fn save_task3_snapshot(h: &mut Harness, filename: &str) {
     let _snapshot_guard = SNAPSHOT_RENDER_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let image = h.render().expect("render TASK 3 geometry snapshot");
@@ -122,6 +124,7 @@ fn save_task3_snapshot(h: &mut Harness, filename: &str) {
     image.save(snapshot_dir.join(filename)).unwrap();
 }
 
+/// Checks word boundaries in a narrow Thai filter header against an unwrapped cell holding the same text.
 #[test]
 fn test_thai_cell_wrapping_in_grid_renderer() {
     let mut s = Session::new();
@@ -154,6 +157,7 @@ fn test_thai_cell_wrapping_in_grid_renderer() {
     assert!(texts.iter().any(|t| t == "วันนี้อากาศดีมาก"), "Unwrapped cell A2 must paint full string on one line; found: {:?}", texts);
 }
 
+/// Checks that each line of a mixed Thai and Arabic cell retains the explicit right-to-left direction.
 #[test]
 fn thai_wrapped_grid_lines_preserve_explicit_rtl_direction() {
     let mut session = Session::new();
@@ -212,6 +216,7 @@ fn test_thai_mixed_latin_numbers_currency() {
     assert!(texts.iter().any(|t| t.contains("ยอดรวม")), "Wrapped mixed Thai/Latin cell must render Thai prefix; found: {:?}", texts);
 }
 
+/// Checks visible lines and verifies that painting preserves the stored blank lines and original line-ending bytes.
 #[test]
 fn test_thai_cell_hard_breaks_and_blank_lines() {
     let mut s = Session::new();
@@ -247,6 +252,7 @@ fn test_thai_cell_narrow_oversized_clips_safely() {
     assert!(texts.iter().any(|t| t.contains("สวัสดี")));
 }
 
+/// Checks that wrapping uses the full merged rectangle while painting clips at the frozen pane boundaries.
 #[test]
 fn test_thai_cell_merged_and_frozen_panes() {
     let mut s = Session::new();
@@ -318,6 +324,7 @@ fn test_thai_cell_merged_and_frozen_panes() {
     save_task3_snapshot(&mut h, "thai_rendering_task3_frozen_merge.png");
 }
 
+/// Checks that evaluated Thai text wraps while Show Formulas paints the unchanged source without Thai measurement.
 #[test]
 fn formula_text_results_wrap_but_show_formulas_keeps_formula_source_on_legacy_path() {
     let mut session = Session::new();
@@ -357,6 +364,7 @@ fn formula_text_results_wrap_but_show_formulas_keeps_formula_source_on_legacy_pa
     assert_eq!(cell.input_text(), formula, "Show Formulas must not change raw formula source");
 }
 
+/// Checks that Page Layout uses the Thai wrapper and confines each line's clip to the page workspace.
 #[test]
 fn thai_adapter_geometry_is_active_in_ui_page_layout() {
     let mut session = Session::new();
@@ -481,6 +489,7 @@ fn test_non_thai_and_unwrapped_regression() {
     assert!(texts.iter().any(|t| t == "12,345.67"), "Formatted number rendered");
 }
 
+/// Checks that unsupported alignments and stacked text remain visible without consuming Thai layout budget.
 #[test]
 fn thai_out_of_scope_alignments_and_rotation_255_stay_on_legacy_renderer() {
     let mut session = Session::new();
@@ -534,6 +543,7 @@ fn test_thai_alignments_and_indent() {
     assert!(texts.iter().any(|t| t == "อากาศ" || t == "อากาศดีมาก"));
 }
 
+/// Checks alignment and clipping at several zoom and DPI settings, including filter and conditional icon reservations.
 #[test]
 fn thai_grid_geometry_tracks_alignment_indent_decorations_zoom_and_dpi() {
     let horizontal = ["General", "Left", "Center", "Right"];

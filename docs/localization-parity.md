@@ -137,6 +137,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Merge upstream localization updates while retaining Thai wrapping scope and benchmark provenance. No parity score change |
 | 2026-10-30 | minor | Preserve Thai wrapping through current grid extraction and distinguish the earlier measured snapshot; no parity score change |
 | 2026-10-28 | minor | Record post-integration Thai benchmark regression and scope; no parity score change |
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |

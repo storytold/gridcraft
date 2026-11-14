@@ -933,12 +933,18 @@ pub fn read_file(path: &str) -> Result<Vec<u8>> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+/// Returns the directory containing the save destination, including for a bare filename.
+#[cfg(not(target_arch = "wasm32"))]
+fn save_parent(path: &std::path::Path) -> &std::path::Path {
+    path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."))
+}
+
+/// Creates an exclusive temporary sibling and restores the destination's permissions when present.
 #[cfg(not(target_arch = "wasm32"))]
 fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>) -> std::io::Result<tempfile::NamedTempFile> {
-    let parent = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
     let mut builder = tempfile::Builder::new();
     builder.prefix(".gridcraft-save-").suffix(".sctmp");
-    let temp = builder.tempfile_in(parent)?;
+    let temp = builder.tempfile_in(save_parent(path))?;
     // Apply existing permissions after creation: Builder::permissions applies the
     // process umask, which can silently remove bits from the destination mode.
     if let Some(p) = prior {
@@ -950,6 +956,7 @@ fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>
     Ok(temp)
 }
 
+/// Synchronizes the file contents before atomically replacing the destination.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     use std::io::Write;
@@ -959,9 +966,14 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // an open failure never removes somebody else's path. A crash may leave this unique
     // file behind, but cannot leave a partially written destination workbook.
     let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
-    let mut temp = create_save_temp(std::path::Path::new(path), prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    temp.write_all(bytes).and_then(|()| temp.flush()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    temp.persist(path).map(|_| ()).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))
+    let destination = std::path::Path::new(path);
+    let mut temp = create_save_temp(destination, prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    temp.write_all(bytes).and_then(|()| temp.as_file().sync_all()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    temp.persist(destination).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))?;
+    // Some filesystems don't support directory sync. The replacement has already succeeded.
+    #[cfg(unix)]
+    let _ = std::fs::File::open(save_parent(destination)).and_then(|directory| directory.sync_all());
+    Ok(())
 }
 
 #[cfg(target_arch = "wasm32")]

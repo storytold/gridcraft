@@ -82,6 +82,7 @@ struct RetryProgress {
 }
 
 impl FrameBudget {
+    /// Charges both measurement limits together. A rejected candidate leaves both counters unchanged.
     fn reserve_measurement(&mut self, bytes: usize, limits: FrameBudgetLimits) -> bool {
         let Some(measurements) = self.measurements.checked_add(1) else {
             return false;
@@ -142,6 +143,7 @@ impl FrameBudgetState {
         self.repaint_retry = false;
     }
 
+    /// Folds each request into an ordered workload signature and records hits to detect retry progress.
     fn record_request(&mut self, key_hash: u64, cache_hit: bool) {
         self.workload_hash = self.workload_hash.rotate_left(7) ^ key_hash.wrapping_mul(0x9e37_79b9_7f4a_7c15);
         self.workload_items = self.workload_items.saturating_add(1);
@@ -150,6 +152,7 @@ impl FrameBudgetState {
         }
     }
 
+    /// Decides whether to repaint using the retry state from before this pass, even if several scopes finalize it.
     fn finish_pass(&mut self) -> bool {
         // Multiple grid paints may finish their local scope before another scope adds requests.
         // Recompute each such decision from the state before this actual egui pass so the full
@@ -254,6 +257,7 @@ pub(crate) fn install_frame_budget_finalizer(ctx: &egui::Context) {
     }
 }
 
+/// Shares one budget across paint scopes for the active viewport, resetting usage on the first access of a new pass.
 fn with_frame_budget<R>(ctx: &egui::Context, update: impl FnOnce(&mut FrameBudgetState) -> R) -> R {
     let (id, pass_nr) = frame_budget_key(ctx);
     ctx.data_mut(|data| {
@@ -478,6 +482,7 @@ pub fn get_break_opportunities(para_text: &str) -> Vec<usize> {
     get_break_opportunities_with(para_text, || {})
 }
 
+/// Records one segmentation per nonempty paragraph and guarantees both endpoint offsets in the result.
 fn get_break_opportunities_with(para_text: &str, mut record: impl FnMut()) -> Vec<usize> {
     if para_text.is_empty() {
         return vec![0];
@@ -633,6 +638,7 @@ struct LayoutCache {
 
 const CACHE_ALLOCATOR_OVERHEAD_BYTES: usize = 32;
 
+/// Estimates retained bucket bytes from usable capacity, including control bytes and allocator overhead.
 fn estimated_hash_table_bytes(capacity: usize) -> usize {
     if capacity == 0 {
         return 0;
@@ -676,6 +682,7 @@ impl LayoutCache {
         Self { entries, total_bytes: base_bytes, base_bytes, table_capacity_high_water, clock: 0, max_entries, max_bytes }
     }
 
+    /// On a hit, refreshes the eviction timestamp and returns a plan sharing its line allocation.
     fn get(&mut self, key: &dyn CacheKeyData) -> Option<CachedPlan> {
         self.clock = self.clock.saturating_add(1);
         let last_used = self.clock;
@@ -684,6 +691,7 @@ impl LayoutCache {
         Some(plan.clone())
     }
 
+    /// Evicts least-recently-used plans as needed before admission and again if insertion grows the retained table.
     fn insert(&mut self, key: Arc<CacheKey>, plan: CachedPlan) {
         let mut plan = plan;
         plan.key_hash = key.view().request_hash();
@@ -720,6 +728,7 @@ impl LayoutCache {
         }
     }
 
+    /// Keeps the largest observed table allocation charged across removals, which can lower usable capacity.
     fn update_table_allocation_accounting(&mut self) {
         let observed_capacity = self.entries.capacity();
         if observed_capacity <= self.table_capacity_high_water {
@@ -737,6 +746,7 @@ impl LayoutCache {
         self.total_bytes = self.total_bytes.saturating_add(growth_bytes);
     }
 
+    /// Rebuilds the table when its allocation alone exceeds the byte cap, which entry eviction cannot remedy.
     fn compact_table_if_base_exceeds_limit(&mut self) {
         if self.base_bytes <= self.max_bytes {
             return;
@@ -754,6 +764,7 @@ impl LayoutCache {
         self.total_bytes = self.base_bytes.saturating_add(retained_entry_bytes);
     }
 
+    /// Releases the least recently used plan and its accounted bytes. Returns false when no entry can be evicted.
     fn evict_lru_entry(&mut self) -> bool {
         let Some(lru_key) = self.entries.iter().min_by_key(|(_, entry)| entry.last_used).map(|(key, _)| Arc::clone(key)) else {
             return false;
@@ -765,6 +776,7 @@ impl LayoutCache {
         true
     }
 
+    /// Drops one context's plans and preserves both other contexts' plans and the retained table charge.
     fn clear_context(&mut self, context_id: u64) {
         let mut released_bytes = 0usize;
         self.entries.retain(|key, plan| {
@@ -790,6 +802,8 @@ where
     select_line_ranges_with(text, avail_width, &mut measure_fn, || {})
 }
 
+/// Greedily selects legal breaks within the per-cell limits. Source ranges preserve the original bytes, including
+/// line endings and trailing spaces.
 fn select_line_ranges_with<F, S>(
     text: &str,
     avail_width: f32,
@@ -912,6 +926,7 @@ where
     Ok(out_ranges)
 }
 
+/// Enforces the same line cap for hard breaks and soft wraps before growing the output.
 fn push_line_range(out: &mut Vec<TextLineRange>, range: TextLineRange) -> Result<(), FallbackReason> {
     if out.len() >= MAX_CELL_LAYOUT_LINES {
         return Err(FallbackReason::BudgetExhausted);
@@ -928,6 +943,7 @@ pub(crate) fn available_text_width(rect: Rect, text_left: f32, pad: f32, indent:
     (rect.right() - pad - indent - (content_left + pad)).max(4.0)
 }
 
+/// Starts from the decorated content edge for left alignment and from the cell's right padding for right alignment.
 fn line_x(rect: Rect, content_left: f32, halign: HAlign, pad: f32, indent: f32, line_width: f32) -> f32 {
     let line_indent = if matches!(halign, HAlign::Left | HAlign::Right | HAlign::General) { indent.max(0.0) } else { 0.0 };
     match halign {
@@ -937,6 +953,7 @@ fn line_x(rect: Rect, content_left: f32, halign: HAlign, pad: f32, indent: f32, 
     }
 }
 
+/// Uses the widest shaped line and the sum of shaped line heights as the painted block's bounds.
 fn aggregate_layout_size(lines: &[ThaiLayoutLine]) -> Vec2 {
     let mut total_h = 0.0f32;
     let mut max_w = 0.0f32;
@@ -978,7 +995,14 @@ pub fn layout_cell(p: &Painter, text: &str, font: &FontId, color: Color32, avail
 /// Executes Thai layout in the cell's resolved reading direction, returning its layout or fallback reason.
 ///
 /// The direction is used for candidate measurement and final line shaping and is part of the cache key.
-pub(crate) fn layout_cell_with_options(p: &Painter, text: &str, font: &FontId, color: Color32, avail_width: f32, options: ThaiLayoutOptions) -> ThaiLayoutResult {
+pub(crate) fn layout_cell_with_options(
+    p: &Painter,
+    text: &str,
+    font: &FontId,
+    color: Color32,
+    avail_width: f32,
+    options: ThaiLayoutOptions,
+) -> ThaiLayoutResult {
     let ThaiLayoutOptions { halign, direction, zoom } = options;
     if !avail_width.is_finite() || avail_width < 1.0 || !zoom.is_finite() || zoom <= 0.0 {
         return ThaiLayoutResult::LegacyFallback(FallbackReason::InvalidWidth);
@@ -1163,6 +1187,7 @@ mod tests {
     const PINNED_NOTO_SANS_THAI_SHA256: &str = "5a1c559bb539583c8a1fd99d1c5b9491e5e14478c9cd2bd0970d5c3096cc9ef8";
     static CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Pins Thai glyph coverage while letting tests switch the Latin metrics behind the same family name.
     fn cache_test_font_definitions(monospaced: bool) -> egui::FontDefinitions {
         let mut definitions = crate::theme::pinned_font_definitions();
         let fonts_root = std::env::var_os("CRAFT_FONTS_DIR")
@@ -1204,6 +1229,7 @@ mod tests {
         definitions
     }
 
+    /// Checks Thai glyphs in the fixture-only family so a fallback face cannot satisfy the cache tests.
     fn assert_required_thai_face(ctx: &egui::Context) {
         let font = FontId::new(16.0, FontFamily::Name(REQUIRED_THAI_TEST_FAMILY.into()));
         for ch in "กขไทยภาษาเก้า".chars() {
@@ -1238,6 +1264,7 @@ mod tests {
         result.expect("raw range calculation should succeed")
     }
 
+    /// Exercises the renderer's cache path and checks that reported block size agrees with the shaped lines.
     fn cached_ranges(ctx: &egui::Context, text: &str, width: f32) -> Vec<TextLineRange> {
         let font = FontId::new(15.0, FontFamily::Name(CACHE_TEST_FONT_FAMILY.into()));
         let mut ranges = Vec::new();
@@ -1268,6 +1295,7 @@ mod tests {
         ranges
     }
 
+    /// Checks that mixed-script lines retain explicit direction and that each direction reuses its own layout.
     #[test]
     fn explicit_direction_is_used_for_measurement_and_isolated_in_the_cache() {
         let _cache_guard = CACHE_TEST_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1281,9 +1309,14 @@ mod tests {
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
             begin_frame_budget(ui.ctx());
             for direction in directions {
-                let ThaiLayoutResult::Ready(layout) =
-                    layout_cell_with_options(ui.painter(), text, &font, Color32::WHITE, 160.0, ThaiLayoutOptions { halign: HAlign::Left, direction, zoom: 1.0 })
-                else {
+                let ThaiLayoutResult::Ready(layout) = layout_cell_with_options(
+                    ui.painter(),
+                    text,
+                    &font,
+                    Color32::WHITE,
+                    160.0,
+                    ThaiLayoutOptions { halign: HAlign::Left, direction, zoom: 1.0 },
+                ) else {
                     panic!("mixed Thai and RTL text should produce a Thai layout");
                 };
                 assert!(!layout.lines.is_empty());
@@ -1298,6 +1331,7 @@ mod tests {
         assert_eq!(cache_entry_count_for_text(text), 2, "reading direction is part of the cache identity");
     }
 
+    /// Checks that Top alignment omits partial lines while Center alignment submits the lines for cell clipping.
     #[test]
     fn top_alignment_omits_an_incomplete_last_line() {
         let ctx = egui::Context::default();
@@ -1361,6 +1395,7 @@ mod tests {
         assert_eq!(observed, (1, 3), "only Top alignment omits the incomplete final lines");
     }
 
+    /// Finds a width at which the two font families wrap differently, so reuse of a stale plan is observable.
     fn find_font_sensitive_width(text: &str) -> Option<(f32, Vec<TextLineRange>, Vec<TextLineRange>)> {
         let proportional = egui::Context::default();
         set_cache_test_fonts(&proportional, false);
@@ -1380,6 +1415,7 @@ mod tests {
         CACHE.lock().ok().and_then(|guard| guard.as_ref().map(|cache| cache.entries.keys().filter(|key| key.text == text).count())).unwrap_or(0)
     }
 
+    /// Resets the shared cache to the requested limits. Call with the cache test lock held.
     fn set_test_cache_limits(max_entries: usize, max_bytes: usize) {
         if let Ok(mut cache) = CACHE.lock() {
             *cache = Some(LayoutCache::with_limits(max_entries, max_bytes));
@@ -1390,6 +1426,7 @@ mod tests {
         ctx.repaint_causes().iter().filter(|cause| cause.file.ends_with("thai_layout.rs")).count()
     }
 
+    /// Runs two paint scopes in one egui pass to observe shared usage and the final retry decision.
     fn layout_test_pass(ctx: &egui::Context, text: &str, widths: &[f32]) -> (Vec<bool>, FrameBudgetUsage, bool, usize) {
         let font = FontId::new(15.0, FontFamily::Proportional);
         let mut ready = Vec::new();
@@ -1512,6 +1549,7 @@ mod tests {
         assert!(breaks.contains(&text.len()), "Missing expected break at final word boundary in {breaks:?}");
     }
 
+    /// Verifies UTF-8 boundaries, exact source reconstruction, and legal soft breaks at several widths.
     #[test]
     fn test_source_range_exact_concat_invariant() {
         let texts = [
@@ -1575,6 +1613,7 @@ mod tests {
         }
     }
 
+    /// Verifies forward progress and preservation of the source bytes when no candidate fits the width.
     #[test]
     fn test_oversized_first_segment_clipped_safely() {
         // Single word wider than cell width
@@ -1619,6 +1658,7 @@ mod tests {
         assert_eq!(is_eligible("ไทย", &style, &value, false), Err(FallbackReason::UnsupportedHAlign));
     }
 
+    /// Covers the supported alignment combinations and checks specific fallback reasons for excluded styles.
     #[test]
     fn thai_eligibility_is_limited_to_the_approved_t1_alignment_and_rotation_scope() {
         let value = Value::from("ไทย");
@@ -1683,6 +1723,7 @@ mod tests {
         );
     }
 
+    /// Checks that exact budget limits are usable and a failed reservation leaves both counters intact.
     #[test]
     fn frame_budget_stops_at_exact_measurement_and_byte_limits() {
         let mut by_count = FrameBudget::default();
@@ -1750,6 +1791,7 @@ mod tests {
         next_output.textures_delta.clear();
     }
 
+    /// Checks that retry progress counts egui passes once even when several paint scopes finalize within each pass.
     #[test]
     fn multiple_paint_scopes_settle_retry_across_actual_passes_regression() {
         let ctx = egui::Context::default();
@@ -1798,6 +1840,7 @@ mod tests {
         assert_eq!(empty_pass_retry_request_count(&ctx), 0, "the stopped pass must not leave a repaint request pending");
     }
 
+    /// Checks that transient byte exhaustion schedules a retry without charging the rejected measurement.
     #[test]
     fn frame_budget_rejects_an_oversized_candidate_before_egui_measurement() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -1830,6 +1873,7 @@ mod tests {
         assert!(repaint, "transient pass exhaustion must request a retry");
     }
 
+    /// Checks that limited passes finish a cache-fitting workload and leave later warm passes with no measurement or retries.
     #[test]
     fn cache_fitting_work_completes_across_passes_without_starvation() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -1869,6 +1913,7 @@ mod tests {
         assert!(completed_usage.segmentations <= widths.len());
     }
 
+    /// Checks that stable work stops after the no-progress limit and a changed width restarts retry evaluation.
     #[test]
     fn no_progress_stops_retry_and_changed_layout_key_restarts_evaluation() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -1893,6 +1938,7 @@ mod tests {
         assert!(changed_repaint, "a changed width creates a fresh key and must be evaluated again");
     }
 
+    /// Checks that external repaints keep a stopped workload stable and that new keys allow measurement to resume.
     #[test]
     fn stopped_overflow_skips_measurements_on_external_repaints_until_keys_change() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -1933,6 +1979,7 @@ mod tests {
         }
     }
 
+    /// Checks that borrowed keys match owned keys and cache hits reuse the original line allocation.
     #[test]
     fn borrowed_cache_lookup_preserves_identity_and_shares_plan_lines() {
         let mut cache = LayoutCache::new();
@@ -1967,6 +2014,7 @@ mod tests {
         }
     }
 
+    /// Checks that an over-capacity workload stops retrying within the pass limit and respects both cache caps.
     #[test]
     fn cache_overflow_working_set_stops_retry_with_bounded_state() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -2003,6 +2051,7 @@ mod tests {
         }
     }
 
+    /// Checks that a cell above the line cap reuses its fallback without segmentation, measurement, or a retry.
     #[test]
     fn permanent_line_fallback_is_cached_without_retry_repaint() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -2052,6 +2101,7 @@ mod tests {
         assert_eq!(line_x(rect, text_left, HAlign::Center, 5.0, 0.0, 20.0), 57.5);
     }
 
+    /// Checks that identical text and geometry retain separate plans when contexts resolve different font metrics.
     #[test]
     fn cache_does_not_share_plans_between_contexts_with_different_fonts() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -2076,6 +2126,7 @@ mod tests {
         );
     }
 
+    /// Checks that contexts using egui's font setter still get independent cache identities.
     #[test]
     fn contexts_without_font_install_wrapper_do_not_share_generation_zero_plans() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -2102,6 +2153,7 @@ mod tests {
         assert_eq!(cache_entry_count_for_text(text), 2);
     }
 
+    /// Checks that replacing fonts invalidates only the changed context and leaves the other context warm.
     #[test]
     fn changing_one_context_preserves_other_context_plans_and_warm_hits() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -2128,6 +2180,7 @@ mod tests {
         assert_eq!(cache_entry_count_for_text(text), 1);
     }
 
+    /// Checks that changing font definitions recomputes line breaks even when the family name and width stay fixed.
     #[test]
     fn replacing_font_definitions_invalidates_same_text_family_and_width() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -2146,6 +2199,7 @@ mod tests {
         assert_eq!(cached_ranges(&ctx, text, width), monospaced_ranges, "a font rebuild must invalidate the prior plan under the same key fields");
     }
 
+    /// Checks that each pixel scale gets a separate cache entry and returning to a prior scale reuses its entry.
     #[test]
     fn cache_keys_distinguish_dpi_and_reuse_each_scale_after_returning() {
         let _lock = CACHE_TEST_LOCK.lock().expect("cache test lock");
@@ -2215,6 +2269,7 @@ mod tests {
         assert!(cache.total_bytes <= MAX_CACHE_BYTES);
     }
 
+    /// Checks that byte pressure evicts the oldest untouched plan and keeps a plan made recent by a lookup.
     #[test]
     fn cache_evicts_lru_entries_to_keep_byte_cap() {
         let mut cache = LayoutCache::new();
@@ -2256,6 +2311,7 @@ mod tests {
         assert!(cache.entries.contains_key(key2.as_ref()), "the newest entry should remain after byte-cap eviction");
     }
 
+    /// Checks that retained capacity stays charged through churn and that both cache caps still govern eviction afterward.
     #[test]
     fn cache_accounts_for_table_growth_during_sustained_lru_churn() {
         let mut cache = LayoutCache::new();
@@ -2373,6 +2429,7 @@ mod tests {
         assert!(cache.entries.keys().any(|key| key.text == format!("post-churn-entry-{MAX_CACHE_ENTRIES}")));
     }
 
+    /// Checks that an entry-count eviction retains the newly inserted plan while keeping total bytes bounded.
     #[test]
     fn cache_evicts_at_the_entry_limit() {
         let mut cache = LayoutCache::new();
