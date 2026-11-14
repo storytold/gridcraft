@@ -7,8 +7,8 @@ use super::menus::set_fill_tag;
 use super::selection::select_ranges;
 use super::tables::{is_filter_button, table_headings};
 use super::{
-    CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens, Workbook,
-    json, pos2, vec2,
+    CellRef, Color32, CursorIcon, Drag, EditState, FillOrigin, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens,
+    Workbook, json, pos2, vec2,
 };
 
 // ------------------------------------------------------------------ interaction
@@ -49,6 +49,13 @@ impl InteractionInput<'_> {
 }
 
 pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+    if let Drag::Fill { origin, .. } = app.grid.drag
+        && !origin.is_current(app)
+    {
+        app.grid.drag = Drag::None;
+        app.grid.drag_select = false;
+        return;
+    }
     // Text selection and editing must not also move the object or edit worksheet cells.
     if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
         return;
@@ -483,7 +490,9 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     if on_handle(p) {
-        app.grid.drag = Drag::Fill { target: None, menu: resp.drag_started_by(egui::PointerButton::Secondary) };
+        if let Some(origin) = FillOrigin::capture(app) {
+            app.grid.drag = Drag::Fill { origin, target: None, menu: resp.drag_started_by(egui::PointerButton::Secondary) };
+        }
         return;
     }
     if on_cur_border(p) && resp.drag_started() {
@@ -729,10 +738,10 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::Freeze { cols, .. } => {
                 app.grid.drag = Drag::Freeze { cols, to: Some(freeze_boundary(geo, sh, p, cols)) };
             }
-            Drag::Fill { menu, .. } => {
-                let src = sel.current();
+            Drag::Fill { origin, menu, .. } => {
+                let src = origin.source;
                 let target = fill_target(src, pc);
-                app.grid.drag = Drag::Fill { target: Some(target), menu };
+                app.grid.drag = Drag::Fill { origin, target: Some(target), menu };
                 scroll_by(app, auto);
             }
             Drag::Move { grab, .. } => {
@@ -752,6 +761,21 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, sel, pos, mods, resp) =
         (input.geo, input.sheet, input.workbook, &input.selection, input.position, input.modifiers, input.response);
     let ctx = input.context.clone();
+    // Escape cancels either fill gesture before release can commit values or open a menu.
+    // Consume it here so cancellation does not also clear the clipboard in the grid handler.
+    if matches!(app.grid.drag, Drag::Fill { .. })
+        && ctx.input_mut(|i| {
+            let pressed = i.key_pressed(egui::Key::Escape);
+            if pressed {
+                // Escape cancels the gesture regardless of whether Ctrl/Cmd is still held.
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
+            }
+            pressed
+        })
+    {
+        app.grid.drag = Drag::None;
+    }
+
     if resp.drag_stopped() || (!input.any_pointer_down && app.grid.drag != Drag::None && !resp.dragged()) {
         match std::mem::take(&mut app.grid.drag) {
             Drag::Select => {
@@ -772,18 +796,16 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                     point_header_to(app, geo, sh, wb, &drag, p);
                 }
             }
-            // Esc mid-drag lands here too (egui ends the drag on Esc): no menu, and the key is
-            // spent on the drag so the grid's Esc doesn't also drop the copy.
-            Drag::Fill { target: Some(t), menu: true } => {
+            // A right-drag release offers fill modes instead of immediately applying the fill.
+            Drag::Fill { origin, target: Some(t), menu: true } => {
                 if let Some(p) = pos
-                    && t != sel.current()
-                    && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    && t != origin.source
                 {
-                    app.grid.fill_menu = Some((sel.current(), t, geo.mirror_pos(p)));
+                    app.grid.fill_menu = Some((origin.source, t, geo.mirror_pos(p)));
                 }
             }
-            Drag::Fill { target: Some(t), menu: false } => {
-                let src = sel.current();
+            Drag::Fill { origin, target: Some(t), menu: false } => {
+                let src = origin.source;
                 if t != src {
                     // Ctrl (Cmd on macOS) swaps copying and extending, as in Excel.
                     let mode = if mods.command { "alternate" } else { "series" };

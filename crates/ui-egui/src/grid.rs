@@ -27,6 +27,7 @@ pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
+mod fill_preview;
 mod geo;
 mod interact;
 mod keyboard;
@@ -96,6 +97,27 @@ pub fn zoom_glide_step(from: u16, to: u16, t: f32) -> u16 {
     }
 }
 
+/// The identity and unchanged selection/content a fill gesture started with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FillOrigin {
+    document: u64,
+    sheet: u64,
+    revision: u64,
+    source: RangeRef,
+}
+
+impl FillOrigin {
+    fn capture(app: &SheetApp) -> Option<Self> {
+        let d = app.session.active()?;
+        Some(Self { document: d.uid, sheet: d.wb.active()?.uid.get(), revision: d.revision, source: d.selection.current() })
+    }
+
+    /// A changed sheet, selection or workbook edit cancels rather than retargeting the gesture.
+    fn is_current(self, app: &SheetApp) -> bool {
+        Self::capture(app) == Some(self)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum Drag {
     #[default]
@@ -128,6 +150,7 @@ pub enum Drag {
     },
     /// Dragging the fill handle; `menu` when the right button drags it (the fill menu opens on release).
     Fill {
+        origin: FillOrigin,
         target: Option<RangeRef>,
         menu: bool,
     },
