@@ -481,6 +481,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Prikaži",
         "Collapse dialog" => "Skupi dijalog",
         "Expand dialog" => "Proširi dijalog",
+        "has formula" => "sadrži formulu",
         _ => return None,
     })
 }

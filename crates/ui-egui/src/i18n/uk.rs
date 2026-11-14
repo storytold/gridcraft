@@ -1013,6 +1013,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показати",
         "Collapse dialog" => "Згорнути діалогове вікно",
         "Expand dialog" => "Розгорнути діалогове вікно",
+        "has formula" => "містить формулу",
         _ => return None,
     })
 }

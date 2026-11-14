@@ -561,6 +561,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "has formula" => "bevat formule",
         _ => return None,
     })
 }

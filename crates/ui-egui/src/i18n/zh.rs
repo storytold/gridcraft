@@ -482,6 +482,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "显示",
         "Collapse dialog" => "折叠对话框",
         "Expand dialog" => "展开对话框",
+        "has formula" => "包含公式",
         _ => return None,
     })
 }
