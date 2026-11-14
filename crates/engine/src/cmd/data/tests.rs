@@ -582,3 +582,19 @@ fn remove_duplicates_with_table_totals_row_shrinks_table_and_updates_refs() {
     assert_eq!(sh.value(CellRef::parse("E2").unwrap()), Value::Number(2.0));
     assert_eq!(sh.value(CellRef::parse("F2").unwrap()), Value::Number(30.0));
 }
+
+#[test]
+fn remove_duplicates_moved_totals_formula_with_a1_range_shrinks() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Key"], ["a"], ["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A5", "header": true, "name": "T"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "T", "on": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "A6", "input": "=COUNTA(A2:A5)"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"range": "A1:A6", "columns": ["A"], "header": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.tables[0].range.a1(), "A1:A5");
+    let f = sh.cell(CellRef::parse("A5").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(f.text.trim_start_matches('='), "COUNTA(A2:A4)");
+    assert_eq!(sh.value(CellRef::parse("A5").unwrap()), Value::Number(3.0));
+}

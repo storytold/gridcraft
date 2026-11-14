@@ -126,10 +126,28 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         {
             let new_end = old_end.saturating_sub(removed as u32);
             if totals_row && new_end < old_end {
+                // The removed rows are the ones between the new and old totals row, so the moved
+                // totals formulas follow them like Delete Cells does: a custom `=SUM(A2:A5)` shrinks
+                // instead of ending up including its own cell.
+                let shift = gridcraft_formula::adjust::Edit::DeleteCells {
+                    axis: gridcraft_formula::adjust::Axis::Rows,
+                    range: RangeRef::new(CellRef::new(new_end, c0), CellRef::new(old_end - 1, c1)),
+                };
+                let host = shm.name.clone();
                 for col in c0..=c1 {
                     let src = CellRef::new(old_end, col);
                     let dst = CellRef::new(new_end, col);
-                    let cell = shm.cell(src).cloned();
+                    let mut cell = shm.cell(src).cloned();
+                    if let Some(cell) = cell.as_mut()
+                        && let Some(f) = cell.formula.clone()
+                        && let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed(x, &host, &host, &shift)).flatten()
+                    {
+                        cell.formula = Some(std::sync::Arc::new(gridcraft_model::Formula {
+                            array: f.array,
+                            dynamic: f.dynamic,
+                            ..gridcraft_model::Formula::from_expr(new)
+                        }));
+                    }
                     let pic = shm.cell_pictures.remove(&src);
                     let note = shm.comments.remove(&src);
                     let link = shm.hyperlinks.remove(&src);
