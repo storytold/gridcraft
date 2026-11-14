@@ -135,6 +135,66 @@ fn scenarios() {
     assert!(s.execute("data.scenarioSummary", json!({})).is_err());
 }
 
+fn summary_session() -> Session {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A1", "on": false})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "High", "changing": "A1", "values": [30]})).unwrap();
+    s
+}
+
+#[test]
+fn scenario_summary_respects_workbook_structure_protection() {
+    let mut s = summary_session();
+    s.execute("review.protectWorkbook", json!({"on": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "redo marker"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let (undo, redo) = (s.doc().unwrap().undo.len(), s.doc().unwrap().redo.len());
+
+    let err = s.execute("data.scenarioSummary", json!({"resultCells": "B1"})).unwrap_err();
+    assert!(err.to_string().contains("protected"), "{err}");
+    let d = s.doc().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &d.wb), "a rejected summary must not change the workbook");
+    assert_eq!((d.undo.len(), d.redo.len()), (undo, redo));
+    assert_eq!(d.wb.sheets.len(), 1);
+    assert_eq!(d.wb.active_sheet(), 0);
+    assert_eq!(n(&s, "A1"), 10.0);
+    assert_eq!(n(&s, "B1"), 20.0);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::from("redo marker"));
+
+    s.execute("review.protectWorkbook", json!({"on": false})).unwrap();
+    s.execute("data.scenarioSummary", json!({"resultCells": "B1"})).unwrap();
+    assert_eq!(n(&s, "'Scenario Summary'!D7"), 60.0);
+}
+
+#[test]
+fn scenario_summary_allows_sheet_protection_and_survives_history_and_save() {
+    for protect_sheet in [false, true] {
+        let mut s = summary_session();
+        if protect_sheet {
+            s.execute("review.protectSheet", json!({})).unwrap();
+        }
+        s.execute("data.scenarioSummary", json!({"resultCells": "B1"})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 2);
+        assert_eq!(n(&s, "'Scenario Summary'!D7"), 60.0);
+        assert_eq!(n(&s, "Sheet1!A1"), 10.0);
+        assert_eq!(n(&s, "Sheet1!B1"), 20.0);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(n(&s, "'Scenario Summary'!D7"), 60.0);
+        let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "summary.xlsx").unwrap();
+        let (wb, _) = crate::io::open_bytes("summary.xlsx", &bytes).unwrap();
+        assert_eq!(wb.sheets.len(), 2);
+        assert_eq!(wb.sheet(0).unwrap().is_protected(), protect_sheet);
+        let summary = wb.sheet_index("Scenario Summary").unwrap();
+        assert_eq!(wb.sheet(summary).unwrap().value(CellRef::parse("D7").unwrap()), Value::Number(60.0));
+    }
+}
+
 #[test]
 fn data_tables() {
     let mut s = s();
