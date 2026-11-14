@@ -137,9 +137,14 @@ fn invalid_jsonrpc_versions_do_not_execute_or_initialize() {
         assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A1"}))["input"], "original");
         msg.as_object_mut().unwrap().remove("id");
         msg["method"] = json!("notifications/initialized");
-        assert_eq!(s.handle(msg), None, "messages without an ID still get no reply");
+        let reply = s.handle(msg).expect("a malformed envelope is not a valid notification");
+        assert_eq!(err_code(&reply), -32600);
+        assert_eq!(reply["id"], Value::Null);
         assert!(!s.is_initialized(), "an invalid envelope must not initialize the server");
     }
+    let mut s = server();
+    assert_eq!(s.handle(json!({"jsonrpc": "2.0", "method": "notifications/initialized"})), None);
+    assert!(s.is_initialized(), "a valid notification is still handled without a response");
 }
 
 #[test]
