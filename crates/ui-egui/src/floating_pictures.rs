@@ -22,14 +22,32 @@ const MIN_TEXTURE_SIDE: u32 = 64;
 /// the others are dropped, least recently drawn first, to keep the cache under it.
 const MAX_CACHE_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CACHE_ITEMS: usize = 4096;
+/// What printing and PDF export decode of a header or footer picture (`HF_MAX_*` in the
+/// engine's `print/header_footer.rs`): larger ones are left out of the printout, so they aren't
+/// shown either, and the page on screen is the page printed.
+const HF_MAX_BYTES: usize = 16 * 1024 * 1024;
+const HF_MAX_SIDE: u32 = 8192;
+const HF_MAX_PIXELS: u64 = 16_000_000;
 
-/// A picture: its workbook, its object id there, and its size in bytes (object ids are per
-/// workbook, so two open workbooks can both have a picture 1).
+/// A picture: its workbook, its id there, and its size in bytes (object ids are per workbook, so
+/// two open workbooks can both have a picture 1). Header and footer pictures have no object id:
+/// theirs is the address of their bytes, which their cache entry keeps allocated (see
+/// [`Entry::source`]), so no other picture can take that address while the entry lasts.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct Key {
     doc: u64,
-    id: u32,
+    kind: Kind,
+    id: u64,
     len: usize,
+}
+
+/// What a cached picture is.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+enum Kind {
+    /// A floating picture (Insert › Pictures).
+    Floating,
+    /// A header or footer picture (`&G`).
+    HeaderFooter,
 }
 
 #[derive(Default)]
@@ -48,6 +66,10 @@ struct Entry {
     /// size or the largest texture allowed), or when it can't be decoded.
     side: u32,
     used: u64,
+    /// A header or footer picture's bytes, held weakly: the allocation stays, so its address (the
+    /// key) isn't reused by another picture, and a picture no sheet holds any more is a miss.
+    /// Its bytes are counted in [`Entry::bytes`].
+    source: Option<std::sync::Weak<[u8]>>,
 }
 
 impl Cache {
@@ -68,9 +90,18 @@ impl Cache {
 
     /// The texture for picture `key` drawn with its longer side `want` pixels long.
     fn texture(&mut self, ctx: &egui::Context, key: Key, data: &[u8], want: u32) -> Option<TextureHandle> {
+        self.texture_of(ctx, key, data, None, want)
+    }
+
+    /// [`Cache::texture`] for a picture whose key is the address of `source`'s bytes.
+    fn texture_of(&mut self, ctx: &egui::Context, key: Key, data: &[u8], source: Option<&Arc<[u8]>>, want: u32) -> Option<TextureHandle> {
         let frame = ctx.cumulative_frame_nr();
         let side = texture_side(want, ctx.input(|i| i.max_texture_side));
-        if let Some(entry) = self.entries.get_mut(&key) {
+        let stale = self.entries.get(&key).is_some_and(|e| match (&e.source, source) {
+            (Some(held), Some(now)) => !held.upgrade().is_some_and(|held| Arc::ptr_eq(&held, now)),
+            _ => false,
+        });
+        if let Some(entry) = self.entries.get_mut(&key).filter(|_| !stale) {
             entry.used = frame;
             if entry.side >= side {
                 return entry.texture.clone();
@@ -81,7 +112,8 @@ impl Cache {
             self.bytes = self.bytes.saturating_sub(old.bytes);
         }
         let decoded = decode(data, side);
-        let bytes = decoded.as_ref().map_or(0, |(image, _)| image.pixels.len().saturating_mul(4));
+        let held = source.map_or(0, |s| s.len());
+        let bytes = decoded.as_ref().map_or(0, |(image, _)| image.pixels.len().saturating_mul(4)).saturating_add(held);
         while self.entries.len() >= MAX_CACHE_ITEMS || self.bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
             let oldest = self.entries.iter().filter(|(_, e)| e.used.saturating_add(1) < frame).min_by_key(|(_, e)| e.used).map(|(key, _)| *key);
             let Some(oldest) = oldest else { break };
@@ -103,7 +135,7 @@ impl Cache {
             return texture;
         }
         self.bytes = self.bytes.saturating_add(bytes);
-        self.entries.insert(key, Entry { texture: texture.clone(), bytes, side, used: frame });
+        self.entries.insert(key, Entry { texture: texture.clone(), bytes, side, used: frame, source: source.map(Arc::downgrade) });
         texture
     }
 }
@@ -157,16 +189,42 @@ pub(crate) fn forget_closed(ctx: &egui::Context, open: &[u64]) {
 /// The texture of picture `image` of workbook `doc`, drawn in `rect` (points); `None` when it
 /// can't be decoded or is too large to be.
 pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::Rect) -> Option<TextureHandle> {
+    let key = Key { doc, kind: Kind::Floating, id: u64::from(image.id), len: image.data.len() };
+    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want_side(ctx, rect))
+}
+
+/// The texture of a header or footer picture of workbook `doc` (its encoded bytes, as the sheet
+/// keeps them), drawn in `rect` (points), from the same bounded cache as floating pictures.
+pub(crate) fn header_footer_texture(ctx: &egui::Context, doc: u64, data: &Arc<[u8]>, rect: egui::Rect) -> Option<TextureHandle> {
+    if !printable(data) {
+        return None;
+    }
+    let key = Key { doc, kind: Kind::HeaderFooter, id: data.as_ptr() as usize as u64, len: data.len() };
+    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture_of(ctx, key, data, Some(data), want_side(ctx, rect))
+}
+
+/// Whether printing decodes header/footer picture `data`: within the `HF_MAX_*` limits, read
+/// from its header only.
+fn printable(data: &[u8]) -> bool {
+    data.len() <= HF_MAX_BYTES
+        && image::ImageReader::new(Cursor::new(data))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.into_dimensions().ok())
+            .is_some_and(|(w, h)| w > 0 && h > 0 && w <= HF_MAX_SIDE && h <= HF_MAX_SIDE && u64::from(w) * u64::from(h) <= HF_MAX_PIXELS)
+}
+
+/// The longer side of `rect` in physical pixels.
+fn want_side(ctx: &egui::Context, rect: egui::Rect) -> u32 {
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
-    let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
-    let key = Key { doc, id: image.id, len: image.data.len() };
-    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
+    if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A `w` × `h` PNG of one `color`.
     fn png(w: u32, h: u32, color: [u8; 4]) -> Vec<u8> {
         let image = image::RgbaImage::from_pixel(w, h, image::Rgba(color));
         let mut bytes = Cursor::new(Vec::new());
@@ -174,8 +232,9 @@ mod tests {
         bytes.into_inner()
     }
 
+    /// The texture cache key of floating picture `id` of document `doc`.
     fn key(doc: u64, id: u32, data: &[u8]) -> Key {
-        Key { doc, id, len: data.len() }
+        Key { doc, kind: Kind::Floating, id: u64::from(id), len: data.len() }
     }
 
     /// Runs one frame, so the frame number moves on as it does when the app paints.
@@ -278,6 +337,47 @@ mod tests {
         assert_eq!(image::ImageReader::with_format(Cursor::new(&huge), image::ImageFormat::Png).into_dimensions().unwrap(), (20_000, 20_000));
         assert!(decode(&huge, 64).is_none());
         assert!(decode(&png(4, 2, [255, 0, 0, 255]), 64).is_some_and(|(i, complete)| i.size == [4, 2] && complete));
+    }
+
+    /// A 1 × 1 PNG whose header says `w` × `h`.
+    fn png_claiming(w: u32, h: u32) -> Vec<u8> {
+        let mut data = png(1, 1, [0, 0, 0, 255]);
+        let ihdr = data.windows(4).position(|w| w == b"IHDR").unwrap();
+        data[ihdr + 4..ihdr + 8].copy_from_slice(&w.to_be_bytes());
+        data[ihdr + 8..ihdr + 12].copy_from_slice(&h.to_be_bytes());
+        let crc = crc32(&data[ihdr..ihdr + 17]);
+        data[ihdr + 17..ihdr + 21].copy_from_slice(&crc.to_be_bytes());
+        data
+    }
+
+    /// A header or footer picture printing leaves out (5,000 × 4,000 is 20 million pixels) isn't
+    /// shown either, while a floating picture that size still is.
+    #[test]
+    fn header_pictures_are_shown_only_within_the_printing_limits() {
+        assert!(printable(&png(40, 20, [0, 0, 0, 255])));
+        assert!(printable(&png_claiming(4000, 4000)), "16 million pixels print");
+        assert!(!printable(&png_claiming(5000, 4000)), "over 16 million pixels");
+        assert!(!printable(&png_claiming(9000, 10)), "over 8192 px on a side");
+        let ctx = egui::Context::default();
+        let big: Arc<[u8]> = png_claiming(5000, 4000).into();
+        assert!(header_footer_texture(&ctx, 1, &big, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(50.0, 40.0))).is_none());
+    }
+
+    /// A header picture's cache entry keeps its bytes' address from being reused, counts those
+    /// bytes, and is a miss once its sheet has dropped the picture.
+    #[test]
+    fn a_header_picture_entry_is_tied_to_its_bytes() {
+        let ctx = egui::Context::default();
+        let mut cache = Cache::default();
+        let first: Arc<[u8]> = png(8, 4, [255, 0, 0, 255]).into();
+        let k = Key { doc: 1, kind: Kind::HeaderFooter, id: first.as_ptr() as usize as u64, len: first.len() };
+        let red = cache.texture_of(&ctx, k, &first, Some(&first), 64).unwrap();
+        assert_eq!(cache.bytes, 8 * 4 * 4 + first.len(), "the texture and the bytes it holds");
+        // Other bytes under the same key (as if the address were reused) are decoded afresh.
+        let other: Arc<[u8]> = png(8, 4, [0, 0, 255, 255]).into();
+        let blue = cache.texture_of(&ctx, k, &other, Some(&other), 64).unwrap();
+        assert_ne!(red.id(), blue.id());
+        assert_eq!(cache.texture_of(&ctx, k, &other, Some(&other), 64).unwrap().id(), blue.id(), "then found again");
     }
 
     fn crc32(bytes: &[u8]) -> u32 {
