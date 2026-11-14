@@ -995,6 +995,20 @@ fn python_ui_commands_are_listed() {
     }
 }
 
+#[test]
+fn selection_pane_ui_command_is_listed() {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, crate::Services::default());
+    let Outcome::Done(reply) = handle(&mut app, &egui::Context::default(), "engine.commands", &json!({"search": "selection pane"})) else {
+        panic!("command discovery must return immediately");
+    };
+    let commands = reply["result"].as_array().cloned().unwrap_or_default();
+    assert!(
+        commands.iter().any(|command| { command["id"] == "ui.selectionPane" && command["ui"] == true && command["label"] == "Open Selection Pane" })
+    );
+}
+
 /// Runs `command` through the control channel, as one line of a batch: no frame runs after it.
 fn execute(app: &mut SheetApp, ctx: &egui::Context, command: &str, params: Json) {
     let Outcome::Done(reply) = handle(app, ctx, "engine.execute", &json!({"command": command, "params": params})) else {

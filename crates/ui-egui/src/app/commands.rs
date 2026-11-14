@@ -189,6 +189,10 @@ impl SheetApp {
             }
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
+            "ui.selectionPane" => {
+                self.grid.pane = Some("selection".into());
+                Ok(Json::Null)
+            }
             "ui.ribbonTab" => {
                 self.ui.ribbon_tab = p.get("tab").and_then(Json::as_str).unwrap_or("Home").to_string();
                 Ok(Json::Null)
