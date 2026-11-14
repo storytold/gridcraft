@@ -1200,6 +1200,16 @@ fn saving_a_distinct_count_pivot_as_xlsx_says_only_gridcraft_reads_it() {
     assert_eq!(notices(&mut s), 1);
     s.execute("file.save", json!({})).unwrap();
     assert_eq!(notices(&mut s), 0, "saving the same file again does not repeat it");
+    // The path is known now, but a Distinct Count added later was never disclosed.
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$4", "destination": "Sheet1!H3", "rows": ["Region"], "values": ["Customer"]}))
+        .unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 0, "a plain Count adds nothing to disclose");
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 1, "a new Distinct Count field is disclosed on an ordinary Save to the same path");
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 0, "and only once");
     s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     assert_eq!(notices(&mut s), 1, "a download is an export too");
     std::fs::remove_dir_all(&dir).unwrap();

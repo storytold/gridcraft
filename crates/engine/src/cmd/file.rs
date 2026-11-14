@@ -120,7 +120,6 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
     let d = s.doc_mut()?;
-    let first_export = d.path.as_deref() != Some(path.as_str());
     // The document's own file keeps the format its content had when opened; any other path
     // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
     let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
@@ -131,7 +130,13 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         None => crate::io::save_bytes(wb, &path)?,
     };
     crate::io::write_file(&path, &bytes)?;
-    let distinct_notice = kind == Some(crate::io::FileKind::Xlsx) && first_export && has_distinct_count_pivot(wb);
+    // Only a field the user was not told about yet raises the notice: a known path is no proof,
+    // since a Distinct Count added after an earlier save is still unreported.
+    let distinct = distinct_count_fields(wb);
+    let distinct_notice = kind == Some(crate::io::FileKind::Xlsx) && distinct.iter().any(|f| !d.distinct_disclosed.contains(f));
+    if kind == Some(crate::io::FileKind::Xlsx) {
+        d.distinct_disclosed = distinct;
+    }
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
         // The new file is the workbook's own now, so `CELL("filename")` reports it (#1489). Set
@@ -150,12 +155,23 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
 
-/// Shown when a workbook with a Distinct Count PivotTable is saved as a new .xlsx (#3336): the
+/// Shown when a workbook with a Distinct Count PivotTable value field is saved as .xlsx for the first time (#3336): the
 /// file stores a plain Count that only GridCraft's private marker turns back into Distinct Count.
 const DISTINCT_COUNT_NOTICE: &str = "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count.";
 
-fn has_distinct_count_pivot(wb: &gridcraft_model::Workbook) -> bool {
-    wb.sheets.iter().flat_map(|sheet| &sheet.pivots).any(|pt| pt.values.iter().any(|v| v.func == gridcraft_model::PivotFunc::DistinctCount))
+/// Every Distinct Count value field of the workbook, as (sheet, pivot, value) positions.
+fn distinct_count_fields(wb: &gridcraft_model::Workbook) -> Vec<(usize, usize, usize)> {
+    let mut fields = Vec::new();
+    for (si, sheet) in wb.sheets.iter().enumerate() {
+        for (pi, pt) in sheet.pivots.iter().enumerate() {
+            for (vi, v) in pt.values.iter().enumerate() {
+                if v.func == gridcraft_model::PivotFunc::DistinctCount {
+                    fields.push((si, pi, vi));
+                }
+            }
+        }
+    }
+    fields
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
@@ -172,7 +188,7 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     // The file name goes into a PivotChart's link to its PivotTable.
     let bytes = crate::io::save_bytes(&d.wb, &name)?;
-    if fmt == "xlsx" && has_distinct_count_pivot(&d.wb) {
+    if fmt == "xlsx" && !distinct_count_fields(&d.wb).is_empty() {
         s.ui_requests.push(crate::UiRequest::Message(DISTINCT_COUNT_NOTICE.into()));
     }
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
