@@ -85,6 +85,9 @@ fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'stat
     if let Some(r) = parse_fraction(t) {
         return Some((r, Some("# ?/?")));
     }
+    if is_signed_fraction_text(t) {
+        return None;
+    }
     if let Some(r) = parse_datetime(t, sys) {
         return Some(r);
     }
@@ -204,7 +207,7 @@ fn plain_number(s: &str, frac: bool) -> Option<f64> {
 fn parse_fraction(t: &str) -> Option<f64> {
     let (whole, frac) = t.split_once(' ')?;
     let neg = whole.starts_with('-');
-    let w = plain_number(whole.trim_start_matches('-'), false)?;
+    let w = plain_number(whole.strip_prefix(['-', '+']).unwrap_or(whole), false)?;
     let (a, b) = frac.trim().split_once('/')?;
     let a = plain_number(a, false)?;
     let b = plain_number(b, false)?;
@@ -216,6 +219,20 @@ fn parse_fraction(t: &str) -> Option<f64> {
         return None;
     }
     Some(if neg { -v } else { v })
+}
+
+/// Fraction-shaped text (`1 -1/2`, `1 1e0/2`) that `parse_fraction` rejected for a signed or
+/// exponent part. It must stay text rather than fall through to date parsing.
+fn is_signed_fraction_text(t: &str) -> bool {
+    let Some((whole, frac)) = t.split_once(' ') else { return false };
+    let unsigned = whole.strip_prefix(['-', '+']).unwrap_or(whole);
+    if !unsigned.starts_with(|c: char| c.is_ascii_digit() || c == '.') {
+        return false;
+    }
+    let Some((a, b)) = frac.trim().split_once('/') else { return false };
+    let part = |s: &str| !s.is_empty() && s.bytes().all(|c| c.is_ascii_digit() || matches!(c, b'+' | b'-' | b'e' | b'E'));
+    let odd = |s: &str| s.starts_with(['+', '-']) || s.contains(['e', 'E']);
+    part(a) && part(b) && (odd(a) || odd(b))
 }
 
 fn month_from_name(s: &str) -> Option<u32> {
@@ -433,6 +450,24 @@ mod tests {
             assert_eq!(p(s).value, Value::text(s), "{s}");
         }
         assert_eq!(p("3/4/2026").value, Value::Number(46085.0));
+    }
+
+    #[test]
+    fn fraction_rejects_signed_parts() {
+        for s in ["1 -1/2", "1 1/-2", "--1 1/2", "1 +1/2", "1 1e0/2"] {
+            assert_eq!(parse_fraction(s), None, "{s}");
+        }
+        assert_eq!(parse_fraction("1 1/2"), Some(1.5));
+        assert_eq!(parse_fraction("-1 1/2"), Some(-1.5));
+    }
+
+    #[test]
+    fn input_rejects_signed_fraction_text() {
+        for s in ["1 -1/2", "-1 -1/2", "+1 -1/2", "1 1/-2", "1 +1/2", "1 1e0/2"] {
+            assert_eq!(p(s).value, Value::text(s), "{s}");
+            assert_eq!(p(s).format, None, "{s}");
+        }
+        assert_eq!(p("1 1/2").value, Value::Number(1.5));
     }
 
     #[test]
