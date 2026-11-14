@@ -238,6 +238,9 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                 Some(a) => a.iter().collect(),
                 None => vec![row],
             };
+            if let (Some(first), Some(last)) = (start.offset(ri as i64, 0), start.offset(ri as i64, cols.len() as i64 - 1)) {
+                cx.written.push((sheet, RangeRef::new(first, last)));
+            }
             for (ci, v) in cols.iter().enumerate() {
                 let Some(at) = start.offset(ri as i64, ci as i64) else { continue };
                 let input = json_to_input(v);
