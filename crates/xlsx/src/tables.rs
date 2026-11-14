@@ -111,6 +111,7 @@ pub fn paper_id(name: &str) -> Option<u32> {
 
 /// Functions introduced after Excel 2007 that files store with the `_xlfn.` prefix. Entries with
 /// `_xlws.` get `_xlfn._xlws.`.
+/// NETWORKDAYS.INTL and WORKDAY.INTL are in the file format's own function list, so they're saved without `_xlfn.` (#3517).
 const FUTURE_FUNCTIONS: &[&str] = &[
     "ACOT",
     "ACOTH",
@@ -207,7 +208,6 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "MODE.SNGL",
     "MUNIT",
     "NEGBINOM.DIST",
-    "NETWORKDAYS.INTL",
     "NORM.DIST",
     "NORM.INV",
     "NORM.S.DIST",
@@ -270,7 +270,6 @@ const FUTURE_FUNCTIONS: &[&str] = &[
     "VSTACK",
     "WEBSERVICE",
     "WEIBULL.DIST",
-    "WORKDAY.INTL",
     "WRAPCOLS",
     "WRAPROWS",
     "XLOOKUP",
@@ -381,8 +380,8 @@ mod tests {
         assert_eq!(file_function_name("stockhistory").as_deref(), Some("_xlfn.STOCKHISTORY"));
         assert_eq!(file_function_name("TRANSLATE").as_deref(), Some("_xlfn.TRANSLATE"));
         assert_eq!(file_function_name("DETECTLANGUAGE").as_deref(), Some("_xlfn.DETECTLANGUAGE"));
-        assert_eq!(file_function_name("NETWORKDAYS.INTL").as_deref(), Some("_xlfn.NETWORKDAYS.INTL"));
-        assert_eq!(file_function_name("WORKDAY.INTL").as_deref(), Some("_xlfn.WORKDAY.INTL"));
+        assert_eq!(file_function_name("NETWORKDAYS.INTL"), None);
+        assert_eq!(file_function_name("WORKDAY.INTL"), None);
         // Excel 16.0 build 20527 saves COPILOT as plain `COPILOT(...)` (it does not know the name yet).
         assert_eq!(file_function_name("COPILOT"), None);
         assert_eq!(file_function_name("SUM"), None);
