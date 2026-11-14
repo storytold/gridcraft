@@ -63,6 +63,8 @@ impl Bridge {
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
         let bridge = self.clone();
+        // `sync` marks host saves as saved itself; nothing reports them through the delivery log.
+        services.delivered = None;
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
             if let Err(e) = bridge.post_save(name, bytes) {
                 log::error!("couldn't hand {name} to the page: {e}");
