@@ -477,8 +477,9 @@ pub(crate) fn yearfrac_core(sys: DateSystem, s: i64, e: i64, basis: i64) -> R<f6
                 days / year_len
             } else {
                 let years = (d2.year - d1.year + 1) as f64;
-                let span = ymd_serial(sys, d2.year as i64 + 1, 1, 1).unwrap_or(e + 1) - ymd_serial(sys, d1.year as i64, 1, 1).unwrap_or(s);
-                days / (span as f64 / years)
+                // Real calendar-year lengths: 1900-system serials would count the fictitious 29 February 1900 (#4098).
+                let span: f64 = (d1.year..=d2.year).map(|y| if is_leap(y) { 366.0 } else { 365.0 }).sum();
+                days / (span / years)
             }
         }
         2 => days / 360.0,
@@ -836,6 +837,13 @@ mod tests {
         close(ev("YEARFRAC", vec![n(d(2011.0, 2.0, 28.0)), n(d(2012.0, 2.0, 29.0)), n(0.0)]), 1.0);
         close(ev("YEARFRAC", vec![n(d(2011.0, 3.0, 1.0)), n(d(2012.0, 2.0, 29.0)), n(1.0)]), 365.0 / 366.0);
         close(ev("YEARFRAC", vec![s, n(d(2012.0, 1.0, 1.0))]), 0.0);
+    }
+
+    #[test]
+    fn yearfrac_actual_average_year_ignores_fictitious_1900_leap_day() {
+        // #4098: 1900 and 1901 each have 365 days, so the average year is 365 and 366 elapsed days give 366/365 (Excel 16).
+        close(ev("YEARFRAC", vec![n(d(1900.0, 3.0, 1.0)), n(d(1901.0, 3.0, 2.0)), n(1.0)]), 1.002_739_726_027_397_4);
+        close(ev("YEARFRAC", vec![n(d(1900.0, 3.0, 1.0)), n(d(1901.0, 3.0, 2.0)), n(3.0)]), 1.002_739_726_027_397_4);
     }
 
     #[test]
