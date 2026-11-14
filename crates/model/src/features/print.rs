@@ -206,6 +206,9 @@ pub struct SheetProtection {
     pub format_cells: bool,
     pub format_columns: bool,
     pub format_rows: bool,
+    /// Insert hyperlinks (XLSX `insertHyperlinks`).
+    #[serde(default)]
+    pub insert_hyperlinks: bool,
     pub insert_columns: bool,
     pub insert_rows: bool,
     pub delete_columns: bool,

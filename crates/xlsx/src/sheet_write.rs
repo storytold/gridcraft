@@ -471,6 +471,7 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
             ("formatCells", p.format_cells),
             ("formatColumns", p.format_columns),
             ("formatRows", p.format_rows),
+            ("insertHyperlinks", p.insert_hyperlinks),
             ("insertColumns", p.insert_columns),
             ("insertRows", p.insert_rows),
             ("deleteColumns", p.delete_columns),

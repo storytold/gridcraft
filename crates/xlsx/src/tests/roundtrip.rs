@@ -518,6 +518,28 @@ fn full_roundtrip() {
     assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
 }
 
+/// The Insert hyperlinks permission survives a save: Excel reads a missing `insertHyperlinks`
+/// as "not allowed", so dropping it locks users out of inserting links on a protected sheet.
+#[test]
+fn insert_hyperlinks_permission_roundtrips() {
+    for allowed in [true, false] {
+        let mut wb = Workbook::new();
+        if let Some(s) = wb.sheet_mut(0) {
+            s.protection = Some(SheetProtection {
+                select_locked: true,
+                select_unlocked: true,
+                format_rows: true,
+                insert_hyperlinks: allowed,
+                ..Default::default()
+            });
+        }
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        let p = back.sheet(0).and_then(|s| s.protection.clone()).unwrap();
+        assert_eq!(p.insert_hyperlinks, allowed);
+        assert!(p.format_rows, "other permissions are kept");
+    }
+}
+
 fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert_eq!(back.date_system, wb.date_system);
     assert_eq!(back.calc, wb.calc);
