@@ -69,12 +69,29 @@ impl SheetApp {
                 if !self.commit_edit(0, 0, false, false) {
                     return false;
                 }
-                self.run_or_alert("file.save", json!({}));
-                if self.session.active().is_some_and(|x| !x.is_dirty()) {
+                // Whether the workbook's own file was written. One never saved has none: Save asks
+                // where to put it and the workbook stays open.
+                let written = match self.run("file.save", json!({})) {
+                    Ok(answer) => answer.get("bytes").is_some(),
+                    // A refused cell draft already shows its own message, as in `run_or_alert`.
+                    Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => false,
+                    Err(e) => {
+                        self.alert(e);
+                        false
+                    }
+                };
+                // A text file (CSV) holds only the active sheet's values, so the workbook still
+                // reads as edited after saving one (#2607). Save asked for that file, so the workbook
+                // closes once it's written, unless it has sheets the file left out.
+                let Some((dirty, sheets)) = self.session.active().map(|d| (d.is_dirty(), d.wb.sheets.len())) else { return true };
+                if !dirty || (written && sheets == 1) {
                     self.run_or_alert("file.close", json!({"force": true, "document": true}));
                     if quitting {
                         self.continue_quit(ctx);
                     }
+                } else if written {
+                    let text = "This file type keeps only the active sheet, so the other sheets weren't saved. To keep them, save the workbook as an Excel Workbook (.xlsx) with Save As, or close it with Don't Save.";
+                    self.message = Some(("GridCraft".into(), self.ui.language.tr(text).into()));
                 }
             }
         }
