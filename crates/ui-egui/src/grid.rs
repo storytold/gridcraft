@@ -32,6 +32,7 @@ mod interact;
 mod keyboard;
 mod menus;
 mod quadrant;
+mod scroll_rail;
 mod selection;
 mod show;
 mod tables;
@@ -47,6 +48,7 @@ use editor::{editor_slack, editor_width, list_picker_height};
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
+pub use scroll_rail::ScrollRail;
 pub use selection::selection_fill;
 pub(crate) use selection::{SelectionPaintInput, paint_selection};
 pub(crate) use show::horizontal_scrollbar;
@@ -336,6 +338,8 @@ pub struct GridState {
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+    /// The axis the current scroll gesture is held to (see [`ScrollRail`]).
+    pub scroll_rail: ScrollRail,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
