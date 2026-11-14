@@ -1085,16 +1085,50 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());
     }
-    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
+    // `sync_all` before the rename: without it a power loss right after the rename can leave
+    // the new name pointing at an empty or truncated file while the old workbook is gone.
+    // A file system that cannot flush at all (some network mounts; on Apple targets std asks
+    // for F_FULLFSYNC, which they refuse) keeps the old behaviour: skip the flush, still rename.
+    let synced = |f: &std::fs::File| f.sync_all().or_else(|e| if full_sync_unsupported(&e) { Ok(()) } else { Err(e) });
+    f.write_all(bytes).and_then(|()| f.flush()).and_then(|()| synced(&f)).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
+    drop(f);
     std::fs::rename(&tmp, path).map_err(|e| {
         // A write or rename that fails (full disk, the workbook locked by another app) leaves
         // no temporary file beside the user's workbook.
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
-    })
+    })?;
+    // Make the rename itself durable. Best effort: the workbook is already in place, so a
+    // directory that can't be opened or synced (some file systems) is not a failed save.
+    #[cfg(unix)]
+    {
+        let dir = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
+}
+
+/// True when a flush failed only because the file system cannot do it: on Unix ENOTTY (25, what
+/// `fcntl(F_FULLFSYNC)` returns on such volumes; on Windows 25 is ERROR_SEEK, a real failure), on
+/// Apple targets ENOTSUP (45, which std leaves uncategorized there), or an unsupported-operation
+/// error (EOPNOTSUPP/ENOSYS, and ENOTSUP where it equals EOPNOTSUPP). Any other error is a real
+/// failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn full_sync_unsupported(e: &std::io::Error) -> bool {
+    flush_unsupported_on(e, cfg!(unix), cfg!(target_vendor = "apple"))
+}
+
+/// [`full_sync_unsupported`] for a given platform, so each platform's raw codes can be tested
+/// on any host.
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_unsupported_on(e: &std::io::Error, unix: bool, apple: bool) -> bool {
+    let raw = e.raw_os_error();
+    (unix && raw == Some(25)) || (apple && raw == Some(45)) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
 /// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
