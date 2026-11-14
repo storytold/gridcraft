@@ -330,9 +330,27 @@ fn wrapped_cell_text_y_keeps_vertical_alignment_when_text_is_taller_than_the_row
     let y_center = wrapped_cell_text_y(VAlign::Center, rect, gh, z);
     let y_bottom = wrapped_cell_text_y(VAlign::Bottom, rect, gh, z);
     // Taller text overflows upward for Bottom and both ways for Center (the cell clips it).
-    assert!((y_top - 1.5 * z).abs() < 0.01, "Top leaves space inside the cell, got {y_top}");
-    assert!((y_center + gh / 2.0 - (rect.center().y + 0.5 * z)).abs() < 0.01, "Center follows the shared insets, got {y_center}");
-    assert!((y_bottom + gh - (rect.bottom() - 0.5 * z)).abs() < 0.01, "Bottom keeps the single-line inset, got {y_bottom}");
+    // With no unpainted descent, Top and Bottom share the same inset and Middle stays centred.
+    assert!((y_top - (rect.top() + GLYPH_EDGE_INSET * z)).abs() < 0.01, "Top starts at the inset, got {y_top}");
+    assert!((y_center + gh / 2.0 - rect.center().y).abs() < 0.01, "Center is centred, got {y_center}");
+    assert!((y_bottom + gh - (rect.bottom() - GLYPH_EDGE_INSET * z)).abs() < 0.01, "Bottom ends one inset above the bottom edge, got {y_bottom}");
+}
+
+#[test]
+fn bottom_align_keeps_the_same_painted_gap_as_top_align() {
+    let rect = Rect::from_min_max(pos2(0.0, 10.0), pos2(100.0, 90.0));
+    let (gh, z) = (18.0, 2.0);
+    // Calibri leaves much more unpainted room under the baseline than above the capitals.
+    let slack = GlyphSlack { above: 1.0, below: 6.0 };
+    let top = cell_text_y_slack(VAlign::Top, rect, gh, z, slack);
+    let bottom = cell_text_y_slack(VAlign::Bottom, rect, gh, z, slack);
+    let center = cell_text_y_slack(VAlign::Center, rect, gh, z, slack);
+    let ink_top_gap = top + slack.above - rect.top();
+    let ink_bottom_gap = rect.bottom() - (bottom + gh - slack.below);
+    assert!((ink_top_gap - ink_bottom_gap).abs() < 0.01, "painted gaps differ: top {ink_top_gap}, bottom {ink_bottom_gap}");
+    assert!((ink_top_gap - (GLYPH_EDGE_INSET * z + slack.above)).abs() < 0.01, "{ink_top_gap}");
+    let ink_mid = center + (slack.above + gh - slack.below) / 2.0;
+    assert!((ink_mid - rect.center().y).abs() < 0.01, "painted middle is off centre, got {ink_mid}");
 }
 
 /// The screen box of a galley of `size` drawn at `pos` turned by `angle` about `pos`, as egui
@@ -402,6 +420,93 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
     let bb = rotated_box(rotated_text_pos(rect, size, angle, HAlign::Center, VAlign::Center, 2.5, 0.0), size, angle);
     assert!((bb.center().y - rect.center().y).abs() < 0.01, "{bb:?} not centred in {rect:?}");
     assert!((bb.center().x - rect.center().x).abs() < 0.01, "{bb:?} not centred in {rect:?}");
+}
+
+// 100% sheet zoom is one 96-dpi sheet pixel per egui point, on the grid and in Page Layout
+// (both multiply by DISPLAY_SCALE). Three rows, top / middle / bottom, with a tall top row
+// so the top inset is not the same as sitting on the edge.
+#[test]
+fn zoom_100_is_one_to_one_and_top_align_keeps_an_inset() {
+    use gridcraft_engine::model::LineInfo;
+    use gridcraft_engine::paper::PageGrid;
+    let mut wb = Workbook::new();
+    {
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.zoom = 100;
+        sh.cols.insert(1, LineInfo { size: Some(140.0), custom: true, ..LineInfo::default() });
+        for (row, height) in [(1u32, 64.0), (3, 40.0), (5, 24.0)] {
+            sh.rows.insert(row, LineInfo { size: Some(height), custom: true, ..LineInfo::default() });
+        }
+    }
+    let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0));
+    {
+        let sh = wb.sheet(0).unwrap();
+        let geo = Geo::new(sh, rect, egui::Vec2::ZERO);
+        assert!((geo.z - 1.0).abs() < 1e-4, "100% must be 1 sheet pixel per point, got {}", geo.z);
+        let tall = geo.cell_rect(sh, CellRef::new(1, 1));
+        let mid_row = geo.cell_rect(sh, CellRef::new(3, 1));
+        let short = geo.cell_rect(sh, CellRef::new(5, 1));
+        assert!((tall.height() - 64.0).abs() < 0.05 && (tall.width() - 140.0).abs() < 0.05, "{tall:?}");
+        assert!((mid_row.height() - 40.0).abs() < 0.05, "{mid_row:?}");
+        assert!((short.height() - 24.0).abs() < 0.05, "{short:?}");
+        let gh = 16.0;
+        let inset = GLYPH_EDGE_INSET * geo.z;
+        let top = cell_text_y(VAlign::Top, tall, gh, geo.z);
+        let middle = cell_text_y(VAlign::Center, tall, gh, geo.z);
+        let bottom = cell_text_y(VAlign::Bottom, tall, gh, geo.z);
+        assert!((top - (tall.top() + inset)).abs() < 0.01, "top inset, got {top}");
+        assert!((bottom - (tall.bottom() - gh - inset)).abs() < 0.01, "bottom inset, got {bottom}");
+        assert!((middle + gh / 2.0 - tall.center().y).abs() < 0.01, "middle stays centred, got {middle}");
+        assert!(top + 8.0 < middle && middle < bottom, "top stays at the top of a tall row");
+        // The inset tracks the sheet zoom: twice as large at 200%, and at 50% it does not eat the row.
+        let at_200 = cell_text_y(VAlign::Top, tall, gh, 2.0);
+        assert!((at_200 - (tall.top() + GLYPH_EDGE_INSET * 2.0)).abs() < 0.01, "{at_200}");
+        let half_rect = Rect::from_min_max(pos2(0.0, 0.0), pos2(80.0, 20.0));
+        let at_50 = cell_text_y(VAlign::Top, half_rect, gh, 0.5);
+        assert!((at_50 - GLYPH_EDGE_INSET * 0.5).abs() < 0.01, "{at_50}");
+        assert!(at_50 + gh < half_rect.bottom(), "50% inset must not eat the row");
+        // A single line taller than the row is clamped to the top inset (`y_bottom.max(y_top)`).
+        let gh_over = short.height() + 8.0;
+        assert!(gh_over > short.height(), "the glyph must be taller than the row");
+        let over_top = cell_text_y(VAlign::Top, short, gh_over, geo.z);
+        let over_mid = cell_text_y(VAlign::Center, short, gh_over, geo.z);
+        let over_bot = cell_text_y(VAlign::Bottom, short, gh_over, geo.z);
+        let unclamped = short.bottom() - gh_over - inset;
+        assert!(unclamped < short.top() + inset, "without the clamp the line would start above the top inset");
+        assert!((over_top - (short.top() + inset)).abs() < 0.01, "tall glyph stays at the top inset, got {over_top}");
+        assert!((over_bot - over_top).abs() < 0.01, "bottom cannot start above the top inset, got {over_bot}");
+        assert!((over_mid - over_top).abs() < 0.01, "middle collapses onto the top inset, got {over_mid}");
+        let wrapped_top = wrapped_cell_text_y(VAlign::Top, tall, gh, geo.z);
+        let wrapped_mid = wrapped_cell_text_y(VAlign::Center, tall, gh, geo.z);
+        let wrapped_bot = wrapped_cell_text_y(VAlign::Bottom, tall, gh, geo.z);
+        assert!((wrapped_top - (tall.top() + 1.5)).abs() < 0.01, "wrapped top inset, got {wrapped_top}");
+        assert!((wrapped_bot - (tall.bottom() - gh - 1.5)).abs() < 0.01, "wrapped bottom inset, got {wrapped_bot}");
+        assert!((wrapped_mid + gh / 2.0 - tall.center().y).abs() < 0.01, "wrapped middle stays centred");
+    }
+    let page = PageGrid::build(&wb, 0, 0, 0).unwrap();
+    // `PageGrid::scale` is the print scale (1.0 at 100%). `Geo::paged` multiplies the sheet
+    // zoom by it, so comparing `paged.z` with `page.scale` only restates that formula.
+    assert!((page.scale - 1.0).abs() < 1e-4, "100% print scale is 1:1, got {}", page.scale);
+    let sh = wb.sheet(0).unwrap();
+    let paged = Geo::paged(sh, rect, egui::Vec2::ZERO, std::sync::Arc::new(page));
+    assert!((paged.z - 1.0).abs() < 1e-4, "page layout at 100% sheet zoom is 1:1, got {}", paged.z);
+    // Sheet zoom reaches `Geo::z` and the cell size. Passing 2.0 or 0.5 straight into
+    // `cell_text_y` does not exercise that.
+    for (percent, factor) in [(50u16, 0.5f32), (200, 2.0)] {
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.zoom = percent;
+            let geo = Geo::new(sh, rect, egui::Vec2::ZERO);
+            let cell = geo.cell_rect(sh, CellRef::new(1, 1));
+            let mid_row = geo.cell_rect(sh, CellRef::new(3, 1));
+            let short_row = geo.cell_rect(sh, CellRef::new(5, 1));
+            assert!((geo.z - factor).abs() < 1e-4, "{percent}% must be {factor} sheet pixels per point, got {}", geo.z);
+            assert!((cell.height() - 64.0 * factor).abs() < 0.05 && (cell.width() - 140.0 * factor).abs() < 0.05, "{percent}% {cell:?}");
+            assert!((mid_row.height() - 40.0 * factor).abs() < 0.05, "{percent}% {mid_row:?}");
+            assert!((short_row.height() - 24.0 * factor).abs() < 0.05, "{percent}% {short_row:?}");
+        } else {
+            assert!(wb.sheet(0).is_some(), "sheet 0");
+        }
+    }
 }
 
 /// One grid frame of `app` in a headless context.
