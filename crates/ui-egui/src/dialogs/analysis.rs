@@ -34,7 +34,10 @@ pub(super) fn goal_seek(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, c
     }
     if *confirm {
         match app.run("data.goalSeek", json!({"set": set, "to": to.parse::<f64>().unwrap_or(0.0), "changing": changing})) {
-            Ok(r) => app.toast = Some((format!("Goal Seeking found a solution: {}", r["value"]), crate::now_ms())),
+            Ok(r) => {
+                let text = app.ui.language.tr_fill("Goal Seeking found a solution: {value}", &[("value", &r["value"].to_string())]);
+                app.toast = Some((text, crate::now_ms()));
+            }
             Err(e) => app.message = Some(("Goal Seek".into(), crate::clean_error(&e))),
         }
     }

@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -11,6 +11,13 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 
 ## Where we are (measured from source on `main`, after the 2026-10-10 merges)
 
+- **Current state (2026-11-08).** The counts, labels and per-language rows in this section and in
+  the Languages table are a snapshot from the dates given there; every language since added a
+  catalog of its own (`crates/ui-egui/src/i18n/<code>.rs`, 18 languages besides English), and
+  `cargo xtask i18n-report` lists what each one still lacks. The status bar statistics, resize
+  tips, sheet notes, Goal Seek and macro toasts and the equation editor's own error messages now
+  follow the interface language; error text from the RaTeX equation parser stays English.
+  Where an older bullet below says status messages are English literals, this one supersedes it.
 - **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
   #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the
   system language (closes #20) and a View-tab switcher, with English-keyed lookup tables:
@@ -85,7 +92,9 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 
 ## Languages
 
-UI strings translated are measured counts against the ~2,200 estimate. Estimates to `full`
+UI strings translated are measured counts against the ~2,200 estimate, as a snapshot from when
+each row was last measured (Spanish, French and Vietnamese have had catalogs since; see the current
+state above and `cargo xtask i18n-report`). Estimates to `full`
 include the rest of the catalog work below (10–20 h, counted once), localized function names,
 separators, number/date formats, machine translation with agent review, and script work.
 
@@ -136,6 +145,7 @@ language (none so far) and of localized function names.
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
+| 2026-11-08 | minor | Strings built with `format!` in English now translate their template first and fill it in once (`Language::tr_fill`): status bar statistics and the circular-reference note, the column width / row height drag tip, the formula bar text for a picture in a cell, the Move or Copy and Unhide notes, the Format Control title, the equation editor's error prefix and its own check messages (macro definitions, `%` with a link, nesting, length, matrix-cell and size limits; RaTeX parser errors stay English), and the Goal Seek and macro recorder/runner toasts (#3600, #3602, #3603, #3605, #3607–#3611). 24 new keys in every catalog; Average, Count, Sum and the three existing templates added to the 11 catalogs that lacked them, and Ukrainian's English placeholders for those six replaced. Numbers in these strings keep the `.` decimal point |
 | 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
 | 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |

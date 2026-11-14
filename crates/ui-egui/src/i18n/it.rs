@@ -1021,6 +1021,32 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostra",
         "Collapse dialog" => "Comprimi finestra di dialogo",
         "Expand dialog" => "Espandi finestra di dialogo",
+        "Numerical Count" => "Conteggio numeri",
+        "Minimum" => "Minimo",
+        "Maximum" => "Massimo",
+        "Circular References: {cell}" => "Riferimenti circolari: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Larghezza: {chars} ({pixels} pixel)",
+        "Height: {points} ({pixels} pixels)" => "Altezza: {points} ({pixels} pixel)",
+        "Picture in cell" => "Immagine nella cella",
+        "Picture: {alt}" => "Immagine: {alt}",
+        "Format Control: {name}" => "Formato controllo: {name}",
+        "Error at character {position}: {message}" => "Errore al carattere {position}: {message}",
+        "Macro definitions are not supported in equations." => "Le definizioni di macro non sono supportate nelle equazioni.",
+        "A % can't be combined with a link in an equation." => "Un % non può essere combinato con un collegamento in un'equazione.",
+        "Equations can nest at most 32 levels deep." => "Le equazioni possono essere annidate al massimo su 32 livelli.",
+        "An equation can be at most 4096 bytes long." => "Un'equazione può essere lunga al massimo 4096 byte.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Un'equazione può avere al massimo 2500 celle di matrice (righe per la riga più larga)."
+        }
+        "This equation is too large to draw." => "Questa equazione è troppo grande per essere disegnata.",
+        "This equation could not be laid out." => "Impossibile impaginare questa equazione.",
+        "Saved macro “{name}” ({steps} step)" => "Macro “{name}” salvata ({steps} passaggio)",
+        "Saved macro “{name}” ({steps} steps)" => "Macro “{name}” salvata ({steps} passaggi)",
+        "without {key}: another macro took it while recording" => "senza {key}: un’altra macro l’ha preso durante la registrazione",
+        "Recording stopped" => "Registrazione interrotta",
+        "Macro “{name}” stopped: {message}" => "Macro “{name}” interrotta: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Macro “{name}” eseguita ({steps} passaggio)",
+        "Ran macro “{name}” ({steps} steps)" => "Macro “{name}” eseguita ({steps} passaggi)",
         _ => return None,
     })
 }

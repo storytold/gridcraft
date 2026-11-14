@@ -711,8 +711,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::ResizeCol { col, start, orig, to } => {
                 let w = nan_safe_size(orig + (p.x - start) / geo.z);
-                app.toast =
-                    Some((format!("Width: {:.2} ({} pixels)", gridcraft_engine::cmd::format::points_to_chars(w as f64), w.round()), crate::now_ms()));
+                app.toast = Some((column_width_tip(app.ui.language, w), crate::now_ms()));
                 // Preview on the dragged column only; the release applies it to the selection. A
                 // rejected size leaves the last shown preview (and `to`) as it was.
                 let ok = app.session.run("home.columnWidth", json!({"cols": RangeRef::cols(col, col).a1(), "width": w.round()})).is_ok();
@@ -721,7 +720,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::ResizeRow { row, start, orig, to } => {
                 let h = nan_safe_size(orig + (p.y - start) / geo.z);
-                app.toast = Some((format!("Height: {:.2} ({} pixels)", h * 0.75, h.round()), crate::now_ms()));
+                app.toast = Some((row_height_tip(app.ui.language, h), crate::now_ms()));
                 let ok = app.session.run("home.rowHeight", json!({"rows": format!("{}:{}", row + 1, row + 1), "height": h.round()})).is_ok();
                 coalesce_resize_undo(app);
                 app.grid.drag = Drag::ResizeRow { row, start, orig, to: if ok { Some(h) } else { to } };
@@ -1031,6 +1030,20 @@ fn scroll_by(app: &mut SheetApp, d: egui::Vec2) {
     }
 }
 
+/// The tip while a column border is dragged to `width` pixels: the width in characters, then in
+/// pixels (`Width: 8.43 (64 pixels)`).
+pub(crate) fn column_width_tip(lang: crate::i18n::Language, width: f32) -> String {
+    let chars = format!("{:.2}", gridcraft_engine::cmd::format::points_to_chars(f64::from(width)));
+    lang.tr_fill("Width: {chars} ({pixels} pixels)", &[("chars", &chars), ("pixels", &width.round().to_string())])
+}
+
+/// The tip while a row border is dragged to `height` pixels: the height in points, then in pixels
+/// (`Height: 15.00 (20 pixels)`).
+pub(crate) fn row_height_tip(lang: crate::i18n::Language, height: f32) -> String {
+    let points = format!("{:.2}", height * 0.75);
+    lang.tr_fill("Height: {points} ({pixels} pixels)", &[("points", &points), ("pixels", &height.round().to_string())])
+}
+
 fn fill_target(src: RangeRef, pc: CellRef) -> RangeRef {
     let below = pc.row as i64 - src.end.row as i64;
     let above = src.start.row as i64 - pc.row as i64;
@@ -1261,6 +1274,17 @@ mod resize_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_tips_follow_the_interface_language() {
+        use crate::i18n::Language;
+        assert_eq!(column_width_tip(Language::En, 64.0), "Width: 8.43 (64 pixels)");
+        assert_eq!(row_height_tip(Language::En, 20.0), "Height: 15.00 (20 pixels)");
+        let de = Language::De;
+        assert_eq!(column_width_tip(de, 64.0), de.tr("Width: {chars} ({pixels} pixels)").replace("{chars}", "8.43").replace("{pixels}", "64"));
+        assert_eq!(row_height_tip(de, 20.0), de.tr("Height: {points} ({pixels} pixels)").replace("{points}", "15.00").replace("{pixels}", "20"));
+        assert!(!column_width_tip(de, 64.0).starts_with("Width"));
+    }
 
     #[test]
     fn the_pen_preview_is_the_ink_the_stroke_commits() {

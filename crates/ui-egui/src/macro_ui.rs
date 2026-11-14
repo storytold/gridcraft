@@ -89,13 +89,16 @@ pub fn stop_recording(app: &mut SheetApp) {
             Some(name) => {
                 let steps = v["steps"].as_u64().unwrap_or(0);
                 app.macros.note_recent(name);
-                let mut text = format!("Saved macro “{name}” ({steps} step{})", if steps == 1 { "" } else { "s" });
+                let lang = app.ui.language;
+                let saved = if steps == 1 { "Saved macro “{name}” ({steps} step)" } else { "Saved macro “{name}” ({steps} steps)" };
+                let mut text = lang.tr_fill(saved, &[("name", name), ("steps", &steps.to_string())]);
                 if let Some(k) = v["shortcutDropped"].as_str() {
-                    text.push_str(&format!(" without {k}: another macro took it while recording"));
+                    text.push(' ');
+                    text.push_str(&lang.tr_fill("without {key}: another macro took it while recording", &[("key", k)]));
                 }
                 app.toast = Some((text, crate::now_ms()));
             }
-            None => app.toast = Some(("Recording stopped".into(), crate::now_ms())),
+            None => app.toast = Some((app.ui.language.tr("Recording stopped").into(), crate::now_ms())),
         },
         Err(e) => app.message = Some(("Record Macro".into(), crate::clean_error(&e))),
     }
@@ -174,9 +177,13 @@ pub fn note_result(app: &mut SheetApp, id: &str, params: &Json, v: &Json) {
     }
     app.macros.note_recent(&name);
     let ran = v["ran"].as_u64().unwrap_or(0);
+    let lang = app.ui.language;
     let text = match v["stopped"].as_str() {
-        Some(msg) => format!("Macro “{name}” stopped: {msg}"),
-        None => format!("Ran macro “{name}” ({ran} step{})", if ran == 1 { "" } else { "s" }),
+        Some(msg) => lang.tr_fill("Macro “{name}” stopped: {message}", &[("name", &name), ("message", msg)]),
+        None => {
+            let ran_text = if ran == 1 { "Ran macro “{name}” ({steps} step)" } else { "Ran macro “{name}” ({steps} steps)" };
+            lang.tr_fill(ran_text, &[("name", &name), ("steps", &ran.to_string())])
+        }
     };
     app.toast = Some((text, crate::now_ms()));
 }
@@ -672,6 +679,54 @@ pub fn record_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn macro_toasts_follow_the_interface_language() {
+        use crate::i18n::Language;
+        use gridcraft_engine::Session;
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        let ran = |app: &mut SheetApp, v: Json| {
+            note_result(app, "macro.run", &json!({}), &v);
+            app.toast.take().map(|t| t.0).unwrap_or_default()
+        };
+        assert_eq!(ran(&mut app, json!({"macro": "M", "ran": 1})), "Ran macro “M” (1 step)");
+        assert_eq!(ran(&mut app, json!({"macro": "M", "ran": 2})), "Ran macro “M” (2 steps)");
+        assert_eq!(ran(&mut app, json!({"macro": "M", "stopped": "Oops"})), "Macro “M” stopped: Oops");
+        let it = Language::It;
+        app.ui.language = it;
+        // A name holding a placeholder is shown as it is.
+        let want = it.tr("Ran macro “{name}” ({steps} steps)").replace("{steps}", "2").replace("{name}", "{steps}");
+        assert_eq!(ran(&mut app, json!({"macro": "{steps}", "ran": 2})), want);
+        assert_ne!(want, "Ran macro “{steps}” (2 steps)");
+        let want = it.tr("Ran macro “{name}” ({steps} step)").replace("{name}", "M").replace("{steps}", "1");
+        assert_eq!(ran(&mut app, json!({"macro": "M", "ran": 1})), want);
+        let want = it.tr("Macro “{name}” stopped: {message}").replace("{name}", "M").replace("{message}", "Oops");
+        assert_eq!(ran(&mut app, json!({"macro": "M", "stopped": "Oops"})), want);
+    }
+
+    #[test]
+    fn recording_toasts_follow_the_interface_language() {
+        use crate::i18n::Language;
+        use gridcraft_engine::Session;
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("macro.record", json!({"name": "Two"})).unwrap();
+        app.run("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+        app.run("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+        stop_recording(&mut app);
+        assert_eq!(app.toast.take().map(|t| t.0).as_deref(), Some("Saved macro “Two” (2 steps)"));
+        let it = Language::It;
+        app.ui.language = it;
+        app.run("macro.record", json!({"name": "Rec"})).unwrap();
+        app.run("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+        stop_recording(&mut app);
+        let want = it.tr("Saved macro “{name}” ({steps} step)").replace("{name}", "Rec").replace("{steps}", "1");
+        assert_eq!(app.toast.take().map(|t| t.0).as_deref(), Some(want.as_str()));
+        assert!(!want.starts_with("Saved macro"));
+    }
 
     #[test]
     fn questions_are_read_from_the_error() {
