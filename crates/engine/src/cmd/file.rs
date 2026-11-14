@@ -1,9 +1,12 @@
 //! File menu: new, open, save, close, export, properties, options.
 
 use serde_json::{Value as Json, json};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::{CommandSpec, Result, Session, always, bad, bool_param, cmd, edit, has_doc, ok, str_param, target_sheet, u32_param};
 use crate::DocState;
+use crate::calc::Calc;
+use crate::model::Workbook;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -47,16 +50,68 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
     } else if let Some(path) = str_param(p, "path") {
+        let prepared = s.prepared_open.take().filter(|(for_path, _)| for_path == path);
         // Already open? Switch to it.
         if let Some(i) = s.documents().iter().position(|d| d.path.as_deref() == Some(path)) {
             s.set_active(i);
             return Ok(json!({"index": i, "alreadyOpen": true}));
+        }
+        // Read and calculated on another thread already: see `Session::offer_prepared_open`.
+        if let Some((_, prepared)) = prepared {
+            return finish_open(s, prepared);
         }
         (path.to_string(), crate::io::read_file(path)?)
     } else {
         s.ui_requests.push(crate::UiRequest::Dialog("open".into(), json!({})));
         return ok();
     };
+    finish_open(s, prepare(name, bytes, p, &OpenProgress::default())?)
+}
+
+/// How far a workbook being opened on another thread has got.
+#[derive(Debug, Default)]
+pub struct OpenProgress {
+    calculating: AtomicBool,
+    cancelled: AtomicBool,
+}
+
+impl OpenProgress {
+    /// Past reading the file: its formulas are being calculated.
+    pub fn is_calculating(&self) -> bool {
+        self.calculating.load(Ordering::Relaxed)
+    }
+    /// The result isn't wanted any more: stop at the next step.
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+    }
+}
+
+/// A workbook read and calculated, not yet part of the session.
+#[derive(Debug)]
+pub struct PreparedOpen {
+    wb: Workbook,
+    calc: Calc,
+    warnings: Vec<String>,
+    path: Option<String>,
+    title: String,
+    content_is_xlsx: bool,
+}
+
+/// `file.open`'s reading and calculating, for `{path}` or `{name, base64}`: it needs no session,
+/// so it can run on another thread while the window stays alive. Hand the result to
+/// `Session::offer_prepared_open`, and `file.open` on that path adds it.
+pub fn prepare_open(p: &Json, progress: &OpenProgress) -> Result<PreparedOpen> {
+    let (name, bytes) = if let Some(b) = str_param(p, "base64") {
+        (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
+    } else if let Some(path) = str_param(p, "path") {
+        (path.to_string(), crate::io::read_file(path)?)
+    } else {
+        return Err(bad("file.open", "`path` or `base64` is required"));
+    };
+    prepare(name, bytes, p, progress)
+}
+
+fn prepare(name: String, bytes: Vec<u8>, p: &Json, progress: &OpenProgress) -> Result<PreparedOpen> {
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
     let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
@@ -79,6 +134,18 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // workbook decrypted with its password, so Save never replaces the encrypted original with
     // an unprotected copy.
     let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
+    let content_is_xlsx = crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx;
+    let mut calc = Calc::new();
+    progress.calculating.store(true, Ordering::Relaxed);
+    if !progress.cancelled.load(Ordering::Relaxed) {
+        calc.recalc_all(&mut wb);
+    }
+    Ok(PreparedOpen { wb, calc, warnings, path, title, content_is_xlsx })
+}
+
+/// Adds a prepared workbook to the session: the rest of `file.open`, and its result.
+fn finish_open(s: &mut Session, prepared: PreparedOpen) -> Result<Json> {
+    let PreparedOpen { wb, calc, warnings, path, title, content_is_xlsx } = prepared;
     // Replace an untouched blank Book1 like Excel does.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
@@ -86,8 +153,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     // Someone else may have made the file: its active content asks before it runs.
-    let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+    let mut doc = DocState::with_calc(wb, calc, path, title, crate::Trust::FromFile);
+    if content_is_xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);

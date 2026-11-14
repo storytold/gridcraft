@@ -325,6 +325,7 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
+    app.background_open = true;
     app.watch_desktop_theme();
     app.start_update_check();
     let control_port = control_port;

@@ -341,6 +341,15 @@ pub struct SheetApp {
     /// tests, embedding hosts) one window shows the active workbook window, and its close button
     /// quits.
     pub native_windows: bool,
+    /// `open_path` reads and calculates on another thread, with a progress card, so a large file
+    /// never leaves the window unresponsive. Off for tests and embedding hosts, where opening is
+    /// synchronous.
+    pub background_open: bool,
+    /// The file being opened on another thread, and those asked for meanwhile.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) opening: Option<app::Opening>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) open_queue: std::collections::VecDeque<String>,
     /// View › Arrange All's layout and windows, waiting for the native windows to move.
     pub arrange_windows: Option<(String, Vec<u64>)>,
     /// The update check, the startup prompt and a running self-update (desktop only).

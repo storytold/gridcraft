@@ -335,7 +335,7 @@ impl DocState {
         calc.rebuild(&wb);
         Self::with_calc(wb, calc, path, title, trust)
     }
-    fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
+    pub(crate) fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
         // Equations arrive without a layout (files never store one); painting reads only the cache.
         wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
@@ -502,6 +502,8 @@ pub struct Session {
     pub clipboard: Option<Clipboard>,
     pub prefs: Prefs,
     pub mode: Mode,
+    /// See [`Session::offer_prepared_open`].
+    pub(crate) prepared_open: Option<(String, cmd::file::PreparedOpen)>,
     /// Commands run so far, without their passwords ([`cmd::journal_params`]).
     pub journal: Vec<(String, Json)>,
     /// Serialized size of each journal entry, measured once when it is pushed, and their sum.
@@ -612,6 +614,18 @@ impl Session {
         cmd::locked_cell_error(sh, at, &d.unlocked_ranges)
     }
     /// Opens a workbook in a new window, which becomes the active one.
+    /// A workbook prepared on another thread, for the next `file.open` of `path`: the command
+    /// then does everything it always does (entering the cell being edited, switching to the
+    /// file if it is open by now, the journal) without reading the file again.
+    pub fn offer_prepared_open(&mut self, path: String, prepared: cmd::file::PreparedOpen) {
+        self.prepared_open = Some((path, prepared));
+    }
+    /// Forgets a workbook offered for a `file.open` that was refused before it could take it, so a
+    /// later `file.open` reads the file again, with its own options.
+    pub fn discard_prepared_open(&mut self) {
+        self.prepared_open = None;
+    }
+
     pub fn add_document(&mut self, d: DocState) -> usize {
         let uid = d.uid;
         self.docs.push(d);
