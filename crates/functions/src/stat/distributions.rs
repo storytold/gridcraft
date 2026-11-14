@@ -631,7 +631,18 @@ pub(super) fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
     num_val(s)
 }
 
-pub(super) fn binom_inv(a: &[Arg], _: C) -> R<Value> {
+/// BINOM.INV: Excel answers a probability_s or an alpha of exactly 0 or 1 with #NUM! (#4015, #4050).
+pub(super) fn binom_inv(a: &[Arg], c: C) -> R<Value> {
+    let (_, p, alpha) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+    if p <= 0.0 || p >= 1.0 || alpha <= 0.0 || alpha >= 1.0 {
+        return Err(CellError::Num);
+    }
+    critbinom(a, c)
+}
+
+/// CRITBINOM, and BINOM.INV once its endpoints are refused. CRITBINOM keeps the closed ranges:
+/// its endpoints have not been measured against Excel.
+pub(super) fn critbinom(a: &[Arg], _: C) -> R<Value> {
     let n = num(a, 0)?.trunc();
     let p = num(a, 1)?;
     let alpha = num(a, 2)?;
