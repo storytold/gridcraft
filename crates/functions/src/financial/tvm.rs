@@ -1,4 +1,5 @@
 use super::{Arg, CellError, Ctx, R, Value, array_numbers, as_array, flatten, num, num_val, numbers, opt_num, type_arg};
+use crate::math::power_of;
 
 // ---------------------------------------------------------------------------------------------
 // Time value of money
@@ -32,20 +33,31 @@ fn pmt_calc(rate: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 {
     }
 }
 
-fn fv_calc(rate: f64, nper: f64, pmt: f64, pv: f64, typ: f64) -> f64 {
-    if rate == 0.0 {
-        return -(pv + pmt * nper);
-    }
-    let p = (1.0 + rate).powf(nper);
-    -(pv * p + pmt * (1.0 + rate * typ) * (p - 1.0) / rate)
+/// (1+rate)^nper for FV and PV, which use Excel's `^`: an integer power by repeated squaring, a
+/// negative base's odd root, and its errors (0^0 is #NUM!, 0^-n is #DIV/0!).
+fn growth(rate: f64, nper: f64) -> R<f64> {
+    power_of(1.0 + rate, nper)
 }
 
-fn pv_calc(rate: f64, nper: f64, pmt: f64, fv: f64, typ: f64) -> f64 {
+fn fv_calc(rate: f64, nper: f64, pmt: f64, pv: f64, typ: f64) -> R<f64> {
     if rate == 0.0 {
-        return -(fv + pmt * nper);
+        return Ok(-(pv + pmt * nper));
     }
-    let p = (1.0 + rate).powf(nper);
-    -(fv + pmt * (1.0 + rate * typ) * (p - 1.0) / rate) / p
+    let p = growth(rate, nper)?;
+    Ok(-(pv * p + pmt * (1.0 + rate * typ) * (p - 1.0) / rate))
+}
+
+fn pv_calc(rate: f64, nper: f64, pmt: f64, fv: f64, typ: f64) -> R<f64> {
+    if rate == 0.0 {
+        return Ok(-(fv + pmt * nper));
+    }
+    let p = growth(rate, nper)?;
+    // PV(-1,3,-10,100) and PV(-0.9,310,0,-1) divide by a zero growth (a subnormal is 0): #DIV/0!
+    // (observed on Windows Excel 16.0.20430).
+    if p.abs() < f64::MIN_POSITIVE {
+        return Err(CellError::Div0);
+    }
+    Ok(-(fv + pmt * (1.0 + rate * typ) * (p - 1.0) / rate) / p)
 }
 
 pub(super) fn pmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -59,12 +71,12 @@ pub(super) fn pmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 pub(super) fn fv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (rate, nper, pmt) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    num_val(fv_calc(rate, nper, pmt, opt_num(a, 3, 0.0)?, type_arg(a, 4)?))
+    num_val(fv_calc(rate, nper, pmt, opt_num(a, 3, 0.0)?, type_arg(a, 4)?)?)
 }
 
 pub(super) fn pv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (rate, nper, pmt) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    num_val(pv_calc(rate, nper, pmt, opt_num(a, 3, 0.0)?, type_arg(a, 4)?))
+    num_val(pv_calc(rate, nper, pmt, opt_num(a, 3, 0.0)?, type_arg(a, 4)?)?)
 }
 
 pub(super) fn nper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -88,14 +100,14 @@ pub(super) fn nper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(q.ln() / (1.0 + rate).ln())
 }
 
-fn ipmt_calc(rate: f64, per: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 {
+fn ipmt_calc(rate: f64, per: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> R<f64> {
     let p = pmt_calc(rate, nper, pv, fv, typ);
     if typ == 1.0 && per == 1.0 {
-        return 0.0;
+        return Ok(0.0);
     }
-    let bal = fv_calc(rate, per - 1.0, p, pv, typ);
+    let bal = fv_calc(rate, per - 1.0, p, pv, typ)?;
     let i = bal * rate;
-    if typ == 1.0 { i / (1.0 + rate) } else { i }
+    Ok(if typ == 1.0 { i / (1.0 + rate) } else { i })
 }
 
 pub(super) fn ipmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -104,7 +116,7 @@ pub(super) fn ipmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if per < 1.0 || per > np || np == 0.0 {
         return Err(CellError::Num);
     }
-    num_val(ipmt_calc(rate, per, np, pv, fv, typ))
+    num_val(ipmt_calc(rate, per, np, pv, fv, typ)?)
 }
 
 pub(super) fn ppmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -113,7 +125,7 @@ pub(super) fn ppmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if per < 1.0 || per > np || np == 0.0 {
         return Err(CellError::Num);
     }
-    num_val(pmt_calc(rate, np, pv, fv, typ) - ipmt_calc(rate, per, np, pv, fv, typ))
+    num_val(pmt_calc(rate, np, pv, fv, typ) - ipmt_calc(rate, per, np, pv, fv, typ)?)
 }
 
 /// The validated (rate, periods, pv, start, end, type) of CUMIPMT/CUMPRINC: every check that
@@ -137,7 +149,7 @@ fn cumulative(a: &[Arg], principal: bool) -> R<Value> {
     let mut sum = 0.0;
     let mut per = start;
     while per <= end {
-        let i = ipmt_calc(rate, per, np_i, pv, 0.0, typ);
+        let i = ipmt_calc(rate, per, np_i, pv, 0.0, typ)?;
         sum += if principal { p - i } else { i };
         per += 1.0;
     }
