@@ -355,9 +355,9 @@ fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
 fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome, is_rtl: bool) {
     let lang = app.ui.language;
     let layout = if is_rtl {
-        egui::Layout::right_to_left(egui::Align::Min)
+        egui::Layout::right_to_left(egui::Align::Min).with_main_wrap(true)
     } else {
-        egui::Layout::left_to_right(egui::Align::Min)
+        egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true)
     };
 
     ui.with_layout(layout, |ui| {
@@ -743,18 +743,22 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, is_rtl: bool) {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let (label_rect, _) = ui.allocate_exact_size(vec2(label_w, 24.0), Sense::hover());
-                ui.painter().text(pos2(label_rect.right(), label_rect.center().y), Align2::RIGHT_CENTER, lang.tr(label), theme::ui_font(12.5), t.text_dim);
+                let label_resp = ui.add_sized(
+                    vec2(label_w, 24.0),
+                    egui::Label::new(RichText::new(lang.tr(label)).font(theme::ui_font(12.5)).color(t.text_dim)).selectable(false),
+                );
 
                 ui.add_space(gap_w);
 
-                let resp = ui.add_sized(
-                    vec2(field_w, 22.0),
-                    egui::TextEdit::singleline(draft)
-                        .id(id)
-                        .font(theme::ui_font(12.5))
-                        .margin(egui::Margin::symmetric(6, 2)),
-                );
+                let resp = ui
+                    .add_sized(
+                        vec2(field_w, 22.0),
+                        egui::TextEdit::singleline(draft)
+                            .id(id)
+                            .font(theme::ui_font(12.5))
+                            .margin(egui::Margin::symmetric(6, 2)),
+                    )
+                    .labelled_by(label_resp.id);
                 if resp.lost_focus() && draft != saved {
                     let mut params = serde_json::Map::new();
                     params.insert((*key).to_string(), json!(draft.clone()));

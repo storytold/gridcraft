@@ -76,7 +76,6 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
 
-                    // ב-RTL כפתור File מצויר ראשון כדי שיתייצב בצד ימין
                     if is_rtl && app.chrome.file_tab {
                         file_menu(app, ui);
                     }
@@ -85,7 +84,6 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
 
-                    // ב-LTR כפתור File מצויר כרגיל בצד שמאל לפני הלשוניות
                     if !is_rtl && app.chrome.file_tab {
                         file_menu(app, ui);
                     }
@@ -152,11 +150,17 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     .id_salt(("ribbon_scroll", tab.as_str()))
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
 
-                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
+                let rtl_init_id = egui::Id::unique(("ribbon_rtl_scroll_init", tab.as_str(), is_rtl));
+                let needs_rtl_init = is_rtl
+                    && is_reversed_rtl_tab(tab.as_str())
+                    && !ui.data(|d| d.get_temp::<bool>(rtl_init_id)).unwrap_or(false);
+
+                if let Some((frame, x)) = ui.data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
                     && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
                 {
                     area = area.horizontal_scroll_offset(x);
                 }
+
                 let scroll = area.show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
@@ -178,9 +182,24 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     });
                 });
+
+                let max_scroll = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
+                if needs_rtl_init && max_scroll > 0.5 {
+                    let frame = ui.ctx().cumulative_frame_nr();
+                    ui.data_mut(|d| {
+                        d.insert_temp(rtl_init_id, true);
+                        d.insert_temp(RibbonOverflow::scroll_target_id(tab.as_str()), (frame, max_scroll));
+                    });
+                    ui.ctx().request_repaint();
+                }
+
                 scroll_arrows(ui, &t, tab.as_str(), scroll);
             });
         });
+}
+
+fn is_reversed_rtl_tab(tab: &str) -> bool {
+    matches!(tab, "Home" | "Insert" | "Draw" | "Page Layout" | "Formulas" | "Data" | "Review" | "View" | "Automate")
 }
 
 /// How much of the active tab's groups the ribbon card shows, recorded each frame for the scroll

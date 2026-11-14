@@ -202,9 +202,12 @@ fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gri
             let id_change = ui.make_persistent_id("backstage_max_change");
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(lang.tr("Maximum Iterations:"));
+                let label = ui.label(lang.tr("Maximum Iterations:"));
                 ui.add_space(10.0);
                 let committed = crate::widgets::committed_text(ui, id_iter, &calc.max_iterations.to_string(), Some(80.0));
+                if let Some(response) = ui.ctx().read_response(id_iter) {
+                    response.labelled_by(label.id);
+                }
                 if let Some(text) = committed.filter(|_| iterative) {
                     match parse_max_iterations(&text) {
                         Some(n) if n != calc.max_iterations => {
@@ -219,9 +222,12 @@ fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gri
             ui.add_space(6.0);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(lang.tr("Maximum Change:"));
+                let label = ui.label(lang.tr("Maximum Change:"));
                 ui.add_space(10.0);
                 let committed = crate::widgets::committed_text(ui, id_change, &calc.max_change.to_string(), Some(80.0));
+                if let Some(response) = ui.ctx().read_response(id_change) {
+                    response.labelled_by(label.id);
+                }
                 if let Some(text) = committed.filter(|_| iterative) {
                     match parse_max_change(&text, lang.formula_locale()) {
                         Some(d) if d != calc.max_change => {

@@ -910,6 +910,7 @@ fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
     let size = vec2(150.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), app.ui.language.tr("Font")));
 
     let visuals = ui.style().interact(&resp);
     ui.painter().rect(rect, visuals.corner_radius, visuals.bg_fill, visuals.bg_stroke, StrokeKind::Inside);
@@ -939,24 +940,27 @@ fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
 
     if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
         let role = crate::fonts::role_key(&value, false, false);
-        if !crate::fonts::is_bound(&role) {
+        let ready = if crate::fonts::is_bound(&role) {
+            true
+        } else if !crate::fonts::installed_among(&[value.clone()]).is_empty() {
             let mut used: Vec<String> = app
                 .session
                 .active()
                 .map(|d| d.wb.styles.iter().map(|(_, s)| s.font.name.clone()).collect())
                 .unwrap_or_default();
-            
             if !used.contains(&value) {
                 used.push(value.clone());
             }
+            let fonts = theme::font_definitions_with(app.ui.language, &used);
+            ui.ctx().set_fonts(fonts);
+            crate::fonts::is_bound(&role)
+        } else {
+            true
+        };
 
-            if !crate::fonts::installed_among(&[value.clone()]).is_empty() {
-                let fonts = theme::font_definitions_with(app.ui.language, &used);
-                ui.ctx().set_fonts(fonts);
-            }
+        if ready {
+            act(app, "home.fontName", json!({"name": value}));
         }
-
-        act(app, "home.fontName", json!({"name": value}));
     }
 }
 
@@ -1051,6 +1055,7 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let text_to_display = lang.tr(&current);
     let size = vec2(150.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), lang.tr("Number")));
     
     let visuals = ui.style().interact(&resp);
     ui.painter().rect(rect, visuals.corner_radius, visuals.bg_fill, visuals.bg_stroke, StrokeKind::Inside);
@@ -1144,7 +1149,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ui.with_layout(ui.menu_layout(is_rtl), |ui| {
                 for (label, cols) in [
                     ("Green - Yellow - Red", vec!["#63BE7B", "#FFEB84", "#F8696B"]),
-                    ("Red - Yellow - Green", vec!["#F8696B", "#FFEB84", "#F8696B"]),
+                    ("Red - Yellow - Green", vec!["#F8696B", "#FFEB84", "#63BE7B"]),
                     ("Green - White - Red", vec!["#63BE7B", "#FCFCFF", "#F8696B"]),
                     ("Blue - White - Red", vec!["#5A8AC6", "#FCFCFF", "#F8696B"]),
                     ("White - Green", vec!["#FCFCFF", "#63BE7B"]),

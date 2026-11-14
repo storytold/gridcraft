@@ -1125,6 +1125,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "הצג",
         "Collapse dialog" => "כווץ דו-שיח",
         "Expand dialog" => "הרחב דו-שיח",
+        "Diagram" => "דיאגרמה",
+        "Decorative Text" => "טקסט דקורטיבי",
         _ => return None,
     })
-}
+}   

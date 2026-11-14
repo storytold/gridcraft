@@ -70,7 +70,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             }
             ui.separator();
             if is_rtl {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                     ui.label(egui::RichText::new(lang.tr("Filter")).strong());
                 });
             } else {
