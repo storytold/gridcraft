@@ -118,14 +118,25 @@ fn quoted(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut 
     Ok(j + 1)
 }
 
-fn error_literal(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn error_literal(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let rest = src.get(start..).unwrap_or("");
-    let error = CellError::ALL
-        .iter()
-        .copied()
-        .find(|error| rest.get(..error.as_str().len()).is_some_and(|text| text.eq_ignore_ascii_case(error.as_str())))
+    // The entry language's spelling first (`#WERT!`), then a canonical one that differs (`#VALUE!`).
+    let localized = CellError::ALL.iter().map(|&error| (error, locale.error_name(error)));
+    let canonical = CellError::ALL.iter().filter(|&&error| locale.error_name(error) != error.as_str()).map(|&error| (error, error.as_str()));
+    // Compare as many characters as the name has: `#überlauf!` is `#ÜBERLAUF!`.
+    let prefix = |name: &str| rest.char_indices().nth(name.chars().count()).map_or(rest, |(at, _)| rest.get(..at).unwrap_or(rest));
+    let (error, text) = localized
+        .chain(canonical)
+        .find(|(_, name)| crate::same_name(prefix(name), name))
         .ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
-    let end = i + error.as_str().chars().count();
+    let end = i + text.chars().count();
     emit(src, chars, out, Tok::Error(error), start, end);
     Ok(end)
 }
@@ -293,7 +304,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 i += 1;
             }
             '#' => {
-                i = error_literal(src, &chars, i, start, &mut out)?;
+                i = error_literal(src, &chars, locale, i, start, &mut out)?;
             }
             '[' => {
                 i = structured_ref(src, &chars, i, start, &mut out)?;
