@@ -1999,3 +1999,20 @@ fn remove_personal_information_is_kept_and_honoured() {
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }
+
+#[test]
+fn protection_edit_objects_and_scenarios_roundtrip() {
+    for (objects, scenarios) in [(true, true), (true, false), (false, true), (false, false)] {
+        let mut wb = Workbook::new();
+        wb.sheet_mut(0).unwrap().protection = Some(SheetProtection {
+            select_locked: true,
+            select_unlocked: true,
+            edit_objects: objects,
+            edit_scenarios: scenarios,
+            ..Default::default()
+        });
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        let p = back.sheet(0).unwrap().protection.clone().unwrap();
+        assert_eq!((p.edit_objects, p.edit_scenarios), (objects, scenarios));
+    }
+}

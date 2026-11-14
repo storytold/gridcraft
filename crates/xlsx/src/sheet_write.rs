@@ -466,7 +466,13 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
 fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut Out) -> Vec<u32> {
     // sheetProtection
     if let Some(p) = &sheet.protection {
-        s.push_str("<sheetProtection sheet=\"1\" objects=\"1\" scenarios=\"1\"");
+        s.push_str("<sheetProtection sheet=\"1\"");
+        if !p.edit_objects {
+            s.push_str(" objects=\"1\"");
+        }
+        if !p.edit_scenarios {
+            s.push_str(" scenarios=\"1\"");
+        }
         for (attr, allowed) in [
             ("formatCells", p.format_cells),
             ("formatColumns", p.format_columns),
