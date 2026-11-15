@@ -111,13 +111,24 @@ const LIST_PICKER_ROW_H: f32 = 18.0;
 const LIST_PICKER_CHROME: f32 = 8.0;
 
 /// Shown under a validation list that was cut short (source budget or match cap).
-const LIST_MORE_NOTE: &str = "More entries not shown";
+pub(crate) const LIST_MORE_NOTE: &str = "More entries not shown";
 
 /// Height of one row of a validation list popup: its button's real height (text plus padding), at
 /// least `LIST_PICKER_ROW_H`. `show_rows` needs the height the rows are drawn at: with a smaller
 /// one the popup shows fewer rows than it scrolls by and the last entries can't be reached.
 fn list_row_height(ui: &egui::Ui) -> f32 {
-    LIST_PICKER_ROW_H.max(ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y)
+    LIST_PICKER_ROW_H.max(ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).ceil()
+}
+
+/// Draws one row of a validation list popup in a slot exactly `row_h` tall. A button sizes itself
+/// to its text, and text is laid out to the tallest face its glyphs fall back to, rounded to whole
+/// pixels, so its height is not always `list_row_height`. `show_rows` places rows by `row_h`: rows
+/// that advance by anything else drift out of the popup and under the note below it.
+fn list_row(ui: &mut egui::Ui, width: f32, row_h: f32, button: egui::Button<'_>) -> egui::Response {
+    let (slot, _) = ui.allocate_exact_size(vec2(width, row_h), egui::Sense::hover());
+    // A child placed on the slot: whatever the button asks for, the popup advances by the slot.
+    let mut row = ui.new_child(egui::UiBuilder::new().max_rect(slot).layout(egui::Layout::top_down(egui::Align::Min)));
+    row.add(button.min_size(slot.size()))
 }
 
 /// The searched list of a list validation under the cell being typed into (from the cell or the
@@ -188,7 +199,7 @@ pub(super) fn list_search(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: 
             let out = area.show_rows(ui, row_h, list.matches.len(), |ui, rows| {
                 for row in rows {
                     let Some(text) = list.matches.get(row).and_then(|&i| list.items.get(i)) else { continue };
-                    if ui.add(egui::Button::selectable(row == list.index, text.as_str()).min_size(vec2(width, row_h))).clicked() {
+                    if list_row(ui, width, row_h, egui::Button::selectable(row == list.index, text.as_str())).clicked() {
                         pick = Some(row);
                     }
                 }
@@ -271,7 +282,7 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // Only the rows in view are drawn: a long list costs what eight rows cost.
             egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show_rows(ui, row_h, items.len(), |ui, rows| {
                 for it in rows.filter_map(|i| items.get(i)) {
-                    if ui.add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), row_h))).clicked() {
+                    if list_row(ui, r.width().max(100.0), row_h, egui::Button::new(it.as_str()).frame_when_inactive(false)).clicked() {
                         app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
                         close = true;
                     }

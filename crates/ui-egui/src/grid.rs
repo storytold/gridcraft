@@ -26,7 +26,7 @@ mod active_row;
 pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
-mod editor;
+pub(crate) mod editor;
 mod geo;
 mod interact;
 mod keyboard;

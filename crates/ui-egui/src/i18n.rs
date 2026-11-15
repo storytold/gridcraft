@@ -418,6 +418,20 @@ mod tests {
         }
     }
 
+    /// The note under a validation list that was cut short is a sentence, not a feature name: a
+    /// catalog without it shows the English sentence in the middle of a translated interface.
+    #[test]
+    fn the_cut_short_list_note_is_translated_in_every_catalog() {
+        let key = crate::grid::editor::LIST_MORE_NOTE;
+        for language in Language::ALL {
+            let shown = language.tr(key);
+            assert!(!shown.contains('\n'), "{}: {key:?} is not a single line: {shown:?}", language.code());
+            if language != Language::En {
+                assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+            }
+        }
+    }
+
     #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its

@@ -373,6 +373,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recente",
         "No recent workbooks yet." => "Încă niciun registru recent.",
         "More workbooks" => "Mai multe registre",
+        "More entries not shown" => "Mai multe intrări nu sunt afișate",
         "Modified" => "Modificat",
         "Not available" => "Indisponibil",
         "Just now" => "Chiar acum",

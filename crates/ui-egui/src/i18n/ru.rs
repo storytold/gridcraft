@@ -388,6 +388,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Последние",
         "No recent workbooks yet." => "Недавних книг пока нет.",
         "More workbooks" => "Другие книги",
+        "More entries not shown" => "Показаны не все записи",
         "Modified" => "Изменён",
         "Not available" => "Недоступен",
         "Just now" => "Только что",

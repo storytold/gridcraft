@@ -373,6 +373,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recent",
         "No recent workbooks yet." => "Nog geen recente werkmappen.",
         "More workbooks" => "Meer werkmappen",
+        "More entries not shown" => "Meer items worden niet weergegeven",
         "Modified" => "Gewijzigd",
         "Not available" => "Niet beschikbaar",
         "Just now" => "Zojuist",

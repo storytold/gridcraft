@@ -5,10 +5,16 @@ use egui::{Event, Key, Modifiers, PointerButton};
 use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
-use gridcraft_ui_egui::{SheetApp, grid};
+use gridcraft_ui_egui::grid;
 use serde_json::json;
 
-type Harness = egui_kittest::Harness<'static, SheetApp>;
+use crate::common::{self, Harness};
+
+/// A 1200×800 harness on the pinned test font set: row heights must not depend on the fonts the
+/// host happens to have installed.
+fn open(session: Session) -> Harness {
+    common::harness_with(common::builder().with_size(egui::vec2(1200.0, 800.0)), common::app(session), 4)
+}
 
 const CITIES: [&str; 6] = [
     "Paris - France",
@@ -26,15 +32,7 @@ fn harness_with(rule: serde_json::Value) -> Harness {
     session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
     session.execute("data.validation", rule).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    open(session)
 }
 
 fn harness() -> Harness {
@@ -181,14 +179,7 @@ fn a_long_list_shows_a_few_rows_and_scrolls_to_the_highlight() {
     session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
     session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$H$1:$H$50000"})).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
+    let mut h = open(session);
     text(&mut h, "item");
     assert!(shown(&h, "Item 00000"));
     assert!(!shown(&h, "Item 00100"), "only the visible rows are drawn");
@@ -283,14 +274,7 @@ fn a_list_from_a_huge_column_is_read_within_the_source_budget() {
     session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
     session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$H:$H"})).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
+    let mut h = open(session);
     text(&mut h, "zzz");
     let list = h.state().editor.as_ref().and_then(|e| e.list.as_ref()).map(|l| (l.items.len(), l.truncated, l.matches.len()));
     assert_eq!(list, Some((budget, true, 0)));
@@ -307,14 +291,7 @@ fn the_dropdown_arrow_reads_a_huge_list_once_and_draws_only_its_visible_rows() {
     session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
     session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$H:$H"})).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
+    let mut h = open(session);
     key(&mut h, Key::ArrowDown, Modifiers::ALT);
     assert!(h.state().grid.list_picker.is_some(), "Alt+Down opens the full list");
     let read = |h: &Harness| h.state().grid.list_picker_items.as_ref().map(|l| (l.source.items.len(), l.source.truncated, l.source.items.as_ptr()));
@@ -341,14 +318,7 @@ fn the_highlighted_row_stays_inside_the_popup() {
     session.execute("range.setValues", json!({"range": "H1", "values": rows})).unwrap();
     session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$H$1:$H$50000"})).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
+    let mut h = open(session);
     text(&mut h, "item");
     let inside = |h: &Harness, item: &str| {
         let row = h.get_by_label(item).rect();
