@@ -546,16 +546,25 @@ impl Dialog {
                     json!({"text": existing}),
                 )
             }
-            // Asks before a web or e-mail link leaves the workbook. OK opens it through
-            // `Session::open_confirmed_link` (which refuses anything but http, https and mailto),
-            // not a command: `link.open` refuses web addresses for programmatic callers, and a
-            // dialog without a command can't be confirmed over the control channel (#2181).
+            // Asks before a web or e-mail link, or a file or folder on this computer, leaves the
+            // workbook. OK opens it through `Session::open_confirmed_link` (which refuses
+            // anything but http, https, mailto and existing documents and folders), not a
+            // command: `link.open` refuses them for programmatic callers, and a dialog without a
+            // command can't be confirmed over the control channel (#2181). A file's `url` is its
+            // resolved full path.
             "openLink" => {
                 let url = params.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
-                let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url}));
-                d.fields = vec![Note(format!(
-                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook.\n\n{url}"
-                ))];
+                // The warning follows what OK will do ([`Session::open_confirmed_link`]), not a
+                // caller's flag: a full path or a target the engine classifies as local is a file.
+                let local = gridcraft_engine::links::is_full_path(&url)
+                    || matches!(gridcraft_engine::links::classify(&url), gridcraft_engine::links::LinkKind::Local(_));
+                let ask = if local {
+                    "This workbook asks to open the file or folder below with the program your computer uses for it. Files can contain harmful content: open it only if you trust the workbook."
+                } else {
+                    "This workbook asks to open the address below. Links can lead to harmful sites or start other programs: open it only if you trust the workbook."
+                };
+                let mut d = Dialog::custom("openLink", "Open Hyperlink", json!({"url": url, "local": local}));
+                d.fields = vec![Note(format!("{ask}\n\n{url}"))];
                 d.link = Some(url);
                 d
             }
@@ -1207,9 +1216,29 @@ mod tests {
         open_confirmed_link(&mut app, &d).unwrap();
         assert_eq!(*opened.borrow(), vec!["https://example.org/a".to_string()]);
 
-        let bad = Dialog::open(&mut app, "openLink", json!({"url": "file:///etc/passwd"})).unwrap();
+        let bad = Dialog::open(&mut app, "openLink", json!({"url": "file://host/etc/passwd"})).unwrap();
         assert!(open_confirmed_link(&mut app, &bad).is_err());
         assert_eq!(opened.borrow().len(), 1);
+    }
+
+    /// The Open Hyperlink warning follows the address, not a caller's `local` flag: a path or `file:`
+    /// address says it opens a file even when the caller leaves the flag out, and a web address
+    /// keeps the web warning even when the flag is set.
+    #[test]
+    fn open_hyperlink_warning_follows_the_address() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        let note = |app: &mut SheetApp, params: Json| match Dialog::open(app, "openLink", params).unwrap().fields.first() {
+            Some(crate::dialogs::Field::Note(text)) => text.clone(),
+            _ => String::new(),
+        };
+        for url in ["/tmp/a.txt", "file:///tmp/a.txt", "./notes.txt"] {
+            assert!(note(&mut app, json!({"url": url})).contains("file or folder"), "{url}");
+        }
+        for url in ["https://example.org/a", "mailto:a@example.org"] {
+            assert!(note(&mut app, json!({"url": url, "local": true})).contains("open the address"), "{url}");
+        }
     }
 
     /// #2181: an OK that arrives with synthetic control-channel input (`ui.key` Enter, `ui.click`

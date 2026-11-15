@@ -38,26 +38,35 @@ pub(super) fn insert_link(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Follows a link: a reference selects it, an `http`/`https`/`mailto` address is handed to the
-/// host (`UiRequest::OpenUrl`); anything else is refused ([`crate::links::classify`]). Opens no
-/// dialog; the interactive click asks for confirmation first, in the UI.
+/// Follows a link: a reference selects it, an `http`/`https`/`mailto` address or an existing file
+/// or folder on this computer is handed to the host (`UiRequest::OpenUrl`); anything else is
+/// refused ([`crate::links::classify_link`]). The cell's link is its hyperlink or the target of a
+/// `=HYPERLINK()` formula. Opens no dialog; the interactive click asks for confirmation first, in
+/// the UI.
 pub(super) fn open_link(s: &mut Session, p: &Json) -> Result<Json> {
-    let target = match str_param(p, "url").or_else(|| str_param(p, "target")) {
-        Some(t) => t.to_string(),
+    let (target, external) = match str_param(p, "url").or_else(|| str_param(p, "target")) {
+        Some(t) => (t.to_string(), false),
         None => {
             let sheet = target_sheet(s, p)?;
             let at = cell_param_on(s, p, "cell", sheet)?.unwrap_or(s.doc()?.selection.active);
-            let Some(h) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.hyperlinks.get(&at)) else {
+            let Some(link) = crate::links::link_at(&s.doc()?.wb, sheet, at) else {
                 return Err(EngineError::Other("There's no hyperlink in this cell.".into()));
             };
-            h.target.clone()
+            link
         }
     };
-    match crate::links::classify(&target) {
+    match crate::links::classify_link(&target, external) {
         crate::links::LinkKind::Internal(r) => crate::cmd::edit::go_to(s, &json!({"reference": r.trim_start_matches('#')})),
         crate::links::LinkKind::External(u) => {
             s.ui_requests.push(crate::UiRequest::OpenUrl(u.clone()));
             Ok(json!({"opened": u}))
+        }
+        crate::links::LinkKind::Local(path) => {
+            let base = s.doc()?.path.as_deref().and_then(|f| std::path::Path::new(f).parent().map(std::path::Path::to_path_buf));
+            let full = crate::links::resolve_local(base.as_deref(), &path).map_err(EngineError::Other)?;
+            let opened = full.to_string_lossy().into_owned();
+            s.ui_requests.push(crate::UiRequest::OpenUrl(opened.clone()));
+            Ok(json!({"opened": opened}))
         }
         crate::links::LinkKind::Refused(why) => Err(EngineError::Other(why)),
     }

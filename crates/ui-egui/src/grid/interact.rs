@@ -507,12 +507,12 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
     } else if mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
-        if let Some(h) = sh.hyperlinks.get(&c).cloned()
+        if let Some((target, external)) = gridcraft_engine::links::link_at(wb, wb.active_sheet(), c)
             && acts
             && !mods.alt
             && p.x < geo.cell_rect(sh, c).left() + geo.cell_rect(sh, c).width() * 0.8
         {
-            follow_link(app, &h.target);
+            follow_link(app, &target, external);
         } else {
             note_selecting_press(app);
             select_ranges(app, RangeRef::cell(c), true, c);
@@ -524,13 +524,13 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
             let _ = app.run("cell.toggleCheckbox", json!({"cell": c.a1()}));
         }
         // A click on a hyperlink's text follows it (like Excel); elsewhere in the cell selects.
-        if let Some(h) = sh.hyperlinks.get(&c).cloned()
+        if let Some((target, external)) = gridcraft_engine::links::link_at(wb, wb.active_sheet(), c)
             && acts
             && !mods.any()
         {
             let r = geo.cell_rect(sh, c);
             if p.x < r.left() + r.width() * 0.8 {
-                follow_link(app, &h.target);
+                follow_link(app, &target, external);
             }
         }
     }
@@ -1188,18 +1188,27 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     }
 }
 
-/// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
-/// OK calls `Session::open_confirmed_link`, since `link.open` refuses them for programmatic
-/// callers, #2181); every other kind is refused with a message. The decision is the engine's
-/// ([`gridcraft_engine::links::classify`]), the same one `link.open` applies.
-pub fn follow_link(app: &mut SheetApp, target: &str) {
-    use gridcraft_engine::links::{LinkKind, classify};
-    match classify(target) {
+/// A click on a hyperlink (`external`: the workbook marks it as leaving the workbook). References
+/// select; web and e-mail addresses and existing files and folders ask first (the dialog's OK
+/// calls `Session::open_confirmed_link`, since `link.open` refuses them for programmatic callers,
+/// #2181); every other kind is refused with a message. The decision is the engine's
+/// ([`gridcraft_engine::links::classify_link`]), the same one `link.open` applies.
+pub fn follow_link(app: &mut SheetApp, target: &str, external: bool) {
+    use gridcraft_engine::links::{LinkKind, classify_link, resolve_local};
+    match classify_link(target, external) {
         LinkKind::Internal(r) => {
             let _ = app.session.run("edit.goTo", json!({"reference": r.trim_start_matches('#')}));
             app.grid.ensure_visible = true;
         }
         LinkKind::External(url) => app.open_dialog("openLink", json!({"url": url})),
+        LinkKind::Local(path) => {
+            let file = app.session.active().and_then(|d| d.path.clone());
+            let base = file.as_deref().and_then(|f| std::path::Path::new(f).parent());
+            match resolve_local(base, &path) {
+                Ok(full) => app.open_dialog("openLink", json!({"url": full.to_string_lossy(), "local": true})),
+                Err(why) => app.message = Some(("Hyperlink".into(), why)),
+            }
+        }
         LinkKind::Refused(why) => app.message = Some(("Hyperlink".into(), why)),
     }
 }
