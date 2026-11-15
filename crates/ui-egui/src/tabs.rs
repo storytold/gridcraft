@@ -266,14 +266,24 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                             .add(egui::TextEdit::singleline(&mut text).font(theme::ui_font(13.0)).desired_width(r.width() - 12.0))
                                             .accessible_name(app.ui.language.tr("Sheet Name"));
                                         app.grid.rename_text = text.clone();
-                                        if rename_needs_focus(ed.has_focus(), ed.lost_focus()) {
-                                            ed.request_focus();
-                                        }
-                                        if ed.lost_focus() {
-                                            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && text != name {
-                                                app.run_or_alert("sheet.rename", json!({"sheet": i, "name": text}));
+                                        if app.message.is_none() {
+                                            if rename_needs_focus(ed.has_focus(), ed.lost_focus()) {
+                                                ed.request_focus();
                                             }
-                                            app.grid.renaming_tab = None;
+                                            if ed.lost_focus() {
+                                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) || text == name {
+                                                    app.grid.renaming_tab = None;
+                                                } else {
+                                                    // The message drawn later must not dismiss itself with this submit key.
+                                                    ui.input_mut(|i| {
+                                                        i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Enter, .. }))
+                                                    });
+                                                    match app.run("sheet.rename", json!({"sheet": i, "name": text})) {
+                                                        Ok(_) => app.grid.renaming_tab = None,
+                                                        Err(e) => app.alert(e),
+                                                    }
+                                                }
+                                            }
                                         }
                                     } else {
                                         ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
