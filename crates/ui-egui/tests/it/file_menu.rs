@@ -715,3 +715,124 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// Types `name` into Save As › File name, in place of what the field holds.
+fn type_file_name(h: &mut egui_kittest::Harness<'static, SheetApp>, name: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name").type_text(name);
+    h.run_steps(2);
+}
+
+/// Opens Save As (the page closes after every save, and its field starts over each time), types
+/// `name`, picks the file type `fmt` and presses the page's button (`button`).
+fn save_as_named(h: &mut egui_kittest::Harness<'static, SheetApp>, name: &str, fmt: &'static str, button: &str) {
+    choose(h, "Save As");
+    type_file_name(h, name);
+    h.state_mut().backstage.as_mut().unwrap().save_format = fmt;
+    h.run_steps(2);
+    click(h, button);
+}
+
+/// Save As has a File name field (#3497) that starts with the workbook's name. On the desktop the
+/// Save dialog opens with what was typed, for the workbook and for every copy type.
+#[test]
+fn save_as_file_name_names_the_file_for_every_type() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-as-name-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let (capture, target) = (asked.clone(), dir.clone());
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(move |suggested| {
+            capture.lock().unwrap().push(suggested.to_string());
+            Some(target.join(suggested).to_string_lossy().into_owned())
+        })),
+        ..Default::default()
+    });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    choose(&mut h, "Save As");
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name").value().as_deref(), Some("Book1"));
+    for fmt in ["csv", "html", "pdf", "xlsx"] {
+        save_as_named(&mut h, "Quarterly review", fmt, "Browse…");
+        assert!(dir.join(format!("Quarterly review.{fmt}")).is_file(), "{fmt} is saved under the typed name");
+    }
+    assert_eq!(*asked.lock().unwrap(), ["Quarterly review.csv", "Quarterly review.html", "Quarterly review.pdf", "Quarterly review.xlsx"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A name with nothing usable in it falls back to the workbook's own name.
+#[test]
+fn save_as_unusable_file_name_uses_the_workbook_name() {
+    let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+    let capture = asked.clone();
+    let mut h = harness(Services {
+        pick_save: Some(Box::new(move |suggested| {
+            capture.lock().unwrap().push(suggested.to_string());
+            None
+        })),
+        ..Default::default()
+    });
+    save_as_named(&mut h, "  / ", "pdf", "Browse…");
+    assert_eq!(*asked.lock().unwrap(), ["Book1.pdf"]);
+}
+
+/// In the browser the file downloads under the typed name, whatever the type, and an extension
+/// that is the type's own isn't doubled.
+#[test]
+fn web_save_as_downloads_under_the_typed_name() {
+    let files = Arc::new(Mutex::new(Vec::<String>::new()));
+    let capture = files.clone();
+    let mut h = harness(Services { download: Some(Box::new(move |name, _| capture.lock().unwrap().push(name.to_string()))), ..Default::default() });
+    for fmt in ["xlsx", "csv", "html", "pdf"] {
+        // The workbook's own extension typed by hand isn't doubled; for a copy it is just part of the name.
+        let typed = if fmt == "xlsx" { "Plan.xlsx" } else { "Plan" };
+        save_as_named(&mut h, typed, fmt, &format!("Download (.{fmt})"));
+    }
+    assert_eq!(*files.lock().unwrap(), ["Plan.xlsx", "Plan.csv", "Plan.html", "Plan.pdf"]);
+}
+
+/// A `fileName` passed straight to `file.exportPdf` is cleaned like the one typed on Save As: no
+/// folder separators, no doubled `.pdf`, and an unusable one falls back to the workbook's name.
+#[test]
+fn export_pdf_file_name_param_is_cleaned() {
+    let files = Arc::new(Mutex::new(Vec::<String>::new()));
+    let capture = files.clone();
+    let mut h = harness(Services { download: Some(Box::new(move |name, _| capture.lock().unwrap().push(name.to_string()))), ..Default::default() });
+    for typed in ["Plan.pdf", "a/b", "  / "] {
+        h.state_mut().run("file.exportPdf", serde_json::json!({"fileName": typed})).unwrap();
+    }
+    assert_eq!(*files.lock().unwrap(), ["Plan.pdf", "a b.pdf", "Book1.pdf"]);
+}
+
+/// What is typed becomes a file stem: no folder separators or control characters, no doubled
+/// extension, and nothing left means "use the workbook's name".
+#[test]
+fn typed_file_names_are_cleaned() {
+    use gridcraft_ui_egui::backstage::clean_file_stem;
+    assert_eq!(clean_file_stem("Budget", "xlsx").as_deref(), Some("Budget"));
+    assert_eq!(clean_file_stem("  Budget.XLSX ", "xlsx").as_deref(), Some("Budget"));
+    assert_eq!(clean_file_stem("Budget.csv", "xlsx").as_deref(), Some("Budget.csv"));
+    assert_eq!(clean_file_stem("a/b\\c", "pdf").as_deref(), Some("a b c"));
+    assert_eq!(clean_file_stem("a\tb", "pdf").as_deref(), Some("ab"));
+    assert_eq!(clean_file_stem("x .xlsx", "xlsx").as_deref(), Some("x"));
+    assert_eq!(clean_file_stem("café.XLSX", "xlsx").as_deref(), Some("café"));
+    assert_eq!(clean_file_stem("Q1: plan?", "xlsx").as_deref(), Some("Q1  plan"));
+    for nothing in ["", "   ", "/", ".", "..", ".xlsx", "*", "<>|"] {
+        assert_eq!(clean_file_stem(nothing, "xlsx"), None, "{nothing:?}");
+    }
+}
+
+/// The name typed on Save As is still used when Export, not Save As, is the page that saves.
+#[test]
+fn export_page_uses_the_name_typed_on_save_as() {
+    let files = Arc::new(Mutex::new(Vec::<String>::new()));
+    let capture = files.clone();
+    let mut h = harness(Services { download: Some(Box::new(move |name, _| capture.lock().unwrap().push(name.to_string()))), ..Default::default() });
+    choose(&mut h, "Save As");
+    type_file_name(&mut h, "Plan");
+    choose(&mut h, "Export");
+    click(&mut h, "Create PDF");
+    assert_eq!(*files.lock().unwrap(), ["Plan.pdf"]);
+}
