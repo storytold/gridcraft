@@ -257,7 +257,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         (false, _) => None,
     };
     if let Some(text) = source {
-        let ink = equation_ink(obj.child("txBody"), &text, described_source(descr).is_some());
+        let ink = equation_ink(tb, &text, described_source(descr).is_some(), has_math);
         return Some(Shape {
             id: 0,
             kind: ShapeKind::Equation,
@@ -328,17 +328,21 @@ fn described_source(descr: &str) -> Option<(&str, &str)> {
 }
 
 /// The colour an equation's frame carries (its "ink": the colour of everything the source does
-/// not colour itself). GridCraft saves it on the paragraph's `a:endParaRPr`. Another writer's
-/// Office Math has none: its first run's colour stands in. The runs of GridCraft's own equation
-/// cannot stand in when the source colours some of them (`{\color{green}a}+d` would read back
-/// green), so a source with a colour command and no saved ink reads as Automatic.
-fn equation_ink(tb: Option<&El>, source: &str, own: bool) -> Color {
+/// not colour itself). GridCraft saves it on its own Office Math paragraph's `a:endParaRPr`;
+/// another writer's paragraph-end formatting is not that convention, so its first run's colour
+/// stands in, as do the runs of a body without Office Math (one colour throughout: the plain-text
+/// box of an equation outside the subset). The runs of GridCraft's own Office Math cannot stand
+/// in when the source colours some of them (`{\color{green}a}+d` would read back green), so such
+/// a source with no saved ink reads as Automatic.
+fn equation_ink(tb: Option<&El>, source: &str, own: bool, has_math: bool) -> Color {
     let Some(tb) = tb else { return Color::default() };
-    if let Some(c) = tb.kids("p").find_map(|p| p.child("endParaRPr")).and_then(|e| e.child("solidFill")).and_then(dml_color) {
-        return c;
-    }
-    if own && (source.contains("\\color") || source.contains("\\textcolor")) {
-        return Color::default();
+    if own && has_math {
+        if let Some(c) = tb.kids("p").find_map(|p| p.child("endParaRPr")).and_then(|e| e.child("solidFill")).and_then(dml_color) {
+            return c;
+        }
+        if source.contains("\\color") || source.contains("\\textcolor") {
+            return Color::default();
+        }
     }
     first_run_color(tb, 0).unwrap_or_default()
 }

@@ -512,3 +512,43 @@ fn a_coloured_run_in_gridcraft_s_own_equation_is_not_the_frames_ink() {
     assert_eq!(first_run_green("a+b", Color::Auto, true).line, Color::Rgb(0x008000));
     assert_eq!(first_run_green("a+b", Color::Auto, false).line, Color::Rgb(0x008000));
 }
+
+#[test]
+fn another_writer_s_paragraph_end_colour_is_not_the_frames_ink() {
+    // Another writer's Office Math with a green first run and a blue paragraph end: the blue
+    // `a:endParaRPr` is that writer's formatting, not GridCraft's saved ink, so the first run's
+    // colour stays the frame's ink as before.
+    let s = first_run_green("a+b", Color::Rgb(0x0000FF), false);
+    assert_eq!(s.line, Color::Rgb(0x008000));
+}
+
+#[test]
+fn a_coloured_equation_without_office_math_keeps_its_frame_ink() {
+    // `\begin{CD}` is outside the Office Math subset, so the equation is saved as the plain-text
+    // box alone, whose runs all carry the frame's ink; the colour command in the source does not
+    // make that ink Automatic on reopening.
+    let src = "{\\color{red}A} \\begin{CD} A @>f>> B \\end{CD}";
+    for ink in [Color::Rgb(0x0000FF), Color::Auto] {
+        let bytes = write_xlsx(&book(vec![equation(1, "B2", src, ink)])).unwrap();
+        assert!(!drawing(&unzip(&bytes)).contains("<a14:m>"), "written without Office Math");
+        let s = shapes(&read_xlsx(&bytes).unwrap().0);
+        assert_eq!((s.len(), s[0].kind, s[0].text.as_str(), s[0].line), (1, ShapeKind::Equation, src, ink));
+    }
+}
+
+#[test]
+fn nested_colours_keep_the_frame_ink_through_save_and_reopen() {
+    // The combined round trip: the uncoloured parts (`b`, `+d`) take the frame's ink, so saving
+    // and reopening, twice, must leave that ink as it was rather than the source's green.
+    let src = "{\\color{green}a+{\\color{black}b}+c}+d";
+    for ink in [Color::Auto, Color::Rgb(0x1F4E79)] {
+        let mut wb = book(vec![equation(1, "B2", src, ink)]);
+        for _ in 0..2 {
+            let bytes = write_xlsx(&wb).unwrap();
+            assert!(drawing(&unzip(&bytes)).contains("<a14:m>"), "written as Office Math");
+            wb = read_xlsx(&bytes).unwrap().0;
+            let s = shapes(&wb);
+            assert_eq!((s.len(), s[0].kind, s[0].text.as_str(), s[0].line), (1, ShapeKind::Equation, src, ink));
+        }
+    }
+}
