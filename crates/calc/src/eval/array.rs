@@ -1,4 +1,5 @@
 use super::{Array, BinOp, CellError, MAX_CELLS, Value, compare};
+use gridcraft_core::Region;
 
 /// The aggregates that can fold a reference without building an array.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -53,12 +54,14 @@ impl Acc {
 
 // ---------------------------------------------------------------- operators
 
-pub(super) fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: gridcraft_core::DateSystem) -> Value {
+pub(super) fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: gridcraft_core::DateSystem, region: &Region) -> Value {
     match v {
-        Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys)).collect() }),
+        Value::Array(a) => {
+            Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys, region)).collect() })
+        }
         Value::Error(e) => Value::Error(*e),
         Value::Text(_) if plus => v.clone(),
-        other => match other.to_number_in(sys) {
+        other => match other.to_number_region(sys, region) {
             Ok(n) => f(n),
             Err(e) => Value::Error(e),
         },
@@ -165,19 +168,20 @@ pub(super) fn single(v: Value) -> Option<Value> {
 /// error for a result too large to hold, before the rest is built.
 pub(super) const MAX_CONCAT_ARRAY_BYTES: usize = 512 * 1024 * 1024;
 
-pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem) -> Value {
+/// `x op y` with numeric text read in `region`.
+pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem, region: &Region) -> Value {
     if op == BinOp::Concat && (matches!(x, Value::Array(_)) || matches!(y, Value::Array(_))) {
-        return concat_arrays(x, y, sys, MAX_CONCAT_ARRAY_BYTES);
+        return concat_arrays(x, y, sys, region, MAX_CONCAT_ARRAY_BYTES);
     }
-    zip2(x, y, |a, b| binary_scalar(op, a, b, sys))
+    zip2(x, y, |a, b| binary_scalar(op, a, b, sys, region))
 }
 
 /// `x & y` with at least one array operand, giving `#NUM!` once the texts built so far pass `budget`
 /// bytes.
-fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: usize) -> Value {
+fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, region: &Region, budget: usize) -> Value {
     let mut used = 0usize;
     try_zip2(x, y, |a, b| {
-        let v = binary_scalar(BinOp::Concat, a, b, sys);
+        let v = binary_scalar(BinOp::Concat, a, b, sys, region);
         if let Value::Text(t) = &v {
             used = used.saturating_add(t.len());
             if used > budget {
@@ -189,14 +193,14 @@ fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: 
     .unwrap_or(Value::Error(CellError::Num))
 }
 
-fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
+fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem, region: &Region) -> Value {
     if let Value::Error(e) = a {
         return Value::Error(*e);
     }
     if let Value::Error(e) = b {
         return Value::Error(*e);
     }
-    let num = |f: fn(f64, f64) -> Value| match (a.to_number_in(sys), b.to_number_in(sys)) {
+    let num = |f: fn(f64, f64) -> Value| match (a.to_number_region(sys, region), b.to_number_region(sys, region)) {
         (Ok(x), Ok(y)) => f(x, y),
         (Err(e), _) | (_, Err(e)) => Value::Error(e),
     };
@@ -258,12 +262,13 @@ mod tests {
         let col = Value::from(Array::column((0..100).map(|i| Value::number(i as f64)).collect()));
         let long = Value::text("x".repeat(100));
         // 100 cells of 101 or 102 bytes each: about 10 KB in all.
-        let r = concat_arrays(&col, &long, sys, 20_000);
+        let en = &gridcraft_core::region::EN_US;
+        let r = concat_arrays(&col, &long, sys, en, 20_000);
         assert!(matches!(&r, Value::Array(a) if a.data.len() == 100), "{r:?}");
-        assert_eq!(concat_arrays(&col, &long, sys, 5_000), Value::Error(CellError::Num));
-        assert_eq!(concat_arrays(&long, &col, sys, 5_000), Value::Error(CellError::Num));
+        assert_eq!(concat_arrays(&col, &long, sys, en, 5_000), Value::Error(CellError::Num));
+        assert_eq!(concat_arrays(&long, &col, sys, en, 5_000), Value::Error(CellError::Num));
         // Through the operator, a small result is unaffected.
-        let r = super::binary_values(BinOp::Concat, &col, &Value::text("a"), sys);
+        let r = super::binary_values(BinOp::Concat, &col, &Value::text("a"), sys, en);
         assert!(matches!(&r, Value::Array(a) if a.data.first() == Some(&Value::text("0a"))), "{r:?}");
     }
 

@@ -79,7 +79,7 @@ pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, lay
         }
         let name = ctx.fit(&series.name, LABEL_SIZE, plot.x - name_x - 4.0);
         ctx.text(name_x, y, &name, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
-        let fmt = Fmt::new(&series.number_format);
+        let fmt = Fmt::new(&series.number_format, ctx.region);
         for j in 0..layout.columns {
             let value = series.values.get(j).copied().flatten().map(|v| fmt.format(v, None)).unwrap_or_default();
             let text = ctx.fit(&value, LABEL_SIZE, cw - 4.0);

@@ -166,6 +166,12 @@ fn num_text(t: &str) -> Option<f64> {
     gridcraft_core::parse::parse_number_text(t.trim()).filter(|v| v.is_finite())
 }
 
+/// A number in a `data.solver` param: the en-US `.` the API sends, or the workbook region's
+/// typed form (`12,5` in `pt-BR`). Saved models keep [`num_text`], as their formulas are canonical.
+fn typed_num_text(wb: &Workbook, t: &str) -> Option<f64> {
+    gridcraft_core::parse::parse_number_param(t, wb.date_system, wb.region).filter(|v| v.is_finite())
+}
+
 /// `t` split at the first `pat` outside quoted sheet names: `'A<=B'!$C$1 <= 5` splits at the
 /// second `<=`. A doubled quote inside a name (`'O''Brien<=1'!A1`) toggles the quoted state
 /// twice, as in [`split_areas`], so it doesn't end the name.
@@ -229,8 +235,8 @@ fn parse_constraint(wb: &Workbook, sheet: usize, c: &Json) -> Result<Constraint>
             }
             Json::String(t) => {
                 let t = t.trim().trim_start_matches('=').trim();
-                if let Some(v) = num_text(t) {
-                    (Rhs::Const(v), t.to_string())
+                if let Some(v) = typed_num_text(wb, t) {
+                    (Rhs::Const(v), gridcraft_core::number_to_text(v))
                 } else {
                     let (rsi, cells) = cells_of(wb, t, sheet, MAX_CONSTRAINTS)?;
                     if rsi != sheet {
@@ -263,7 +269,7 @@ pub(super) fn parse_model(s: &Session, p: &Json) -> Result<Model> {
         "min" | "minimize" | "minimum" => Goal::Min,
         "value" | "valueof" | "value of" => {
             let v = f64_param(p, "value")
-                .or_else(|| str_param(p, "value").and_then(num_text))
+                .or_else(|| str_param(p, "value").and_then(|t| typed_num_text(wb, t)))
                 .filter(|v| v.is_finite())
                 .ok_or_else(|| bad(CMD, "goal `value` needs a number in `value`"))?;
             Goal::Value(v)

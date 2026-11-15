@@ -20,8 +20,16 @@ fn split_op(t: &str) -> (&str, &str) {
     ("begins", t)
 }
 
-/// Does a list value match one criteria cell's value (Excel's advanced-filter semantics)?
+/// [`criterion_matches_in`] with en-US numbers.
+#[cfg(test)]
 pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
+    criterion_matches_in(v, text, crit, gridcraft_core::DateSystem::D1900, &gridcraft_core::region::EN_US)
+}
+
+/// Does a list value match one criteria cell's value (Excel's advanced-filter semantics)? A
+/// number in the criterion text is read as a command parameter: en-US `.` or `region`'s form
+/// (`>12,5` in `pt-BR`).
+pub(crate) fn criterion_matches_in(v: &Value, text: &str, crit: &Value, sys: gridcraft_core::DateSystem, region: &gridcraft_core::Region) -> bool {
     let crit_text = match crit {
         Value::Empty => return true,
         Value::Number(n) => return v.as_f64().is_some_and(|x| (x - n).abs() <= 1e-12 * n.abs().max(1.0)),
@@ -38,7 +46,7 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
             _ => true,
         };
     }
-    let num = gridcraft_core::parse::parse_number_text(operand);
+    let num = gridcraft_core::parse::parse_number_param(operand, sys, region);
     let lower_text = text.to_lowercase();
     let lower_op = operand.to_lowercase();
     use std::cmp::Ordering;
@@ -150,7 +158,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                     let at = CellRef::new(row, list.start.col + off);
                     let v = sh.value(at);
                     let text = crate::display::cell_text(wb, sh, at);
-                    criterion_matches(&v, &text, crit)
+                    criterion_matches_in(&v, &text, crit, wb.date_system, wb.region)
                 }
                 Cond::Computed(e, at) => {
                     let shifted = gridcraft_formula::adjust::shift_relative(e.clone(), row as i64 - first_data as i64, 0);

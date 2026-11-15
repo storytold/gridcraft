@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use gridcraft_core::parse::parse_number_text_in;
+use gridcraft_core::parse::{parse_number_text_in, parse_number_text_in_region};
 use gridcraft_core::{CellError, Value, number_to_text};
 
 use crate::criteria::wildcard_find;
@@ -353,7 +353,8 @@ fn value(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         Value::Number(n) => num_val(n),
         Value::Empty => num_val(0.0),
         Value::Error(e) => Err(e),
-        Value::Text(t) => parse_number_text_in(&t, c.date_system()).ok_or(CellError::Value).and_then(num_val),
+        // Read in the workbook's region: 1,5 is one and a half in pt-BR.
+        Value::Text(t) => parse_number_text_in_region(&t, c.date_system(), c.region()).ok_or(CellError::Value).and_then(num_val),
         _ => Err(CellError::Value),
     }
 }

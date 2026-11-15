@@ -255,7 +255,11 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             "Relative standing of a value strictly between 0 and 1.",
             |a: &[Arg], _c: C| percentrank_impl(a, true)
         ),
-        f!("COUNT", 1, VAR, Statistical, A, "COUNT(value1, [value2], ...)", "Counts the numbers.", |a: &[Arg], _c: C| num_val(count_impl(a))),
+        f!("COUNT", 1, VAR, Statistical, A, "COUNT(value1, [value2], ...)", "Counts the numbers.", |a: &[Arg], c: C| num_val(count_impl(
+            a,
+            c.date_system(),
+            c.region()
+        ))),
         f!("COUNTA", 1, VAR, Statistical, A, "COUNTA(value1, [value2], ...)", "Counts the non-empty values.", |a: &[Arg], _c: C| num_val(
             counta_impl(a)
         )),
