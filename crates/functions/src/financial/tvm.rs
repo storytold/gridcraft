@@ -295,7 +295,13 @@ pub(super) fn xnpv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 pub(super) fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value)?;
-    let guess = opt_num(a, 2, 0.1)?;
+    // A Boolean guess is #VALUE!: Excel does not read TRUE/FALSE as 1/0 here, while `opt_num`
+    // would. Every other coercion (a numeric guess, numeric text, an empty literal) stays.
+    let guess = match a.get(2).map(|g| g.value.scalar()) {
+        None => 0.1,
+        Some(Value::Bool(_)) => return Err(CellError::Value),
+        Some(_) => opt_num(a, 2, 0.1)?,
+    };
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
     }
