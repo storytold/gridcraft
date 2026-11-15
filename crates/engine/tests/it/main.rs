@@ -19,6 +19,7 @@ mod image_function;
 mod ink_roundtrip;
 mod line_count_overflow;
 mod long_operator_chains;
+mod merged_selection_keys;
 mod offset_overflow;
 mod percent_entry;
 mod pivot_unknown_func;
