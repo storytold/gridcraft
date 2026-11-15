@@ -88,9 +88,10 @@ all exported pages. Distinct characters remain copyable even when the font share
 Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only
 embedding, and characters absent from a selected face return an error before the output file is
 written. TrueType outlines in an OpenType container are accepted; extensions do not validate font
-bytes. Fonts are embedded whole, without subsetting. Explicit font selection does not add shaping, ligatures, bidi or
+bytes. Fonts are embedded whole, without subsetting. Explicit font selection does not add complex shaping, ligatures or
 variable-font axis selection; use static faces and scripts that need no complex shaping. Custom
-font files are not added to the repository.
+font files are not added to the repository. Paragraph base direction and mirrored RTL sheet layout
+follow the workbook while retaining the selected faces and widths.
 
 Without an explicit face for the text, Arabic uses shaped Noto Type3 subsets from the optional
 build font bundle or supported system paths. Latin text uses the standard PDF fonts; Greek and Cyrillic can use the

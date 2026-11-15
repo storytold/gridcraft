@@ -13,10 +13,12 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 #[cfg(test)]
 use gridcraft_model::{Alignment, Image, SheetViewMode};
 use gridcraft_model::{
-    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ShapeKind, Sheet, Style, StyleId,
-    StyleTable, Underline, VAlign, Visibility, Workbook,
+    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ReadingOrder, ShapeKind, Sheet,
+    Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
 };
-use gridcraft_pdf::{Font, MAX_FONT_BYTES, MAX_FONT_FAMILIES, MAX_TOTAL_FONT_BYTES, Page, PdfDoc, Point, Rect, Rgb, TextFonts, UnicodeFont};
+use gridcraft_pdf::{
+    Baseline, Font, MAX_FONT_BYTES, MAX_FONT_FAMILIES, MAX_TOTAL_FONT_BYTES, Page, PdfDoc, Point, Rect, Rgb, TextDirection, TextFonts, UnicodeFont,
+};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -207,7 +209,16 @@ fn render_document(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &st
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
-                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
+                    printed_blocks.push(PrintedBlock {
+                        page: page_index,
+                        sheet: lay.sheet,
+                        rows: *rs,
+                        cols: *cs,
+                        x,
+                        y,
+                        k,
+                        mirror_axis: sh.right_to_left.then_some(b.mirror_axis),
+                    });
                     if lay.settings.headings {
                         draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                     }
@@ -223,6 +234,7 @@ fn render_document(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &st
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
+                let ox = if sh.right_to_left { lay.page_w - ox - lay.heading_w * k } else { ox };
                 pg.fill_rect(ox, oy, lay.heading_w * k, lay.heading_h * k, fill);
                 pg.rect_stroke(ox, oy, lay.heading_w * k, lay.heading_h * k, 0.3, [0xA0, 0xA0, 0xA0]);
             }

@@ -28,6 +28,38 @@ pub use symbol::{symbol_code, symbol_width};
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 
+/// Paragraph base direction. Context follows spreadsheet reading order: the first
+/// non-whitespace character determines direction, including digits and punctuation.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TextDirection {
+    #[default]
+    Auto,
+    Context,
+    LeftToRight,
+    RightToLeft,
+}
+
+impl TextDirection {
+    /// Resolve once for a paragraph before wrapping it into visual lines.
+    pub fn resolve(self, text: &str) -> Self {
+        use unicode_bidi::{BidiClass, BidiInfo, bidi_class};
+        let rtl = match self {
+            Self::Auto => BidiInfo::new(text, None).paragraphs.first().is_some_and(|p| p.level.is_rtl()),
+            Self::Context => text.chars().find(|ch| !ch.is_whitespace()).is_some_and(|ch| matches!(bidi_class(ch), BidiClass::R | BidiClass::AL)),
+            explicit => return explicit,
+        };
+        if rtl { Self::RightToLeft } else { Self::LeftToRight }
+    }
+
+    fn level(self) -> Option<unicode_bidi::Level> {
+        match self {
+            Self::Auto => None,
+            Self::LeftToRight | Self::Context => Some(unicode_bidi::Level::ltr()),
+            Self::RightToLeft => Some(unicode_bidi::Level::rtl()),
+        }
+    }
+}
+
 /// A PDF export could not preserve the requested text.
 #[derive(Clone, Debug)]
 pub struct Error(String);
@@ -252,9 +284,23 @@ impl TextFonts {
 
     /// Width using exactly the face that will draw the text, in points.
     pub fn text_width(&self, font: Font, size: f32, text: &str) -> f32 {
+        self.text_width_with_direction(font, size, text, TextDirection::Auto)
+    }
+
+    /// Whether composable measurements preserve this paragraph's visual advances.
+    pub fn width_is_char_sum(&self, font: Font, text: &str, direction: TextDirection) -> bool {
+        let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
+        !self.is_shaped(font, text) && arabic::is_logical_order(text, direction)
+    }
+
+    /// Width measured with these faces and the paragraph's base direction.
+    pub fn text_width_with_direction(&self, font: Font, size: f32, text: &str, direction: TextDirection) -> f32 {
+        let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
         if self.is_shaped(font, text) {
-            return arabic::layout(font, text).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
+            return arabic::layout(font, text, direction).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
         }
+        let Ok(visual) = arabic::latin_visual(text, direction) else { return 0.0 };
+        let text = visual.as_ref();
         let slot = self.slot(font, text);
         let units = if slot.is_some()
             || self.custom
@@ -349,6 +395,13 @@ impl Point {
     pub const fn new(x: f32, y: f32) -> Self {
         Self { x, y }
     }
+}
+
+/// A text baseline origin and its clockwise rotation in radians.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Baseline {
+    pub origin: Point,
+    pub angle: f32,
 }
 
 /// A page-space rectangle described by its top-left corner and extent.
@@ -536,16 +589,19 @@ impl Font {
     }
 }
 
-/// Whether `text` set in `font` is shaped, so its width is not the sum of its characters' widths.
-pub fn is_shaped(font: Font, text: &str) -> bool {
-    SYSTEM_FONTS.text().is_shaped(font, text)
+/// Whether the system font set can measure this text incrementally.
+pub fn width_is_char_sum(font: Font, text: &str, direction: TextDirection) -> bool {
+    SYSTEM_FONTS.text().width_is_char_sum(font, text, direction)
 }
 
-/// Width of `text` in points when set in `font` at `size` points.
-/// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
-/// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
+/// Width of text using the registered faces and automatic direction.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     SYSTEM_FONTS.text().text_width(font, size, text)
+}
+
+/// Width using the registered faces and the same direction as drawing.
+pub fn text_width_with_direction(font: Font, size: f32, text: &str, direction: TextDirection) -> f32 {
+    SYSTEM_FONTS.text().text_width_with_direction(font, size, text, direction)
 }
 
 /// Unicode → WinAnsiEncoding (CP1252) byte; unmappable characters become `?`.
@@ -1078,10 +1134,15 @@ impl Page {
     /// Arabic ink extents above and below the baseline, in points. Standard font text returns
     /// `None`. Font errors are recorded for [`PdfDoc::finish`], just as when drawing text.
     pub fn text_vertical_extents(&mut self, font: Font, size: f32, text: &str) -> Option<(f32, f32)> {
+        self.text_vertical_extents_with_direction(font, size, text, TextDirection::Auto)
+    }
+
+    /// Arabic ink extents with an explicit paragraph base direction.
+    pub fn text_vertical_extents_with_direction(&mut self, font: Font, size: f32, text: &str, direction: TextDirection) -> Option<(f32, f32)> {
         if !self.unicode.is_shaped(font, text) {
             return None;
         }
-        match arabic::vertical_extents(font, text) {
+        match arabic::vertical_extents(font, text, direction) {
             Ok((ascent, descent)) => Some((ascent * size / 1000.0, descent * size / 1000.0)),
             Err(error) => {
                 self.error.get_or_insert(error);
@@ -1092,44 +1153,90 @@ impl Page {
 
     /// Text with its baseline starting at `(x, y)`.
     pub fn text(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str) {
-        self.text_rotated(Point::new(x, y), size, font, color, text, 0.0);
+        self.text_with_direction(Point::new(x, y), size, font, color, text, TextDirection::Auto);
+    }
+
+    /// Text drawn with an explicit paragraph base direction.
+    pub fn text_with_direction(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        self.text_rotated_with_direction(Baseline { origin, angle: 0.0 }, size, font, color, text, direction);
     }
 
     /// Text rotated by `angle` radians (clockwise on the page, like the y-down coordinate
     /// system) about its baseline origin.
     pub fn text_rotated(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+        self.text_rotated_with_direction(Baseline { origin, angle }, size, font, color, text, TextDirection::Auto);
+    }
+
+    /// Rotated text with an explicit paragraph base direction.
+    pub fn text_rotated_with_direction(&mut self, baseline: Baseline, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        let Baseline { origin, angle } = baseline;
         if text.is_empty() || !extent(size) || !finite(&[origin.x, origin.y]) || self.full() {
             return;
         }
+        let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+        // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
+        let matrix = format!("{} {} {} {} {} {}", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
+        let size = size.min(10_000.0);
         let shaping = self.unicode.shaping(font, text);
         self.missing_arabic_font |= shaping == arabic::Shaping::NoFont;
         if shaping == arabic::Shaping::Shaped {
-            if self.saved.len() >= MAX_SAVE_DEPTH {
+            self.shaped_text(&matrix, size, font, color, text, direction);
+        } else {
+            self.standard_text(baseline, size, font, color, text, direction);
+        }
+    }
+
+    fn shaped_text(&mut self, matrix: &str, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        if self.saved.len() >= MAX_SAVE_DEPTH {
+            return;
+        }
+        let body = match self.arabic.text(font, text, size, direction) {
+            Ok(body) => body,
+            Err(error) => {
+                self.error.get_or_insert(error);
                 return;
             }
-            match self.arabic.text(font, text, size.min(10_000.0)) {
-                Ok(body) => {
-                    for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT)].into_iter().flatten() {
-                        if let Some(f) = self.fonts.get_mut(slot) {
-                            *f = true;
-                        }
-                    }
-                    let mut s = format!("q\n{} {} {} {} {} {} cm\n", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
-                    push_rgb(&mut s, color, false);
-                    s.push(' ');
-                    push_rgb(&mut s, color, true);
-                    let _ = write!(s, "\n{body}\nQ");
-                    if self.content.len().saturating_add(s.len()) > MAX_PAGE_CONTENT {
-                        self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
-                    } else {
-                        self.op(&s);
-                    }
-                }
-                Err(error) => {
-                    self.error.get_or_insert(error);
-                }
+        };
+        for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT)].into_iter().flatten() {
+            if let Some(f) = self.fonts.get_mut(slot) {
+                *f = true;
             }
+        }
+        let mut s = format!("q\n{matrix} cm\n");
+        push_rgb(&mut s, color, false);
+        s.push(' ');
+        push_rgb(&mut s, color, true);
+        let _ = write!(s, "\n{body}\nQ");
+        self.text_op(&s);
+    }
+
+    fn standard_text(&mut self, baseline: Baseline, size: f32, font: Font, color: Rgb, text: &str, direction: TextDirection) {
+        let visual = match arabic::latin_visual(text, direction) {
+            Ok(visual) => visual,
+            Err(error) => {
+                self.error.get_or_insert(error);
+                return;
+            }
+        };
+        // Buffer the complete run so ActualText and its painted text append atomically at the page limit.
+        let content = std::mem::take(&mut self.content);
+        self.unshaped_text(baseline.origin, size, font, color, &visual, baseline.angle);
+        let body = std::mem::replace(&mut self.content, content);
+        let body = if visual != text { format!("/Span << /ActualText {} >> BDC\n{body}EMC\n", arabic::unicode_string(text, true)) } else { body };
+        self.text_op(&body);
+    }
+
+    fn text_op(&mut self, s: &str) {
+        if self.content.len().saturating_add(s.len()).saturating_add(1) > MAX_PAGE_CONTENT {
+            self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
+        } else {
+            self.op(s);
+        }
+    }
+
+    fn unshaped_text(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
+        if text.is_empty() || !extent(size) || !finite(&[origin.x, origin.y]) || self.full() {
             return;
         }
         self.missing_glyph = self.missing_glyph.or_else(|| self.unicode.missing_glyph(font, text));
@@ -1174,7 +1281,7 @@ impl Page {
                 n(self.y(origin.y)),
                 shown
             );
-            self.op(&s);
+            self.text_op(&s);
             return;
         }
         let fi = font.index();
@@ -1193,7 +1300,7 @@ impl Page {
             let mut s = String::new();
             self.set_fill(&mut s, color);
             let _ = write!(s, "BT\n{tm}/F{} {} Tf\n{} Tj\nET", fi + 1, size, pdf_string_in(text, true));
-            self.op(&s);
+            self.text_op(&s);
             return;
         }
         // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
@@ -1223,7 +1330,7 @@ impl Page {
         let mut colour = String::new();
         self.set_fill(&mut colour, color);
         let s = format!("{colour}BT\n{runs}ET");
-        self.op(&s);
+        self.text_op(&s);
     }
 
     /// Assigns document-wide two-byte character codes, independently of TrueType glyph ids.
@@ -1265,6 +1372,11 @@ impl Page {
     /// Width using this page's text faces.
     pub fn text_width(&self, font: Font, size: f32, text: &str) -> f32 {
         self.unicode.text_width(font, size, text)
+    }
+
+    /// Width measured with this page's faces and paragraph base direction.
+    pub fn text_width_with_direction(&self, font: Font, size: f32, text: &str, direction: TextDirection) -> f32 {
+        self.unicode.text_width_with_direction(font, size, text, direction)
     }
 
     /// Draws an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) into the box
