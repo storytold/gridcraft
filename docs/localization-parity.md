@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-15 · **Change:** minor (RaTeX equation parser messages follow the interface language); previously minor (Ukrainian Chart is Діаграма); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -15,8 +15,9 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   the Languages table are a snapshot from the dates given there; every language since added a
   catalog of its own (`crates/ui-egui/src/i18n/<code>.rs`, 18 languages besides English), and
   `cargo xtask i18n-report` lists what each one still lacks. The status bar statistics, resize
-  tips, sheet notes, Goal Seek and macro toasts and the equation editor's own error messages now
-  follow the interface language; error text from the RaTeX equation parser stays English.
+  tips, sheet notes, Goal Seek and macro toasts and the equation editor's error messages, its own
+  and those of the RaTeX equation parser, now follow the interface language (a parser message of
+  a shape GridCraft does not know stays English).
   Where an older bullet below says status messages are English literals, this one supersedes it.
 - **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
   #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the
@@ -142,6 +143,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |

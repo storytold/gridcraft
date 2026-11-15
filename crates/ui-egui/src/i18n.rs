@@ -281,6 +281,52 @@ pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
     out
 }
 
+/// The values that [`fill`] puts into `template` to give `text`, or `None` when `text` has
+/// another shape. A `{name}` of lowercase letters and `_` is a placeholder; any other `{` is
+/// text. Each placeholder takes the text up to the first copy of the literal after it (the last
+/// one takes the rest), and a match counts only when filling the values back in gives `text`.
+pub fn unfill<'a>(template: &'a str, text: &'a str) -> Option<Vec<(&'a str, &'a str)>> {
+    enum Part<'a> {
+        Text(String),
+        Value(&'a str),
+    }
+    let mut parts = Vec::new();
+    let mut literal = String::new();
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('{') {
+        literal.push_str(before);
+        match after.split_once('}').filter(|(name, _)| !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')) {
+            Some((name, tail)) => {
+                parts.push(Part::Text(std::mem::take(&mut literal)));
+                parts.push(Part::Value(name));
+                rest = tail;
+            }
+            None => {
+                literal.push('{');
+                rest = after;
+            }
+        }
+    }
+    literal.push_str(rest);
+    parts.push(Part::Text(literal));
+
+    // `parts` alternates text and placeholder, starting and ending with (maybe empty) text.
+    let mut values = Vec::new();
+    let mut rest = text;
+    for (i, part) in parts.iter().enumerate() {
+        match part {
+            Part::Text(literal) => rest = rest.strip_prefix(literal.as_str())?,
+            Part::Value(name) => {
+                let Some(Part::Text(next)) = parts.get(i + 1) else { return None };
+                let len = if i + 2 == parts.len() { rest.strip_suffix(next.as_str())?.len() } else { rest.find(next.as_str())? };
+                values.push((*name, &rest[..len]));
+                rest = &rest[len..];
+            }
+        }
+    }
+    (rest.is_empty() && fill(template, &values) == text).then_some(values)
+}
+
 /// English text and its translation, sorted by the English.
 type HelpTable = &'static [(&'static str, &'static str)];
 
@@ -455,6 +501,23 @@ mod tests {
         assert_eq!(fill("{ unclosed", &[("unclosed", "x")]), "{ unclosed");
         assert_eq!(fill("50% {}", &[]), "50% {}");
         assert_eq!(Language::En.tr_fill("Sheets: {sheets}", &[("sheets", "Sheet1, Sheet2")]), "Sheets: Sheet1, Sheet2");
+    }
+
+    #[test]
+    fn unfill_reads_back_what_fill_put_in() {
+        assert_eq!(unfill("Expected '{expected}', got '{got}'", "Expected '}', got 'EOF'"), Some(vec![("expected", "}"), ("got", "EOF")]));
+        assert_eq!(
+            unfill("Mismatch: \\begin{{begin}} matched by \\end{{end}}", "Mismatch: \\begin{a} matched by \\end{b}"),
+            Some(vec![("begin", "a"), ("end", "b")])
+        );
+        assert_eq!(unfill("{command} valid only here", "\\hline valid only here"), Some(vec![("command", "\\hline")]));
+        assert_eq!(unfill("Undefined control sequence: {name}", "Undefined control sequence: \\foo"), Some(vec![("name", "\\foo")]));
+        assert_eq!(unfill("Double superscript", "Double superscript"), Some(vec![]));
+        // The last placeholder runs to the closing literal, so a longer message is read whole.
+        assert_eq!(unfill("Invalid type '{type}'", "Invalid type 'a' after 'b'"), Some(vec![("type", "a' after 'b")]));
+        assert_eq!(unfill("Expected '{expected}', got '{got}'", "Expected } here"), None);
+        assert_eq!(unfill("Expected '{expected}'", "Expected 'x' later"), None);
+        assert_eq!(unfill("Mismatched {command}", "Mismatch: x"), None);
     }
 
     /// The templates the UI translates first and fills in after (status bar, toasts, dialog

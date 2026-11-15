@@ -590,6 +590,82 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Goal Seeking found a solution: {value}" => "Doelzoeken heeft een oplossing gevonden: {value}",
         "Sheets: {sheets}" => "Bladen: {sheets}",
         "Hidden: {sheets}" => "Verborgen: {sheets}",
+        "Double superscript" => "Dubbele superscript",
+        "Double subscript" => "Dubbele subscript",
+        "Extra }" => "Overbodige }",
+        "Unexpected end of input in a macro argument" => "Onverwacht einde van de invoer in een macroargument",
+        "Expected \\right after \\left" => "\\right verwacht na \\left",
+        "\\middle must be within \\left and \\right" => "\\middle moet tussen \\left en \\right staan",
+        "Invalid environment name" => "Ongeldige omgevingsnaam",
+        "Expected \\end after environment body" => "\\end verwacht na de inhoud van de omgeving",
+        "Expected URL" => "URL verwacht",
+        "\\tag requires an argument" => "\\tag vereist een argument",
+        "only one infix operator per group" => "Slechts één infix-operator per groep",
+        "Expected color token" => "Kleur verwacht",
+        "Expected size for \\raisebox" => "Grootte verwacht voor \\raisebox",
+        "Expected size for \\rule width" => "Grootte verwacht voor de breedte van \\rule",
+        "Expected size for \\rule height" => "Grootte verwacht voor de hoogte van \\rule",
+        "Cannot use both \\tag and \\nonumber in the same row" => "\\tag en \\nonumber kunnen niet in dezelfde rij staan",
+        "Multiple \\tag in a row" => "Meerdere \\tag in een rij",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag moet aan het einde van de rij na de vergelijking staan",
+        "Multiple \\nonumber in a row" => "Meerdere \\nonumber in een rij",
+        "\\nonumber must appear at the end of the row" => "\\nonumber moet aan het einde van de rij staan",
+        "Too many tab characters: &" => "Te veel tabtekens: &",
+        "Invalid column alignment for array" => "Ongeldige kolomuitlijning voor array",
+        "Expected column alignment character" => "Teken voor kolomuitlijning verwacht",
+        "Expected l or c or r" => "l, c of r verwacht",
+        "Expected ]" => "] verwacht",
+        "Unexpected end of CD row after @" => "Onverwacht einde van de CD-rij na @",
+        "Invalid column alignment for subarray" => "Ongeldige kolomuitlijning voor subarray",
+        "{subarray} can contain only one column" => "{subarray} kan maar één kolom bevatten",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "prooftree heeft een \\LeftLabel of \\RightLabel zonder volgende afleidingsopdracht"
+        }
+        "Recursion limit exceeded" => "Recursielimiet overschreden",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Te veel macro-uitbreidingen: oneindige lus of maxExpand-instelling te laag"
+        }
+        "Expected raw style for \\htmlStyle" => "Onbewerkte stijl verwacht voor \\htmlStyle",
+        "\\verb assertion failed" => "Controle van \\verb mislukt",
+        "Undefined control sequence: {name}" => "Onbekende besturingsreeks: {name}",
+        "Expected '{expected}', got '{got}'" => "'{expected}' verwacht, '{got}' gevonden",
+        "Expected group after '{symbol}'" => "Groep verwacht na '{symbol}'",
+        "Expected delimiter as argument to '{function}'" => "Scheidingsteken verwacht als argument van '{function}'",
+        "Expected group as argument to '{function}'" => "Groep verwacht als argument van '{function}'",
+        "Got function '{function}' with no arguments as superscript" => "Functie '{function}' zonder argumenten gebruikt als superscript",
+        "Got function '{function}' with no arguments as subscript" => "Functie '{function}' zonder argumenten gebruikt als subscript",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Functie '{function}' zonder argumenten gebruikt als argument van '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Functie '{function}' zonder argumenten gebruikt als \\tag",
+        "Can't use function '{function}' in text mode" => "Functie '{function}' kan niet in tekstmodus worden gebruikt",
+        "Can't use function '{function}' in math mode" => "Functie '{function}' kan niet in wiskundemodus worden gebruikt",
+        "Invalid color: '{color}'" => "Ongeldige kleur: '{color}'",
+        "Invalid size: '{size}'" => "Ongeldige grootte: '{size}'",
+        "Invalid unit: '{unit}'" => "Ongeldige eenheid: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Ongeldig scheidingsteken '{delimiter}' na '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Ongeldig type scheidingsteken '{type}' na '{function}'",
+        "Invalid delimiter type '{type}'" => "Ongeldig type scheidingsteken '{type}'",
+        "No such environment: {name}" => "Onbekende omgeving: {name}",
+        "Expected argument to \\begin{{name}}" => "Argument verwacht voor \\begin{{name}}",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Komt niet overeen: \\begin{{begin}} afgesloten met \\end{{end}}",
+        "{command} valid only within array environment" => "{command} is alleen geldig binnen een array-omgeving",
+        "Mismatched {command}" => "{command} zonder tegenhanger",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "&, \\\\, \\cr of \\end verwacht, '{got}' gevonden",
+        "Unknown column alignment: {alignment}" => "Onbekende kolomuitlijning: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Te veel formules in een rij: {expected} verwacht, {got} gevonden",
+        "Unknown CD directive: @{directive}" => "Onbekende CD-opdracht: @{directive}",
+        "Expected argument for {command}" => "Argument verwacht voor {command}",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "{command} heeft {count} premisse(s) nodig, maar er zijn er maar {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} is in prooftree alleen geldig als ondersteunde bussproofs-opdracht"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => "prooftree eindigde met {count} item(s) op de bewijsstapel, 1 verwacht",
+        "\\@char has non-numeric argument {argument}" => "\\@char heeft een niet-numeriek argument {argument}",
+        "\\@char with invalid code point {code}" => "\\@char met ongeldig codepunt {code}",
+        "Invalid environment name character: {character}" => "Ongeldig teken in de omgevingsnaam: {character}",
         _ => return None,
     })
 }
