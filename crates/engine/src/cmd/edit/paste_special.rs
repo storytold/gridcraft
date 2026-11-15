@@ -257,23 +257,44 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             What::Formats => new.style = map_style(sc_cell.style, &mut cx.wb),
                             What::Comments | What::Validation | What::ColumnWidths => {}
                         }
-                        // Operations combine numbers with what is already there.
-                        if op != "none"
-                            && matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas)
-                            && new.formula.is_none()
-                            && new.py.is_none()
+                        let sym = match op.as_str() {
+                            "add" => Some('+'),
+                            "subtract" => Some('-'),
+                            "multiply" => Some('*'),
+                            "divide" => Some('/'),
+                            _ => None,
+                        };
+                        let operates = sym.is_some()
+                            && matches!(
+                                what,
+                                What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas | What::FormulasAndNumberFormats
+                            )
+                            && new.py.is_none();
+                        // A copied formula joins a formula already there, each in parentheses
+                        // (`=(A2*2)*(C2+1)`), so the result keeps following both.
+                        if operates
+                            && let (Some(f), Some(pasted), Some(sym)) = (&old.formula, &new.formula, sym)
+                            && f.array.is_none()
+                            && pasted.array.is_none()
                         {
+                            let text = format!("=({}){sym}({})", f.text, pasted.text);
+                            new.formula = Some(combined_formula(&text, f.expr.is_some() && pasted.expr.is_some(), &dest_name, dest)?);
+                            new.value = Value::Empty;
+                        }
+                        // Operations combine numbers with what is already there.
+                        if operates && new.formula.is_none() {
                             if old_picture.is_some() || new_picture.is_some() {
                                 new_picture = None;
                                 new.value = Value::Error(gridcraft_core::CellError::Value);
                             }
                             let a = old.value.clone();
                             let b = new.value.clone();
-                            // Numbers stored as text take part (multiplying by 1 turns them into
-                            // numbers); other text and errors stay as they are.
+                            // Numbers stored as text take part on either side (multiplying by 1
+                            // turns them into numbers); other text and errors stay as they are.
+                            let b_number = (b.is_number() || b.is_empty() || b.is_text()) && b.to_number().is_ok();
                             if let (Ok(x), Ok(y)) = (a.to_number(), b.to_number())
                                 && (a.is_number() || a.is_empty() || a.is_text())
-                                && (b.is_number() || b.is_empty())
+                                && b_number
                             {
                                 new.value = match op.as_str() {
                                     "add" => Value::number(x + y),
@@ -288,23 +309,21 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                     }
                                     _ => b.clone(),
                                 };
-                            } else if (a.is_text() || a.is_error()) && (b.is_number() || b.is_empty()) {
+                            } else if (a.is_text() || a.is_error()) && b_number {
                                 new.value = a;
+                            } else if b.is_text() && !b_number && (!a.is_empty() || old.formula.is_some()) {
+                                // Copied text that isn't a number leaves what is there unchanged.
+                                new.value = a;
+                                new.formula = old.formula.clone();
                             }
                             // A formula already there is kept and combined with the pasted number.
                             if let Some(f) = &old.formula
                                 && let Ok(y) = b.to_number()
-                                && (b.is_number() || b.is_empty())
-                                && let Some(sym) = match op.as_str() {
-                                    "add" => Some('+'),
-                                    "subtract" => Some('-'),
-                                    "multiply" => Some('*'),
-                                    "divide" => Some('/'),
-                                    _ => None,
-                                }
+                                && b_number
+                                && let Some(sym) = sym
                             {
                                 let text = format!("=({}){sym}{}", f.text, gridcraft_core::number_to_text(y));
-                                new.formula = Some(std::sync::Arc::new(Formula::new(&text)));
+                                new.formula = Some(combined_formula(&text, f.expr.is_some(), &dest_name, dest)?);
                                 new.value = Value::Empty;
                             }
                         }
@@ -394,6 +413,23 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         s.clipboard = None;
     }
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
+}
+
+/// The formula a Paste Special operation makes by joining the destination's formula with what was
+/// pasted. Joined text past Excel's 8,192-character limit doesn't parse, so the paste is refused
+/// rather than leaving a `#NAME?` formula in the cell.
+/// `parts` says whether the formulas joined parsed on their own: one that didn't (kept as text,
+/// `#NAME?`) makes a joined formula that doesn't parse either, as before, and is not refused.
+fn combined_formula(text: &str, parts: bool, sheet: &str, at: CellRef) -> Result<std::sync::Arc<Formula>> {
+    let f = Formula::new(text);
+    if parts && f.expr.is_none() {
+        return Err(EngineError::Other(format!(
+            "The operation would make the formula in {}!{} too long, so nothing was pasted.",
+            gridcraft_formula::quote_sheet(sheet),
+            at.a1()
+        )));
+    }
+    Ok(std::sync::Arc::new(f))
 }
 
 /// Most cells one Paste Link writes (it writes a formula into every cell of the copied area,
