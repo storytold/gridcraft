@@ -446,6 +446,16 @@ fn a_named_delimiter_is_kept_only_if_it_would_be_detected_again() {
     assert_eq!(read_csv(b"sep=;\na;b\n1;2\n", &opts).unwrap().csv_delimiter, Some(b';'));
 }
 
+#[test]
+fn sep_line_counts_against_the_output_limit() {
+    let mut sheet = Sheet::new("Sheet1");
+    sheet.set_value(CellRef::new(0, 0), Value::text("sep=;"));
+    let text = |c: CellRef| sheet.value(c).as_text().unwrap_or("").to_string();
+    // The row is 7 bytes and fits; with the `sep=,` line it needs 14.
+    assert!(matches!(write_csv_limited(&sheet, b',', 7, text), Err(IoError::TooLarge(_))));
+    assert_eq!(write_csv_limited(&sheet, b',', 14, text).unwrap(), b"sep=,\r\nsep=;\r\n");
+}
+
 /// Review of #2270: a first row that looks like a `sep=` line (a lone `sep=;` in A1) is data. Saved
 /// behind a `sep=,` line it opens as it was; Excel writes it bare and reads it back garbled.
 #[test]

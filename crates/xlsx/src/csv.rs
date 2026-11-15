@@ -459,7 +459,12 @@ fn write_delimited(
     // with another delimiter (`a,b;x` once `"a,b"` lost its quotes) keeps its own.
     let first_is_sep = out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some());
     if sep_guard && (first_is_sep || sniff_delimiter(&out, '"') != delim as u8) {
-        out.insert_str(0, &format!("sep={delim}\r\n"));
+        let line = format!("sep={delim}\r\n");
+        // The line counts against the cap like the rows.
+        if out.len().saturating_add(line.len()) > limit {
+            return Err(too_large(format!("more than {} MiB with its sep= line", limit >> 20)));
+        }
+        out.insert_str(0, &line);
     }
     Ok(out.into_bytes())
 }
