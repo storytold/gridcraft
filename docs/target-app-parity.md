@@ -351,7 +351,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 | 2026-10-18 | trivial | Stale chart notes: all chart kinds survive XLSX round-trip (PRs #158, #161) and trendlines landed |
 | 2026-10-16 | minor | Advanced Filter copy-to clears only its actual output and rejects overflow without changing cells (#1031) |
 | 2026-10-15 | minor | Row auto-fit: line breaks count only in wrapping cells (Excel: wrap off shows one line, AutoFit gives one line); unwrapped multi-line cells from files no longer grow rows on open (no score change) |
-| 2026-10-12 | minor | Worksheet functions 514 / 523 (98.3%; 505 working): GETPIVOTDATA
+| 2026-10-12 | minor | Worksheet functions 514 / 523 (98.3%; 505 working): GETPIVOTDATA |
 | 2026-10-21 | minor | Automation: typed macros in the engine and `macro.*` commands, no interface yet (no score change); catalog 274 / 290 → 275 / 291 (View › Macros › Record Macro) |
 | 2026-10-12 | minor | Essentials AutoFit evidence: rows auto-fit oversized fonts on open and row formatting (#833) |
 | 2026-10-12 | minor | Sheet tabs: reveal the selected tab on navigation and resize while preserving manual scrolling (#681); no score change |
