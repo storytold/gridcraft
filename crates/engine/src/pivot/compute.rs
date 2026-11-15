@@ -1,5 +1,7 @@
 use super::items::{Acc, ByValue, FieldItems, build_tree, collect_siblings, date_flags, is_collapsed, item_label};
-use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
+use super::output::{
+    AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, caption, data_cols_exceed_sheet, flatten_cols,
+};
 use super::{
     CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
     PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
@@ -96,6 +98,10 @@ struct AggregateData {
     col_leaves: HashSet<Vec<u32>>,
 }
 
+/// Most accumulators (groups times value columns) one report may hold: twice what the 5 million
+/// group limit allowed at one value field.
+const MAX_ACCUMULATORS: usize = 16_000_000;
+
 fn aggregate_record(
     input: &AggregateInput<'_>,
     data: &mut AggregateData,
@@ -156,7 +162,9 @@ fn aggregate_record(
     if !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
         return Err("The PivotTable report will not fit on the sheet.".into());
     }
-    if data.aggs.len() > 5_000_000 {
+    // Each entry holds one accumulator per value field and calculated-field source column, so the
+    // width counts too: a handful of groups over hundreds of fields is large as well.
+    if data.aggs.len() > 5_000_000 || data.aggs.len().saturating_mul(input.vals.len() + input.extra.len()) > MAX_ACCUMULATORS {
         return Err("The PivotTable report is too large.".into());
     }
     Ok(())
@@ -304,8 +312,8 @@ fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
                     let lv = spec.path.len().saturating_sub(1);
                     let label = spec.path.last().and_then(|it| col_items.get(lv).map(|fi| fi.shown_label(*it))).unwrap_or_default();
                     let text = match vi {
-                        Some(vi) if k > 1 => format!("{label} {}", val_name(*vi)),
-                        _ => format!("{label} Total"),
+                        Some(vi) if k > 1 => caption(&label, &val_name(*vi)),
+                        _ => caption(&label, "Total"),
                     };
                     g.set(first_level + lv, c, Value::text(text), CellKind::ColLabel, 0, None);
                 }
@@ -362,6 +370,7 @@ struct ShowContext<'a> {
     value_index: usize,
     level0: &'a [u32],
     siblings: &'a HashMap<Vec<u32>, Vec<u32>>,
+    cache: &'a ShowCache,
 }
 
 fn number(value: &Option<Value>) -> Option<f64> {
@@ -378,42 +387,89 @@ fn ratio(a: Value, b: Option<Value>) -> Value {
     }
 }
 
+/// What Running Total and Rank need from other cells, computed once per sibling set instead of
+/// once per displayed value (which rescanned the whole set every time).
+type ShowKey = (Vec<u32>, Vec<u32>, usize);
+/// Cumulative values by top-level item, and the total of all of them.
+type RunningTotals = (HashMap<u32, f64>, f64);
+/// Top-level items by (rest of a row path, column path).
+type ItemsByRest = HashMap<(Vec<u32>, Vec<u32>), Vec<u32>>;
+
+#[derive(Default)]
+struct ShowCache {
+    /// Ranked values' sibling numbers, sorted ascending without repeats, by (parent, column, value).
+    ranks: std::cell::RefCell<HashMap<ShowKey, Vec<f64>>>,
+    /// Running totals by top-level item, with the total of all of them, by (rest of path, column, value).
+    running: std::cell::RefCell<HashMap<ShowKey, RunningTotals>>,
+    /// The top-level items that have a row path ending in `rest` (with column path `col`), in
+    /// top-level order, by (`rest`, `col`): built once from the report's cells, so a running total
+    /// visits the items that can hold a number, not every top-level item per distinct `rest`.
+    items_by_rest: std::cell::RefCell<Option<ItemsByRest>>,
+}
+
 fn running_total(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
-    let Some((first, _)) = context.row_path.split_first() else { return raw };
+    let Some((first, rest)) = context.row_path.split_first() else { return raw };
     if !matches!(raw, Value::Number(_)) {
         return raw;
     }
-    let mut total = 0.0;
-    for item in context.level0 {
-        let mut path = context.row_path.to_vec();
-        if let Some(first_item) = path.first_mut() {
-            *first_item = *item;
+    let mut index = context.cache.items_by_rest.borrow_mut();
+    let items_by_rest = index.get_or_insert_with(|| {
+        let position: HashMap<u32, usize> = context.level0.iter().enumerate().rev().map(|(at, item)| (*item, at)).collect();
+        let mut map = ItemsByRest::new();
+        for (row, col) in lookup.aggs.keys() {
+            if let Some((item, rest)) = row.split_first()
+                && position.contains_key(item)
+            {
+                map.entry((rest.to_vec(), col.clone())).or_default().push(*item);
+            }
         }
-        total += number(&lookup.get(&path, context.col_path, context.value_index)).unwrap_or(0.0);
-        if item == first {
-            break;
+        for items in map.values_mut() {
+            items.sort_by_key(|item| position.get(item).copied().unwrap_or(usize::MAX));
         }
-    }
-    Value::number(total)
+        map
+    });
+    let mut cache = context.cache.running.borrow_mut();
+    let (by_item, all) = cache.entry((rest.to_vec(), context.col_path.to_vec(), context.value_index)).or_insert_with(|| {
+        let mut total = 0.0;
+        let mut by_item = HashMap::new();
+        for item in items_by_rest.get(&(rest.to_vec(), context.col_path.to_vec())).into_iter().flatten() {
+            let mut path = Vec::with_capacity(rest.len() + 1);
+            path.push(*item);
+            path.extend_from_slice(rest);
+            // An item with no number here adds nothing and is not stored (the shown cell always has one).
+            let Some(value) = number(&lookup.get(&path, context.col_path, context.value_index)) else { continue };
+            total += value;
+            by_item.entry(*item).or_insert(total);
+        }
+        (by_item, total)
+    });
+    Value::number(by_item.get(first).copied().unwrap_or(*all))
 }
 
 fn ranked_value(raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
     let Some((_, parent)) = context.row_path.split_last() else { return Value::Empty };
     let Some(me) = raw.as_f64() else { return raw };
-    let siblings = context.siblings.get(parent).cloned().unwrap_or_default();
+    let mut cache = context.cache.ranks.borrow_mut();
+    let sorted = cache.entry((parent.to_vec(), context.col_path.to_vec(), context.value_index)).or_insert_with(|| {
+        let mut all: Vec<f64> = context
+            .siblings
+            .get(parent)
+            .into_iter()
+            .flatten()
+            .filter_map(|sibling| {
+                let mut path = parent.to_vec();
+                path.push(*sibling);
+                number(&lookup.get(&path, context.col_path, context.value_index))
+            })
+            .collect();
+        all.sort_by(f64::total_cmp);
+        all.dedup();
+        all
+    });
     // Excel's ranks are dense: ties share a rank and the next value takes the next one
     // (5, 4, 3, 3, 4 rank 1, 2, 3, 3, 2), so count the distinct larger values.
-    let mut larger: Vec<f64> = siblings
-        .into_iter()
-        .filter_map(|sibling| {
-            let mut path = parent.to_vec();
-            path.push(sibling);
-            number(&lookup.get(&path, context.col_path, context.value_index)).filter(|value| *value > me)
-        })
-        .collect();
-    larger.sort_by(f64::total_cmp);
-    larger.dedup();
-    Value::number(larger.len() as f64 + 1.0)
+    let larger = sorted.len() - sorted.partition_point(|value| *value <= me);
+    Value::number(larger as f64 + 1.0)
 }
 
 fn show_value(definition: &PivotValue, raw: Value, lookup: &ValueLookup<'_>, context: &ShowContext<'_>) -> Value {
@@ -745,6 +801,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         })
         .collect();
     let lookup = ValueLookup { wb, source: src, calc: &calc, vals: &vals, extra: &extra, aggs: &aggs, value_count: k };
+    let show_cache = ShowCache::default();
     let mut chart_rows: Vec<u32> = Vec::new();
     let chart_cols: Vec<(u32, String)> = data_cols
         .iter()
@@ -795,7 +852,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         if !line.values {
             continue;
         }
-        fill_line_values(&mut g, r, line, &data_cols, &specs, &vals, &data_fmt, l, ck.1, pt, &lookup, &level0, &siblings, &mut probe);
+        fill_line_values(&mut g, r, line, &data_cols, &specs, &vals, &data_fmt, l, ck.1, pt, &lookup, &level0, &siblings, &show_cache, &mut probe);
     }
     Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
 }
@@ -815,6 +872,7 @@ fn fill_line_values(
     lookup: &ValueLookup<'_>,
     level0: &[u32],
     siblings: &HashMap<Vec<u32>, Vec<u32>>,
+    show_cache: &ShowCache,
     probe: &mut Option<&mut Probe>,
 ) {
     let rp = line.path.as_slice();
@@ -833,7 +891,7 @@ fn fill_line_values(
             }
             continue;
         };
-        let context = ShowContext { row_path: rp, col_path: cp, value_index: *vi, level0, siblings };
+        let context = ShowContext { row_path: rp, col_path: cp, value_index: *vi, level0, siblings, cache: show_cache };
         let shown = show_value(vdef, raw, lookup, &context);
         if let Some(pr) = probe.as_deref_mut() {
             if pr.at == Some((r, l + j)) {

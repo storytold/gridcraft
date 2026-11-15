@@ -40,7 +40,7 @@ pub(super) struct FieldItems {
 /// Sort classes: numbers, text, logicals, errors, dates (a number whose own cell has a date
 /// format, which Excel caches as `<d>` and sorts after errors), blanks.
 fn cmp_items(a: &Item, b: &Item) -> Ordering {
-    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
+    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| gridcraft_core::compare_text(&a.text, &b.text))
 }
 
 /// (identity key, item) for a source value under a field's date grouping; `date` marks a number
