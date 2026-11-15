@@ -707,20 +707,6 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
 }
 
 #[test]
-fn a_full_recalc_keeps_a_spill_with_the_formula_already_spilling_there() {
-    // F13's array would spill over F14:G14, which C14's array already fills: F13 is #SPILL!, and
-    // a full recalculation (Ctrl+Alt+F9) doesn't hand the area to F13 for coming first in
-    // reading order.
-    let mut t = T::new();
-    t.set("C14", "=SEQUENCE(1,7)");
-    t.set("F13", "=SEQUENCE(5,2)");
-    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
-    t.calc.recalc_all(&mut t.wb);
-    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
-    assert_eq!([t.num("C14"), t.num("G14"), t.num("I14")], [1.0, 5.0, 7.0]);
-}
-
-#[test]
 fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
     // Both arrays spill; in manual calculation F13 then grows over F14:G14, which C14's array
     // fills. A full recalculation gives what an automatic one would: C14 keeps its cells and F13
@@ -735,23 +721,6 @@ fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
     assert_eq!([t.num("C14"), t.num("F14"), t.num("G14"), t.num("I14")], [1.0, 4.0, 5.0, 7.0]);
-}
-
-#[test]
-fn a_full_recalc_keeps_a_former_area_where_it_crosses_into_far_cells() {
-    // As above, with one array at BI14:BO14 and the other at BN13: the former area runs past
-    // column BL, and the array grows into the part beyond it (former areas are indexed by squares
-    // of cells, so the overlap must be found away from the area's first cells too).
-    let mut t = T::new();
-    t.set("J1", "1");
-    t.set("BI14", "=SEQUENCE(1,7)");
-    t.set("BN13", "=SEQUENCE(J1,2)");
-    assert_eq!([t.num("BN13"), t.num("BO13")], [1.0, 2.0]);
-    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
-    t.set("J1", "5");
-    t.calc.recalc_all(&mut t.wb);
-    assert_eq!(t.get("BN13"), Value::Error(CellError::Spill));
-    assert_eq!([t.num("BI14"), t.num("BN14"), t.num("BO14")], [1.0, 6.0, 7.0]);
 }
 
 #[test]

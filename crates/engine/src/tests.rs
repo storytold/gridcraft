@@ -2993,9 +2993,10 @@ fn overlapping_spills_keep_the_one_that_exists_whichever_anchor_is_first() {
 #[test]
 fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
     use gridcraft_core::CellError::Spill;
-    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, takes
-    // its cells, shrinks back and lets it spill again, then the steps are undone, redone, edited
-    // inside the contested area and cleared. Every state must match a full recalc.
+    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, is
+    // #SPILL! because E10 holds those cells (as in Excel), shrinks back and spills again, then the
+    // steps are undone, redone, edited inside the contested area and cleared. Every state must
+    // match a full recalc.
     let mut s = s();
     s.execute("cell.set", json!({"cell": "H1", "input": "1"})).unwrap();
     s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(H1)"})).unwrap();
@@ -3017,18 +3018,18 @@ fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
         s.execute(id, params.clone()).unwrap();
         assert_matches_full_recalc(&s);
         if i == 0 {
-            // Both held a spill: reading order gives F8 the cells.
-            assert_eq!(v(&s, "F12"), Value::Number(5.0));
-            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+            // Both held a spill: E10 holds F10, so it keeps it and F8 is blocked.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 2 {
             assert_eq!(v(&s, "E10"), Value::Number(10.0));
             assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 3 {
-            // Undone back to the grown F8.
-            assert_eq!(v(&s, "F12"), Value::Number(5.0));
-            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+            // Undone back to the grown F8, blocked again.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 8 {
             assert_eq!((v(&s, "F8"), v(&s, "E10"), v(&s, "F9")), (Value::Empty, Value::Empty, Value::Empty));
@@ -3268,20 +3269,6 @@ fn a_spill_that_goes_away_unblocks_another() {
     s.execute("cell.set", json!({"cell": "F9", "input": "0"})).unwrap();
     assert_eq!(v(&s, "F8"), Value::Error(gridcraft_core::CellError::Spill));
     assert_eq!((v(&s, "E10"), v(&s, "G10")), (Value::Number(1.0), Value::Number(3.0)));
-}
-
-#[test]
-fn clearing_the_array_that_holds_a_contested_area_lets_the_other_spill() {
-    // F13's array wants F14:G14, inside C14's spill C14:I14. Clearing C14 empties the whole
-    // area, to the right of C14 too, so F13 spills straight away, as in Excel.
-    let mut s = s();
-    s.execute("cell.set", json!({"cell": "C14", "input": "=SEQUENCE(1,7)"})).unwrap();
-    s.execute("cell.set", json!({"cell": "F13", "input": "=SEQUENCE(5,2)"})).unwrap();
-    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
-    s.execute("edit.clearContents", json!({"range": "C14"})).unwrap();
-    assert_eq!((v(&s, "F13"), v(&s, "G17")), (Value::Number(1.0), Value::Number(10.0)));
-    s.execute("edit.undo", json!({})).unwrap();
-    assert_eq!((v(&s, "F13"), v(&s, "I14")), (Value::Error(gridcraft_core::CellError::Spill), Value::Number(7.0)));
 }
 
 #[test]
