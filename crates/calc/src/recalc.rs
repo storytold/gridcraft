@@ -717,7 +717,7 @@ impl Calc {
         &mut self,
         wb: &mut Workbook,
         dirty: &[Key],
-        mut results: HashMap<Key, Value>,
+        results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
         direct: Vec<(Key, Value)>,
     ) -> Vec<Key> {
@@ -736,13 +736,19 @@ impl Calc {
                 }
             }
         }
-        for key in dirty {
-            let Some(value) = results.remove(key) else { continue };
+        for (key, value) in results {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
-            if let Some(cell) = sheet.cells.get_mut(key.1)
-                && cell.value != value
-            {
-                cell.value = value;
+            if let Some(cell) = sheet.cells.get_mut(key.1) {
+                // A blocked array is `#SPILL!` with nothing left in `spills`. Remember it, or
+                // clearing the cell in its way never recalculates the anchor.
+                if value == Value::Error(CellError::Spill) {
+                    self.spill_errors.insert(key);
+                } else {
+                    self.spill_errors.remove(&key);
+                }
+                if cell.value != value {
+                    cell.value = value;
+                }
             }
         }
         if spills.is_empty() && wb.sheets.iter().all(|sheet| sheet.spill.is_empty() && sheet.spill_ranges.is_empty()) {
