@@ -482,6 +482,9 @@ fn remote_backend_over_tcp() {
     drop(s);
     handle.join().unwrap();
     assert!(Remote::connect_with_token("127.0.0.1:1", "x".into()).is_err());
+    // A network address is refused before anything, the token included, is sent.
+    let err = Remote::connect_with_token("192.0.2.1:7979", "x".into()).err().unwrap();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
 }
 
 #[test]
