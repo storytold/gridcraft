@@ -123,6 +123,7 @@ mod translated_credits;
 mod translated_dialogs_more;
 mod translated_find_sort;
 mod translated_form_fields;
+mod translated_name_scope;
 mod translated_panes;
 mod translated_ribbon_more;
 mod translated_templates_solver;

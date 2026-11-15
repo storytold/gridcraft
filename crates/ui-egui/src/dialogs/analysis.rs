@@ -430,7 +430,7 @@ fn at_home(app: &mut SheetApp, d: &mut Dialog) -> bool {
 /// range that holds data is replaced only with `overwrite`; without it the form asks first.
 fn save_solver_model(app: &mut SheetApp, d: &mut Dialog, range: &str, overwrite: bool) {
     d.values.remove("askModelOverwrite");
-    let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d), "overwrite": overwrite})) {
+    let note = match app.run("data.solverSaveModel", json!({"to": range.trim(), "model": build_params(d, app.ui.language), "overwrite": overwrite})) {
         Ok(r) => format!("The model was saved to {}.", r.get("range").and_then(Json::as_str).unwrap_or("")),
         Err(e) if !overwrite && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
             d.values.insert("askModelOverwrite".into(), json!(range.trim()));

@@ -18,7 +18,7 @@ use gridcraft_engine::model::PageOrder;
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
 /// Unchanged hyperlink display text is omitted so its number or formula stays intact.
-pub(crate) fn build_params(d: &Dialog) -> Json {
+pub(crate) fn build_params(d: &Dialog, lang: crate::i18n::Language) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "insertLink" => {
@@ -100,8 +100,9 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
         }
         "defineName" => {
             if let Some(m) = v.as_object_mut() {
+                // The scope box shows the workbook keyword in the interface language.
                 for key in ["scope", "oldScope"] {
-                    if m.get(key).and_then(Json::as_str) == Some("Workbook") {
+                    if m.get(key).and_then(Json::as_str).is_some_and(|s| s == "Workbook" || s == lang.tr("Workbook")) {
                         m.remove(key);
                     }
                 }
@@ -435,7 +436,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         confirm = false;
     }
     if confirm && let Some(cmd) = d.command {
-        let params = build_params(&d);
+        let params = build_params(&d, app.ui.language);
         match app.run(cmd, params) {
             Ok(r) => {
                 open = false;

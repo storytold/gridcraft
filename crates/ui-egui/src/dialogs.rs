@@ -828,6 +828,10 @@ impl Dialog {
                         defaults[key] = v.clone();
                     }
                 }
+                // The scope box shows the workbook keyword in the interface language; OK maps it back.
+                if defaults["scope"] == "Workbook" {
+                    defaults["scope"] = json!(app.ui.language.tr("Workbook"));
+                }
                 Dialog::form(
                     "defineName",
                     if editing { "Edit Name" } else { "New Name" },
@@ -1152,9 +1156,9 @@ mod tests {
         let mut dialog = Dialog::open(&mut app, "removeDuplicates", json!({})).unwrap();
         assert_eq!(dialog.values.get("range"), Some(&json!("B2:C5")));
         assert!(dialog.fields.iter().any(|field| matches!(field, Field::Text { key: "range", .. })));
-        assert_eq!(build_params(&dialog)["range"], "B2:C5");
+        assert_eq!(build_params(&dialog, crate::i18n::Language::En)["range"], "B2:C5");
         dialog.set_value("range", json!("D2:E6"));
-        assert_eq!(build_params(&dialog)["range"], "D2:E6");
+        assert_eq!(build_params(&dialog, crate::i18n::Language::En)["range"], "D2:E6");
     }
 
     #[test]
@@ -1179,7 +1183,7 @@ mod tests {
         assert_eq!(d.values["operator"], "greater");
         assert_eq!(d.values["formula1"], "5");
         // OK without edits keeps the rule: 6 is accepted, 4 is rejected.
-        app.run(d.command.unwrap(), build_params(&d)).unwrap();
+        app.run(d.command.unwrap(), build_params(&d, crate::i18n::Language::En)).unwrap();
         let doc = app.session.active().unwrap();
         let at = gridcraft_engine::core::CellRef::new(0, 0);
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "6").is_none());
