@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-18 · **Change:** minor (calc recalculates wide levels on worker threads; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -18,7 +18,7 @@ including tests, 2026-10-10.
 | L1 | `functions` | ~13.4k | The function library: `FnSpec` registry (name, arity, category, scalar args, signature, description) and pure implementations; automatic array lifting |
 | L1 | `math` | ~1.1k | Equations: LaTeX laid out by RaTeX (MIT, pinned) into plain glyph, rule and path data, and LaTeX to Office Math; every entry point capped and panic-guarded |
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
-| L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
+| L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection, planned into levels of independent formulas; wide levels on worker threads (native) |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
 | L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
@@ -233,7 +233,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 ## Known architectural gaps
 
-- No threading in calc (see [hardware-parity.md](hardware-parity.md)).
+- Threading in calc is confined to a recalculation pass: each round's dirty formulas are planned into dependency levels (on one thread too), worker threads calculate levels with 512 or more formulas a worker can take (random draws stay on the main thread) and hand back any formula that reads one not done yet, and the main thread finishes those; when an array is laid out differently from what the workbook stores, the formulas after it in the level whose references meet its area, and the dynamic formulas after it, are calculated again on the main thread at their turn instead of merged (`Calc::relaid_levels`). Each planned round is checked against row-major order before it is written back (`Calc::agrees_with_row_major`) and calculated again in row-major order on the main thread when the two could differ; after such a round, or once planning a round passed its budget of index work, the workbook isn't planned again until a formula changes. Formulas on or behind a cycle are calculated in row-major order after the levels. A workbook with iterative calculation on has no plan, and wasm stays single-threaded (see [hardware-parity.md](hardware-parity.md)). A worker keeps a copy of a block it reads twice in a level (text included, within 256 MiB shared by the workers); the main thread has no such copies yet. Planning takes time and memory in proportion to the dirty formulas and their precedents. `GRIDCRAFT_CALC_THREADS` (0 = the automatic count: the processors present, at most 64) overrides the workbook's thread setting, `GRIDCRAFT_PARALLEL_MIN` the level size below which no threads are started, and `GRIDCRAFT_PROFILE` prints the plan and the timings.
 - No string catalog or text shaping (see [localization-parity.md](localization-parity.md)).
 - XLSX reader builds the whole workbook in memory; no streaming (#175).
 - Unmodelled XLSX parts are not carried through a save.
@@ -242,6 +242,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | calc: recalculation levels on worker threads (native), single-threaded on wasm |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |

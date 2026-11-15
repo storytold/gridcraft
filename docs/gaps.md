@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-18 · **Change:** minor (§2: defined names are static precedents; earlier: §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-18 · **Change:** minor (§2: multi-threaded recalculation landed; earlier: §2: defined names are static precedents; earlier: §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -25,10 +25,23 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Impact:** the main format; a repair prompt or silent loss destroys trust.
 - **Estimate:** 15–25 h, plus owner time in Excel. [file-format-parity.md](file-format-parity.md)
 
-### 2. Large workbooks don't open; recalc is single-threaded (P, H)
-- **Missing:** streaming read for ~100 MB XLSX; multi-threaded recalc; 100k-dependent edit under
-  100 ms (was ~0.4 s); whole-sheet operations bounded.
-- **Evidence:** #175; no threading in `crates/calc`; PR #152 (whole-sheet Fill/Remove Duplicates
+### 2. Large workbooks don't open (P, H)
+- **Missing:** streaming read for ~100 MB XLSX; 100k-dependent edit under 100 ms (was ~0.4 s);
+  whole-sheet operations bounded. Landed 2026-11-18: recalculation on several cores. Each round's
+  dirty formulas are planned into dependency levels, levels of 512 formulas or more run on worker
+  threads (each keeping copies of the blocks it reads twice), and each planned round is checked
+  against row-major order before it is written back, and calculated again in row-major order on
+  the main thread when the two could differ; values are main's, known stale ones included (#2320,
+  #4469, #4470). Opening two real workbooks (release CLI, four-core 2011 iMac i5-2500S, Linux):
+  LAMBDA-heavy, 51,014 formulas, ~18 s on four threads and ~74 s on one; lookup-heavy, 41,232 formulas, ~7 s and ~19 s (measured
+  2026-11-18). Still to do: skipping the plan and the threads for levels too cheap to gain from
+  them; a workbook with iterative calculation on gains no speed (it has no plan); block copies
+  for the main thread; reading the `.xls` multi-thread record. Also spill ranges read from the
+  file, so the first calculation after opening doesn't lay every array out anew, and one rule for
+  a circular reference closed through INDIRECT or OFFSET: which member shows `#CIRC!` and which
+  the circular list names follow the row-major order the cycle is entered in, and can differ
+  from each other.
+- **Evidence:** #175; PR #152 (whole-sheet Fill/Remove Duplicates
   out of memory), PR #151 (current region past 10,000 rows). Landed 2026-11-18: formulas
   referencing most defined names, or using LET variables or LAMBDA parameters (also volatile
   before), are static dependencies (were volatile: a 49K-cell column of LAMBDA
@@ -39,10 +52,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   formulas in under 1 s instead of 49,098 in ~295 s; a lookup-heavy workbook of 41,232 formulas
   opens in ~18 s instead of ~34 s, and a one-cell edit recalculates 2 formulas in under 1 s instead
   of 37,401 in ~34 s (measured 2026-11-18). A formula reading cells of its own spill through a
-  defined name still loops as on main and is not reported as a circular reference (#4470). Still single-threaded,
-  and cached values are still ignored on open.
+  defined name still loops as on main and is not reported as a circular reference (#4470).
+  Calculation was still single-threaded at that point; cached values are still ignored on open.
 - **Impact:** finance and data users routinely have big workbooks.
-- **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
+- **Estimate:** 20–30 h for beta (30–50 h full). [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
 - **Missing:** slicers and their caches, timelines, the data model, query tables attached to
@@ -207,6 +220,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | §2: multi-threaded recalculation landed; the entry keeps the streaming reader and the edit-latency target |
 | 2026-11-18 | minor | §2: names as static precedents, per-pass name parse cache, TEXT fast path; measured ~302 s → ~75 s open, ~295 s → under 1 s edit on a LAMBDA-heavy workbook of 51,014 formulas |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |

@@ -287,7 +287,8 @@ pub(crate) const NAME_LOOKUPS_SCANNED: usize = 16;
 
 #[cfg(test)]
 thread_local! {
-    /// [`NameIndex`]es built on this thread, which a test reads.
+    /// [`NameIndex`]es built on this thread, which a test reads; a level's workers add theirs to
+    /// the main thread's after the level.
     pub(crate) static NAME_INDEXES_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -312,6 +313,26 @@ impl NameLookup {
             return wb.name_position(name, sheet);
         }
         self.index.insert(NameIndex::new(wb)).find(name, sheet)
+    }
+
+    /// The index, once built.
+    pub fn index(&self) -> Option<&NameIndex> {
+        self.index.as_ref()
+    }
+
+    /// Before `lookups` lookups made where [`NameLookup::find`] can't be called (by the worker
+    /// threads of a level, which read [`NameLookup::index`]): counted as scans while they fit in
+    /// what is left of [`NAME_LOOKUPS_SCANNED`], else the index is built now, once, for them to
+    /// share.
+    pub fn expect(&mut self, wb: &Workbook, lookups: usize) {
+        if self.index.is_some() {
+            return;
+        }
+        if lookups <= NAME_LOOKUPS_SCANNED.saturating_sub(self.scans) {
+            self.scans += lookups;
+        } else {
+            self.index = Some(NameIndex::new(wb));
+        }
     }
 }
 

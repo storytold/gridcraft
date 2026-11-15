@@ -992,10 +992,8 @@ impl Plan {
     pub(crate) fn budget(&self) -> usize {
         self.budget
     }
-    /// The most reads the round's dynamic formulas may keep noted (see `Watch::reads`): one entry
-    /// per formula of the round, the round's size, plus the planner's fixed part,
-    /// [`FIXED_INDEX_WORK`], so that the notes never outweigh what the round already holds for
-    /// its results.
+    /// The most reads the round's dynamic formulas may keep noted (see `Watch::reads`): at most
+    /// one noted read per formula of the round plus 2^20 ([`FIXED_INDEX_WORK`]).
     pub(crate) fn note_limit(&self) -> usize {
         self.order.len().saturating_add(FIXED_INDEX_WORK)
     }
