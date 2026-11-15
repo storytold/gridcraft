@@ -6,6 +6,8 @@ Every non-code asset in this repository (images, icons, fonts, example files, pr
 
 Generated-in-code art is original and has no file to list: the UI icon set (`crates/ui-egui/src/icons.rs`), themes (`crates/engine/src/cmd/view.rs`), cell styles (`crates/engine/src/cmd/format.rs`), table styles (`crates/engine/src/tables.rs`), chart palettes and the sample workbooks (`crates/engine/src/sample.rs`).
 
+Browser chart PNG export reuses Ubuntu Light, Hack Regular and Noto Emoji from the existing [`epaint_default_fonts`](https://github.com/emilk/egui/tree/main/crates/epaint_default_fonts) dependency, which carries their upstream licences (`(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`). These are the interface's open fallback fonts; no font files are vendored in this repository.
+
 | Asset | Author | Source | Licence | Notes |
 |---|---|---|---|---|
 | `epaint_default_fonts::EGUI_ICONS`, `epaint_default_fonts::EMOJI_ICON` (dependency font inputs) | John Slegers | [egui 6d518fc](https://github.com/storytold/egui/tree/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts), [emoji-icon-font](https://github.com/jslegers/emoji-icon-font) | MIT (Copyright (c) 2014 John Slegers; full upstream text in `NOTICE`) | egui-icons.ttf is the five-glyph subset; emoji-icon-font.ttf is the full monochrome fallback. Registered by the production default font definitions; dependency assets unmodified here, no font file copied into this repository. |

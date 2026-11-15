@@ -2,7 +2,7 @@ use super::frame::{Bx, value_range};
 use super::lines::decimate;
 use super::{
     ChartKind, Ctx, HAlign, LABEL_SIZE, LineDash, MAX_CATS, MAX_LINE_PTS, MAX_TRENDLINES, Prim, SeriesData, TEXT, TrendlineKind, VAlign,
-    fit_trendline, moving_average,
+    fit_trendline, moving_average, place_group,
 };
 
 // ---------------------------------------------------------------- trendlines
@@ -71,7 +71,7 @@ fn clip_segment(a: (f64, f64), b: (f64, f64)) -> Option<ClippedSegment> {
 
 /// Clips a sampled polyline in plot fractions (`None` = gap) to the plot box (the unit
 /// square), returning the visible runs.
-fn clip_unit(pts: &[Option<(f64, f64)>]) -> Vec<Vec<(f64, f64)>> {
+pub(super) fn clip_unit(pts: &[Option<(f64, f64)>]) -> Vec<Vec<(f64, f64)>> {
     const LIM: f64 = 1e9;
     let ok = |p: &(f64, f64)| p.0.is_finite() && p.1.is_finite();
     let cl = |p: (f64, f64)| (p.0.clamp(-LIM, LIM), p.1.clamp(-LIM, LIM));
@@ -158,13 +158,18 @@ pub(super) fn draw_trendlines(
 
 /// Trendline equation / R² labels, stacked in the plot's top-right corner.
 pub(super) fn draw_trend_labels(ctx: &mut Ctx, plot: Bx, labels: &[String]) {
-    let lh = LABEL_SIZE * 1.3;
+    let start = ctx.out.len();
+    let size = ctx.font_size("trendline", LABEL_SIZE);
+    let lh = size * 1.3;
     for (i, t) in labels.iter().enumerate() {
         let y = plot.y + 4.0 + i as f32 * lh;
         if y + lh > plot.bottom() {
             break;
         }
-        let t = ctx.fit(t, LABEL_SIZE, plot.w - 8.0);
-        ctx.text(plot.right() - 4.0, y, &t, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Top));
+        let t = ctx.fit(t, size, plot.w - 8.0);
+        ctx.text_role("trendline", plot.right() - 4.0, y, &t, size, TEXT, HAlign::Right, VAlign::Top);
+    }
+    if let Some(position) = ctx.format.trendline_label_position {
+        place_group(ctx, start, position, plot);
     }
 }

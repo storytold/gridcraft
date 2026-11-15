@@ -224,6 +224,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
         || (!opened_now
             && ui.input(|i| i.pointer.any_pressed())
+            && !egui::Popup::is_any_open(ui.ctx())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))
@@ -402,8 +403,10 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
             items.push(("Delete", "object.delete"));
             if kind == "chart" {
-                items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
+                close = crate::chart_tools::context_menu(app, ui, id);
+                return;
             }
+            let items = vec![("Delete", "object.delete")];
             let lang = crate::i18n::current(ui.ctx());
             for (label, action) in items {
                 if label == "-" {
@@ -430,6 +433,7 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     if close
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
         || (ui.input(|i| i.pointer.any_pressed())
+            && !egui::Popup::is_any_open(ui.ctx())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))

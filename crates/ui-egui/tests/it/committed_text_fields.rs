@@ -1,7 +1,7 @@
 //! Text fields over workbook values (chart titles, table name) keep what the user types until they commit it.
 
 use egui::{Event, Key, Modifiers, accesskit::Role};
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
@@ -47,6 +47,10 @@ fn typing_a_chart_title_in_format_chart_area_sets_it() {
     h.state_mut().select_object_id(Some(id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
+    h.get_by_role_and_label(Role::Button, "Size & Properties").click();
+    h.run_steps(2);
+    // Chart Settings starts expanded; toggling it here would hide the title controls.
+    assert_eq!(h.get_by_role_and_label(Role::DisclosureTriangle, "Chart Settings").accesskit_node().data().is_expanded(), Some(true));
     h.get_by_role_and_label(Role::DisclosureTriangle, "Chart Title").click();
     h.run_steps(2);
     // The pane sits on the right; the formula bar and name box are further left.

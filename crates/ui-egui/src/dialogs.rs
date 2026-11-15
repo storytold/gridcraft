@@ -1083,6 +1083,22 @@ impl Dialog {
                 d.result = Some(app.session.run("review.spelling", json!({})).unwrap_or_else(|e| json!({"error": e})));
                 d
             }
+            "chartExport" => Dialog::form(
+                "chartExport",
+                "Save as Picture",
+                "chart.export",
+                vec![],
+                json!({"chart":p("chart"),"format":"png","scale":2,"transparent":false}),
+            ),
+            "saveChartTemplate" => {
+                let name = app
+                    .selected_chart_snapshot()
+                    .filter(|chart| Some(chart.id) == p("chart").as_u64().and_then(|id| u32::try_from(id).ok()))
+                    .and_then(|chart| chart.title.clone())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or_else(|| "My Chart Template".into());
+                Dialog::custom("saveChartTemplate", "Save Chart Template", json!({"chart":p("chart"),"name":name}))
+            }
             "chartTitle" => Dialog::form(
                 "chartTitle",
                 "Chart Title",

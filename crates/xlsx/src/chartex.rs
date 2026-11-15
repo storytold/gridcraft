@@ -122,6 +122,57 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         },
     };
     let axis_title = |id: &str| plot.kids("axis").find(|a| a.attr("id") == Some(id)).and_then(|a| a.path(&["title", "tx"])).and_then(text);
+    let mut format = crate::chart::read_custom_format(root).unwrap_or_default();
+    format.legend_overlay = chart.child("legend").is_some_and(|legend| legend.flag("overlay", false));
+    crate::chart::merge_native_surface(&mut format.chart_area, root.child("spPr"));
+    crate::chart::merge_native_surface(&mut format.plot_area, plot.child("spPr"));
+    format.vertical_gridlines =
+        plot.kids("axis").find(|axis| axis.attr("id") == Some("0")).is_some_and(|axis| axis.child("majorGridlines").is_some());
+    format.horizontal_gridline = plot
+        .kids("axis")
+        .find(|axis| axis.attr("id") == Some("1"))
+        .and_then(|axis| axis.child("majorGridlines"))
+        .map(|grid| {
+            let sp = grid.child("spPr");
+            let mut surface = crate::chart::read_surface(sp);
+            if !sp.is_some_and(|sp| sp.path(&["ln", "solidFill", "srgbClr"]).is_some() || sp.path(&["ln", "noFill"]).is_some()) {
+                surface.border = None;
+            }
+            if surface.border == Some([191, 191, 191, 255]) {
+                surface.border = None;
+            }
+            if surface.border_width == Some(0.75) {
+                surface.border_width = None;
+            }
+            surface
+        })
+        .map(|surface| gridcraft_model::ChartStroke { color: surface.border, width: surface.border_width })
+        .unwrap_or_else(|| format.horizontal_gridline.clone());
+    for (i, native_series) in region.kids("series").filter(|s| s.attr("layoutId") != Some("paretoLine")).enumerate() {
+        if native_series.child("spPr").is_some() {
+            let sp = native_series.child("spPr");
+            if sp.is_some_and(|sp| sp.path(&["solidFill", "srgbClr"]).is_some() || sp.child("noFill").is_some()) {
+                let native_color = sp.and_then(|sp| sp.child("solidFill")).and_then(dml_color);
+                let fill = crate::chart::read_surface(sp).fill;
+                let same_as_series =
+                    native_color.as_ref() == series.get(i).and_then(|series| series.color.as_ref()) && fill.is_none_or(|fill| fill[3] == 255);
+                if same_as_series {
+                    let remove = if let Some(style) = format.series.get_mut(&i) {
+                        style.fill_color = None;
+                        *style == gridcraft_model::ChartSeriesFormat::default()
+                    } else {
+                        false
+                    };
+                    if remove {
+                        format.series.remove(&i);
+                    }
+                } else {
+                    format.series.entry(i).or_default().fill_color = fill;
+                }
+            }
+        }
+    }
+    crate::chart::sanitize_chart_format(&mut format);
     Some(Chart {
         id: 0,
         kind: kind?,
@@ -131,7 +182,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         legend,
         data_labels,
         data_table: None,
-        gridlines: plot.kids("axis").any(|a| a.child("majorGridlines").is_some()),
+        gridlines: plot.kids("axis").find(|a| a.attr("id") == Some("1")).is_some_and(|a| a.child("majorGridlines").is_some()),
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
@@ -140,6 +191,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: None,
+        format,
     })
 }
 
@@ -291,7 +343,11 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
         // Fills are written out: they don't come from the style part. Waterfall decreases and
         // treemap/sunburst boxes get their own colours.
         let color = ser.color.as_ref().and_then(|c| srgb(c, &wb.theme)).unwrap_or_else(|| accent(i));
-        s.push_str(&fill_xml(&color, ch.kind == ChartKind::BoxWhisker));
+        if let Some(fill) = ch.format.series.get(&i).and_then(|style| style.fill_color) {
+            s.push_str(&crate::chart::surface_xml(&gridcraft_model::ChartSurface { fill: Some(fill), ..Default::default() }, "cx"));
+        } else {
+            s.push_str(&fill_xml(&color, ch.kind == ChartKind::BoxWhisker));
+        }
         let points = || crate::chart::ref_values(wb, si, &ser.values).unwrap_or_default().into_iter().take(10_000).enumerate();
         match ch.kind {
             ChartKind::Waterfall => {
@@ -343,21 +399,23 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
             .unwrap_or_default()
     };
     if let Some(gap) = gap {
-        let _ =
-            write!(s, "<cx:axis id=\"0\"><cx:catScaling gapWidth=\"{}\"/>{}<cx:tickLabels/></cx:axis>", esc_attr(gap), title(ch.x_title.as_deref()));
+        let _ = write!(
+            s,
+            "<cx:axis id=\"0\"><cx:catScaling gapWidth=\"{}\"/>{}{}<cx:tickLabels/></cx:axis>",
+            esc_attr(gap),
+            title(ch.x_title.as_deref()),
+            if ch.format.vertical_gridlines { gridline_xml(&ch.format.vertical_gridline) } else { String::new() }
+        );
         if ch.kind != ChartKind::Funnel {
             let _ = write!(
                 s,
                 "<cx:axis id=\"1\"><cx:valScaling/>{}{}<cx:tickLabels/></cx:axis>",
                 title(ch.y_title.as_deref()),
-                if ch.gridlines {
-                    format!("<cx:majorGridlines><cx:spPr><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr></cx:majorGridlines>")
-                } else {
-                    String::new()
-                }
+                if ch.gridlines { gridline_xml(&ch.format.horizontal_gridline) } else { String::new() }
             );
         }
     }
+    s.push_str(&crate::chart::surface_xml(&ch.format.plot_area, "cx"));
     s.push_str("</cx:plotArea>");
     let pos = match ch.legend {
         LegendPos::None => None,
@@ -367,19 +425,83 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
         LegendPos::Right => Some("r"),
     };
     if let Some(p) = pos {
-        let _ = write!(s, "<cx:legend pos=\"{p}\" align=\"ctr\" overlay=\"0\"/>");
+        let _ = write!(s, "<cx:legend pos=\"{p}\" align=\"ctr\" overlay=\"{}\"/>", u8::from(ch.format.legend_overlay));
     }
     // A white chart area with a light border, like other charts.
-    let _ = write!(
-        s,
-        "</cx:chart><cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr></cx:chartSpace>"
-    );
+    s.push_str("</cx:chart>");
+    if ch.format.chart_area == Default::default() {
+        let _ = write!(
+            s,
+            "<cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr>"
+        );
+    } else {
+        let mut chart_area = ch.format.chart_area.clone();
+        if chart_area.fill.is_none() {
+            chart_area.fill = Some([255, 255, 255, 255]);
+        }
+        s.push_str(&crate::chart::surface_xml(&chart_area, "cx"));
+    }
+    s.push_str(&crate::chart::format_extension(&ch.format, "cx"));
+    s.push_str("</cx:chartSpace>");
     s
+}
+
+fn gridline_xml(stroke: &gridcraft_model::ChartStroke) -> String {
+    if stroke.color.is_none() && stroke.width.is_none() {
+        return format!("<cx:majorGridlines><cx:spPr><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr></cx:majorGridlines>");
+    }
+    let surface = gridcraft_model::ChartSurface {
+        border: Some(stroke.color.unwrap_or([191, 191, 191, 255])),
+        border_width: Some(stroke.width.unwrap_or(0.75)),
+        ..Default::default()
+    };
+    format!("<cx:majorGridlines>{}</cx:majorGridlines>", crate::chart::surface_xml(&surface, "cx"))
 }
 
 #[cfg(test)]
 mod quartile_tests {
     use super::*;
+
+    #[test]
+    fn default_white_chart_area_survives_repeated_chartex_saves() {
+        let xml = r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"/></cx:plotAreaRegion></cx:plotArea></cx:chart><cx:spPr><a:solidFill><a:schemeClr val="bg1"/></a:solidFill><a:ln w="9525"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill></a:ln></cx:spPr></cx:chartSpace>"#;
+        let parsed = crate::xml::parse(xml.as_bytes()).unwrap();
+        let mut chart = read_chartex(&parsed).unwrap();
+        for _ in 0..2 {
+            let saved = write_chartex(&Workbook::default(), 0, &chart, &mut Vec::new());
+            assert!(saved.contains("<a:solidFill><a:srgbClr val=\"FFFFFF\""), "default white fill missing after save: {saved}");
+            chart = read_chartex(&crate::xml::parse(saved.as_bytes()).unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn native_chartex_strokes_follow_chart_format_validation_limits() {
+        for (width, expected) in [("NaN", None), ("inf", None), ("-12700", None), ("266700", None), ("0", Some(0.0)), ("254000", Some(20.0))] {
+            let xml = format!(
+                r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><cx:spPr><a:ln w="{width}"/></cx:spPr><cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"/></cx:plotAreaRegion><cx:spPr><a:ln w="{width}"/></cx:spPr><cx:axis id="1"><cx:majorGridlines><cx:spPr><a:ln w="{width}"/></cx:spPr></cx:majorGridlines></cx:axis></cx:plotArea></cx:chart></cx:chartSpace>"#
+            );
+            let root = crate::xml::parse(xml.as_bytes()).unwrap();
+            let chart = read_chartex(&root).unwrap();
+            assert_eq!(chart.format.chart_area.border_width, expected, "chart border: {width}");
+            assert_eq!(chart.format.plot_area.border_width, expected, "plot border: {width}");
+            assert_eq!(chart.format.horizontal_gridline.width, expected, "gridlines: {width}");
+        }
+    }
+
+    #[test]
+    fn hidden_native_gridlines_preserve_the_extension_style() {
+        let format = gridcraft_model::ChartFormat {
+            horizontal_gridline: gridcraft_model::ChartStroke { color: Some([12, 34, 56, 255]), width: Some(2.5) },
+            ..Default::default()
+        };
+        let extension = crate::chart::format_extension(&format, "cx");
+        let xml = format!(
+            r#"<cx:chartSpace xmlns:cx="http://schemas.microsoft.com/office/drawing/2014/chartex" xmlns:gc="urn:gridcraft:chart-format:1" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">{extension}<cx:chart><cx:plotArea><cx:plotAreaRegion><cx:series layoutId="boxWhisker"/></cx:plotAreaRegion><cx:axis id="1"/></cx:plotArea></cx:chart></cx:chartSpace>"#
+        );
+        let chart = read_chartex(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+        assert_eq!(chart.format.horizontal_gridline.color, Some([12, 34, 56, 255]));
+        assert_eq!(chart.format.horizontal_gridline.width, Some(2.5));
+    }
 
     #[test]
     fn box_whisker_reads_quartile_method_and_defaults() {
