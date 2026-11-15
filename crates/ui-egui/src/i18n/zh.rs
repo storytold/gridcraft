@@ -482,6 +482,44 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "显示",
         "Collapse dialog" => "折叠对话框",
         "Expand dialog" => "展开对话框",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "所有文件夹",
+        "Library|Library folder" => "库文件夹",
+        "Library|Add Folder…" => "添加文件夹…",
+        "Library|Remove" => "移除",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => "不再在库中显示此文件夹（其中的文件保持不变）",
+        "Library|Refresh" => "刷新",
+        "Library|Read the folders again" => "重新读取文件夹",
+        "Library|Folder path" => "文件夹路径",
+        "Library|Add" => "添加",
+        "Library|Reading {read} of {total} files…" => "正在读取文件 {read}/{total}…",
+        "Library|Nothing matches \"{query}\"." => "没有与“{query}”匹配的内容。",
+        "Library|Nothing in this folder yet." => "此文件夹中还没有内容。",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "正在显示 {total} 个文件中的前 {shown} 个：选择一个文件夹或进行搜索以查看其他文件。"
+        }
+        "Library|Nothing in this file." => "此文件中没有内容。",
+        "Library|Hidden" => "隐藏",
+        "Library|Click to insert" => "单击以插入",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "将此元素放在相同位置",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "以及另外 {count} 个",
+        "Library|Pictures" => "图片",
+        "Library|Picture" => "图片",
+        "Library|Insert picture" => "插入图片",
+        "Library|Search pictures" => "搜索图片",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "显示包含 PNG 和 JPEG 文件的文件夹中的图片",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "添加包含 PNG 或 JPEG 图片的文件夹，即可在此处查看。单击图片可将其放到工作表上。"
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "库会显示此计算机上文件夹中的图片，浏览器版本无法读取这些文件夹。请使用桌面应用浏览库。"
+        }
+        "Library" => "库",
+        "Pictures from your own folders" => "来自你自己文件夹的图片",
         _ => return None,
     })
 }

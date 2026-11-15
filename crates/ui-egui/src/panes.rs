@@ -29,7 +29,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 "watch" => "Watch Window",
                 "selection" => "Selection",
                 "formatChart" => "Format Chart Area",
-                crate::library_pane::PANE => "Library",
+                crate::library_pane::PANE => app.ui.language.tr("Library"),
                 _ => "",
             };
             ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));

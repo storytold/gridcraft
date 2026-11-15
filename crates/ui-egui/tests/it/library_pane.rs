@@ -93,11 +93,12 @@ fn pictures_fill_in_and_a_click_inserts_one() {
     let dir = pictures("click");
     let mut h = blank_harness(4);
     open_on(&mut h, &dir);
-    // One heading per file, the broken one with its error, and a cell per picture.
-    assert!(h.query_by_label("blue-logo").is_some());
-    assert!(h.query_by_label_contains("not a PNG or JPEG picture").is_some());
-    let cell = h.get_by_role_and_label(Role::Button, "Picture 1: blue-logo.png");
-    assert!(h.query_by_role_and_label(Role::Button, "Picture 1: red-swatch.png").is_some());
+    // Every file's one picture in one grid, named under its thumbnail, with no heading per file:
+    // listing reads no file, so the broken one is a cell too until its thumbnail is drawn.
+    assert!(h.query_by_label("blue-logo").is_none());
+    let cell = h.get_by_role_and_label(Role::Button, "Picture: blue-logo.png");
+    assert!(h.query_by_role_and_label(Role::Button, "Picture: red-swatch.png").is_some());
+    assert!(h.query_by_role_and_label(Role::Button, "Picture: broken.png").is_some());
     assert_eq!(images(&h), 0);
     cell.click();
     h.run_steps(3);
@@ -127,11 +128,11 @@ fn a_search_narrows_the_pictures() {
     }
     h.run_steps(3);
     assert_eq!(h.state().library.hits(), Some(1));
-    assert!(h.query_by_role_and_label(Role::Button, "Picture 1: red-swatch.png").is_some());
-    assert!(h.query_by_role_and_label(Role::Button, "Picture 1: blue-logo.png").is_none());
+    assert!(h.query_by_role_and_label(Role::Button, "Picture: red-swatch.png").is_some());
+    assert!(h.query_by_role_and_label(Role::Button, "Picture: blue-logo.png").is_none());
     h.state_mut().library.query = "nothing like it".into();
     h.run_steps(30);
-    assert!(h.query_by_label_contains("No pictures match").is_some());
+    assert!(h.query_by_label_contains("Nothing matches").is_some());
 }
 
 #[test]
@@ -186,4 +187,17 @@ fn opening_the_library_closes_the_comments_pane() {
     assert!(!pane_open(&h));
     // The words are GridCraft's.
     assert_eq!(LABELS.nouns.many, "pictures");
+}
+
+#[test]
+fn the_pane_speaks_the_interface_language() {
+    let dir = pictures("german");
+    let mut h = blank_harness(4);
+    h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::De;
+    open_on(&mut h, &dir);
+    assert!(h.query_by_label("Ordner hinzufügen…").is_some(), "the pane's own words");
+    assert!(h.query_by_label("Bilder").is_some(), "GridCraft's tab");
+    assert!(h.query_by_role_and_label(Role::Button, "Bild: blue-logo.png").is_some(), "an item's name");
+    assert!(h.query_by_label("Add Folder…").is_none());
+    assert!(h.query_by_label("Bibliothek").is_some(), "the pane's title");
 }

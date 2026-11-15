@@ -1027,6 +1027,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Todas as pastas",
+        "Library|Library folder" => "Pasta da biblioteca",
+        "Library|Add Folder…" => "Adicionar pasta…",
+        "Library|Remove" => "Remover",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Deixar de mostrar esta pasta na biblioteca (os arquivos continuam onde estão)"
+        }
+        "Library|Refresh" => "Atualizar",
+        "Library|Read the folders again" => "Ler as pastas novamente",
+        "Library|Folder path" => "Caminho da pasta",
+        "Library|Add" => "Adicionar",
+        "Library|Reading {read} of {total} files…" => "Lendo {read} de {total} arquivos…",
+        "Library|Nothing matches \"{query}\"." => "Nada corresponde a \"{query}\".",
+        "Library|Nothing in this folder yet." => "Esta pasta ainda está vazia.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Mostrando os primeiros {shown} de {total} arquivos: escolha uma pasta ou pesquise para ver os outros."
+        }
+        "Library|Nothing in this file." => "Este arquivo está vazio.",
+        "Library|Hidden" => "Oculto",
+        "Library|Click to insert" => "Clique para inserir",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Colocar este elemento no mesmo lugar",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "e mais {count}",
+        "Library|Pictures" => "Imagens",
+        "Library|Picture" => "Imagem",
+        "Library|Insert picture" => "Inserir imagem",
+        "Library|Search pictures" => "Pesquisar imagens",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Mostrar as imagens de uma pasta de arquivos PNG e JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Adicione uma pasta de imagens PNG ou JPEG para vê-las aqui. Clique em uma imagem para colocá-la na planilha."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "A biblioteca mostra as imagens em pastas deste computador, que a versão para navegador não consegue ler. Use o aplicativo para desktop para navegar em uma biblioteca."
+        }
+        "Library" => "Biblioteca",
+        "Pictures from your own folders" => "Imagens das suas próprias pastas",
         _ => return None,
     })
 }

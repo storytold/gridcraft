@@ -490,6 +490,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "표시",
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "모든 폴더",
+        "Library|Library folder" => "라이브러리 폴더",
+        "Library|Add Folder…" => "폴더 추가…",
+        "Library|Remove" => "제거",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "라이브러리에 이 폴더를 더 이상 표시하지 않음(파일은 그대로 유지됨)"
+        }
+        "Library|Refresh" => "새로 고침",
+        "Library|Read the folders again" => "폴더 다시 읽기",
+        "Library|Folder path" => "폴더 경로",
+        "Library|Add" => "추가",
+        "Library|Reading {read} of {total} files…" => "파일 읽는 중: {read}/{total}…",
+        "Library|Nothing matches \"{query}\"." => "\"{query}\"와(과) 일치하는 항목이 없습니다.",
+        "Library|Nothing in this folder yet." => "이 폴더는 아직 비어 있습니다.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "파일 {total}개 중 처음 {shown}개를 표시하는 중: 나머지를 보려면 폴더를 선택하거나 검색하세요."
+        }
+        "Library|Nothing in this file." => "이 파일은 비어 있습니다.",
+        "Library|Hidden" => "숨김",
+        "Library|Click to insert" => "클릭하여 삽입",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "이 요소를 같은 위치에 배치",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "외 {count}개",
+        "Library|Pictures" => "그림",
+        "Library|Picture" => "그림",
+        "Library|Insert picture" => "그림 삽입",
+        "Library|Search pictures" => "그림 검색",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "PNG 및 JPEG 파일 폴더의 그림 표시",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "PNG 또는 JPEG 그림 폴더를 추가하면 여기에 표시됩니다. 그림을 클릭하면 시트에 배치됩니다."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "라이브러리는 이 컴퓨터의 폴더에 있는 그림을 표시하며, 브라우저 버전은 이를 읽을 수 없습니다. 라이브러리를 탐색하려면 데스크톱 앱을 사용하세요."
+        }
+        "Library" => "라이브러리",
+        "Pictures from your own folders" => "내 폴더의 그림",
         _ => return None,
     })
 }

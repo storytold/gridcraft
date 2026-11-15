@@ -561,6 +561,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Alle mappen",
+        "Library|Library folder" => "Bibliotheekmap",
+        "Library|Add Folder…" => "Map toevoegen…",
+        "Library|Remove" => "Verwijderen",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Deze map niet meer in de bibliotheek tonen (de bestanden blijven waar ze zijn)"
+        }
+        "Library|Refresh" => "Vernieuwen",
+        "Library|Read the folders again" => "De mappen opnieuw lezen",
+        "Library|Folder path" => "Mappad",
+        "Library|Add" => "Toevoegen",
+        "Library|Reading {read} of {total} files…" => "{read} van {total} bestanden lezen…",
+        "Library|Nothing matches \"{query}\"." => "Niets komt overeen met \"{query}\".",
+        "Library|Nothing in this folder yet." => "Deze map is nog leeg.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "De eerste {shown} van {total} bestanden worden weergegeven: kies een map of zoek om de andere te zien."
+        }
+        "Library|Nothing in this file." => "Dit bestand is leeg.",
+        "Library|Hidden" => "Verborgen",
+        "Library|Click to insert" => "Klik om in te voegen",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Dit element op dezelfde plaats zetten",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "en nog {count}",
+        "Library|Pictures" => "Afbeeldingen",
+        "Library|Picture" => "Afbeelding",
+        "Library|Insert picture" => "Afbeelding invoegen",
+        "Library|Search pictures" => "Afbeeldingen zoeken",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "De afbeeldingen in een map met PNG- en JPEG-bestanden weergeven",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Voeg een map met PNG- of JPEG-afbeeldingen toe om ze hier te zien. Klik op een afbeelding om die op het blad te plaatsen."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "De bibliotheek toont de afbeeldingen in mappen op deze computer, die de browserversie niet kan lezen. Gebruik de desktop-app om door een bibliotheek te bladeren."
+        }
+        "Library" => "Bibliotheek",
+        "Pictures from your own folders" => "Afbeeldingen uit uw eigen mappen",
         _ => return None,
     })
 }

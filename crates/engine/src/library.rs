@@ -1,7 +1,8 @@
 //! Insert ▸ Library: the pictures in the user's own folders, on the Library core the Craft apps
 //! share ([`craft_library`], first asked for in storytold/deckcraft#958). This module is what is
 //! GridCraft's own: the files its Pictures tab lists ([`Pictures`]: the PNG and JPEG pictures
-//! Insert ▸ Pictures takes, one picture per file), how it opens one and draws its thumbnail, and
+//! Insert ▸ Pictures takes, one picture per file, known from its name so that listing and search
+//! read no file), how it opens one and draws its thumbnail, and
 //! its file access ([`Confined`]), which goes through [`crate::io`] so the scripts' file sandbox
 //! applies to every folder listing and file read. The `library.*` commands are in
 //! [`crate::cmd::library`].
@@ -69,8 +70,10 @@ impl craft_library::Fs for Confined {
     fn canonical(&self, path: &Path) -> Result<PathBuf, String> {
         io::library_canonical(path)
     }
+    /// A picture is read only for its thumbnail or an insert, and never past what Insert ▸ Pictures
+    /// takes.
     fn read(&self, path: &Path, max: u64) -> Result<Vec<u8>, String> {
-        io::library_read(path, max)
+        io::library_read(path, max.min(MAX_PICTURE_BYTES as u64))
     }
 }
 
@@ -81,7 +84,7 @@ pub struct Picture {
     /// The file name, which is the item's title.
     pub name: String,
     pub bytes: Vec<u8>,
-    /// The format's name, for search (`PNG`, `JPEG`).
+    /// The format's name, from the content (`PNG`, `JPEG`).
     pub format: &'static str,
     pub mime: &'static str,
     pub width: u32,
@@ -123,7 +126,18 @@ impl craft_library::Kind for Pictures {
     }
 
     fn item(&self, doc: &Picture, _index: usize) -> Item {
-        Item { title: doc.name.clone(), hidden: false, text: format!("{} {} × {}", doc.format, doc.width, doc.height) }
+        Item { title: doc.name.clone(), hidden: false, text: doc.format.to_string() }
+    }
+
+    /// A picture file's one item from its name, as [`Pictures::item`] gives it once the file is
+    /// read: listing, indexing and searching then read no file.
+    fn item_from_name(&self, name: &str) -> Option<Item> {
+        let format = match name.rsplit_once('.')?.1.to_ascii_lowercase().as_str() {
+            "png" => "PNG",
+            "jpg" | "jpeg" => "JPEG",
+            _ => return None,
+        };
+        Some(Item { title: name.to_string(), hidden: false, text: format.to_string() })
     }
 
     fn thumbnail(&self, doc: &Picture, _index: usize, width: u32) -> Result<Thumbnail, String> {
@@ -229,7 +243,12 @@ mod tests {
         let p = Pictures.open("logo.png", &png(30, 20)).unwrap();
         assert_eq!((p.format, p.mime, p.width, p.height), ("PNG", "image/png", 30, 20));
         assert_eq!(Pictures.count(&p), 1);
-        assert_eq!(Pictures.item(&p, 0), Item { title: "logo.png".into(), hidden: false, text: "PNG 30 × 20".into() });
+        assert_eq!(Pictures.item(&p, 0), Item { title: "logo.png".into(), hidden: false, text: "PNG".into() });
+        // Named, the same item without reading the file.
+        assert_eq!(Pictures.item_from_name("logo.png"), Some(Pictures.item(&p, 0)));
+        assert_eq!(Pictures.item_from_name("Photo.JPEG").map(|i| i.text), Some("JPEG".into()));
+        assert_eq!(Pictures.item_from_name("notes.txt"), None);
+        assert_eq!(Pictures.item_from_name("png"), None);
         for (name, bytes) in [("text.png", b"not a picture at all".to_vec()), ("empty.jpg", vec![]), ("gif.png", b"GIF89a\x01\x00\x01\x00".to_vec())]
         {
             assert!(Pictures.open(name, &bytes).is_err(), "{name}");

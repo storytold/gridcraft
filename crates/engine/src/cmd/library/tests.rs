@@ -118,9 +118,9 @@ fn folders_are_added_listed_and_removed() {
         assert!(f.get("error").is_none(), "{f}");
     }
     assert_eq!(files[0]["title"], "Logo", "the file name stands for the title");
-    // Without reading the files.
+    // A picture is known from its file name, so `pictures: false` gives the same answer.
     let quick = s.execute("library.list", json!({"pictures": false})).unwrap();
-    assert!(quick[0].get("pictures").is_none(), "{quick}");
+    assert_eq!(quick, json!(files));
     // One file.
     let one = s.execute("library.list", json!({"file": d.0.join("Logo.png")})).unwrap();
     assert_eq!(one.as_array().unwrap().len(), 1);
@@ -217,6 +217,7 @@ fn a_pipe_named_like_a_picture_is_left_alone() {
 
 #[test]
 fn search_finds_pictures_by_name_and_format() {
+    // Searching reads no file: these are known from their names.
     let d = pictures();
     let mut s = s();
     add(&mut s, &d);
@@ -228,8 +229,6 @@ fn search_finds_pictures_by_name_and_format() {
     let jpegs = s.execute("library.search", json!({"query": "jpeg"})).unwrap();
     assert_eq!(jpegs.as_array().unwrap().len(), 1, "{jpegs}");
     assert_eq!(jpegs[0]["match"], "text");
-    let by_size = s.execute("library.search", json!({"query": "16 × 16"})).unwrap();
-    assert_eq!(by_size[0]["title"], "arrow.png", "{by_size}");
     let limited = s.execute("library.search", json!({"query": "png", "limit": 1})).unwrap();
     assert_eq!(limited.as_array().unwrap().len(), 1);
     // One folder only.
@@ -318,7 +317,7 @@ fn only_library_pictures_are_inserted() {
 }
 
 #[test]
-fn a_corrupt_or_oversized_file_is_listed_with_its_error() {
+fn a_corrupt_or_oversized_file_fails_when_drawn_or_inserted() {
     let d = Dir::new("corrupt");
     d.file("good.png", &png(8, 8));
     d.file("text.png", b"this is text, not a picture");
@@ -326,27 +325,61 @@ fn a_corrupt_or_oversized_file_is_listed_with_its_error() {
     cut.truncate(20);
     d.file("cut.png", &cut);
     d.file("renamed.jpg", &png(8, 8));
-    // A real PNG header in a file past what Insert ▸ Pictures takes (sparse: no disk is used).
-    let big = d.file("huge.png", &png(1, 1));
+    // A real PNG header in a file past what Insert ▸ Pictures takes, and one past what the Library
+    // reads at all (sparse: no disk is used).
+    let big = d.file("big.png", &png(1, 1));
     std::fs::OpenOptions::new().write(true).open(&big).unwrap().set_len(65 << 20).unwrap();
+    let huge = d.file("huge.png", &png(1, 1));
+    std::fs::OpenOptions::new().write(true).open(&huge).unwrap().set_len(257 << 20).unwrap();
     let mut s = s();
     add(&mut s, &d);
+    // Listing reads no file: each is listed from its name, one picture, except the one too large
+    // for the Library to read at all.
     let files = list(&mut s);
     let by = |name: &str| files.iter().find(|f| f["file"].as_str().unwrap().ends_with(name)).unwrap().clone();
-    assert!(by("good.png").get("error").is_none());
-    assert!(by("text.png")["error"].as_str().unwrap().contains("not a PNG or JPEG"), "{}", by("text.png"));
-    assert_eq!(by("text.png")["pictureCount"], 0);
-    assert!(by("cut.png")["error"].as_str().is_some(), "{}", by("cut.png"));
-    assert!(by("huge.png")["error"].as_str().unwrap().contains("64 MB"), "{}", by("huge.png"));
+    for name in ["good.png", "text.png", "cut.png", "renamed.jpg", "big.png"] {
+        assert_eq!(by(name)["pictureCount"], 1, "{}", by(name));
+        assert!(by(name).get("error").is_none(), "{}", by(name));
+    }
+    assert!(by("huge.png")["error"].as_str().unwrap().contains("256 MB"), "{}", by("huge.png"));
+    // Drawing or inserting reads the file, and says what is wrong with it.
+    let thumb = |s: &mut Session, name: &str| err(s.execute("library.thumbnail", json!({"file": d.0.join(name), "picture": 0})));
+    assert!(thumb(&mut s, "text.png").contains("not a PNG or JPEG"));
+    assert!(!thumb(&mut s, "cut.png").is_empty());
+    assert!(thumb(&mut s, "big.png").contains("larger than 64 MB"), "{}", thumb(&mut s, "big.png"));
+    assert!(thumb(&mut s, "huge.png").contains("256 MB"));
     // A picture is known by its content: a PNG named .jpg is a PNG.
-    assert_eq!(by("renamed.jpg")["pictures"][0]["title"], "renamed.jpg");
     s.execute("library.insert", json!({"file": d.0.join("renamed.jpg")})).unwrap();
     assert_eq!(s.doc().unwrap().wb.active().unwrap().images[0].mime, "image/png");
     // The broken ones don't insert, and leave the workbook as it was.
-    for name in ["text.png", "cut.png", "huge.png"] {
+    for name in ["text.png", "cut.png", "big.png", "huge.png"] {
         assert!(!err(s.execute("library.insert", json!({"file": d.0.join(name)}))).is_empty());
     }
     assert_eq!(images(&s), 1);
+}
+
+/// Listing and search never open a file: one nobody may read is listed and found, and fails only
+/// when it is drawn or inserted.
+#[cfg(unix)]
+#[test]
+fn listing_and_search_read_no_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = Dir::new("unreadable");
+    let locked = d.file("locked-logo.png", &png(8, 8));
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read(&locked).is_ok() {
+        return; // running as a user who reads everything
+    }
+    let mut s = s();
+    add(&mut s, &d);
+    let files = list(&mut s);
+    assert_eq!(files[0]["pictures"][0]["title"], "locked-logo.png", "{files:?}");
+    assert!(files[0].get("error").is_none());
+    let hits = s.execute("library.search", json!({"query": "logo"})).unwrap();
+    assert_eq!(hits.as_array().map(Vec::len), Some(1), "{hits}");
+    assert!(!err(s.execute("library.thumbnail", json!({"file": locked, "picture": 0}))).is_empty());
+    assert!(!err(s.execute("library.insert", json!({"file": locked}))).is_empty());
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
 }
 
 #[test]

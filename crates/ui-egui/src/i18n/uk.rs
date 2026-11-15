@@ -1013,6 +1013,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показати",
         "Collapse dialog" => "Згорнути діалогове вікно",
         "Expand dialog" => "Розгорнути діалогове вікно",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Усі папки",
+        "Library|Library folder" => "Папка бібліотеки",
+        "Library|Add Folder…" => "Додати папку…",
+        "Library|Remove" => "Прибрати",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Більше не показувати цю папку в бібліотеці (її файли залишаться на місці)"
+        }
+        "Library|Refresh" => "Оновити",
+        "Library|Read the folders again" => "Прочитати папки знову",
+        "Library|Folder path" => "Шлях до папки",
+        "Library|Add" => "Додати",
+        "Library|Reading {read} of {total} files…" => "Читання файлів: {read} з {total}…",
+        "Library|Nothing matches \"{query}\"." => "Нічого не знайдено за запитом «{query}».",
+        "Library|Nothing in this folder yet." => "У цій папці поки нічого немає.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Показано перші файли: {shown} з {total}. Виберіть папку або скористайтеся пошуком, щоб побачити решту."
+        }
+        "Library|Nothing in this file." => "У цьому файлі нічого немає.",
+        "Library|Hidden" => "Приховано",
+        "Library|Click to insert" => "Клацніть, щоб вставити",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Розмістити цей елемент у тому самому місці",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "і ще {count}",
+        "Library|Pictures" => "Зображення",
+        "Library|Picture" => "Зображення",
+        "Library|Insert picture" => "Вставити зображення",
+        "Library|Search pictures" => "Пошук зображень",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Показувати зображення з папки з файлами PNG і JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Додайте папку із зображеннями PNG або JPEG, щоб побачити їх тут. Клацніть зображення, щоб розмістити його на аркуші."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Бібліотека показує зображення з папок на цьому комп’ютері, які версія для браузера не може прочитати. Використовуйте настільну програму, щоб переглядати бібліотеку."
+        }
+        "Library" => "Бібліотека",
+        "Pictures from your own folders" => "Зображення з ваших власних папок",
         _ => return None,
     })
 }
