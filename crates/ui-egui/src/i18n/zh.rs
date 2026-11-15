@@ -1015,6 +1015,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove the password (Modify)" => "移除密码（修改）",
         "Rename Sheet" => "重命名工作表",
         "Report Layout" => "报表布局",
+        "Resize Chart Data" => "调整图表数据区域",
         "Residuals" => "残差",
         "Right margin (in):" => "右页边距（英寸）：",
         "Row Height" => "行高",
@@ -2293,7 +2294,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         // Form controls: the Assign Action and Format Control dialogs and button questions.
         "Insert Control" => "插入控件",
         "Assign Action: {name}" => "指定操作：{name}",
-        "Format Control: {name}" => "设置控件格式：{name}",
         "Run a macro" => "运行宏",
         "Run a command" => "运行命令",
         "This workbook has no macros yet." => "此工作簿还没有宏。",

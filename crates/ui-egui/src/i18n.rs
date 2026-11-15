@@ -670,7 +670,7 @@ mod tests {
             assert_eq!(Language::En.tr(key), english);
             for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
                 let code = language.code();
-                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                let shown = language.raw(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
                 assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
                 assert_eq!(shown.contains("{letters}"), key.contains("{letters}"), "{code}: placeholder of {key:?}: {shown:?}");
             }
