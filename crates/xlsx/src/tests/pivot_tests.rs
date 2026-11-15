@@ -751,7 +751,8 @@ fn oversized_pivot_cache_warns() {
     let (wb, report) = read_xlsx(&bytes).unwrap();
     assert_eq!(wb.sheet(0).unwrap().name, "Data");
     assert!(wb.sheet(0).unwrap().pivots.is_empty());
-    let lost = format!("a PivotTable's cache is too large to read ({CACHE_PART} expands to {declared} bytes); kept as plain cells");
+    let limit = crate::package::MAX_PART;
+    let lost = format!("a PivotTable's cache is too large to read ({CACHE_PART} expands to more than {limit} bytes); kept as plain cells");
     assert!(report.warnings.contains(&lost), "{:?}", report.warnings);
 }
 
