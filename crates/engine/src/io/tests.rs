@@ -418,6 +418,25 @@ fn csv_open_honours_a_sep_line_and_saves_a_file_that_reopens_in_columns() {
 /// A first cell that reads like a `sep=` line needs one of its own only in a CSV. A `.tsv` is read
 /// with tabs given, so a `sep=` line there would come back as an extra row above the data.
 #[test]
+fn csv_save_names_its_delimiter_when_reopening_would_pick_another() {
+    let cells = |wb: &Workbook| {
+        let sh = wb.sheet(0).unwrap();
+        (0..2).map(|c| sh.value(CellRef::new(0, c)).as_text().map(str::to_string)).collect::<Vec<_>>()
+    };
+    // Read with `;`; saved, `a,b` loses its quotes and the line has one comma and one semicolon,
+    // which detection alone would read as comma-separated.
+    let (wb, _) = open_bytes("tie.csv", b"sep=;\r\n\"a,b\";x\r\n").unwrap();
+    let saved = save_bytes(&wb, "tie.csv").unwrap();
+    assert_eq!(saved, b"sep=;\r\na,b;x\r\n");
+    assert_eq!(cells(&open_bytes("tie.csv", &saved).unwrap().0), [Some("a,b".into()), Some("x".into())]);
+    // `|` is saved as commas; semicolons in the values would make detection pick `;`.
+    let (wb, _) = open_bytes("pipe.csv", b"sep=|\r\na;b;c|d;e;f\r\n").unwrap();
+    let saved = save_bytes(&wb, "pipe.csv").unwrap();
+    assert_eq!(saved, b"sep=,\r\na;b;c,d;e;f\r\n");
+    assert_eq!(cells(&open_bytes("pipe.csv", &saved).unwrap().0), [Some("a;b;c".into()), Some("d;e;f".into())]);
+}
+
+#[test]
 fn tsv_save_writes_no_sep_line_and_reopens_in_place() {
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();

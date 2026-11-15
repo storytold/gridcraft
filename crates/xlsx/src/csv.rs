@@ -657,9 +657,12 @@ fn write_delimited(
             return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
         }
     }
-    // A first row that would read as Excel's `sep=` line (a lone `sep=;` cell) stays data behind a
-    // `sep=` line of its own naming the delimiter, which GridCraft and Excel both drop on opening.
-    if sep_guard && out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some()) {
+    // A `sep=` line naming the delimiter, which GridCraft and Excel both drop on opening, goes first
+    // when the file wouldn't reopen in the same columns without it: a first row that would read as
+    // Excel's `sep=` line (a lone `sep=;` cell) stays data, and output that detection would read
+    // with another delimiter (`a,b;x` once `"a,b"` lost its quotes) keeps its own.
+    let first_is_sep = out.split(['\r', '\n']).next().is_some_and(|first| sep_line(first, '"').is_some());
+    if sep_guard && (first_is_sep || sniff_delimiter(&out, '"') != delim as u8) {
         out.insert_str(0, &format!("sep={delim}\r\n"));
     }
     Ok(out.into_bytes())
