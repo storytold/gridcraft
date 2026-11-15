@@ -14,6 +14,8 @@ workspace = true
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "aa84415bae3b765fef6b7ef42404f66ad1cff9d9" }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
+# The Library pane the Craft apps share, over the engine's `library.*` commands.
+craft-library-egui = { workspace = true }
 # `monochrome_emoji_fonts` restores the Noto Emoji and emoji-icon faces that 0.37 moved behind
 # this feature. The UI draws ✕, ◀, ↘ and 📋 as text; without these faces the strict kittest
 # harness (and a host with no symbol font) renders them as tofu.

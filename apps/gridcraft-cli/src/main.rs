@@ -187,6 +187,21 @@ fn blank() -> Session {
     s
 }
 
+/// The Library folders the desktop app keeps in its preferences, so `run` and `mcp` browse the
+/// same Library (Insert ▸ Library). Only those: the app's other preferences don't change what the
+/// CLI does. `GRIDCRAFT_NO_PREFS`, as for the app, leaves them out.
+fn saved_library_folders() -> Vec<String> {
+    if std::env::var_os("GRIDCRAFT_NO_PREFS").is_some() {
+        return vec![];
+    }
+    let Some(path) = gridcraft_engine::settings_dir().map(|d| d.join(gridcraft_engine::PREFS_FILE)) else { return vec![] };
+    // A file this large is not the app's preferences.
+    if !std::fs::metadata(&path).is_ok_and(|m| m.is_file() && m.len() <= 4 << 20) {
+        return vec![];
+    }
+    std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<gridcraft_engine::Prefs>(&b).ok()).map(|p| p.library_folders).unwrap_or_default()
+}
+
 fn activate_sheet(s: &mut Session, sheet: Option<&str>) -> Result<(), String> {
     if let Some(name) = sheet {
         let p = match name.parse::<u64>() {
@@ -434,6 +449,7 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         (None, None) => blank(),
     };
+    s.prefs.library_folders = saved_library_folders();
     let quiet = a.has("quiet");
     let mut step = 0usize;
     for (name, value) in &a.opts {
@@ -547,7 +563,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
             )
         }
         None => {
-            let session = match (a.opt("in"), a.opt("sample")) {
+            let mut session = match (a.opt("in"), a.opt("sample")) {
                 (Some(p), _) => open(p)?,
                 (None, Some(name)) => {
                     let mut s = Session::new();
@@ -556,6 +572,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
                 }
                 (None, None) => blank(),
             };
+            session.prefs.library_folders = saved_library_folders();
             Box::new(Headless::with_session(session))
         }
     };

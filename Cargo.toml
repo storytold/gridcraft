@@ -41,6 +41,13 @@ craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0
 craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+# Insert ▸ Library: the Library core the Craft apps share (folders, bounds, caches, search, the
+# `library.*` answers) and its egui pane (in ui-egui). A temporary exception to the one revision
+# above: they exist only at storytold/craft-libs#1584's head until it merges, and they bring a
+# second craft-ui (craft-library-egui's) until then. Once #1584 is on craft-libs main, every
+# craft-libs pin here moves to one main commit, these two with them.
+craft-library = { git = "https://github.com/storytold/craft-libs", rev = "772e09b5bd6b39c64dce2e0982324e959753ffde", version = "0.1.0" }
+craft-library-egui = { git = "https://github.com/storytold/craft-libs", rev = "772e09b5bd6b39c64dce2e0982324e959753ffde", version = "0.1.0" }
 
 # foundation
 thiserror = "2"

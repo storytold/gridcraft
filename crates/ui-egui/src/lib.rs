@@ -42,6 +42,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod library_pane;
 pub mod macro_editor;
 pub mod macro_ui;
 pub mod objects;
@@ -343,6 +344,9 @@ pub struct SheetApp {
     pub native_windows: bool,
     /// View › Arrange All's layout and windows, waiting for the native windows to move.
     pub arrange_windows: Option<(String, Vec<u64>)>,
+    /// Insert ▸ Library: the pane's own state (its tab, folder, search and thumbnails); the
+    /// folders themselves are a preference ([`gridcraft_engine::Prefs::library_folders`]).
+    pub library: library_pane::State,
     /// The update check, the startup prompt and a running self-update (desktop only).
     #[cfg(not(target_arch = "wasm32"))]
     updates_rt: updates_ui::Runtime,

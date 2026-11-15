@@ -14,6 +14,7 @@ pub mod cmd;
 pub mod display;
 pub mod fill;
 pub mod io;
+pub mod library;
 pub mod links;
 pub mod macros;
 pub mod outline;
@@ -428,6 +429,30 @@ pub struct Prefs {
     /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
     #[serde(deserialize_with = "recent::lenient")]
     pub recent_functions: Vec<String>,
+    /// Insert ▸ Library: the folders of pictures the Library pane browses, set with
+    /// `library.addFolder` and `library.removeFolder` (an application list, at most
+    /// [`library::MAX_FOLDERS`]).
+    #[serde(deserialize_with = "library::lenient_folders")]
+    pub library_folders: Vec<String>,
+}
+
+/// The preferences file ([`Prefs`]) in [`settings_dir`].
+pub const PREFS_FILE: &str = "prefs.json";
+
+/// The per-user settings folder the desktop app keeps `prefs.json`, `ui.json` and its logs in;
+/// the CLI reads the Library folders from there too. Only the path: nothing is read here.
+pub fn settings_dir() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/GridCraft"))
+    } else if cfg!(windows) {
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("GridCraft"))
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+            .map(|c| c.join("gridcraft"))
+    }
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -463,6 +488,7 @@ impl Default for Prefs {
             formula_bar: true,
             status_bar: StatusBarStats::default(),
             recent_functions: recent::defaults(),
+            library_folders: vec![],
         }
     }
 }
@@ -561,6 +587,9 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// Insert ▸ Library: what the Library has read of the folders in
+    /// [`Prefs::library_folders`] (indexes, opened pictures and thumbnails, each within a budget).
+    pub library: library::Cache,
 }
 
 impl Session {

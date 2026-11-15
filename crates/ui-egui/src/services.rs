@@ -14,6 +14,9 @@ pub struct Services {
     /// Desktop: submit the PDF with the chosen settings on a worker.
     pub print_native: Option<printing::Submit>,
     pub pick_open: Option<Box<dyn Fn() -> Option<String>>>,
+    /// Native folder picker (Insert ▸ Library ▸ Add Folder…). Without it the Library pane takes a
+    /// typed path.
+    pub pick_folder: Option<Box<dyn Fn() -> Option<String>>>,
     pub pick_save: Option<PickSave>,
     /// Native picture picker (PNG/JPEG), separate from workbook opening.
     pub pick_picture: Option<Box<dyn Fn() -> Option<String>>>,
