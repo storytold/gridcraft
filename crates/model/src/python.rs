@@ -404,7 +404,10 @@ fn spilled_lines(text: &str) -> Option<Value> {
     Array::new(rows, 1, text.split('\n').map(Value::text).collect()).map(Value::from)
 }
 
-/// Line breaks as `\n`.
+/// Line breaks as `\n`: `\r\n` and a lone `\r` become `\n` wherever they are, string literals
+/// included. Python reads source the same way, since its tokenizer turns both into `\n` before it
+/// sees a literal, so this changes how code is stored and saved, not what it does. A carriage
+/// return a string needs is the escape `\r`, two characters this leaves alone.
 pub fn normalize_code(code: &str) -> String {
     code.replace("\r\n", "\n").replace('\r', "\n")
 }
@@ -602,6 +605,15 @@ pub const BLOCKED: Value = Value::Error(CellError::Blocked);
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_keeps_its_line_breaks_as_python_reads_them() {
+        // A carriage return inside a literal is a line break to Python's tokenizer too, so the code
+        // stored is the code that runs; the escape `\r` is two characters and stays.
+        assert_eq!(PyCode::new("s = \"\"\"a\rb\"\"\"\r\nt = 1\r").code, "s = \"\"\"a\nb\"\"\"\nt = 1\n");
+        assert_eq!(PyCode::new("s = \"a\\rb\"").code, "s = \"a\\rb\"");
+        assert_eq!(PyEnvironment::from_person("x = 1\r\ny = 2").code, "x = 1\ny = 2");
+    }
 
     #[test]
     fn formula_round_trip_with_chunks_and_quotes() {
