@@ -17,6 +17,7 @@ mod extlist;
 mod fixtures;
 mod google_sheets_dummy;
 mod ink_roundtrip;
+mod limits;
 mod literal_category_roundtrip;
 mod locale_numfmt;
 mod malformed;

@@ -133,7 +133,9 @@ fn zip(parts: &[(String, Vec<u8>)]) -> Vec<u8> {
 
 fn replace(parts: &mut [(String, Vec<u8>)], name: &str, from: &str, to: &str) {
     let (_, bytes) = parts.iter_mut().find(|(n, _)| n == name).unwrap();
-    let text = std::str::from_utf8(bytes).unwrap().replace(from, to);
+    let text = std::str::from_utf8(bytes).unwrap();
+    assert!(text.contains(from), "{name} holds no {from:?}");
+    let text = text.replace(from, to);
     *bytes = text.into_bytes();
 }
 
@@ -217,6 +219,83 @@ fn pictures_roundtrip_across_sheets_with_and_without_dynamic_arrays() {
         assert_eq!(picture_cell.attr("t"), Some("e"));
         assert_eq!(picture_cell.child("v").unwrap().text, "#VALUE!");
     }
+}
+
+#[test]
+fn a_picture_cells_long_fallback_text_is_not_counted() {
+    // A picture in a cell is kept as the picture; its fallback text isn't kept, so a long one
+    // isn't counted in the long-text warning.
+    let mut parts = independent_parts(false);
+    let long = "a".repeat(gridcraft_core::MAX_CELL_CHARS as usize + 1);
+    replace(&mut parts, "sheets/data.xml", r#"t="e" vm="2"><v>#VALUE!</v>"#, &format!(r#"t="inlineStr" vm="2"><is><t>{long}</t></is>"#));
+    let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+    assert!(wb.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")));
+    assert!(!report.warnings.iter().any(|w| w.contains("longer than Excel's")), "{:?}", report.warnings);
+}
+
+#[test]
+fn a_plain_cell_repeating_a_picture_cell_leaves_the_picture_saved() {
+    // A cell repeating the address of a picture cell replaces the cell's value, but the picture
+    // stays and is what is saved there, as on main. A long text there was read, so it is counted.
+    let long = "a".repeat(gridcraft_core::MAX_CELL_CHARS as usize + 1);
+    for (later, counted) in [(r#"<c r="A1"><v>5</v></c>"#.to_string(), 0), (format!(r#"<c r="A1" t="inlineStr"><is><t>{long}</t></is></c>"#), 1)] {
+        let mut parts = independent_parts(false);
+        let picture_cell = r#"<c r="A1" t="e" vm="2"><v>#VALUE!</v></c>"#;
+        replace(&mut parts, "sheets/data.xml", picture_cell, &format!("{picture_cell}{later}"));
+        let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+        assert!(wb.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")), "{later}");
+        assert!(report.warnings.iter().any(|w| w.contains("already read")), "{:?}", report.warnings);
+        let long: Vec<&String> = report.warnings.iter().filter(|w| w.contains("longer than Excel's")).collect();
+        assert!(long.len() == counted && long.iter().all(|w| w.contains(": 1 cell text(s) ")), "{:?}", report.warnings);
+        let saved = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap().0;
+        assert!(saved.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")), "{later}");
+        assert_eq!(saved.sheet(0).unwrap().value(at("A1")), Value::Error(CellError::Value), "{later}");
+    }
+}
+
+#[test]
+fn a_cell_at_a_picture_cells_address_after_its_fallback_was_cleared_is_a_repeat() {
+    // The picture cell A1, then an empty A1 (which clears the cell but leaves the picture), B1,
+    // and A1 again: the picture is still stored at A1, so the last A1 repeats an address already
+    // read, and isn't out of column order. The picture stays and is what is saved.
+    let mut parts = independent_parts(false);
+    let picture_cell = r#"<c r="A1" t="e" vm="2"><v>#VALUE!</v></c>"#;
+    replace(&mut parts, "sheets/data.xml", picture_cell, &format!(r#"{picture_cell}<c r="A1"/>"#));
+    replace(&mut parts, "sheets/data.xml", "</row><row r=\"2\">", r#"<c r="A1"><v>5</v></c></row><row r="2">"#);
+    let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+    assert!(wb.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")));
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("sheet \"Pictures\": 2 cell(s), or a row's properties, repeated an address or row already read")),
+        "{:?}",
+        report.warnings
+    );
+    assert!(!report.warnings.iter().any(|w| w.contains("out of column order")), "{:?}", report.warnings);
+    let saved = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap().0;
+    assert!(saved.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")));
+}
+
+#[test]
+fn a_cell_at_a_picture_cells_address_in_a_later_element_of_the_same_row_is_a_repeat() {
+    // As above, but the last A1 sits in a second row element for row 1, after row 2's, which
+    // cleared the column bitmap, and A1 is not the furthest cell: only the picture stored at A1
+    // finds it.
+    let mut parts = independent_parts(false);
+    let picture_cell = r#"<c r="A1" t="e" vm="2"><v>#VALUE!</v></c>"#;
+    replace(&mut parts, "sheets/data.xml", picture_cell, &format!(r#"{picture_cell}<c r="A1"/>"#));
+    replace(&mut parts, "sheets/data.xml", "</sheetData>", r#"<row r="1"><c r="A1"><v>5</v></c></row></sheetData>"#);
+    let (wb, report) = read_xlsx(&zip(&parts)).unwrap();
+    assert!(wb.sheet(0).unwrap().cell_pictures.contains_key(&at("A1")));
+    assert!(
+        report
+            .warnings
+            .iter()
+            .any(|w| w.starts_with("sheet \"Pictures\": 2 cell(s), or a row's properties, repeated an address or row already read")),
+        "{:?}",
+        report.warnings
+    );
 }
 
 #[test]
