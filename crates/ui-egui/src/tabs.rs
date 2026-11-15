@@ -134,7 +134,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(8.0);
             if view.show_sheet_tabs {
-                if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
+                let prev = crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0));
+                prev.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("Previous sheet")));
+                if prev.clicked() {
                     // Ctrl-click jumps to the first visible sheet, like Excel's tab scroll buttons.
                     let edge =
                         if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, false)) } else { None };
@@ -146,7 +148,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                         None => app.run_or_alert("sheet.previous", json!({})),
                     }
                 }
-                if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
+                let next = crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0));
+                next.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("Next sheet")));
+                if next.clicked() {
                     // Ctrl-click jumps to the last visible sheet.
                     let edge =
                         if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, true)) } else { None };
