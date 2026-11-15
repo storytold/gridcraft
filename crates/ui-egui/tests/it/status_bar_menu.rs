@@ -58,3 +58,29 @@ fn right_clicking_the_status_bar_text_opens_the_menu() {
         assert!(h.query_by_label("Numerical Count").is_some(), "a right-click on {text:?} opens the statistics menu");
     }
 }
+
+/// On a phone-width window the statistics are drawn from the right end; anything that does not
+/// fit is left out instead of painting over the mode text at the left end (#4187).
+#[test]
+fn statistics_that_do_not_fit_stay_clear_of_the_mode_text() {
+    let mut session = Session::new();
+    session.new_workbook();
+    for (cell, input) in [("A1", "4"), ("A2", "-1"), ("A3", "9")] {
+        session.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    session.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
+    let mut h = crate::common::builder().with_size(vec2(320.0, 640.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        crate::common::app(session),
+    );
+    h.run_steps(4);
+    let ready = h.get_by_label("Ready").rect();
+    for text in ["Average: 4", "Count: 3", "Sum: 12"] {
+        if let Some(label) = h.query_by_label(text) {
+            assert!(!label.rect().intersects(ready), "{text:?} overlaps the mode text: {:?} vs {ready:?}", label.rect());
+        }
+    }
+}
