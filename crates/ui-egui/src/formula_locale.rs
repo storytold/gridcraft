@@ -170,4 +170,22 @@ mod tests {
         assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
     }
+
+    /// Traditional Chinese has help for every function and argument the catalog lists.
+    #[test]
+    fn traditional_chinese_function_help_covers_the_whole_catalog() {
+        let catalog = gridcraft_engine::cmd::formulas::function_list();
+        for f in &catalog {
+            let name = f["name"].as_str().unwrap_or_default();
+            let english = f["description"].as_str().unwrap_or_default();
+            assert!(Language::ZhHant.function_description(english).is_some(), "{name}: no zh-Hant description for {english:?}");
+        }
+        assert_eq!(
+            description("IF", FormulaLocale::En, Language::ZhHant).as_deref(),
+            Language::ZhHant
+                .function_description(catalog.iter().find(|f| f["name"] == "IF").and_then(|f| f["description"].as_str()).unwrap_or_default())
+        );
+        let sum = sig("SUM", FormulaLocale::En, Language::ZhHant);
+        assert!(sum.starts_with("SUM(") && !sum.contains("number"), "{sum}");
+    }
 }

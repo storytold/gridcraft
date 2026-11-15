@@ -29,6 +29,7 @@ mod uk;
 mod vi;
 mod zh;
 pub(crate) mod zh_hant;
+mod zh_hant_functions;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -270,6 +271,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::ZhHant => Some((zh_hant_functions::DESCRIPTIONS, zh_hant_functions::ARGUMENTS)),
             _ => None,
         }
     }
