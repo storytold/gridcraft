@@ -299,3 +299,27 @@ fn trace_arrows_stay_through_a_wheel_zoom() {
     h.state_mut().run("cell.set", json!({"cell": "B2", "input": "2"})).unwrap();
     assert!(!current(&h), "an edit removes them");
 }
+
+/// Whether the last frame asked the OS to focus the window.
+fn asked_for_focus(h: &Harness) -> bool {
+    h.output().viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Focus)))
+}
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+#[test]
+/// On X11 an unfocused window never learns that Ctrl is held, so the first wheel turn over it
+/// asks for focus; once it has focus Ctrl+wheel zooms without a click (#3496).
+fn a_wheel_turn_over_an_unfocused_window_asks_for_focus() {
+    let mut h = harness();
+    h.input_mut().focused = false;
+    h.step();
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, vec2(0.0, -1.0), Modifiers::NONE));
+    h.step();
+    assert!(asked_for_focus(&h), "the window asks for focus");
+
+    // A focused window has no need to ask.
+    let mut h = harness();
+    h.input_mut().events.push(wheel_event(MouseWheelUnit::Line, MouseWheelSource::Unknown, TouchPhase::Move, vec2(0.0, -1.0), Modifiers::NONE));
+    h.step();
+    assert!(!asked_for_focus(&h), "a focused window does not ask");
+}

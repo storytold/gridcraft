@@ -42,6 +42,17 @@ fn kept_cf(app: &mut SheetApp, wb: &Workbook, si: usize) -> CfCache {
     }
 }
 
+/// Asks for keyboard focus when the wheel turns over an unfocused window on X11 (#3496).
+///
+/// An unfocused X11 window gets no key events, so winit reports no Ctrl for it and Ctrl+wheel
+/// would only scroll until a click gave it focus. With focus, the next notch zooms. Windows and
+/// macOS read Ctrl from the wheel event itself, so they need nothing.
+fn focus_for_wheel(ui: &egui::Ui) {
+    if cfg!(all(unix, not(target_vendor = "apple"))) && !ui.input(|i| i.focused) {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let available = ui.available_rect_before_wrap();
@@ -115,6 +126,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
             app.grid.wheel_zoom = Some(zooming);
         } else if scroll_delta != egui::Vec2::ZERO {
+            focus_for_wheel(ui);
             let z = if paper { make_geo(app, view.scroll).z } else { sh.zoom as f32 / 100.0 * DISPLAY_SCALE };
             let mut d = scroll_delta;
             // A horizontal swipe moves the content the way the fingers go, which is towards
