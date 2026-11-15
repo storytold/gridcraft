@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
             validation
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
-        cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
+        cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → {invalid: [cell], truncated: bool (true when the 100,000-cell scan allowance ended before every range was checked)}", has_doc, circle_invalid),
         CommandSpec {
             shortcut_mac: Some("Cmd+Shift+K"),
             ..cmd!(
