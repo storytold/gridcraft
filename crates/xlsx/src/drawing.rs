@@ -249,15 +249,19 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let descr = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
     let tb = obj.child("txBody");
     let has_math = tb.is_some_and(|tb| crate::omml::find_math(tb, 0).is_some());
+    // The description's source is GridCraft's own only while its marker matches; the saved frame
+    // ink belongs to that body alone, not to Office Math another application rewrote.
+    let mut own = false;
     let source = match (has_math, described_source(descr)) {
         (_, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker && (has_math || holds_written_text(tb, src))) => {
+            own = true;
             Some(src.to_string())
         }
         (true, _) => tb.and_then(crate::omml::equation_source),
         (false, _) => None,
     };
     if let Some(text) = source {
-        let ink = equation_ink(tb, &text, described_source(descr).is_some(), has_math);
+        let ink = equation_ink(tb, &text, own, has_math);
         return Some(Shape {
             id: 0,
             kind: ShapeKind::Equation,

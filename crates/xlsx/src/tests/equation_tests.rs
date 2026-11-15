@@ -523,6 +523,34 @@ fn another_writer_s_paragraph_end_colour_is_not_the_frames_ink() {
 }
 
 #[test]
+fn an_equation_whose_office_math_was_rewritten_reads_its_first_run_as_the_frames_ink() {
+    // GridCraft's description is still there, but another application changed the Office Math
+    // (`b` became `c`), so the marker no longer matches and the equation is rebuilt from the
+    // Office Math. The blue paragraph end GridCraft saved is not its ink any more: the green
+    // first run stands in, and the next save writes that back instead of the stale blue.
+    let wb = book(vec![equation(1, "B2", "a+b", Color::Rgb(0x0000FF))]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let mut d = drawing(&parts);
+    assert!(d.contains("<m:t>b</m:t>"), "the second operand is its own run: {d}");
+    d = d.replacen("<m:t>b</m:t>", "<m:t>c</m:t>", 1);
+    let at = d.find("<a:rPr lang=\"en-US\"").unwrap();
+    let close = d[at..].find('>').unwrap() + at + 1;
+    let green = "<a:solidFill><a:srgbClr val=\"008000\"/></a:solidFill>";
+    match d[close..].starts_with("<a:solidFill>") {
+        true => {
+            let end = d[close..].find("</a:solidFill>").unwrap() + close + "</a:solidFill>".len();
+            d.replace_range(close..end, green);
+        }
+        false => d.insert_str(close, green),
+    }
+    parts.insert(name, d.into_bytes());
+    let s = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+    assert_eq!((s.len(), s[0].kind, s[0].text.as_str()), (1, ShapeKind::Equation, "a+c"), "rebuilt from the Office Math");
+    assert_eq!(s[0].line, Color::Rgb(0x008000));
+}
+
+#[test]
 fn a_coloured_equation_without_office_math_keeps_its_frame_ink() {
     // `\begin{CD}` is outside the Office Math subset, so the equation is saved as the plain-text
     // box alone, whose runs all carry the frame's ink; the colour command in the source does not
