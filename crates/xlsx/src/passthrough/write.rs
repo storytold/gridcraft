@@ -26,7 +26,8 @@ impl KeptOut {
     pub fn reserve_vml_blocks(&mut self, wb: &Workbook) {
         let vmls =
             wb.sheets.iter().filter_map(|s| s.preserved.as_deref()).flat_map(|p| &p.parts).filter(|q| q.content_type.eq_ignore_ascii_case(CT_VML));
-        let max = vmls.map(|q| vml_block_max(&String::from_utf8_lossy(&q.data))).max().unwrap_or(0);
+        // Read as text from a UTF-8 copy: a drawing may be UTF-16.
+        let max = vmls.map(|q| vml_block_max(&String::from_utf8_lossy(&crate::xml::to_utf8(&q.data)))).max().unwrap_or(0);
         self.vml_blocks = u32::try_from(max).unwrap_or(u32::MAX);
     }
 
