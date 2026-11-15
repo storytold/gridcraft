@@ -41,6 +41,7 @@ pub(crate) use cell_paint::paint_border;
 pub(crate) use cell_paint::{cell_text_y, rotated_text_pos, wrapped_cell_text_y};
 #[cfg(test)]
 use cell_paint::{center_across_end, display_text, look, numfmt_color, painted_halign};
+pub(crate) use editor::cell_editor_ink;
 pub use editor::validation_arrow;
 #[cfg(test)]
 use editor::{editor_slack, editor_width, list_picker_height};

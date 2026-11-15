@@ -19,6 +19,26 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
         app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
     }
+    let mut dark_sheet = app.ui.dark_sheet;
+    let hint = lang.tr("Show the cells with their colours inverted. Saving, printing and PDFs are unchanged.");
+    if ui.checkbox(&mut dark_sheet, lang.tr("Dark sheet (light text on dark cells)")).on_hover_text(hint).changed() {
+        app.run_or_alert("view.darkSheet", json!({"on": dark_sheet}));
+    }
+    let mut dark_charts = app.ui.dark_charts;
+    let hint = lang.tr("Show charts with their colours inverted. Saving, printing and PDFs are unchanged.");
+    if ui.checkbox(&mut dark_charts, lang.tr("Dark charts")).on_hover_text(hint).changed() {
+        app.run_or_alert("view.darkCharts", json!({"on": dark_charts}));
+    }
+    let mut dark_pictures = app.ui.dark_pictures;
+    let hint = lang.tr("Show pictures with their colours inverted. Saving, printing and PDFs are unchanged.");
+    if ui.checkbox(&mut dark_pictures, lang.tr("Dark pictures")).on_hover_text(hint).changed() {
+        app.run_or_alert("view.darkPictures", json!({"on": dark_pictures}));
+    }
+    // Shown, not only as tooltips, so keyboard, touch and screen-reader users get it too.
+    dim(
+        ui,
+        lang.tr("Dark sheet, charts and pictures invert their colours on screen only, separately from Display theme. Saving, printing and PDFs are unchanged."),
+    );
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;

@@ -27,15 +27,26 @@ struct Entry {
     texture: Option<TextureHandle>,
     bytes: usize,
     used: u64,
+    /// Decoded for the dark-pictures setting (colours inverted); a switch decodes it again.
+    dark: bool,
 }
 
 impl Cache {
+    /// The picture's texture for this frame, decoded once and kept while it is drawn; it is decoded
+    /// again when the Dark pictures setting changes, so the cache never shows the other variant.
     fn texture(&mut self, ctx: &egui::Context, picture: &Arc<CellPicture>) -> Option<TextureHandle> {
         let frame = ctx.cumulative_frame_nr();
         let key = Arc::as_ptr(picture) as usize;
-        if let Some(entry) = self.entries.get_mut(&key) {
+        let dark = crate::theme::dark_pictures(ctx);
+        if let Some(entry) = self.entries.get_mut(&key)
+            && entry.dark == dark
+        {
             entry.used = frame;
             return entry.texture.clone();
+        }
+        // Decoded for the other setting: decode it again.
+        if let Some(old) = self.entries.remove(&key) {
+            self.bytes = self.bytes.saturating_sub(old.bytes);
         }
         // Prune discarded workbooks/payloads before allocating another texture.
         self.entries.retain(|_, entry| {
@@ -61,11 +72,16 @@ impl Cache {
                 self.bytes = self.bytes.saturating_sub(entry.bytes);
             }
         }
-        let decoded = source.and_then(|(format, _)| decode_format(picture, format));
+        let decoded = source.and_then(|(format, _)| decode_format(picture, format)).map(|mut image| {
+            if dark {
+                crate::theme::ink_image(&mut image);
+            }
+            image
+        });
         let bytes = decoded.as_ref().map_or(0, |image| image.pixels.len() * 4);
         let texture = decoded.map(|image| ctx.load_texture("cell picture", image, egui::TextureOptions::LINEAR));
         self.bytes += bytes;
-        self.entries.insert(key, Entry { source: Arc::downgrade(picture), texture: texture.clone(), bytes, used: frame });
+        self.entries.insert(key, Entry { source: Arc::downgrade(picture), texture: texture.clone(), bytes, used: frame, dark });
         texture
     }
 }
@@ -151,6 +167,7 @@ mod tests {
         Ok(Arc::new(CellPicture { data: bytes.into_inner(), mime: "image/png".into(), alt: "Test picture".into() }))
     }
 
+    /// Pictures fit their cell keeping the aspect ratio, and the decoded-content cache stays bounded.
     #[test]
     fn aspect_fit_and_bounded_content_cache() -> Result<(), Box<dyn std::error::Error>> {
         let cell = Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 100.0));
@@ -184,6 +201,24 @@ mod tests {
         assert!(cache.bytes <= MAX_CACHE_BYTES);
         assert!(decode(&CellPicture { data: vec![], mime: "image/png".into(), alt: String::new() }).is_none());
         assert_eq!(decode(&red).ok_or("decode failed")?.pixels.first(), Some(&Color32::RED));
+        Ok(())
+    }
+
+    #[test]
+    fn the_dark_pictures_setting_decodes_the_picture_again_and_back() -> Result<(), Box<dyn std::error::Error>> {
+        let ctx = egui::Context::default();
+        let mut cache = Cache::default();
+        let white = picture([255, 255, 255, 255])?;
+        let light = cache.texture(&ctx, &white).ok_or("missing texture")?.id();
+        crate::theme::set_dark_pictures(&ctx, true);
+        let dark = cache.texture(&ctx, &white).ok_or("missing dark texture")?.id();
+        assert_ne!(dark, light, "switching on decodes it again, inverted");
+        assert_eq!(cache.entries.len(), 1, "the light texture is given back");
+        assert_eq!(cache.bytes, 4 * 2 * 4);
+        crate::theme::set_dark_pictures(&ctx, false);
+        assert_ne!(cache.texture(&ctx, &white).ok_or("missing texture")?.id(), dark);
+        let mut output = ctx.run_ui(Default::default(), |_| {});
+        output.textures_delta.clear();
         Ok(())
     }
 }

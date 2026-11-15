@@ -49,8 +49,9 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
     response
 }
 
-/// Preview only reads the dialog draft. A white worksheet surface keeps automatic
-/// and explicit border colors faithful in both light and dark application themes.
+/// Preview only reads the dialog draft. It sits on the sheet surface as the cell will, whatever the
+/// Display theme: white with the authored colours on the light sheet; on the dark sheet the sheet
+/// grey, with every line mapped and held legible as on a cell.
 pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
     ui.add_space(8.0);
     ui.label("Preview");
@@ -70,13 +71,14 @@ pub(crate) fn sample(ui: &mut Ui, borders: &Borders, theme: &Theme) {
     ];
     for (line, points) in edges.iter().take(4) {
         if line.is_none() {
-            ui.painter().extend(egui::Shape::dotted_line(points, Color32::from_gray(190), 4.0, 0.5));
+            ui.painter().extend(egui::Shape::dotted_line(points, t.on_sheet(Color32::from_gray(190)), 4.0, 0.5));
         }
     }
     for (line, points) in edges {
         if !line.is_none() {
+            // Automatic is black, as on a cell; the guard measures against the white the line was authored on.
             let color = line.color.resolve(theme).map(theme::color32).unwrap_or(Color32::BLACK);
-            paint_border(ui.painter(), points, line.style, color);
+            paint_border(ui.painter(), points, line.style, t.on_sheet_over(color, Color32::WHITE, theme::INK_LINE_MIN));
         }
     }
 }

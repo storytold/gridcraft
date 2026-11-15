@@ -1,7 +1,8 @@
 //! GridCraft's icon set, drawn in code on a 16×16 design grid (original artwork; see
 //! ATTRIBUTION.md). Large ribbon icons use the same drawings at 32×32 with accent colours.
 //! Accent and paper colours come from the theme tokens, so icons follow light and dark mode;
-//! icons placed on the sheet ([`paint_on_sheet`]) keep the light colours, as the sheet does.
+//! icons placed on the sheet ([`paint_on_sheet`]) follow the sheet, not Display theme: light by
+//! default, dark when the dark sheet is on (`docs/dark-sheet.md`).
 
 use egui::epaint::{CubicBezierShape, PathShape, PathStroke};
 use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2, vec2};
@@ -299,9 +300,11 @@ pub fn paint_accent(p: &Painter, rect: Rect, icon: Icon, c: Color32, accent: Opt
     paint_with(p, rect, icon, c, &Palette { accent, ..Palette::of(&Tokens::get(p.ctx())) });
 }
 
-/// Draws `icon` on the sheet, which stays white in both themes, so with the light palette.
+/// Draws `icon` on the sheet. The sheet follows the dark-sheet setting, not Display theme, so the
+/// palette takes the sheet from the context and the chrome light (icons carry no chrome colours).
 pub fn paint_on_sheet(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
-    paint_with(p, rect, icon, c, &Palette::of(&Tokens::light()));
+    let sheet_dark = crate::theme::dark_sheet(p.ctx());
+    paint_with(p, rect, icon, c, &Palette::of(&Tokens::palette(false, sheet_dark)));
 }
 
 /// Draws `icon` into `rect` (square-ish), in colour `c`, with palette `pal`.
