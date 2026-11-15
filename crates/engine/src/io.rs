@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{Sheet, Workbook};
+use gridcraft_model::{LineIndex, Sheet, Workbook};
 
 use crate::{EngineError, Result};
 
@@ -100,14 +100,18 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
 fn fit_imported_rows(wb: &mut Workbook) {
+    // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
+    let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheet(si) else { continue };
         let mut rows: Vec<u32> = sh.cells.iter().map(|(c, _)| c.row).collect();
         rows.sort_unstable();
         rows.dedup();
+        // One sweep over the sheet's merges for all of its rows, in ascending order.
+        let mut sweep = crate::cmd::MergeSweep::new(left);
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::auto_row_height(wb, si, row);
+            crate::cmd::fit_row_height(wb, si, row, &mut sweep);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)
@@ -116,6 +120,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
                 sh.rows.entry(row).or_default().size = Some(before);
             }
         }
+        left = sweep.left();
     }
 }
 
@@ -576,7 +581,7 @@ pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
     let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
     gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
         gridcraft_core::Value::Number(n) if n.is_finite() => {
-            let shape = crate::display::number_format(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
+            let shape = crate::display::parsed(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
             match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
                 Some(((date, time), d)) => iso(&d, date, time),
                 None => n.to_string(),
@@ -604,6 +609,24 @@ fn iso(d: &gridcraft_core::date::DateTime, date: bool, time: bool) -> String {
 
 pub(crate) fn esc(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// [`esc`], or `None` once the escaped text would pass `limit` bytes (nothing larger is built).
+fn esc_within(s: &str, limit: usize) -> Option<String> {
+    let mut out = String::with_capacity(s.len().min(limit));
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            c => out.push(c),
+        }
+        if out.len() > limit {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 fn html_cell_css(wb: &Workbook, sh: &Sheet, c: CellRef, dir: CellDir) -> String {
@@ -681,6 +704,30 @@ fn table_dir(sh: &Sheet) -> &'static str {
 const CLIPBOARD_HTML_MAX_BYTES: usize = 4 * 1024 * 1024;
 const CLIPBOARD_HTML_MAX_CELLS: u64 = 10_000;
 
+/// Most cells the merge index holds: one entry per merged cell inside the exported range.
+const MERGE_INDEX_MAX_ENTRIES: usize = 1_000_000;
+
+/// The merge covering each cell of `rect`, as `Sheet::merge_at` would find it (the first in the
+/// sheet's list), built once so a table lookup is one probe instead of a scan of every merge.
+/// `None` when overlapping merges would cost more than a few visits per cell of `rect`, or merged
+/// cells fill more than [`MERGE_INDEX_MAX_ENTRIES`]: a hostile file's merge list can't multiply the
+/// work or the memory of a bounded export.
+fn merge_index(sh: &Sheet, rect: RangeRef) -> Option<std::collections::HashMap<CellRef, RangeRef>> {
+    let mut map = std::collections::HashMap::new();
+    let mut left = rect.count().saturating_mul(4);
+    for m in &sh.merges {
+        let Some(part) = m.intersection(&rect) else { continue };
+        left = left.checked_sub(part.count())?;
+        for c in part.iter() {
+            map.entry(c).or_insert(*m);
+        }
+        if map.len() > MERGE_INDEX_MAX_ENTRIES {
+            return None;
+        }
+    }
+    Some(map)
+}
+
 /// An HTML fragment for the same range as `plain_text`, previously produced by
 /// `display::range_text`. Large copies keep plain text only; never return a partial table.
 pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &str) -> Option<String> {
@@ -689,6 +736,7 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
         return None;
     }
     let sh = wb.sheet(sheet)?;
+    let merges = merge_index(sh, r)?;
     let mut out = ClipboardHtml(String::new());
     write!(out, "<table{} style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">", table_dir(sh)).ok()?;
     for row in r.start.row..=r.end.row {
@@ -698,7 +746,7 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
         out.write_str("<tr>").ok()?;
         for col in r.start.col..=r.end.col {
             let c = CellRef::new(row, col);
-            let span = if let Some(merged) = sh.merges.iter().find(|m| m.contains(c)).and_then(|m| m.intersection(&r)) {
+            let span = if let Some(merged) = merges.get(&c).and_then(|m| m.intersection(&r)) {
                 let first_row = (merged.start.row..=merged.end.row).find(|&row| !sh.is_row_hidden(row))?;
                 if c != CellRef::new(first_row, merged.start.col) {
                     continue;
@@ -761,6 +809,14 @@ const HTML_EXPORT_MAX_ROWS: u32 = 100_001;
 /// tall, wide one) would otherwise be gigabytes of `<td></td>` before finishing (#2387).
 const HTML_EXPORT_MAX_CELLS: u64 = 4_000_000;
 
+/// Most bytes of one web page. Every cell may hold long text (shared across many cells in the
+/// file), so the cell count alone doesn't bound the page; past this the export fails instead.
+const HTML_EXPORT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+fn html_too_big() -> EngineError {
+    EngineError::Other(format!("the web page would be over {} MiB. Save as .xlsx or CSV instead.", HTML_EXPORT_MAX_BYTES / (1024 * 1024)))
+}
+
 /// A sheet as a standalone HTML table (Save as Web Page). A sheet with pictures gets the sheet's
 /// own column widths and row heights so each picture and chart (inline SVG) can sit at its anchor.
 pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
@@ -803,6 +859,24 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 r.width()
             )));
         }
+        let merges = merge_index(sh, r)
+            .ok_or_else(|| EngineError::Other("the sheet's merged cells overlap too much, or cover too many cells, for a web page.".into()))?;
+        // Visible rows and columns of the table before each line, so a merge's span is counted
+        // in constant time whatever the file says its size is.
+        let visible_before = |hidden: &dyn Fn(u32) -> bool, from: u32, to: u32| {
+            let mut v = Vec::with_capacity((to - from) as usize + 2);
+            v.push(0u32);
+            for line in from..=to {
+                v.push(v.last().copied().unwrap_or(0) + u32::from(!hidden(line)));
+            }
+            v
+        };
+        let rows_before = visible_before(&|y| sh.is_row_hidden(y), r.start.row, r.end.row);
+        let cols_before = visible_before(&|x| sh.is_col_hidden(x), r.start.col, r.end.col);
+        let visible = |before: &[u32], from: u32, a: u32, b: u32| {
+            let at = |line: u32| before.get((line - from) as usize).copied().unwrap_or(0);
+            at(b + 1) - at(a)
+        };
         if fixed {
             out.push_str("<colgroup>");
             for col in (r.start.col..=r.end.col).filter(|&c| !sh.is_col_hidden(c)) {
@@ -821,27 +895,31 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             }
             for col in r.start.col..=r.end.col {
                 let c = CellRef::new(row, col);
-                if sh.merges.iter().any(|m| m.contains(c) && m.start != c) || (fixed && sh.is_col_hidden(col)) {
+                let merge = merges.get(&c);
+                if merge.is_some_and(|m| m.start != c) || (fixed && sh.is_col_hidden(col)) {
                     continue;
                 }
                 let text = crate::display::cell_text(wb, sh, c);
                 let dir = CellDir::of(sh, c, &text);
                 let css = html_cell_css(wb, sh, c, dir);
-                let span = sh
-                    .merges
-                    .iter()
-                    .find(|m| m.start == c)
+                let span = merge
                     .map(|m| {
                         if fixed {
-                            let rows = (m.start.row..=m.end.row).filter(|&y| !sh.is_row_hidden(y)).count();
-                            let cols = (m.start.col..=m.end.col).filter(|&x| !sh.is_col_hidden(x)).count();
+                            // Spans count the table's visible lines: the merge is clipped to the table.
+                            let rows = visible(&rows_before, r.start.row, m.start.row, m.end.row.min(r.end.row));
+                            let cols = visible(&cols_before, r.start.col, m.start.col, m.end.col.min(r.end.col));
                             format!(" rowspan=\"{rows}\" colspan=\"{cols}\"")
                         } else {
                             format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width())
                         }
                     })
                     .unwrap_or_default();
-                let _ = write!(out, "<td style=\"{css}\"{}{span}>{}</td>", dir.attr(), esc(&text));
+                // The text is escaped only as far as the page still has room for it.
+                let Some(escaped) = esc_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
+                let _ = write!(out, "<td style=\"{css}\"{}{span}>{escaped}</td>", dir.attr());
+                if out.len() > HTML_EXPORT_MAX_BYTES {
+                    return Err(html_too_big());
+                }
             }
             out.push_str("</tr>");
         }
@@ -849,34 +927,48 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     out.push_str("</table>");
     if fixed {
         // Sheet units are CSS pixels; the table starts at the used range, not at A1.
-        let (left, top) = used.map_or((0.0, 0.0), |r| (sh.col_left(r.start.col), sh.row_top(r.start.row)));
+        // Indexed positions: each anchor would otherwise sum every custom row and column before it.
+        let ri = LineIndex::new(&sh.rows, sh.default_row_height, gridcraft_core::MAX_ROWS);
+        let ci = LineIndex::new(&sh.cols, sh.default_col_width, gridcraft_core::MAX_COLS);
+        let (left, top) = used.map_or((0.0, 0.0), |r| (ci.start(r.start.col), ri.start(r.start.row)));
         let place = |a: &gridcraft_model::Anchor| {
             format!(
                 "position:absolute;left:{}px;top:{}px;width:{}px;height:{}px",
-                sh.col_left(a.cell.col) - left + f64::from(a.dx),
-                sh.row_top(a.cell.row) - top + f64::from(a.dy),
+                ci.start(a.cell.col) - left + f64::from(a.dx),
+                ri.start(a.cell.row) - top + f64::from(a.dy),
                 a.width.max(0.0),
                 a.height.max(0.0)
             )
         };
         for im in &sh.images {
-            let _ = write!(
-                out,
-                "<img src=\"data:{};base64,{}\" alt=\"{}\" style=\"{}\">",
-                esc(&im.mime),
-                base64_encode(&im.data),
-                esc(&im.alt),
-                place(&im.anchor)
-            );
+            // The base64 text is a third longer than the picture: refused before it is built.
+            if out.len().saturating_add(im.data.len().div_ceil(3).saturating_mul(4)) > HTML_EXPORT_MAX_BYTES {
+                return Err(html_too_big());
+            }
+            // The attributes are escaped only as far as the page has room for them.
+            let room = HTML_EXPORT_MAX_BYTES.saturating_sub(out.len());
+            let (Some(mime), Some(alt)) = (esc_within(&im.mime, room), esc_within(&im.alt, room)) else { return Err(html_too_big()) };
+            let _ = write!(out, "<img src=\"data:{mime};base64,{}\" alt=\"{alt}\" style=\"{}\">", base64_encode(&im.data), place(&im.anchor));
+            if out.len() > HTML_EXPORT_MAX_BYTES {
+                return Err(html_too_big());
+            }
         }
+        let mut svg_budget = crate::chart_svg::MAX_PAGE_SVG_BYTES;
         for ch in &sh.charts {
-            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor)) {
+            if let Some(svg) = crate::chart_svg::chart_svg(wb, sheet, ch, &place(&ch.anchor), svg_budget)? {
+                svg_budget -= svg.len();
                 out.push_str(&svg);
+                if out.len() > HTML_EXPORT_MAX_BYTES {
+                    return Err(html_too_big());
+                }
             }
         }
         out.push_str("</div>");
     }
     out.push_str("</body></html>");
+    if out.len() > HTML_EXPORT_MAX_BYTES {
+        return Err(html_too_big());
+    }
     Ok(out)
 }
 
@@ -888,12 +980,12 @@ thread_local! {
 /// While one is alive, [`read_file`] and [`write_file`] on this thread refuse every path: a
 /// stored script's steps run inside one (#2178), so no command reaches the file system from a
 /// script whatever its parameters are called. Dropping it (also on unwind) lifts the refusal.
-pub(crate) struct ScriptSandbox(());
+pub struct ScriptSandbox(std::marker::PhantomData<*const ()>);
 
 impl ScriptSandbox {
-    pub(crate) fn enter() -> Self {
+    pub fn enter() -> Self {
         let _ = SCRIPT_SANDBOX.try_with(|c| c.set(c.get().saturating_add(1)));
-        ScriptSandbox(())
+        ScriptSandbox(std::marker::PhantomData)
     }
 }
 
@@ -921,6 +1013,12 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 pub fn read_file(path: &str) -> Result<Vec<u8>> {
     use std::io::Read;
     script_sandbox_check(path)?;
+    // Checked before opening: opening a FIFO nobody writes to blocks the calling (GUI) thread.
+    // shortcut: a FIFO swapped in between this check and the open still blocks; close that with
+    // O_NONBLOCK when the crate takes a libc dependency.
+    if !std::fs::metadata(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?.is_file() {
+        return Err(EngineError::Other(format!("{path}: only regular files can be opened")));
+    }
     let f = std::fs::File::open(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     // A symlink to an endless device reports length 0 but streams forever, so metadata
     // alone never bounds the read: require a real file and cap the bytes actually taken.
@@ -952,18 +1050,37 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // link's target; and it inherits the destination's access restrictions, so saving a
     // private workbook doesn't widen who can read it.
     let tmp = format!("{path}.sctmp");
-    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let prior_meta = std::fs::metadata(path).ok();
+    let prior = prior_meta.as_ref().map(std::fs::Metadata::permissions);
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
+    // Over an existing file the replacement starts owner-only, whatever the umask: its group is
+    // still the saving user's primary one until it is changed below, and a member of that group
+    // must not be able to open it (and keep the descriptor) before then.
     #[cfg(unix)]
-    if let Some(p) = &prior {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        opts.mode(p.mode());
+    if prior.is_some() {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;
+    // The replacement belongs to the saving user's primary group: restore the old file's group and
+    // then its mode. When the group can't be restored its access is dropped rather than handed to a
+    // different group; failing to read that back is a failed save.
+    #[cfg(unix)]
+    if let Some(m) = &prior_meta {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let _ = std::os::unix::fs::fchown(&f, None, Some(m.gid()));
+        let group_kept = f.metadata().map(|now| now.gid() == m.gid()).map_err(|e| {
+            let _ = std::fs::remove_file(&tmp);
+            EngineError::Other(format!("{path}: {e}"))
+        })?;
+        // Best effort: a file system that can't change modes keeps the owner-only one. Without the
+        // group, the old owner and other bits are kept and the group, setuid and setgid bits dropped.
+        let _ = f.set_permissions(std::fs::Permissions::from_mode(restored_mode(m.mode(), group_kept)));
+    }
     #[cfg(not(unix))]
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());
@@ -978,6 +1095,13 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })
+}
+
+/// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
+/// restored; without the group, the owner and other bits only.
+#[cfg(unix)]
+fn restored_mode(old: u32, group_kept: bool) -> u32 {
+    if group_kept { old & 0o7777 } else { old & 0o707 }
 }
 
 #[cfg(target_arch = "wasm32")]
