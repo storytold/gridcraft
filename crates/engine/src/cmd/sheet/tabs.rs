@@ -319,6 +319,7 @@ mod tests {
         };
         for params in [
             json!({"color": "#GG0000"}),
+            json!({"color": "#GGFF0000"}),
             json!({"color": ""}),
             json!({"color": null}),
             json!({"color": false}),
@@ -341,7 +342,11 @@ mod tests {
     fn tab_colors_still_accept_rgb_theme_and_clearing() {
         let mut s = Session::new();
         s.new_workbook();
-        for (color, expected) in [(json!("#00FF00"), Color::Rgb(0x00FF00)), (json!({"theme": 3, "tint": 0.4}), Color::Theme(3, 400))] {
+        for (color, expected) in [
+            (json!("#00FF00"), Color::Rgb(0x00FF00)),
+            (json!("#80FF0000"), Color::Rgb(0xFF0000)),
+            (json!({"theme": 3, "tint": 0.4}), Color::Theme(3, 400)),
+        ] {
             s.execute("sheet.tabColor", json!({"color": color})).unwrap();
             assert_eq!(s.doc().unwrap().wb.active().unwrap().tab_color, Some(expected));
         }
