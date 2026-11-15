@@ -7,6 +7,8 @@
 //!   built-in encoding ([`symbol_code`]), for Greek letters and mathematical operators.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
+//!   An image added to the document ([`PdfDoc::add_image`]) is written once and shared by every
+//!   page that draws it ([`Page::image_shared`]).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
 //! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
@@ -416,6 +418,71 @@ struct Style {
     join: u8,
 }
 
+impl ImageData {
+    /// An RGBA buffer (`pw`×`ph` pixels, row-major, straight alpha) split into colour and alpha;
+    /// `None` when it is empty, too large or shorter than its size says.
+    fn from_rgba(rgba: &[u8], [pw, ph]: [u32; 2]) -> Option<ImageData> {
+        let px = pw as u64 * ph as u64;
+        if pw == 0 || ph == 0 || px > MAX_IMAGE_PIXELS || (rgba.len() as u64) < px * 4 {
+            return None;
+        }
+        let px = px as usize;
+        let mut rgb = Vec::with_capacity(px * 3);
+        let mut alpha = Vec::with_capacity(px);
+        for p in rgba.as_chunks::<4>().0.iter().take(px) {
+            rgb.extend_from_slice(&[p[0], p[1], p[2]]);
+            alpha.push(p[3]);
+        }
+        let alpha = if alpha.iter().all(|a| *a == 255) { None } else { Some(alpha) };
+        Some(ImageData::new(pw, ph, rgb, alpha))
+    }
+
+    /// Writes the image (and its soft mask) as objects from `*next` on; returns the image's
+    /// object number.
+    fn write(&self, out: &mut Vec<u8>, offsets: &mut Vec<usize>, next: &mut u32) -> u32 {
+        let img_id = *next;
+        *next += 1;
+        let smask_id = self.alpha.as_ref().map(|_| {
+            let id = *next;
+            *next += 1;
+            id
+        });
+        let mut dict = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /BitsPerComponent 8 /ColorSpace /DeviceRGB", self.width, self.height);
+        if let Some(id) = smask_id {
+            let _ = write!(dict, " /SMask {id} 0 R");
+        }
+        dict.push_str(" /Filter /RunLengthDecode");
+        stream_obj(out, offsets, img_id, &dict, &run_length(&self.rgb));
+        if let (Some(id), Some(a)) = (smask_id, &self.alpha) {
+            let dict = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /RunLengthDecode", self.width, self.height);
+            stream_obj(out, offsets, id, &dict, &run_length(a));
+        }
+        img_id
+    }
+}
+
+/// An image added once to a document ([`PdfDoc::add_image`]) that any of its pages can draw
+/// ([`Page::image_shared`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ImageId {
+    doc: u64,
+    index: usize,
+}
+
+/// A page's `/XObject` entries for the shared images it draws (`ids`: object numbers by index).
+fn shared_refs(used: &[usize], ids: &[u32]) -> String {
+    let mut out = String::new();
+    for k in used {
+        if let Some(id) = ids.get(*k).filter(|id| **id != 0) {
+            let _ = write!(out, "/Sh{} {} 0 R ", k + 1, id);
+        }
+    }
+    out
+}
+
+/// Tells documents apart, so an [`ImageId`] can't be drawn on another document's page.
+static NEXT_DOC: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 enum LinkTarget {
     Uri(String),
     Page { index: usize, x: f32, y: f32 },
@@ -434,6 +501,10 @@ pub struct Page {
     content: String,
     fonts: [bool; FONT_SLOTS],
     images: Vec<ImageData>,
+    /// The document's shared images this page draws (indexes into `PdfDoc::images`).
+    shared: Vec<usize>,
+    /// The document the page belongs to (see [`ImageId`]).
+    doc: u64,
     /// Indexes into `images`, by content hash; a hash match is confirmed with [`ImageData::same`].
     image_index: HashMap<u64, Vec<usize>>,
     /// Pixel comparisons made while looking up duplicate pictures (test instrumentation).
@@ -819,6 +890,25 @@ impl Page {
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);
         self.op(&s);
     }
+
+    /// Draws an image added once to the document with [`PdfDoc::add_image`] into the box
+    /// `(x, y, w, h)`: every page that draws it refers to the same image object. An id from
+    /// another document or a bad box is ignored.
+    pub fn image_shared(&mut self, destination: Rect, image: ImageId) {
+        let Rect { x, y, width: w, height: h } = destination;
+        if image.doc != self.doc || !(extent(w) && extent(h) && finite(&[x, y])) {
+            return;
+        }
+        // Drawn inside its own q/Q, which counts towards the nesting limit.
+        if self.saved.len() >= MAX_SAVE_DEPTH {
+            return;
+        }
+        if !self.shared.contains(&image.index) {
+            self.shared.push(image.index);
+        }
+        let s = format!("q {} 0 0 {} {} {} cm /Sh{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), image.index + 1);
+        self.op(&s);
+    }
 }
 
 /// Document metadata.
@@ -833,6 +923,10 @@ pub struct Info {
 #[derive(Default)]
 pub struct PdfDoc {
     pages: Vec<Page>,
+    /// Images any page can draw, each written once ([`PdfDoc::add_image`]).
+    images: Vec<ImageData>,
+    /// Identifies the document (0 until first needed, see [`ImageId`]).
+    id: u64,
     pub info: Info,
 }
 
@@ -936,20 +1030,43 @@ impl std::fmt::Write for Utf8<'_> {
 }
 
 impl PdfDoc {
+    /// An empty document.
     pub fn new() -> PdfDoc {
         PdfDoc::default()
+    }
+
+    /// This document's id, given on first use; images added to it carry it so a page of
+    /// another document can't draw them.
+    fn id(&mut self) -> u64 {
+        if self.id == 0 {
+            self.id = NEXT_DOC.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        self.id
+    }
+
+    /// Adds an RGBA image (`pw`×`ph` pixels, row-major, straight alpha) that every page can draw
+    /// with [`Page::image_shared`], written once however many pages draw it (a logo in every
+    /// page's header). `None` for a malformed or oversized buffer.
+    pub fn add_image(&mut self, rgba: &[u8], pixel_size: [u32; 2]) -> Option<ImageId> {
+        let img = ImageData::from_rgba(rgba, pixel_size)?;
+        let doc = self.id();
+        self.images.push(img);
+        Some(ImageId { doc, index: self.images.len() - 1 })
     }
 
     /// Adds a page of `width_pt` × `height_pt` points and returns it for drawing.
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
         let height = if height_pt.is_finite() { height_pt.clamp(3.0, 14_400.0) } else { 792.0 };
+        let doc = self.id();
         self.pages.push(Page {
             width,
             height,
             content: String::new(),
             fonts: [false; FONT_SLOTS],
             images: Vec::new(),
+            shared: Vec::new(),
+            doc,
             image_index: HashMap::new(),
             #[cfg(test)]
             image_comparisons: 0,
@@ -1051,11 +1168,18 @@ impl PdfDoc {
                 dict_obj(&mut out, &mut offsets, *id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"));
             }
         }
+        // Shared images some page draws, once each; object numbers by index (0: no page draws it).
+        let shared_ids: Vec<u32> = self
+            .images
+            .iter()
+            .enumerate()
+            .map(|(k, img)| if self.pages.iter().any(|p| p.shared.contains(&k)) { img.write(&mut out, &mut offsets, &mut next) } else { 0 })
+            .collect();
         // Images already written, by content hash: (page, image, object id). A hash match is
         // confirmed by comparing the pixels before an object is shared.
         let mut written: HashMap<u64, Vec<(usize, usize, u32)>> = HashMap::new();
         for (pi, ((page, content), links)) in self.pages.iter().zip(contents).zip(page_links).enumerate() {
-            let mut xobjects = String::new();
+            let mut xobjects = shared_refs(&page.shared, &shared_ids);
             for (k, img) in page.images.iter().enumerate() {
                 let known = written.get(&img.hash).and_then(|c| {
                     c.iter().find_map(|(p, i, id)| {
