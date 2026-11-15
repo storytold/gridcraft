@@ -93,6 +93,17 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 bs.preview_page = 0;
             }
             ui.add_space(8.0);
+            // Also already exists as `pageLayout.printGridlines` (the Page Layout ribbon tab's
+            // Gridlines > Print checkbox) -- same reasoning as Orientation above: Excel's Page
+            // Setup dialog has a Gridlines checkbox right on its Sheet tab, so this gives it a
+            // home next to the other print-affecting settings instead of ribbon-only.
+            let mut print_gridlines =
+                app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.print.gridlines);
+            if ui.checkbox(&mut print_gridlines, lang.tr("Print Gridlines")).changed() {
+                app.run_or_alert("pageLayout.printGridlines", json!({"on": print_gridlines}));
+                bs.preview_page = 0;
+            }
+            ui.add_space(8.0);
             if ui.link(lang.tr("Page Setup…")).clicked() {
                 app.open_dialog("pageSetup", json!({}));
             }
