@@ -8,6 +8,7 @@ use egui::{Color32, Key, Sense, Stroke, StrokeKind, vec2};
 
 use crate::icons::{self, Icon};
 use gridcraft_engine::core::{CellRef, RangeRef};
+use gridcraft_engine::model::Visibility;
 use serde_json::{Map, Value as Json, json};
 
 use crate::SheetApp;
@@ -49,6 +50,7 @@ pub enum Field {
     Password { key: &'static str, label: &'static str },
     Number { key: &'static str, label: &'static str },
     Choice { key: &'static str, label: &'static str, options: Vec<(&'static str, &'static str)> },
+    SheetPicker { key: &'static str, label: &'static str, options: Vec<String> },
     Check { key: &'static str, label: &'static str },
     Note(String),
 }
@@ -132,6 +134,18 @@ impl Dialog {
                     self.values.insert("preset".into(), json!(zoom_preset(value.as_f64().unwrap_or(0.0))));
                 }
                 _ => {}
+            }
+        }
+        if self.name == "unhideSheet"
+            && let Some(selected) = value.as_str()
+            && let Some(options) = self.fields.iter().find_map(|field| match field {
+                Field::SheetPicker { key: picker_key, options, .. } if *picker_key == key => Some(options),
+                _ => None,
+            })
+        {
+            let query = self.search.to_lowercase();
+            if let Some(index) = options.iter().filter(|name| name.to_lowercase().contains(&query)).position(|name| name == selected) {
+                self.list_index = index;
             }
         }
         self.values.insert(key.into(), value);
@@ -470,13 +484,23 @@ impl Dialog {
             ),
             "unhideSheet" => {
                 let opts: Vec<String> =
-                    p("sheets").as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                    p("sheets").as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_else(|| {
+                        app.session
+                            .active()
+                            .map(|d| {
+                                d.wb.sheets.iter().filter(|sheet| sheet.visibility == Visibility::Hidden).map(|sheet| sheet.name.clone()).collect()
+                            })
+                            .unwrap_or_default()
+                    });
+                if opts.is_empty() {
+                    return None;
+                }
                 let first = opts.first().cloned().unwrap_or_default();
                 let mut d = Dialog::form(
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![SheetPicker { key: "sheet", label: "Unhide sheet:", options: opts.clone() }],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
