@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-13 · **Change:** minor (§11: European Portuguese interface, `pt-pt`; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -116,7 +116,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 11. No localization at all (L)
 - Catalog: ribbon-only in five languages (#31, #104, #82; ~12% of strings each), and 943 strings
   (~43%) in Japanese (10-17) and Brazilian Portuguese, including the dialog labels, messages, File
-  view and menus. The remaining dialogs, menus and messages are English; en-US function names and
+  view and menus; European Portuguese (`pt-pt`, 11-13) covers the Brazilian catalog's keys in
+  European wording. The remaining dialogs, menus and messages are English; en-US function names and
   separators (#45); German in PR #163. **Estimate:**
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
@@ -193,6 +194,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | §11: European Portuguese interface (`pt-pt`) covers the Brazilian catalog's keys in European wording; `pt` and `pt-BR` stay Brazilian |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
