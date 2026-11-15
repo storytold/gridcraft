@@ -361,7 +361,9 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
 
 // XML 1.0 byte escaping is shared; spreadsheet string and phonetic policy stays here.
 use craft_xml::is_xml_char;
-pub use craft_xml::{esc, esc_attr, push_esc};
+#[cfg(test)]
+use craft_xml::push_esc;
+pub use craft_xml::{esc, esc_attr};
 
 /// Appends `n` in decimal.
 pub fn push_u64(o: &mut String, mut n: u64) {
