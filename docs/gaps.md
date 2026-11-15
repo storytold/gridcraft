@@ -1,6 +1,10 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+Custom totals formulas now follow table and column renames, with synthetic XLSX
+round-trip and undo/redo coverage (related to #3389). This narrows file-fidelity
+risks; calculated-column metadata and independent Excel acceptance remain separate.
+
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-09 · **Change:** minor (Unicode source and destination bindings keep their meaning during table renames; earlier: custom totals include bare table references on rename, preserving defined-name and LET/LAMBDA bindings; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -193,6 +197,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Custom totals use Unicode-aware LET/LAMBDA source and destination binding checks; source shadowing, initializer/nested scopes and reparsed explicit table references have regressions. |
+| 2026-11-08 | minor | Custom totals also rename bare table references, preserving defined names and LET/LAMBDA bindings; synthetic import/save/reopen and undo/redo coverage extended; estimates unchanged. |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
