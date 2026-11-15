@@ -499,3 +499,59 @@ fn align_refuses_ids_that_are_not_an_array() {
     s.execute("arrange.group", json!({"kind": "shape"})).unwrap();
     assert_eq!((anchor_of(&s, shape), anchor_of(&s, equation)), before, "nothing moved");
 }
+
+#[test]
+fn align_refuses_invalid_modes_without_moving_objects() {
+    let mut s = s();
+    let add = |s: &mut Session, cell: &str| {
+        ObjRef::new(
+            ObjKind::Shape,
+            id_of(&s.execute("insert.shape", json!({"kind": "ellipse", "at": cell, "width": 40, "height": 20})).unwrap(), "shape"),
+        )
+    };
+    let (a, b) = (add(&mut s, "A1"), add(&mut s, "D6"));
+    let anchors = (anchor_of(&s, a), anchor_of(&s, b));
+    s.execute("cell.set", json!({"cell": "Z99", "input": "redo marker"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let (before, revision, undo, redo) = {
+        let doc = s.doc().unwrap();
+        assert!(!doc.undo.is_empty() && !doc.redo.is_empty());
+        (doc.wb.clone(), doc.revision, doc.undo.len(), doc.redo.len())
+    };
+    for mode in [json!("sideways"), json!(""), json!("LEFT"), json!(null), json!(false), json!(7), json!([]), json!({})] {
+        let params = json!({"kind": "shape", "ids": [a.id, b.id], "align": mode});
+        let error = s.execute("arrange.align", params.clone()).unwrap_err().to_string();
+        assert!(error.contains("align must be left, center, right, top, middle or bottom"), "{params}: {error}");
+        let doc = s.doc().unwrap();
+        assert_eq!(*doc.wb, *before, "{params}");
+        assert_eq!((doc.revision, doc.undo.len(), doc.redo.len()), (revision, undo, redo), "{params}");
+        assert_eq!((anchor_of(&s, a), anchor_of(&s, b)), anchors, "{params}");
+    }
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "Z99"})).unwrap()["value"], json!("redo marker"));
+
+    let position = |s: &Session, o: ObjRef| {
+        let sh = sheet(s, 0);
+        let anchor = sh.object_anchor(o).unwrap();
+        (sh.col_left(anchor.cell.col) + f64::from(anchor.dx), sh.row_top(anchor.cell.row) + f64::from(anchor.dy))
+    };
+    let ((left, top), (right, bottom)) = (position(&s, a), position(&s, b));
+    for (mode, expected) in [
+        (Some("left"), ((left, top), (left, bottom))),
+        (Some("center"), (((left + right) / 2.0, top), ((left + right) / 2.0, bottom))),
+        (Some("right"), ((right, top), (right, bottom))),
+        (Some("top"), ((left, top), (right, top))),
+        (Some("middle"), ((left, (top + bottom) / 2.0), (right, (top + bottom) / 2.0))),
+        (Some("bottom"), ((left, bottom), (right, bottom))),
+        (None, ((left, top), (left, bottom))),
+    ] {
+        let mut params = json!({"kind": "shape", "ids": [a.id, b.id]});
+        if let Some(mode) = mode {
+            params["align"] = json!(mode);
+        }
+        s.execute("arrange.align", params).unwrap();
+        assert_eq!((position(&s, a), position(&s, b)), expected, "{mode:?}");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!((anchor_of(&s, a), anchor_of(&s, b)), anchors, "{mode:?}");
+    }
+}
