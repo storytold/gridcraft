@@ -8,8 +8,8 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink,
-    LineInfo, NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, StyleId, Table, TableColumn,
-    TotalsFn, Validation, ValidationKind, XmlColumnPr,
+    LineInfo, NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, StyleId, Table,
+    TableColumn, TotalsFn, Validation, ValidationKind, XmlColumnPr,
 };
 
 use crate::fmla::{from_file, unwrap_google_sheets};
