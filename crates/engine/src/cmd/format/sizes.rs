@@ -194,16 +194,35 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let measure = s.text_width.clone();
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
-        let mut widths = Vec::new();
         let mut measured: std::collections::HashMap<StyleId, std::collections::HashMap<String, f32>> = Default::default();
         let mut distinct = 0usize;
-        let used = sh.used_range();
-        for (a, b) in lines {
-            for c in a..=b.min(a + 16383) {
-                let Some(u) = used else { continue };
-                let col = RangeRef::new(CellRef::new(u.start.row, c), CellRef::new(u.end.row, c));
-                let mut max: f32 = 0.0;
-                for (cell, _) in sh.cells.iter_range(col) {
+        // Selected columns, then one pass over the populated cells (the store is row-oriented, so a
+        // scan per column would revisit every row for each selected column, empty or not).
+        let cols: std::collections::BTreeSet<u32> = lines.iter().flat_map(|&(a, b)| a..=b.min(a + 16383)).collect();
+        let mut maxes: std::collections::BTreeMap<u32, f32> = Default::default();
+        if let Some(u) = sh.used_range() {
+            // One pass per run of adjacent selected columns, so columns between distant selections
+            // (A and XFD) are never visited.
+            let mut runs: Vec<(u32, u32)> = Vec::new();
+            for &c in &cols {
+                match runs.last_mut() {
+                    Some((_, end)) if *end + 1 == c => *end = c,
+                    _ => runs.push((c, c)),
+                }
+            }
+            // Every run is a pass over all the stored rows: many runs (alternating columns) are one
+            // pass over their whole span instead, the unselected columns skipped.
+            if runs.len() > 4
+                && let (Some(&(first, _)), Some(&(_, last))) = (runs.first(), runs.last())
+            {
+                runs = vec![(first, last)];
+            }
+            for (first, last) in runs {
+                let span = RangeRef::new(CellRef::new(u.start.row, first), CellRef::new(u.end.row, last));
+                for (cell, _) in sh.cells.iter_range(span) {
+                    if !cols.contains(&cell.col) {
+                        continue;
+                    }
                     if sh.merge_at(cell).is_some_and(|m| !m.is_single()) {
                         continue;
                     }
@@ -226,14 +245,14 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                             }
                             None => approx_text_width(line, st.font.size, st.font.bold),
                         };
-                        max = max.max(w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell));
+                        let w = w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell);
+                        let max = maxes.entry(cell.col).or_insert(0.0);
+                        *max = max.max(w);
                     }
-                }
-                if max > 0.0 {
-                    widths.push((c, max.clamp(8.0, 1785.0)));
                 }
             }
         }
+        let widths: Vec<(u32, f32)> = maxes.into_iter().filter(|&(_, m)| m > 0.0).map(|(c, m)| (c, m.clamp(8.0, 1785.0))).collect();
         let sh = cx.sheet_mut(si)?;
         for (c, w) in widths {
             let e = sh.cols.entry(c).or_default();
