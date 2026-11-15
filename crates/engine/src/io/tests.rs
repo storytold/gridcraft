@@ -30,10 +30,19 @@ fn save_fails_upfront_when_the_temp_name_is_taken() {
     let victim = dir.join("victim.txt");
     std::fs::write(&victim, b"original").unwrap();
     let dest = dir.join("book.xlsx");
+    #[cfg(unix)]
     std::os::unix::fs::symlink(&victim, dir.join("book.xlsx.sctmp")).unwrap();
+    // Other platforms exercise the same exclusive-create guarantee with an occupied file,
+    // without requiring permission to create a Windows symbolic link.
+    #[cfg(not(unix))]
+    std::fs::write(dir.join("book.xlsx.sctmp"), b"occupied").unwrap();
     let err = write_file(dest.to_str().unwrap(), b"new").unwrap_err();
     assert_eq!(std::fs::read(&victim).unwrap(), b"original");
     assert!(!dir.join("book.xlsx").exists(), "{err}");
+    #[cfg(unix)]
+    assert!(std::fs::symlink_metadata(dir.join("book.xlsx.sctmp")).unwrap().file_type().is_symlink());
+    #[cfg(not(unix))]
+    assert_eq!(std::fs::read(dir.join("book.xlsx.sctmp")).unwrap(), b"occupied");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
