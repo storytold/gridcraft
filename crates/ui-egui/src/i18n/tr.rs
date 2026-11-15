@@ -1740,6 +1740,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "New Macro" => "Yeni Makro",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        // ---- 0.19.1 sürümündeki yeni metinler ----
+        "Display options for this workbook" => "Bu çalışma kitabının görüntüleme seçenekleri",
+        "Down, then over" => "Önce aşağı, sonra yana",
+        "Edit Hyperlink" => "Köprüyü Düzenle",
+        "Edit Hyperlink…" => "Köprüyü Düzenle…",
+        "Highlight the active cell's row" => "Etkin hücrenin satırını vurgula",
+        "Over, then down" => "Önce yana, sonra aşağı",
+        "Page order" => "Sayfa sırası",
+        "Remove Hyperlink" => "Köprüyü Kaldır",
+        "Resize formula bar" => "Formül çubuğunu yeniden boyutlandır",
+        "Show horizontal scroll bar" => "Yatay kaydırma çubuğunu göster",
+        "Show sheet tabs" => "Sayfa sekmelerini göster",
+        "Show vertical scroll bar" => "Dikey kaydırma çubuğunu göster",
         _ => return None,
     })
 }
