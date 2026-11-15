@@ -480,23 +480,25 @@ mod lifecycle_tests {
     #[test]
     /// A hidden logic tick saves a dirty file-backed workbook once and clears its dirty state.
     fn a_logic_only_tick_autosaves_a_dirty_workbook_once() {
-        let ctx = egui::Context::default();
-        let mut app = app();
         let dir = std::env::temp_dir().join(format!("gridcraft-logic-autosave-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("autosave.xlsx");
-        app.run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
-        app.ui.autosave = true;
-        app.session.active_mut().unwrap().path = Some(path.to_string_lossy().into_owned());
-        app.grid.last_autosave = monotonic_ms() - 3000.0;
+        for name in ["lower.xlsx", "upper.XLSX", "mixed.XlSx"] {
+            let ctx = egui::Context::default();
+            let mut app = app();
+            let path = dir.join(name);
+            app.run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+            app.ui.autosave = true;
+            app.session.active_mut().unwrap().path = Some(path.to_string_lossy().into_owned());
+            app.grid.last_autosave = monotonic_ms() - 3000.0;
 
-        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
-        assert!(path.exists(), "a hidden logic-only tick saves a dirty workbook with a file");
-        assert!(!app.session.active().unwrap().is_dirty(), "the save clears the dirty state");
-        let saved_at = app.grid.last_autosave;
-        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
-        assert_eq!(app.grid.last_autosave, saved_at, "the same change is not saved a second time");
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+            assert!(path.exists(), "a hidden logic-only tick saves a dirty workbook with a file: {name}");
+            assert!(!app.session.active().unwrap().is_dirty(), "the save clears the dirty state: {name}");
+            let saved_at = app.grid.last_autosave;
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+            assert_eq!(app.grid.last_autosave, saved_at, "the same change is not saved a second time: {name}");
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
