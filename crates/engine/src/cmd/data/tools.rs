@@ -16,11 +16,16 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     // columns compared a million blank rows and reported them as removed duplicates).
     let r = sh.used_range().and_then(|u| r.intersection(&u)).unwrap_or(RangeRef::cell(r.start));
     let header = bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r));
-    let cols: Vec<u32> = p
-        .get("columns")
-        .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(|c| col_param(Some(c), r.start.col)).collect())
-        .unwrap_or_else(|| (r.start.col..=r.end.col).collect());
+    let cols: Vec<u32> = match p.get("columns").and_then(Json::as_array) {
+        Some(columns) => columns
+            .iter()
+            .map(|c| {
+                col_param(Some(c), r.start.col)
+                    .ok_or_else(|| bad("data.removeDuplicates", "`columns` must name at least one column of the range"))
+            })
+            .collect::<Result<_>>()?,
+        None => (r.start.col..=r.end.col).collect(),
+    };
     // With no column to compare, every row key is empty: the first row would survive and every
     // other row would be deleted as a duplicate. A column outside the range compares data the
     // user didn't select. Excel refuses both.
