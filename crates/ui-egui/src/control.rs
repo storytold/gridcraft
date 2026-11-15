@@ -110,8 +110,12 @@ fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
 /// window afterwards unless the command itself switched windows.
 fn run_in(app: &mut SheetApp, target: gridcraft_engine::Target, id: &str, params: Json) -> Result<Json, String> {
     let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
+    // A UI command reads and changes the target window's interface state (its page range…),
+    // and the active window's is back once the command is done.
+    app.follow_active_window();
     let r = run(app, id, params);
     app.session.leave_target(guard);
+    app.follow_active_window();
     r
 }
 
@@ -284,12 +288,12 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 (
                     "ui.printSettings",
                     "Print Settings",
-                    "{printer?: discovered name, copies?: 1..999, duplex?: printerDefault|off|longEdge|shortEdge|null, grayscale?: bool, refresh?: bool} → {printer,copies,duplex,grayscale,printers,ready,busy,discovering,status,detail}; {} inspects without submitting",
+                    "{printer?: discovered name, copies?: 1..999, duplex?: printerDefault|off|longEdge|shortEdge|null, grayscale?: bool, from?: page (1-based)|null, to?: page|null, refresh?: bool} → {printer,copies,duplex,grayscale,from,to,printers,ready,busy,discovering,status,detail}; from/to are the Print view's page range (null clears a bound); {} inspects without submitting",
                 ),
                 (
                     "ui.printSubmit",
                     "Submit Print Job",
-                    "existing file.print sheet/pagination params → {printing,bytes,pending}; submits without opening a dialog",
+                    "existing file.print sheet/pagination params; without from/to, the page range of ui.printSettings → {printing,bytes,pending}; submits without opening a dialog",
                 ),
                 ("app.language.set", "Interface Language", language_params.as_str()),
                 ("app.language.english", "Interface Language: English", ""),

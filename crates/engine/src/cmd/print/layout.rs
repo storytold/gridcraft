@@ -105,6 +105,10 @@ pub struct PrintOptions {
     pub all_sheets: bool,
     pub range: Option<RangeRef>,
     pub fit_to_page: Option<bool>,
+    /// The page range (File › Print's Pages … to …): 1-based page numbers counted over the
+    /// whole job in sheet order. `None` = from the first page, to the last.
+    pub from: Option<usize>,
+    pub to: Option<usize>,
 }
 
 impl PrintOptions {
@@ -118,7 +122,42 @@ impl PrintOptions {
             Some(r) => Some(RangeRef::parse(split_sheet(r).1).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?),
             None => None,
         };
-        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage") })
+        let (from, to) = (page_param(p, "from", cmd)?, page_param(p, "to", cmd)?);
+        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage"), from, to })
+    }
+
+    /// The first and last page that print out of a job of `total` pages (1-based, inclusive),
+    /// as Excel measures them: `from` after the last page is an error (nothing to print), `to`
+    /// past the last page stops at the last page, and `from` greater than `to` prints the pages
+    /// between them (3 to 2 prints pages 2 and 3).
+    pub(super) fn page_span(&self, total: usize, cmd: &str) -> Result<(usize, usize)> {
+        if self.from.is_none() && self.to.is_none() {
+            return Ok((1, total));
+        }
+        let (a, b) = (self.from.unwrap_or(1), self.to.unwrap_or(usize::MAX));
+        let (first, last) = (a.min(b), a.max(b));
+        if first > total {
+            let pages = if total == 1 { "1 page".to_string() } else { format!("{total} pages") };
+            return Err(bad(cmd, format!("nothing to print: the job has {pages} and the page range starts at page {first}")));
+        }
+        Ok((first, last.min(total)))
+    }
+}
+
+/// A page-number param (`from`, `to`): a whole number from 1, as a number or as text. Absent,
+/// `null` or empty text means no bound.
+fn page_param(p: &Json, key: &str, cmd: &str) -> Result<Option<usize>> {
+    let n = match p.get(key) {
+        None | Some(Json::Null) => return Ok(None),
+        Some(Json::String(t)) if t.trim().is_empty() => return Ok(None),
+        Some(Json::String(t)) => t.trim().parse::<u64>().ok(),
+        // 2.0 is a whole number; 2.5, -1 and 0 are not page numbers.
+        Some(Json::Number(n)) => n.as_u64().or_else(|| n.as_f64().filter(|v| v.fract() == 0.0 && *v >= 1.0).map(|v| v as u64)),
+        Some(_) => None,
+    };
+    match n {
+        Some(n) if n >= 1 => Ok(Some(usize::try_from(n).unwrap_or(usize::MAX))),
+        _ => Err(bad(cmd, format!("`{key}` must be a page number from 1, not {}", p.get(key).map(Json::to_string).unwrap_or_default()))),
     }
 }
 
