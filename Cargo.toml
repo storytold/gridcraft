@@ -31,8 +31,8 @@ gridcraft-math = { path = "crates/math" }
 # craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "=0.1.0", features = ["egui"] }
-# PDF image-stream RunLength encoding, at the existing shared revision.
-craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+# PDF RunLength encoding; this revision also fixes the vendored JBIG2 dependency for Git consumers.
+craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "201601fa2d5dab0f1aa0e6f2581751bac088a495", version = "0.1.0" }
 # Compound files ([MS-CFB]) and password-encrypted OOXML packages ([MS-OFFCRYPTO]).
 craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }

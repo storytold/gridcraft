@@ -1010,7 +1010,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430
 [[package]]
 name = "craft-stream-codecs"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430955825553ab7b976f4#bb57d422d0bc842cbde430955825553ab7b976f4"
+source = "git+https://github.com/storytold/craft-libs?rev=201601fa2d5dab0f1aa0e6f2581751bac088a495#201601fa2d5dab0f1aa0e6f2581751bac088a495"
 dependencies = [
  "fax",
  "hayro-ccitt",
@@ -2469,8 +2469,7 @@ checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
 [[package]]
 name = "hayro-jbig2"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69374b3668dd45aeb3d3145cda68f2c7b4f223aaa2511e67d076f1c7d741388d"
+source = "git+https://github.com/storytold/craft-libs?rev=201601fa2d5dab0f1aa0e6f2581751bac088a495#201601fa2d5dab0f1aa0e6f2581751bac088a495"
 dependencies = [
  "hayro-ccitt",
 ]
