@@ -60,7 +60,8 @@ fn translated_name_manager_buttons_edit_and_delete_the_original_name() {
         h.get_by_label(&format!("   {}   ", lang.tr("OK"))).click();
         h.run_steps(3);
         assert!(h.query_by_label("GrandTotal").is_some());
-        h.get_by_role_and_label(egui::accesskit::Role::Button, lang.tr("Delete")).click();
+        // Home › Cells has a Delete button too: the dialog's is the one drawn last.
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, lang.tr("Delete")).last().expect("the dialog's Delete").click();
         h.run_steps(3);
         assert!(h.state().session.active().unwrap().wb.names.is_empty());
         h.get_by_label(&format!(" {} ", lang.tr("Close"))).click();
@@ -79,18 +80,22 @@ fn translated_macro_list_substitutes_counts_without_translating_script_names() {
         assert!(h.query_by_label(lang.tr("This workbook has no scripts or macros.")).is_some());
         h.state_mut().dialog.as_mut().unwrap().result = Some(json!([
             {"name": "Original Script", "kind": "script", "steps": 1, "trusted": false},
-            {"kind": "script", "steps": 2, "trusted": false},
+            {"name": "Second Script", "kind": "script", "steps": 2, "trusted": false},
             {"name": "VBA", "kind": "vba"}
         ]));
         h.run_steps(3);
-        for label in
-            ["Trust Scripts", "Scripts in this workbook came from a file and are disabled.", "(unnamed)", "— VBA project (preserved, not run)"]
-        {
-            assert!(h.query_by_label(lang.tr(label)).is_some());
+        for label in [
+            "Trust Scripts",
+            "Scripts in this workbook came from a file and are disabled.",
+            "Macro name:",
+            "This workbook also has a VBA project. GridCraft keeps it when you save but does not run it.",
+        ] {
+            assert!(h.query_by_label(lang.tr(label)).is_some(), "{label}");
         }
-        assert!(h.query_by_label("Original Script").is_some());
-        for (key, count) in [("— {steps} step", "1"), ("— {steps} steps", "2")] {
-            assert!(h.query_by_label(&lang.tr(key).replace("{steps}", count)).is_some());
+        // Script names stay as written; only the count around them is translated.
+        for (name, key, count) in [("Original Script", "(script, {steps} step)", "1"), ("Second Script", "(script, {steps} steps)", "2")] {
+            let row = format!("{name}    {}", lang.tr(key).replace("{steps}", count));
+            assert!(h.query_by_label(&row).is_some(), "{row}");
         }
         assert_eq!(h.state().dialog.as_ref().unwrap().result.as_ref().unwrap()[0]["trusted"], false);
     }
@@ -104,8 +109,9 @@ fn translated_command_search_runs_the_stable_command_and_about_keeps_tab_keys() 
         h.state_mut().open_dialog("commandSearch", json!({}));
         h.state_mut().dialog.as_mut().unwrap().search = lang.tr("Bold").to_string();
         h.run_steps(3);
-        let label = format!("{}    {}", lang.tr("Bold"), ["Home", "Font"].map(|part| lang.tr(part)).join(" › "));
-        h.get_by_label(&label).click();
+        // The row reads "{command}  ({shortcut})    {menu}"; the shortcut depends on the platform.
+        let (name, menu) = (lang.tr("Bold"), ["Home", "Font"].map(|part| lang.tr(part)).join(" › "));
+        h.query_all_by(|n| n.label().is_some_and(|l| l.starts_with(name) && l.ends_with(&menu))).next().expect("the Bold row").click();
         h.run_steps(3);
         assert!(h.state().dialog.is_none());
         assert_eq!(h.state().session.journal.last().unwrap().0, "home.bold");
@@ -143,7 +149,8 @@ fn translated_rule_summary_keeps_ranges_and_delete_removes_the_rule() {
             .replace("{kind}", lang.tr("Formula"))
             .replace("{ranges}", "A1:A5");
         assert!(h.query_by_label(&label).is_some());
-        h.get_by_role_and_label(egui::accesskit::Role::Button, lang.tr("Delete")).click();
+        // Home › Cells has a Delete button too: the dialog's is the one drawn last.
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, lang.tr("Delete")).last().expect("the dialog's Delete").click();
         h.run_steps(3);
         assert!(h.state_mut().run("home.manageRules", json!({})).unwrap()["rules"].as_array().unwrap().is_empty());
     }
@@ -158,8 +165,8 @@ fn turkish_command_search_matches_uppercase_dotless_i_and_keeps_english_ids_sear
         h.state_mut().open_dialog("commandSearch", json!({}));
         h.state_mut().dialog.as_mut().unwrap().search = query.into();
         h.run_steps(3);
-        let label = format!("{}    {}", lang.tr(command_label), ["Home", "Font"].map(|part| lang.tr(part)).join(" \u{203a} "));
-        h.get_by_label(&label).click();
+        let (name, menu) = (lang.tr(command_label), ["Home", "Font"].map(|part| lang.tr(part)).join(" \u{203a} "));
+        h.query_all_by(|n| n.label().is_some_and(|l| l.starts_with(name) && l.ends_with(&menu))).next().expect("the command's row").click();
         h.run_steps(3);
         assert!(h.state().dialog.is_none());
         assert_eq!(h.state().session.journal.last().unwrap().0, command_id);

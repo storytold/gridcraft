@@ -258,13 +258,13 @@ pub fn contributors_ui(ui: &mut egui::Ui) {
     ui.label(RichText::new(counts).small().weak());
     ui.separator();
     if list.is_empty() {
-        ui.label("No contributor data was built into this copy.");
+        ui.label(lang.tr("No contributor data was built into this copy."));
     } else if v.table {
         // The table scrolls vertically itself, under a fixed header; it only scrolls sideways
         // once its columns are dragged wider than the dialog.
         ui.allocate_ui(egui::vec2(ui.available_width(), 340.0), |ui| {
             ui.set_max_height(340.0);
-            egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| table(ui, &list, &mut v));
+            egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| table(ui, &list, &mut v, lang));
         });
     } else {
         egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(340.0).show(ui, |ui| {
@@ -376,26 +376,27 @@ fn cells(c: &Contributor) -> [String; 9] {
 
 /// A contributor-table header. The sorted column is highlighted; its direction shows on the
 /// toolbar's sort-order button, so no arrow widens the column.
-fn header_text(k: SortKey) -> RichText {
-    RichText::new(k.label().1).strong()
+fn header_text(k: SortKey, lang: Language) -> RichText {
+    RichText::new(lang.tr(k.label().1)).strong()
 }
 
-fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
+fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, lang: Language) {
     let h = row_height(ui);
     let rows: Vec<[String; 9]> = list.iter().map(|c| cells(c)).collect();
     let widths: Vec<f32> = SortKey::ALL
         .iter()
         .enumerate()
         .map(|(i, &k)| match i.checked_sub(1) {
-            None => natural(ui, header_text(k), list.iter().map(|c| c.name(v.names))),
-            Some(col) => natural(ui, header_text(k), rows.iter().filter_map(|r| r.get(col).cloned())),
+            None => natural(ui, header_text(k, lang), list.iter().map(|c| c.name(v.names))),
+            Some(col) => natural(ui, header_text(k, lang), rows.iter().filter_map(|r| r.get(col).cloned())),
         })
         .collect();
     fitted_table(ui, "credits_table", &widths, &CONTRIBUTOR_GROW)
         .header(h + 4.0, |mut header| {
             for k in SortKey::ALL {
                 header.col(|ui| {
-                    let r = aligned(ui, k != SortKey::Name, |ui| ui.selectable_label(v.key == k, header_text(k))).on_hover_text(k.label().0);
+                    let r = aligned(ui, k != SortKey::Name, |ui| ui.selectable_label(v.key == k, header_text(k, lang)))
+                        .on_hover_text(lang.tr(k.label().0));
 
                     if r.clicked() {
                         if v.key == k {
@@ -413,7 +414,7 @@ fn table(ui: &mut egui::Ui, list: &[&Contributor], v: &mut View) {
                 body.row(h, |mut row| {
                     row.col(|ui| {
                         aligned(ui, false, |ui| ui.hyperlink_to(c.name(v.names), format!("https://github.com/{}", c.login)))
-                            .on_hover_text(c.summary());
+                            .on_hover_text(c.localized_summary(lang));
                     });
                     for text in cells {
                         row.col(|ui| {
@@ -434,7 +435,7 @@ pub fn models_ui(ui: &mut egui::Ui) {
     }
     let assisted: u64 = MODELS.iter().map(|m| m.commits).max().unwrap_or(0).max(1);
     let h = row_height(ui);
-    let titles = ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"];
+    let titles = ["Company", "Model", "Version", "Commits", "% of all commits", "Lines +/−"].map(|t| lang.tr(t));
     // Company, Model and Version read as text; the counts line up on the right.
     let right = [false, false, false, true, true, true];
     let rows: Vec<[String; 6]> = MODELS

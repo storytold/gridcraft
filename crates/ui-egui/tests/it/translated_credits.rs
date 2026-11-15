@@ -39,10 +39,11 @@ fn translated_credits_controls_preserve_names_and_table_sorting() {
         h.get_by_label(lang.tr("Table")).click();
         h.run_steps(2);
         if !CONTRIBUTORS.is_empty() {
-            let name_header = lang.tr("Name");
-            h.get_by_label(&format!("{name_header} ▲")).click();
+            // The sorted column's header is highlighted; its direction is on the sort-order button.
+            h.get_by_label("▲").click();
             h.run_steps(2);
-            assert!(h.query_by_label(&format!("{name_header} ▼")).is_some());
+            assert!(h.query_by_label("▼").is_some());
+            assert!(h.query_all_by_label(lang.tr("Name")).next().is_some());
             for key in SortKey::ALL.into_iter().filter(|key| *key != SortKey::Name) {
                 assert!(h.query_all_by_label(lang.tr(key.label().1)).next().is_some());
             }

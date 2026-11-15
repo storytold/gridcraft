@@ -1219,6 +1219,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Send Backward" => "Geriye Gönder",
         "The chart no longer exists." => "Grafik artık yok.",
         "Trust Scripts" => "Betiklere Güven",
+        "Macro name:" => "Makro adı:",
+        "(script, {steps} step)" => "(betik, {steps} adım)",
+        "(script, {steps} steps)" => "(betik, {steps} adım)",
+        "Run" => "Çalıştır",
+        "Step Into" => "Adım Adım Gir",
+        "Open the macro in the step editor and stop before its first step" => "Makroyu adım düzenleyicisinde aç ve ilk adımından önce dur",
+        "Create" => "Oluştur",
+        "Write a new macro with this name" => "Bu adla yeni bir makro yaz",
+        "Options…" => "Seçenekler…",
+        "This workbook also has a VBA project. GridCraft keeps it when you save but does not run it." => {
+            "Bu çalışma kitabında bir VBA projesi de var. GridCraft kaydederken onu korur ama çalıştırmaz."
+        }
         "'This workbook' is protected." => "'Bu çalışma kitabı' korumalı.",
         "A table can't overlap another table." => "Bir tablo başka bir tabloyla çakışamaz.",
         "A workbook must contain at least one visible worksheet." => "Çalışma kitabında en az bir görünür çalışma sayfası olmalıdır.",

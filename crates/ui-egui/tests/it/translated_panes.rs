@@ -2,6 +2,7 @@
 
 use egui::accesskit::Role;
 use egui_kittest::kittest::{NodeT as _, Queryable as _};
+use gridcraft_engine::model::{ObjKind, ObjRef};
 use gridcraft_ui_egui::SheetApp;
 use gridcraft_ui_egui::i18n::Language;
 use serde_json::json;
@@ -74,7 +75,7 @@ fn selection_and_chart_empty_states_translate() {
         h.run_steps(3);
         assert!(h.query_by_label(lang.tr("Format Chart Area")).is_some());
         assert!(h.query_by_label(lang.tr("Select a chart to format it.")).is_some());
-        h.state_mut().selected_chart = Some(u32::MAX);
+        h.state_mut().selected_object = Some(ObjRef { kind: ObjKind::Chart, id: u32::MAX });
         h.run_steps(3);
         assert!(h.query_by_label(lang.tr("The chart no longer exists.")).is_some());
     }
@@ -87,7 +88,7 @@ fn chart_labels_translate_and_commands_keep_their_original_values() {
         h.state_mut().run("range.setValues", json!({"range": "A1", "values": [["Name", "Revenue"], ["Q1", 10], ["Q2", 20]]})).unwrap();
         let id =
             h.state_mut().run("insert.chart", json!({"range": "A1:B3", "type": "column", "at": "E3"})).unwrap()["chart"].as_u64().unwrap() as u32;
-        h.state_mut().selected_chart = Some(id);
+        h.state_mut().select_object_id(Some(id));
         h.run_steps(3);
         for key in ["Chart Title", "Chart Type", "Legend", "Elements", "Series", "Colors & Layout", "Size"] {
             assert!(h.query_by_role_and_label(Role::DisclosureTriangle, lang.tr(key)).is_some(), "missing {key}");
@@ -132,7 +133,7 @@ fn chart_series_translates_generated_names_and_preserves_explicit_series1() {
             let range = if unnamed { "A1:A2" } else { "A1:A3" };
             let id =
                 h.state_mut().run("insert.chart", json!({"range": range, "type": "column", "at": "E3"})).unwrap()["chart"].as_u64().unwrap() as u32;
-            h.state_mut().selected_chart = Some(id);
+            h.state_mut().select_object_id(Some(id));
             h.run_steps(3);
             let name = &h.state().session.active().unwrap().wb.active().unwrap().charts[0].series[0].name;
             assert_eq!(name.is_none(), unnamed);
