@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Schemă",
+        "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
         "Paste Values" => "Lipire valori",
         "Paste Formulas" => "Lipire formule",
@@ -362,6 +364,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Salvare",
         "Save As" => "Salvare ca",
         "Export" => "Exportare",
+        "Minimize" => "Minimizare",
+        "Maximize" => "Maximizare",
+        "Restore Down" => "Restaurare",
         "Close" => "Închidere",
         "Options" => "Opțiuni",
         "Blank workbook" => "Registru gol",
