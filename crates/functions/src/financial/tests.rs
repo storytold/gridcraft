@@ -197,6 +197,21 @@ fn number(v: Value) -> f64 {
     }
 }
 
+/// A negative fractional basis is #NUM!, not truncation toward zero (#4058).
+#[test]
+fn negative_fractional_basis_is_rejected() {
+    let price = |basis: f64| ev("PRICE", vec![d(2024, 1, 15), d(2025, 6, 30), n(0.05), n(0.04), n(100.0), n(2.0), n(basis)]);
+    is_err(price(-0.9), CellError::Num);
+    is_err(ev("COUPDAYS", vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(-0.9)]), CellError::Num);
+    is_err(ev("PRICEMAT", vec![d(2008, 2, 15), d(2008, 4, 13), d(2007, 11, 11), n(0.061), n(0.061), n(-0.9)]), CellError::Num);
+    is_err(ev("ACCRINTM", vec![d(2008, 4, 1), d(2008, 6, 15), n(0.1), n(1000.0), n(-0.5)]), CellError::Num);
+    // Controls: a positive fraction still truncates to basis 0, and -1 is still #NUM!.
+    close_tol(price(0.9), 101.40114791702759, 1e-9);
+    close_tol(price(0.0), 101.40114791702759, 1e-9);
+    close(ev("COUPDAYS", vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(0.9)]), 180.0);
+    is_err(price(-1.0), CellError::Num);
+}
+
 #[test]
 fn odd_periods() {
     // The worked examples on Microsoft's function pages (results as printed there).
