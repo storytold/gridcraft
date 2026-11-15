@@ -239,11 +239,7 @@ fn name_box_shows_a_name_defined_on_a_sheet_with_an_apostrophe() {
 fn name_box_dropdown_qualifies_foreign_scopes_and_lists_only_ranges() {
     let mut s = blank();
     s.execute("home.insertSheet", json!({"name": "Bob's"})).unwrap();
-    for (name, refers_to, scope) in [
-        ("Spot", "=Sheet1!$B$2", "Workbook"),
-        ("Spot", "='Bob''s'!$D$4", "Bob's"),
-        ("Rate", "=0.07", "Workbook"),
-    ] {
+    for (name, refers_to, scope) in [("Spot", "=Sheet1!$B$2", "Workbook"), ("Spot", "='Bob''s'!$D$4", "Bob's"), ("Rate", "=0.07", "Workbook")] {
         s.execute("formulas.defineName", json!({"name": name, "refersTo": refers_to, "scope": scope})).unwrap();
     }
     s.execute("selection.set", json!({"sheet": 0, "cell": "A1"})).unwrap();
