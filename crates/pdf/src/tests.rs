@@ -1239,3 +1239,21 @@ fn symbol_text_is_never_shaped_as_arabic() -> Result<(), Box<dyn Error>> {
     assert_eq!(text_width(Font::Symbol, 10.0, "\u{03B1}ب"), f32::from(Font::Symbol.char_width('\u{03B1}') + Font::Symbol.char_width('ب')) / 100.0);
     Ok(())
 }
+
+#[test]
+fn shared_run_length_preserves_pixels_at_packet_boundaries() {
+    for len in [0, 1, 2, 3, 127, 128, 129, 255, 256, 257, 1024] {
+        for seed in [0u8, 127, 128, 255] {
+            let repeats = vec![seed; len];
+            let literals: Vec<u8> = (0..len).map(|i| seed.wrapping_add(i as u8)).collect();
+            let pairs: Vec<u8> = (0..len).map(|i| (i / 2) as u8).collect();
+            for pixels in [repeats, literals, pairs] {
+                let encoded = run_length(&pixels);
+                assert_eq!(encoded.last(), Some(&128));
+                assert_eq!(rle_decode(&encoded), pixels);
+            }
+        }
+    }
+    // Two equal bytes may now terminate a literal packet. PDF pixel values stay exact.
+    assert_eq!(run_length(&[1, 2, 2, 3]), [0, 1, 255, 2, 0, 3, 128]);
+}
