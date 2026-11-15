@@ -334,6 +334,13 @@ fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             RangeRef::new(r.start, CellRef::new((r.end.row + 1).min(MAX_ROWS - 1), r.end.col))
         };
         let sh = cx.sheet_mut(sheet)?;
+        // As in Excel, the table unmerges the merged cells it covers: a table can't hold them.
+        let merged = sh.merges.len();
+        sh.merges.retain(|m| !m.intersects(&r));
+        if sh.merges.len() != merged {
+            cx.structural = true;
+        }
+        let sh = cx.sheet_mut(sheet)?;
         let mut names: Vec<String> = Vec::new();
         // Lower-case names taken, and the next suffix for each header, so that thousands of equal
         // headers don't take cubic time.
