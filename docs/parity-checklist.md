@@ -4,7 +4,7 @@
 
 Each entry is an Excel ribbon or menu command (feature names only). It counts as implemented when GridCraft registers a command with the same id. This measures breadth only; the overall assessment (depth, fidelity, effort) is in [target-app-parity.md](target-app-parity.md).
 
-**Overall: 282 / 296 commands implemented (95.3%).**
+**Overall: 283 / 297 commands implemented (95.3%).**
 
 | Tab | Implemented | Total | Parity |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Each entry is an Excel ribbon or menu command (feature names only). It counts as
 | Draw | 4 | 4 | 100% |
 | Page Layout | 23 | 23 | 100% |
 | Formulas | 23 | 23 | 100% |
-| Data | 23 | 28 | 82% |
+| Data | 24 | 29 | 83% |
 | Review | 15 | 18 | 83% |
 | View | 21 | 21 | 100% |
 | Automate | 4 | 4 | 100% |
@@ -238,7 +238,7 @@ Implemented:
 - `formulas.calculateNow` Calculate Now (Calculation)
 - `formulas.calculateSheet` Calculate Sheet (Calculation)
 
-## Data (23 / 28, 82%)
+## Data (24 / 29, 83%)
 
 Implemented:
 
@@ -253,6 +253,7 @@ Implemented:
 - `data.removeDuplicates` Remove Duplicates (Data Tools)
 - `data.validation` Data Validation (Data Tools)
 - `data.circleInvalid` Circle Invalid Data (Data Tools)
+- `data.clearValidationCircles` Clear Validation Circles (Data Tools)
 - `data.consolidate` Consolidate (Data Tools)
 - `data.scenarioManager` Scenario Manager (Forecast)
 - `data.goalSeek` Goal Seek (Forecast)

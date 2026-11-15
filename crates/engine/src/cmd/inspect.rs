@@ -51,6 +51,7 @@ fn inspect(s: &mut Session, _: &Json) -> Result<Json> {
                 "shapes": sh.shapes.len(),
                 "conditionalFormats": sh.cond_formats.len(),
                 "validations": sh.validations.len(),
+                "validationCircles": d.validation_circles_on(&sh.name).iter().map(|c| c.a1()).collect::<Vec<_>>(),
                 "comments": sh.comments.len(),
                 "autofilter": sh.autofilter.as_ref().map(|a| a.range.a1()),
                 "protected": sh.protection.is_some(),
