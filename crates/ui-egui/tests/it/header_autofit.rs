@@ -21,12 +21,12 @@ fn harness(selection: &str) -> egui_kittest::Harness<'static, SheetApp> {
     session.execute("home.columnWidth", json!({"cols": "A:D", "width": 100})).unwrap();
     session.execute("home.rowHeight", json!({"rows": "1:4", "height": 60})).unwrap();
     session.execute("selection.set", json!({"range": selection})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h.state_mut().session.active_mut().unwrap().undo.clear();
@@ -154,6 +154,110 @@ fn dragging_a_boundary_inside_a_multi_area_selection_resizes_every_selected_line
 }
 
 #[test]
+fn a_multi_selection_resize_previews_on_the_dragged_line_and_applies_on_release() {
+    // Issue #1082: only the dragged line moves while the button is held; Esc cancels.
+    for rows in [false, true] {
+        let mut h = harness(if rows { "1:3" } else { "A:C" });
+        let before = sizes(&h, rows);
+        let (start, zoom) = edge(&h, rows, 1);
+        let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        let held = sizes(&h, rows);
+        assert_eq!(held[1], (before[1] + 30.0 / zoom).round(), "the dragged line previews");
+        for index in [0, 2, 3] {
+            assert_eq!(held[index], before[index], "line {index} waits for the release");
+        }
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        let after = sizes(&h, rows);
+        for (index, size) in after.iter().take(3).enumerate() {
+            assert_eq!(*size, held[1], "line {index} takes the width on release");
+        }
+        assert_eq!(after[3], before[3]);
+        assert_eq!(h.state().session.active().unwrap().undo.len(), 1);
+        h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(sizes(&h, rows), before);
+
+        // Esc during the drag cancels everything.
+        let mut h = harness(if rows { "1:3" } else { "A:C" });
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        h.input_mut().events.push(Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        assert_eq!(sizes(&h, rows), before, "Esc restores the sizes");
+    }
+}
+
+#[test]
+fn escaping_a_resize_drag_keeps_an_earlier_size_edit() {
+    // A resize drag right after another resize shares its undo label; Esc must cancel only the drag.
+    for (rows, selection) in [(false, "B:B"), (true, "2:2"), (false, "A:C"), (true, "1:3")] {
+        let mut h = harness(selection);
+        let key = if rows { ("home.rowHeight", "rows", "2:2", "height") } else { ("home.columnWidth", "cols", "B:B", "width") };
+        h.state_mut().session.execute(key.0, json!({key.1: key.2, key.3: 80})).unwrap();
+        h.run_steps(2);
+        let earlier = sizes(&h, rows);
+        let undo_len = h.state().session.active().unwrap().undo.len();
+        let (start, _) = edge(&h, rows, 1);
+        let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        assert_ne!(sizes(&h, rows), earlier, "the drag previews");
+        h.input_mut().events.push(Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.step();
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        assert_eq!(sizes(&h, rows), earlier, "Esc cancels only the drag (rows: {rows}, selection {selection})");
+        assert_eq!(h.state().session.active().unwrap().undo.len(), undo_len, "the earlier edit stays on the undo stack");
+    }
+}
+
+#[test]
+fn a_resize_drag_after_another_resize_is_its_own_undo_step() {
+    for (rows, selection) in [(false, "B:B"), (true, "2:2"), (false, "A:C"), (true, "1:3")] {
+        let mut h = harness(selection);
+        let key = if rows { ("home.rowHeight", "rows", "2:2", "height") } else { ("home.columnWidth", "cols", "B:B", "width") };
+        h.state_mut().session.execute(key.0, json!({key.1: key.2, key.3: 80})).unwrap();
+        h.run_steps(2);
+        let earlier = sizes(&h, rows);
+        let (start, _) = edge(&h, rows, 1);
+        let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(start + delta));
+        h.step();
+        button(&mut h, start + delta, false);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().undo.len(), 2, "selection {selection}: two undo steps");
+        h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(sizes(&h, rows), earlier, "selection {selection}: one undo reverts only the drag");
+    }
+}
+
+#[test]
 fn table_filter_autofit_works_through_command_and_header_double_click() {
     for zoom in [50, 100, 200] {
         for double_click in [false, true] {
@@ -188,6 +292,126 @@ fn table_filter_autofit_works_through_command_and_header_double_click() {
             assert_eq!(app.session.active().unwrap().undo.len(), 1);
             h.state_mut().session.execute("edit.undo", json!({})).unwrap();
             assert_eq!(sizes(&h, false)[0], 100.0);
+        }
+    }
+}
+
+fn press_escape(h: &mut egui_kittest::Harness<'_, SheetApp>) {
+    h.input_mut().events.push(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.step();
+}
+
+#[test]
+fn a_rejected_final_preview_releases_with_the_size_last_shown() {
+    // The engine refuses rows over 546 px and columns over 1800 px; the release must apply the last
+    // accepted preview to the whole selection, not retry the refused size.
+    for rows in [false, true] {
+        let mut h = harness(if rows { "1:3" } else { "A:C" });
+        let before = sizes(&h, rows);
+        let (start, zoom) = edge(&h, rows, 1);
+        let unit = |d: f32| if rows { vec2(0.0, d) } else { vec2(d, 0.0) };
+        button(&mut h, start, true);
+        h.input_mut().events.push(Event::PointerMoved(start + unit(15.0)));
+        h.step();
+        h.input_mut().events.push(Event::PointerMoved(start + unit(30.0)));
+        h.step();
+        let shown = sizes(&h, rows)[1];
+        assert_eq!(shown, (before[1] + 30.0 / zoom).round());
+        h.input_mut().events.push(Event::PointerMoved(start + unit(4000.0 * zoom)));
+        h.step();
+        assert_eq!(sizes(&h, rows)[1], shown, "the refused size is not shown");
+        button(&mut h, start + unit(4000.0 * zoom), false);
+        h.run_steps(2);
+        let after = sizes(&h, rows);
+        for (index, size) in after.iter().take(3).enumerate() {
+            assert_eq!(*size, shown, "line {index} takes the size that was shown (rows: {rows})");
+        }
+        assert_eq!(after[3], before[3]);
+    }
+}
+
+#[test]
+fn escaping_a_resize_drag_leaves_redo_history_as_it_was() {
+    for rows in [false, true] {
+        for with_redo in [false, true] {
+            let mut h = harness(if rows { "1:3" } else { "A:C" });
+            let cmd = if rows { ("home.rowHeight", "rows", "4:4", "height") } else { ("home.columnWidth", "cols", "D:D", "width") };
+            let mut redo_len = 0;
+            let mut d_size = 0.0;
+            if with_redo {
+                h.state_mut().session.execute(cmd.0, json!({cmd.1: cmd.2, cmd.3: 80})).unwrap();
+                h.state_mut().session.execute("edit.undo", json!({})).unwrap();
+                h.run_steps(2);
+                redo_len = h.state().session.active().unwrap().redo.len();
+                assert_eq!(redo_len, 1);
+                d_size = sizes(&h, rows)[3];
+            }
+            let before = sizes(&h, rows);
+            let (start, _) = edge(&h, rows, 1);
+            let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+            button(&mut h, start, true);
+            h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+            h.step();
+            h.input_mut().events.push(Event::PointerMoved(start + delta));
+            h.step();
+            assert_ne!(sizes(&h, rows), before, "the drag previews");
+            press_escape(&mut h);
+            button(&mut h, start + delta, false);
+            h.run_steps(2);
+            assert_eq!(sizes(&h, rows), before);
+            assert_eq!(h.state().session.active().unwrap().redo.len(), redo_len, "Esc leaves the redo stack alone (rows: {rows}, redo: {with_redo})");
+            // Ctrl+Y brings back only what was undone before the drag.
+            let redone = h.state_mut().session.execute("edit.redo", json!({}));
+            if with_redo {
+                redone.unwrap();
+                let redone = sizes(&h, rows);
+                assert_eq!(redone[3], 80.0);
+                assert_ne!(redone[3], d_size);
+                assert_eq!(redone[..3], before[..3], "the cancelled drag does not come back");
+            } else {
+                assert!(redone.is_err(), "nothing to redo after a cancelled drag");
+            }
+        }
+    }
+}
+
+#[test]
+fn escaping_a_resize_drag_keeps_a_pending_copy_and_format_painter() {
+    // Esc cancels the drag only: the marked copy and Format Painter stay, whether the release comes
+    // in a later frame or in the same frame as Esc.
+    for rows in [false, true] {
+        for (same_frame, modifiers) in [(false, Modifiers::NONE), (true, Modifiers::NONE), (false, Modifiers::SHIFT)] {
+            let mut h = harness(if rows { "1:3" } else { "A:C" });
+            h.state_mut().session.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+            h.state_mut().session.execute("edit.formatPainter", json!({"sticky": true})).unwrap();
+            h.run_steps(2);
+            assert!(h.state().session.clipboard.is_some() && h.state().session.format_painter.is_some());
+            let before = sizes(&h, rows);
+            let (start, _) = edge(&h, rows, 1);
+            let delta = if rows { vec2(0.0, 30.0) } else { vec2(30.0, 0.0) };
+            button(&mut h, start, true);
+            h.input_mut().events.push(Event::PointerMoved(start + delta / 2.0));
+            h.step();
+            h.input_mut().events.push(Event::PointerMoved(start + delta));
+            h.step();
+            assert_ne!(sizes(&h, rows), before, "the drag previews");
+            let pos = start + delta;
+            let esc = Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers };
+            if same_frame {
+                h.input_mut().events.extend([esc, Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers }]);
+            } else {
+                h.input_mut().events.push(esc);
+                h.step();
+                h.input_mut()
+                    .events
+                    .extend([Event::PointerMoved(pos), Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers }]);
+            }
+            h.step();
+            h.run_steps(2);
+            let what = format!("rows: {rows}, same frame: {same_frame}, modifiers: {modifiers:?}");
+            assert_eq!(sizes(&h, rows), before, "the drag is cancelled ({what})");
+            assert!(h.state().session.clipboard.is_some(), "the copy is still marked ({what})");
+            assert!(h.state().session.format_painter.is_some(), "Format Painter is still on ({what})");
         }
     }
 }

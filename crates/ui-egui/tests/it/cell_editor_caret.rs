@@ -21,7 +21,7 @@ fn caret(fill: Option<&str>, dark: bool) -> Color32 {
     theme::apply(&ctx, dark);
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     if let Some(color) = fill {
         app.run("home.fillColor", json!({"range": "A1", "color": color})).unwrap();
     }

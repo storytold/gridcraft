@@ -13,12 +13,12 @@ fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("range.setValues", json!({"range": "A1", "values": [["A", "B", "C", "D", "E"], [1, 2]]})).unwrap();
-    let mut h = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h
@@ -173,6 +173,33 @@ fn moving_a_selection_keeps_move_and_still_moves_cells() {
 }
 
 #[test]
+fn moving_a_selection_onto_data_asks_before_replacing_it() {
+    // #3136: the drop replaced the cells there without asking.
+    let mut h = harness();
+    h.state_mut().session.execute("selection.set", json!({"range": "A2:B2"})).unwrap();
+    h.run_steps(2);
+    let r = selection_rect(&h);
+    press(&mut h, pos2(r.left() + 10.0, r.top() + 1.0));
+    let target = cell(&h, "A1").center();
+    move_with_cursor(&mut h, target, CursorIcon::Move);
+    button(&mut h, target, false);
+    h.run_steps(1);
+    let q = h.state().macros.question.clone().expect("a question before replacing A1:B1");
+    assert_eq!(q.text, "There's already data here. Do you want to replace it?");
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::text("A"));
+    assert_eq!(sh.value(CellRef::parse("A2").unwrap()), Value::Number(1.0));
+    // OK replaces them.
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().macros.question.is_none());
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+    assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::Number(2.0));
+    assert_eq!(sh.value(CellRef::parse("A2").unwrap()), Value::Empty);
+}
+
+#[test]
 fn resizing_headers_keeps_the_axis_cursor_when_leaving_the_header() {
     for cols in [true, false] {
         let mut h = harness();
@@ -259,7 +286,7 @@ fn object_move_and_resize_keep_their_cursors_and_update_the_object() {
         let mut h = harness();
         let result = h.state_mut().session.execute("insert.chart", json!({"type": "column", "at": "D3", "width": 300, "height": 200})).unwrap();
         let id = result["chart"].as_u64().unwrap() as u32;
-        h.state_mut().selected_chart = Some(id);
+        h.state_mut().select_object_id(Some(id));
         h.run_steps(2);
         let g = geo(&h);
         let min = cell(&h, "D3").min;
@@ -268,7 +295,7 @@ fn object_move_and_resize_keep_their_cursors_and_update_the_object() {
         let target = start + vec2(60.0, 30.0);
         let cursor = if resize { CursorIcon::ResizeNwSe } else { CursorIcon::Move };
         move_with_cursor(&mut h, target, cursor);
-        assert!(matches!(h.state().grid.drag, Drag::Object { resize: r, .. } if r == resize));
+        assert!(matches!(h.state().grid.drag, Drag::Object { handle, .. } if handle.is_some() == resize));
         move_with_cursor(&mut h, target + vec2(1.0, 1.0), cursor);
         button(&mut h, target, false);
         assert_eq!(h.state().grid.drag, Drag::None);

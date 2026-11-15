@@ -127,16 +127,17 @@ fn click(h: &mut Harness, at: Pos2) {
 }
 
 #[test]
+/// The filter button in a replaced heading opens that column's menu without changing the selection; clicking beside it still selects the column.
 fn the_button_in_a_replaced_heading_opens_that_columns_filter_menu() {
     let mut s = session("C20");
     s.execute("home.hideColumns", json!({"cols": "B:B"})).unwrap();
     s.execute("selection.set", json!({"cell": "C20"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     let sh = sheet(&h.state().session);

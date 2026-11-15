@@ -147,10 +147,10 @@ impl RangeRef {
         RangeRef::new(CellRef::new(0, 0), CellRef::new(MAX_ROWS - 1, MAX_COLS - 1))
     }
     pub fn height(&self) -> u32 {
-        self.end.row - self.start.row + 1
+        self.end.row.saturating_sub(self.start.row).saturating_add(1)
     }
     pub fn width(&self) -> u32 {
-        self.end.col - self.start.col + 1
+        self.end.col.saturating_sub(self.start.col).saturating_add(1)
     }
     pub fn count(&self) -> u64 {
         self.height() as u64 * self.width() as u64
@@ -187,6 +187,12 @@ impl RangeRef {
             start: CellRef::new(self.start.row.min(o.start.row), self.start.col.min(o.start.col)),
             end: CellRef::new(self.end.row.max(o.end.row), self.end.col.max(o.end.col)),
         }
+    }
+    /// The top-left cell of a list of areas: the lowest row and the lowest column across all of
+    /// them, whatever order they are listed in. Excel writes the relative formulas of a
+    /// multi-area validation or conditional format for this cell. `None` for no areas.
+    pub fn top_left(ranges: &[RangeRef]) -> Option<CellRef> {
+        ranges.iter().copied().reduce(|a, b| a.union(&b)).map(|r| r.start)
     }
     /// Row-major iterator over the cells. Callers must bound huge ranges themselves.
     pub fn iter(&self) -> impl Iterator<Item = CellRef> + '_ {
@@ -246,7 +252,7 @@ fn is_r1c1_token(name: &str) -> bool {
         if chars.peek().is_some_and(|c| c.to_ascii_lowercase() == letter) {
             chars.next();
             letters += 1;
-            while chars.peek().is_some_and(|c| c.is_ascii_digit()) {
+            while chars.peek().is_some_and(char::is_ascii_digit) {
                 chars.next();
             }
         }
@@ -290,20 +296,68 @@ pub fn split_sheet(reference: &str) -> (Option<String>, &str) {
     }
 }
 
+/// The areas of a reference list, split at the commas between them. A comma inside a quoted
+/// sheet name (`'Sales, West'!A1`) is part of the name, and a doubled quote inside the quotes
+/// (`'O''Brien, Jr'!A1`) is an escaped quote, not the end of the name: a quote toggles the
+/// quoted state, so a doubled one toggles it twice.
+pub fn split_areas(reference: &str) -> Vec<&str> {
+    let mut areas = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in reference.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            ',' if !quoted => {
+                areas.push(reference.get(start..i).unwrap_or_default());
+                start = i.saturating_add(1);
+            }
+            _ => {}
+        }
+    }
+    areas.push(reference.get(start..).unwrap_or_default());
+    areas
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn range_parse_rejects_signed_rows() {
+    fn hostile_range_dimensions_saturate_instead_of_wrapping() {
+        let r = RangeRef { start: CellRef::new(0, 0), end: CellRef::new(u32::MAX, u32::MAX) };
+        assert_eq!((r.height(), r.width()), (u32::MAX, u32::MAX));
+        assert_eq!(r.count(), u64::from(u32::MAX) * u64::from(u32::MAX));
+    }
+
+    #[test]
+    fn areas_split_only_at_commas_outside_quoted_sheet_names() {
+        assert_eq!(split_areas("B2:B4,D1"), ["B2:B4", "D1"]);
+        assert_eq!(split_areas("'Sales, West'!$A$1"), ["'Sales, West'!$A$1"]);
+        assert_eq!(split_areas("'O''Brien, Jr'!A1:B2,D4"), ["'O''Brien, Jr'!A1:B2", "D4"]);
+        assert_eq!(split_areas("'Q1, Q2'!A1,'Q3, Q4'!B2"), ["'Q1, Q2'!A1", "'Q3, Q4'!B2"]);
+        assert_eq!(split_areas(""), [""]);
+    }
+
+    #[test]
+    fn range_parse_rejects_signed_rows() -> Result<(), std::io::Error> {
         assert!(RangeRef::parse("+1:+3").is_none());
         assert!(RangeRef::parse("-1:3").is_none());
         assert!(RangeRef::parse("$$1:3").is_none());
         assert!(RangeRef::parse(":3").is_none());
         assert!(RangeRef::parse("$$A:$$C").is_none());
         assert!(RangeRef::parse("$A:$C").is_some());
-        let r = RangeRef::parse("$1:$3").unwrap();
+        let r = RangeRef::parse("$1:$3").ok_or_else(|| std::io::Error::other("valid row range"))?;
         assert_eq!((r.start.row, r.end.row), (0, 2));
+        Ok(())
+    }
+
+    #[test]
+    fn top_left_spans_every_area_in_any_order() {
+        let areas: Vec<RangeRef> = ["H62:H68", "H26:H27", "H93:H95"].iter().filter_map(|a| RangeRef::parse(a)).collect();
+        assert_eq!(RangeRef::top_left(&areas), CellRef::parse("H26"));
+        // Lowest row and lowest column, even when they come from different areas.
+        let areas: Vec<RangeRef> = ["C5:D6", "E2", "B9"].iter().filter_map(|a| RangeRef::parse(a)).collect();
+        assert_eq!(RangeRef::top_left(&areas), CellRef::parse("B2"));
+        assert_eq!(RangeRef::top_left(&[]), None);
     }
 
     #[test]
@@ -389,18 +443,20 @@ mod tests {
     }
 
     #[test]
-    fn ranges() {
-        let r = RangeRef::parse("C3:A1").unwrap();
+    fn ranges() -> Result<(), std::io::Error> {
+        let parse = |s| RangeRef::parse(s).ok_or_else(|| std::io::Error::other("valid range"));
+        let r = parse("C3:A1")?;
         assert_eq!(r.a1(), "A1:C3");
         assert_eq!(r.count(), 9);
-        assert_eq!(RangeRef::parse("A:C").unwrap().a1(), "A:C");
-        assert_eq!(RangeRef::parse("3:5").unwrap().a1(), "3:5");
+        assert_eq!(parse("A:C")?.a1(), "A:C");
+        assert_eq!(parse("3:5")?.a1(), "3:5");
         assert!(RangeRef::parse("0:5").is_none());
-        let a = RangeRef::parse("A1:C3").unwrap();
-        let b = RangeRef::parse("B2:D4").unwrap();
-        assert_eq!(a.intersection(&b).unwrap().a1(), "B2:C3");
+        let a = parse("A1:C3")?;
+        let b = parse("B2:D4")?;
+        assert_eq!(a.intersection(&b).ok_or_else(|| std::io::Error::other("overlap expected"))?.a1(), "B2:C3");
         assert_eq!(a.union(&b).a1(), "A1:D4");
         assert_eq!(a.iter().count(), 9);
+        Ok(())
     }
 
     #[test]
@@ -458,18 +514,19 @@ mod category_level_tests {
     use super::*;
 
     #[test]
-    fn a_wide_range_beside_a_column_of_values_is_a_multi_level_axis() {
-        let r = |s: &str| RangeRef::parse(s).unwrap();
-        assert_eq!(category_levels(&r("A4:B39"), Some(&r("C4:C39"))), Some(CategoryLevels { by_columns: true, outer: 1 }));
-        assert_eq!(category_levels(&r("A4:D39"), Some(&r("C4:C39"))), Some(CategoryLevels { by_columns: true, outer: 3 }));
-        assert_eq!(category_levels(&r("A4:F39"), Some(&r("C4:C39"))).map(|l| l.outer), Some(3), "capped");
-        assert_eq!(category_levels(&r("A4:A39"), Some(&r("C4:C39"))), None, "one column: a plain list");
+    fn a_wide_range_beside_a_column_of_values_is_a_multi_level_axis() -> Result<(), std::io::Error> {
+        let r = |s| RangeRef::parse(s).ok_or_else(|| std::io::Error::other("valid test range"));
+        assert_eq!(category_levels(&r("A4:B39")?, Some(&r("C4:C39")?)), Some(CategoryLevels { by_columns: true, outer: 1 }));
+        assert_eq!(category_levels(&r("A4:D39")?, Some(&r("C4:C39")?)), Some(CategoryLevels { by_columns: true, outer: 3 }));
+        assert_eq!(category_levels(&r("A4:F39")?, Some(&r("C4:C39")?)).map(|l| l.outer), Some(3), "capped");
+        assert_eq!(category_levels(&r("A4:A39")?, Some(&r("C4:C39")?)), None, "one column: a plain list");
         // A row of values: levels are rows.
-        assert_eq!(category_levels(&r("B2:M3"), Some(&r("B4:M4"))), Some(CategoryLevels { by_columns: false, outer: 1 }));
-        assert_eq!(category_levels(&r("B3:M3"), Some(&r("B4:M4"))), None);
+        assert_eq!(category_levels(&r("B2:M3")?, Some(&r("B4:M4")?)), Some(CategoryLevels { by_columns: false, outer: 1 }));
+        assert_eq!(category_levels(&r("B3:M3")?, Some(&r("B4:M4")?)), None);
         // Literal values: the categories' own shape decides.
-        assert_eq!(category_levels(&r("A1:B6"), None), Some(CategoryLevels { by_columns: true, outer: 1 }));
-        assert_eq!(category_levels(&r("A1:F2"), None), Some(CategoryLevels { by_columns: false, outer: 1 }));
-        assert_eq!(category_levels(&r("A:B"), Some(&r("C:C"))), None, "whole columns");
+        assert_eq!(category_levels(&r("A1:B6")?, None), Some(CategoryLevels { by_columns: true, outer: 1 }));
+        assert_eq!(category_levels(&r("A1:F2")?, None), Some(CategoryLevels { by_columns: false, outer: 1 }));
+        assert_eq!(category_levels(&r("A:B")?, Some(&r("C:C")?)), None, "whole columns");
+        Ok(())
     }
 }

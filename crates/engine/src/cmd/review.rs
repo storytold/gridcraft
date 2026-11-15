@@ -5,7 +5,7 @@ use gridcraft_core::CellRef;
 use gridcraft_model::{EditRange, PasswordHash, SheetProtection, Visibility, password_hash};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, DocState, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, str_param, target_ranges, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -35,6 +35,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Allow Edit Ranges…",
             menu: &["Review", "Protect"],
             shortcut: None,
+            shortcut_mac: None,
             params: "{action?: list (default) | add | modify | delete | unlock, title?, range?, password?, newTitle?, sheet?} → ranges",
             enabled: has_doc,
             run: allow_edit_ranges,
@@ -90,7 +91,7 @@ fn has_comments(s: &Session) -> std::result::Result<(), String> {
 fn step_comment(s: &mut Session, forward: bool) -> Result<Json> {
     let list = comment_cells(s);
     let d = s.doc()?;
-    let here = (d.wb.active_sheet, d.selection.active);
+    let here = (d.wb.active_sheet(), d.selection.active);
     let target = if forward {
         list.iter().find(|c| **c > here).or_else(|| list.first())
     } else {
@@ -162,6 +163,8 @@ fn protect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let what = d.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
     let prot = SheetProtection { password: str_param(p, "password").filter(|x| !x.is_empty()).map(|pw| new_password_hash(d, &what, pw)), ..prot };
     edit(s, |cx| {
+        // FORMULATEXT reads a sheet's protection: its results are recalculated.
+        cx.recalc_all = true;
         cx.sheet_mut(sheet)?.protection = Some(prot.clone());
         Ok(Json::Null)
     })
@@ -181,7 +184,10 @@ fn unprotect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.protection = None;
+        // Only removing protection changes what FORMULATEXT reads; a no-op unprotect skips the full recalculation.
+        if cx.sheet_mut(sheet)?.protection.take().is_some() {
+            cx.recalc_all = true;
+        }
         Ok(Json::Null)
     })
 }
@@ -374,7 +380,7 @@ mod tests {
 
     fn at(s: &Session) -> (usize, String) {
         let d = s.doc().unwrap();
-        (d.wb.active_sheet, d.selection.active.a1())
+        (d.wb.active_sheet(), d.selection.active.a1())
     }
 
     #[test]
@@ -401,6 +407,21 @@ mod tests {
         assert!(s.execute("review.nextComment", json!({})).is_err());
         assert!(s.execute("review.previousComment", json!({})).is_err());
         assert_eq!(at(&s), (0, "A1".to_string()));
+    }
+
+    #[test]
+    fn protecting_and_unprotecting_leave_table_headers_alone() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["a", "b"], [1, 2]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B2", "header": true})).unwrap();
+        // An imported header can hold a number: only a structural edit would turn it back into text.
+        let d = s.doc_mut().unwrap();
+        std::sync::Arc::make_mut(&mut d.wb).sheet_mut(0).unwrap().set_value(gridcraft_core::CellRef::new(0, 0), gridcraft_core::Value::Number(7.0));
+        s.execute("review.protectSheet", json!({})).unwrap();
+        s.execute("review.unprotectSheet", json!({})).unwrap();
+        let v = s.doc().unwrap().wb.sheet(0).unwrap().value(gridcraft_core::CellRef::new(0, 0));
+        assert_eq!(v, gridcraft_core::Value::Number(7.0));
     }
 
     #[test]
@@ -443,7 +464,7 @@ mod tests {
         );
         let prot: SheetProtection = serde_json::from_str(&old).unwrap();
         assert_eq!((prot.legacy_password_hash, prot.password.is_none()), (Some(password_hash("old")), true));
-        let i = s.doc().unwrap().wb.active_sheet;
+        let i = s.doc().unwrap().wb.active_sheet();
         let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
         std::sync::Arc::make_mut(&mut wb.sheets[i]).protection = Some(prot);
         assert!(s.execute("review.unprotectSheet", json!({"password": "new"})).is_err());

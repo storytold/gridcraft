@@ -18,12 +18,12 @@ fn filter_menu_on_a_long_list() -> Harness {
     values.extend((1..=80).map(|i| vec![json!(format!("ITEM-{i:03}"))]));
     session.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
     session.execute("data.filter", json!({"range": "A1:A81"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     let button = {
@@ -42,6 +42,7 @@ fn filter_menu_on_a_long_list() -> Harness {
 }
 
 #[test]
+/// A wheel event over the menu's blank right area scrolls the value list.
 fn filter_list_scrolls_with_the_pointer_right_of_the_values() {
     let mut h = filter_menu_on_a_long_list();
     let first = h.get_by_label("ITEM-001").rect();
@@ -51,6 +52,7 @@ fn filter_list_scrolls_with_the_pointer_right_of_the_values() {
     h.run_steps(2);
     h.input_mut().events.push(Event::MouseWheel {
         unit: MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
         delta: vec2(0.0, -3.0),
         phase: TouchPhase::Move,
         modifiers: Modifiers::NONE,

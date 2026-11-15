@@ -1,10 +1,10 @@
 //! Conditional formatting evaluation: what extra style, data bar, colour scale or icon a cell
 //! gets.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
-use gridcraft_model::*;
+use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
 
 /// The conditional look of one cell.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -47,6 +47,8 @@ enum StatsNeed {
 fn stats_need(rule: &CfRule) -> Option<StatsNeed> {
     match rule {
         CfRule::Duplicate { .. } | CfRule::Unique { .. } => Some(StatsNeed::Counts),
+        // only two- and three-colour scales paint: no statistics for the others
+        CfRule::ColorScale { stops } if !matches!(stops.len(), 2 | 3) => None,
         CfRule::Top10 { .. } | CfRule::AboveAverage { .. } | CfRule::ColorScale { .. } | CfRule::DataBar { .. } | CfRule::IconSet { .. } => {
             Some(StatsNeed::Numbers)
         }
@@ -70,15 +72,58 @@ thread_local! {
     static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Most cells one rule's statistics visit, across all of its ranges together: a rule repeating
+/// the same range many times must not multiply the scan.
+const STATS_SCAN_LIMIT: usize = 2_000_000;
+
+/// Steps through the spilled cells inside `r`, row-major: `Some(cell)` for each, and `None` for a
+/// jump past the spills left or right of the columns on a row (one step per row, however many
+/// there are), so unrelated spills between a narrow range's corners cost little.
+fn spill_steps(sh: &Sheet, r: RangeRef) -> impl Iterator<Item = Option<CellRef>> + '_ {
+    let mut cur = Some(r.start);
+    std::iter::from_fn(move || {
+        let at = cur.filter(|at| *at <= r.end)?;
+        let (&c, _) = sh.spill.range(at..=r.end).next()?;
+        if c.col < r.start.col {
+            cur = Some(CellRef::new(c.row, r.start.col));
+            Some(None)
+        } else if c.col > r.end.col {
+            cur = c.row.checked_add(1).map(|row| CellRef::new(row, r.start.col));
+            Some(None)
+        } else {
+            cur = c.col.checked_add(1).map(|col| CellRef::new(c.row, col));
+            Some(Some(c))
+        }
+    })
+}
+
 fn numbers_in(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> (Vec<f64>, HashMap<String, usize>) {
     let mut nums = Vec::new();
     let mut counts = HashMap::new();
+    let mut budget = STATS_SCAN_LIMIT;
+    let mut seen: HashSet<RangeRef> = HashSet::new();
+    let used = sh.used_range();
     for r in ranges {
-        let r = match sh.used_range().and_then(|u| r.intersection(&u)) {
+        if budget == 0 {
+            break;
+        }
+        let r = match used.and_then(|u| r.intersection(&u)) {
             Some(x) => x,
             None => continue,
         };
-        for c in r.iter().take(2_000_000) {
+        // The same range listed twice counts its cells once.
+        if !seen.insert(r) {
+            continue;
+        }
+        // Only stored and spilled cells hold values: blank cells of a sparse range cost nothing,
+        // so a value far down a huge range is still counted. Every cell looked at is charged.
+        let stored = sh.cells.iter_range(r).map(|(c, _)| (Some(c), true));
+        let spilled = spill_steps(sh, r).map(|c| (c, false));
+        for (c, is_stored) in stored.chain(spilled).take(budget) {
+            budget -= 1;
+            // a skip over spills outside the columns (charged, not read), or a spilled value
+            // under a stored cell, which was read with it
+            let Some(c) = c.filter(|c| is_stored || sh.cells.get(*c).is_none()) else { continue };
             #[cfg(test)]
             SCANNED.with(|n| n.set(n.get() + 1));
             let v = sh.value(c);
@@ -136,6 +181,95 @@ fn lerp(a: [u8; 3], b: [u8; 3], t: f64) -> [u8; 3] {
 
 pub use gridcraft_model::icon_count;
 
+struct RuleEval<'a> {
+    wb: &'a Workbook,
+    sheet: usize,
+    cell: CellRef,
+    first: CellRef,
+    value: &'a Value,
+    text: &'a str,
+    stats: &'a RuleStats,
+}
+
+fn simple_rule_style<'a>(ctx: &RuleEval<'_>, rule: &'a CfRule) -> Option<&'a Style> {
+    let RuleEval { wb, sheet, cell, first, value, text, stats } = ctx;
+    match rule {
+        CfRule::CellIs { op, a, b, style } => {
+            let eval = |f: &str| gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(f, *first, *cell));
+            let av = eval(a);
+            let matches = match op {
+                CfOperator::Between | CfOperator::NotBetween => {
+                    let bv = b.as_deref().map(eval).unwrap_or_default();
+                    let (lo, hi) = if compare(&av, &bv) == std::cmp::Ordering::Greater { (bv, av) } else { (av, bv) };
+                    let within = compare(value, &lo) != std::cmp::Ordering::Less && compare(value, &hi) != std::cmp::Ordering::Greater;
+                    if *op == CfOperator::Between { within } else { !within }
+                }
+                CfOperator::Equal => compare(value, &av) == std::cmp::Ordering::Equal,
+                CfOperator::NotEqual => compare(value, &av) != std::cmp::Ordering::Equal,
+                CfOperator::Greater => compare(value, &av) == std::cmp::Ordering::Greater,
+                CfOperator::Less => compare(value, &av) == std::cmp::Ordering::Less,
+                CfOperator::GreaterOrEqual => compare(value, &av) != std::cmp::Ordering::Less,
+                CfOperator::LessOrEqual => compare(value, &av) != std::cmp::Ordering::Greater,
+            };
+            (matches && !value.is_error()).then_some(style.as_ref())
+        }
+        CfRule::Expression { formula, style } => {
+            gridcraft_calc::evaluate(wb, *sheet, *cell, &relative(formula, *first, *cell)).to_bool().unwrap_or(false).then_some(style.as_ref())
+        }
+        CfRule::ContainsText { text: needle, style } => {
+            (!value.is_error() && text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::NotContainsText { text: needle, style } => {
+            (value.is_error() || !text.to_lowercase().contains(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::BeginsWith { text: needle, style } => {
+            (!value.is_error() && text.to_lowercase().starts_with(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::EndsWith { text: needle, style } => {
+            (!value.is_error() && text.to_lowercase().ends_with(&needle.to_lowercase())).then_some(style.as_ref())
+        }
+        CfRule::Blanks { style } => (value.is_empty() || text.trim().is_empty()).then_some(style.as_ref()),
+        CfRule::NoBlanks { style } => (!value.is_empty() && !text.trim().is_empty()).then_some(style.as_ref()),
+        CfRule::Errors { style } => value.is_error().then_some(style.as_ref()),
+        CfRule::NoErrors { style } => (!value.is_error()).then_some(style.as_ref()),
+        CfRule::Duplicate { style } => {
+            (!value.is_empty() && stats.counts.get(&text.to_lowercase()).copied().unwrap_or(0) > 1).then_some(style.as_ref())
+        }
+        CfRule::Unique { style } => {
+            (!value.is_empty() && stats.counts.get(&text.to_lowercase()).copied().unwrap_or(0) == 1).then_some(style.as_ref())
+        }
+        _ => None,
+    }
+}
+
+fn time_period_matches(wb: &Workbook, period: &str, serial: f64) -> bool {
+    let today = gridcraft_core::date::serial_in_system(wb.date_system, gridcraft_calc::now_serial()).floor();
+    let day = serial.floor();
+    let date = |serial| gridcraft_core::date::datetime_from_serial(wb.date_system, serial);
+    let week_start = today - date(today).map(|value| value.weekday as f64).unwrap_or(0.0);
+    let (year, month) = date(today).map(|value| (value.year, value.month)).unwrap_or((2026, 1));
+    let year_month = date(day).map(|value| (value.year, value.month));
+    let month_matches = |offset: i32| {
+        let shifted_month = month as i32 + offset;
+        let shifted_year = year + (shifted_month - 1).div_euclid(12);
+        let shifted_month = (shifted_month - 1).rem_euclid(12) + 1;
+        year_month == Some((shifted_year, shifted_month as u32))
+    };
+    match period {
+        "yesterday" => day == today - 1.0,
+        "today" => day == today,
+        "tomorrow" => day == today + 1.0,
+        "last7Days" => day > today - 7.0 && day <= today,
+        "lastWeek" => day >= week_start - 7.0 && day < week_start,
+        "thisWeek" => day >= week_start && day < week_start + 7.0,
+        "nextWeek" => day >= week_start + 7.0 && day < week_start + 14.0,
+        "lastMonth" => month_matches(-1),
+        "thisMonth" => month_matches(0),
+        "nextMonth" => month_matches(1),
+        _ => false,
+    }
+}
+
 impl CfCache {
     pub fn new() -> Self {
         Self::default()
@@ -155,58 +289,14 @@ impl CfCache {
         let v = sh.value(c);
         let no_stats = RuleStats::default();
         for (idx, cf) in rules {
-            let first = cf.ranges.first().map(|r| r.start).unwrap_or(c);
+            let first = RangeRef::top_left(&cf.ranges).unwrap_or(c);
             let st: &RuleStats = match stats_need(&cf.rule) {
                 Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
                 None => &no_stats,
             };
             let text = v.display();
-            let matched_style: Option<&Style> = match &cf.rule {
-                CfRule::CellIs { op, a, b, style } => {
-                    let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, c, &relative(f, first, c));
-                    let av = eval(a);
-                    let ok = match op {
-                        CfOperator::Between | CfOperator::NotBetween => {
-                            let bv = b.as_deref().map(eval).unwrap_or_default();
-                            let (lo, hi) = if compare(&av, &bv) == std::cmp::Ordering::Greater { (bv, av) } else { (av, bv) };
-                            let inside = compare(&v, &lo) != std::cmp::Ordering::Less && compare(&v, &hi) != std::cmp::Ordering::Greater;
-                            if *op == CfOperator::Between { inside } else { !inside }
-                        }
-                        CfOperator::Equal => compare(&v, &av) == std::cmp::Ordering::Equal,
-                        CfOperator::NotEqual => compare(&v, &av) != std::cmp::Ordering::Equal,
-                        CfOperator::Greater => compare(&v, &av) == std::cmp::Ordering::Greater,
-                        CfOperator::Less => compare(&v, &av) == std::cmp::Ordering::Less,
-                        CfOperator::GreaterOrEqual => compare(&v, &av) != std::cmp::Ordering::Less,
-                        CfOperator::LessOrEqual => compare(&v, &av) != std::cmp::Ordering::Greater,
-                    };
-                    // As in Excel, a blank cell compares as 0 (or ""), and an error never matches.
-                    (ok && !v.is_error()).then_some(style.as_ref())
-                }
-                CfRule::Expression { formula, style } => {
-                    gridcraft_calc::evaluate(wb, sheet, c, &relative(formula, first, c)).to_bool().unwrap_or(false).then_some(style.as_ref())
-                }
-                // As in Excel, an error value never contains, begins or ends with anything (its rule
-                // formulas SEARCH/LEFT/RIGHT fail on it), so it always "does not contain" (#1162).
-                CfRule::ContainsText { text: t, style } => {
-                    (!v.is_error() && text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::NotContainsText { text: t, style } => {
-                    (v.is_error() || !text.to_lowercase().contains(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::BeginsWith { text: t, style } => {
-                    (!v.is_error() && text.to_lowercase().starts_with(&t.to_lowercase())).then_some(style.as_ref())
-                }
-                CfRule::EndsWith { text: t, style } => (!v.is_error() && text.to_lowercase().ends_with(&t.to_lowercase())).then_some(style.as_ref()),
-                CfRule::Blanks { style } => (v.is_empty() || text.trim().is_empty()).then_some(style.as_ref()),
-                CfRule::NoBlanks { style } => (!v.is_empty() && !text.trim().is_empty()).then_some(style.as_ref()),
-                CfRule::Errors { style } => v.is_error().then_some(style.as_ref()),
-                CfRule::NoErrors { style } => (!v.is_error()).then_some(style.as_ref()),
-                CfRule::Duplicate { style } => {
-                    (!v.is_empty() && st.counts.get(&text.to_lowercase()).copied().unwrap_or(0) > 1).then_some(style.as_ref())
-                }
-                CfRule::Unique { style } => {
-                    (!v.is_empty() && st.counts.get(&text.to_lowercase()).copied().unwrap_or(0) == 1).then_some(style.as_ref())
-                }
+            let context = RuleEval { wb, sheet, cell: c, first, value: &v, text: &text, stats: st };
+            let matched_style = simple_rule_style(&context, &cf.rule).or_else(|| match &cf.rule {
                 CfRule::Top10 { bottom, percent, rank, style } => match v.as_f64() {
                     Some(n) if !st.sorted.is_empty() => {
                         let k = if *percent { ((st.sorted.len() as f64) * (*rank as f64) / 100.0).floor().max(1.0) as usize } else { *rank as usize };
@@ -229,39 +319,12 @@ impl CfCache {
                     None => None,
                 },
                 CfRule::TimePeriod { period, style } => match v.as_f64() {
-                    Some(n) => {
-                        let today = gridcraft_core::date::serial_in_system(wb.date_system, gridcraft_calc::now_serial()).floor();
-                        let d = n.floor();
-                        let wd = gridcraft_core::date::datetime_from_serial(wb.date_system, today).map(|x| x.weekday as f64).unwrap_or(0.0);
-                        let week_start = today - wd;
-                        let (ty, tm) =
-                            gridcraft_core::date::datetime_from_serial(wb.date_system, today).map(|x| (x.year, x.month)).unwrap_or((2026, 1));
-                        let ym = gridcraft_core::date::datetime_from_serial(wb.date_system, d).map(|x| (x.year, x.month));
-                        let month_off = |k: i32| {
-                            let m = tm as i32 + k;
-                            let y = ty + (m - 1).div_euclid(12);
-                            let m = (m - 1).rem_euclid(12) + 1;
-                            ym == Some((y, m as u32))
-                        };
-                        let ok = match period.as_str() {
-                            "yesterday" => d == today - 1.0,
-                            "today" => d == today,
-                            "tomorrow" => d == today + 1.0,
-                            "last7Days" => d > today - 7.0 && d <= today,
-                            "lastWeek" => d >= week_start - 7.0 && d < week_start,
-                            "thisWeek" => d >= week_start && d < week_start + 7.0,
-                            "nextWeek" => d >= week_start + 7.0 && d < week_start + 14.0,
-                            "lastMonth" => month_off(-1),
-                            "thisMonth" => month_off(0),
-                            "nextMonth" => month_off(1),
-                            _ => false,
-                        };
-                        ok.then_some(style.as_ref())
-                    }
-                    None => None,
+                    Some(n) if time_period_matches(wb, period, n) => Some(style.as_ref()),
+                    _ => None,
                 },
                 CfRule::ColorScale { stops } => {
-                    if let Some(n) = v.as_f64() {
+                    // Only two- and three-colour scales paint: evaluate no thresholds for others.
+                    if let Some(n) = v.as_f64().filter(|_| matches!(stops.len(), 2 | 3)) {
                         let pts: Vec<(f64, [u8; 3])> = stops
                             .iter()
                             .map(|(k, col)| (threshold(wb, sheet, c, st, k), col.resolve(&wb.theme).unwrap_or([255, 255, 255])))
@@ -329,7 +392,8 @@ impl CfCache {
                     }
                     None
                 }
-            };
+                _ => None,
+            });
             if let Some(st) = matched_style {
                 any = true;
                 // Every matching rule applies; where two set the same part, the rule with the
@@ -350,6 +414,9 @@ impl CfCache {
 /// Adds the parts `lower` sets that `style` leaves unset (differential styles: default parts
 /// are unset).
 fn layer_under(style: &mut Style, lower: &Style) {
+    if style.align.reading_order.is_none() {
+        style.align.reading_order = lower.align.reading_order;
+    }
     if style.fill.pattern == PatternType::None {
         style.fill = lower.fill;
     }
@@ -398,6 +465,28 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn reading_order_respects_conditional_rule_priority_and_explicit_context() {
+        for (higher, expected) in [
+            (json!({"font": {"bold": true}}), "RightToLeft"),
+            (json!({"align": {"reading_order": "Context"}}), "Context"),
+            (json!({"align": {"reading_order": "LeftToRight"}}), "LeftToRight"),
+        ] {
+            let mut s = crate::Session::new();
+            s.new_workbook();
+            s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+            for style in [json!({"align": {"reading_order": "RightToLeft"}}), higher] {
+                s.execute("home.conditionalFormat", json!({"range": "A1", "rule": {"type": "noBlanks", "style": style}})).unwrap();
+            }
+            let wb = &s.doc().unwrap().wb;
+            let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+            for wb in [wb, &reopened] {
+                let style = CfCache::new().look(wb, 0, CellRef::new(0, 0)).unwrap().style.unwrap();
+                assert_eq!(serde_json::to_value(style.align).unwrap()["reading_order"], expected);
+            }
+        }
+    }
 
     #[test]
     fn every_matching_rule_applies() {
@@ -540,6 +629,89 @@ mod tests {
             cache.look(&d.wb, 0, CellRef::parse(&format!("A{r}")).unwrap());
         }
         assert_eq!(SCANNED.with(|n| n.get()), 10_000);
+    }
+
+    /// A rule listing the same range many times scans it once, and never more than the shared
+    /// limit however many ranges it holds.
+    #[test]
+    fn repeated_ranges_share_one_scan_budget() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "XFD1048576", "values": [[4]]})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(0).unwrap();
+        let dense = RangeRef::parse("A1:XFD1048576").unwrap();
+        let small = RangeRef::parse("A1:A3").unwrap();
+        SCANNED.with(|n| n.set(0));
+        let st = RuleStats::build(sh, &vec![small; 1000], StatsNeed::Numbers);
+        assert_eq!(st.sorted, vec![1.0, 2.0, 3.0]);
+        assert_eq!(SCANNED.with(|n| n.get()), 3);
+        let shifted: Vec<RangeRef> = (0..50).map(|i| RangeRef::new(CellRef::new(i, 0), dense.end)).collect();
+        SCANNED.with(|n| n.set(0));
+        RuleStats::build(sh, &shifted, StatsNeed::Numbers);
+        assert!(SCANNED.with(|n| n.get()) <= STATS_SCAN_LIMIT);
+    }
+
+    /// Blank cells of a sparse range are not charged to the scan budget: a value at the end of two
+    /// million-row columns still counts, so duplicates are found.
+    #[test]
+    fn sparse_ranges_keep_their_values_under_the_scan_budget() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[7]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "B1048576", "values": [[7]]})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(0).unwrap();
+        let ranges = [RangeRef::parse("A1:A1048576").unwrap(), RangeRef::parse("B1:B1048576").unwrap()];
+        SCANNED.with(|n| n.set(0));
+        let st = RuleStats::build(sh, &ranges, StatsNeed::Counts);
+        assert_eq!(st.counts.get("7"), Some(&2));
+        assert_eq!(SCANNED.with(|n| n.get()), 2);
+    }
+
+    /// Spills left and right of a narrow range, between its corners, are skipped a row at a time:
+    /// they do not use the budget that the in-range spills need.
+    #[test]
+    fn spills_outside_a_narrow_range_do_not_use_its_scan_budget() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let d = s.doc().unwrap();
+        let mut sh = d.wb.sheet(0).unwrap().clone();
+        for row in 0..1000 {
+            for col in [0u32, 5, 6, 7] {
+                sh.spill.insert(CellRef::new(row, col), Value::Number(1.0));
+            }
+        }
+        let r = RangeRef::parse("F1:G1000").unwrap();
+        let steps: Vec<_> = spill_steps(&sh, r).collect();
+        assert_eq!(steps.iter().flatten().count(), 2000);
+        // column A is skipped one step a row, never one per cell
+        assert!(steps.len() <= 2000 + 1000, "{}", steps.len());
+        let narrow = RangeRef::parse("C1:C1000").unwrap();
+        assert_eq!(spill_steps(&sh, narrow).flatten().count(), 0);
+    }
+
+    /// A colour scale with an unsupported number of stops paints nothing and evaluates none of them.
+    #[test]
+    fn colour_scales_with_other_stop_counts_paint_nothing() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1], [5]]})).unwrap();
+        let mut wb: Workbook = (*s.doc().unwrap().wb).clone();
+        let stop = (CfValueKind::Formula("=1".into()), Color::default());
+        let rule = |n: usize| CondFormat {
+            ranges: vec![RangeRef::parse("A1:A2").unwrap()],
+            rule: CfRule::ColorScale { stops: vec![stop.clone(); n] },
+            priority: 1,
+            stop_if_true: false,
+        };
+        wb.sheet_mut(0).unwrap().cond_formats.push(rule(4));
+        let mut cache = CfCache::new();
+        assert_eq!(cache.look(&wb, 0, CellRef::parse("A1").unwrap()).and_then(|l| l.scale_fill), None);
+        wb.sheet_mut(0).unwrap().cond_formats = vec![rule(2)];
+        let mut cache = CfCache::new();
+        assert!(cache.look(&wb, 0, CellRef::parse("A1").unwrap()).and_then(|l| l.scale_fill).is_some());
     }
 
     #[test]

@@ -1,17 +1,18 @@
 //! Outline groups (Data ▸ Group) of a sheet's rows or columns: the runs of lines at or above
 //! each outline level, as the grid draws them (brackets, − / + buttons, level buttons) and the
 //! Show / Hide Detail commands act on them. Summary rows sit below their detail and summary
-//! columns right of it (Excel's defaults; the model has no setting for the other way round).
+//! columns right of it, or above / left of it when the sheet's outline settings say so
+//! ([`Sheet::summary_below`], [`Sheet::summary_right`]).
 
 use std::collections::BTreeMap;
 
-use gridcraft_model::LineInfo;
+use gridcraft_model::{LineInfo, Sheet};
 
 /// The deepest outline level XLSX allows.
 pub const MAX_LEVEL: u8 = 7;
 
 /// One group: lines `start..=end` at outline level `level` or deeper, with its summary line
-/// just after `end`.
+/// just after `end`, or just before `start` when `summary_before` is set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OutlineGroup {
     pub level: u8,
@@ -19,16 +20,28 @@ pub struct OutlineGroup {
     pub end: u32,
     /// Every detail line is hidden: the button shows +.
     pub collapsed: bool,
+    /// The summary line is above (rows) or left of (columns) the detail.
+    pub summary_before: bool,
 }
 
 impl OutlineGroup {
     /// The summary line, where the − / + button sits.
     pub fn summary(&self) -> u32 {
-        self.end.saturating_add(1)
+        if self.summary_before { self.start.saturating_sub(1) } else { self.end.saturating_add(1) }
+    }
+    /// Whether the summary line exists: a group that starts at the first line (summary before)
+    /// or ends at the last one (summary after) has none.
+    pub fn has_summary(&self) -> bool {
+        !self.contains(self.summary())
     }
     pub fn contains(&self, line: u32) -> bool {
         line >= self.start && line <= self.end
     }
+}
+
+/// Whether the sheet's summary rows (`rows`) or summary columns sit before their detail.
+pub fn summary_before(sh: &Sheet, rows: bool) -> bool {
+    if rows { !sh.summary_below } else { !sh.summary_right }
 }
 
 /// The deepest outline level used by these lines (0 = no outline).
@@ -36,8 +49,14 @@ pub fn max_level(lines: &BTreeMap<u32, LineInfo>) -> u8 {
     lines.values().map(|l| l.outline.min(MAX_LEVEL)).max().unwrap_or(0)
 }
 
-/// Every group, ordered by where it ends (inner groups before the group around them).
+/// Every group, with its summary line after the detail; see [`groups_with`].
 pub fn groups(lines: &BTreeMap<u32, LineInfo>) -> Vec<OutlineGroup> {
+    groups_with(lines, false)
+}
+
+/// Every group, ordered by where it ends (inner groups before the group around them), with its
+/// summary line before the detail when `summary_before` is set.
+pub fn groups_with(lines: &BTreeMap<u32, LineInfo>, summary_before: bool) -> Vec<OutlineGroup> {
     let mut out = Vec::new();
     // Open group per level (index level - 1): start line and whether all its lines are hidden.
     let mut open: [Option<(u32, bool)>; MAX_LEVEL as usize] = [None; MAX_LEVEL as usize];
@@ -47,7 +66,7 @@ pub fn groups(lines: &BTreeMap<u32, LineInfo>) -> Vec<OutlineGroup> {
             if let Some(slot) = open.get_mut(level as usize - 1)
                 && let Some((start, hidden)) = slot.take()
             {
-                out.push(OutlineGroup { level, start, end, collapsed: hidden });
+                out.push(OutlineGroup { level, start, end, collapsed: hidden, summary_before });
             }
         }
     };
@@ -102,9 +121,9 @@ mod tests {
         assert_eq!(
             g,
             vec![
-                OutlineGroup { level: 2, start: 5, end: 6, collapsed: false },
-                OutlineGroup { level: 1, start: 4, end: 7, collapsed: false },
-                OutlineGroup { level: 1, start: 11, end: 12, collapsed: true },
+                OutlineGroup { level: 2, start: 5, end: 6, collapsed: false, summary_before: false },
+                OutlineGroup { level: 1, start: 4, end: 7, collapsed: false, summary_before: false },
+                OutlineGroup { level: 1, start: 11, end: 12, collapsed: true, summary_before: false },
             ]
         );
         assert_eq!(g[1].summary(), 8);
@@ -129,5 +148,22 @@ mod tests {
         assert_eq!(g.len(), 7);
         assert!(g.iter().all(|g| g.start == u32::MAX - 1 && g.end == u32::MAX));
         assert_eq!(g[0].summary(), u32::MAX);
+        assert!(!g[0].has_summary());
+    }
+
+    #[test]
+    fn summary_before_the_detail() {
+        // Rows 5..8 at level 1 with 6..7 at level 2: the summaries are rows 4 and 5.
+        let l = lines(&[(4, 1, false), (5, 2, false), (6, 2, false), (7, 1, false), (0, 1, false)]);
+        let g = groups_with(&l, true);
+        let at = |level: u8, start: u32| g.iter().find(|g| g.level == level && g.start == start).copied();
+        assert_eq!(at(1, 4).map(|g| (g.summary(), g.has_summary())), Some((3, true)));
+        assert_eq!(at(2, 5).map(|g| (g.summary(), g.has_summary())), Some((4, true)));
+        // A group on the first line has no line before it.
+        assert_eq!(at(1, 0).map(|g| (g.summary(), g.has_summary())), Some((0, false)));
+        let mut sh = Sheet::new("S");
+        assert!(!summary_before(&sh, true) && !summary_before(&sh, false));
+        sh.summary_below = false;
+        assert!(summary_before(&sh, true) && !summary_before(&sh, false));
     }
 }

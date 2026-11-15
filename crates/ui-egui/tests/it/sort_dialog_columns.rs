@@ -10,16 +10,7 @@ use serde_json::json;
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn harness(session: Session) -> Harness {
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 /// Header row + three rows; the user's cursor sits in column B (Revenue).
@@ -41,6 +32,18 @@ fn sort_dialog_seeds_the_active_column() {
     h.state_mut().open_dialog("sort", json!({}));
     h.run_steps(2);
     assert_eq!(col(&h), "B", "Sort by starts on the column the cursor is in, not A");
+}
+
+/// #3446: the closed "Sort by" box shows the column's name next to its letter,
+/// as the open list does ("B: Revenue", not just "B").
+#[test]
+fn closed_column_box_shows_the_column_name() {
+    use egui::accesskit::Role;
+    let mut h = harness(sales());
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    let shown: Vec<String> = h.get_all_by_role(Role::ComboBox).filter_map(|n| n.value()).collect();
+    assert!(shown.iter().any(|v| v == "B: Revenue"), "the Sort by box shows the column name: {shown:?}");
 }
 
 #[test]

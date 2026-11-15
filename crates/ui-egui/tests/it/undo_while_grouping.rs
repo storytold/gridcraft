@@ -15,12 +15,12 @@ fn harness() -> Harness {
     s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
     s.execute("cell.set", json!({"cell": "A1", "input": "2"})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     h

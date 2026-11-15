@@ -1,21 +1,21 @@
 //! Ribbon layout: the big split button, the scroll arrows of an overflowing tab, and every tab
 //! fitting the card's height.
 
-use egui::{FontDefinitions, FontFamily, vec2};
+use egui::vec2;
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::icons::Icon;
 use gridcraft_ui_egui::ribbon::{RibbonOverflow, TABS};
-use gridcraft_ui_egui::{SheetApp, theme, widgets};
+use gridcraft_ui_egui::{SheetApp, widgets};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
 fn app_at(width: f32, tab: &str) -> Harness {
     let mut session = Session::new();
     session.new_workbook();
-    let mut app = SheetApp::new(session, Default::default());
+    let mut app = crate::common::app(session);
     app.ui.ribbon_tab = tab.into();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 700.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(width, 700.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
@@ -102,18 +102,13 @@ struct Clicks {
 }
 
 #[test]
+/// The main button clicks once and the arrow twice separately; the tooltip keeps the platform shortcut, and the icon sits above the full-width label.
 fn big_split_button_separates_the_default_action_from_the_menu() {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 200.0)).build_ui_state(
+    // The ribbon picks the shortcut by the OS egui reports, which kittest pins to Nix unless told:
+    // pin macOS, so the check is the same on every host (the other platforms' text is in
+    // `widgets::tests`).
+    let mut h = crate::common::builder().with_size(vec2(300.0, 200.0)).with_os(egui::os::OperatingSystem::Mac).build_ui_state(
         |ui, c: &mut Clicks| {
-            if ui.ctx().cumulative_pass_nr() == 0 {
-                // egui's own font stands in for the system UI font; it applies from the next pass.
-                let mut fonts = FontDefinitions::default();
-                let proportional = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
-                fonts.families.insert(FontFamily::Name(theme::UI.into()), proportional.clone());
-                fonts.families.insert(FontFamily::Name(theme::CELL.into()), proportional);
-                ui.ctx().set_fonts(fonts);
-                return;
-            }
             let (main, arrow) = widgets::big_split_button(ui, Icon::Sum, "Auto\nSum", "AutoSum");
             c.main += u32::from(main.clicked());
             c.arrow += u32::from(arrow.clicked());
@@ -128,11 +123,12 @@ fn big_split_button_separates_the_default_action_from_the_menu() {
     h.get_by_label("Auto Sum options").click();
     h.run_steps(2);
     assert_eq!((h.state().main, h.state().arrow), (1, 2));
-    // The tooltip carries the shortcut hint, as every ribbon button's does.
+    // The tooltip carries the shortcut hint, as every ribbon button's does. egui 0.37 waits for
+    // the pointer to settle before opening it, so remove the hover delay and let it settle.
+    h.ctx.all_styles_mut(|s| s.interaction.tooltip_delay = 0.0);
     h.get_by_label("Auto Sum").hover();
-    h.run_steps(3);
-    let hint = if cfg!(target_os = "macos") { "AutoSum (\u{2318}" } else { "AutoSum (Alt+=" };
-    assert!(h.query(egui_kittest::kittest::By::new().label_contains(hint)).is_some(), "tooltip with the shortcut");
+    h.run_steps(6);
+    assert!(h.query_by_value("AutoSum (\u{2318}\u{21e7}T)").is_some(), "tooltip with the macOS shortcut");
     // The icon part sits above the label part, across the full width.
     let main = h.get_by_label("Auto Sum").rect();
     let arrow = h.get_by_label("Auto Sum options").rect();
@@ -141,15 +137,15 @@ fn big_split_button_separates_the_default_action_from_the_menu() {
 }
 
 #[test]
-fn formulas_autosum_runs_on_the_icon_and_opens_its_menu_on_the_label() {
+fn formulas_autosum_runs_sum_and_its_arrow_opens_the_menu() {
     let mut h = app_at(1600.0, "Formulas");
     h.get_by_label("AutoSum").click();
     h.run_steps(2);
-    assert!(h.state().session.journal.iter().any(|(id, _)| id == "formulas.autoSum"), "the icon runs AutoSum");
-    assert!(h.query_by_label("AVERAGE").is_none());
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "formulas.autoSum"), "the button runs AutoSum");
+    assert!(h.query_by_label("Average").is_none());
     h.get_by_label("AutoSum options").click();
     h.run_steps(2);
-    h.get_by_label("AVERAGE").click();
+    h.get_by_label("Average").click();
     h.run_steps(2);
     let last = h.state().session.journal.iter().rev().find(|(id, _)| id == "formulas.autoSum").map(|(_, p)| p.clone());
     assert_eq!(last.and_then(|p| p.get("function").and_then(|f| f.as_str().map(str::to_string))).as_deref(), Some("AVERAGE"));
