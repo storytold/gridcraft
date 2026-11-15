@@ -36,6 +36,7 @@ use serde::Serialize;
 use serde_json::Value as Json;
 
 pub use cmd::{CommandInfo, CommandSpec, command_specs, find_command, register_test_command};
+pub use gridcraft_brush as brush;
 pub use gridcraft_calc as calc;
 pub use gridcraft_core as core;
 pub use gridcraft_formula as formula;
@@ -537,6 +538,7 @@ pub struct Session {
     pub macro_recording: Option<macros::recorder::RecordingStart>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
     pub draw_tool: String,
+    pub draw_brush: brush::Style,
     pub draw_color: String,
     pub draw_width: f32,
     /// Review › Show Comments: the Comments pane is open.

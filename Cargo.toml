@@ -26,6 +26,7 @@ gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 gridcraft-math = { path = "crates/math" }
+gridcraft-brush = { path = "crates/brush" }
 # Every craft-libs crate (craft-update, craft-window and the file-format crates here, craft-ui in
 # ui-egui, craft-print in the app, craft-web-api and craft-web-host in the web app) comes from one
 # craft-libs revision.

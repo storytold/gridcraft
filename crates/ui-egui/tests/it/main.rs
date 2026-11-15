@@ -12,6 +12,7 @@ mod advanced_filter;
 mod argument_names;
 mod autosave_persist;
 mod borders;
+mod brush_gesture;
 mod cell_editor_caret;
 mod cell_pictures;
 mod cf_rule_pick;

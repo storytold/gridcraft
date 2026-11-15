@@ -1,0 +1,21 @@
+[package]
+name = "gridcraft-brush"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft brush data and adapter for the PhotoCraft CPU renderer"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Upgrade these together and run the brush and workbook round-trip tests.
+photocraft-paint = { git = "https://github.com/storytold/photocraft", rev = "74330157cb601573ae4523a95bb9132822fc3918" }
+photocraft-color = { git = "https://github.com/storytold/photocraft", rev = "74330157cb601573ae4523a95bb9132822fc3918" }
+photocraft-geom = { git = "https://github.com/storytold/photocraft", rev = "74330157cb601573ae4523a95bb9132822fc3918" }
+photocraft-raster = { git = "https://github.com/storytold/photocraft", rev = "74330157cb601573ae4523a95bb9132822fc3918" }
+crc32fast = "1"
+image = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use egui::TextureHandle;
 use gridcraft_engine::model::Image;
@@ -41,6 +41,7 @@ struct Cache {
 }
 
 struct Entry {
+    source: Weak<Vec<u8>>,
     /// `None` when the picture can't be decoded: kept, so it isn't tried again every frame.
     texture: Option<TextureHandle>,
     bytes: usize,
@@ -103,7 +104,7 @@ impl Cache {
             return texture;
         }
         self.bytes = self.bytes.saturating_add(bytes);
-        self.entries.insert(key, Entry { texture: texture.clone(), bytes, side, used: frame });
+        self.entries.insert(key, Entry { source: Weak::new(), texture: texture.clone(), bytes, side, used: frame });
         texture
     }
 }
@@ -160,7 +161,20 @@ pub(crate) fn texture(ctx: &egui::Context, doc: u64, image: &Image, rect: egui::
     let px = (rect.width().max(rect.height()) * ctx.pixels_per_point()).ceil();
     let want = if px.is_finite() && px > 0.0 { px.min(u32::MAX as f32) as u32 } else { 1 };
     let key = Key { doc, id: image.id, len: image.data.len() };
-    cache(ctx).lock().unwrap_or_else(std::sync::PoisonError::into_inner).texture(ctx, key, &image.data, want)
+    let shared = cache(ctx);
+    let mut cache = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let source = Arc::downgrade(&image.data);
+    // Restyling and undo can replace a picture with different bytes of the same length.
+    if cache.entries.get(&key).is_some_and(|e| !e.source.ptr_eq(&source))
+        && let Some(entry) = cache.entries.remove(&key)
+    {
+        cache.bytes = cache.bytes.saturating_sub(entry.bytes);
+    }
+    let texture = cache.texture(ctx, key, &image.data, want);
+    if let Some(entry) = cache.entries.get_mut(&key) {
+        entry.source = source;
+    }
+    texture
 }
 
 #[cfg(test)]
