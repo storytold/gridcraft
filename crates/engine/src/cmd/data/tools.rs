@@ -2,6 +2,7 @@ use super::{
     Cell, CellRef, EngineError, Json, RangeRef, Result, Session, bad, bool_param, cell_param_on, col_param, data_target, edit, guess_header, json,
     ok, str_param, target_range, target_sheet,
 };
+use crate::cmd::{SpillReplacement, check_spill_targets};
 
 // ---------------------------------------------------------------- tools
 
@@ -131,6 +132,7 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
+        let mut targets = Vec::new();
         for (i, row) in (r.start.row..=r.end.row).enumerate() {
             let text = sh.value(CellRef::new(row, r.start.col)).display();
             let parts: Vec<String> = match &fixed {
@@ -148,10 +150,15 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 }
                 None => split_delimited(&text, &delims, consecutive, quote),
             };
+            let start = out.len();
             for (j, part) in parts.into_iter().enumerate() {
                 out.push((CellRef::new(dest.row + i as u32, dest.col + j as u32), part));
             }
+            if let (Some(first), Some(last)) = (out.get(start), out.last()) {
+                targets.push(RangeRef::new(first.0, last.0));
+            }
         }
+        check_spill_targets(sh, &targets, SpillReplacement::Whole)?;
         for (c, t) in out {
             let cell = match crate::cmd::edit::input_to_cell(&t, sheet, c, &mut cx.wb) {
                 Ok(cell) => cell,

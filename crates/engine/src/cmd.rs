@@ -652,6 +652,37 @@ pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocke
     })
 }
 
+/// How a command replaces an existing spill when its output reaches the formula cell.
+#[derive(Clone, Copy)]
+pub(crate) enum SpillReplacement {
+    /// Text to Columns and Data Table may replace a spill only as a whole.
+    Whole,
+    /// Advanced Filter may replace a body formula and remove its remaining spilled values.
+    Anchor,
+}
+
+/// Refuses output into generated array cells before a command writes or starts trial
+/// calculations. Generated cells need not have stored content, including when their result is
+/// blank, so checking the cell store or a post-edit content diff cannot establish editability.
+/// `targets` are the non-overlapping ranges the command actually writes or clears. Work is
+/// bounded by those ranges and the existing spills; no worksheet-sized range is expanded.
+pub(crate) fn check_spill_targets(sh: &gridcraft_model::Sheet, targets: &[RangeRef], replacement: SpillReplacement) -> Result<()> {
+    for (&anchor, spill) in &sh.spill_ranges {
+        let covered = targets.iter().filter_map(|r| r.intersection(spill)).fold(0u64, |n, r| n.saturating_add(r.count()));
+        if covered == 0 {
+            continue;
+        }
+        let allowed = match replacement {
+            SpillReplacement::Whole => covered == spill.count(),
+            SpillReplacement::Anchor => targets.iter().any(|r| r.contains(anchor)),
+        };
+        if !allowed {
+            return Err(EngineError::Other("You can't change part of an array.".into()));
+        }
+    }
+    Ok(())
+}
+
 /// Refuses an edit that put something into a cell of a multi-cell legacy array other than its
 /// formula cell, while the array stays (Excel: "You can't change part of an array."). The array
 /// would show its value there while the file kept the new content. Cells shifted by row and

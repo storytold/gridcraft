@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-13 · **Last updated:** 2026-11-13 · **Change:** minor (shared spill destination preflight; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -29,6 +29,16 @@ including tests, 2026-10-10.
 | — | `xtask` | — | `ci`, `parity`, `assets`, `layers`, `wasm`, `version`, `stats` |
 
 ## Data flow
+
+Bulk output commands validate their actual destination ranges against the current successful
+array spills before writing. Text to Columns and Data Table require complete spill coverage;
+Advanced Filter checks the header row separately and may replace a body spill anchor. Goal Seek
+and Solver validate generated members before starting trial calculations. The shared
+`cmd::check_spill_targets` uses spill ranges rather than stored cell contents, so blank generated
+values are protected too. A refused operation leaves the workbook and undo history unchanged;
+Advanced Filter therefore also leaves headers unchanged, whereas Excel can write those headers
+before refusing its body. Ordinary cell editing, clipboard and clear commands retain their own
+existing edit rules.
 
 1. **Every action is a command.** The UI, CLI, control channel and MCP call
    `Session::execute(id, params)`. Commands are `CommandSpec { id, label, menu, shortcut, params,
@@ -242,6 +252,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Shared spill destination preflight for Text to Columns, Advanced Filter, Data Table, Goal Seek and Solver; command-specific whole-spill and body-anchor replacement policies (#3919, #3920, #3921, #3926, #3942) |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
