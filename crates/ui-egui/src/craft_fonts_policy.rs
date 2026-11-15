@@ -22,6 +22,7 @@ pub const REQUIRED_FACES: &[(&str, &str, &[&str])] = &[
     ("BIZ UDPGothic", "Regular", &["Jpan", "Latn"]),
     ("BIZ UDPGothic", "Bold", &["Jpan", "Latn"]),
     ("NanumGothic", "Regular", &["Hang", "Kore"]),
+    ("Noto Sans Arabic", "Regular", &["Arab"]),
     ("Noto Sans Symbols", "Regular", &["Zsym"]),
     ("Noto Sans Symbols 2", "Regular", &["Zsym"]),
 ];
@@ -39,6 +40,7 @@ pub const WEB_ALLOWED: &[(&str, &str)] = &[
     ("BIZ UDPGothic", "Regular"),
     ("BIZ UDPGothic", "Bold"),
     ("NanumGothic", "Regular"),
+    ("Noto Sans Arabic", "Regular"),
     ("Noto Sans Symbols", "Regular"),
     ("Noto Sans Symbols 2", "Regular"),
 ];
@@ -170,6 +172,7 @@ mod tests {
                 ("BIZ UDPGothic", "Regular"),
                 ("BIZ UDPGothic", "Bold"),
                 ("NanumGothic", "Regular"),
+                ("Noto Sans Arabic", "Regular"),
                 ("Noto Sans Symbols", "Regular"),
                 ("Noto Sans Symbols 2", "Regular"),
             ]
