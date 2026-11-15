@@ -97,6 +97,18 @@ impl SheetLayout {
     pub(crate) fn hf_text_scale(&self) -> f32 {
         if self.settings.hf_scale_with_doc { self.scale } else { 1.0 }
     }
+    /// The geometry its headers and footers are laid out in.
+    pub fn hf_frame(&self) -> super::HfFrame {
+        let [_, _, _, _, hm, fm] = self.margins;
+        super::HfFrame {
+            page_w: self.page_w,
+            page_h: self.page_h,
+            header_margin: hm,
+            footer_margin: fm,
+            sides: self.hf_sides(),
+            text_scale: self.hf_text_scale(),
+        }
+    }
 }
 
 /// Options shared by the print commands.

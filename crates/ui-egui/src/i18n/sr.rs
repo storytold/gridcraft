@@ -481,6 +481,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Prikaži",
         "Collapse dialog" => "Skupi dijalog",
         "Expand dialog" => "Proširi dijalog",
+
+        "Picture" => "Slika",
+        "Format\nPicture" => "Oblikuj\nsliku",
+        "Format Picture" => "Oblikuj sliku",
+        "Height:" => "Visina:",
+        "Width:" => "Širina:",
+        "Lock aspect ratio" => "Zaključaj razmeru",
         _ => return None,
     })
 }

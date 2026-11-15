@@ -600,6 +600,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Zobrazit",
         "Collapse dialog" => "Sbalit dialogové okno",
         "Expand dialog" => "Rozbalit dialogové okno",
+
+        "Picture" => "Obrázek",
+        "Format\nPicture" => "Formátovat\nobrázek",
+        "Format Picture" => "Formátovat obrázek",
+        "Height:" => "Výška:",
+        "Width:" => "Šířka:",
+        "Lock aspect ratio" => "Zamknout poměr stran",
         _ => return None,
     })
 }

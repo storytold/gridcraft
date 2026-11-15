@@ -451,6 +451,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Hiện",
         "Collapse dialog" => "Thu gọn hộp thoại",
         "Expand dialog" => "Mở rộng hộp thoại",
+
+        "Picture" => "Ảnh",
+        "Format\nPicture" => "Định dạng\nẢnh",
+        "Format Picture" => "Định dạng Ảnh",
+        "Height:" => "Chiều cao:",
+        "Width:" => "Chiều rộng:",
+        "Lock aspect ratio" => "Khóa tỷ lệ khung hình",
         _ => return None,
     })
 }

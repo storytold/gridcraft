@@ -53,6 +53,50 @@ pub struct PrintSettings {
     /// sheet is more than one page wide and tall.
     #[serde(default)]
     pub page_order: PageOrder,
+
+    /// Pictures in header and footer sections (`&G`, #1257), at most one per section and kind
+    /// of page. A picture prints where its section's header or footer text has `&G`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hf_pictures: Vec<HfPicture>,
+}
+
+/// Most pictures a sheet's headers and footers hold: one per section (3) × header or footer ×
+/// kind of page (odd, first, even).
+pub const MAX_HF_PICTURES: usize = 18;
+
+/// A picture in a header or footer section.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HfPicture {
+    /// The pages it prints on.
+    pub page: HfPage,
+    /// In the footer (else the header).
+    pub footer: bool,
+    /// The section: 0 left, 1 centre, 2 right.
+    pub section: u8,
+    /// Printed size in points (before Scale with Document).
+    pub width: f32,
+    pub height: f32,
+    /// Encoded bytes (PNG, JPEG…) as the file holds them, base64 in JSON. Shared, so an undo
+    /// step doesn't copy the picture.
+    #[serde(with = "crate::b64::shared")]
+    pub data: std::sync::Arc<Vec<u8>>,
+    /// Its media type (`image/png`).
+    pub mime: String,
+    /// Its title (Excel keeps the inserted file's name).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// Excel's crop and colour settings for it (`cropleft`, `gain`, `grayscale`…), kept as read
+    /// and written back; GridCraft doesn't apply them yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adjust: Vec<(String, String)>,
+}
+
+impl HfPicture {
+    /// Whether it is the picture of section `section` of the header (`footer` false) or footer
+    /// of pages of kind `page`.
+    pub fn is_at(&self, page: HfPage, footer: bool, section: usize) -> bool {
+        self.page == page && self.footer == footer && usize::from(self.section) == section
+    }
 }
 
 fn yes() -> bool {
@@ -96,7 +140,7 @@ impl PageOrder {
 }
 
 /// Which header/footer pair a printed page uses.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HfPage {
     Odd,
     Even,
@@ -187,6 +231,8 @@ impl Default for PrintSettings {
             hf_scale_with_doc: true,
             hf_align_with_margins: true,
             page_order: PageOrder::DownThenOver,
+
+            hf_pictures: vec![],
         }
     }
 }

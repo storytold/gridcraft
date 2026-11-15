@@ -153,6 +153,15 @@ pub fn specs() -> Vec<CommandSpec> {
             header_footer
         ),
         cmd!(
+            "pageLayout.headerFooterPicture",
+            "Picture",
+            ["Header & Footer", "Header & Footer Elements"],
+            None,
+            "{sheet?, page?: odd|even|first, part?: header|footer, section?: left|center|right, path? | base64?, width?: pt, height?: pt, title?, spec?} puts a picture (PNG or JPEG, at most 16 MB, 8192 pixels on a side and 16 million pixels) in that section, replacing the one there, and adds `&G` at the section's start if it has none; without a size it keeps its proportions and fits the margin. `spec` first sets that header or footer's whole text (field names or codes), as the in-place editor commits it. Only `width` and/or `height`: resizes the section's picture (one side keeps its proportions). {…, remove: true} takes the section's picture and its `&G` away → {page, part, section, width, height, header, footer}",
+            has_doc,
+            header_footer_picture
+        ),
+        cmd!(
             "pageLayout.theme",
             "Themes",
             ["Page Layout", "Themes"],
@@ -478,6 +487,8 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
             }
             *spec = cap(&super::print::join_header_footer(&parts));
         }
+        // A picture whose section no longer has `&G` would never print: it goes too.
+        prune_hf_pictures(pr);
         Ok(json!({
             "header": pr.header,
             "footer": pr.footer,
@@ -489,6 +500,212 @@ fn header_footer(s: &mut Session, p: &Json) -> Result<Json> {
             "firstFooter": pr.first_footer,
             "evenHeader": pr.even_header,
             "evenFooter": pr.even_footer,
+        }))
+    })
+}
+
+/// Whether section `idx` of the header (`footer` false) or footer of `page` pages has `&G`.
+fn section_has_g(pr: &gridcraft_model::PrintSettings, page: gridcraft_model::HfPage, footer: bool, idx: usize) -> bool {
+    let spec = pr.hf(page, footer);
+    !spec.is_empty() && super::print::expand_header_footer(spec, &super::print::HfContext::default()).get(idx).is_some_and(|s| s.picture.is_some())
+}
+
+/// Drops the header and footer pictures whose section has no `&G` left.
+fn prune_hf_pictures(pr: &mut gridcraft_model::PrintSettings) {
+    let keep: Vec<bool> = pr.hf_pictures.iter().map(|q| section_has_g(pr, q.page, q.footer, usize::from(q.section))).collect();
+    let mut it = keep.into_iter();
+    pr.hf_pictures.retain(|_| it.next().unwrap_or(false));
+}
+
+/// A raw header/footer section without its `&G` codes (`&&G` is a literal `&G` and stays).
+fn without_g(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut it = raw.chars().peekable();
+    while let Some(c) = it.next() {
+        if c != '&' {
+            out.push(c);
+            continue;
+        }
+        match it.peek().copied() {
+            Some('G' | 'g') => {
+                it.next();
+            }
+            Some('&') => {
+                it.next();
+                out.push_str("&&");
+            }
+            _ => out.push('&'),
+        }
+    }
+    out
+}
+
+/// Whether a raw header/footer section has a `&G` code (`&&G` is a literal `&G`).
+fn has_g(raw: &str) -> bool {
+    without_g(raw) != raw
+}
+
+/// Largest header/footer picture accepted, in bytes.
+const MAX_HF_PICTURE_BYTES: usize = 16 * 1024 * 1024;
+
+/// The media type of a picture GridCraft can put in a header or footer, from its bytes: the
+/// formats it can read the size of and print (GIF and BMP aren't decoded in this build).
+fn hf_picture_mime(data: &[u8]) -> Option<&'static str> {
+    match image::guess_format(data).ok()? {
+        image::ImageFormat::Png => Some("image/png"),
+        image::ImageFormat::Jpeg => Some("image/jpeg"),
+        _ => None,
+    }
+}
+
+/// `pageLayout.headerFooterPicture`: puts a picture in a header or footer section (with `&G`),
+/// replacing the one there, or removes it.
+fn header_footer_picture(s: &mut Session, p: &Json) -> Result<Json> {
+    use gridcraft_model::{HfPage, HfPicture};
+    const CMD: &str = "pageLayout.headerFooterPicture";
+    let si = target_sheet(s, p)?;
+    // A header/footer drawing read from a file that couldn't be modelled is written back as it
+    // was; a sheet holds one such drawing, so its pictures can't be changed here.
+    let kept_drawing =
+        s.doc()?.wb.sheet(si).and_then(|sh| sh.preserved.as_deref()).is_some_and(|k| k.elements.iter().any(|e| e.slot == "legacyDrawingHF"));
+    if kept_drawing {
+        return Err(bad(CMD, "this sheet's header and footer pictures come from the file in a form GridCraft can't edit; they are kept as they are"));
+    }
+    let footer = match str_param(p, "part").unwrap_or("header") {
+        "header" => false,
+        "footer" => true,
+        other => return Err(bad(CMD, format!("`part` must be header or footer, not `{other}`"))),
+    };
+    let idx: u8 = match str_param(p, "section").unwrap_or("center") {
+        "left" => 0,
+        "center" | "centre" => 1,
+        "right" => 2,
+        other => return Err(bad(CMD, format!("`section` must be left, center or right, not `{other}`"))),
+    };
+    let page = match str_param(p, "page") {
+        None => HfPage::Odd,
+        Some(id) => HfPage::parse(id).ok_or_else(|| bad(CMD, format!("`page` must be odd, even or first, not `{id}`")))?,
+    };
+    let remove = bool_param(p, "remove").unwrap_or(false);
+    let size = |k: &str| f64_param(p, k).filter(|v| v.is_finite() && *v > 0.0).map(|v| (v as f32).clamp(1.0, 1584.0));
+    let (want_w, want_h) = (size("width"), size("height"));
+    let has_data = str_param(p, "base64").is_some() || str_param(p, "path").is_some();
+    // Only a size: the section's picture is resized.
+    let resize = !remove && !has_data && (want_w.is_some() || want_h.is_some());
+    // The whole header or footer text of the page kind, as the in-place editor commits it.
+    let spec = str_param(p, "spec").map(super::print::fields_to_codes);
+    let picture = if remove || resize {
+        None
+    } else {
+        let data = if let Some(b) = str_param(p, "base64") {
+            crate::io::base64_decode(b).ok_or_else(|| bad(CMD, "invalid base64"))?
+        } else if let Some(path) = str_param(p, "path") {
+            crate::io::read_file(path)?
+        } else {
+            return Err(bad(CMD, "give the picture as `path` or `base64`, a `width` or `height` to resize it, or `remove: true`"));
+        };
+        if data.len() > MAX_HF_PICTURE_BYTES {
+            return Err(bad(CMD, "pictures larger than 16 MB aren't supported in headers and footers"));
+        }
+        let mime = hf_picture_mime(&data).ok_or_else(|| bad(CMD, "the picture must be a PNG or JPEG image"))?;
+        let (pw, ph) = crate::io::image_size(&data).filter(|(w, h)| *w > 0 && *h > 0).ok_or_else(|| bad(CMD, "the picture's size can't be read"))?;
+        // Printing would leave a larger picture out: refuse it here instead of storing it.
+        if !super::print::hf_printable_size(pw, ph) {
+            return Err(bad(
+                CMD,
+                format!(
+                    "the picture is {pw} × {ph} pixels; headers and footers print pictures up to 8192 pixels on a side and 16 million pixels: make it smaller"
+                ),
+            ));
+        }
+        let title = str_param(p, "title")
+            .map(str::to_string)
+            .or_else(|| str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem()).map(|n| n.to_string_lossy().into_owned()))
+            .unwrap_or_default()
+            .chars()
+            .take(255)
+            .collect();
+        Some((data, mime, (pw as f32 * 0.75, ph as f32 * 0.75), title))
+    };
+    edit(s, |cx| {
+        let pr = &mut cx.sheet_mut(si)?.print;
+        if let Some(spec) = &spec {
+            // Cut to fit, the text could lose a `&G`: refused, as for the picture's own `&G`.
+            if spec.chars().count() > MAX_HEADER_FOOTER {
+                return Err(bad(CMD, format!("a header or footer holds at most {MAX_HEADER_FOOTER} characters; shorten it to add the picture")));
+            }
+            pr.hf_mut(page, footer).clone_from(spec);
+        }
+        let mut parts = super::print::split_header_footer(pr.hf(page, footer));
+        let at = usize::from(idx);
+        if resize {
+            let q = pr.hf_pictures.iter_mut().find(|q| q.is_at(page, footer, at)).ok_or_else(|| bad(CMD, "this section has no picture to resize"))?;
+            let (w, h) = match (want_w, want_h) {
+                (Some(w), Some(h)) => (w, h),
+                (Some(w), None) => (w, w * q.height / q.width.max(0.01)),
+                (None, Some(h)) => (h * q.width / q.height.max(0.01), h),
+                (None, None) => (q.width, q.height),
+            };
+            let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
+            (q.width, q.height) = (fit(w), fit(h));
+        } else {
+            pr.hf_pictures.retain(|q| !q.is_at(page, footer, at));
+        }
+        if remove && let Some(slot) = parts.get_mut(at) {
+            *slot = without_g(slot);
+        }
+        if let Some((data, mime, (nw, nh), title)) = picture {
+            // The size asked for, keeping the proportions when only one side is given; else the
+            // picture's own size (96 dpi), made smaller to fit the margin it sits in.
+            let (w, h) = match (want_w, want_h) {
+                (Some(w), Some(h)) => (w, h),
+                (Some(w), None) => (w, w * nh / nw),
+                (None, Some(h)) => (h * nw / nh, h),
+                (None, None) => {
+                    let [_, _, top, bottom, hm, fm] = pr.margins;
+                    let room = if footer { bottom - fm } else { top - hm } * 72.0;
+                    let k = if room >= 9.0 && nh > room { room / nh } else { 1.0 };
+                    (nw * k, nh * k)
+                }
+            };
+            let fit = |v: f32| if v.is_finite() { v.clamp(1.0, 1584.0) } else { 72.0 };
+            // `&G` stays where it is (the editor puts it at the caret); a section without one
+            // gets it at its start.
+            if let Some(slot) = parts.get_mut(at)
+                && !has_g(slot)
+            {
+                slot.insert_str(0, "&G");
+            }
+            pr.hf_pictures.push(HfPicture {
+                page,
+                footer,
+                section: idx,
+                width: fit(w),
+                height: fit(h),
+                data: std::sync::Arc::new(data),
+                mime: mime.into(),
+                title,
+                adjust: vec![],
+            });
+        }
+        // Cut to fit, the text could lose a picture's `&G` (and with it the picture): refused.
+        let joined = super::print::join_header_footer(&parts);
+        if joined.chars().count() > MAX_HEADER_FOOTER {
+            return Err(bad(CMD, format!("a header or footer holds at most {MAX_HEADER_FOOTER} characters; shorten it to add the picture")));
+        }
+        *pr.hf_mut(page, footer) = joined;
+        // A given text may have taken another section's `&G` away.
+        prune_hf_pictures(pr);
+        let shown = pr.hf_pictures.iter().find(|q| q.is_at(page, footer, usize::from(idx)));
+        let section = ["left", "center", "right"].get(usize::from(idx)).copied().unwrap_or("center");
+        Ok(json!({
+            "page": page.id(),
+            "part": if footer { "footer" } else { "header" },
+            "section": section,
+            "width": shown.map(|q| q.width),
+            "height": shown.map(|q| q.height),
+            "header": pr.hf(page, false),
+            "footer": pr.hf(page, true),
         }))
     })
 }
