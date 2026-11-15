@@ -99,6 +99,16 @@ pub struct CalcSettings {
     /// GridCraft itself shows and takes A1 references.
     #[serde(default)]
     pub r1c1: bool,
+    /// Multi-threaded calculation (`<calcPr concurrentCalc>`). When false, recalc stays on one thread.
+    #[serde(default = "multi_threaded_default")]
+    pub multi_threaded: bool,
+    /// Manual thread count (`<calcPr concurrentManualCount>`). `0` means every processor (native recalc clamps to 64).
+    #[serde(default)]
+    pub threads: u32,
+}
+
+fn multi_threaded_default() -> bool {
+    true
 }
 
 impl Default for CalcSettings {
@@ -110,6 +120,8 @@ impl Default for CalcSettings {
             max_change: Self::DEFAULT_CHANGE,
             precision_as_displayed: false,
             r1c1: false,
+            multi_threaded: true,
+            threads: 0,
         }
     }
 }

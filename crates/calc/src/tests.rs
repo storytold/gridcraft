@@ -1769,22 +1769,23 @@ fn sum_count_average_follow_edits_inside_the_range() {
 }
 
 #[test]
-fn visit_range_declines_when_a_formula_in_the_block_spills_into_it() {
-    // The sheet: D1 = SEQUENCE(3) and D4 = 10, and D1 has not been calculated yet when the
-    // block D1:D5 is read.
+fn visit_range_leaves_a_spill_block_to_range_values() {
+    // D1 = SEQUENCE(3) has not been calculated when D1:D5 is read, and D4 holds 10. A spill
+    // inside the block declines the sparse walk; `range_values` lays the array out and the
+    // aggregate still sees every number.
     let mut wb = Workbook::new();
     let sh = wb.sheet_mut(0).unwrap();
     sh.cells.set(c("D1"), Cell::formula(Formula::new("=SEQUENCE(3)")));
     sh.cells.set(c("D4"), Cell::value(Value::Number(10.0)));
     let block = gridcraft_core::RangeRef::parse("D1:D5").unwrap();
-
-    // Reading the block calculates D1, which spills over D2:D3. A walk over the stored cells
-    // would never see 2 and 3, so the host must decline and leave the block to `range_values`.
-    // (`Calc` recalculates a pass that produced new spills, so final results are right either
-    // way; only this direct call shows the host's contract.)
     let walked = crate::recalc::tests::probe_visit_range(&wb, &[("D1", "=SEQUENCE(3)")], block);
+    assert_eq!(walked, None, "a spill in the block is left to range_values");
 
-    assert_eq!(walked, None, "walked a block holding a spill it can't see");
+    let mut t = T::new();
+    t.set("D1", "=SEQUENCE(3)");
+    t.set("D4", "10");
+    t.set("E1", "=SUM(D1:D5)");
+    assert_eq!(t.num("E1"), 16.0);
 }
 
 /// Trim references evaluate as `TRIMRANGE(range, code, code)`.

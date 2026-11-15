@@ -30,13 +30,92 @@ fn index_spills<'a>(batch: usize, on_sheet: usize, areas: impl ExactSizeIterator
 }
 
 mod graph;
+mod parallel;
 mod pass_host;
 
 #[cfg(test)]
 use graph::Intervals;
-pub use graph::{FxHasher, Graph, Key};
+pub use graph::{FxHasher, Graph, Key, Plan};
 use graph::{HashMap, HashSet, Node, Taken};
 use pass_host::{PassHost, spills_as_before};
+
+/// Formulas in a level below this count stay on one thread.
+const PARALLEL_MIN: usize = 512;
+
+/// Calculation threads for `calc`: one on wasm, when multi-threaded calculation is off, or when
+/// the machine has one processor; else the manual count or every processor, at most 64.
+pub fn thread_count(calc: &gridcraft_model::CalcSettings) -> usize {
+    if cfg!(target_arch = "wasm32") || !calc.multi_threaded {
+        return 1;
+    }
+    let n = if calc.threads > 0 { calc.threads as usize } else { std::thread::available_parallelism().map(|p| p.get()).unwrap_or(1) };
+    n.clamp(1, 64)
+}
+
+fn uses_random(e: &Expr) -> bool {
+    let mut found = false;
+    e.walk(&mut |x| {
+        if let Expr::Call(n, _) = x
+            && matches!(n.as_str(), "RAND" | "RANDBETWEEN" | "RANDARRAY")
+        {
+            found = true;
+        }
+    });
+    found
+}
+
+fn held_back_on_host(graph: &Graph, k: Key) -> bool {
+    graph.nodes.get(&k).is_some_and(|n| n.dynamic || n.expr.as_ref().is_some_and(|e| uses_random(e)))
+}
+
+fn flush_direct(host: &mut PassHost<'_>) {
+    if host.direct.is_empty() {
+        return;
+    }
+    for (k, v) in std::mem::take(&mut host.direct) {
+        host.pending.remove(&k);
+        host.results.insert(k, v);
+    }
+}
+
+fn run_level(graph: &Graph, host: &mut PassHost<'_>, level: &[Key], threads: usize) {
+    flush_direct(host);
+    if threads <= 1 || level.len() < PARALLEL_MIN {
+        for &k in level {
+            host.calculate(k);
+        }
+        return;
+    }
+    let (host_side, parallel): (Vec<Key>, Vec<Key>) = level.iter().copied().partition(|k| held_back_on_host(graph, *k));
+    if !parallel.is_empty() {
+        let pending: HashSet<Key> = parallel.iter().copied().collect();
+        if let Some(out) =
+            parallel::eval_level(host.wb(), graph, &parallel, &host.results, &host.spills, host.now_value(), threads, &pending, host.in_pass())
+        {
+            host.direct.extend(out.values);
+            host.spills.extend(out.spills);
+            host.thread_log.extend(out.threads);
+            if !out.deferred.is_empty() {
+                flush_direct(host);
+                for k in out.deferred {
+                    host.calculate(k);
+                }
+            }
+        } else {
+            for k in parallel {
+                host.calculate(k);
+            }
+        }
+    }
+    // Fold worker values only when a formula still to run on the caller may read them.
+    // Otherwise they stay in order for the direct write.
+    if !host_side.is_empty() {
+        flush_direct(host);
+        for k in host_side {
+            host.calculate(k);
+        }
+    }
+}
 
 /// Calculation state kept beside a workbook.
 #[derive(Clone, Debug)]
@@ -55,6 +134,8 @@ pub struct Calc {
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
     spill_errors: SpillErrors,
+    /// Which thread evaluated each formula in the last recalculation pass (tests and diagnostics).
+    pub last_formula_thread: HashMap<Key, std::thread::ThreadId>,
 }
 
 /// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
@@ -144,6 +225,7 @@ impl Default for Calc {
             last_recalc_cells: 0,
             standing: Standing::default(),
             spill_errors: SpillErrors::default(),
+            last_formula_thread: HashMap::default(),
         }
     }
 }
@@ -235,16 +317,17 @@ impl Calc {
                     self.spill_errors.insert((si, c));
                 }
                 if let Some(f) = &cell.formula
-                    && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
+                    && let Some(e) = f.expr_arc()
                 {
-                    self.graph.insert((si, c), Node { areas, dynamic });
+                    let (areas, dynamic) = precedents(wb, si, &e);
+                    self.graph.insert((si, c), Node { areas, dynamic, expr: Some(e), legacy: f.array });
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
                 } else if cell.py.is_some() {
                     // A Python cell lays out its kept result, so it is calculated like a formula
                     // that reads nothing: its spill is blocked and unblocked like a formula's.
-                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
+                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false, expr: None, legacy: None });
                 }
             }
         }
@@ -344,19 +427,24 @@ impl Calc {
             } else {
                 self.spill_errors.remove(&k);
             }
-            let precedent =
-                wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
-            let py = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref());
-            let python = py.is_some();
-            // A Python cell whose result (if any) is not an array spills nothing.
-            let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
+            let (precedent, expr, legacy, python, spills) = {
+                let cell = wb.sheet(k.0).and_then(|s| s.cell(k.1));
+                let precedent = cell.and_then(|c| c.formula.as_ref()).and_then(|f| f.with_expr(|e| precedents(wb, k.0, e)));
+                let expr = cell.and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc());
+                let legacy = cell.and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
+                let py = cell.and_then(|c| c.py.as_ref());
+                let python = py.is_some();
+                // A Python cell whose result (if any) is not an array spills nothing.
+                let spills = py.and_then(|p| p.result_value()).is_some_and(|v| matches!(v, Value::Array(_)));
+                (precedent, expr, legacy, python, spills)
+            };
             match precedent {
                 Some((areas, dynamic)) => {
-                    self.graph.insert(k, Node { areas, dynamic });
+                    self.graph.insert(k, Node { areas, dynamic, expr, legacy });
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
-                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    self.graph.insert(k, Node { areas: Vec::new(), dynamic: false, expr: None, legacy: None });
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -467,7 +555,7 @@ impl Calc {
         let t1 = prof_now();
         let n = dirty.len();
         self.run(wb, dirty, false);
-        if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+        if profile_enabled() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
     }
@@ -528,6 +616,7 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
+    #[allow(clippy::cognitive_complexity)]
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
@@ -535,6 +624,7 @@ impl Calc {
         if !full {
             self.standing = Standing::default();
         }
+        self.last_formula_thread.clear();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -549,49 +639,56 @@ impl Calc {
             }
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
-            let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
-            for k in &dirty {
-                if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
-                    exprs.insert(*k, e);
-                }
-            }
+            dirty.dedup();
             let python: HashMap<Key, Value> = dirty
                 .iter()
                 .filter_map(|k| wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.py.as_ref()).and_then(|p| p.result_value()).map(|v| (*k, v)))
                 .collect();
             let now = self.now();
             let mut rng = self.rng;
+            let in_pass: HashSet<Key> = dirty.iter().copied().collect();
+            let threads = if wb.calc.iterative { 1 } else { thread_count(&wb.calc) };
             let tp = prof_now();
-            let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+            let plan = self.graph.levels(&dirty);
+            let (results, spills, cycles, direct) = {
+                let mut host = PassHost::new(wb, &self.graph, &in_pass, &mut rng, now).with_python(python);
                 host.standing = Some(&self.standing);
                 host.iterate = wb.calc.iterative;
-                for k in &dirty {
-                    host.calculate(*k);
+                for level in plan.levels() {
+                    run_level(&self.graph, &mut host, level, threads);
+                }
+                if !plan.rest().is_empty() || host.iterate {
+                    for (k, v) in std::mem::take(&mut host.direct) {
+                        host.pending.remove(&k);
+                        host.results.insert(k, v);
+                    }
+                }
+                for &k in plan.rest() {
+                    host.calculate(k);
                 }
                 if host.iterate && !host.members.is_empty() {
-                    let passes = host.iterate_loops(&dirty, wb.calc.max_iterations, wb.calc.max_change);
-                    if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+                    let order: Vec<Key> = plan.levels().flatten().chain(plan.rest()).copied().collect();
+                    let passes = host.iterate_loops(&order, wb.calc.max_iterations, wb.calc.max_change);
+                    if profile_enabled() {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                self.last_formula_thread.extend(host.thread_log.iter().map(|(k, id)| (*k, *id)));
+                let direct = std::mem::take(&mut host.direct);
+                (host.results, host.spills, host.cycles, direct)
             };
             self.rng = rng;
-            if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+            if profile_enabled() {
                 eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
             }
             let tw = prof_now();
-            self.last_recalc_cells += results.len();
-            // The loops this round finds replace the ones listed for the formulas it evaluated.
+            self.last_recalc_cells += results.len() + direct.len();
             if !self.circular.is_empty() {
                 let evaluated: HashSet<Key> = dirty.iter().copied().collect();
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
-            let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
-            // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
-            // a spill area before it was laid out: they are evaluated once more.
+            let mut spill_changes = self.write_back(wb, &dirty, results, &spills, direct);
             if dynamic_again && !spills.is_empty() {
                 dynamic_again = false;
                 spill_changes.extend(self.graph.dynamic.iter().copied());
@@ -599,7 +696,7 @@ impl Calc {
             if full {
                 // Everything was already evaluated once; spill dependents need another pass.
             }
-            if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
+            if profile_enabled() {
                 eprintln!("  write-back {:.1} ms", prof_now() - tw);
             }
             spill_changes.sort_by_key(|(s, c)| (*s, c.row, c.col));
@@ -609,8 +706,6 @@ impl Calc {
             }
             dirty = self.dirty_closure(wb, &spill_changes, &[]);
         }
-        // Loops among formulas the run did not evaluate stay listed while they are still formulas.
-        // Iterative calculation reports none.
         if wb.calc.iterative {
             self.circular.clear();
         } else {
@@ -624,10 +719,11 @@ impl Calc {
         dirty: &[Key],
         results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
+        direct: Vec<(Key, Value)>,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
-        for (key, value) in results {
+        for (key, value) in direct {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
             if let Some(cell) = sheet.cells.get_mut(key.1) {
                 if value == Value::Error(CellError::Spill) {
@@ -639,6 +735,24 @@ impl Calc {
                     cell.value = value;
                 }
             }
+        }
+        for (key, value) in results {
+            let Some(sheet) = wb.sheet_mut(key.0) else { continue };
+            if let Some(cell) = sheet.cells.get_mut(key.1) {
+                // A blocked array is `#SPILL!` with nothing left in `spills`. Remember it, or
+                // clearing the cell in its way never recalculates the anchor.
+                if value == Value::Error(CellError::Spill) {
+                    self.spill_errors.insert(key);
+                } else {
+                    self.spill_errors.remove(&key);
+                }
+                if cell.value != value {
+                    cell.value = value;
+                }
+            }
+        }
+        if spills.is_empty() && wb.sheets.iter().all(|sheet| sheet.spill.is_empty() && sheet.spill_ranges.is_empty()) {
+            return spill_changes;
         }
         for key in dirty {
             let new = spills.get(key);
@@ -776,15 +890,21 @@ pub fn evaluate(wb: &Workbook, sheet: usize, at: CellRef, formula: &str) -> Valu
 }
 
 pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> Value {
-    let exprs = HashMap::default();
+    let graph = Graph::default();
+    let in_pass = HashSet::default();
     let mut rng = 0x1234_5678_9ABC_DEF0u64;
-    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut host = PassHost::new(wb, &graph, &in_pass, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
 }
 
-fn prof_now() -> f64 {
+pub(super) fn prof_now() -> f64 {
     gridcraft_core::date::unix_now_ms().unwrap_or(0.0)
+}
+
+pub(super) fn profile_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("GRIDCRAFT_PROFILE").is_some())
 }
 
 #[cfg(test)]
@@ -794,7 +914,7 @@ pub(crate) mod tests {
     use gridcraft_core::{CellRef, RangeRef, Value};
     use gridcraft_model::{Cell, Formula, Workbook};
 
-    use super::{Calc, HashMap, Host, Intervals, Key, PassHost, index_spills};
+    use super::{Calc, Graph, HashMap, HashSet, Host, Intervals, Key, PassHost, index_spills};
 
     /// xorshift64 for repeatable pseudo-random cases.
     fn rng(state: &mut u64) -> u64 {
@@ -848,9 +968,10 @@ pub(crate) mod tests {
     #[test]
     fn a_read_beside_a_large_spill_walks_none_of_it() {
         let (wb, python) = big_python_spill();
-        let exprs = HashMap::default();
+        let graph = Graph::default();
+        let in_pass = HashSet::default();
         let mut rng = 1u64;
-        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0).with_python(python);
+        let mut host = PassHost::new(&wb, &graph, &in_pass, &mut rng, 0.0).with_python(python);
         assert_eq!(host.cell_value(0, CellRef::new(0, 0)), Value::Number(0.0));
         // Beside the spill (column ALM, the 1,001st), over the rows it covers.
         let beside = RangeRef::parse("ALM1:ALM1000").unwrap();
@@ -887,9 +1008,10 @@ pub(crate) mod tests {
             let array = gridcraft_core::Array::new(3, 3, data).unwrap();
             let mut python = HashMap::default();
             python.insert((0, anchor), Value::Array(std::sync::Arc::new(array)));
-            let exprs = HashMap::default();
+            let graph = Graph::default();
+            let in_pass = HashSet::default();
             let mut rng = 1u64;
-            let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0).with_python(python);
+            let mut host = PassHost::new(&wb, &graph, &in_pass, &mut rng, 0.0).with_python(python);
             assert_eq!(host.cell_value(0, anchor), Value::Number(1.0));
             let all = RangeRef::parse("A1:C3").unwrap();
             let sum: f64 = host.range_values(0, all).iter().map(|v| if let Value::Number(n) = v { *n } else { 0.0 }).sum();
@@ -1042,7 +1164,7 @@ pub(crate) mod tests {
                 if let Some(sh) = wb.sheet_mut(0) {
                     sh.cells.set(k.1, Cell::formula(Formula::new("=1")));
                 }
-                calc.graph.insert(k, Node { areas, dynamic: false });
+                calc.graph.insert(k, Node { areas, dynamic: false, expr: None, legacy: None });
                 keys.push(k);
                 if rng(&mut s).is_multiple_of(7) {
                     calc.graph.settle();
@@ -1232,11 +1354,9 @@ pub(crate) mod tests {
     fn wide_read_at_the_nesting_limit_suspends_once() {
         const WIDTH: u32 = 3000;
         let mut wb = Workbook::new();
-        let mut exprs = HashMap::default();
-        let mut put = |wb: &mut Workbook, at: String, text: String| {
+        let put = |wb: &mut Workbook, at: String, text: String| {
             let at = CellRef::parse(&at).unwrap();
             wb.sheet_mut(0).unwrap().cells.set(at, Cell::formula(Formula::new(&text)));
-            exprs.insert((0, at), std::sync::Arc::new(gridcraft_formula::parse(&text[1..]).unwrap()));
         };
         // A1 reads A2, ..., A64 (the 64th formula deep) reads a wide range of formulas.
         for r in 1..64 {
@@ -1246,8 +1366,11 @@ pub(crate) mod tests {
         for r in 1..=WIDTH {
             put(&mut wb, format!("B{r}"), format!("={r}*2"));
         }
+        let mut calc = Calc::new();
+        calc.rebuild(&wb);
+        let in_pass: HashSet<Key> = calc.graph.nodes.keys().copied().collect();
         let mut rng = 1u64;
-        let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0);
+        let mut host = PassHost::new(&wb, &calc.graph, &in_pass, &mut rng, 0.0);
         host.calculate((0, CellRef::parse("A1").unwrap()));
         let total = (WIDTH * (WIDTH + 1)) as f64;
         assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));
@@ -1259,17 +1382,15 @@ pub(crate) mod tests {
     /// values it hands over for `range` while the formulas in `pending` (cell, formula) have not been
     /// calculated yet, or `None` when it declines the block.
     pub(crate) fn probe_visit_range(wb: &Workbook, pending: &[(&str, &str)], range: RangeRef) -> Option<Vec<Value>> {
-        let mut exprs = HashMap::default();
-        for (at, formula) in pending {
-            let expr = gridcraft_formula::parse(formula.strip_prefix('=').unwrap_or(formula)).ok()?;
-            exprs.insert((0, CellRef::parse(at)?), std::sync::Arc::new(expr));
-        }
+        let mut calc = Calc::new();
+        calc.rebuild(wb);
+        let in_pass: HashSet<Key> = pending.iter().filter_map(|(at, _)| CellRef::parse(at).map(|c| (0, c))).collect();
 
         // A cell in `pending` is calculated the first time something reads it, which is the state
         // of a real pass partway through; `visit_range` has to cope with the formulas it reads
         // being calculated under it.
         let mut rng = 1u64;
-        let mut host = PassHost::new(wb, &exprs, &mut rng, 0.0);
+        let mut host = PassHost::new(wb, &calc.graph, &in_pass, &mut rng, 0.0);
 
         let mut seen = Vec::new();
         host.visit_range(0, range, &mut |v| {
@@ -1277,5 +1398,338 @@ pub(crate) mod tests {
             true
         })
         .then_some(seen)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn snapshot(wb: &Workbook) -> (Vec<(usize, u32, u32, Value)>, Vec<(usize, CellRef, Value)>) {
+        let mut cells = Vec::new();
+        let mut spill_vals = Vec::new();
+        for (si, sheet) in wb.sheets.iter().enumerate() {
+            for (c, _cell) in sheet.cells.iter() {
+                cells.push((si, c.row, c.col, sheet.value(c)));
+            }
+            for (c, v) in &sheet.spill {
+                spill_vals.push((si, *c, v.clone()));
+            }
+        }
+        cells.sort_by_key(|(s, r, c, _)| (*s, *r, *c));
+        spill_vals.sort_by_key(|(s, c, _)| (*s, c.row, c.col));
+        (cells, spill_vals)
+    }
+
+    #[test]
+    fn serial_and_parallel_paths_agree_on_a_mixed_workbook() {
+        fn build(wb: &mut Workbook) {
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.cells.set(CellRef::parse("Z1").unwrap(), Cell::value(Value::Number(10.0)));
+            for r in 0..80 {
+                sh.cells.set(CellRef::new(r, 2), Cell::formula(Formula::new(&format!("=$Z$1+{r}"))));
+            }
+            for r in 0..80 {
+                let row = r + 1;
+                for c in 4..10 {
+                    sh.cells.set(CellRef::new(r, c), Cell::value(Value::Number(f64::from(r + 1))));
+                }
+                sh.cells.set(CellRef::new(r, 10), Cell::formula(Formula::new(&format!("=SUM(E{row}:J{row})+$Z$1"))));
+            }
+            sh.cells.set(CellRef::parse("A1").unwrap(), Cell::formula(Formula::new("=SEQUENCE(5)")));
+            sh.cells.set(CellRef::parse("B1").unwrap(), Cell::formula(Formula::new("=SUM(A2:A5)")));
+            sh.cells.set(CellRef::parse("F1").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"A4\")")));
+            sh.cells.set(CellRef::parse("F2").unwrap(), Cell::formula(Formula::new("=OFFSET(A1,3,0)")));
+            sh.cells.set(CellRef::parse("D1").unwrap(), Cell::value(Value::Number(5.0)));
+            sh.cells.set(CellRef::parse("D2").unwrap(), Cell::formula(Formula::new("=D1*2")));
+            wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet2")));
+            let sh2 = wb.sheet_mut(1).unwrap();
+            sh2.cells.set(CellRef::parse("A1").unwrap(), Cell::formula(Formula::new("=Sheet1!D2+3")));
+            sh2.cells.set(CellRef::parse("B1").unwrap(), Cell::formula(Formula::new("=A1+Sheet1!B1")));
+        }
+        let mut one = Workbook::new();
+        build(&mut one);
+        one.calc.multi_threaded = false;
+        let mut calc_one = Calc::new();
+        calc_one.recalc_all(&mut one);
+
+        let mut eight = Workbook::new();
+        build(&mut eight);
+        eight.calc.multi_threaded = true;
+        eight.calc.threads = 0;
+        let mut calc_eight = Calc::new();
+        calc_eight.recalc_all(&mut eight);
+
+        assert_eq!(snapshot(&one), snapshot(&eight));
+        let sh = eight.sheet(0).unwrap();
+        assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+        assert_eq!(sh.value(CellRef::parse("A5").unwrap()), Value::Number(5.0));
+        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::Number(14.0));
+        assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::Number(4.0));
+        assert_eq!(sh.value(CellRef::parse("F2").unwrap()), Value::Number(4.0));
+        assert_eq!(eight.sheet(1).unwrap().value(CellRef::parse("A1").unwrap()), Value::Number(13.0));
+        assert_eq!(eight.sheet(1).unwrap().value(CellRef::parse("B1").unwrap()), Value::Number(27.0));
+
+        let c1 = CellRef::parse("C1").unwrap();
+        one.sheet_mut(0).unwrap().cells.set(c1, Cell::value(Value::Number(50.0)));
+        eight.sheet_mut(0).unwrap().cells.set(c1, Cell::value(Value::Number(50.0)));
+        let key = (0, c1);
+        calc_one.cells_changed(&mut one, &[key]);
+        calc_eight.cells_changed(&mut eight, &[key]);
+        assert_eq!(snapshot(&one), snapshot(&eight));
+    }
+
+    const VLOOKUP_IF_FORMULA: &str = r#"=IF(VLOOKUP(Data!$A$1,Data!$B$1:$C$2,2,FALSE)="alpha","yes"&Data!$A$1,"no")"#;
+
+    fn build_chain_workbook(wb: &mut Workbook) {
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::new(0, 0), Cell::value(Value::Number(1.0)));
+        sh.cells.set(CellRef::new(0, 1), Cell::formula(Formula::new("=A1+1")));
+        for r in 1..200 {
+            sh.cells.set(CellRef::new(r, 1), Cell::formula(Formula::new(&format!("=B{r}+1"))));
+        }
+    }
+
+    fn build_vlookup_workbook(wb: &mut Workbook) {
+        wb.sheet_mut(0).unwrap().name = "Data".into();
+        {
+            let data = wb.sheet_mut(0).unwrap();
+            data.cells.set(CellRef::new(0, 0), Cell::value(Value::Number(2.0)));
+            data.cells.set(CellRef::new(0, 1), Cell::value(Value::Number(1.0)));
+            data.cells.set(CellRef::new(0, 2), Cell::value(Value::text("alpha")));
+            data.cells.set(CellRef::new(1, 1), Cell::value(Value::Number(2.0)));
+            data.cells.set(CellRef::new(1, 2), Cell::value(Value::text("beta")));
+        }
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Calc")));
+        let calc = wb.sheet_mut(1).unwrap();
+        for r in 0..200 {
+            calc.cells.set(CellRef::new(r, 0), Cell::formula(Formula::new(VLOOKUP_IF_FORMULA)));
+        }
+    }
+
+    #[test]
+    fn serial_and_parallel_paths_agree_on_chain_and_vlookup_workbooks() {
+        let mut chain_one = Workbook::new();
+        build_chain_workbook(&mut chain_one);
+        chain_one.calc.multi_threaded = false;
+        let mut calc_chain_one = Calc::new();
+        calc_chain_one.recalc_all(&mut chain_one);
+
+        let mut chain_eight = Workbook::new();
+        build_chain_workbook(&mut chain_eight);
+        chain_eight.calc.multi_threaded = true;
+        chain_eight.calc.threads = 0;
+        let mut calc_chain_eight = Calc::new();
+        calc_chain_eight.recalc_all(&mut chain_eight);
+        assert_eq!(snapshot(&chain_one), snapshot(&chain_eight));
+
+        let a1 = (0, CellRef::new(0, 0));
+        chain_one.sheet_mut(0).unwrap().cells.set(a1.1, Cell::value(Value::Number(3.0)));
+        chain_eight.sheet_mut(0).unwrap().cells.set(a1.1, Cell::value(Value::Number(3.0)));
+        calc_chain_one.cells_changed(&mut chain_one, &[a1]);
+        calc_chain_eight.cells_changed(&mut chain_eight, &[a1]);
+        assert_eq!(snapshot(&chain_one), snapshot(&chain_eight));
+        let last = CellRef::new(199, 1);
+        assert_eq!(chain_one.sheet(0).unwrap().value(last), Value::Number(203.0));
+        assert_eq!(chain_eight.sheet(0).unwrap().value(last), Value::Number(203.0));
+
+        let mut lookup_one = Workbook::new();
+        build_vlookup_workbook(&mut lookup_one);
+        lookup_one.calc.multi_threaded = false;
+        let mut calc_lookup_one = Calc::new();
+        calc_lookup_one.recalc_all(&mut lookup_one);
+
+        let mut lookup_eight = Workbook::new();
+        build_vlookup_workbook(&mut lookup_eight);
+        lookup_eight.calc.multi_threaded = true;
+        lookup_eight.calc.threads = 0;
+        let mut calc_lookup_eight = Calc::new();
+        calc_lookup_eight.recalc_all(&mut lookup_eight);
+        assert_eq!(snapshot(&lookup_one), snapshot(&lookup_eight));
+        let sample = CellRef::new(0, 0);
+        assert_eq!(lookup_one.sheet(1).unwrap().value(sample), Value::text("no"));
+        assert_eq!(lookup_eight.sheet(1).unwrap().value(sample), Value::text("no"));
+
+        let data_a1 = (0, CellRef::new(0, 0));
+        lookup_one.sheet_mut(0).unwrap().cells.set(data_a1.1, Cell::value(Value::Number(1.0)));
+        lookup_eight.sheet_mut(0).unwrap().cells.set(data_a1.1, Cell::value(Value::Number(1.0)));
+        calc_lookup_one.cells_changed(&mut lookup_one, &[data_a1]);
+        calc_lookup_eight.cells_changed(&mut lookup_eight, &[data_a1]);
+        assert_eq!(snapshot(&lookup_one), snapshot(&lookup_eight));
+        assert_eq!(lookup_one.sheet(1).unwrap().value(sample), Value::text("yes1"));
+        assert_eq!(lookup_eight.sheet(1).unwrap().value(sample), Value::text("yes1"));
+    }
+
+    fn fill_parallel_stress(wb: &mut Workbook) {
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::parse("Z1").unwrap(), Cell::value(Value::Number(10.0)));
+        for r in 0..520 {
+            sh.cells.set(CellRef::new(r, 1), Cell::formula(Formula::new(&format!("=$Z$1+{r}"))));
+        }
+        sh.cells.set(CellRef::parse("A1").unwrap(), Cell::formula(Formula::new("=SEQUENCE(5)")));
+        sh.cells.set(CellRef::parse("B1").unwrap(), Cell::formula(Formula::new("=SUM(A2:A5)")));
+        sh.cells.set(CellRef::parse("F1").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"A4\")")));
+        sh.cells.set(CellRef::parse("F2").unwrap(), Cell::formula(Formula::new("=OFFSET(A1,3,0)")));
+        sh.cells.set(CellRef::parse("D1").unwrap(), Cell::value(Value::Number(5.0)));
+        sh.cells.set(CellRef::parse("D2").unwrap(), Cell::formula(Formula::new("=D1*2")));
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet2")));
+        let sh2 = wb.sheet_mut(1).unwrap();
+        sh2.cells.set(CellRef::parse("A1").unwrap(), Cell::formula(Formula::new("=Sheet1!D2+3")));
+        sh2.cells.set(CellRef::parse("B1").unwrap(), Cell::formula(Formula::new("=A1+Sheet1!B1")));
+    }
+
+    fn distinct_thread_count(calc: &Calc) -> usize {
+        let mut seen = HashSet::default();
+        for id in calc.last_formula_thread.values() {
+            seen.insert(*id);
+        }
+        seen.len()
+    }
+
+    #[test]
+    fn parallel_level_records_multiple_threads() {
+        let caller = std::thread::current().id();
+        let mut wb_off = Workbook::new();
+        fill_parallel_stress(&mut wb_off);
+        wb_off.calc.multi_threaded = false;
+        let mut calc_off = Calc::new();
+        calc_off.recalc_all(&mut wb_off);
+
+        let mut wb = Workbook::new();
+        fill_parallel_stress(&mut wb);
+        wb.calc.multi_threaded = true;
+        wb.calc.threads = 0;
+        let mut calc = Calc::new();
+        calc.recalc_all(&mut wb);
+
+        assert_eq!(snapshot(&wb_off), snapshot(&wb));
+        let sh = wb.sheet(0).unwrap();
+        assert_eq!(sh.value(CellRef::parse("A1").unwrap()), Value::Number(1.0));
+        assert_eq!(sh.value(CellRef::parse("A5").unwrap()), Value::Number(5.0));
+        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::Number(14.0));
+        assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::Number(4.0));
+        assert_eq!(sh.value(CellRef::parse("F2").unwrap()), Value::Number(4.0));
+        assert_eq!(wb.sheet(1).unwrap().value(CellRef::parse("A1").unwrap()), Value::Number(13.0));
+        assert_eq!(wb.sheet(1).unwrap().value(CellRef::parse("B1").unwrap()), Value::Number(27.0));
+
+        assert!(distinct_thread_count(&calc) > 1, "expected worker threads, got {:?}", calc.last_formula_thread);
+        assert!(calc_off.last_formula_thread.values().all(|id| *id == caller));
+    }
+
+    #[test]
+    fn thread_count_respects_workbook_settings() {
+        let off = gridcraft_model::CalcSettings { multi_threaded: false, ..Default::default() };
+        assert_eq!(super::thread_count(&off), 1);
+        let manual = gridcraft_model::CalcSettings { threads: 3, ..Default::default() };
+        assert_eq!(super::thread_count(&manual), 3);
+        let every = gridcraft_model::CalcSettings { threads: 0, ..Default::default() };
+        let expected = std::thread::available_parallelism().map(|p| p.get()).unwrap_or(1).clamp(1, 64);
+        assert_eq!(super::thread_count(&every), expected);
+        assert!(super::thread_count(&every) > 1);
+        let capped = gridcraft_model::CalcSettings { threads: 1000, ..Default::default() };
+        assert_eq!(super::thread_count(&capped), 64);
+    }
+
+    #[test]
+    #[cfg(target_arch = "wasm32")]
+    fn thread_count_is_one_on_wasm() {
+        assert_eq!(super::thread_count(&gridcraft_model::CalcSettings::default()), 1);
+    }
+
+    #[test]
+    fn random_formulas_evaluate_on_the_calling_thread() {
+        let caller = std::thread::current().id();
+        let mut wb = Workbook::new();
+        fill_parallel_stress(&mut wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::new(520, 1), Cell::formula(Formula::new("=RAND()")));
+        sh.cells.set(CellRef::new(521, 1), Cell::formula(Formula::new("=RANDBETWEEN(1,2)")));
+        sh.cells.set(CellRef::new(522, 1), Cell::formula(Formula::new("=RANDARRAY(1,1)")));
+        wb.calc.multi_threaded = true;
+        wb.calc.threads = 0;
+        let mut calc = Calc::new();
+        calc.recalc_all(&mut wb);
+        for key in [(0, CellRef::new(520, 1)), (0, CellRef::new(521, 1)), (0, CellRef::new(522, 1))] {
+            assert_eq!(calc.last_formula_thread.get(&key), Some(&caller));
+        }
+        let worker_key = (0, CellRef::new(400, 1));
+        assert_ne!(calc.last_formula_thread.get(&worker_key), Some(&caller));
+    }
+
+    #[test]
+    fn iterative_recalc_stays_on_one_thread() {
+        let caller = std::thread::current().id();
+        let mut wb = Workbook::new();
+        fill_parallel_stress(&mut wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::parse("C1").unwrap(), Cell::formula(Formula::new("=C2+1")));
+        sh.cells.set(CellRef::parse("C2").unwrap(), Cell::formula(Formula::new("=C1+1")));
+        wb.calc.iterative = true;
+        wb.calc.multi_threaded = true;
+        wb.calc.threads = 0;
+        let mut calc = Calc::new();
+        calc.recalc_all(&mut wb);
+        assert!(calc.last_formula_thread.values().all(|id| *id == caller));
+    }
+
+    #[test]
+    fn indirect_to_rand_and_later_level_match_serial_recalc() {
+        let caller = std::thread::current().id();
+        fn build(wb: &mut Workbook) {
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.cells.set(CellRef::parse("Z1").unwrap(), Cell::value(Value::Number(10.0)));
+            for r in 0..520 {
+                sh.cells.set(CellRef::new(r, 1), Cell::formula(Formula::new(&format!("=$Z$1+{r}"))));
+            }
+            sh.cells.set(CellRef::parse("H1").unwrap(), Cell::formula(Formula::new("=RAND()")));
+            sh.cells.set(CellRef::parse("I1").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"H1\")")));
+            sh.cells.set(CellRef::parse("F1").unwrap(), Cell::formula(Formula::new("=$Z$1+1")));
+            sh.cells.set(CellRef::parse("F2").unwrap(), Cell::formula(Formula::new("=F1*2")));
+            sh.cells.set(CellRef::parse("G1").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"F2\")")));
+            sh.cells.set(CellRef::parse("J1").unwrap(), Cell::formula(Formula::new("=OFFSET(F1,1,0)")));
+        }
+        let mut serial_wb = Workbook::new();
+        build(&mut serial_wb);
+        serial_wb.calc.multi_threaded = false;
+        let mut serial_calc = Calc::new();
+        serial_calc.recalc_all(&mut serial_wb);
+
+        let mut parallel_wb = Workbook::new();
+        build(&mut parallel_wb);
+        parallel_wb.calc.multi_threaded = true;
+        parallel_wb.calc.threads = 0;
+        let mut parallel_calc = Calc::new();
+        parallel_calc.recalc_all(&mut parallel_wb);
+
+        assert_eq!(snapshot(&serial_wb), snapshot(&parallel_wb));
+        let sh = parallel_wb.sheet(0).unwrap();
+        let h1 = sh.value(CellRef::parse("H1").unwrap());
+        let i1 = sh.value(CellRef::parse("I1").unwrap());
+        let f2 = sh.value(CellRef::parse("F2").unwrap());
+        let g1 = sh.value(CellRef::parse("G1").unwrap());
+        assert_eq!(i1, h1);
+        assert_ne!(i1, Value::Number(0.0));
+        assert_eq!(g1, f2);
+        assert_eq!(sh.value(CellRef::parse("J1").unwrap()), f2);
+        let i1_key = (0, CellRef::parse("I1").unwrap());
+        let g1_key = (0, CellRef::parse("G1").unwrap());
+        let j1_key = (0, CellRef::parse("J1").unwrap());
+        assert_eq!(parallel_calc.last_formula_thread.get(&i1_key), Some(&caller));
+        assert_eq!(parallel_calc.last_formula_thread.get(&g1_key), Some(&caller));
+        assert_eq!(parallel_calc.last_formula_thread.get(&j1_key), Some(&caller));
+    }
+
+    #[test]
+    fn indirect_after_parallel_warm_up_finishes_on_main_thread() {
+        let caller = std::thread::current().id();
+        let mut wb = Workbook::new();
+        fill_parallel_stress(&mut wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.cells.set(CellRef::parse("D600").unwrap(), Cell::formula(Formula::new("=$Z$1+5")));
+        sh.cells.set(CellRef::parse("A600").unwrap(), Cell::formula(Formula::new("=INDIRECT(\"D600\")+1")));
+        wb.calc.multi_threaded = true;
+        wb.calc.threads = 0;
+        let mut calc = Calc::new();
+        calc.recalc_all(&mut wb);
+        let indirect = (0, CellRef::parse("A600").unwrap());
+        assert_eq!(calc.last_formula_thread.get(&indirect), Some(&caller));
+        let worker_key = (0, CellRef::new(200, 1));
+        assert_ne!(calc.last_formula_thread.get(&worker_key), Some(&caller));
     }
 }

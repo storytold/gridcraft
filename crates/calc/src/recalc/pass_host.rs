@@ -1,4 +1,4 @@
-use super::graph::{HashMap, HashSet, Key};
+use super::graph::{Graph, HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
 use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
@@ -19,9 +19,10 @@ type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
 
 pub(super) struct PassHost<'a> {
     wb: &'a Workbook,
-    exprs: &'a HashMap<Key, std::sync::Arc<Expr>>,
+    graph: &'a Graph,
+    in_pass: &'a HashSet<Key>,
     pub(super) results: HashMap<Key, Value>,
-    pending: HashSet<Key>,
+    pub(super) pending: HashSet<Key>,
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
@@ -87,15 +88,20 @@ pub(super) struct PassHost<'a> {
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
     python: HashMap<Key, Value>,
+    /// Thread that evaluated each formula finished in this pass (merged into [`Calc::last_formula_thread`]).
+    pub(super) thread_log: Vec<(Key, std::thread::ThreadId)>,
+    /// Parallel results not yet folded into `results`, in level order.
+    pub(super) direct: Vec<(Key, Value)>,
 }
 
 impl<'a> PassHost<'a> {
-    pub(super) fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+    pub(super) fn new(wb: &'a Workbook, graph: &'a Graph, in_pass: &'a HashSet<Key>, rng: &'a mut u64, now: f64) -> Self {
         PassHost {
             wb,
-            exprs,
-            results: HashMap::with_capacity_and_hasher(exprs.len(), Default::default()),
-            pending: exprs.keys().copied().collect(),
+            graph,
+            in_pass,
+            results: HashMap::with_capacity_and_hasher(in_pass.len(), Default::default()),
+            pending: in_pass.iter().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
             spill_index: SpillIndex::default(),
@@ -126,6 +132,8 @@ impl<'a> PassHost<'a> {
             out_of_stack: false,
             sums: HashMap::default(),
             python: HashMap::default(),
+            thread_log: Vec::new(),
+            direct: Vec::new(),
         }
     }
 
@@ -135,6 +143,18 @@ impl<'a> PassHost<'a> {
         self.pending.extend(python.keys().copied());
         self.python = python;
         self
+    }
+
+    pub(super) fn wb(&self) -> &Workbook {
+        self.wb
+    }
+
+    pub(super) fn now_value(&self) -> f64 {
+        self.now
+    }
+
+    pub(super) fn in_pass(&self) -> &HashSet<Key> {
+        self.in_pass
     }
 }
 
@@ -180,7 +200,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
                 // A formula or Python cell recalculated in this pass lays its array out again.
                 *o != anchor
                     && r.contains(c)
-                    && !host.exprs.contains_key(&(sheet, *o))
+                    && !host.in_pass.contains(&(sheet, *o))
                     && !host.python.contains_key(&(sheet, *o))
                     && standing.outranks((sheet, *o), (sheet, anchor))
             })
@@ -191,6 +211,111 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
         || sh.tables.iter().any(|t| t.range.contains(anchor))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
+}
+
+/// Spill cells inside `range`, excluding each array's anchor (that cell is stored and visited
+/// with the formula). Sheet spills are filled first; a spill computed in this pass overwrites
+/// them. `None` when an array is too large to enumerate: the caller then takes the dense path.
+pub(super) fn spill_cells_in_range(
+    sheet: usize,
+    range: RangeRef,
+    stored: &std::collections::BTreeMap<CellRef, Value>,
+    spills: &HashMap<Key, std::sync::Arc<Array>>,
+) -> Option<Vec<(CellRef, Value)>> {
+    if stored.is_empty() && spills.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut out: std::collections::BTreeMap<CellRef, Value> = std::collections::BTreeMap::new();
+    for (c, v) in stored.range(range.start..=range.end) {
+        if range.contains(*c) {
+            out.insert(*c, v.clone());
+        }
+    }
+    for (anchor, arr) in spills {
+        if anchor.0 != sheet {
+            continue;
+        }
+        let n = (arr.rows as u64).checked_mul(arr.cols as u64)?;
+        if n > crate::eval::MAX_CELLS {
+            return None;
+        }
+        for r in 0..arr.rows {
+            for cc in 0..arr.cols {
+                let c = CellRef::new(anchor.1.row.saturating_add(r as u32), anchor.1.col.saturating_add(cc as u32));
+                if c == anchor.1 || !range.contains(c) {
+                    continue;
+                }
+                out.insert(c, arr.get(r, cc).cloned().unwrap_or_default());
+            }
+        }
+        if out.len() as u64 > crate::eval::MAX_CELLS {
+            return None;
+        }
+    }
+    if out.len() as u64 > crate::eval::MAX_CELLS {
+        return None;
+    }
+    Some(out.into_iter().collect())
+}
+
+/// [`spill_blocked`] for a worker that has no [`PassHost`]: no `Standing`, and a Python spill is
+/// not in `in_pass` unless that cell is dirty. The calling thread finishes formulas that need those.
+fn spill_blocked_wave(wb: &Workbook, in_pass: &HashSet<Key>, (sheet, anchor): Key, a: &Array) -> bool {
+    let Some(sh) = wb.sheet(sheet) else { return false };
+    let end =
+        CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
+    let range = RangeRef::new(anchor, end);
+    let own = sh.spill_ranges.get(&anchor);
+    let spilled_over = |c: CellRef| {
+        !own.is_some_and(|o| o.contains(c)) && sh.spill_ranges.iter().any(|(o, r)| *o != anchor && r.contains(c) && !in_pass.contains(&(sheet, *o)))
+    };
+    end.row >= gridcraft_core::MAX_ROWS
+        || end.col >= gridcraft_core::MAX_COLS
+        || sh.merges.iter().any(|m| m.intersects(&range))
+        || sh.tables.iter().any(|t| t.range.contains(anchor))
+        || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
+        || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
+}
+
+pub(super) fn finish_formula(
+    wb: &Workbook,
+    in_pass: &HashSet<Key>,
+    k: Key,
+    expr: &Expr,
+    v: Value,
+    legacy: Option<RangeRef>,
+    block_spills: bool,
+) -> (Value, Option<std::sync::Arc<Array>>) {
+    let v = match legacy {
+        Some(range) => fit_to_range(v, range),
+        None => v,
+    };
+    let keep_blanks = matches!(expr, Expr::Call(n, _) if matches!(n.as_str(), "GROUPBY" | "PIVOTBY"));
+    let (v, spill) = match v {
+        Value::Array(a) => {
+            let a = if keep_blanks || !a.data.iter().any(|x| matches!(x, Value::Empty)) {
+                a
+            } else {
+                let data = a.data.iter().map(|x| if matches!(x, Value::Empty) { Value::Number(0.0) } else { x.clone() }).collect();
+                Array::new(a.rows, a.cols, data).map(std::sync::Arc::new).unwrap_or(a)
+            };
+            // A dynamic-array formula anchors a spill range even while its result is one
+            // value -- a FILTER matching one row, a SORT or UNIQUE over one item -- so `C1#`
+            // is the 1 x 1 range and `ROWS(C1#)` is 1, as in Excel (#1491). A formula that
+            // returns a scalar never reaches this arm, so it does not become an anchor.
+            let spill = Some(a.clone());
+            (a.data.first().cloned().unwrap_or_default(), spill)
+        }
+        Value::Empty => (Value::Number(0.0), None),
+        v => (v, None),
+    };
+    if !block_spills {
+        return (v, spill);
+    }
+    match spill {
+        Some(a) if spill_blocked_wave(wb, in_pass, k, &a) => (Value::Error(CellError::Spill), None),
+        other => (v, other),
+    }
 }
 
 /// Whether `arr`, anchored at `anchor`, would spill exactly what the sheet already holds over
@@ -292,7 +417,7 @@ impl PassHost<'_> {
         if let Some(result) = self.python.get(&k).cloned() {
             return self.python_result(k, result);
         }
-        let Some(expr) = self.exprs.get(&k) else {
+        let Some(expr) = self.graph.nodes.get(&k).and_then(|n| n.expr.as_ref()) else {
             return self.wb.sheet(k.0).map(|s| s.value(k.1)).unwrap_or_default();
         };
         if self.suspend.is_some() {
@@ -328,10 +453,11 @@ impl PassHost<'_> {
             self.stack.push(k);
         }
         let expr = std::sync::Arc::clone(expr);
+        let expr_ref: &Expr = &expr;
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
-            ev.value(&expr)
+            ev.value(expr_ref)
         };
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
@@ -429,6 +555,7 @@ impl PassHost<'_> {
             _ => v,
         };
         self.results.insert(k, v.clone());
+        self.thread_log.push((k, std::thread::current().id()));
         v
     }
 
@@ -461,6 +588,7 @@ impl PassHost<'_> {
             _ => v,
         };
         self.results.insert(k, v.clone());
+        self.thread_log.push((k, std::thread::current().id()));
         v
     }
 
