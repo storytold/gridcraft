@@ -13,6 +13,7 @@ workspace = true
 test-support = []
 
 [dependencies]
+craft-stream-codecs.workspace = true
 harfrust = "=0.12.0"
 skrifa = { workspace = true }
 unicode-bidi = "=0.3.18"

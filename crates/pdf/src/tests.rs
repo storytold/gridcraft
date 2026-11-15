@@ -1841,3 +1841,21 @@ fn directed_named_fonts_keep_visual_metrics_and_logical_extraction() -> Result<(
     assert_eq!(pdf.windows(10).filter(|window| *window == b"/FontFile2").count(), 2);
     Ok(())
 }
+
+#[test]
+fn shared_run_length_preserves_pixels_at_packet_boundaries() {
+    for len in [0, 1, 2, 3, 127, 128, 129, 255, 256, 257, 1024] {
+        for seed in [0u8, 127, 128, 255] {
+            let repeats = vec![seed; len];
+            let literals: Vec<u8> = (0..len).map(|i| seed.wrapping_add(i as u8)).collect();
+            let pairs: Vec<u8> = (0..len).map(|i| (i / 2) as u8).collect();
+            for pixels in [repeats, literals, pairs] {
+                let encoded = run_length(&pixels);
+                assert_eq!(encoded.last(), Some(&128));
+                assert_eq!(rle_decode(&encoded), pixels);
+            }
+        }
+    }
+    // Two equal bytes may now terminate a literal packet. PDF pixel values stay exact.
+    assert_eq!(run_length(&[1, 2, 2, 3]), [0, 1, 255, 2, 0, 3, 128]);
+}
