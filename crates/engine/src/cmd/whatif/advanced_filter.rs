@@ -83,6 +83,40 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
     }
 }
 
+/// Shifts a computed criterion's references for one list row.
+///
+/// Unqualified references with a relative row follow the list sheet and advance per record;
+/// explicit references to the list sheet advance per record; all other references stay fixed on
+/// their own sheet (or the criteria sheet when unqualified with an absolute row).
+fn shift_computed_criterion(
+    wb: &gridcraft_model::Workbook,
+    list_sheet: usize,
+    list_sheet_name: &str,
+    expr: gridcraft_formula::Expr,
+    dr: i64,
+) -> gridcraft_formula::Expr {
+    use gridcraft_formula::{Expr, RefKind, Reference, SheetSel, adjust::shift_relative};
+    expr.map(&mut |x| match x {
+        Expr::Ref(r) => {
+            let rel_row = match &r.kind {
+                RefKind::Cell(a) => !a.row_abs,
+                RefKind::Range(a, b) => !a.row_abs || !b.row_abs,
+                RefKind::Rows(_, a0, _, a1) => !a0 || !a1,
+                RefKind::Cols(..) => false,
+            };
+            match &r.sheet {
+                SheetSel::Current if rel_row => {
+                    let r = Reference { sheet: SheetSel::Named(list_sheet_name.to_owned()), ..r };
+                    shift_relative(Expr::Ref(r), dr, 0)
+                }
+                SheetSel::Named(name) if wb.sheet_index(name) == Some(list_sheet) => shift_relative(Expr::Ref(r), dr, 0),
+                _ => Expr::Ref(r),
+            }
+        }
+        other => other,
+    })
+}
+
 /// Most (list row, criteria row) pairs one Advanced Filter tests.
 const MAX_FILTER_TESTS: u64 = 50_000_000;
 
@@ -153,7 +187,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                     criterion_matches(&v, &text, crit)
                 }
                 Cond::Computed(e, at) => {
-                    let shifted = gridcraft_formula::adjust::shift_relative(e.clone(), row as i64 - first_data as i64, 0);
+                    let shifted = shift_computed_criterion(wb, si, &sh.name, e.clone(), row as i64 - first_data as i64);
                     let v = gridcraft_calc::recalc::evaluate_expr(wb, criteria.map(|(si, _)| si).unwrap_or(si), *at, &shifted);
                     matches!(v.scalar().to_bool(), Ok(true))
                 }

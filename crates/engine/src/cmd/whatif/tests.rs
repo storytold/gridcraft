@@ -341,3 +341,30 @@ fn scenario_summary_counts_result_rows_in_its_cell_limit() {
     let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
     assert!(err.contains("too many cells"), "{err}");
 }
+
+#[test]
+fn advanced_filter_computed_criteria_on_separate_sheet_matches_excel() {
+    let mut s = s();
+    s.execute("sheet.rename", json!({"name": "Input Data"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Rules"})).unwrap();
+    s.execute("range.setValues", json!({"sheet": "Input Data", "range": "A1", "values": [["ID", "Score"], [101, 10], [102, 30], [103, 20]]}))
+        .unwrap();
+    s.execute("range.setValues", json!({"sheet": "Rules", "range": "B2", "values": [[100], [0], [100]]})).unwrap();
+    s.execute("cell.set", json!({"sheet": "Rules", "cell": "D1", "input": "Probe"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Input Data"})).unwrap();
+
+    for (formula, expected) in [
+        ("=B2>24", vec![102.0]),
+        ("=$B2>24", vec![102.0]),
+        ("='Input Data'!B2>24", vec![102.0]),
+        ("=B$2>24", vec![101.0, 102.0, 103.0]),
+        ("=Rules!B2>24", vec![101.0, 102.0, 103.0]),
+    ] {
+        s.execute("cell.set", json!({"sheet": "Rules", "cell": "D2", "input": formula})).unwrap();
+        let r =
+            s.execute("data.advancedFilter", json!({"range": "'Input Data'!A1:B4", "criteria": "Rules!D1:D2", "copyTo": "'Input Data'!F1"})).unwrap();
+        assert_eq!(r["matched"], expected.len(), "formula {formula}");
+        let got: Vec<f64> = (0..expected.len()).map(|i| n(&s, &format!("'Input Data'!F{}", i + 2))).collect();
+        assert_eq!(got, expected, "formula {formula}");
+    }
+}
