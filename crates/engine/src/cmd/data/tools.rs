@@ -20,8 +20,7 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         Some(columns) => columns
             .iter()
             .map(|c| {
-                col_param(Some(c), r.start.col)
-                    .ok_or_else(|| bad("data.removeDuplicates", "`columns` must name at least one column of the range"))
+                col_param(Some(c), r.start.col).ok_or_else(|| bad("data.removeDuplicates", "`columns` must name at least one column of the range"))
             })
             .collect::<Result<_>>()?,
         None => (r.start.col..=r.end.col).collect(),
