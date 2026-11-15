@@ -159,15 +159,15 @@ mod tests {
         // and `...` survive.
         assert_eq!(sig("IF", En, Language::Es), "IF(prueba_lógica, [valor_si_verdadero], [valor_si_falso])");
         assert_eq!(sig("SUM", En, Language::Es), "SUM(número1, [número2], ...)");
-        assert_eq!(description("IF", En, Language::Es).as_deref(), Some("Devuelve un valor según una condición."));
+        assert_eq!(description("IF", En, Language::Es).as_deref(), Some("Devuelve un valor si una condición es VERDADERA y otro si es FALSA."));
         // Spanish names and separators, from a localized name.
         assert_eq!(sig("suma", Es, Language::Es), "SUMA(número1; [número2]; ...)");
-        assert_eq!(description("SUMA", Es, Language::Es).as_deref(), Some("Suma los números."));
-        // An argument list Spanish covers only in part stays English instead of mixing (the name
+        assert_eq!(description("SUMA", Es, Language::Es).as_deref(), Some("Suma todos los números de los argumentos."));
+        // Spanish function help translates descriptions and arguments when available (the name
         // is whatever the Spanish formula table calls SUMIFS).
         let sumifs = sig("SUMIFS", Es, Language::Es);
-        assert!(sumifs.ends_with("(sum_range; criteria_range1; criteria1; ...)"), "{sumifs}");
-        assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Adds the cells that meet every condition."));
+        assert!(sumifs.ends_with("(rango_suma; rango_criterios1; criterio1; ...)"), "{sumifs}");
+        assert_eq!(description("SUMIFS", Es, Language::Es).as_deref(), Some("Suma las celdas que cumplen todos los criterios."));
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
     }
 }

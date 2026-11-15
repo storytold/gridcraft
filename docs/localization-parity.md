@@ -1,142 +1,164 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-11-14 · **Last updated:** 2026-11-14 · **Change:** major
+> (replaced historical coverage estimates with the current catalog report;
+> clarified script, RTL and PDF limitations; Spanish function help now has
+> 761 entries and no obsolete keys) · **Target:** Microsoft Excel (Microsoft 365)
 
-Per-language status against Excel, which ships its UI in dozens of languages (Windows language
-packs cover 100+), with localized function names, argument separators, number and date formats,
-right-to-left sheets and full complex-script support. Part of
-[target-app-parity.md](target-app-parity.md). **Localization: ~10% ready, 100–165 h** (estimated).
+This document describes the current localization state and the evidence used
+to measure it. Historical entries are retained in the revision history, but
+their counts and estimates must not be read as current measurements.
 
-Cell text now uses shared Unicode bidi layout while retaining logical source indexes for editing, copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction, independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional direction preserves absent versus explicit Context in differential styles. The renderer is pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM checks. Physical screen-reader behavior remains unverified.
+## Scope and measurement
 
-## Where we are (measured from source on `main`, after the 2026-10-10 merges)
+GridCraft registers 19 values in the `Language` enum, including English as
+the source/fallback language. There are 18 translated UI catalog files under
+`crates/ui-egui/src/i18n/`. English is not represented by a separate
+translated catalog. `es_functions.rs` is a separate Spanish function-help
+catalog, not another UI language.
 
-- **A first catalog exists, for the ribbon only.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in
-  #31, #104, #82; German added 10-11) adds an interface-language preference that defaults to the
-  system language (closes #20) and a View-tab switcher, with English-keyed lookup tables:
-  Japanese 268 labels, Simplified Chinese, Korean, Russian, Brazilian Portuguese, German and Czech 266
-  each. The tables are used by
-  the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the Format Cells
-  dialog, every dialog title and the shared OK/Cancel buttons; the other dialogs, menus,
-  context menus, task panes, status messages and command labels are still English literals.
-  Untranslated labels fall back to English.
-- **Function help** (the argument hint, autocomplete, Insert Function and the Formulas-tab
-  menus) follows the interface language through per-language tables keyed by the catalog's
-  English text (`i18n/<lang>_functions.rs`): descriptions, and argument names from which the
-  hint is assembled with the formula syntax's function name and separator. Spanish translates
-  the 10 common functions it had help for (SUM, AVERAGE, IF…); other languages show the English
-  help.
-- **A first catalog exists.** `crates/ui-egui/src/i18n.rs` (merged 10-10 in #31, #104, #82; German
-  added 10-11) adds an interface-language preference that defaults to the system language (closes
-  #20) and a View-tab switcher, with English-keyed lookup tables: Simplified Chinese, Korean,
-  Russian, German and Czech 266–518 labels each, Brazilian Portuguese and Japanese 943 each. The
-  tables are used by the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the
-  Format Cells dialog, every dialog title and the shared OK/Cancel buttons; Japanese and Portuguese
-  also cover the other dialog labels, message boxes, Backstage/File-view items, template names and
-  native menus (Japanese, 10-17: `i18n/ja.rs` keeps the shared 398-label core and adds 545 of those
-  strings). The remaining menus, context menus, task panes, status messages, command labels and
-  function descriptions are still English literals. Untranslated labels fall back to English.
-- **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
-  strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
-  Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open). The `B1` (Gregorian) and `B2` (Hijri) calendar prefixes that Arabic
-  Excel writes at the start of a format section are hidden; under `B2` the year, month number,
-  day, month names and weekday names (Arabic; `mmm` and `ddd` show the full name) count in the
-  tabular Hijri calendar (leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of each 30-year
-  cycle). Checked against Excel 16.0 (build 20527, en-US) on every serial from 1 to 2,958,465
-  and about 1,700 format/value pairs: a `[$...]` locale or currency tag before `B2` keeps the
-  date Gregorian; a repeated prefix (`B2B2`) is accepted; any other `B` and digit (`B3`,
-  `B12`, `B1B2`, `dd B2`, `\B2`), or a prefix before a number format (`B10.00`), is
-  rejected (`TEXT` gives `#VALUE!`, a cell shows General); serial 60 shows `#VALUE!` under `B2`
-  for any date or clock part; two-word month names use a no-break space. Differs from Excel:
-  in a `B2` section with a weekday and a month name, Excel prints the weekday for
-  `mmmm`/`mmmmm` after `ddd`/`dddd`, and the weekday numbered by the month (Saturday from
-  month 7) for `ddd`/`dddd` after `mmm`/`mmmm`; a `B2` section showing only the weekday uses
-  the real weekday for serials 0–59 and gives `#VALUE!` for the last days of 9999. Excel's
-  Buddhist-year `b`/`bb`/`bbbb` tokens are not supported.
-- **Script support.** System-font fallback for CJK, Thai and Hebrew landed in #38 (closes #32;
-  #142 is still open pending confirmation). Native CJK fallback also probes Flatpak's read-only
-  `/run/host/fonts`, `/run/host/local-fonts` and `/run/host/user-fonts` layouts, so installed
-  Noto CJK and WenQuanYi faces can render Chinese without a broad filesystem grant. This does
-  not change the installed-font catalogue or add bundled fonts. System CJK fallback faces and
-  embedded faces tagged with CJK scripts share the Latin baseline in cells, editors and titles
-  (#1265, #2621); other script, emoji and symbol fallbacks retain their alignment.
-  Lao falls back to Lao Sangam MN / Lao MN (macOS),
-  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). egui uses harfrust shaping and Unicode bidi layout; script-specific coverage
-  beyond Arabic still needs verification. **Sheet Right-to-Left**
-  Leelawadee UI / DokChampa (Windows) or Noto Sans Lao / Phetsarath OT (Linux). Arabic falls back to a system Arabic face, fontconfig's
-  Arabic choice or craft-fonts' Noto Sans Arabic; fontconfig's choice leads these fallbacks, but a UI font with Arabic of its
-  own (DejaVu Sans in the Flatpak) still draws interface Arabic (#229). There is no complex-text shaping: Arabic and
-  Devanagari don't join or reorder, and there is no bidirectional layout. **Sheet Right-to-Left**
-  (`view.rightToLeft`, Page Layout › Sheet Options, XLSX `rightToLeft`, `.xls` WINDOW2 fRightToLeft) mirrors the grid (#146):
-  column A and the row headers on the right, the vertical scrollbar on the left; hit-testing,
-  arrow keys, editor, popups and floating objects follow; text follows its cell reading direction inside its box,
-  and the sheet tabs, horizontal scrollbar and printing/PDF are not mirrored yet.
-  Text boxes and shapes keep their paragraphs' right-to-left direction (`a:pPr rtl`) through XLSX
-  save, though GridCraft still draws that text left to right. IME input goes
-  through egui/winit and is unverified for Chinese, Japanese and Korean.
-- **Names in any script.** Defined names (Define Name, Create from Selection) are limited to
-  255 characters, counted as characters rather than UTF-8 bytes, so a 255-letter Arabic name is
-  accepted as in Excel. Sheet names already counted characters (31).
-- **PDF export** uses only the 14 standard PDF fonts: non-Latin text cannot export.
+`cargo xtask i18n-report` reads the UI catalog source files. Its reference set
+is the union of keys found in the translated UI catalogs: currently 1,199
+distinct keys across 18 catalogs. For each language, the report counts keys
+missing from that union. A missing key falls back to English.
 
-## Languages
+These figures measure **key presence only**. They do not establish that a
+translation differs from the English source, is accurate, has been reviewed
+by a native speaker, or covers every string visible in the application.
+The 1,199-key union is not a complete inventory of all user-visible text.
+The report is informational: missing translations do not fail CI.
 
-UI strings translated are measured counts against the ~2,200 estimate. Estimates to `full`
-include the rest of the catalog work below (10–20 h, counted once), localized function names,
-separators, number/date formats, machine translation with agent review, and script work.
+The report's source scanner recognizes the catalog patterns used by the
+current Rust files, including match arms and table rows. It is not a complete
+Rust parser. The report also checks Spanish function-help keys against the
+current English function catalog and reports obsolete entries.
 
-| Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
-|---|---|---|---|---|---|---|---|
-| English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
-| Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
-| Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
-| Arabic | ar | 0 (0%) | no | shared shaping/bidi; no Arabic UI catalog or mirrored shell; Sheet RTL mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
-| Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
-| Japanese | ja | 943 (~43%) | dialogs and messages | CJK system-font fallback; IME unverified; no furigana display | no | menus, File view, dialogs, messages | 3–5 h |
-| Japanese | ja | 268 (~12%) | no | CJK system-font fallback; the theme's East Asian typeface (`<a:ea>`) survives open + save (rendering does not use it yet); IME unverified; no furigana display | no | menus only | 8–12 h |
-| German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
-| Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
-| Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
-| Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
-| Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
+## Interface catalogs
 
-Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
-| Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
-Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
+The following figures are the current output of `cargo xtask i18n-report`:
 
-**Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
-once the catalog covers dialogs and commands. **Needs a human:** native-speaker review of every
-language (none so far) and of localized function names.
+| Language | Code | Keys present | Keys missing |
+|---|---:|---:|---:|
+| Czech | cs | 579 | 620 |
+| German | de | 496 | 703 |
+| Greek | el | 995 | 204 |
+| Spanish | es | 504 | 695 |
+| French | fr | 464 | 735 |
+| Italian | it | 996 | 203 |
+| Japanese | ja | 1,138 | 61 |
+| Korean | ko | 474 | 725 |
+| Dutch | nl | 545 | 654 |
+| Polish | pl | 995 | 204 |
+| Portuguese (Brazil) | pt | 1,004 | 195 |
+| Romanian | ro | 1,040 | 159 |
+| Russian | ru | 474 | 725 |
+| Serbian | sr | 463 | 736 |
+| Turkish | tr | 434 | 765 |
+| Ukrainian | uk | 995 | 204 |
+| Vietnamese | vi | 434 | 765 |
+| Simplified Chinese | zh | 474 | 725 |
 
-## Infrastructure (do first)
+The enum uses the internal codes `pt` and `zh`, not `pt-BR` and `zh-Hans`.
+Regional or script locale tags may be accepted as aliases, but they do not
+change the catalog identifiers. Hindi (`hi`), Arabic (`ar`) and Indonesian
+(`id`) are not registered in the enum and have no UI catalogs.
 
-1. Extend the catalog from the ribbon to every user-visible string (dialogs, menus, task panes,
-   status and error messages, command labels, function descriptions). A string a catalog lacks
-   shows in English and never fails a check: `cargo xtask i18n-report` lists the missing strings
-   per language, and `cargo xtask ci` runs it first. Language switching and the system-language default already exist (#31).
-2. Locale-aware formulas: localized function-name tables and separators at the formula-bar
-   boundary only (files keep en-US invariant names), locale number and date formats, list
-   separators in CSV.
-3. Text shaping and fallback: a shaping engine for grid, editor and PDF text (Arabic, Devanagari,
-   Thai), system font fallback for CJK, bidirectional runs, right-to-left sheet tabs and printing;
-   embedded subset fonts in PDF.
+## Spanish function help
+
+`crates/ui-egui/src/i18n/es_functions.rs` contains 761 entries:
+
+- 479 function descriptions.
+- 282 argument names.
+- 0 entries keyed by English text that the current function catalog no
+  longer contains.
+
+Function-help coverage is separate from the UI-catalog counts above. The
+report's obsolete-key check establishes that these entries still correspond
+to the current English function catalog; it does not assess translation
+quality or native-speaker review.
+
+## Script rendering, input and directionality
+
+Font fallback and text shaping are separate capabilities. Existing system-font
+fallbacks for scripts such as CJK, Thai and Hebrew do not by themselves prove
+that text is shaped or laid out correctly for every writing system. IME input
+for Chinese, Japanese and Korean also requires separate verification.
+
+The source audit did not find evidence sufficient to claim complete Unicode
+bidirectional layout or complex-script shaping. In particular, the project
+should not claim complete Arabic or Devanagari shaping and bidi support on
+the basis of the features listed below.
+
+### Right-to-left worksheets
+
+GridCraft reads and writes the XLSX worksheet `rightToLeft` property and
+preserves the corresponding legacy `.xls` worksheet setting. The grid can
+therefore represent right-to-left sheet geometry. XLSX cell-style
+`readingOrder` values are also read and written, including the right-to-left
+value.
+
+These file-format properties are not equivalent to full bidirectional text
+layout. Text direction in a cell, paragraph direction in a shape, sheet
+geometry and Unicode bidi reordering are distinct concerns. Shapes can retain
+right-to-left paragraph metadata in XLSX without GridCraft necessarily
+rendering their text with the corresponding shaping and visual ordering.
+
+### PDF export
+
+PDF export uses the standard PDF fonts without embedding for WinAnsi text.
+The PDF implementation also has a CID route using the predefined Adobe-GB1
+character collection and `UniGB-UTF16-H` for certain characters outside
+WinAnsi, including CJK and other characters covered by that route.
+
+This is not universal non-Latin typography support. Coverage depends on the
+available encoding and CID character collection; complete shaping, bidi
+layout, font coverage and consistent text measurement are not guaranteed for
+Arabic, Devanagari or every other complex writing system. The sheet-printing
+path also measures text using the project's text-width machinery, so correct
+measurement and visual output must be verified for scripts using the CID path.
+
+## Locale-aware formulas and regional formats
+
+The UI-catalog counts above do not measure localized function names, argument
+separators, decimal/list separators, or localized number and date formats.
+These are separate localization dimensions and must be assessed independently.
+The historical estimates in this document are not current effort estimates.
+
+## Human linguistic review
+
+Catalog presence is not evidence of human linguistic review. The repository
+documentation describes translations as AI-assisted and not yet reviewed by
+native speakers. In particular, the former `yes` entry for Turkish native
+review is not supported by the inspected commit history or review records.
+Its status should be treated as **not documented / pending verification**,
+not as a confirmed review and not as proof that no review has ever happened.
+
+Review status should be recorded per language only when there is evidence of
+the review, ideally identifying the reviewed catalog/version and the review
+scope. Automated code review is not linguistic review.
+
+## Remaining work
+
+1. Expand and maintain UI catalogs, using `cargo xtask i18n-report` to identify
+   missing keys. The report is a presence check, not a quality assessment.
+2. Assess localized function names, argument separators and regional number,
+   date and CSV formats independently of UI translation.
+3. Verify font fallback, shaping, bidirectional layout and IME input for each
+   relevant script and platform; do not infer complete support from font
+   fallback or worksheet RTL metadata.
+4. Verify PDF output for non-Latin scripts, including glyph coverage,
+   shaping, text direction and measurement.
+5. Record human linguistic review with evidence for each language.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-14 | minor | Spanish function help expanded to 479 function descriptions and 282 argument names; localization parity and roadmap records reconciled with the current catalog audit |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
-| 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
+| 2026-10-26 | historical claim, not revalidated | Earlier work recorded shared bidi layout for Arabic clusters, marks, visual cursor navigation and directional accessibility. The 2026-11-14 source audit did not revalidate this as complete Unicode bidi or complex-script support; do not treat this entry as the current capability statement |
 | 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |
 | 2026-10-27 | minor | AutoFit column width, wrapped-row height and PivotTable column fit estimate Arabic letters at ~0.48 em (measured 0.36–0.53 em shaped, Noto Sans/Naskh Arabic and DejaVu Sans) instead of 1 em, Arabic-Indic digits as wide as ASCII digits, and give vowel marks and direction marks no width; vowelled Arabic no longer fits ~3.5× too wide |
