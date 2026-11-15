@@ -145,7 +145,9 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
     let (c0, c1) = q.cols;
     // Gridlines.
     if sh.show_gridlines {
-        let stroke = Stroke::new(1.0, t.gridline);
+        // The sheet's own colour (File › Options › Advanced); Automatic is the theme's.
+        let color = sh.gridline_rgb().map_or(t.gridline, |[r, g, b]| Color32::from_rgb(r, g, b));
+        let stroke = Stroke::new(1.0, color);
         let top = geo.y(sh, r0);
         let bottom = geo.y_end(sh, r1);
         let left = geo.x(sh, c0);

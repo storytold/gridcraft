@@ -1,12 +1,16 @@
-use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
+use super::{
+    Color32, Icon, Json, Key, Language, Modifiers, Rect, RichText, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, i18n, icons, json, pos2,
+    section, theme, vec2,
+};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
 /// (calculation mode and iterative calculation) and the display options for this workbook (sheet
-/// tabs and scroll bars) when a document is active. Theme, language, formula
+/// tabs and scroll bars) and for a worksheet (`sheet`: the one picked in its list) when a
+/// document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
-pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
+pub(super) fn options(app: &mut SheetApp, ui: &mut Ui, sheet: &mut Option<u64>) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
     general_options(app, ui, lang);
@@ -46,11 +50,114 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
         }
     }
     ui.add_space(18.0);
+    worksheet_options(app, ui, lang, sheet);
+    ui.add_space(18.0);
     section(ui, lang, "Formulas");
     ui.label(lang.tr("Workbook calculation"));
     calc_options(app, ui, lang, &calc);
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// Excel's Advanced › Display options for this worksheet (#3100), for the sheet picked in the
+/// list beside the heading (`picked`, a sheet's uid; the active sheet until one is picked). Each
+/// control runs its sheet command with `sheet`; all of it is saved with the workbook.
+fn worksheet_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, picked: &mut Option<u64>) {
+    let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
+    let index = picked.and_then(|uid| wb.sheets.iter().position(|sh| sh.uid.get() == uid)).unwrap_or(wb.active_sheet());
+    let Some(sheet) = wb.sheet(index) else { return };
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let heading = RichText::new(lang.tr("Display options for this worksheet")).font(theme::ui_bold(15.0)).color(t.text);
+        let label = ui.label(heading);
+        ui.add_space(8.0);
+        craft_ui::ComboBox::from_id_salt("backstage_options_sheet")
+            .width(160.0)
+            .selected_text(sheet.name.as_str())
+            .show_ui(ui, |ui| {
+                for (i, sh) in wb.sheets.iter().enumerate() {
+                    if ui.selectable_label(i == index, sh.name.as_str()).clicked() {
+                        *picked = Some(sh.uid.get());
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+    });
+    ui.add_space(8.0);
+    let name = sheet.name.as_str();
+    for (on, label, id) in [
+        (sheet.show_headings, "Show row and column headers", "view.headings"),
+        (sheet.show_formulas, "Show formulas in cells instead of their calculated results", "formulas.showFormulas"),
+        (sheet.show_zeros, "Show a zero in cells that have zero value", "view.showZeros"),
+        (sheet.show_outline_symbols, "Show outline symbols if an outline is applied", "view.showOutlineSymbols"),
+        (sheet.show_gridlines, "Show gridlines", "view.gridlines"),
+    ] {
+        let mut on = on;
+        if ui.checkbox(&mut on, lang.tr(label)).changed() {
+            app.run_or_alert(id, json!({"sheet": name, "on": on}));
+        }
+    }
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.add_space(24.0);
+        ui.label(lang.tr("Gridline color"));
+        let current = sheet.gridline_color.zip(sheet.gridline_rgb());
+        if let Some(pick) = gridline_color_picker(ui, lang, current) {
+            app.run_or_alert("view.gridlineColor", json!({"sheet": name, "colorIndex": pick}));
+        }
+    });
+}
+
+/// The Gridline color button: the sheet's colour (`current`: its palette index and RGB; the theme's
+/// gridline colour for Automatic) and a menu of Automatic and the 56 palette colours, eight to a
+/// row in palette order. Returns the pick as `view.gridlineColor` takes it: an index or "automatic".
+fn gridline_color_picker(ui: &mut Ui, lang: Language, current: Option<(u8, [u8; 3])>) -> Option<Json> {
+    let t = Tokens::get(ui.ctx());
+    let automatic = lang.tr("Automatic");
+    let hex = |[r, g, b]: [u8; 3]| format!("#{r:02X}{g:02X}{b:02X}");
+    let shown = current.map_or_else(|| automatic.to_string(), |(_, rgb)| hex(rgb));
+    let (rect, button) = ui.allocate_exact_size(vec2(118.0, 22.0), Sense::click());
+    button.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lang.tr("Gridline color")));
+    let p = ui.painter();
+    p.rect_filled(rect, 3.0, t.input_bg);
+    p.rect_stroke(rect, 3.0, Stroke::new(1.0, if button.hovered() { t.accent } else { t.input_border }), StrokeKind::Inside);
+    let swatch = Rect::from_min_size(rect.min + vec2(5.0, 5.0), vec2(22.0, rect.height() - 10.0));
+    p.rect_filled(swatch, 1.0, current.map_or(t.gridline, |(_, [r, g, b])| Color32::from_rgb(r, g, b)));
+    p.rect_stroke(swatch, 1.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+    p.text(pos2(swatch.right() + 6.0, rect.center().y), egui::Align2::LEFT_CENTER, &shown, theme::ui_font(12.5), t.text);
+    icons::paint(p, Rect::from_center_size(pos2(rect.right() - 10.0, rect.center().y), vec2(10.0, 10.0)), Icon::Chevron, t.text_dim);
+    let mut pick = None;
+    egui::Popup::menu(&button).show(|ui| {
+        if ui.selectable_label(current.is_none(), automatic).clicked() {
+            pick = Some(json!("automatic"));
+            ui.close();
+        }
+        ui.add_space(4.0);
+        egui::Grid::new("backstage_gridline_colors").min_col_width(18.0).spacing(vec2(3.0, 3.0)).show(ui, |ui| {
+            for index in 1..=56u8 {
+                let Some(rgb @ [r, g, b]) = gridcraft_engine::core::color::indexed_color(index) else { continue };
+                let selected = current.is_some_and(|(i, _)| i == index);
+                let (rect, swatch) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
+                swatch.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, hex(rgb)));
+                let p = ui.painter();
+                p.rect_filled(rect, 1.0, Color32::from_rgb(r, g, b));
+                p.rect_stroke(rect, 1.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
+                if selected || swatch.hovered() {
+                    p.rect_stroke(rect.expand(1.0), 1.0, Stroke::new(1.5, t.accent), StrokeKind::Outside);
+                }
+                if swatch.on_hover_text(hex(rgb)).clicked() {
+                    pick = Some(json!(index));
+                    ui.close();
+                }
+                if index % 8 == 0 {
+                    ui.end_row();
+                }
+            }
+        });
+    });
+    pick
 }
 
 /// The display theme and interface language controls of the General section.

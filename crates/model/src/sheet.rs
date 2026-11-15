@@ -116,6 +116,12 @@ pub struct Sheet {
     pub tab_color: Option<Color>,
     pub visibility: Visibility,
     pub show_gridlines: bool,
+    /// The gridline colour (File › Options › Advanced › Display options for this worksheet): a
+    /// `ColorIndex` from 1 to 56 into the legacy palette, or `None` for Automatic, the theme's
+    /// gridline colour. It stays while the gridlines are hidden. Saved as `sheetView
+    /// defaultGridColor="0" colorId` (the index + 7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gridline_color: Option<u8>,
     pub show_headings: bool,
     pub show_formulas: bool,
     pub show_zeros: bool,
@@ -204,6 +210,7 @@ impl Sheet {
             tab_color: None,
             visibility: Visibility::Visible,
             show_gridlines: true,
+            gridline_color: None,
             show_outline_symbols: true,
             summary_below: true,
             summary_right: true,
@@ -237,6 +244,11 @@ impl Sheet {
 
     pub fn cell(&self, c: CellRef) -> Option<&Cell> {
         self.cells.get(c)
+    }
+    /// The gridline colour as RGB: `None` for Automatic, and for an index outside 1 to 56 (which
+    /// only a hand-edited JSON workbook can hold).
+    pub fn gridline_rgb(&self) -> Option<[u8; 3]> {
+        self.gridline_color.and_then(gridcraft_core::color::indexed_color)
     }
     /// The source of a non-anchor dynamic-array spill cell, from the current calc state.
     /// Anchors, ordinary cells and cells outside successfully generated spills return `None`.
@@ -759,6 +771,22 @@ mod tests {
         let read: Sheet = serde_json::from_str(&json).unwrap();
         assert_ne!(read.uid.get(), a.uid.get());
         assert_eq!(read, a);
+    }
+
+    #[test]
+    fn the_gridline_colour_is_optional_in_json() {
+        // Automatic writes nothing, so a JSON workbook from before the colour existed is the same
+        // and loads as Automatic.
+        let mut sheet = Sheet::new("S");
+        let json = serde_json::to_string(&sheet).unwrap();
+        assert!(!json.contains("gridline_color"), "{json}");
+        assert_eq!(serde_json::from_str::<Sheet>(&json).unwrap().gridline_color, None);
+        sheet.gridline_color = Some(3);
+        let read: Sheet = serde_json::from_str(&serde_json::to_string(&sheet).unwrap()).unwrap();
+        assert_eq!((read.gridline_color, read.gridline_rgb()), (Some(3), Some([0xFF, 0, 0])));
+        // An index outside the palette draws and saves as Automatic.
+        sheet.gridline_color = Some(57);
+        assert_eq!(sheet.gridline_rgb(), None);
     }
 
     #[test]
