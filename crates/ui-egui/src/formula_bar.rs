@@ -89,6 +89,7 @@ pub struct EditorInfo {
 /// Draws the formula bar: line-count-driven height, Name Box, cancel/enter/Fx buttons, the editable field, muted read-only spill text and the expansion chevron.
 pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
     let font = theme::ui_font(13.0);
     let row_h = ui.ctx().fonts_mut(|f| f.row_height(&font));
     let last = BarLayout::get(ui.ctx());
@@ -111,14 +112,14 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ui.add_space(4.0);
                 let editing = app.editor.is_some();
                 let c = if editing { t.text } else { t.text_disabled };
-                let cancel = crate::widgets::icon_button(ui, Icon::Close, c, "Cancel", vec2(22.0, 24.0));
+                let cancel = crate::widgets::icon_button(ui, Icon::Close, c, lang.tr("Cancel"), vec2(22.0, 24.0));
                 if cancel.clicked() && editing {
                     app.cancel_edit();
                 }
-                if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 24.0)).clicked() && editing {
+                if crate::widgets::icon_button(ui, Icon::Check, c, lang.tr("Formula Bar|Enter"), vec2(22.0, 24.0)).clicked() && editing {
                     app.commit_edit(0, 0, false, false);
                 }
-                let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
+                let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, lang.tr("Insert Function"), vec2(26.0, 24.0));
                 if fx.clicked() {
                     app.open_dialog("insertFunction", json!({}));
                 }
@@ -280,7 +281,11 @@ fn active_input(app: &SheetApp) -> String {
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
-        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+        return if picture.alt.is_empty() {
+            app.ui.language.tr("Picture in cell").into()
+        } else {
+            app.ui.language.tr("Picture: {alt}").replace("{alt}", &picture.alt)
+        };
     }
     // Python code is shown as it is: it isn't a formula to translate or a value to format. Like
     // a formula, it stays out of view in a Hidden cell on a protected sheet.
@@ -427,9 +432,10 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     let mb = Rect::from_min_size(pos2(rect.right() - 16.0, rect.top() + 4.0), vec2(14.0, 16.0));
     icons::paint(ui.painter(), mb, Icon::Chevron, t.text_dim);
     let r = ui.interact(mb, id.with("drop"), Sense::click());
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), app.ui.language.tr("Defined Names")));
     egui::Popup::menu(&r).show(|ui| {
         if names.is_empty() {
-            ui.label(egui::RichText::new("No names defined").italics());
+            ui.label(egui::RichText::new(app.ui.language.tr("No names defined")).italics());
         }
         for n in names {
             if ui.button(&n).clicked() {

@@ -242,7 +242,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         if series.len() == 1 {
             series[0].name.as_ref().map(|n| gridcraft_calc::evaluate(&d.wb, sheet, at, n).display())
         } else {
-            Some("Chart Title".into())
+            Some(str_param(p, "defaultTitle").unwrap_or("Chart Title").into())
         }
     });
     let chart = Chart {

@@ -7,9 +7,10 @@ const LIST_HEIGHT: f32 = 360.0;
 pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Read the rules in place: running `home.manageRules` for them each frame copied and
     // serialised every rule and journaled a step 60 times a second.
+    let lang = app.ui.language;
     let count = app.session.active().and_then(|d| d.wb.active()).map_or(0, |sh| sh.cond_formats.len());
     if count == 0 {
-        ui.label("There are no conditional formatting rules on this sheet.");
+        ui.label(lang.tr("There are no conditional formatting rules on this sheet."));
         return;
     }
     let mut action: Option<Json> = None;
@@ -19,16 +20,42 @@ pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
         for i in rows {
             let Some(cf) = sh.cond_formats.get(i) else { break };
             let kind = serde_json::to_value(&cf.rule).ok().and_then(|r| r.as_object().and_then(|o| o.keys().next().cloned())).unwrap_or_default();
+            let label = match kind.as_str() {
+                "CellIs" => "Cell Value",
+                "Expression" => "Formula",
+                "ContainsText" => "Contains Text",
+                "NotContainsText" => "Does Not Contain Text",
+                "BeginsWith" => "Begins With",
+                "EndsWith" => "Ends With",
+                "Blanks" => "Blanks",
+                "NoBlanks" => "No Blanks",
+                "Errors" => "Errors",
+                "NoErrors" => "No Errors",
+                "Duplicate" => "Duplicate Values",
+                "Unique" => "Unique Values",
+                "Top10" => "Top/Bottom Rules",
+                "AboveAverage" => "Above/Below Average",
+                "TimePeriod" => "A Date Occurring",
+                "ColorScale" => "Color Scales",
+                "DataBar" => "Data Bars",
+                "IconSet" => "Icon Sets",
+                _ => kind.as_str(),
+            };
             let ranges = cf.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
             ui.horizontal(|ui| {
-                ui.label(format!("{}. {kind}  applies to {ranges}", i + 1));
+                ui.label(
+                    lang.tr("{number}. {kind}  applies to {ranges}")
+                        .replace("{number}", &(i + 1).to_string())
+                        .replace("{kind}", lang.tr(label))
+                        .replace("{ranges}", &ranges),
+                );
                 if ui.small_button("▲").clicked() {
                     action = Some(json!({"moveUp": i}));
                 }
                 if ui.small_button("▼").clicked() {
                     action = Some(json!({"moveDown": i}));
                 }
-                if ui.small_button("Delete").clicked() {
+                if ui.small_button(lang.tr("Delete")).clicked() {
                     action = Some(json!({"delete": i}));
                 }
             });

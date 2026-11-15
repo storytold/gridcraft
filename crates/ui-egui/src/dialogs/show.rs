@@ -208,11 +208,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
                 "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
                 "agents" => {
-                    ui.label("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:");
+                    ui.label(app.ui.language.tr("GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:"));
                     ui.add_space(4.0);
                     ui.monospace("gridcraft --control 7979        # JSON-lines control channel\ngridcraft-cli mcp --connect 7979   # MCP bridged to this window\ngridcraft-cli mcp                   # headless MCP server");
                     ui.add_space(4.0);
-                    ui.label(format!("{} engine commands are available. See docs/mcp.md and docs/control-protocol.md.", gridcraft_engine::command_specs().len()));
+                    ui.label(app.ui.language.tr("{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md.").replace("{count}", &gridcraft_engine::command_specs().len().to_string()));
                 }
                 "about" => about(ui, &mut d),
                 "journal" => {
@@ -243,7 +243,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     if let Some((name, bytes)) = arrived {
                         d.picture_inbox = None;
                         if bytes.len() > 16 * 1024 * 1024 {
-                            app.message = Some((d.title.clone(), "Choose a PNG or JPEG no larger than 16 MB.".into()));
+                            app.message = Some((d.title.clone(), app.ui.language.tr("Choose a PNG or JPEG no larger than 16 MB.").into()));
                         } else {
                             d.values.remove("path");
                             d.values.insert("alt".into(), json!(name));
@@ -251,17 +251,17 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     }
                     if app.services.pick_picture_async.is_some() {
-                        let name = d.values.get("alt").and_then(Json::as_str).unwrap_or("No picture selected");
+                        let name = d.values.get("alt").and_then(Json::as_str).unwrap_or_else(|| app.ui.language.tr("No picture selected"));
                         ui.label(name);
                     } else {
-                        ui.label("Picture file path (PNG or JPEG):");
+                        ui.label(app.ui.language.tr("Picture file path (PNG or JPEG):"));
                         let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
                         if ui.text_edit_singleline(&mut path).changed() {
                             d.values.remove("base64");
                             d.values.insert("path".into(), json!(path));
                         }
                     }
-                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button("Browse…").clicked() {
+                    if (app.services.pick_picture.is_some() || app.services.pick_picture_async.is_some()) && ui.button(app.ui.language.tr("Browse…")).clicked() {
                         if let Some(start) = &app.services.pick_picture_async {
                             let inbox = crate::Inbox::default();
                             start(inbox.clone());
@@ -275,13 +275,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             d.values.insert("path".into(), json!(path));
                         }
                     }
-                    ui.label("Description (optional):");
+                    ui.label(app.ui.language.tr("Description (optional):"));
                     let mut alt = d.values.get("alt").and_then(Json::as_str).unwrap_or("").to_string();
                     if ui.text_edit_singleline(&mut alt).changed() {
                         d.values.insert("alt".into(), json!(alt));
                     }
                     if d.values.get("placement").and_then(Json::as_str) == Some("cell") {
-                        ui.label(egui::RichText::new("Fits inside the selected cell and moves with its content.").small());
+                        ui.label(egui::RichText::new(app.ui.language.tr("Fits inside the selected cell and moves with its content.")).small());
                     }
                     ok_cancel(ui, &mut confirm, &mut open);
                 }
@@ -310,7 +310,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 "saveCopy" => {
                     let fmt = d.values.get("format").and_then(Json::as_str).unwrap_or("xlsx").to_string();
-                    ui.label(format!("Save a copy as .{fmt}"));
+                    ui.label(app.ui.language.tr("Save a copy as .{format}").replace("{format}", &fmt));
                     let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
                     ui.text_edit_singleline(&mut path);
                     d.values.insert("path".into(), json!(path.clone()));
@@ -338,41 +338,43 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     }
                 }
                 "saveChanges" => {
-                    ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
+                    let lang = app.ui.language;
+                    let title = d.values.get("title").and_then(Json::as_str).unwrap_or_else(|| lang.tr("this workbook"));
+                    ui.label(lang.tr("Do you want to save the changes you made to {title}?").replace("{title}", title));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
                     ui.horizontal(|ui| {
                         for (label, answer) in
                             [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
                         {
-                            if ui.button(label).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
+                            if ui.button(lang.tr(label)).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
                                 open = false;
                             }
                         }
                     });
                 }
                 "start" => {
-                    ui.heading("Start a new workbook");
+                    ui.heading(app.ui.language.tr("Start a new workbook"));
                     ui.horizontal_wrapped(|ui| {
-                        if ui.button("Blank workbook").clicked() {
+                        if ui.button(app.ui.language.tr("Blank workbook")).clicked() {
                             app.run_or_alert("file.new", json!({}));
                             open = false;
                         }
                         for (n, t) in gridcraft_engine::sample::SAMPLES {
-                            if ui.button(*t).clicked() {
+                            if ui.button(app.ui.language.tr(t)).clicked() {
                                 app.run_or_alert("file.new", json!({"sample": n}));
                                 open = false;
                             }
                         }
                     });
                     ui.separator();
-                    ui.label(egui::RichText::new("Recent").strong());
+                    ui.label(egui::RichText::new(app.ui.language.tr("Recent")).strong());
                     for path in app.ui.recent.clone() {
                         if ui.link(&path).clicked() {
                             app.open_path(&path);
                             open = false;
                         }
                     }
-                    if ui.button("Open…").clicked() {
+                    if ui.button(app.ui.language.tr("Open…")).clicked() {
                         app.open_dialog("open", json!({}));
                         open = false;
                     }
@@ -408,7 +410,10 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
-        app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
+        app.message = Some((
+            d.title.clone(),
+            app.ui.language.tr("Return to the original worksheet to insert this picture, or cancel and choose another cell.").into(),
+        ));
         confirm = false;
     }
     if confirm && d.name == "openLink" {

@@ -30,6 +30,24 @@ fn page(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<&'static str> {
 }
 
 #[test]
+fn turkish_new_workbook_tiles_translate_sample_titles_without_changing_selection() {
+    let mut h = harness(Services::default());
+    h.state_mut().ui.language = Language::Tr;
+    h.run_steps(2);
+    h.get_by_label(Language::Tr.tr("File")).click();
+    h.run_steps(3);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, Language::Tr.tr("New")).click();
+    h.run_steps(3);
+    for title in ["Household Budget", "Quarterly Sales Dashboard", "Gradebook"] {
+        assert!(h.query_by_label(Language::Tr.tr(title)).is_some(), "sample tile {title} should be translated");
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::Button, Language::Tr.tr("Household Budget")).click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 2, "the translated tile still creates the sample workbook");
+    assert!(h.state().backstage.is_none());
+}
+
+#[test]
 fn new_and_open_from_the_file_tab_keep_the_ribbon_as_it_was() {
     let opened = Arc::new(Mutex::new(0));
     let capture = opened.clone();
@@ -320,6 +338,50 @@ fn closing_the_window_asks_about_every_unsaved_workbook() {
     assert!(sent.contains(&egui::ViewportCommand::Close), "once every workbook is answered the window closes: {sent:?}");
     let sent = request_window_close(&mut h);
     assert!(!sent.contains(&egui::ViewportCommand::CancelClose), "the close that follows is let through");
+}
+
+/// The Save Changes question and its buttons follow the interface language, like every dialog.
+#[test]
+fn the_save_changes_dialog_is_translated() {
+    for language in [Language::It, Language::PtBr, Language::Ro] {
+        let mut h = harness(Services::default());
+        h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+        h.run_steps(2);
+        request_window_close(&mut h);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+        h.run_steps(2);
+        for label in ["Don't Save", "Cancel", "Save"] {
+            let shown = language.tr(label);
+            assert_ne!(shown, label, "{language:?}: {label} has no translation");
+            // Another button may share the label (the window's own Cancel), so look for any.
+            assert!(h.query_all_by_role_and_label(egui::accesskit::Role::Button, shown).next().is_some(), "{language:?}: no {shown} button");
+        }
+        let question = language.tr("Do you want to save the changes you made to {title}?");
+        let before = question.split("{title}").next().unwrap_or(question).trim();
+        assert!(h.query_all_by_label_contains(before).next().is_some(), "{language:?}: the question is not translated");
+        // The dialog's Cancel is drawn last.
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, language.tr("Cancel")).last().unwrap().click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+    }
+}
+
+/// Dialog buttons and labels written straight into the code go through the catalog too.
+#[test]
+fn the_find_and_replace_dialog_is_translated() {
+    for language in [Language::It, Language::PtBr, Language::Ro] {
+        let mut h = harness(Services::default());
+        h.state_mut().run("app.language.set", serde_json::json!({"language": language.code()})).unwrap();
+        h.state_mut().open_dialog("find", serde_json::json!({"replace": true}));
+        h.run_steps(3);
+        for label in ["Find Next", "Find All", "Replace All"] {
+            let shown = language.tr(label);
+            assert_ne!(shown, label, "{language:?}: {label} has no translation");
+            assert!(h.query_by_role_and_label(egui::accesskit::Role::Button, shown).is_some(), "{language:?}: no {shown} button");
+        }
+        assert!(h.query_all_by_label(language.tr("Find what:")).next().is_some(), "{language:?}: Find what: is not translated");
+    }
 }
 
 #[test]

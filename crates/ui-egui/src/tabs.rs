@@ -385,6 +385,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
 /// Draws status mode/messages, zoom controls/view-mode buttons and selection statistics.
 pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
     egui::Panel::bottom("status_bar").exact_size(26.0).frame(egui::Frame::NONE.fill(t.status_bar).inner_margin(egui::Margin::symmetric(12, 0))).show(
         ui,
         |ui| {
@@ -407,7 +408,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(ui, egui::RichText::new(lang.tr("Macros preserved (not executed)")).font(theme::ui_font(12.5)).color(t.danger));
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -417,8 +418,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
+                            Some((_, c)) => lang.tr("Circular References: {cell}").replace("{cell}", &c.a1()),
+                            None => lang.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
                     }
@@ -442,7 +443,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         app.open_dialog("zoom", json!({}));
                     }
                     ui.add_space(4.0);
-                    if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "Zoom In", vec2(18.0, 18.0)).clicked() {
+                    if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, lang.tr("Zoom In"), vec2(18.0, 18.0)).clicked() {
                         let z = ((zoom as f32 / 10.0).floor() * 10.0 + 10.0).min(400.0);
                         app.run_or_alert("view.zoom", json!({"percent": z}));
                     }
@@ -454,7 +455,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
                         crate::grid::Trace::keep_through_zoom(app, from);
                     }
-                    if crate::widgets::icon_button(ui, Icon::Minus, t.text_dim, "Zoom Out", vec2(18.0, 18.0)).clicked() {
+                    if crate::widgets::icon_button(ui, Icon::Minus, t.text_dim, lang.tr("Zoom Out"), vec2(18.0, 18.0)).clicked() {
                         let z = ((zoom as f32 / 10.0).ceil() * 10.0 - 10.0).max(10.0);
                         app.run_or_alert("view.zoom", json!({"percent": z}));
                     }
@@ -472,7 +473,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(lang.tr(tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }

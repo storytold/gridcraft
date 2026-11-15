@@ -27,9 +27,10 @@ pub(super) fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
     let el = str_param(p, "element").unwrap_or("title").to_string();
     let on = bool_param(p, "on").unwrap_or(true);
     let pos = str_param(p, "position").map(str::to_string);
+    let default_title = str_param(p, "defaultTitle").unwrap_or("Chart Title").to_string();
     with_chart(s, p, |c| {
         match el.as_str() {
-            "title" => c.title = if on { c.title.clone().filter(|t| !t.is_empty()).or(Some("Chart Title".into())) } else { Some(String::new()) },
+            "title" => c.title = if on { c.title.clone().filter(|t| !t.is_empty()).or(Some(default_title.clone())) } else { Some(String::new()) },
             "legend" => {
                 c.legend = if !on {
                     LegendPos::None
