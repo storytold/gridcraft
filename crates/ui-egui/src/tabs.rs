@@ -22,6 +22,12 @@ fn navigator_items(sheets: &[Arc<Sheet>]) -> Vec<(String, String)> {
     sheets.iter().enumerate().filter(|(_, s)| s.visibility == Visibility::Visible).map(|(i, s)| (i.to_string(), s.name.clone())).collect()
 }
 
+/// Workbook index of the first (or, with `last`, the last) visible sheet: where Ctrl-clicking a tab arrow lands.
+fn edge_sheet(sheets: &[Arc<Sheet>], last: bool) -> Option<usize> {
+    let mut visible = sheets.iter().enumerate().filter(|(_, s)| s.visibility == Visibility::Visible).map(|(i, _)| i);
+    if last { visible.next_back() } else { visible.next() }
+}
+
 /// Switch to sheet `i` from the tab strip or the navigator. In point mode the formula being typed keeps going on the
 /// other sheet; otherwise the edit is committed first.
 fn activate_sheet(app: &mut SheetApp, i: usize) {
@@ -53,6 +59,18 @@ fn tab_drop(i: usize, steps: i64, copy: bool) -> Option<serde_json::Value> {
         return Some(json!({"sheet": i, "to": to, "copy": true}));
     }
     Some(json!({"sheet": i, "to": to}))
+}
+
+/// Where a request to scroll the active tab into view is kept until the tabs are drawn.
+fn reveal_request_id(scope: egui::Id) -> egui::Id {
+    scope.with("worksheet_tabs_reveal_request")
+}
+
+/// Asks the tab strip to bring the active tab into view in this frame, even when the active sheet
+/// did not change (a Ctrl-click on an arrow whose edge sheet is already active).
+fn request_reveal(ui: &Ui) {
+    let id = reveal_request_id(ui.scope_id());
+    ui.ctx().data_mut(|data| data.insert_temp(id, true));
 }
 
 /// The New sheet (+) button and the gap before it.
@@ -100,29 +118,58 @@ fn tab_split_handle(app: &mut SheetApp, ui: &mut Ui, split: Rect, bar: (f32, f32
 /// Draws the worksheet tab strip: navigation, scroll/reveal, rename/drag/move with optional copy, context menu, new-sheet button, split handle and grid scrollbar.
 pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
+    // Only the controls drawn this frame have a rectangle: a hidden one keeps no stale geometry.
+    app.grid.hscroll = None;
+    app.grid.tab_split = None;
+    // File › Options › Advanced › Display options for this workbook (#3101): with neither the
+    // sheet tabs nor the horizontal scroll bar, the bar isn't there at all.
+    let view = app.session.active().map(|d| d.wb.view).unwrap_or_default();
+    if !view.show_sheet_tabs && !view.show_horizontal_scroll {
+        return;
+    }
     egui::Panel::bottom("sheet_tabs").exact_size(32.0).frame(egui::Frame::NONE.fill(t.tab_bar)).show(ui, |ui| {
         let rect = ui.max_rect();
         ui.painter().line_segment([rect.left_top(), rect.right_top()], Stroke::new(1.0, t.ribbon_border));
         ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(8.0);
-            if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
-                app.run_or_alert("sheet.previous", json!({}));
+            if view.show_sheet_tabs {
+                if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
+                    // Ctrl-click jumps to the first visible sheet, like Excel's tab scroll buttons.
+                    let edge =
+                        if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, false)) } else { None };
+                    match edge {
+                        Some(i) => {
+                            activate_sheet(app, i);
+                            request_reveal(ui);
+                        }
+                        None => app.run_or_alert("sheet.previous", json!({})),
+                    }
+                }
+                if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
+                    // Ctrl-click jumps to the last visible sheet.
+                    let edge =
+                        if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, true)) } else { None };
+                    match edge {
+                        Some(i) => {
+                            activate_sheet(app, i);
+                            request_reveal(ui);
+                        }
+                        None => app.run_or_alert("sheet.next", json!({})),
+                    }
+                }
+                let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, app.ui.language.tr("All sheets"), vec2(24.0, 24.0));
+                all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
+                let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
+                let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
+                let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
+                if let crate::ribbon::ComboResult::Picked(i) = crate::ribbon::editable_combo(ui, &all, "sheet_navigator", &active, &rows, false)
+                    && let Ok(i) = i.parse::<usize>()
+                {
+                    activate_sheet(app, i);
+                }
+                ui.add_space(8.0);
             }
-            if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
-                app.run_or_alert("sheet.next", json!({}));
-            }
-            let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, app.ui.language.tr("All sheets"), vec2(24.0, 24.0));
-            all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
-            let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
-            let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
-            let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
-            if let crate::ribbon::ComboResult::Picked(i) = crate::ribbon::editable_combo(ui, &all, "sheet_navigator", &active, &rows, false)
-                && let Ok(i) = i.parse::<usize>()
-            {
-                activate_sheet(app, i);
-            }
-            ui.add_space(8.0);
             let Some(d) = app.session.active() else { return };
             let (bar_left, bar_width) = (ui.cursor().left(), ui.available_width());
             let uid = d.uid;
@@ -143,6 +190,8 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             // After the handle at the scrollbar's left edge is dragged, the tabs and New sheet
             // take the share it was dragged to.
             let tabs_width = match share {
+                // Without the scroll bar the tabs have the whole bar.
+                _ if !view.show_horizontal_scroll => (bar_width - NEW_SHEET_WIDTH).max(0.0),
                 Some(share) => (bar_width * share - NEW_SHEET_WIDTH).max(0.0),
                 None => (bar_width * 0.6).max(100.0),
             };
@@ -150,159 +199,167 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             // allow browsing other tabs without snapping back on every frame.
             let reveal_key = egui::Id::unique((d.uid, d.wb.active_sheet(), &sheets, tabs_width.to_bits()));
             let reveal_id = ui.scope_id().with("worksheet_tabs_reveal");
+            let request_id = reveal_request_id(ui.scope_id());
             let reveal_active = ui.ctx().data_mut(|data| {
                 let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
                 data.insert_temp(reveal_id, reveal_key);
-                changed
+                // A Ctrl-click on an arrow whose edge sheet is already active changes nothing above,
+                // yet asks to bring that tab into view.
+                changed | data.remove_temp::<bool>(request_id).unwrap_or(false)
             });
-            ui.allocate_ui_with_layout(vec2(tabs_width, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // Translate vertical wheel movement into horizontal
-                // worksheet-tab scrolling.
-                let wheel_scroll = if ui.rect_contains_pointer(ui.max_rect()) {
-                    ui.input(|i| {
-                        let d = i.smooth_scroll_delta;
-                        if d.x.abs() > d.y.abs() { d.x } else { d.y }
-                    })
-                } else {
-                    0.0
-                };
+            if view.show_sheet_tabs {
+                ui.allocate_ui_with_layout(vec2(tabs_width, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    // Translate vertical wheel movement into horizontal
+                    // worksheet-tab scrolling.
+                    let wheel_scroll = if ui.rect_contains_pointer(ui.max_rect()) {
+                        ui.input(|i| {
+                            let d = i.smooth_scroll_delta;
+                            if d.x.abs() > d.y.abs() { d.x } else { d.y }
+                        })
+                    } else {
+                        0.0
+                    };
 
-                egui::ScrollArea::horizontal()
-                    .id_salt("worksheet_tabs_horizontal")
-                    .auto_shrink([true, false])
-                    .min_scrolled_width(0.0)
-                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
-                    .show(ui, |ui| {
-                        if wheel_scroll.abs() > 0.0 {
-                            ui.scroll_with_delta(vec2(wheel_scroll, 0.0));
-                        }
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            for (i, name, color, active) in sheets {
-                                let renaming = app.grid.renaming_tab == Some(i);
-                                let font = if active { theme::ui_bold(13.0) } else { theme::ui_font(13.0) };
-                                let tw = ui.painter().layout_no_wrap(name.clone(), font.clone(), t.text).size().x;
-                                let w = (tw + 32.0).max(72.0);
-                                let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click_and_drag());
-                                if active && reveal_active {
-                                    resp.scroll_to_me(None);
-                                }
-                                let r = r.shrink2(vec2(0.0, 1.0));
-                                if active {
-                                    ui.painter().rect_filled(Rect::from_min_max(pos2(r.left(), r.top() - 2.0), r.max), 4.0, t.tab_active);
-                                    ui.painter().rect_stroke(
-                                        Rect::from_min_max(pos2(r.left(), r.top() - 2.0), r.max),
-                                        4.0,
-                                        Stroke::new(1.0, t.ribbon_border),
-                                        StrokeKind::Inside,
-                                    );
-                                } else if resp.hovered() {
-                                    ui.painter().rect_filled(r, 4.0, t.hover);
-                                }
-                                if let Some(c) = color {
-                                    let band = Rect::from_min_size(pos2(r.left() + 6.0, r.bottom() - 4.0), vec2(r.width() - 12.0, 3.0));
-                                    ui.painter().rect_filled(band, 1.0, theme::color32(c));
-                                } else if active {
-                                    let band = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.min(48.0), 2.5));
-                                    ui.painter().rect_filled(band, 1.0, t.accent);
-                                }
-                                if renaming {
-                                    let mut text = app.grid.rename_text.clone();
-                                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(6.0, 5.0))));
-                                    let ed = child
-                                        .add(egui::TextEdit::singleline(&mut text).font(theme::ui_font(13.0)).desired_width(r.width() - 12.0))
-                                        .accessible_name(app.ui.language.tr("Sheet Name"));
-                                    app.grid.rename_text = text.clone();
-                                    if rename_needs_focus(ed.has_focus(), ed.lost_focus()) {
-                                        ed.request_focus();
+                    egui::ScrollArea::horizontal()
+                        .id_salt("worksheet_tabs_horizontal")
+                        .auto_shrink([true, false])
+                        .min_scrolled_width(0.0)
+                        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                        .show(ui, |ui| {
+                            if wheel_scroll.abs() > 0.0 {
+                                ui.scroll_with_delta(vec2(wheel_scroll, 0.0));
+                            }
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                for (i, name, color, active) in sheets {
+                                    let renaming = app.grid.renaming_tab == Some(i);
+                                    let font = if active { theme::ui_bold(13.0) } else { theme::ui_font(13.0) };
+                                    let tw = ui.painter().layout_no_wrap(name.clone(), font.clone(), t.text).size().x;
+                                    let w = (tw + 32.0).max(72.0);
+                                    let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click_and_drag());
+                                    if active && reveal_active {
+                                        resp.scroll_to_me(None);
                                     }
-                                    if ed.lost_focus() {
-                                        if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && text != name {
-                                            app.run_or_alert("sheet.rename", json!({"sheet": i, "name": text}));
+                                    let r = r.shrink2(vec2(0.0, 1.0));
+                                    if active {
+                                        ui.painter().rect_filled(Rect::from_min_max(pos2(r.left(), r.top() - 2.0), r.max), 4.0, t.tab_active);
+                                        ui.painter().rect_stroke(
+                                            Rect::from_min_max(pos2(r.left(), r.top() - 2.0), r.max),
+                                            4.0,
+                                            Stroke::new(1.0, t.ribbon_border),
+                                            StrokeKind::Inside,
+                                        );
+                                    } else if resp.hovered() {
+                                        ui.painter().rect_filled(r, 4.0, t.hover);
+                                    }
+                                    if let Some(c) = color {
+                                        let band = Rect::from_min_size(pos2(r.left() + 6.0, r.bottom() - 4.0), vec2(r.width() - 12.0, 3.0));
+                                        ui.painter().rect_filled(band, 1.0, theme::color32(c));
+                                    } else if active {
+                                        let band = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.min(48.0), 2.5));
+                                        ui.painter().rect_filled(band, 1.0, t.accent);
+                                    }
+                                    if renaming {
+                                        let mut text = app.grid.rename_text.clone();
+                                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(6.0, 5.0))));
+                                        let ed = child
+                                            .add(egui::TextEdit::singleline(&mut text).font(theme::ui_font(13.0)).desired_width(r.width() - 12.0))
+                                            .accessible_name(app.ui.language.tr("Sheet Name"));
+                                        app.grid.rename_text = text.clone();
+                                        if rename_needs_focus(ed.has_focus(), ed.lost_focus()) {
+                                            ed.request_focus();
                                         }
-                                        app.grid.renaming_tab = None;
+                                        if ed.lost_focus() {
+                                            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && text != name {
+                                                app.run_or_alert("sheet.rename", json!({"sheet": i, "name": text}));
+                                            }
+                                            app.grid.renaming_tab = None;
+                                        }
+                                    } else {
+                                        ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
                                     }
-                                } else {
-                                    ui.painter().text(r.center(), Align2::CENTER_CENTER, &name, font, if active { t.accent } else { t.text });
-                                }
-                                // A right-click activates the tab too, as in Excel, so the menu's sheet commands (Protect
-                                // Sheet, Select All Sheets) act on the sheet that was clicked rather than the one that was active.
-                                if resp.clicked() || (resp.secondary_clicked() && !active) {
-                                    activate_sheet(app, i);
-                                }
-                                if resp.double_clicked() {
-                                    app.grid.renaming_tab = Some(i);
-                                    app.grid.rename_text = name.clone();
-                                }
-                                // Drag to reorder; with the copy modifier held, drop a copy instead.
-                                let copy = drop_copies_sheet(ui.input(|inp| inp.modifiers), ui.ctx().os() == egui::os::OperatingSystem::Mac);
-                                if resp.dragged() && copy {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
-                                }
-                                if resp.drag_stopped()
-                                    && let Some(p) = ui.input(|inp| inp.pointer.interact_pos())
-                                {
-                                    let dx = p.x - r.center().x;
-                                    let steps = (dx / w).round() as i64;
-                                    if let Some(params) = tab_drop(i, steps, copy) {
-                                        app.run_or_alert("sheet.move", params);
+                                    // A right-click activates the tab too, as in Excel, so the menu's sheet commands (Protect
+                                    // Sheet, Select All Sheets) act on the sheet that was clicked rather than the one that was active.
+                                    if resp.clicked() || (resp.secondary_clicked() && !active) {
+                                        activate_sheet(app, i);
                                     }
-                                }
-                                resp.context_menu(|ui| {
-                                    ui.set_min_width(180.0);
-                                    if ui.button(app.ui.language.tr("Insert Sheet")).clicked() {
-                                        app.run_or_alert("home.insertSheet", json!({"before": i}));
-                                    }
-                                    if ui.button(app.ui.language.tr("Delete")).clicked() {
-                                        app.run_or_alert("home.deleteSheet", json!({"sheet": i}));
-                                    }
-                                    if ui.button(app.ui.language.tr("Rename")).clicked() {
+                                    if resp.double_clicked() {
                                         app.grid.renaming_tab = Some(i);
                                         app.grid.rename_text = name.clone();
                                     }
-                                    if ui.button(app.ui.language.tr("Move or Copy…")).clicked() {
-                                        app.open_dialog("moveSheet", json!({"sheet": i}));
+                                    // Drag to reorder; with the copy modifier held, drop a copy instead.
+                                    let copy = drop_copies_sheet(ui.input(|inp| inp.modifiers), ui.ctx().os() == egui::os::OperatingSystem::Mac);
+                                    if resp.dragged() && copy {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Copy);
                                     }
-                                    if ui.button(app.ui.language.tr("Duplicate")).clicked() {
-                                        app.run_or_alert("sheet.move", json!({"sheet": i, "to": i + 1, "copy": true}));
+                                    if resp.drag_stopped()
+                                        && let Some(p) = ui.input(|inp| inp.pointer.interact_pos())
+                                    {
+                                        let dx = p.x - r.center().x;
+                                        let steps = (dx / w).round() as i64;
+                                        if let Some(params) = tab_drop(i, steps, copy) {
+                                            app.run_or_alert("sheet.move", params);
+                                        }
                                     }
-                                    ui.menu_button(app.ui.language.tr("Tab Color"), |ui| {
-                                        let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
-                                        if let Some(c) = crate::widgets::color_palette_fixed(ui, &colors, app.ui.language.tr("No Color")) {
-                                            app.run_or_alert("sheet.tabColor", json!({"sheet": i, "color": c}));
+                                    resp.context_menu(|ui| {
+                                        ui.set_min_width(180.0);
+                                        if ui.button(app.ui.language.tr("Insert Sheet")).clicked() {
+                                            app.run_or_alert("home.insertSheet", json!({"before": i}));
+                                        }
+                                        if ui.button(app.ui.language.tr("Delete")).clicked() {
+                                            app.run_or_alert("home.deleteSheet", json!({"sheet": i}));
+                                        }
+                                        if ui.button(app.ui.language.tr("Rename")).clicked() {
+                                            app.grid.renaming_tab = Some(i);
+                                            app.grid.rename_text = name.clone();
+                                        }
+                                        if ui.button(app.ui.language.tr("Move or Copy…")).clicked() {
+                                            app.open_dialog("moveSheet", json!({"sheet": i}));
+                                        }
+                                        if ui.button(app.ui.language.tr("Duplicate")).clicked() {
+                                            app.run_or_alert("sheet.move", json!({"sheet": i, "to": i + 1, "copy": true}));
+                                        }
+                                        ui.menu_button(app.ui.language.tr("Tab Color"), |ui| {
+                                            let colors = app.session.active().map(|d| d.wb.theme.colors).unwrap_or_default();
+                                            if let Some(c) = crate::widgets::color_palette_fixed(ui, &colors, app.ui.language.tr("No Color")) {
+                                                app.run_or_alert("sheet.tabColor", json!({"sheet": i, "color": c}));
+                                                ui.close();
+                                            }
+                                        });
+                                        ui.separator();
+                                        if ui.button(app.ui.language.tr("Hide")).clicked() {
+                                            app.run_or_alert("sheet.hide", json!({"sheet": i}));
+                                        }
+                                        if ui.button(app.ui.language.tr("Unhide…")).clicked() {
+                                            app.run_or_alert("sheet.unhide", json!({}));
+                                        }
+                                        ui.separator();
+                                        let protected = app.active_sheet_protected();
+                                        if ui
+                                            .button(if protected {
+                                                app.ui.language.tr("Unprotect Sheet…")
+                                            } else {
+                                                app.ui.language.tr("Protect Sheet…")
+                                            })
+                                            .clicked()
+                                        {
+                                            app.open_dialog("protectSheet", json!({}));
+                                        }
+                                        if ui.button(app.ui.language.tr("Select All Sheets")).clicked() {
                                             ui.close();
                                         }
                                     });
-                                    ui.separator();
-                                    if ui.button(app.ui.language.tr("Hide")).clicked() {
-                                        app.run_or_alert("sheet.hide", json!({"sheet": i}));
-                                    }
-                                    if ui.button(app.ui.language.tr("Unhide…")).clicked() {
-                                        app.run_or_alert("sheet.unhide", json!({}));
-                                    }
-                                    ui.separator();
-                                    let protected = app.active_sheet_protected();
-                                    if ui
-                                        .button(if protected {
-                                            app.ui.language.tr("Unprotect Sheet…")
-                                        } else {
-                                            app.ui.language.tr("Protect Sheet…")
-                                        })
-                                        .clicked()
-                                    {
-                                        app.open_dialog("protectSheet", json!({}));
-                                    }
-                                    if ui.button(app.ui.language.tr("Select All Sheets")).clicked() {
-                                        ui.close();
-                                    }
-                                });
-                            }
+                                }
+                            });
                         });
-                    });
-            });
-            ui.add_space(6.0);
-            if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, app.ui.language.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
-                app.run_or_alert("home.insertSheet", json!({}));
+                });
+                ui.add_space(6.0);
+                if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, app.ui.language.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
+                    app.run_or_alert("home.insertSheet", json!({}));
+                }
+            }
+            if !view.show_horizontal_scroll {
+                return;
             }
             // The track ends where the grid does, so it stops under the vertical scrollbar.
             let avail = ui.available_rect_before_wrap();
@@ -312,8 +369,14 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             let split_left =
                 share.map_or(avail.left(), |share| (bar_left + bar_width * share).min(right - SPLIT_WIDTH - MIN_TRACK).max(avail.left()));
             let split = Rect::from_min_max(pos2(split_left, avail.top()), pos2(split_left + SPLIT_WIDTH, avail.bottom()));
-            tab_split_handle(app, ui, split, (bar_left, bar_width), right, uid, &t);
-            let track = Rect::from_min_max(pos2(split.right(), avail.center().y - 7.0), pos2(right, avail.center().y + 7.0));
+            // Without sheet tabs there is nothing to split: the scroll bar takes the bar.
+            let track_left = if view.show_sheet_tabs {
+                tab_split_handle(app, ui, split, (bar_left, bar_width), right, uid, &t);
+                split.right()
+            } else {
+                avail.left()
+            };
+            let track = Rect::from_min_max(pos2(track_left, avail.center().y - 7.0), pos2(right, avail.center().y + 7.0));
             crate::grid::horizontal_scrollbar(app, ui, track, &t);
         });
     });
@@ -340,6 +403,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     gridcraft_engine::Mode::Point => "Point",
                 };
                 text(ui, egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
+                crate::macro_ui::status(app, ui);
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
@@ -386,7 +450,9 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     let slider = ui.add(egui::Slider::new(&mut z, 10.0..=400.0).show_value(false).logarithmic(true));
                     ui.ctx().accesskit_node_builder(slider.id, |node| node.set_label(app.ui.language.tr("Zoom")));
                     if slider.changed() {
+                        let from = crate::grid::Trace::key(app);
                         let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
+                        crate::grid::Trace::keep_through_zoom(app, from);
                     }
                     if crate::widgets::icon_button(ui, Icon::Minus, t.text_dim, "Zoom Out", vec2(18.0, 18.0)).clicked() {
                         let z = ((zoom as f32 / 10.0).ceil() * 10.0 - 10.0).max(10.0);
@@ -412,8 +478,20 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     }
                     ui.add_space(16.0);
                     // The layout runs right to left, so the last statistic is drawn first.
+                    // Clicking a statistic copies its value (without the label) to the clipboard.
                     for p in selection_statistics(app).into_iter().rev() {
-                        text(ui, egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim));
+                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                        let resp = ui.add(
+                            egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
+                                .selectable(false)
+                                .sense(Sense::click()),
+                        );
+                        let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(app.ui.language.tr("Click to copy"));
+                        if resp.clicked() {
+                            ui.ctx().copy_text(value);
+                        }
+                        // The label senses clicks, so it also has to open the statistics menu on right-click.
+                        resp.context_menu(|ui| status_bar_menu(app, ui));
                         ui.add_space(10.0);
                     }
                 });
@@ -483,7 +561,8 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, navigator_items, rename_needs_focus, tab_drop,
+        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, edge_sheet, navigator_items, rename_needs_focus,
+        tab_drop,
     };
     use crate::SheetApp;
     use egui::Modifiers;
@@ -573,6 +652,16 @@ mod tests {
         very_hidden.visibility = Visibility::VeryHidden;
         let sheets = [Sheet::new("Data"), hidden, very_hidden, Sheet::new("Summary")].map(Arc::new);
         assert_eq!(navigator_items(&sheets), vec![("0".to_string(), "Data".to_string()), ("3".to_string(), "Summary".to_string())]);
+    }
+
+    #[test]
+    fn ctrl_click_on_the_tab_arrows_lands_on_the_first_and_last_visible_sheet() {
+        let mut hidden = Sheet::new("Hidden");
+        hidden.visibility = Visibility::Hidden;
+        let sheets = [hidden.clone(), Sheet::new("A"), Sheet::new("B"), Sheet::new("C"), hidden].map(Arc::new);
+        assert_eq!(edge_sheet(&sheets, false), Some(1));
+        assert_eq!(edge_sheet(&sheets, true), Some(3));
+        assert_eq!(edge_sheet(&[], true), None);
     }
 
     #[test]

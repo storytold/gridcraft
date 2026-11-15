@@ -100,6 +100,11 @@ fn windows_and_mac_variants() {
     assert_eq!(lookup(Key::ArrowLeft, Some(Key::Num4), alt_shift, false), run("data.ungroup"));
     assert_eq!(lookup(Key::PageDown, Some(Key::Num3), Modifiers::ALT, false), Some(Shortcut::ScreenRight));
     assert_eq!(lookup(Key::PageDown, Some(Key::Num3), CTRL_SHIFT, false), None);
+    // Ctrl+. is Next Corner of Selection, with Control on a Mac too (#1442); Cmd+Shift+. stays
+    // Increase Font Size.
+    assert_eq!(lookup(Key::Period, Some(Key::Period), cmd, false), run("selection.nextCorner"));
+    assert_eq!(lookup(Key::Period, Some(Key::Period), ctrl, true), run("selection.nextCorner"));
+    assert_eq!(lookup(Key::Period, Some(Key::Period), Modifiers { shift: true, ..mac_cmd }, true), run("home.increaseFontSize"));
     // Plain keys stay with the grid (typing, navigation).
     assert_eq!(lookup(Key::A, Some(Key::A), Modifiers::NONE, false), None);
     assert_eq!(lookup(Key::F2, Some(Key::F2), Modifiers::NONE, false), None);
