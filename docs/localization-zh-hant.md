@@ -1,6 +1,6 @@
 # 繁體中文（台灣）介面 / Traditional Chinese (Taiwan) interface
 
-更新日期 / Updated: 2026-11-03
+更新日期 / Updated: 2026-11-15
 
 ## 繁體中文
 
@@ -13,8 +13,16 @@
 翻譯檔位於 `crates/ui-egui/src/i18n/zh_hant.rs`，沿用現有的英文查表機制，
 採用「儲存格、活頁簿、工作表、樞紐分析表、資料編輯列、走勢圖、貼上」等台灣用語。
 譯文由英文原始字串重新撰寫，並經台灣用語審核；沒有複製其他軟體的翻譯資源。
-未翻譯的文字仍顯示英文。函數說明、公式語法、數值與日期格式、文件內容及命令 ID
+未翻譯的文字仍顯示英文。公式語法、數值與日期格式、文件內容及命令 ID
 沿用既有行為；新增語系不代表整個應用程式已完成在地化。
+
+### 函數說明
+
+`crates/ui-egui/src/i18n/zh_hant_functions.rs` 提供函數目錄中全部 479 則函數說明與
+283 個引數名稱的繁中譯文（引數提示、自動完成、插入函數對話方塊及「公式」索引標籤選單），
+採用台灣 Excel 用語，例如「傳回、參照、儲存格、陣列、引數、常態分配、變異數、亂數」。
+譯文以 #3271（acebd12345）的翻譯為基礎，並依台灣用語修訂。`cargo xtask i18n-report`
+會列出目錄已不存在的英文鍵；測試確認每個函數都有繁中說明。
 
 ### Noto CJK 繁中字型
 
@@ -44,9 +52,14 @@ An explicit `Hans` or `Hant` script takes precedence over the region. Existing `
 The catalog in `crates/ui-egui/src/i18n/zh_hant.rs` uses the existing English-keyed lookup mechanism
 and Taiwan spreadsheet terminology. Translations were written from the English source strings
 and reviewed for Taiwan usage; no proprietary localization resources were copied. Untranslated
-strings fall back to English. Function help, formula syntax, number/date formats, document content
+strings fall back to English. Formula syntax, number/date formats, document content
 and command IDs retain their existing behavior. Adding this catalog does not imply complete
 application localization.
+
+Worksheet function help is in `crates/ui-egui/src/i18n/zh_hant_functions.rs`: all 479 function
+descriptions and 283 argument names in the function catalog (argument hints, autocomplete, Insert
+Function and the Formulas-tab menus), in Taiwan Excel terms. It builds on the translations in #3271
+by acebd12345, revised for Taiwan usage; a test checks every catalog function has a description.
 
 ### Noto CJK fonts
 

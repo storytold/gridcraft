@@ -145,6 +145,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Traditional Chinese function help: all 479 descriptions and 283 argument names of the function catalog, plus Maximize/Minimize/Restore Down / 繁中函數說明：函數目錄全部 479 則說明與 283 個引數名稱 |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-11-03 | minor | Traditional Chinese: 1,196 lookup entries, script-aware locale selection, persistent preferences and native TC font fallback / 繁中：1,196 個查表項目、繁簡語系分流、設定保存與桌面繁中字型回退 |
