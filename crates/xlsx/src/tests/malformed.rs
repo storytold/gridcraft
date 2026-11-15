@@ -539,3 +539,18 @@ fn outline_summary_directions_round_trip() {
     let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
     assert!(!xml.contains("outlinePr"), "{xml}");
 }
+
+/// A shared follower whose copy is refused keeps its cached value even inside an array range.
+#[test]
+fn refused_shared_copies_keep_their_values_inside_array_ranges() {
+    let master = format!("1+(\"{}", "a".repeat(gridcraft_formula::MAX_FORMULA_LEN));
+    let rows = format!(
+        r#"<row r="1"><c r="B1"><f t="array" ref="B1:C3">1</f><v>1</v></c><c r="C1"><f t="shared" ref="C1:C3" si="0">{master}</f><v>1</v></c></row><row r="2"><c r="C2"><f t="shared" si="0"/><v>7</v></c></row>"#
+    );
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let c2 = gridcraft_core::CellRef::new(1, 2);
+    assert!(s.cell(c2).is_some_and(|c| c.formula.is_none()));
+    assert_eq!(s.value(c2), gridcraft_core::Value::Number(7.0));
+    assert!(rep.warnings.iter().any(|w| w.contains("longer than")), "{:?}", rep.warnings);
+}
