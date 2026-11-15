@@ -204,8 +204,8 @@ fn write_struct_ref(s: &StructRef, at_shorthand: bool) -> String {
 
 fn number(n: f64) -> String {
     let text = number_to_text(n);
-    // 15 significant digits can round past f64::MAX, which no longer parses.
-    if text.parse::<f64>().is_ok_and(f64::is_finite) {
+    // Use the compact spelling only when reparsing preserves the value in the formula.
+    if !n.is_finite() || text.parse::<f64>().is_ok_and(|parsed| parsed == n) {
         return text;
     }
     let exact = format!("{:E}", n);
