@@ -280,6 +280,8 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, prio: &[u32]) {
     }
 }
 
+/// Writes the sheet's notes and form controls drawing, then its header and footer picture drawing,
+/// then the kept elements that follow them.
 fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::passthrough::SheetKept<'_>, rels: &mut Rels, out: &mut Out) {
     // Notes and form controls share one legacy VML drawing: notes need it for Excel to show them,
     // and controls carry their `x:ClientData` there. Shape ids come from 1024-id blocks listed in
@@ -324,6 +326,11 @@ fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::pas
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
     } else if let Some(rid) = kept.lone_vml(rels, out) {
         let _ = write!(s, "<legacyDrawing r:id=\"{rid}\"/>");
+    }
+    // Header and footer pictures (#1257): CT_Worksheet puts <legacyDrawingHF> right after
+    // <legacyDrawing>. Their shape block is the next free one, after this sheet's notes drawing.
+    if let Some(el) = crate::hf_pictures::write(sheet, si + 1, rels, out) {
+        s.push_str(&el);
     }
     s.push_str(&kept.elements(&controls));
 }
