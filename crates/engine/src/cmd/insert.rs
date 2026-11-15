@@ -538,6 +538,7 @@ fn valid_table_name(name: &str) -> bool {
         && name.chars().enumerate().all(|(i, c)| c.is_alphanumeric() || c == '_' || c == '.' || (i == 0 && c == '\\'))
 }
 
+/// Renames a table; structured references in cell formulas and calculated column formulas follow.
 fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     let name = str_param(p, "name").ok_or_else(|| bad("table.rename", "missing `name`"))?.to_string();
@@ -572,6 +573,23 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 });
                 if let Some(cell) = sh.cells.get_mut(c) {
                     cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
+                }
+            }
+            // Calculated column formulas are stored as text on the columns. Files write a whole-table
+            // reference as `Table[]`, so as in Excel only structured references are renamed there.
+            for text in sh.tables.iter_mut().flat_map(|t| &mut t.columns).filter_map(|col| col.formula.as_mut()) {
+                let Ok(e) = gridcraft_formula::parse(text) else { continue };
+                let mut hit = false;
+                let ne = e.map(&mut |x| match x {
+                    gridcraft_formula::Expr::Struct(mut st) if st.table.eq_ignore_ascii_case(&old) => {
+                        st.table = name.clone();
+                        hit = true;
+                        gridcraft_formula::Expr::Struct(st)
+                    }
+                    o => o,
+                });
+                if hit {
+                    *text = gridcraft_formula::print(&ne);
                 }
             }
         }
@@ -1992,5 +2010,30 @@ mod tests {
         }
         s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
         s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
+    }
+
+    #[test]
+    fn renaming_a_table_updates_calculated_column_formulas() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Sku", "Price"], [101, 5], [102, 7]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "D1", "values": [["Item", "Cost"], [102, 0], [101, 0]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Prices"})).unwrap();
+        s.execute("insert.table", json!({"range": "D1:E3", "header": true, "name": "Orders"})).unwrap();
+        // Excel-authored files carry calculated column formulas; no command creates them.
+        let f = "INDEX(Prices[Price],MATCH(Orders[@Item],Prices[Sku],0))";
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[1].columns[1].formula = Some(f.into());
+        let stored = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().tables[1].columns[1].formula.clone().unwrap();
+        s.execute("table.rename", json!({"table": "Prices", "name": "PriceList"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(PriceList[Price],MATCH(Orders[@Item],PriceList[Sku],0))");
+        s.execute("table.rename", json!({"table": "Orders", "name": "Sales"})).unwrap();
+        assert_eq!(stored(&s), "INDEX(PriceList[Price],MATCH(Sales[@Item],PriceList[Sku],0))");
+        // LET/LAMBDA names keep their spelling, as in Excel; only the table reference follows.
+        let f = "LET(PriceList,2,Rates,3,PriceList+Rates)+ROWS(PriceList[])";
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().tables[1].columns[1].formula = Some(f.into());
+        s.execute("table.rename", json!({"table": "PriceList", "name": "Rates"})).unwrap();
+        assert_eq!(stored(&s), "LET(PriceList,2,Rates,3,PriceList+Rates)+ROWS(Rates[])");
     }
 }
