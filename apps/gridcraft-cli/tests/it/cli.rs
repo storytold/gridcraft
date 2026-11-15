@@ -243,6 +243,39 @@ fn a_directory_first_reached_at_the_depth_limit_is_completed_when_named_as_an_in
     let _ = std::fs::remove_dir_all(dir);
 }
 
+#[test]
+fn run_accepts_a_leading_utf8_bom_in_scripts() {
+    let dir = tmpdir("script-bom");
+    let script = dir.join("s.jsonl");
+    let out = dir.join("t.xlsx");
+    for prefix in ["", "\u{feff}"] {
+        for first in [
+            "cell.set={\"cell\":\"A1\",\"input\":\"21\"}",
+            "{\"command\":\"cell.set\",\"params\":{\"cell\":\"A1\",\"input\":\"21\"}}",
+            "# comment\ncell.set={\"cell\":\"A1\",\"input\":\"21\"}",
+        ] {
+            std::fs::write(&script, format!("{prefix}{first}\ncell.set={{\"cell\":\"A2\",\"input\":\"left\u{feff}right\"}}\n")).unwrap();
+            let text = ok(&["run", "--script", script.to_str().unwrap(), "--print", "A1:A2", "--csv", "--quiet"]);
+            assert_eq!(text, "21\nleft\u{feff}right\n");
+        }
+    }
+
+    // Only the file's leading marker is skipped. Malformed lines keep their original number.
+    for (text, line, error) in [
+        ("\u{feff}# comment\nx={bad", "s.jsonl:2", "bad JSON params"),
+        ("# comment\n\u{feff}file.new", "s.jsonl:2", "file.new"),
+        ("\u{feff}\u{feff}file.new", "s.jsonl:1", "file.new"),
+    ] {
+        std::fs::write(&script, text).unwrap();
+        let o = run(&["run", "--script", script.to_str().unwrap(), "--out", out.to_str().unwrap(), "--quiet"]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success(), "{err}");
+        assert!(err.contains(line) && err.contains(error), "{err}");
+        assert!(!out.exists(), "no workbook is written on error");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// A script line whose parameters are under a key `run` does not read used to run the command
 /// with no parameters at all, and the run still exited 0: three mistaken lines made Sheet2,
 /// Sheet3 and Sheet4 instead of the named sheets, and nothing said so (#2256).
