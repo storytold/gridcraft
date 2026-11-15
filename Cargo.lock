@@ -2219,6 +2219,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "web-time",
  "zip 3.0.0",
 ]
@@ -2282,6 +2283,12 @@ dependencies = [
 [[package]]
 name = "gridcraft-pdf"
 version = "0.19.1"
+dependencies = [
+ "harfrust",
+ "sha2 0.11.1",
+ "skrifa",
+ "unicode-bidi",
+]
 
 [[package]]
 name = "gridcraft-sandbox"
