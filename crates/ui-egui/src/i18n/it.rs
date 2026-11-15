@@ -995,6 +995,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Sposta in Valori",
         "Summarize by Sum" => "Riepiloga per somma",
         "Summarize by Count" => "Riepiloga per conteggio",
+        "Summarize by Distinct Count" => "Riepiloga per conteggio distinto",
         "Summarize by Average" => "Riepiloga per media",
         "Summarize by Max" => "Riepiloga per massimo",
         "Summarize by Min" => "Riepiloga per minimo",
@@ -1021,6 +1022,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostra",
         "Collapse dialog" => "Comprimi finestra di dialogo",
         "Expand dialog" => "Espandi finestra di dialogo",
+        "Distinct Count" => "Conteggio distinto",
+        "A calculated field can't use Distinct Count." => "Un campo calcolato non può usare «Conteggio distinto».",
         _ => return None,
     })
 }

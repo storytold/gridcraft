@@ -448,6 +448,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        "Distinct Count" => "Benzersiz Sayı",
+        "Summarize by Distinct Count" => "Benzersiz Sayıya göre özetle",
+        "A calculated field can't use Distinct Count." => "Hesaplanmış alan Benzersiz Sayı kullanamaz.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Bu çalışma kitabında değer alanı “Benzersiz Sayı” olan bir PivotTable var. .xlsx dosyasında düz bir Sayı olarak ve yalnızca GridCraft'in okuduğu bir işaretle saklanır; bu yüzden Excel'de Yenile onu düz bir sayıya dönüştürür."
+        }
         _ => return None,
     })
 }

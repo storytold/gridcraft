@@ -996,6 +996,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show as Running Total" => "Afișare ca total cumulat",
         "Summarize by Average" => "Rezumare după medie",
         "Summarize by Count" => "Rezumare după numărare",
+        "Summarize by Distinct Count" => "Rezumare după numărare distinctă",
         "Summarize by Max" => "Rezumare după maxim",
         "Summarize by Min" => "Rezumare după minim",
         "Summarize by Sum" => "Rezumare după sumă",
@@ -1068,6 +1069,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        "Distinct Count" => "Numărare distinctă",
+        "A calculated field can't use Distinct Count." => "Un câmp calculat nu poate folosi numărarea distinctă.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Acest registru de lucru conține un tabel pivot cu un câmp de valori „Numărare distinctă”. În fișierul .xlsx este salvat ca o Numărare simplă, împreună cu un marcaj pe care îl citește doar GridCraft, așa că Reîmprospătare în Excel îl transformă într-o numărare simplă."
+        }
         _ => return None,
     })
 }

@@ -1027,6 +1027,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        "Distinct Count" => "Contagem distinta",
+        "Summarize by Distinct Count" => "Resumir por contagem distinta",
+        "A calculated field can't use Distinct Count." => "Um campo calculado não pode usar «Contagem distinta».",
         _ => return None,
     })
 }

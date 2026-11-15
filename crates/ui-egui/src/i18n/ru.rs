@@ -491,6 +491,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "Distinct Count" => "Число уникальных",
+        "Summarize by Distinct Count" => "Итоги по числу уникальных",
+        "A calculated field can't use Distinct Count." => "Вычисляемое поле не может использовать число уникальных.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "В этой книге есть сводная таблица с полем значений «Число уникальных». В файле .xlsx оно сохраняется как обычное Количество вместе с меткой, которую читает только GridCraft, поэтому команда Обновить в Excel превращает его в обычное количество."
+        }
         _ => return None,
     })
 }
