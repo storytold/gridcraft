@@ -60,6 +60,7 @@ pub fn describe(latex: &str, e: &MathError) -> String {
     }
 }
 
+/// Insert an equation shape with its source and no initial click link.
 fn insert_equation(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "insert.equation";
     let latex = str_param(p, "latex").ok_or_else(|| bad(CMD, "`latex` must be the equation's LaTeX source, such as \"x^2 + y^2 = r^2\""))?;
@@ -87,6 +88,7 @@ fn insert_equation(s: &mut Session, p: &Json) -> Result<Json> {
     let id = d.wb.next_object_id();
     let (width, height) = frame_for(&list, (size * PX_PER_PT) as f32);
     let mut shape = Shape {
+        hyperlink: None,
         id,
         kind: ShapeKind::Equation,
         anchor: Anchor { cell: at, dx: 0.0, dy: 0.0, width, height, mode: AnchorMode::MoveOnly },

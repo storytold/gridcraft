@@ -243,7 +243,13 @@ fn relationships(package: &mut Package<'_>, path: &str) -> Result<Vec<Rel>, IoEr
             .unwrap_or_else(|| format!("unsupported:{ty}"));
         let target = e.attr("Target").ok_or_else(|| invalid("relationship has no target"))?;
         let external = e.attr("TargetMode") == Some("External");
-        out.push(Rel { id: id.into(), kind, target: if external { target.into() } else { resolve(dir, target) }, external });
+        out.push(Rel {
+            id: id.into(),
+            kind,
+            target: if external { target.into() } else { resolve(dir, target) },
+            external,
+            raw_target: target.into(),
+        });
     }
     Ok(out)
 }

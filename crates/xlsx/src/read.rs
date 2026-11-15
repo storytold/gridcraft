@@ -15,6 +15,8 @@ use crate::{IoError, ReadReport};
 
 /// State shared while reading one package.
 pub struct Ctx<'a> {
+    /// Source worksheet part → assigned model name for internal drawing click links.
+    pub drawing_link_sheets: std::collections::HashMap<String, String>,
     pub pkg: Package<'a>,
     pub report: ReadReport,
     pub sst: Vec<Arc<str>>,
@@ -249,6 +251,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
     let known_function = opts.known_function;
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
+        drawing_link_sheets: Default::default(),
         pkg,
         report: ReadReport::default(),
         sst: vec![],
@@ -319,6 +322,15 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
     let mut legacy_formulas: Vec<(usize, Vec<gridcraft_core::CellRef>)> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
+    let mut link_names = SheetNames::default();
+    for (i, se) in sheet_els.iter().enumerate() {
+        if let Some(rel) = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).filter(|r| r.kind == "worksheet") {
+            let name = link_names.unique(se.attr("name").unwrap_or(""), i);
+            // Match the read loop's first relationship for duplicate ids; if malformed sheet
+            // entries reuse one part, keep the first model destination deterministically.
+            cx.drawing_link_sheets.entry(crate::package::normalize(&rel.target)).or_insert(name);
+        }
+    }
     let mut names = SheetNames::default();
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();

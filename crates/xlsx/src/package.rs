@@ -30,6 +30,8 @@ pub struct Rel {
     /// Resolved part name (no leading `/`), or the raw target for external relationships.
     pub target: String,
     pub external: bool,
+    /// Original target before part resolution removes fragments.
+    pub raw_target: String,
 }
 
 /// GridCraft's wording of a package error.
@@ -93,7 +95,7 @@ impl<'a> Package<'a> {
             .into_iter()
             .map(|r| {
                 let kind = r.kind().to_string();
-                Rel { id: r.id, kind, target: r.target, external: r.external }
+                Rel { id: r.id, kind, target: r.target, external: r.external, raw_target: r.target_raw }
             })
             .collect())
     }
