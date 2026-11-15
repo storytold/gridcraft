@@ -128,6 +128,10 @@ The saved choice remains System; new users still start in Light. The legacy
 outline then jumps to a new selection instead of gliding there); without `on` it toggles. It is
 the View ▸ Animations checkbox, saved with the other UI preferences and on by default.
 
+`{command: "view.selectionPane", params: {on: true}}` opens Page Layout ▸ Arrange ▸ Selection
+Pane; without `on` it toggles the pane. `arrange.selectionPane` stays a query that lists the
+sheet's objects, so opening the pane needs this view command.
+
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and
 `app.language.japanese` are shortcuts. `engine.commands` lists every code it takes (`en`, `es`,

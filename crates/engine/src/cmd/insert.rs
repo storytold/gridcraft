@@ -1076,7 +1076,16 @@ fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
     } else if let Some(path) = str_param(p, "path") {
         crate::io::read_file(path)?
     } else {
-        s.ui_requests.push(crate::UiRequest::Dialog("insertPicture".into(), json!({"placement": placement})));
+        // Page Layout › Background picks its file through this dialog; the marker keeps the
+        // confirmation on `pageLayout.background`, so the picture is stored as a sheet background
+        // (Excel's "Sheet background" marker at A1) instead of a floating picture.
+        let mut request = json!({"placement": placement});
+        if bool_param(p, "background").unwrap_or(false)
+            && let Some(m) = request.as_object_mut()
+        {
+            m.insert("background".into(), json!(true));
+        }
+        s.ui_requests.push(crate::UiRequest::Dialog("insertPicture".into(), request));
         return ok();
     };
     if placement == "cell" {

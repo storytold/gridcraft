@@ -25,6 +25,7 @@ mod insert_function;
 mod names;
 mod paste;
 mod ref_edit;
+mod reports;
 mod show;
 mod spelling;
 mod zoom;
@@ -1031,6 +1032,7 @@ impl Dialog {
                 select_chart(&mut d, 0);
                 d
             }
+            "recommendedPivotTables" => return recommended_pivot_tables_dialog(app),
             "selectData" => {
                 // Chart Design › Select Data: data range, series to keep, category axis labels.
                 let id = p("chart").as_u64();
@@ -1095,14 +1097,7 @@ impl Dialog {
                 json!({"chart": p("chart")}),
             ),
             "insertPicture" => {
-                let placement = params.get("placement").and_then(Json::as_str).unwrap_or("overCells");
-                let mut dialog = Dialog::form(
-                    "insertPicture",
-                    if placement == "cell" { "Place Picture in Cell" } else { "Place Picture over Cells" },
-                    "insert.picture",
-                    vec![],
-                    json!({"path": "", "placement": placement, "at": active}),
-                );
+                let mut dialog = picture_dialog(&params, &active);
                 dialog.picture_target = app.view_key();
                 dialog
             }
@@ -1113,6 +1108,69 @@ impl Dialog {
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
             "start" => Dialog::custom("start", "GridCraft", json!({})),
+            // The controls whose commands only report data: the dialog runs the command and shows
+            // what it returned, so the button never does something invisible.
+            "addIns" => {
+                let mut d = Dialog::custom("addIns", "Add-ins", json!({}));
+                d.result = Some(app.session.run("home.addIns", json!({})).unwrap_or_else(|e| json!({"error": e})));
+                d
+            }
+            "queriesConnections" => {
+                let mut d = Dialog::custom("queriesConnections", "Queries & Connections", json!({}));
+                d.result = Some(app.session.run("data.queriesConnections", json!({})).unwrap_or_else(|e| json!({"error": e})));
+                d
+            }
+            "thesaurus" => {
+                let word = reports::selected_word(app);
+                let mut d = Dialog::custom("thesaurus", "Thesaurus", json!({"word": word}));
+                d.result = Some(reports::thesaurus_result(app, &word));
+                d
+            }
+            "customViews" => {
+                let mut d = Dialog::custom("customViews", "Custom Views", json!({"name": ""}));
+                d.result = Some(app.session.run("view.customViews", json!({})).unwrap_or_else(|e| json!({"error": e})));
+                d
+            }
+            "pivotChart" => {
+                // Insert › PivotChart without a PivotTable at the active cell: Excel asks which
+                // report to chart ("Create PivotChart") instead of failing.
+                let mut d = Dialog::custom(
+                    "pivotChart",
+                    "Create PivotChart",
+                    json!({"pivot": crate::pivot_pane::active_pivot(app).unwrap_or_default(), "type": "column"}),
+                );
+                d.command = Some("insert.pivotChart");
+                d.result = Some(app.session.run("pivot.list", json!({})).unwrap_or_else(|e| json!({"error": e})));
+                d
+            }
+            "consolidate" => {
+                let cell = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_else(|| "A1".into());
+                Dialog::form(
+                    "consolidate",
+                    "Consolidate",
+                    "data.consolidate",
+                    vec![
+                        Choice {
+                            key: "function",
+                            label: "Function:",
+                            options: vec![
+                                ("sum", "Sum"),
+                                ("count", "Count"),
+                                ("countNums", "Count Numbers"),
+                                ("average", "Average"),
+                                ("max", "Max"),
+                                ("min", "Min"),
+                                ("product", "Product"),
+                            ],
+                        },
+                        Text { key: "sources", label: "Reference (separate ranges with ;):" },
+                        Text { key: "destination", label: "Destination:" },
+                        Check { key: "topRow", label: "Top row" },
+                        Check { key: "leftColumn", label: "Left column" },
+                    ],
+                    json!({"function": "sum", "sources": "", "destination": cell, "topRow": false, "leftColumn": false}),
+                )
+            }
             "comments" => {
                 app.grid.pane = None;
                 app.run_or_alert("review.showComments", json!({"on": true}));
@@ -1136,10 +1194,48 @@ impl Dialog {
     }
 }
 
+/// Insert › Recommended PivotTables: the engine's suggestions for the selected data, listed by the
+/// dialog, which OK applies by index. Errors (no range, nothing to suggest) show as a message
+/// instead of a dialog.
+fn recommended_pivot_tables_dialog(app: &mut SheetApp) -> Option<Dialog> {
+    let recs = match app.session.run("insert.recommendedPivotTables", json!({})) {
+        Ok(r) => r,
+        Err(e) => {
+            app.message = Some(("Recommended PivotTables".into(), crate::clean_error(&e)));
+            return None;
+        }
+    };
+    let mut d = Dialog::custom("recommendedPivotTables", "Recommended PivotTables", json!({"apply": 0}));
+    d.command = Some("insert.recommendedPivotTables");
+    d.result = Some(recs);
+    Some(d)
+}
+
+/// The picture dialog the Insert tab's Pictures and Page Layout's Background pick a file through.
+/// A background request carries `background`, so its OK runs `pageLayout.background` (which marks
+/// the picture and puts it at A1) instead of inserting an unmarked floating picture.
+fn picture_dialog(params: &Json, active: &str) -> Dialog {
+    let placement = params.get("placement").and_then(Json::as_str).unwrap_or("overCells");
+    let background = params.get("background").and_then(Json::as_bool).unwrap_or(false);
+    let title = if background {
+        "Sheet Background"
+    } else if placement == "cell" {
+        "Place Picture in Cell"
+    } else {
+        "Place Picture over Cells"
+    };
+    Dialog::form(
+        "insertPicture",
+        title,
+        if background { "pageLayout.background" } else { "insert.picture" },
+        vec![],
+        json!({"path": "", "placement": placement, "at": active}),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {
         let mut session = gridcraft_engine::Session::default();

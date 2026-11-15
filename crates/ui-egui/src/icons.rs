@@ -97,6 +97,8 @@ pub enum Icon {
     ChartLine,
     ChartPie,
     ChartScatter,
+    ChartWaterfall,
+    ChartCombo,
     Picture,
     Shapes,
     Link,
@@ -609,6 +611,18 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             for (x, y) in [(5.0, 11.0), (7.0, 8.0), (9.5, 9.5), (11.0, 5.0), (13.0, 4.0)] {
                 g.circle(x, y, 1.1, Some(blue), None);
             }
+        }
+        Icon::ChartWaterfall => {
+            g.stroke(&[(2.0, 14.0), (14.0, 14.0)], c);
+            g.rect(3.0, 4.0, 2.5, 10.0, Some(blue), None);
+            g.rect(6.8, 7.0, 2.5, 7.0, Some(green), None);
+            g.rect(10.6, 10.0, 2.5, 4.0, Some(orange), None);
+        }
+        Icon::ChartCombo => {
+            g.stroke(&[(2.0, 14.0), (14.0, 14.0)], c);
+            g.rect(3.5, 8.0, 2.8, 6.0, Some(blue), None);
+            g.rect(8.2, 10.0, 2.8, 4.0, Some(green), None);
+            g.line(&[(3.0, 6.5), (7.0, 4.0), (11.0, 6.0), (13.5, 3.0)], orange, 1.5);
         }
         Icon::Picture => {
             g.rect(2.0, 3.0, 12.0, 10.0, Some(pal.wash(Cat::Blue)), Some(c));

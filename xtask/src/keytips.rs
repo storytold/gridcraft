@@ -20,7 +20,21 @@ const ENV_SENSITIVE: &[&str] = &["review.spelling"];
 
 /// Commands that the UI turns into a dialog when invoked menu-style with no params (the engine
 /// command itself errors without them). Never probed; their tests assert the dialog opens.
-const UI_DIALOG_COMMANDS: &[(&str, &str)] = &[("insert.recommendedCharts", "recommendedCharts")];
+const UI_DIALOG_COMMANDS: &[(&str, &str)] = &[
+    ("insert.recommendedCharts", "recommendedCharts"),
+    ("insert.recommendedPivotTables", "recommendedPivotTables"),
+    ("insert.pivotChart", "pivotChart"),
+    ("data.consolidate", "consolidate"),
+    ("home.addIns", "addIns"),
+    ("data.queriesConnections", "queriesConnections"),
+    ("review.thesaurus", "thesaurus"),
+    ("view.customViews", "customViews"),
+    ("pageLayout.background", "insertPicture"),
+];
+
+/// Commands the UI implements itself, so invoking them never reaches the engine catalog.
+/// Never probed; their tests assert the command runs cleanly.
+const UI_ONLY_COMMANDS: &[&str] = &["view.selectionPane"];
 
 /// Format generated source through `rustfmt` so the checked-in file matches
 /// the emitter byte-for-byte.
@@ -71,7 +85,7 @@ fn probe_live_commands(calls: &[(String, String)]) -> Probe {
     use gridcraft_engine::Session;
     let mut map = Probe::new();
     for (id, params) in calls {
-        if ENV_SENSITIVE.contains(&id.as_str()) || UI_DIALOG_COMMANDS.iter().any(|(c, _)| c == id) {
+        if ENV_SENSITIVE.contains(&id.as_str()) || UI_DIALOG_COMMANDS.iter().any(|(c, _)| c == id) || UI_ONLY_COMMANDS.contains(&id.as_str()) {
             continue;
         }
         let params = if params.is_empty() { serde_json::json!({}) } else { serde_json::from_str(params).unwrap_or_default() };
@@ -305,10 +319,15 @@ fn render_tests(entries: &[Entry], probe: &Probe) -> String {
             "command" if UI_DIALOG_COMMANDS.iter().any(|(c, _)| *c == e.target) => {
                 let dialog = UI_DIALOG_COMMANDS.iter().find(|(c, _)| *c == e.target).map_or("", |(_, d)| d);
                 format!(
-                    "// The dialog previews chart types for the selected data, so the sheet needs some.\n    h.state_mut().session.execute(\"range.setValues\", serde_json::json!({{\"range\": \"A1\", \"values\": [[\"Fruit\", \"Sales\"], [\"Apples\", 5], [\"Pears\", 3]]}})).unwrap();\n    h.state_mut().session.execute(\"selection.set\", serde_json::json!({{\"range\": \"A1:B3\"}})).unwrap();\n    sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some({dialog:?}), \"{seq} must open the {dialog} dialog\");",
+                    "// Some of these dialogs preview the selection, so the sheet has a small table.\n    h.state_mut().session.execute(\"range.setValues\", serde_json::json!({{\"range\": \"A1\", \"values\": [[\"Fruit\", \"Sales\"], [\"Apples\", 5], [\"Pears\", 3]]}})).unwrap();\n    h.state_mut().session.execute(\"selection.set\", serde_json::json!({{\"range\": \"A1:B3\"}})).unwrap();\n    h.run_steps(2);\n    sequence(&mut h, {seq:?}, false);\n    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some({dialog:?}), \"{seq} must open the {dialog} dialog\");",
                     seq = e.seq,
                 )
             }
+            "command" if UI_ONLY_COMMANDS.contains(&e.target.as_str()) => format!(
+                "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().message.is_none() && h.state().toast.is_none(), \"{seq} must run {id} cleanly\");",
+                seq = e.seq,
+                id = e.target,
+            ),
             "command" => match probe.get(&e.probe_key()).copied().unwrap_or(2) {
                 0 => format!(
                     "sequence(&mut h, {seq:?}, false);\n    assert!(h.state().session.journal.iter().any(|(id, _)| id == {id:?}), \"{seq} must journal {id}\");",

@@ -1,4 +1,4 @@
-use super::controls::{control_keytip, sep};
+use super::controls::{act, control_keytip, sep};
 use super::{Icon, SheetApp, Ui, big_button, json};
 use crate::theme::Tokens;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
@@ -69,6 +69,13 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
             app.open_dialog("macros", json!({}));
         }
     });
+    // Scripting Tools: the script recorder records the commands you run as a script, separate
+    // from the macro recorder above.
+    let __k = big_button(ui, Icon::Script, "Record\nActions", "Record the commands you run as a script", false);
+    control_keytip(app, ui, &__k, "automate.recordActions");
+    if __k.clicked() {
+        act(app, "automate.recordActions", json!({}));
+    }
     sep(ui);
     let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
     control_keytip(app, ui, &__k, "commandSearch");

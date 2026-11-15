@@ -3,6 +3,17 @@ use super::{
     formula_locale, i18n, json, now_ms, printing,
 };
 
+/// Whether a command parameter is absent or blank (`null`, `""` or `[]`), as a dialog or a keytip
+/// sends a field it left empty. A blank name means the same as no name at all.
+fn blank_param(v: Option<&Json>) -> bool {
+    match v {
+        None | Some(Json::Null) => true,
+        Some(Json::String(s)) => s.trim().is_empty(),
+        Some(Json::Array(a)) => a.is_empty(),
+        _ => false,
+    }
+}
+
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
@@ -85,7 +96,7 @@ impl SheetApp {
             self.arrange_windows = Some((arrange, windows));
         }
         // The new chart is selected, as after inserting any object, so Delete removes it, not its data.
-        if id == "insert.chart"
+        if (id == "insert.chart" || id == "insert.pivotChart")
             && let Ok(r) = &r
             && let Some(chart) = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok())
         {
@@ -114,7 +125,21 @@ impl SheetApp {
         r
     }
 
-    pub fn run_or_alert(&mut self, id: &str, params: Json) {
+    pub fn run_or_alert(&mut self, id: &str, mut params: Json) {
+        // An unfilled field reaches here as `""` or `[]`; for these two commands blank is the same
+        // as absent, so drop it and the branch below opens the dialog (or uses the active cell)
+        // instead of the command failing on an empty name.
+        let blank_key = match id {
+            "insert.pivotChart" => Some("pivot"),
+            "data.consolidate" => Some("sources"),
+            _ => None,
+        };
+        if let Some(key) = blank_key
+            && let Some(map) = params.as_object_mut()
+            && blank_param(map.get(key))
+        {
+            map.remove(key);
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -132,6 +157,33 @@ impl SheetApp {
         // which chart to insert; programmatic callers of `run` still get the first recommendation.
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
             return self.open_dialog("recommendedCharts", json!({}));
+        }
+        // Recommended PivotTables with no suggestion applied (ribbon menu, keytip, command search)
+        // lists its suggestions to choose from; programmatic callers of `run` still get the list.
+        if id == "insert.recommendedPivotTables" && params.get("apply").is_none() {
+            return self.open_dialog("recommendedPivotTables", json!({}));
+        }
+        // The Insert tab's PivotChart: with no PivotTable at the active cell the report has to be
+        // chosen first (Excel's Create PivotChart); the command alone needs one to be named.
+        if id == "insert.pivotChart" && params.get("pivot").is_none() && crate::pivot_pane::active_pivot(self).is_none() {
+            return self.open_dialog("pivotChart", json!({}));
+        }
+        // Data › Consolidate opens its dialog: the command needs source ranges, so it refuses a
+        // programmatic call without them.
+        if id == "data.consolidate" && params.get("sources").is_none() {
+            return self.open_dialog("consolidate", json!({}));
+        }
+        // Commands that only report data (Add-ins, Queries & Connections, Thesaurus, Custom Views)
+        // show what they returned in a dialog rather than throwing it away.
+        let result_dialog = match id {
+            "home.addIns" => Some("addIns"),
+            "data.queriesConnections" => Some("queriesConnections"),
+            "review.thesaurus" => Some("thesaurus"),
+            "view.customViews" => Some("customViews"),
+            _ => None,
+        };
+        if let Some(name) = result_dialog.filter(|_| params.as_object().is_none_or(|m| m.is_empty())) {
+            return self.open_dialog(name, json!({}));
         }
         // Switch Windows with no window named (key tip, command search) opens the View tab's
         // list to choose from; programmatic callers of `run` get the list back.
@@ -232,6 +284,19 @@ impl SheetApp {
             "view.animations" => {
                 self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);
                 Ok(json!({"on": self.ui.animations}))
+            }
+            "view.selectionPane" => {
+                // Page Layout › Arrange › Selection Pane. Which pane is open is view state, so it
+                // is a UI command; `arrange.selectionPane` only lists the sheet's objects.
+                let shown = self.grid.pane.as_deref() == Some("selection");
+                let on = p.get("on").and_then(Json::as_bool).unwrap_or(!shown);
+                if on {
+                    self.grid.pane = Some("selection".to_string());
+                } else if shown {
+                    // Only the Selection Pane closes: another pane (Watch, Format Chart) stays open.
+                    self.grid.pane = None;
+                }
+                Ok(json!({"on": on}))
             }
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);

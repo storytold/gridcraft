@@ -504,7 +504,7 @@
   {
    "seq": "HFDP",
    "kind": "command",
-   "target": "arrange.selectionPane",
+   "target": "view.selectionPane",
    "excel": "Selection Pane",
    "note": ""
   },
@@ -1135,8 +1135,8 @@
   },
   {
    "seq": "NI1",
-   "kind": "command",
-   "target": "insert.chart",
+   "kind": "control",
+   "target": "insert.chart.waterfall",
    "excel": "Waterfall Chart",
    "note": "Waterfall (kind TBD)"
   },
@@ -1255,8 +1255,8 @@
   },
   {
    "seq": "NSD",
-   "kind": "command",
-   "target": "insert.chart",
+   "kind": "control",
+   "target": "insert.chart.combo",
    "excel": "Combo Chart",
    "note": "Combo (kind TBD)"
   },
@@ -1496,21 +1496,21 @@
   },
   {
    "seq": "PTC",
-   "kind": "command",
+   "kind": "control",
    "target": "pageLayout.themeColors",
    "excel": "Theme Colors",
    "note": "containment(Colors)"
   },
   {
    "seq": "PTE",
-   "kind": "command",
+   "kind": "control",
    "target": "pageLayout.themeEffects",
    "excel": "Theme Effects",
    "note": "containment(Effects)"
   },
   {
    "seq": "PTF",
-   "kind": "command",
+   "kind": "control",
    "target": "pageLayout.themeFonts",
    "excel": "Theme Fonts",
    "note": "containment(Fonts)"

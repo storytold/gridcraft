@@ -92,6 +92,9 @@ pub(super) fn background(s: &mut Session, p: &Json) -> Result<Json> {
     let mut params = object_params(p);
     params["alt"] = json!("Sheet background");
     params["at"] = json!("A1");
+    // The picture dialog this request opens has to confirm through this command again, or the
+    // picture lands unmarked and `clear` cannot remove it.
+    params["background"] = json!(true);
     s.execute("insert.picture", params)
 }
 

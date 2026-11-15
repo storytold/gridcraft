@@ -10,6 +10,7 @@ use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::ref_edit::{RefLabel, SHEET_DELETED, end_pick, home_sheet_deleted, place_window, ref_edit, window_shown};
+use super::reports::{add_ins, custom_views, pivot_chart, recommended_pivot_tables, result_rows, thesaurus};
 use super::spelling::spelling;
 use super::zoom::zoom;
 use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
@@ -69,6 +70,14 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
         "removeDuplicates" | "subtotal" => {
             if let Some(t) = d.values.get("columnsText").and_then(Json::as_str).filter(|t| !t.trim().is_empty()) {
                 v["columns"] = Json::Array(t.split(',').map(|c| json!(c.trim().to_ascii_uppercase())).collect());
+            }
+        }
+        // A blank destination means the active cell, so it is left out rather than sent empty.
+        "consolidate" => {
+            if let Some(m) = v.as_object_mut()
+                && m.get("destination").and_then(Json::as_str).is_some_and(|s| s.trim().is_empty())
+            {
+                m.remove("destination");
             }
         }
         "allowEditRanges" => {
@@ -204,6 +213,12 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "solver" => solver(app, ui, &mut d, &mut confirm, &mut open),
                 "solverResults" => solver_results(app, ui, &mut d, &mut open),
                 "spelling" => spelling(app, ui, &mut d, &mut open),
+                "addIns" => add_ins(app, ui, &d),
+                "queriesConnections" => result_rows(app, ui, d.result.as_ref()),
+                "thesaurus" => thesaurus(app, ui, &mut d, &mut open),
+                "customViews" => custom_views(app, ui, &mut d, &mut open),
+                "pivotChart" => pivot_chart(app, ui, &mut d, &mut confirm, &mut open),
+                "recommendedPivotTables" => recommended_pivot_tables(ui, &mut d, &mut confirm, &mut open),
                 "assignAction" => crate::control_ui::assign_dialog(app, ui, &mut d, &mut open),
                 "formatControl" => crate::control_ui::format_dialog(app, ui, &mut d, &mut open),
                 "controlQuestion" => crate::control_ui::question_dialog(app, ui, &mut d, &mut open),
