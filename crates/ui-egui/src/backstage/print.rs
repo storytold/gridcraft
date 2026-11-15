@@ -65,6 +65,30 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 .response
                 .accessible_name(lang.tr("Print What"));
             ui.add_space(8.0);
+            // Portrait/Landscape already exists as `pageLayout.orientation` (used by the Page
+            // Layout ribbon tab), but Print itself never offered a quick way to flip it without
+            // leaving the print preview -- Excel's own Print screen has this right next to the
+            // other quick settings, so this mirrors it instead of only living on the ribbon.
+            let landscape = app
+                .session
+                .active()
+                .and_then(|d| d.wb.active())
+                .is_some_and(|s| s.print.orientation != Default::default()); // default is Portrait
+            let orientation_label = if landscape { "Landscape Orientation" } else { "Portrait Orientation" };
+            craft_ui::ComboBox::from_id_salt("backstage_print_orientation")
+                .width(230.0)
+                .selected_text(lang.tr(orientation_label))
+                .show_ui(ui, |ui| {
+                    for (is_landscape, label) in [(false, "Portrait Orientation"), (true, "Landscape Orientation")] {
+                        if ui.selectable_label(landscape == is_landscape, lang.tr(label)).clicked() {
+                            app.run_or_alert("pageLayout.orientation", json!({"orientation": if is_landscape { "landscape" } else { "portrait" }}));
+                            bs.preview_page = 0;
+                        }
+                    }
+                })
+                .response
+                .accessible_name(lang.tr("Orientation"));
+            ui.add_space(8.0);
             if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
                 bs.preview_page = 0;
             }
