@@ -1,6 +1,8 @@
 /// Returns the Polish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Tekst ozdobny",
         "Paste" => "Wklej",
         "Paste Values" => "Wklej wartości",
         "Paste Formulas" => "Wklej formuły",
@@ -355,6 +357,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Zapisz",
         "Save As" => "Zapisz jako",
         "Export" => "Eksportuj",
+        "Minimize" => "Minimalizuj",
+        "Maximize" => "Maksymalizuj",
+        "Restore Down" => "Przywróć w dół",
         "Close" => "Zamknij",
         "Options" => "Opcje",
         "Blank workbook" => "Pusty skoroszyt",
