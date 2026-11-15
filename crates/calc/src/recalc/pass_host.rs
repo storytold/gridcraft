@@ -277,10 +277,6 @@ fn spill_blocked_wave(wb: &Workbook, in_pass: &HashSet<Key>, (sheet, anchor): Ke
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
 }
 
-pub(super) fn stored_legacy(wb: &Workbook, k: Key) -> Option<RangeRef> {
-    wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.array)
-}
-
 pub(super) fn finish_formula(
     wb: &Workbook,
     in_pass: &HashSet<Key>,
