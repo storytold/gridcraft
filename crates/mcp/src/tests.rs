@@ -106,6 +106,7 @@ fn tools_list_has_schemas() {
         "redo",
         "screenshot",
         "list_functions",
+        "list_windows",
     ] {
         assert!(names.contains(&want), "missing tool {want}");
     }
@@ -251,6 +252,22 @@ fn save_and_open_roundtrip() {
     let _ = std::fs::remove_file(path);
 }
 
+/// #2255: `parse: false` on `write_range` stores strings as the text they are, so a dd.mm.yyyy
+/// date or a thousands separator survives, and the result names the strings the default read.
+#[test]
+fn write_range_can_store_strings_as_text() {
+    let mut s = server();
+    let row = json!([["05.04.2026", "2.500", "4.25 %", "=1+1"]]);
+    let stored = ok(&mut s, "write_range", json!({"range": "A1", "parse": false, "values": row}));
+    assert_eq!(stored["convertedCount"], 0, "nothing was read: {stored}");
+    let v = ok(&mut s, "read_range", json!({"range": "A1:D1"}));
+    assert_eq!(v["values"], json!([["05.04.2026", "2.500", "4.25 %", 2.0]]), "{v}");
+    // Without it the strings are read like typed input, and the result says which.
+    let read = ok(&mut s, "write_range", json!({"range": "A3", "values": row}));
+    assert_eq!(read["convertedCount"], 3, "{read}");
+    assert_eq!(read["converted"][0], json!({"cell": "A3", "input": "05.04.2026", "stored": "5/4/2026"}), "{read}");
+}
+
 /// An agent builds a small monthly budget through MCP tool calls only.
 #[test]
 fn agent_builds_a_budget() {
@@ -342,6 +359,71 @@ fn serve_loop_over_buffers() {
     assert!(lines[2]["result"]["content"][0]["text"].as_str().unwrap().contains("42"));
 }
 
+/// Streams `len` bytes of `a` from one reused buffer, then `tail`: a huge line costs no memory to
+/// produce, so only the server can make it expensive.
+struct HugeLine {
+    left: u64,
+    tail: &'static [u8],
+    chunk: Vec<u8>,
+}
+
+impl std::io::Read for HugeLine {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        let buf = std::io::BufRead::fill_buf(self)?;
+        let n = buf.len().min(out.len());
+        out[..n].copy_from_slice(&buf[..n]);
+        std::io::BufRead::consume(self, n);
+        Ok(n)
+    }
+}
+
+impl std::io::BufRead for HugeLine {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.left > 0 {
+            let n = self.chunk.len().min(usize::try_from(self.left).unwrap_or(usize::MAX));
+            return Ok(&self.chunk[..n]);
+        }
+        Ok(self.tail)
+    }
+    fn consume(&mut self, n: usize) {
+        if self.left > 0 {
+            self.left -= n as u64;
+        } else {
+            self.tail = &self.tail[n..];
+        }
+    }
+}
+
+#[test]
+fn a_line_without_newline_keeps_at_most_the_limit_in_memory() {
+    // #2164: the whole line was buffered before its size was checked (4 GiB here; any size a
+    // client cares to send).
+    let mut input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    let mut buf = Vec::new();
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(false));
+    assert!(buf.capacity() <= 2 * (16 << 20) + 1, "kept {} bytes", buf.capacity());
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(true));
+    assert!(buf.starts_with(br#"{"jsonrpc""#));
+    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), None);
+}
+
+#[test]
+fn serve_loop_bounds_a_line_without_newline() {
+    // #2164: a 4 GiB line was read whole before its size was checked. Now the server keeps at
+    // most 16 MB of it, answers that it is too large, and reads the next message normally.
+    let input =
+        HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
+    let mut out = Vec::new();
+    server().serve(input, &mut out).unwrap();
+    let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(lines.len(), 2);
+    assert_eq!(lines[0]["error"]["code"], -32600);
+    assert!(lines[0]["error"]["message"].as_str().unwrap().contains("too large"));
+    assert_eq!(lines[1]["id"], 7);
+    assert!(lines[1].get("result").is_some(), "{}", lines[1]);
+}
+
 #[test]
 fn cell_set_without_input_is_error() {
     let mut s = server();
@@ -366,6 +448,11 @@ fn remote_backend_over_tcp() {
             let stream = stream.unwrap();
             let mut w = stream.try_clone().unwrap();
             let mut r = BufReader::new(stream);
+            // Every connection starts with the token, as the app requires.
+            let mut first = String::new();
+            r.read_line(&mut first).unwrap();
+            let hello = crate::control_auth::check_first_line(&first, "secret-token-0123456789").unwrap();
+            w.write_all(format!("{hello}\n").as_bytes()).unwrap();
             loop {
                 let mut line = String::new();
                 if r.read_line(&mut line).unwrap_or(0) == 0 {
@@ -385,7 +472,7 @@ fn remote_backend_over_tcp() {
     });
     let addr = control_addr(&port.to_string());
     assert_eq!(addr, format!("127.0.0.1:{port}"));
-    let mut s = Server::new(Box::new(Remote::connect(&addr).unwrap()));
+    let mut s = Server::new(Box::new(Remote::connect_with_token(&addr, "secret-token-0123456789".into()).unwrap()));
     assert_eq!(ok(&mut s, "evaluate_formula", json!({"formula": "=1+1"}))["result"], json!(2.0));
     // Second call reconnects transparently.
     ok(&mut s, "set_cell", json!({"cell": "A1", "input": "7"}));
@@ -394,7 +481,52 @@ fn remote_backend_over_tcp() {
     assert!(msg.contains("unknown command"), "{msg}");
     drop(s);
     handle.join().unwrap();
-    assert!(Remote::connect("127.0.0.1:1").is_err());
+    assert!(Remote::connect_with_token("127.0.0.1:1", "x".into()).is_err());
+    // A network address is refused before anything, the token included, is sent.
+    let err = Remote::connect_with_token("192.0.2.1:7979", "x".into()).err().unwrap();
+    assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied, "{err}");
+}
+
+#[test]
+fn control_auth_handshake_and_compare() {
+    use crate::control_auth::{auth_line, check_first_line, constant_time_eq, hex};
+    let token = "0123456789abcdef0123456789abcdef";
+    let ok = check_first_line(&auth_line(7, token), token).unwrap();
+    assert_eq!((ok["id"].clone(), ok["ok"].clone()), (json!(7), json!(true)));
+    // Wrong or missing token, another method, and non-JSON are all refused the same way.
+    let wrong = check_first_line(&auth_line(1, "0123456789abcdef0123456789abcdee"), token).unwrap_err();
+    for bad in [
+        auth_line(1, ""),
+        r#"{"id":1,"method":"auth","params":{}}"#.into(),
+        r#"{"id":1,"method":"app.save","params":{"path":"/tmp/x","token":"0123456789abcdef0123456789abcdef"}}"#.into(),
+        "POST / HTTP/1.1".into(),
+        String::new(),
+    ] {
+        assert_eq!(check_first_line(&bad, token).unwrap_err(), wrong, "{bad}");
+    }
+    // An empty configured token never matches an empty given one.
+    assert!(check_first_line(&auth_line(1, ""), "").is_err());
+    assert!(constant_time_eq(b"abc", b"abc"));
+    assert!(!constant_time_eq(b"abc", b"abd"));
+    assert!(!constant_time_eq(b"abc", b"abcd"));
+    assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+}
+
+#[cfg(unix)]
+#[test]
+fn control_token_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    // Unique port per run so parallel tests don't share a file; the folder is the real one.
+    let port = 40_000 + (std::process::id() % 20_000) as u16;
+    let path = crate::control_auth::write_token_file(port, "tok-0123456789abcdef").unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::metadata(path.parent().unwrap()).unwrap().permissions().mode() & 0o777, 0o700);
+    // A looser leftover is replaced, not reused.
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666)).unwrap();
+    crate::control_auth::write_token_file(port, "tok-1123456789abcdef").unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+    assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), "tok-1123456789abcdef");
+    std::fs::remove_file(&path).unwrap();
 }
 
 #[test]
@@ -466,7 +598,6 @@ fn other_sheet_prefix_is_error() {
     ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": 0}}));
     fails(&mut s, "set_cell", json!({"cell": "Nope!B2", "input": "x"}));
     // A command that cannot honour a sheet prefix must not drop it and use the active sheet.
-    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
     cmd_fails(&mut s, "formulas.tracePrecedents", json!({"cell": "Other!B2"}));
     ok(&mut s, "set_cell", json!({"cell": "Sheet1!B2", "input": "here"}));
     assert_eq!(ok(&mut s, "get_cell", json!({"cell": "B2"}))["text"], "here");
@@ -498,7 +629,10 @@ fn cross_sheet_cell_refs_resolve() {
     // The active sheet may be a quoted name with spaces.
     ok(&mut s, "execute_command", json!({"command": "sheet.activate", "params": {"sheet": "My Sheet"}}));
     ok(&mut s, "execute_command", json!({"command": "view.freezePanes", "params": {"cell": "'My Sheet'!B2"}}));
-    cmd_fails(&mut s, "view.freezePanes", json!({"cell": "Other!B2"}));
+    // Freeze Panes honours another sheet's prefix (or `sheet`) and leaves the active sheet alone.
+    ok(&mut s, "execute_command", json!({"command": "view.freezePanes", "params": {"cell": "Other!C4"}}));
+    let sheets = ok(&mut s, "inspect_workbook", json!({}))["sheets"].clone();
+    assert_eq!((sheets[1]["freeze"].clone(), sheets[2]["freeze"].clone()), (json!([3, 2]), json!([1, 1])), "{sheets}");
     // A prefix naming a different sheet than the `sheet` argument is an error, not resolved in favour of either.
     cmd_fails(&mut s, "cell.get", json!({"cell": "Other!B3", "sheet": "Sheet1"}));
 }
@@ -545,4 +679,32 @@ fn invalid_sort_keys_are_invalid_params() {
         assert_eq!(err_code(&v), -32602, "{v}");
     }
     ok(&mut s, "sort_range", json!({"range": "A1:A3", "keys": ["A", {"column": "A", "order": "desc"}]}));
+}
+
+#[test]
+fn a_window_argument_routes_tools_to_that_window() {
+    let mut s = server();
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "book one"}));
+    ok(&mut s, "new_workbook", json!({}));
+    let windows = ok(&mut s, "list_windows", json!({}));
+    let rows = windows.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{windows}");
+    let (w1, book1) = (rows[0]["window"].as_u64().unwrap(), rows[0]["doc"].as_u64().unwrap());
+    assert_eq!((rows[0]["title"].as_str(), rows[1]["active"].as_bool()), (Some("Book1"), Some(true)));
+
+    // Book2 stays active; reads and writes go to Book1's window.
+    ok(&mut s, "set_cell", json!({"cell": "B1", "input": "=A1", "window": w1}));
+    let got = ok(&mut s, "get_cell", json!({"cell": "B1", "doc": book1}));
+    assert!(got.to_string().contains("book one"), "{got}");
+    let book2 = ok(&mut s, "read_range", json!({"range": "A1:B1"}));
+    assert!(!book2.to_string().contains("book one"), "{book2}");
+    let info = ok(&mut s, "inspect_workbook", json!({"window": w1}));
+    assert!(info.to_string().contains("Book1"), "{info}");
+    assert!(fails(&mut s, "get_cell", json!({"cell": "A1", "window": 999})).contains("no open window"));
+
+    // A second window on Book1 gets a numbered title.
+    ok(&mut s, "execute_command", json!({"command": "view.newWindow", "window": w1}));
+    let titles: Vec<String> =
+        ok(&mut s, "list_windows", json!({})).as_array().unwrap().iter().map(|r| r["title"].as_str().unwrap().to_string()).collect();
+    assert_eq!(titles, ["Book1:1", "Book2", "Book1:2"]);
 }
