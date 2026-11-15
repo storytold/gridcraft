@@ -1,8 +1,8 @@
 //! Pass-through of package content GridCraft does not model, so that open → edit → save keeps it.
 //!
 //! On read, the raw bytes of unmodelled parts are kept with their content type and their
-//! relationship graph, per owner: the package root (custom document properties, ribbon
-//! customisation, add-in task panes), the workbook (custom XML, links to external workbooks with
+//! relationship graph, per owner: the package root (custom document properties, less the notices
+//! `custom_props` writes itself, ribbon customisation, add-in task panes), the workbook (custom XML, links to external workbooks with
 //! their `<externalReferences>`, data connections, XML maps) and each sheet (query tables, cells
 //! mapped to XML elements, form controls other than the buttons, scroll bars and spin buttons
 //! `controls.rs` models, ActiveX controls, OLE objects, the sheet background and printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`

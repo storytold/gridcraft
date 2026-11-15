@@ -29,10 +29,12 @@ pub enum CellError {
     Timeout,
     /// Python can't run here: the workbook's content isn't enabled, or this build has no Python.
     Blocked,
+    /// The Python worker could not start.
+    Connect,
 }
 
 impl CellError {
-    pub const ALL: [CellError; 14] = [
+    pub const ALL: [CellError; 15] = [
         CellError::Null,
         CellError::Div0,
         CellError::Value,
@@ -47,6 +49,7 @@ impl CellError {
         CellError::Busy,
         CellError::Timeout,
         CellError::Blocked,
+        CellError::Connect,
     ];
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -65,10 +68,11 @@ impl CellError {
             CellError::Busy => "#BUSY!",
             CellError::Timeout => "#TIMEOUT!",
             CellError::Blocked => "#BLOCKED!",
+            CellError::Connect => "#CONNECT!",
         }
     }
-    /// `ERROR.TYPE` number. Microsoft documents 1 to 8; 9 (#SPILL!), 11 (#BLOCKED!) and 14 (#CALC!)
-    /// are the numbers Excel returns. Microsoft documents no number for #PYTHON!, #BUSY! or
+    /// `ERROR.TYPE` number. Microsoft documents 1 to 8; 9 (#SPILL!), 10 (#CONNECT!), 11 (#BLOCKED!)
+    /// and 14 (#CALC!) are the numbers Excel returns. Microsoft documents no number for #PYTHON!, #BUSY! or
     /// #TIMEOUT!: 19, 20 and 21 are GridCraft's own choice, after the numbers Excel is known to use,
     /// and may change if Excel's numbers become known.
     pub fn code(&self) -> u32 {
@@ -84,6 +88,7 @@ impl CellError {
             CellError::Spill => 9,
             CellError::Calc => 14,
             CellError::Circ => 15,
+            CellError::Connect => 10,
             CellError::Blocked => 11,
             CellError::Python => 19,
             CellError::Busy => 20,

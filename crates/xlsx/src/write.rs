@@ -114,7 +114,8 @@ pub struct Out {
     pub sst: Sst,
     pub images: u32,
     /// Media parts written so far, by extension and SHA-256 of their bytes: a picture used again
-    /// is found here instead of being compared byte by byte with every earlier one.
+    /// is found here instead of being compared byte by byte with every earlier one. A workbook can
+    /// hold a picture for every Python cell, and each is looked for here.
     media: HashMap<(String, [u8; 32]), String>,
     pub charts: u32,
     /// The workbook's file name, which a PivotChart's link to its PivotTable names in brackets.
@@ -142,6 +143,10 @@ pub struct Out {
     pub(crate) names: crate::array_formula::NameCache,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
+    /// The pictures of the Python cells of the sheet being written, which its drawing part holds.
+    pub python_images: Vec<PythonImage>,
+    /// Bytes of pictures Python cells may still save.
+    python_image_room: usize,
 }
 
 impl Out {
@@ -170,6 +175,31 @@ impl Out {
         self.media.insert(key, file.clone());
         file
     }
+    /// The `xl/media` file name of a picture part already written with these bytes, if any: a
+    /// Python cell's rich value shares its companion picture's part this way.
+    pub fn find_image(&self, ext: &str, data: &[u8]) -> Option<String> {
+        self.media.get(&(ext.to_string(), sha2::Sha256::digest(data).into())).cloned()
+    }
+    /// Takes the room for a picture of this many bytes, if there is any.
+    pub fn take_python_image_room(&mut self, bytes: usize) -> bool {
+        match self.python_image_room.checked_sub(bytes) {
+            Some(left) => {
+                self.python_image_room = left;
+                true
+            }
+            None => false,
+        }
+    }
+    /// The bytes of a part written so far.
+    pub fn part_data(&self, name: &str) -> Option<&[u8]> {
+        self.parts.iter().find(|(n, _)| n == name).map(|(_, data)| data.as_slice())
+    }
+    /// New bytes for a part written so far, which keeps its name and content type.
+    pub fn replace_part(&mut self, name: &str, data: Vec<u8>) {
+        if let Some((_, old)) = self.parts.iter_mut().find(|(n, _)| n == name) {
+            *old = data;
+        }
+    }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
         self.defaults.entry(ext.to_string()).or_insert_with(|| ct.to_string());
     }
@@ -179,6 +209,27 @@ impl Out {
 /// file only needs ids that are unique within it).
 pub fn person_guid(i: usize) -> String {
     format!("{{00000000-0000-4000-8002-{:012X}}}", i as u64 & 0xFFFF_FFFF_FFFF)
+}
+
+/// Most bytes of pictures the Python cells of a file save, counting each cell's, even where they share
+/// a part. Reading charges each to [`crate::package::MAX_TOTAL`], and a file past that doesn't open.
+/// This leaves room for everything else a file holds, and a cell past it has its code and can run again.
+pub(crate) const MAX_PYTHON_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+
+/// The room for Python cells' pictures in the file of `wb`. Floating pictures are charged the same way
+/// when it opens, each one, though many can share a part as the linked copies of a plot do. They come
+/// first: they have nowhere else to be, while a Python cell past the room can run again.
+pub(crate) fn python_image_room(wb: &Workbook) -> usize {
+    let floating = wb.sheets.iter().flat_map(|sh| &sh.images).fold(0usize, |n, image| n.saturating_add(image.data.len()));
+    MAX_PYTHON_IMAGE_BYTES.saturating_sub(floating)
+}
+
+/// A picture a Python cell gave, for the sheet's drawing.
+pub struct PythonImage {
+    pub at: gridcraft_core::CellRef,
+    pub image: gridcraft_model::PyImage,
+    /// The cell has an Excel Value but no rich value, so its text stands in for the picture.
+    pub stands_in: bool,
 }
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
@@ -285,8 +336,11 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         functions,
         names: Default::default(),
         python_scripts: vec![],
+        python_images: vec![],
+        python_image_room: python_image_room(wb),
     };
     out.kept.reserve_vml_blocks(wb);
+    out.cell_pictures.keep_room_for_plain_pictures(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");
 
@@ -371,9 +425,9 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");
-    if !out.python_scripts.is_empty() {
+    if crate::python_part::needs_part(&out.python_scripts, wb.python_env.as_deref()) {
         use crate::python_part as py;
-        let part = py::write(&out.python_scripts);
+        let part = py::write(&out.python_scripts, wb.python_env.as_deref());
         out.part(py::PART, Some(py::CONTENT_TYPE), part.into_bytes());
         wb_rels.add_uri(py::REL, "python.xml");
     }
@@ -458,6 +512,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     root.add("officeDocument", "xl/workbook.xml");
     root.add("core-properties", "docProps/core.xml");
     root.add("extended-properties", "docProps/app.xml");
+    crate::custom_props::write_notices(&mut out);
     crate::passthrough::write_package_rels(&mut root, &mut out);
     out.part("_rels/.rels", None, root.xml().into_bytes());
 

@@ -445,6 +445,11 @@ impl Sheet {
         self.cells.set(c, Cell { value: Value::Error(gridcraft_core::CellError::Value), formula: None, style, py: None });
         self.cell_pictures.insert(c, picture);
     }
+    /// The picture drawn inside cell `c`: one placed there, or what a Python cell gave with Excel
+    /// Value in effect.
+    pub fn picture_at(&self, c: CellRef) -> Option<&Arc<CellPicture>> {
+        self.cell_pictures.get(&c).or_else(|| self.cell(c)?.py.as_deref()?.image_in_cell())
+    }
     pub fn input_text(&self, c: CellRef) -> String {
         if self.cell_pictures.contains_key(&c) { String::new() } else { self.cell(c).map(Cell::input_text).unwrap_or_default() }
     }
@@ -938,7 +943,15 @@ mod tests {
                 by_rows: false,
                 pivot: None,
             }),
-            ObjKind::Image => s.images.push(Image { id, anchor, data: Arc::new(vec![]), mime: String::new(), alt: String::new() }),
+            ObjKind::Image => s.images.push(Image {
+                id,
+                anchor,
+                data: Arc::new(vec![]),
+                mime: String::new(),
+                alt: String::new(),
+                python_source: None,
+                rendered: None,
+            }),
             ObjKind::Shape | ObjKind::Equation => s.shapes.push(Shape {
                 id,
                 kind: if kind == ObjKind::Equation { ShapeKind::Equation } else { ShapeKind::default() },

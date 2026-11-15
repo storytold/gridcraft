@@ -651,6 +651,14 @@ pub struct Image {
     pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
+    /// The Python cell it shows the picture of, as a sheet-qualified reference (`Sheet1!$G$5`): it
+    /// changes when that cell's result does, and goes when the cell can no longer give one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_source: Option<String>,
+    /// The size a linked picture's figure was last drawn at, when that isn't its natural size. A state
+    /// of this session, never saved: only the worker that ran the cell has the figure.
+    #[serde(skip)]
+    pub rendered: Option<[u32; 2]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

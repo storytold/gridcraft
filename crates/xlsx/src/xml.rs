@@ -4,9 +4,10 @@
 use std::fmt::Write as _;
 
 use gridcraft_model::{PhoneticProps, PhoneticRun, PhoneticString};
-use quick_xml::Reader;
-use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
+use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::reader::Config;
+use quick_xml::{NsReader, Reader, XmlVersion};
 
 use crate::IoError;
 
@@ -180,12 +181,17 @@ fn local(name: &[u8]) -> String {
     String::from_utf8_lossy(n).into_owned()
 }
 
-fn start_el(e: &BytesStart<'_>) -> El {
+pub(crate) fn start_el(e: &BytesStart<'_>) -> El {
+    start_el_with(e, |_| true)
+}
+
+/// [`start_el`], with only the attributes whose names `keep` takes.
+fn start_el_with(e: &BytesStart<'_>, keep: impl Fn(&[u8]) -> bool) -> El {
     let mut el = El { name: local(e.name().as_ref()), ..Default::default() };
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
         // Namespace declarations carry no data for us.
-        if key == b"xmlns" || key.starts_with(b"xmlns:") {
+        if key == b"xmlns" || key.starts_with(b"xmlns:") || !keep(key) {
             continue;
         }
         let v = match a.normalized_value(XmlVersion::Explicit1_0) {
@@ -242,15 +248,74 @@ pub fn first_start(xml: &[u8], local_name: &str) -> Option<El> {
 /// tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
     let data = to_utf8(xml);
-    let mut reader = Reader::from_reader(data.as_ref());
-    {
-        let cfg = reader.config_mut();
-        cfg.check_end_names = false;
-        cfg.allow_unmatched_ends = true;
-        cfg.allow_dangling_amp = true;
-        cfg.trim_text_start = false;
-        cfg.trim_text_end = false;
+    let bytes: &[u8] = &data;
+    let mut reader = Reader::from_reader(bytes);
+    tolerant(reader.config_mut());
+    build(&mut reader, split, cb)
+}
+
+/// [`parse_streaming`] for a part whose format lets other vocabularies in: the tree holds only
+/// elements in `namespace`, each with only its unprefixed attributes, so an element or attribute of
+/// another namespace is never taken for one with the same local name. What such an element holds is
+/// left out with it. A root in another namespace leaves nothing, which is an error.
+pub fn parse_streaming_in(xml: &[u8], namespace: &str, split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
+    let data = to_utf8(xml);
+    let bytes: &[u8] = &data;
+    let mut reader = NsReader::from_reader(bytes);
+    tolerant(reader.config_mut());
+    build(&mut InNamespace { reader, namespace: namespace.as_bytes() }, split, cb)
+}
+
+/// How a whole part is read: damage is kept to where it is.
+fn tolerant(cfg: &mut Config) {
+    cfg.check_end_names = false;
+    cfg.allow_unmatched_ends = true;
+    cfg.allow_dangling_amp = true;
+    cfg.trim_text_start = false;
+    cfg.trim_text_end = false;
+}
+
+/// What [`build`] reads a part through.
+trait Source {
+    fn next_event<'b>(&mut self, buf: &'b mut Vec<u8>) -> Result<Event<'b>, IoError>;
+    /// Whether the tree leaves out this element and what it holds.
+    fn leaves_out(&self, e: &BytesStart<'_>) -> bool;
+    fn element(&self, e: &BytesStart<'_>) -> El;
+}
+
+impl Source for Reader<&[u8]> {
+    fn next_event<'b>(&mut self, buf: &'b mut Vec<u8>) -> Result<Event<'b>, IoError> {
+        self.read_event_into(buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", self.buffer_position())))
     }
+    fn leaves_out(&self, _: &BytesStart<'_>) -> bool {
+        false
+    }
+    fn element(&self, e: &BytesStart<'_>) -> El {
+        start_el(e)
+    }
+}
+
+/// One namespace's elements of a part. `namespace` is compared as the file spells it: the XML
+/// namespaces specification compares names as strings, with no normalising.
+struct InNamespace<'a> {
+    reader: NsReader<&'a [u8]>,
+    namespace: &'a [u8],
+}
+
+impl Source for InNamespace<'_> {
+    fn next_event<'b>(&mut self, buf: &'b mut Vec<u8>) -> Result<Event<'b>, IoError> {
+        self.reader.read_event_into(buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", self.reader.buffer_position())))
+    }
+    fn leaves_out(&self, e: &BytesStart<'_>) -> bool {
+        !matches!(self.reader.resolver().resolve_element(e.name()).0, ResolveResult::Bound(Namespace(n)) if n == self.namespace)
+    }
+    fn element(&self, e: &BytesStart<'_>) -> El {
+        // An unprefixed attribute has no namespace; a prefixed one belongs to its prefix's.
+        start_el_with(e, |key| !key.contains(&b':'))
+    }
+}
+
+fn build<S: Source>(source: &mut S, split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
@@ -295,18 +360,33 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         }
         Ok(())
     }
+    // Open elements of one `source` leaves out. They count towards the depth limit like any others.
+    let mut left_out = 0usize;
     loop {
-        let ev = reader.read_event_into(&mut buf).map_err(|e| IoError::Xml(format!("{e} at byte {}", reader.buffer_position())))?;
+        let ev = source.next_event(&mut buf)?;
+        if left_out > 0 {
+            match ev {
+                Event::Start(_) if stack.len() + left_out >= MAX_DEPTH => return Err(IoError::Xml("XML nested too deeply".into())),
+                Event::Start(_) => left_out += 1,
+                Event::End(_) => left_out -= 1,
+                Event::Eof => break,
+                _ => {}
+            }
+            buf.clear();
+            continue;
+        }
         match ev {
+            Event::Start(e) if source.leaves_out(&e) => left_out = 1,
+            Event::Empty(e) if source.leaves_out(&e) => {}
             Event::Start(e) => {
                 if stack.len() >= MAX_DEPTH {
                     return Err(IoError::Xml("XML nested too deeply".into()));
                 }
-                stack.push(start_el(&e));
+                stack.push(source.element(&e));
                 kept_at_start.push(kept);
             }
             Event::Empty(e) => {
-                let el = start_el(&e);
+                let el = source.element(&e);
                 finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
             }
             Event::End(_) => {
@@ -441,7 +521,7 @@ pub fn esc_attr(s: &str) -> String {
     o
 }
 
-fn is_xml_char(c: char) -> bool {
+pub(crate) fn is_xml_char(c: char) -> bool {
     matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 
