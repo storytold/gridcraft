@@ -24,6 +24,13 @@
 譯文以 #3271（acebd12345）的翻譯為基礎，並依台灣用語修訂。`cargo xtask i18n-report`
 會列出目錄已不存在的英文鍵；測試確認每個函數都有繁中說明。
 
+### macOS 選單列
+
+macOS 原生選單列（檔案、編輯、檢視、插入、格式、工具、資料、視窗、說明及 GridCraft 選單）
+跟隨介面語言；在「檢視」切換語言後，選單標題與項目會立即改為新語言，所有語言皆適用。
+選單標籤集中於 `apps/gridcraft/src/native_menu_tree.rs`，測試確認每個標籤都有繁中譯文。
+系統提供的項目（服務、隱藏等）由 macOS 依系統語言顯示。
+
 ### Noto CJK 繁中字型
 
 桌面版繁中介面優先使用已安裝的 **Noto Sans CJK TC**，其次使用支援的繁中系統字型。
@@ -60,6 +67,11 @@ Worksheet function help is in `crates/ui-egui/src/i18n/zh_hant_functions.rs`: al
 descriptions and 283 argument names in the function catalog (argument hints, autocomplete, Insert
 Function and the Formulas-tab menus), in Taiwan Excel terms. It builds on the translations in #3271
 by acebd12345, revised for Taiwan usage; a test checks every catalog function has a description.
+
+On macOS the native menu bar follows the interface language: choosing another language in View
+relabels every menu title and item at once, for every language. The labels live in
+`apps/gridcraft/src/native_menu_tree.rs`, and a test checks each has a Traditional Chinese
+translation. System-provided items (Services, Hide…) follow the macOS system language.
 
 ### Noto CJK fonts
 
