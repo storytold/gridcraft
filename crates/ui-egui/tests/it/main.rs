@@ -17,6 +17,7 @@ mod cell_pictures;
 mod cf_rule_pick;
 mod cf_rules_manager;
 mod chart_data_table;
+mod chart_font_routing;
 mod chart_resize;
 mod chart_source_layering;
 mod clipboard;
