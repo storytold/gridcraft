@@ -5,6 +5,8 @@
 /// Returns the Greek translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Διάγραμμα",
+        "Decorative Text" => "Διακοσμητικό κείμενο",
         "Paste" => "Επικόλληση",
         "Paste Values" => "Επικόλληση τιμών",
         "Paste Formulas" => "Επικόλληση τύπων",
@@ -56,6 +58,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Παράθυρο\nμορφοποίησης",
         "Format" => "Μορφοποίηση",
         "Insert" => "Εισαγωγή",
+        "Header Menu|Insert" => "Εισαγωγή",
         "Insert Cells…" => "Εισαγωγή κελιών…",
         "Delete" => "Διαγραφή",
         "Delete Cells…" => "Διαγραφή κελιών…",
@@ -268,6 +271,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Αποθήκευση",
         "Save As" => "Αποθήκευση ως",
         "Export" => "Εξαγωγή",
+        "Minimize" => "Ελαχιστοποίηση",
+        "Maximize" => "Μεγιστοποίηση",
+        "Restore Down" => "Επαναφορά",
         "Close" => "Κλείσιμο",
         "Options" => "Επιλογές",
         "Blank workbook" => "Κενό βιβλίο εργασίας",

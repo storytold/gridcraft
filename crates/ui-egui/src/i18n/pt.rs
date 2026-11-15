@@ -4,6 +4,8 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagrama",
+        "Decorative Text" => "Texto decorativo",
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",
@@ -59,6 +61,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Painel de\nFormatação",
         "Format" => "Formatar",
         "Insert" => "Inserir",
+        "Header Menu|Insert" => "Inserir",
         "Insert Cells…" => "Inserir Células…",
         "Delete" => "Excluir",
         "Delete Cells…" => "Excluir Células…",
@@ -364,6 +367,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Salvar",
         "Save As" => "Salvar como",
         "Export" => "Exportar",
+        "Minimize" => "Minimizar",
+        "Maximize" => "Maximizar",
+        "Restore Down" => "Restaurar",
         "Close" => "Fechar",
         "Options" => "Opções",
         "Account" => "Conta",

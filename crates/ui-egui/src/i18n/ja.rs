@@ -8,6 +8,8 @@
 
 /// English label → Japanese, the shared reference set.
 pub(super) const CORE: &[(&str, &str)] = &[
+    ("Diagram", "図解"),
+    ("Decorative Text", "装飾文字"),
     ("Paste", "貼り付け"),
     ("Paste Values", "値の貼り付け"),
     ("Paste Formulas", "数式の貼り付け"),
@@ -64,6 +66,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Format\nPane", "書式ウィンドウ"),
     ("Format", "書式"),
     ("Insert", "挿入"),
+    ("Header Menu|Insert", "挿入"),
     ("Insert Cells…", "セルの挿入…"),
     ("Delete", "削除"),
     ("Delete Cells…", "セルの削除…"),
@@ -361,6 +364,9 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Save", "上書き保存"),
     ("Save As", "名前を付けて保存"),
     ("Export", "エクスポート"),
+    ("Minimize", "最小化"),
+    ("Maximize", "最大化"),
+    ("Restore Down", "元のサイズに戻す"),
     ("Close", "閉じる"),
     ("Options", "オプション"),
     ("Blank workbook", "空白のブック"),
