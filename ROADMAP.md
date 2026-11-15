@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-12 · **Change:** minor (embedded PDF fonts retain direct object output and tracked fill colours; shared CJK/Latin fallback baselines; Arabic text layout, reading direction, script fallbacks and B1/B2 calendar formats; form controls: buttons, sliders and spin buttons; RefEdit range selection in Goal Seek, Solver and Data Analysis dialogs; GNOME Wayland window controls without bundled title fonts; Python mode in the formula bar and Python cells preserved as data; equations with LaTeX editing, Office Math and PDF output; Solver Sensitivity reports for Simplex LP and GRG Nonlinear; floating objects share one selection, eight resize handles and keyboard deletion; chart data tables with live values, XLSX round-trip and print/PDF; Formulas Function Library, Recently Used and Insert Function categories; XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-15 · **Change:** minor (automatic Arabic PDF shaping retained with explicit TrueType font selection; embedded PDF fonts retain direct object output and tracked fill colours; shared CJK/Latin fallback baselines; Arabic text layout, reading direction, script fallbacks and B1/B2 calendar formats; form controls: buttons, sliders and spin buttons; RefEdit range selection in Goal Seek, Solver and Data Analysis dialogs; GNOME Wayland window controls without bundled title fonts; Python mode in the formula bar and Python cells preserved as data; equations with LaTeX editing, Office Math and PDF output; Solver Sensitivity reports for Simplex LP and GRG Nonlinear; floating objects share one selection, eight resize handles and keyboard deletion; chart data tables with live values, XLSX round-trip and print/PDF; Formulas Function Library, Recently Used and Insert Function categories; XLSX workbook-view selection and bounded tab ratios; CSV column date-order detection; macro engine and Automate interface; CLI/MCP PDF font families and Unicode extraction; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
 is the native format), fully scriptable by agents (MCP, control channel, CLI), and on the web.
@@ -134,6 +134,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | What landed |
 |---|---|
+| 2026-11-15 | Automatic Arabic PDF shaping coexists with explicit TrueType font selection; document-aware wrapping preserves selected widths and grapheme boundaries, and rendering errors propagate before output writes |
 | 2026-11-12 | Embedded PDF fonts use the direct object writer and tracked fill colours; regressions cover shapes, text, save/restore, shared images, links and Unicode maps across pages |
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
@@ -150,6 +151,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
 | 2026-10-31 | System and embedded CJK fallback text shares the Latin baseline in cells, editors and window titles (#1265, #2621). Symbol and emoji alignment, manual row heights and clipping are unchanged |
+| 2026-10-26 | Arabic PDF export shapes licensed glyph outlines and preserves searchable logical text; characters the font lacks, or a missing Arabic font, fall back to the standard fonts instead of failing the export |
 | 2026-10-26 | Arabic bidi display/editing preserve logical source text; per-cell reading direction is editable and survives undo, XLSX and conditional-format priority |
 | 2026-10-26 | Arabic text shows in cells and the interface through a system, fontconfig or craft-fonts Arabic face; workbook fonts keep their script fallbacks |
 | 2026-10-25 | PDF text preserves distinct Unicode aliases of a shared font glyph, including across pages; supplementary Unicode extraction and bounded encoding maps covered by regression tests |
@@ -184,6 +186,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-15 | File › Options › Formulas: Maximum Iterations and Maximum Change fields for iterative calculation, disabled while it is off, with Excel's limits (1 to 32767, 0 or more) |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
+| 2026-10-14 | XLSX import warns when a pivot cache is missing, malformed or too large, naming the cache and saying its PivotTable was kept as plain cells, instead of dropping the PivotTable silently (#1039) |
 | 2026-10-14 | Set precision as displayed is applied: with the option on, formula results, spills and numbers typed or reformatted are stored as their number format shows them and formulas calculate from those values; `formulas.calculationOptions` gains `precisionAsDisplayed` (turning it on rounds existing constants; locked constants on a protected sheet keep their value; numbers written to a new sheet are rounded too) (#1343) |
 | 2026-10-14 | Lookups (MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP, LOOKUP) compare numbers exactly like Excel, so a computed key such as `=0.1+0.2` no longer finds 0.3; `=` and COUNTIF/SUMIF keep their 15-digit comparison |
 | 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
@@ -208,6 +211,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-12 | Insert › Text › WordArt (`insert.wordArt`, `wordArt.set`): floating decorative text with 10 original styles, outline and shadow, in-place editing, XLSX and print (#784) |
 | 2026-10-12 | Number formatting: one table of built-in formats (xlsx); numbers, dates and General render with one scratch buffer instead of per-token strings; output unchanged, checked against digests recorded from the old code (#817) |
 | 2026-10-21 | Macro engine ([macros.md](docs/macros.md)): typed, declarative macros saved in the workbook (a JSON field; hidden names in xlsx); declared inputs checked with messages that name the cells; tokens (`Input.col(2)`, `Row`, `Output`, `Name:Total`, `{{…}}` in formulas); one undo step with full rollback; a footprint dry run with ask, fail, overwrite, shift down or shift right; a policy that keeps macros away from files and the app, with approval for macros in opened files; Repeat, If and Stop steps; a debugger; a relative recorder; `macro.*` commands beside the unchanged Automate scripts |
+| 2026-10-13 | Performance: a chart is resolved and rendered once per change of its workbook, zoom or fonts instead of on every frame; idle frames, hovering and scrolling reuse it (#1139, part of #1098) |
 | 2026-10-13 | Charts: work and memory are bounded by series x points (2,000,000 per chart: every series keeps its first points; 16 trendlines per chart), hairline columns and bars are merged per pixel column, series ranges are clipped before they are evaluated, the moving average is linear and rendering clean data no longer copies it (#1147) |
 | 2026-10-13 | Charts: one combo plot-kind rule for resolving and drawing; ticks of a scale off the step grid keep their own values (#1146) |
 | 2026-10-12 | Security: the `--control` server requires an auth token (random, kept in a 0600 file or chosen with `GRIDCRAFT_CONTROL_TOKEN`) on each connection's first line and closes bad connections (#777) |
@@ -273,6 +277,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Reconcile automatic Arabic PDF shaping with explicit font selection and export validation |
 | 2026-11-12 | minor | Integrate embedded PDF fonts with direct object output, shared images and tracked drawing styles |
 | 2026-11-10 | trivial | Reconcile upstream CJK baseline and legacy-formula changes with per-export PDF fonts; retain both feature histories |
 | 2026-11-09 | trivial | Reconcile upstream Arabic text layout, fallback and calendar progress with TrueType PDF export capabilities and limits |
@@ -291,6 +296,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
 | 2026-10-31 | minor | Progress log: shared CJK/Latin baselines in cells, editors and window titles |
+| 2026-10-26 | minor | Progress log: Arabic PDF text |
 | 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
 | 2026-10-26 | minor | Progress log: Arabic font fallback |
 | 2026-10-29 | trivial | Reconcile PDF font export and upstream macro engine/interface progress; preserve both feature histories |
@@ -315,6 +321,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |
 | 2026-10-16 | minor | Progress log: interface fonts held once instead of twice |
+| 2026-10-14 | trivial | Progress log: pivot cache import warnings (#1039) |
 | 2026-10-14 | minor | Progress log: Set precision as displayed applied in calculation (#1343) |
 | 2026-10-14 | minor | Progress log: `.xls` import reads cell formatting |
 | 2026-10-14 | minor | Progress log: lookups compare numbers exactly |
@@ -327,6 +334,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
+| 2026-10-13 | trivial | Progress log: charts cached between frames (#1139) |
 | 2026-10-12 | minor | Progress log: PDF writer cleanup (#816) |
 | 2026-10-12 | minor | Catalog 276 → 277 / 292: Insert › WordArt (#784) |
 | 2026-10-12 | minor | Numfmt cleanup: one built-in format table (gridcraft-xlsx), fewer allocations rendering numbers, dates and General, equality test against the previous output (#817); progress log row |

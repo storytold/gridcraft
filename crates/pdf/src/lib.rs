@@ -8,15 +8,16 @@
 //! - Explicit [`TextFonts`] replace all text faces per document, including Latin, and supply
 //!   matching advance widths for layout.
 //! - Symbol uses its own built-in encoding ([`symbol_code`]) for mathematical glyphs.
+//! - Arabic without an explicit face is shaped and set in embedded Type3 subsets.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
 //! - Coordinates are points with a **top-left origin** (y grows down); text `y` is the baseline.
 //!
-//! Streams are written uncompressed (images use the trivial RunLengthDecode filter) so the crate
-//! needs no dependencies.
+//! Streams are written uncompressed (images use the RunLengthDecode filter).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod arabic;
 mod metrics;
 mod symbol;
 mod system_fonts;
@@ -26,6 +27,17 @@ pub use symbol::{symbol_code, symbol_width};
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+
+/// A PDF export could not preserve the requested text.
+#[derive(Clone, Debug)]
+pub struct Error(String);
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+impl std::error::Error for Error {}
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashMap};
@@ -107,7 +119,7 @@ pub struct TextFonts {
     families: BTreeMap<String, usize>,
 }
 
-/// A composable width measurement, including whole-run Unicode fallback selection.
+/// A composable width measurement for unshaped text, including whole-run Unicode fallback selection.
 /// Combine only measurements made with the same font and document font set.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TextMeasurement {
@@ -228,8 +240,21 @@ impl TextFonts {
             .find(|i| self.faces.get(*i).is_some_and(|f| f.as_ref().is_some_and(|f| text.chars().all(|c| c.is_control() || f.has(c)))))
     }
 
+    /// Automatic Arabic shaping applies only when no explicit face controls this text.
+    /// Explicit faces retain their own TrueType outlines and advance widths.
+    pub fn is_shaped(&self, font: Font, text: &str) -> bool {
+        !self.custom && !matches!(font, Font::Embedded(_)) && arabic::shaped(font, text)
+    }
+
+    fn shaping(&self, font: Font, text: &str) -> arabic::Shaping {
+        if self.custom || matches!(font, Font::Embedded(_)) { arabic::Shaping::Plain } else { arabic::shaping(font, text) }
+    }
+
     /// Width using exactly the face that will draw the text, in points.
     pub fn text_width(&self, font: Font, size: f32, text: &str) -> f32 {
+        if self.is_shaped(font, text) {
+            return arabic::layout(font, text).map(|layout| layout.width * size / 1000.0).unwrap_or(0.0);
+        }
         let slot = self.slot(font, text);
         let units = if slot.is_some()
             || self.custom
@@ -511,7 +536,14 @@ impl Font {
     }
 }
 
+/// Whether `text` set in `font` is shaped, so its width is not the sum of its characters' widths.
+pub fn is_shaped(font: Font, text: &str) -> bool {
+    SYSTEM_FONTS.text().is_shaped(font, text)
+}
+
 /// Width of `text` in points when set in `font` at `size` points.
+/// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
+/// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     SYSTEM_FONTS.text().text_width(font, size, text)
 }
@@ -780,6 +812,9 @@ pub struct Page {
     links: Vec<LinkAnnotation>,
     missing_glyph: Option<char>,
     text_limit_exceeded: bool,
+    arabic: arabic::Subset,
+    error: Option<Error>,
+    missing_arabic_font: bool,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -1040,6 +1075,21 @@ impl Page {
         self.op(&s);
     }
 
+    /// Arabic ink extents above and below the baseline, in points. Standard font text returns
+    /// `None`. Font errors are recorded for [`PdfDoc::finish`], just as when drawing text.
+    pub fn text_vertical_extents(&mut self, font: Font, size: f32, text: &str) -> Option<(f32, f32)> {
+        if !self.unicode.is_shaped(font, text) {
+            return None;
+        }
+        match arabic::vertical_extents(font, text) {
+            Ok((ascent, descent)) => Some((ascent * size / 1000.0, descent * size / 1000.0)),
+            Err(error) => {
+                self.error.get_or_insert(error);
+                None
+            }
+        }
+    }
+
     /// Text with its baseline starting at `(x, y)`.
     pub fn text(&mut self, x: f32, y: f32, size: f32, font: Font, color: Rgb, text: &str) {
         self.text_rotated(Point::new(x, y), size, font, color, text, 0.0);
@@ -1049,6 +1099,37 @@ impl Page {
     /// system) about its baseline origin.
     pub fn text_rotated(&mut self, origin: Point, size: f32, font: Font, color: Rgb, text: &str, angle: f32) {
         if text.is_empty() || !extent(size) || !finite(&[origin.x, origin.y]) || self.full() {
+            return;
+        }
+        let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+        let shaping = self.unicode.shaping(font, text);
+        self.missing_arabic_font |= shaping == arabic::Shaping::NoFont;
+        if shaping == arabic::Shaping::Shaped {
+            if self.saved.len() >= MAX_SAVE_DEPTH {
+                return;
+            }
+            match self.arabic.text(font, text, size.min(10_000.0)) {
+                Ok(body) => {
+                    for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT)].into_iter().flatten() {
+                        if let Some(f) = self.fonts.get_mut(slot) {
+                            *f = true;
+                        }
+                    }
+                    let mut s = format!("q\n{} {} {} {} {} {} cm\n", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
+                    push_rgb(&mut s, color, false);
+                    s.push(' ');
+                    push_rgb(&mut s, color, true);
+                    let _ = write!(s, "\n{body}\nQ");
+                    if self.content.len().saturating_add(s.len()) > MAX_PAGE_CONTENT {
+                        self.error.get_or_insert_with(|| Error("PDF page text exceeds the size limit".into()));
+                    } else {
+                        self.op(&s);
+                    }
+                }
+                Err(error) => {
+                    self.error.get_or_insert(error);
+                }
+            }
             return;
         }
         self.missing_glyph = self.missing_glyph.or_else(|| self.unicode.missing_glyph(font, text));
@@ -1097,8 +1178,8 @@ impl Page {
             return;
         }
         let fi = font.index();
-        let size = n(size.min(10_000.0));
         let (sn, cs) = if angle.is_finite() { angle.sin_cos() } else { (0.0, 1.0) };
+        let size = n(size.min(10_000.0));
         // Clockwise in y-down = counter-clockwise negated in PDF's y-up space.
         let tm = format!("{} {} {} {} {} {} Tm\n", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
         // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
@@ -1407,6 +1488,9 @@ impl PdfDoc {
             style: Style::default(),
             saved: Vec::new(),
             refused: 0,
+            arabic: arabic::Subset::default(),
+            error: None,
+            missing_arabic_font: false,
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
@@ -1453,6 +1537,12 @@ impl PdfDoc {
         }
     }
 
+    /// Whether some Arabic text was set in the standard and CID fonts, which have no Arabic glyphs,
+    /// because no Arabic face was found for its weight.
+    pub fn missing_arabic_font(&self) -> bool {
+        self.pages.iter().any(|page| page.missing_arabic_font)
+    }
+
     /// Serializes the document. A document without pages gets one blank Letter page.
     ///
     /// Every object is written straight into the output buffer (nothing is staged in an
@@ -1460,7 +1550,12 @@ impl PdfDoc {
     /// the ids are contiguous from 1. Objects are therefore in the file in the order they are
     /// numbered during writing (fonts, then per page its new images, content stream and page
     /// dictionary), with the catalog, page tree and info dictionary last.
-    pub fn finish(mut self) -> Vec<u8> {
+    ///
+    /// Returns an error if the Arabic font is unusable or Arabic text exceeds a size limit.
+    pub fn finish(mut self) -> Result<Vec<u8>, Error> {
+        if let Some(error) = self.pages.iter().find_map(|page| page.error.clone()) {
+            return Err(error);
+        }
         if self.pages.is_empty() {
             self.add_page(612.0, 792.0);
         }
@@ -1538,6 +1633,8 @@ impl PdfDoc {
         // confirmed by comparing the pixels before an object is shared.
         let mut written: HashMap<u64, Vec<(usize, usize, u32)>> = HashMap::new();
         for (pi, ((page, content), links)) in self.pages.iter().zip(contents).zip(page_links).enumerate() {
+            let arabic_fonts = page.arabic.write_objects(&mut next, &mut out, &mut offsets);
+            let page_fonts = format!("{font_dict}{arabic_fonts}");
             let mut xobjects = String::new();
             for (k, img) in page.images.iter().enumerate() {
                 let known = written.get(&img.hash).and_then(|c| {
@@ -1601,7 +1698,7 @@ impl PdfDoc {
                     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << {}>>{} >> /Contents {} 0 R{} >>",
                     n(page.width),
                     n(page.height),
-                    font_dict,
+                    page_fonts,
                     xo,
                     content_id,
                     annots
@@ -1646,7 +1743,7 @@ impl PdfDoc {
             let _ = writeln!(Utf8(&mut out), "{off:010} 00000 n ");
         }
         let _ = write!(Utf8(&mut out), "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
-        out
+        Ok(out)
     }
 }
 

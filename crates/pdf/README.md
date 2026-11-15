@@ -1,13 +1,18 @@
 # gridcraft-pdf
 
-A small, dependency-free PDF 1.7 writer for vector drawing and RGBA images.
+A small PDF 1.7 writer for shaped Arabic text, vector drawing and RGBA images.
 
 ## System fonts
 
 `set_unicode_font_loader(pdf_unicode_fonts)` enables bounded native TrueType fallback loading for
 Greek and Cyrillic. `system_cell_font_candidates(bold, italic)` supplies the same installed cell-font
-candidate order to the desktop UI, without introducing toolkit dependencies. No fonts are bundled
-by this crate; WebAssembly returns no filesystem-loaded fallback faces.
+candidate order to the desktop UI, without introducing toolkit dependencies. WebAssembly returns
+no filesystem-loaded Greek/Cyrillic fallback faces. Automatic Arabic shaping
+uses Noto Arabic faces from the optional `CRAFT_FONTS_DIR` build input or supported system paths.
+Explicit global and named TrueType faces retain their own glyphs and metrics without shaping.
+
+`PdfDoc::finish()` returns `Result<Vec<u8>, Error>`; callers must handle rendering errors before
+writing or returning the PDF.
 
 ## API migration
 

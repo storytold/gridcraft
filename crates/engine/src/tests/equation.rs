@@ -34,7 +34,7 @@ fn pdf_equation_centres_large_glyphs_and_placeholders_with_custom_font_metrics()
         let mut doc = PdfDoc::with_text_fonts(TextFonts::custom(face.clone(), None, None, None));
         let page = doc.add_page(200.0, 200.0);
         crate::cmd::equation::draw_pdf(page, &list, (0.0, 0.0, 100.0, 100.0), 0.0, [0, 0, 0]);
-        let bytes = doc.finish();
+        let bytes = doc.finish().unwrap();
         let pdf = String::from_utf8_lossy(&bytes);
         let matrix = pdf.lines().find(|line| line.ends_with(" Tm")).unwrap();
         let x: f32 = matrix.split_whitespace().nth(4).unwrap().parse().unwrap();

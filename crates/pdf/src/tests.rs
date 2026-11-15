@@ -74,7 +74,7 @@ fn check_xref(pdf: &[u8]) -> Result<usize, Box<dyn Error>> {
 
 #[test]
 fn minimal_document() -> Result<(), Box<dyn Error>> {
-    let pdf = PdfDoc::new().finish();
+    let pdf = PdfDoc::new().finish()?;
     assert!(pdf.starts_with(b"%PDF-1.7"));
     assert!(pdf.ends_with(b"%%EOF\n"));
     assert!(check_xref(&pdf)? >= 5);
@@ -100,7 +100,7 @@ fn drawing_and_text() -> Result<(), Box<dyn Error>> {
     let p2 = d.add_page(842.0, 595.0);
     p2.text(10.0, 20.0, 10.0, Font::CourierBold, [0, 0, 0], "Second");
     assert_eq!(d.page_count(), 2);
-    let pdf = d.finish();
+    let pdf = d.finish()?;
     check_xref(&pdf)?;
     assert!(find(&pdf, b"(Hello \\(world\\) \\\\ caf\\351 \\2005) Tj").is_some());
     assert!(find(&pdf, b"(Second) Tj").is_some());
@@ -126,7 +126,7 @@ fn uri_and_page_links_are_real_pdf_annotations() -> Result<(), Box<dyn Error>> {
     first.link_uri(0.0, 0.0, 10.0, 10.0, "javascript:alert(1)");
     let second = d.add_page(100.0, 200.0);
     second.link_page(Rect::new(0.0, 0.0, 10.0, 10.0), 99, Point::new(0.0, 0.0));
-    let pdf = d.finish();
+    let pdf = d.finish()?;
     check_xref(&pdf)?;
     let s = String::from_utf8_lossy(&pdf);
     assert_eq!(s.matches("/Subtype /Link").count(), 3);
@@ -150,7 +150,7 @@ fn images_with_alpha() -> Result<(), Box<dyn Error>> {
     p.image_rgba(Rect::new(10.0, 10.0, 40.0, 40.0), &px, [4, 4]);
     p.image_rgba(Rect::new(10.0, 10.0, 40.0, 40.0), &[255; 16], [2, 2]); // opaque: no mask
     p.image_rgba(Rect::new(0.0, 0.0, 1.0, 1.0), &[1, 2, 3], [4, 4]); // too short: ignored
-    let pdf = d.finish();
+    let pdf = d.finish()?;
     check_xref(&pdf)?;
     assert!(find(&pdf, b"/SMask").is_some());
     assert!(find(&pdf, b"/Im1 Do").is_some());
@@ -218,7 +218,7 @@ fn hostile_inputs_never_panic() -> Result<(), Box<dyn Error>> {
     p.restore();
     p.save();
     p.image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &[], [u32::MAX, u32::MAX]);
-    let pdf = d.finish();
+    let pdf = d.finish()?;
     check_xref(&pdf)?;
     Ok(())
 }
@@ -458,7 +458,7 @@ fn corpus_doc(seed: u64) -> (Vec<u8>, Vec<String>) {
         }
         old_pages.push(old.content);
     }
-    (doc.finish(), old_pages)
+    (doc.finish().unwrap(), old_pages)
 }
 
 #[test]
@@ -502,7 +502,7 @@ fn structure_is_valid_for_all_documents() -> Result<(), Box<dyn Error>> {
         check_xref(&pdf)?;
         parse_objects(&pdf); // every /Length matches its data
     }
-    let empty = PdfDoc::new().finish();
+    let empty = PdfDoc::new().finish()?;
     check_xref(&empty)?;
     parse_objects(&empty);
     Ok(())
@@ -518,7 +518,7 @@ fn images_decode_to_their_pixels() {
             p.image_rgba(Rect::new(1.0, 1.0, 20.0, 20.0), px, [*w, *h]);
         }
     }
-    let pdf = d.finish();
+    let pdf = d.finish().unwrap();
     let (objs, pages) = parse_pages(&pdf);
     assert_eq!(pages.len(), 2);
     for page in &pages {
@@ -545,7 +545,7 @@ fn opaque_images_have_no_soft_mask() {
     let p = d.add_page(100.0, 100.0);
     p.image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &[255; 4 * 12], [4, 3]);
     assert!(p.images[0].alpha.is_none());
-    let pdf = d.finish();
+    let pdf = d.finish().unwrap();
     assert!(find(&pdf, b"/SMask").is_none());
     assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 1);
 
@@ -554,7 +554,7 @@ fn opaque_images_have_no_soft_mask() {
         px[translucent * 4 + 3] = 7;
         let mut d = PdfDoc::new();
         d.add_page(100.0, 100.0).image_rgba(Rect::new(0.0, 0.0, 10.0, 10.0), &px, [4, 3]);
-        let (objs, pages) = parse_pages(&d.finish());
+        let (objs, pages) = parse_pages(&d.finish().unwrap());
         let (_, _, _, alpha) = decode_image(&objs, pages[0].xobjects[0].1);
         let mut want = vec![255u8; 12];
         want[translucent] = 7;
@@ -573,7 +573,7 @@ fn identical_images_are_stored_once() -> Result<(), Box<dyn Error>> {
         p.image_rgba(Rect::new(1.0, 1.0, 20.0, 20.0), px, [*w, *h]);
         p.image_rgba(Rect::new(30.0, 1.0, 20.0, 20.0), px, [*w, *h]); // twice on one page
     }
-    let pdf = d.finish();
+    let pdf = d.finish()?;
     check_xref(&pdf)?;
     assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 2, "one image + one soft mask");
     let (_, pages) = parse_pages(&pdf);
@@ -598,7 +598,7 @@ fn different_images_are_not_merged() {
     p.image_rgba(Rect::new(0.0, 0.0, 5.0, 5.0), &b, [4, 1]);
     p.image_rgba(Rect::new(0.0, 0.0, 5.0, 5.0), &a, [2, 2]);
     d.add_page(100.0, 100.0).image_rgba(Rect::new(0.0, 0.0, 5.0, 5.0), &a, [4, 1]);
-    let pdf = d.finish();
+    let pdf = d.finish().unwrap();
     assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 6, "three distinct pictures, each with a soft mask (alpha 50)");
 }
 
@@ -618,7 +618,7 @@ fn many_distinct_images_on_one_page_are_not_compared_pairwise() {
     assert_eq!(p.images.len(), N as usize);
     assert!(p.content.ends_with("/Im1 Do Q\n"), "the repeated picture reuses /Im1");
     assert!(p.image_comparisons <= 1, "{} pixel comparisons for {N} distinct pictures", p.image_comparisons);
-    let pdf = d.finish();
+    let pdf = d.finish().unwrap();
     assert_eq!(pdf.windows(15).filter(|w| *w == b"/Subtype /Image").count(), N as usize);
 }
 
@@ -632,7 +632,7 @@ fn hash_collisions_do_not_merge_images() {
     for p in 0..2 {
         d.page_mut(p).unwrap().images[0].hash = 42; // forced collision
     }
-    let (objs, pages) = parse_pages(&d.finish());
+    let (objs, pages) = parse_pages(&d.finish().unwrap());
     let ids: Vec<usize> = pages.iter().map(|p| p.xobjects[0].1).collect();
     assert_ne!(ids[0], ids[1]);
     assert_eq!(decode_image(&objs, ids[0]).2, vec![10; 12]);
@@ -737,7 +737,7 @@ fn save_nesting_is_limited_to_28() -> Result<(), Box<dyn Error>> {
     p.restore();
     p.image_rgba(Rect::new(0.0, 0.0, 5.0, 5.0), &[9; 16], [2, 2]);
     assert!(p.content.contains(" Do"));
-    let pdf = d.finish();
+    let pdf = d.finish()?;
     check_xref(&pdf)?;
     Ok(())
 }
@@ -750,7 +750,7 @@ fn finish_closes_open_saves() -> Result<(), Box<dyn Error>> {
     for _ in 0..33 {
         p.save();
     }
-    let (_, pages) = parse_pages(&d.finish());
+    let (_, pages) = parse_pages(&d.finish()?);
     let i = interpret(&pages[0].content);
     assert!(i.balanced);
     assert_eq!(i.qs, 28);
@@ -856,7 +856,7 @@ fn every_draw_method_survives_hostile_numbers() -> Result<(), Box<dyn Error>> {
     p.stroke_line_dashed(Point::new(0.0, 0.0), Point::new(1.0, 1.0), 1.0, [0, 0, 0], &[0.0; 100]);
     let c = page_content(&d);
     assert!(!c.contains("NaN") && !c.contains("inf"));
-    let pdf = d.finish();
+    let pdf = d.finish()?;
     check_xref(&pdf)?;
     Ok(())
 }
@@ -879,7 +879,7 @@ fn info_strings_with_non_ascii_are_utf16be() -> Result<(), Box<dyn Error>> {
     doc.add_page(200.0, 200.0);
     doc.info.title = "Übersicht €5 – “Q1” 日本 😀".into();
     doc.info.author = "Müller & Søn".into();
-    let pdf = doc.finish();
+    let pdf = doc.finish()?;
     assert_eq!(utf16_entry(&pdf, "/Title")?, "Übersicht €5 – “Q1” 日本 😀");
     assert_eq!(utf16_entry(&pdf, "/Author")?, "Müller & Søn");
     Ok(())
@@ -890,7 +890,7 @@ fn ascii_info_strings_stay_literal_and_escaped() {
     let mut doc = PdfDoc::new();
     doc.add_page(200.0, 200.0);
     doc.info.title = r"Q1 (draft) a\b".into();
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     assert!(find(&pdf, br"/Title (Q1 \(draft\) a\\b)").is_some());
     assert!(find(&pdf, b"/Producer (GridCraft PDF)").is_some());
 }
@@ -900,7 +900,7 @@ fn info_strings_are_capped() -> Result<(), Box<dyn Error>> {
     let mut doc = PdfDoc::new();
     doc.add_page(200.0, 200.0);
     doc.info.title = "日".repeat(100_000);
-    let pdf = doc.finish();
+    let pdf = doc.finish()?;
     assert_eq!(utf16_entry(&pdf, "/Title")?.chars().count(), MAX_INFO_CHARS);
     Ok(())
 }
@@ -911,7 +911,7 @@ fn cjk_text_is_not_replaced_by_question_marks() -> Result<(), Box<dyn Error>> {
     let p = doc.add_page(612.0, 792.0);
     p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "签字清单");
     p.text(10.0, 40.0, 10.0, Font::Helvetica, [0, 0, 0], "No. 编号 2");
-    let pdf = doc.finish();
+    let pdf = doc.finish()?;
     check_xref(&pdf)?;
     assert!(find(&pdf, b"(????) Tj").is_none(), "CJK text written as question marks");
     assert!(find(&pdf, b"<7B7E5B576E055355> Tj").is_some());
@@ -964,7 +964,7 @@ fn greek_text_embeds_a_unicode_font_instead_of_question_marks() -> Result<(), Bo
     pg.text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], "Αβ Q");
     pg.text(72.0, 90.0, 12.0, Font::HelveticaBold, [0, 0, 0], "Αβ");
     pg.text(72.0, 108.0, 12.0, Font::Helvetica, [0, 0, 0], "plain");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     assert!(find(&pdf, b"/U1 12 Tf").is_some(), "Greek uses the embedded font");
     assert!(find(&pdf, b"<0001000200030004> Tj").is_some(), "distinct Unicode character codes, not `?`");
@@ -983,7 +983,7 @@ fn greek_text_embeds_a_unicode_font_instead_of_question_marks() -> Result<(), Bo
 fn without_a_unicode_font_greek_uses_the_existing_cid_fallback() -> Result<(), Box<dyn Error>> {
     let mut doc = PdfDoc::default();
     doc.add_page(612.0, 792.0).text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], "Αβ");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     assert!(find(&pdf, b"<039103B2> Tj").is_some());
     assert!(find(&pdf, b"FontFile2").is_none());
@@ -1022,7 +1022,7 @@ fn cyrillic_text_embeds_a_unicode_font_instead_of_question_marks() -> Result<(),
     pg.text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], serbian);
     pg.text(72.0, 90.0, 12.0, Font::HelveticaBold, [0, 0, 0], russian);
     pg.text(72.0, 108.0, 12.0, Font::Helvetica, [0, 0, 0], "Total 2026");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     assert!(find(&pdf, b"/U1 12 Tf").is_some(), "regular Cyrillic uses the embedded regular face");
     assert!(find(&pdf, b"/U2 12 Tf").is_some(), "bold Cyrillic uses the embedded bold face");
@@ -1045,7 +1045,7 @@ fn cyrillic_text_embeds_a_unicode_font_instead_of_question_marks() -> Result<(),
 fn without_a_unicode_font_cyrillic_uses_the_existing_cid_fallback() -> Result<(), Box<dyn Error>> {
     let mut doc = PdfDoc::default();
     doc.add_page(612.0, 792.0).text(72.0, 72.0, 12.0, Font::Helvetica, [0, 0, 0], "Здраво");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     assert!(find(&pdf, b"<04170434044004300432043E> Tj").is_some());
     assert!(find(&pdf, b"FontFile2").is_none());
@@ -1064,7 +1064,7 @@ fn custom_faces_replace_latin_and_measure_all_four_styles() -> Result<(), Box<dy
         pg.text(10.0, 20.0 + i as f32 * 20.0, 10.0, font, [0, 0, 0], "AΩ");
     }
     assert_eq!(doc.missing_glyph(), None);
-    let bytes = doc.finish();
+    let bytes = doc.finish().unwrap();
     check_xref(&bytes)?;
     for slot in 1..=4 {
         assert!(find(&bytes, format!("/U{slot} 10 Tf").as_bytes()).is_some());
@@ -1110,7 +1110,7 @@ fn named_families_keep_independent_resources_styles_and_metrics_across_pages() -
     let pg = doc.add_page(300.0, 300.0);
     pg.text(10.0, 20.0, 10.0, heading, [0, 0, 0], "AA");
     pg.text(10.0, 40.0, 10.0, body, [0, 0, 0], "AA");
-    let bytes = doc.finish();
+    let bytes = doc.finish().unwrap();
     check_xref(&bytes)?;
     assert!(find(&bytes, b"/U6 10 Tf").is_some());
     assert!(find(&bytes, b"/U11 10 Tf").is_some());
@@ -1151,7 +1151,7 @@ fn shared_glyph_keeps_each_unicode_character_copyable_across_pages() -> Result<(
     doc.set_text_fonts(TextFonts::custom(font, None, None, None)).unwrap();
     doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "ABΩ");
     doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "BA");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     assert!(find(&pdf, b"> <0041>").is_some(), "A must survive Unicode extraction");
     assert!(find(&pdf, b"> <0042>").is_some(), "B must survive even though it shares A's glyph");
@@ -1169,7 +1169,7 @@ fn supplementary_characters_keep_utf16_surrogate_pair_extraction() -> Result<(),
     doc.set_text_fonts(TextFonts::custom(font, None, None, None)).unwrap();
     doc.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "AΩ😀");
     assert_eq!(doc.missing_glyph(), None);
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     assert!(find(&pdf, b"<000100020003> Tj").is_some());
     assert!(find(&pdf, b"<0003> <D83DDE00>").is_some(), "ToUnicode uses the UTF-16 surrogate pair");
@@ -1217,7 +1217,7 @@ fn separate_script_fallbacks_match_measurement_and_drawing_for_both_weights() ->
     let pg = doc.add_page(100.0, 100.0);
     pg.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "ΩЖAΩ");
     pg.text_rotated(Point::new(10.0, 40.0), 10.0, Font::HelveticaBold, [0, 0, 0], "ΩЖ", std::f32::consts::FRAC_PI_2);
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     for entry in
         ["/U1 10 Tf", "/U2 10 Tf", "/U3 10 Tf", "/U4 10 Tf", "1 0 0 1 14 80 Tm", "1 0 0 1 20 80 Tm", "1 0 0 1 26.67 80 Tm", "0 -1 1 0 10 55 Tm"]
@@ -1249,7 +1249,7 @@ fn changing_fonts_after_a_page_is_rejected_without_corrupting_metrics_or_glyphs(
     let pg = doc.add_page(100.0, 100.0);
     assert_eq!(pg.text_width(Font::Helvetica, 10.0, "AΩ"), 10.0, "new pages retain the original metrics");
     pg.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "ΩA");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     assert!(find(&pdf, &first_bytes).is_some(), "the original face is embedded");
     assert!(find(&pdf, &second_bytes).is_none(), "the rejected face cannot replace the original resource");
@@ -1286,15 +1286,214 @@ fn a_loader_registered_after_initial_lookups_supplies_cached_fonts_to_new_docume
     assert!(cache.loader.set(|| [None, None, None, None]).is_err(), "first registration wins");
     let mut next = PdfDoc::with_text_fonts(cache.text().clone());
     next.add_page(100.0, 100.0).text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "Ω");
-    let next_pdf = next.finish();
+    let next_pdf = next.finish().unwrap();
     check_xref(&next_pdf)?;
     assert!(find(&next_pdf, b"/FontFile2").is_some());
     let existing_pg = existing.add_page(100.0, 100.0);
     assert_eq!(existing_pg.text_width(Font::Helvetica, 10.0, "Ω"), 10.0, "existing documents retain their original faces");
     existing_pg.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "Ω");
-    let existing_pdf = existing.finish();
+    let existing_pdf = existing.finish().unwrap();
     check_xref(&existing_pdf)?;
     assert!(find(&existing_pdf, b"/FontFile2").is_none());
+    Ok(())
+}
+
+#[test]
+fn arabic_is_shaped_and_preserved_or_falls_back_without_a_font() -> Result<(), Box<dyn Error>> {
+    let text = "مَرْحَبًا 123 (ABC)";
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(600.0, 300.0);
+    page.text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text);
+    let layout = arabic::layout(Font::Helvetica, text);
+    let Ok(layout) = layout else {
+        assert!(doc.missing_arabic_font());
+        check_xref(&doc.finish()?)?;
+        return Ok(());
+    };
+    assert!(layout.width > 0.0);
+    assert!((text_width(Font::Helvetica, 20.0, text) - layout.width * 0.02).abs() < 0.001);
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert_eq!(utf16_entry(&pdf, "/ActualText")?, text);
+    assert!(find(&pdf, b"/Subtype /Type3").is_some());
+    assert!(find(&pdf, b"/ToUnicode").is_some());
+    assert!(find(&pdf, b"beginbfchar").is_some());
+    assert!(find(&pdf, b"(?) Tj").is_none());
+    assert!(find(&pdf, b"/UniGB-UTF16-H").is_none(), "Arabic is never set in the CJK font");
+    Ok(())
+}
+
+#[test]
+fn latin_inside_arabic_text_declares_its_page_font() -> Result<(), Box<dyn Error>> {
+    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return Ok(());
+    }
+    let mut doc = PdfDoc::new();
+    doc.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], "مرحبا\u{2028}عالم");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"/F1 20 Tf").is_some(), "the line break is drawn as a Helvetica space");
+    assert!(find(&pdf, b"/Font << /F1 ").is_some(), "the page declares the font its Latin run uses");
+    Ok(())
+}
+
+#[test]
+fn cjk_inside_arabic_text_uses_the_cid_font() -> Result<(), Box<dyn Error>> {
+    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return Ok(());
+    }
+    let text = "مرحبا 编号";
+    let mut doc = PdfDoc::new();
+    doc.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text);
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"<7F1653F7> Tj").is_some(), "the CJK run is set in the CID font");
+    assert!(find(&pdf, b"/Encoding /UniGB-UTF16-H").is_some(), "the page declares the CID font");
+    assert_eq!(utf16_entry(&pdf, "/ActualText")?, text);
+    assert!(text_width(Font::Helvetica, 20.0, text) >= text_width(Font::Helvetica, 20.0, "مرحبا") + 40.0, "two full-width ideographs");
+    for (text, cid_run) in [("مرحبا 😀", &b"<D83DDE00> Tj"[..]), ("مرحبا Привет", &b"<041F04400438043204350442> Tj"[..])] {
+        let mut uncovered = PdfDoc::new();
+        uncovered.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text);
+        assert!(!uncovered.missing_arabic_font());
+        let pdf = uncovered.finish()?;
+        check_xref(&pdf)?;
+        assert!(find(&pdf, cid_run).is_some(), "{text}: characters the Arabic face lacks fall back like non-Arabic text");
+        assert_eq!(utf16_entry(&pdf, "/ActualText")?, text);
+    }
+    Ok(())
+}
+
+#[test]
+fn oversized_arabic_text_is_an_error_instead_of_partial_pdf() -> Result<(), Box<dyn Error>> {
+    let mut doc = PdfDoc::new();
+    doc.add_page(600.0, 300.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], &"ب".repeat(65_537));
+    if doc.missing_arabic_font() {
+        check_xref(&doc.finish()?)?;
+        return Ok(());
+    }
+    assert!(doc.finish().unwrap_err().to_string().contains("128 KiB"));
+    Ok(())
+}
+
+#[test]
+fn arabic_joining_marks_styles_and_rotation() -> Result<(), Box<dyn Error>> {
+    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return Ok(());
+    }
+    for (text, expected) in [("مرحبا 123 (ABC)", "(ABC)"), ("مرحبا [ABC]", "[ABC]"), ("مرحبا <ABC>", "<ABC>")] {
+        let mixed = arabic::layout(Font::Helvetica, text)?;
+        let latin: String = mixed
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                arabic::Item::Latin { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        if !latin.is_empty() {
+            assert_eq!(latin, expected);
+        }
+    }
+    let mut metrics = PdfDoc::new();
+    let (ascent, descent) = metrics.add_page(100.0, 100.0).text_vertical_extents(Font::Helvetica, 20.0, "كمثرى").unwrap();
+    assert!(ascent > 0.0 && descent > 20.0 * 0.22, "Arabic descenders exceed the old Latin baseline allowance");
+    assert!(
+        metrics.page_mut(0).unwrap().text_vertical_extents(Font::Helvetica, 20.0, "مرحبا 123 (ABC)").is_some(),
+        "spaces in variable fonts have empty outlines"
+    );
+    metrics.finish()?;
+    let joined = arabic::layout(Font::Helvetica, "سلام")?;
+    let separate_width: f32 = "سلام".chars().map(|c| text_width(Font::Helvetica, 1000.0, &c.to_string())).sum();
+    assert!((joined.width - separate_width).abs() > 10.0, "joining changes advances");
+    let marked = arabic::layout(Font::Helvetica, "مَرْحَبًا")?;
+    let plain = arabic::layout(Font::Helvetica, "مرحبا")?;
+    assert!(marked.items.len() > plain.items.len());
+    assert!(marked.items.iter().any(|item| matches!(item, arabic::Item::Glyph { y, .. } if *y != 0.0)));
+    let bold_available = match arabic::layout(Font::HelveticaBold, "مرحبا") {
+        Ok(bold) if arabic::bold_face_is_synthetic() => {
+            assert!(bold.width >= plain.width, "synthetic bold keeps the regular advances");
+            true
+        }
+        Ok(bold) => {
+            assert!(bold.width > plain.width, "bold metrics use the bold font instance");
+            true
+        }
+        Err(e) => {
+            assert!(arabic::ARABIC_FONTS.is_empty(), "a bundled face always serves bold text: {e:?}");
+            false
+        }
+    };
+    let mut regular = PdfDoc::new();
+    regular.add_page(500.0, 300.0).text(30.0, 60.0, 20.0, Font::Helvetica, [0, 0, 0], "مرحبا");
+    let regular = regular.finish()?;
+    let mut italic = PdfDoc::new();
+    italic.add_page(500.0, 300.0).text(30.0, 60.0, 20.0, Font::HelveticaOblique, [0, 0, 0], "مرحبا");
+    let italic = italic.finish()?;
+    assert_ne!(regular, italic, "italic shears the actual outlines");
+    let rotated_font = if bold_available { Font::HelveticaBoldOblique } else { Font::HelveticaOblique };
+    let mut rotated = PdfDoc::new();
+    rotated.add_page(500.0, 300.0).text_rotated(Point::new(100.0, 100.0), 20.0, rotated_font, [0, 0, 0], "مرحبا 123", -std::f32::consts::FRAC_PI_2);
+    let rotated = rotated.finish()?;
+    check_xref(&rotated)?;
+    assert_eq!(utf16_entry(&rotated, "/ActualText")?, "مرحبا 123");
+    assert!(find(&rotated, b"0 1 -1 0 100 200 cm").is_some());
+    Ok(())
+}
+
+#[test]
+fn line_breaks_in_arabic_text_draw_as_spaces() -> Result<(), Box<dyn Error>> {
+    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return Ok(());
+    }
+    for text in ["مرحبا\r\nعالم", "مرحبا\u{2028}عالم", "مرحبا\u{2029}ABC\r"] {
+        let layout = arabic::layout(Font::Helvetica, text)?;
+        for item in &layout.items {
+            if let arabic::Item::Latin { text: drawn, .. } = item {
+                assert!(!drawn.chars().any(|ch| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')), "{drawn:?} from {text:?}");
+            }
+        }
+    }
+    let drawn = |text: &str| format!("{:?}", arabic::layout(Font::Helvetica, text).unwrap().items);
+    assert_eq!(drawn("مرحبا\u{2029}عالم"), drawn("مرحبا عالم"), "a paragraph separator keeps right-to-left reading order");
+    Ok(())
+}
+
+#[test]
+fn arabic_text_respects_the_save_nesting_limit() -> Result<(), Box<dyn Error>> {
+    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return Ok(());
+    }
+    let mut d = PdfDoc::new();
+    let p = d.add_page(100.0, 100.0);
+    for _ in 0..28 {
+        p.save();
+    }
+    p.text(10.0, 50.0, 12.0, Font::Helvetica, [0, 0, 0], "مرحبا");
+    assert_eq!(interpret(&p.content).max_depth, 28);
+    p.restore();
+    p.text(10.0, 50.0, 12.0, Font::Helvetica, [0, 0, 0], "مرحبا");
+    assert!(p.content.contains("/ActualText"));
+    check_xref(&d.finish()?)?;
+    Ok(())
+}
+
+#[test]
+fn arabic_subsets_split_after_255_character_codes() -> Result<(), Box<dyn Error>> {
+    if arabic::layout(Font::Helvetica, "مرحبا").is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return Ok(());
+    }
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(600.0, 300.0);
+    let marks = ['َ', 'ُ', 'ِ', 'ّ', 'ْ', 'ً', 'ٌ', 'ٍ'];
+    for i in 0..260 {
+        let text = format!("ب{}{}{}", marks[i % 8], marks[(i / 8) % 8], marks[(i / 64) % 8]);
+        page.text(20.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], &text);
+    }
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"/A2 ").is_some());
+    assert!(find(&pdf, b"/LastChar 255").is_some());
+    assert!(find(&pdf, b"<100> Tj").is_none(), "Type3 codes are always one byte");
     Ok(())
 }
 
@@ -1303,7 +1502,7 @@ fn many_alternating_runs_share_one_text_matrix() {
     let mut doc = PdfDoc::new();
     let p = doc.add_page(612.0, 792.0);
     p.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], &"a\u{4e2d}".repeat(2000));
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     let count = |needle: &[u8]| pdf.windows(needle.len()).filter(|w| *w == needle).count();
     assert_eq!(count(b" Tm\n"), 1, "the position is set once, before the first run");
     assert_eq!(count(b" Tf\n"), 4000, "every run selects its font");
@@ -1311,21 +1510,36 @@ fn many_alternating_runs_share_one_text_matrix() {
 }
 
 #[test]
-fn symbol_font_draws_maths_in_its_own_encoding() {
+fn symbol_font_draws_maths_in_its_own_encoding() -> Result<(), Box<dyn Error>> {
     let mut doc = PdfDoc::new();
     let p = doc.add_page(200.0, 200.0);
     p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{2211}\u{03B1}\u{2264}\u{221E}x");
     p.text(10.0, 80.0, 12.0, Font::TimesItalic, [0, 0, 0], "x");
-    let pdf = doc.finish();
+    let pdf = doc.finish()?;
     let s = String::from_utf8_lossy(&pdf);
     assert!(s.contains("/BaseFont /Symbol >>"), "Symbol has no WinAnsi encoding");
     assert!(s.contains("/BaseFont /Times-Italic /Encoding /WinAnsiEncoding"));
     // The sum, alpha, less-or-equal and infinity codes; x is not in Symbol and becomes `?`.
     assert!(s.contains("(\\345a\\243\\245?) Tj"), "{s}");
-    check_xref(&pdf).unwrap();
+    check_xref(&pdf)?;
     assert!(Font::Symbol.can_encode('\u{2211}') && !Font::Symbol.can_encode('x'));
     assert!(Font::TimesRoman.can_encode('x') && !Font::TimesRoman.can_encode('\u{2211}'));
     assert_eq!(text_width(Font::Symbol, 10.0, "\u{2211}"), 7.13);
+    Ok(())
+}
+
+#[test]
+fn symbol_text_is_never_shaped_as_arabic() -> Result<(), Box<dyn Error>> {
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(200.0, 200.0);
+    assert_eq!(page.text_vertical_extents(Font::Symbol, 12.0, "\u{03B1}ب"), None);
+    page.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "\u{03B1}ب");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"(a?) Tj").is_some());
+    assert!(find(&pdf, b"/ActualText").is_none());
+    assert_eq!(text_width(Font::Symbol, 10.0, "\u{03B1}ب"), f32::from(Font::Symbol.char_width('\u{03B1}') + Font::Symbol.char_width('ب')) / 100.0);
+    Ok(())
 }
 
 #[test]
@@ -1339,7 +1553,7 @@ fn symbol_encoding_survives_registered_unicode_fallbacks() {
     p.text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "∑α≤∞");
     p.text_rotated(Point::new(80.0, 80.0), 12.0, Font::Symbol, [0, 0, 0], "∑α≤∞", 0.5);
     p.text(10.0, 100.0, 12.0, Font::Helvetica, [0, 0, 0], "α");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     let text = String::from_utf8_lossy(&pdf);
     assert_eq!(text.matches("/F13 12 Tf").count(), 2, "math keeps the Symbol resource");
     assert_eq!(text.matches("(\\345a\\243\\245) Tj").count(), 2);
@@ -1358,7 +1572,7 @@ fn explicit_custom_faces_override_symbol_with_matching_metrics() {
     assert_eq!(fonts.missing_glyph(Font::Symbol, "∑α≤∞x"), None);
     let mut doc = PdfDoc::with_text_fonts(fonts);
     doc.add_page(200.0, 200.0).text(10.0, 50.0, 12.0, Font::Symbol, [0, 0, 0], "∑α≤∞x");
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     let text = String::from_utf8_lossy(&pdf);
     assert!(find(&pdf, &bytes).is_some());
     assert!(text.contains("/U1 12 Tf"));
@@ -1395,7 +1609,7 @@ fn embedded_text_preserves_cached_fill_through_shapes_text_and_restore() {
         let fills: Vec<_> = state.paints.iter().map(|paint| paint.fill.as_str()).collect();
         assert_eq!(fills, ["1 0 0", "0 0 1", "1 0 0", "1 0 0", "0 1 0", "1 0 0", "1 0 0"]);
         assert!(state.balanced);
-        check_xref(&doc.finish()).unwrap();
+        check_xref(&doc.finish().unwrap()).unwrap();
     }
 }
 
@@ -1421,7 +1635,7 @@ fn streamed_named_fonts_share_images_and_keep_links_and_unicode_maps() -> Result
         page.link_uri(10.0, 50.0, 20.0, 10.0, "https://example.com/fonts");
         page.save(); // finish must balance this without losing font or image resources.
     }
-    let pdf = doc.finish();
+    let pdf = doc.finish().unwrap();
     check_xref(&pdf)?;
     let (objects, pages) = parse_pages(&pdf);
     assert_eq!(pages.len(), 2);
@@ -1446,6 +1660,56 @@ fn streamed_named_fonts_share_images_and_keep_links_and_unicode_maps() -> Result
     let page_ids: Vec<_> = objects.iter().enumerate().filter(|(_, obj)| obj.dict.contains("/Type /Page ")).map(|(id, _)| id).collect();
     for id in page_ids {
         assert!(objects.iter().any(|obj| obj.dict.contains(&format!("/Dest [{id} 0 R /XYZ 10 180 null]"))));
+    }
+    Ok(())
+}
+
+#[test]
+fn explicit_arabic_faces_keep_their_metrics_beside_automatic_shaping() -> Result<(), Box<dyn Error>> {
+    let text = "ابA";
+    let body_bytes = tiny_ttf(&['ا', 'ب', 'A'], 400, 0);
+    let heading_bytes = tiny_ttf(&['ا', 'ب', 'A'], 800, 0);
+    let body_face = Arc::new(UnicodeFont::parse(body_bytes.clone()).unwrap());
+    let heading_face = Arc::new(UnicodeFont::parse(heading_bytes.clone()).unwrap());
+    let global = TextFonts::custom(body_face.clone(), None, None, None);
+    assert!(!global.is_shaped(Font::Helvetica, text));
+    assert_eq!(global.text_width(Font::Helvetica, 10.0, text), 12.0);
+    let mut fonts = TextFonts::default();
+    fonts.add_family("Body", body_face, None, None, None).unwrap();
+    fonts.add_family("Heading", heading_face, None, None, None).unwrap();
+    let body = fonts.font("Body", false, false);
+    let heading = fonts.font("Heading", false, false);
+    for font in [body, heading] {
+        assert!(!fonts.is_shaped(font, text));
+    }
+    let automatic_shaping = fonts.is_shaped(Font::Helvetica, "مرحبا");
+    let mut doc = PdfDoc::with_text_fonts(fonts);
+    let page = doc.add_page(300.0, 300.0);
+    assert_eq!(page.text_width(body, 10.0, text), 12.0);
+    assert_eq!(page.text_width(heading, 10.0, text), 24.0);
+    assert!(page.text_vertical_extents(body, 10.0, text).is_none());
+    page.text(10.0, 20.0, 10.0, body, [0, 0, 0], text);
+    page.text_rotated(Point::new(10.0, 40.0), 10.0, heading, [0, 0, 0], text, 0.5);
+    assert!(!doc.missing_arabic_font(), "explicit faces do not need the automatic Noto face");
+    let page = doc.add_page(300.0, 300.0);
+    if automatic_shaping {
+        assert!(page.text_vertical_extents(Font::Helvetica, 10.0, "مرحبا").is_some());
+        assert_eq!(page.text_width(Font::Helvetica, 10.0, "مرحبا"), text_width(Font::Helvetica, 10.0, "مرحبا"));
+        page.text(10.0, 20.0, 10.0, Font::Helvetica, [0, 0, 0], "مرحبا");
+    } else {
+        assert!(arabic::ARABIC_FONTS.is_empty(), "required bundled Arabic must be exercised");
+    }
+    let bytes = doc.finish()?;
+    check_xref(&bytes)?;
+    assert!(find(&bytes, &body_bytes).is_some());
+    assert!(find(&bytes, &heading_bytes).is_some());
+    assert!(find(&bytes, b"/U5 10 Tf").is_some());
+    assert!(find(&bytes, b"/U9 10 Tf").is_some());
+    assert!(find(&bytes, b"<0001> <0627>").is_some());
+    assert!(find(&bytes, b"<0002> <0628>").is_some());
+    if automatic_shaping {
+        assert!(find(&bytes, b"/Subtype /Type3").is_some());
+        assert_eq!(utf16_entry(&bytes, "/ActualText")?, "مرحبا");
     }
     Ok(())
 }

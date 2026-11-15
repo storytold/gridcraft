@@ -1,11 +1,13 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-10 · **Change:** minor (Ukrainian Chart is Діаграма; Diagram and Decorative Text labels, Diagram distinct from Chart; shared CJK/Latin fallback baselines; Arabic bidi display, editing, reading direction, font fallback, AutoFit and sorting; B1/B2 calendar formats; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; missing translations are reported without failing checks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-15 · **Change:** minor (automatic Arabic PDF shaping retained beside explicit TrueType font selection; Ukrainian Chart is Діаграма; Diagram and Decorative Text labels, Diagram distinct from Chart; shared CJK/Latin fallback baselines; Arabic bidi display, editing, reading direction, font fallback, AutoFit and sorting; B1/B2 calendar formats; PDF headers and footers retain font/style runs; Greek and Cyrillic retain independent fallbacks; PDF Unicode aliases retain their text; multiple named PDF font families; per-export TrueType fonts through CLI/MCP; missing translations are reported without failing checks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
 right-to-left sheets and full complex-script support. Part of
 [target-app-parity.md](target-app-parity.md). **Localization: ~10% ready, 100–165 h** (estimated).
+
+Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic glyph outlines with ToUnicode and logical ActualText. Cells, headers and chart labels support marks, digits, rotation and style. Bundled builds use the optional `CRAFT_FONTS_DIR` input; unbundled native builds look for Noto Sans Arabic. Characters the Arabic face lacks fall back to the standard and CID fonts, and without an Arabic face for the text's weight Arabic is set in the CID font, which has no Arabic glyphs, with a message. Explicit cell reading-direction integration is separate.
 
 Cell text now uses shared Unicode bidi layout while retaining logical source indexes for editing, copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction, independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional direction preserves absent versus explicit Context in differential styles. The renderer is pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM checks. Physical screen-reader behavior remains unverified.
 
@@ -80,7 +82,7 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 - **Names in any script.** Defined names (Define Name, Create from Selection) are limited to
   255 characters, counted as characters rather than UTF-8 bytes, so a 255-letter Arabic name is
   accepted as in Excel. Sheet names already counted characters (31).
-- **PDF export** embeds explicit TrueType faces through CLI/MCP, including Latin text, or a registered Greek/Cyrillic system fallback (adapted from #1555). Other uncovered text keeps the viewer-dependent CID fallback. No complex shaping, bidi or font subsetting; see [PDF fonts](cli.md#pdf-fonts).
+- **PDF export** shapes automatic Arabic text with embedded Noto glyph outlines and preserves its logical text. Explicit CLI/MCP TrueType faces, including Latin, keep their own glyphs and widths without shaping, bidi or subsetting. Registered Greek/Cyrillic fallbacks remain available; other uncovered text uses the viewer-dependent CID path. See [PDF fonts](cli.md#pdf-fonts).
 
 ## Languages
 
@@ -94,7 +96,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
-| Arabic | ar | 0 (0%) | no | shared shaping/bidi; no Arabic UI catalog or mirrored shell; Sheet RTL mirrors the grid (#146) | no | none | 25–35 h |
+| Arabic | ar | 0 (0%) | no | shared shaping/bidi; no Arabic UI catalog or mirrored shell; PDF export: shaped and joined; Sheet RTL mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
@@ -132,12 +134,14 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Retain automatic Arabic shaping, grapheme wrapping and export errors alongside explicit TrueType faces and document-local font metrics |
 | 2026-11-10 | trivial | Retain Ukrainian Chart terminology alongside per-export PDF font capabilities and histories |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | trivial | Reconcile upstream Diagram and Decorative Text labels with PDF font export capabilities and histories |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-11-10 | trivial | Reconcile upstream CJK baseline and legacy-formula changes with per-export PDF fonts; retain both feature histories |
 | 2026-11-09 | trivial | Reconcile upstream Arabic text layout, fallback and calendar progress with TrueType PDF export capabilities and limits |
+| 2026-11-09 | minor | Arabic PDF export no longer fails on a character the Arabic face lacks (it falls back like other text) or when no Arabic font is available (Arabic is set in the CID font, which has no Arabic glyphs, and a message says so) |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
 | 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
 | 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
@@ -147,6 +151,7 @@ language (none so far) and of localized function names.
 | 2026-10-25 | minor | Embedded PDF fonts keep distinct Unicode characters searchable/copyable when they share a glyph; supplementary characters use UTF-16 extraction mappings, per-face Unicode maps are bounded across pages, and automatic fallback reads reject oversized/non-regular files before parsing |
 | 2026-10-25 | minor | PDF exports preserve multiple workbook font families through named CLI/MCP mappings, with independent styles/resources and widths; up to 32 mappings and 256 MiB of font faces per export |
 | 2026-10-25 | minor | PDF exports accept per-request regular, bold, italic and bold-italic TrueType faces through CLI/MCP, with matching text measurement and validation; adapted embedding from #1555 while retaining the CID fallback |
+| 2026-10-26 | minor | Arabic PDF cells, headers and chart labels support joined letters, combining marks, digits, bold/italic, rotation and grapheme wrapping |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

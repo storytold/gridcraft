@@ -19,7 +19,9 @@ use gridcraft_model::{
 use gridcraft_pdf::{Font, MAX_FONT_BYTES, MAX_FONT_FAMILIES, MAX_TOTAL_FONT_BYTES, Page, PdfDoc, Point, Rect, Rgb, TextFonts, UnicodeFont};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param};
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param,
+};
 
 mod draw;
 mod header_footer;
@@ -152,10 +154,21 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 
+/// A rendered PDF and whether some of its Arabic text was set without an Arabic face.
+pub struct RenderedPdf {
+    pub bytes: Vec<u8>,
+    pub pages: usize,
+    pub missing_arabic_font: bool,
+}
+
+const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this PDF because no Noto Sans Arabic face was found for it.";
+
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
-    let (doc, n) = render_document(wb, layouts, file, path, TextFonts::system());
-    (doc.finish(), n)
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
+    let (doc, pages) = render_document(wb, layouts, file, path, TextFonts::system());
+    let missing_arabic_font = doc.missing_arabic_font();
+    let bytes = doc.finish().map_err(|error| EngineError::Other(error.to_string()))?;
+    Ok(RenderedPdf { bytes, pages, missing_arabic_font })
 }
 
 fn render_document(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, fonts: TextFonts) -> (PdfDoc, usize) {
@@ -297,7 +310,7 @@ fn export_faces(value: &Json, label: &str, cmd: &str, budget: &mut u64) -> Resul
     Ok(out)
 }
 
-fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
+fn build_pdf(s: &mut Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
     let fonts = export_fonts(p, cmd)?;
     let d = s.doc()?;
@@ -310,7 +323,12 @@ fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     if let Some(c) = doc.missing_glyph() {
         return Err(bad(cmd, format!("custom PDF font has no glyph for U+{:04X} ({c}); supply a face covering the exported text", c as u32)));
     }
-    Ok((doc.finish(), pages))
+    let missing_arabic_font = doc.missing_arabic_font();
+    let bytes = doc.finish().map_err(|error| bad(cmd, error.to_string()))?;
+    if missing_arabic_font {
+        s.ui_requests.push(crate::UiRequest::Message(MISSING_ARABIC_FONT.into()));
+    }
+    Ok((bytes, pages))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {

@@ -15,6 +15,11 @@ fn pdf_of(s: &mut Session, p: Json) -> (Vec<u8>, u64) {
 fn contains(hay: &[u8], needle: &str) -> bool {
     hay.windows(needle.len()).any(|w| w == needle.as_bytes())
 }
+fn arabic_face_available() -> bool {
+    let mut doc = gridcraft_pdf::PdfDoc::new();
+    doc.add_page(100.0, 100.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], "مرحبا");
+    !doc.missing_arabic_font()
+}
 
 #[test]
 fn chart_data_table_prints_formatted_values_and_follows_recalculation() {
@@ -56,6 +61,65 @@ fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let cropped = String::from_utf8_lossy(&cropped);
     assert_eq!(cropped.matches("/Subtype /Link").count(), 1);
     assert!(!cropped.contains("/Dest ["));
+}
+
+#[test]
+fn arabic_with_characters_its_font_lacks_still_exports() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "مرحبا Привет"})).unwrap();
+    let out = s.execute("file.exportPdf", json!({})).unwrap();
+    assert_eq!(out["pages"], 1);
+}
+
+#[test]
+fn wrapping_keeps_combining_marks_with_their_letters() {
+    let word = "a\u{301}a\u{301}a\u{301}a\u{301}";
+    let lines = wrap_lines(&TextFonts::system(), word, Font::Helvetica, 10.0, 7.0);
+    assert_eq!(lines.concat(), word);
+    assert!(lines.iter().all(|line| line == "a\u{301}"));
+}
+
+#[test]
+fn arabic_cells_headers_and_charts_export_searchable_shaped_text() {
+    if !arabic_face_available() && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+        return;
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["مَرْحَبًا 123 (ABC)", "القيمة"], ["تفاح", 3], ["كمثرى", 5], ["العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة العَرَبِيَّة", null], ["تقرير ١٢٣ (ABC)", null], ["مرحبا", null]]})).unwrap();
+    s.execute("home.columnWidth", json!({"cols": "A:B", "chars": 32})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "1:6", "height": 50})).unwrap();
+    s.execute("home.fontSize", json!({"range": "A1:B6", "size": 20})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "4:4", "height": 90})).unwrap();
+    s.execute("home.bold", json!({"range": "A2"})).unwrap();
+    s.execute("home.italic", json!({"range": "A3"})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A4"})).unwrap();
+    s.execute("home.orientation", json!({"range": "A6", "angle": 30})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"header": "&Cتقرير المبيعات 2026", "gridlines": true})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        for chart in &mut wb.sheet_mut(0).unwrap().charts {
+            chart.anchor.cell = CellRef::new(8, 0);
+            chart.anchor.width = 500.0;
+            chart.anchor.height = 280.0;
+        }
+    }
+    let (pdf, pages) = pdf_of(&mut s, json!({"fitToPage": true}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "/Subtype /Type3"));
+    for text in ["مَرْحَبًا 123 (ABC)", "تقرير المبيعات 2026", "القيمة", "تفاح", "كمثرى"] {
+        let utf16 = text.encode_utf16().map(|unit| format!("{unit:04X}")).collect::<String>();
+        assert!(contains(&pdf, &format!("/ActualText <FEFF{utf16}>")), "missing text {text}");
+    }
+    let lines = wrap_lines(&TextFonts::system(), "العَرَبِيَّةالعَرَبِيَّة", Font::Helvetica, 20.0, 40.0);
+    assert_eq!(lines.concat(), "العَرَبِيَّةالعَرَبِيَّة");
+    assert!(lines.iter().all(|line| !line.starts_with(['َ', 'ِ', 'ُ', 'ّ', 'ْ'])));
+    assert!(lines.iter().all(|line| gridcraft_pdf::text_width(Font::Helvetica, 20.0, line) <= 40.0));
+    let path = std::env::temp_dir().join(format!("gridcraft-arabic-export-{}.pdf", std::process::id()));
+    std::fs::write(&path, &pdf).unwrap();
+    eprintln!("Arabic PDF artifact: {}", path.display());
 }
 
 #[test]
@@ -1027,6 +1091,18 @@ fn wrapping_uses_the_face_selected_for_the_complete_unicode_line() {
 }
 
 #[test]
+fn wrapping_a_long_arabic_word_measures_pieces_not_the_rest_of_the_word() {
+    let word = "مرحبا".repeat(10_000);
+    if !arabic_face_available() {
+        return;
+    }
+    let lines = wrap_lines(&TextFonts::system(), &word, Font::Helvetica, 10.0, 20.0);
+    assert!(lines.len() > 2000 && lines.len() <= 2002, "{}", lines.len());
+    assert!(lines.iter().take(2000).all(|line| gridcraft_pdf::text_width(Font::Helvetica, 10.0, line) <= 20.0));
+    assert!(word.starts_with(&lines.concat()));
+}
+
+#[test]
 fn center_across_spans_following_empty_center_across_cells() {
     let mut styles = StyleTable::default();
     let across = styles.intern(Style { align: Alignment { h: HAlign::CenterAcross, ..Alignment::default() }, ..Style::default() });
@@ -1235,7 +1311,7 @@ fn cached_chart_layout_uses_export_font_widths_on_every_page() {
         let fonts = TextFonts::custom(face, None, None, None);
         let (doc, _) = render_document(&wb, std::slice::from_ref(&layout), "Book", "", fonts);
         assert_eq!(doc.missing_glyph(), None);
-        doc.finish()
+        doc.finish().unwrap()
     };
     // A is the first character emitted in the regular face, so its document-local CID is 1.
     // The narrow face fits the whole title; the wide face must shorten it with an ellipsis.
@@ -1245,4 +1321,16 @@ fn cached_chart_layout_uses_export_font_widths_on_every_page() {
     assert!(count >= 2, "each page touched by the chart reuses the title fitted with the narrow face");
     assert!(!contains(&export(1000), &full_title), "a later export must lay the chart out with its own wider face");
     assert_eq!(String::from_utf8_lossy(&export(200)).matches(&full_title).count(), count);
+}
+
+#[test]
+fn explicit_arabic_font_wrapping_uses_its_own_widths_and_keeps_graphemes() {
+    use gridcraft_pdf::{TextFonts, UnicodeFont, test_support::tiny_ttf};
+    use std::sync::Arc;
+    let face = Arc::new(UnicodeFont::parse(tiny_ttf(&['ب', 'َ'], 600, 0)).unwrap());
+    let fonts = TextFonts::custom(face, None, None, None);
+    let text = "بَ".repeat(4);
+    let lines = wrap_lines(&fonts, &text, Font::Helvetica, 10.0, 14.0);
+    assert_eq!(lines, ["بَ", "بَ", "بَ", "بَ"]);
+    assert!(lines.iter().all(|line| fonts.text_width(Font::Helvetica, 10.0, line) == 12.0));
 }

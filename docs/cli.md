@@ -88,12 +88,13 @@ all exported pages. Distinct characters remain copyable even when the font share
 Invalid files, CFF outlines, font collections (`.ttc`), restricted or bitmap-only
 embedding, and characters absent from a selected face return an error before the output file is
 written. TrueType outlines in an OpenType container are accepted; extensions do not validate font
-bytes. Fonts are embedded whole, without subsetting. This does not add shaping, ligatures, bidi or
-variable-font axis selection; use static faces and scripts that need no complex shaping. No font
-files are bundled or added to the repository.
+bytes. Fonts are embedded whole, without subsetting. Explicit font selection does not add shaping, ligatures, bidi or
+variable-font axis selection; use static faces and scripts that need no complex shaping. Custom
+font files are not added to the repository.
 
-Without explicit fonts, Latin text uses the standard PDF fonts; Greek and Cyrillic can use the
-registered system TrueType fallback shared with the desktop. The loader lives in the dependency-free
+Without an explicit face for the text, Arabic uses shaped Noto Type3 subsets from the optional
+build font bundle or supported system paths. Latin text uses the standard PDF fonts; Greek and Cyrillic can use the
+registered system TrueType fallback shared with the desktop. The loader lives in the
 PDF crate; building the headless CLI does not require the UI crate or its windowing dependencies.
 Text that fallback cannot cover retains the existing non-embedded CID path, whose rendering
 depends on the PDF viewer's fonts.
