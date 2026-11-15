@@ -27,6 +27,7 @@ mod paste;
 mod ref_edit;
 mod show;
 mod spelling;
+mod styles;
 mod zoom;
 
 use analysis::toolpak_defaults;
@@ -38,6 +39,7 @@ use names::pasteable_names;
 pub(crate) use ref_edit::SHEET_DELETED;
 pub(crate) use show::build_params;
 pub use show::show;
+use styles::{open_merge_styles, open_new_cell_style};
 use zoom::zoom_preset;
 
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
@@ -687,6 +689,8 @@ impl Dialog {
                 }
                 d
             }
+            "newCellStyle" => open_new_cell_style(app),
+            "mergeStyles" => open_merge_styles(app),
             "equation" => return crate::equation::open_editor(app, &params),
             "goalSeek" => Dialog::custom("goalSeek", "Goal Seek", json!({"set": active, "to": "0", "changing": ""})),
             "forecastSheet" => Dialog::form(

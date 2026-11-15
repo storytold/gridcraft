@@ -18,6 +18,7 @@ mod hidden_sheet_navigation;
 mod ink_roundtrip;
 mod line_count_overflow;
 mod long_operator_chains;
+mod merge_styles;
 mod merged_selection_keys;
 mod offset_overflow;
 mod percent_entry;

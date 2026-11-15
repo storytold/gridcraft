@@ -72,6 +72,7 @@ mod macro_editor;
 mod macros_ui;
 mod menu_hover;
 mod merge_center_label;
+mod merge_styles_dialog;
 mod merged_cells;
 mod more_colors;
 mod native_print;
