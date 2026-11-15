@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use gridcraft_core::{Array, CellError, Value, sort_compare};
 
 use crate::util::{A, MAX_CELLS, R, arg, array_val, as_array, has, num, opt_bool, scalar};
-use crate::{Arg, Ctx, FnSpec, VAR};
+use crate::{Arg, Ctx, FnSpec, Gather, VAR};
 
 // ---------------------------------------------------------------------------------------------
 // Helpers
@@ -293,22 +293,23 @@ fn randarray(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     if lo > hi {
         return Err(CellError::Value);
     }
-    let mut data = Vec::with_capacity(r * c);
-    if whole {
+    let data = if whole {
         let (lo, hi) = (lo.ceil(), hi.floor());
         if lo > hi {
             return Err(CellError::Value);
         }
-        for _ in 0..r * c {
-            let x = (lo + (ctx.random() * (hi - lo + 1.0)).floor()).min(hi);
-            data.push(Value::number(x));
-        }
+        draws(r * c, ctx, |x| (lo + (x * (hi - lo + 1.0)).floor()).min(hi))?
     } else {
-        for _ in 0..r * c {
-            data.push(Value::number(lo + ctx.random() * (hi - lo)));
-        }
-    }
+        draws(r * c, ctx, |x| lo + x * (hi - lo))?
+    };
     array_val(r, c, data)
+}
+
+/// `count` draws through `scale`, through [`Gather`] (see [`crate::Halt`]): where a draw can end
+/// the evaluation, every draw does, so after the first the rest are not drawn and nothing is
+/// reserved for them.
+fn draws(count: usize, ctx: &mut dyn Ctx, scale: impl Fn(f64) -> f64) -> R<Vec<Value>> {
+    Gather::new(ctx).collect(ctx, 0..count, |ctx, _| Ok(Value::number(scale(ctx.random()))))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1516,5 +1517,38 @@ mod tests {
         assert!(2300 * w > crate::util::MAX_CELLS && h * w > crate::util::MAX_CELLS);
         let wide: Vec<f64> = (0..2300).map(f64::from).collect();
         is_err(ev("PIVOTBY", vec![av(row(&[1.0])), av(row(&wide)), av(row(&wide)), t("SUM")]), CellError::Num);
+    }
+
+    /// A host where every draw ends the evaluation (a calculation thread's), counting the draws.
+    struct HandingBack {
+        drawn: usize,
+    }
+
+    impl crate::Ctx for HandingBack {
+        fn date_system(&self) -> gridcraft_core::DateSystem {
+            gridcraft_core::DateSystem::D1900
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            self.drawn += 1;
+            0.5
+        }
+        fn can_halt(&self) -> bool {
+            true
+        }
+        fn halted(&mut self, _: crate::Asked) -> bool {
+            self.drawn > 0
+        }
+    }
+
+    #[test]
+    fn draws_ended_by_the_first_reserve_nothing_for_the_rest() {
+        // A count no formula can give (RANDARRAY stops at `MAX_CELLS`): reserving it would fail,
+        // so the draws must end on the first one before the result is reserved.
+        let mut ctx = HandingBack { drawn: 0 };
+        assert_eq!(super::draws(usize::MAX / 2, &mut ctx, |x| x), Err(CellError::Calc));
+        assert_eq!(ctx.drawn, 1);
     }
 }

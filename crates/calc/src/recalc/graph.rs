@@ -67,6 +67,59 @@ pub(super) struct Node {
     /// The formula the node was resolved from (the cell's own, shared; none for a Python cell),
     /// so that `Calc::rebuild` sees a formula replaced by one that reads the same cells.
     pub(super) formula: Option<Arc<Formula>>,
+    /// Whether the formula's parsed tree draws random numbers itself (`uses_random`), worked out
+    /// once here rather than at every level calculated on worker threads. False when the formula
+    /// keeps no parsed tree: `PassHost::run_level` takes the flag only for the very tree it
+    /// evaluates, and walks any other.
+    pub(super) random: bool,
+    /// Whether evaluating the formula may draw a random number by its own tree
+    /// (`draws::random_use`): `random`, or a function that draws passed by name. True for a
+    /// formula that keeps no parsed tree, which is not looked at. A defined name's body is not
+    /// part of it (see `Calc::run`).
+    pub(super) may_draw: bool,
+    /// The places in the formula's parsed tree that may look a defined name up
+    /// (`pass_host::name_lookups`), counted up to one past `NAME_LOOKUPS_SCANNED`, past which
+    /// `PassHost::run_level` builds the names' index whatever the rest adds; worked out once
+    /// here, by the precedent walk (see [`Node::drawing`]), rather than by a walk of the tree at
+    /// every level calculated on worker threads. `None` when not counted (a node made without
+    /// that walk): `run_level` then walks the tree.
+    pub(super) name_lookups: Option<u8>,
+}
+
+impl Node {
+    pub(super) fn new(areas: Vec<Area>, dynamic: bool, formula: Option<Arc<Formula>>) -> Node {
+        Node::drawing(areas, dynamic, formula, None)
+    }
+
+    /// [`Node::new`] with what `random_use` answers for the formula's tree, and its name lookups
+    /// (`name_lookups`), when the caller has them (`drawn`, from the walk that found the
+    /// references). The precedent walk (`precedents_drawing`) folds the draw flags and the count
+    /// into its own walk as an optimisation, saving two tree walks per formula at every graph
+    /// build; under `cfg(test)` the assertions below check every folded answer against a walk of
+    /// `random_use` and of `name_lookups`, which pins that they agree.
+    pub(super) fn drawing(areas: Vec<Area>, dynamic: bool, formula: Option<Arc<Formula>>, drawn: Option<(super::Draws, u8)>) -> Node {
+        let (random, may_draw, name_lookups) = match formula.as_ref().map(|f| f.expr.as_deref()) {
+            Some(Some(tree)) => {
+                #[cfg(test)]
+                if let Some((d, lookups)) = drawn {
+                    let text = formula.as_ref().map(|f| &f.text);
+                    assert_eq!(d, super::random_use(tree), "folded draws differ for {text:?}");
+                    let walked = super::name_lookups(tree, crate::eval::NAME_LOOKUPS_SCANNED);
+                    assert_eq!(usize::from(lookups), walked, "folded name lookups differ for {text:?}");
+                }
+                match drawn {
+                    Some((d, lookups)) => (d.calls, d.may_draw, Some(lookups)),
+                    None => {
+                        let d = super::random_use(tree);
+                        (d.calls, d.may_draw, None)
+                    }
+                }
+            }
+            Some(None) => (false, true, None),
+            None => (false, false, None),
+        };
+        Node { areas, dynamic, formula, random, may_draw, name_lookups }
+    }
 }
 
 /// The same references read the same way, from the same formula: the same one, or one with the
@@ -112,21 +165,28 @@ const BUDGET_PER_FORMULA: usize = 4 * EXACT;
 /// The index work of a round of `formulas` dirty formulas: the budget rule.
 ///
 /// Each phase of a round that walks the dependency index gets this figure for itself: planning
-/// ([`Graph::levels`]) and checking the planned round against row-major order
-/// (`Calc::agrees_with_row_major`). A phase is charged a unit per index entry it inspects (an
-/// area walked, a column visited, an interval-index entry or node visited, an entry stored or
+/// ([`Graph::levels`]), checking the planned round against row-major order
+/// (`Calc::agrees_with_row_major`), and, in levels calculated on worker threads, looking up the
+/// readers of the arrays laid out differently from what the workbook stores
+/// (`PassHost::mark_readers`). A phase is charged a unit per index entry it inspects (an area
+/// walked, a column visited, an interval-index entry or node visited, an entry stored or
 /// released, a reader recounted, listed or reached) and per look-up, and a look-up stops when
 /// its phase's figure runs out. Then planning gives no plan, and the checking sends the round
 /// back to be calculated again in row-major order; after either, the passes run in row-major
-/// order until a formula is entered, changed or removed (the hold, `Calc::row_major_only`). A
-/// range look-up's probes of the per-cell and column indexes ([`Graph::uncharged_probes`]) are
-/// charged before it by planning. The checking leaves them uncharged: the areas it looks up
-/// belong to arrays whose readers `write_back` looks up too, over an area holding them, when the
-/// round is kept, and running out over those probes would hold planning off for the passes
-/// after it.
+/// order until a formula cell is entered, edited, removed or passed as changed, or the workbook
+/// becomes able to draw random numbers (the hold, `Calc::row_major_only`).
+/// Marking that runs out calculates the rest of its level on the main thread. A range look-up's
+/// probes of the per-cell and column indexes ([`Graph::uncharged_probes`]) are charged before
+/// it by planning and by marking for a worker's array that is thrown away. The checking, and
+/// marking for an array that is kept, leave them uncharged: the areas they look up belong to
+/// arrays whose readers `write_back` looks up too, over an area holding them, when the round is
+/// kept, and running out over those probes would hold planning off for the passes after it.
 ///
 /// What the dynamic formulas of a planned round read is noted within a limit of its own
-/// ([`Plan::note_limit`]).
+/// ([`Plan::note_limit`]). The memory a level's workers keep has limits of its own: their copied
+/// blocks share `CACHE_BYTES_BUDGET`, divided between them afresh at each level and dropped with
+/// the workers, and the names they parse go in one store they share, which comes out of what the
+/// pass has left of its limit on definition text (`MAX_PASS_NAME_TEXT`).
 fn index_budget(formulas: usize) -> usize {
     formulas.saturating_mul(BUDGET_PER_FORMULA).saturating_add(FIXED_INDEX_WORK)
 }
@@ -361,6 +421,9 @@ pub struct Graph {
     /// sheet → row intervals of wider ranges, with their columns: (first, last, dependent)
     wide_deps: HashMap<usize, Intervals<(u32, u32, Key)>>,
     pub(super) dynamic: HashSet<Key>,
+    /// The nodes whose formula may draw a random number (`Node::may_draw`), counted by `insert`
+    /// and `remove`.
+    drawing: usize,
     /// Range indexes changed since the last [`Graph::settle`].
     unsettled_cols: HashSet<(usize, u32)>,
     unsettled_wide: HashSet<usize>,
@@ -418,11 +481,18 @@ impl Graph {
         if node.dynamic {
             self.dynamic.insert(k);
         }
+        self.drawing = self.drawing.saturating_add(usize::from(node.may_draw));
         self.nodes.insert(k, node);
+    }
+
+    /// Whether a formula of the graph may draw a random number by its own tree (`Node::may_draw`).
+    pub(super) fn may_draw(&self) -> bool {
+        self.drawing > 0
     }
 
     pub(super) fn remove(&mut self, k: Key) {
         let Some(old) = self.nodes.remove(&k) else { return };
+        self.drawing = self.drawing.saturating_sub(usize::from(old.may_draw));
         let (cells, cols, wide) = Self::entries(&old.areas);
         for c in cells {
             if let Some(v) = self.cell_deps.get_mut(&c) {
@@ -1161,8 +1231,9 @@ impl Plan {
     pub(crate) fn budget(&self) -> usize {
         self.budget
     }
-    /// The most reads the round's dynamic formulas may keep noted (see `Watch::reads`), a limit
-    /// of its own beside [`index_budget`]: one per formula of the round plus
+    /// The most note entries the round may keep, its dynamic formulas' reads (`Watch::reads`) and
+    /// the pairs of readers before an anchor (`Watch::unforced`) between them, a limit of its own
+    /// beside [`index_budget`]: one per formula of the round plus
     /// [`FIXED_INDEX_WORK`], so that the notes stay in proportion to what the round holds for
     /// its results.
     pub(crate) fn note_limit(&self) -> usize {

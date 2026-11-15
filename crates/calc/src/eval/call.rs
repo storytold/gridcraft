@@ -1,7 +1,8 @@
 use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
-use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
+use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, Lambda, Pipe, Value, compare, err};
+use gridcraft_functions::Gather;
 use std::sync::Arc;
 
 /// What a call of a function can evaluate to, by [`Evaluator::call`]'s dispatch (see
@@ -269,8 +270,7 @@ impl<'h> Evaluator<'h> {
             for argument in &args[1..] {
                 evaluated.push(Arg::val(self.value(argument)));
             }
-            let mut context = FnCtx { ev: self, criteria: None, lambda: None };
-            return gridcraft_functions::call(spec, &evaluated, &mut context).pipe(Ev::V);
+            return self.call_function(spec, &evaluated, None, None).pipe(Ev::V);
         }
         let index = match index.to_number() {
             Ok(number) => number.trunc() as i64,
@@ -363,6 +363,10 @@ impl<'h> Evaluator<'h> {
             return self.aggregate(kind, args);
         }
         let mut evaluated = Vec::with_capacity(args.len());
+        // A union's row that the charge below would refuse (see the loop over its areas).
+        let mut over_work = false;
+        // The values the arguments evaluated so far hold, which the charge below counts.
+        let mut held = 0u64;
         // SUMIF/AVERAGEIF: the size of the criteria range (argument 1), which the sum range takes.
         let mut criteria_shape = None;
         // Database functions: the criteria range (argument 2), whose formulas are computed criteria.
@@ -402,13 +406,31 @@ impl<'h> Evaluator<'h> {
             let from_ref = matches!(ev, Ev::R(_));
             let value = match ev {
                 Ev::R(areas) if areas.len() > 1 => {
-                    // Multi-area references (unions): flatten into one row for aggregates.
+                    // Multi-area references (unions): flatten into one row for aggregates. A
+                    // union can hold millions of areas (doubled through LET): read through
+                    // `Gather` (see `gridcraft_functions::Halt`).
                     let mut vals = Vec::new();
-                    for ar in &areas {
-                        match self.area_value(ar) {
-                            Value::Array(a) => vals.extend(a.data.iter().cloned()),
-                            v => vals.push(v),
-                        }
+                    let flattened = Gather::new(&*self).each_kept(
+                        self,
+                        &areas,
+                        |ev, ar| ev.area_value(ar),
+                        |ev, v| {
+                            // The row is charged below with the values of the other arguments,
+                            // after every argument; the work left only goes down, so once the row
+                            // and the arguments before it hold more values than that, the charge
+                            // fails: the rest is read, in order, but not copied.
+                            if over_work {
+                                return;
+                            }
+                            match v {
+                                Value::Array(a) => vals.extend(a.data.iter().cloned()),
+                                v => vals.push(v),
+                            }
+                            over_work = held.saturating_add(vals.len() as u64) > ev.work;
+                        },
+                    );
+                    if let Err(e) = flattened {
+                        return e;
                     }
                     Value::from(Array::row(vals))
                 }
@@ -416,17 +438,22 @@ impl<'h> Evaluator<'h> {
             };
             // Only an argument left out (`f(a,,b)`) is omitted; one that computes a blank is given.
             let blank_value = !from_ref && value == Value::Empty && lambda_at != Some(i) && !matches!(a, Expr::Missing);
+            held = held.saturating_add(if let Value::Array(x) = &value { x.data.len() as u64 } else { 1 });
             evaluated.push(Arg { value, from_ref, blank_value });
         }
         // The function may go through every value it is given (a SUM inside each call of a
         // LAMBDA over a large array): the values count against the cell's work.
-        let values = evaluated.iter().fold(0u64, |n, a| n.saturating_add(if let Value::Array(x) = &a.value { x.data.len() as u64 } else { 1 }));
+        let values = held;
+        if over_work {
+            // As the charge of the whole row would have: no work left.
+            self.spend(u64::MAX);
+            return err(CellError::Calc);
+        }
         if !self.spend(values) {
             return err(CellError::Calc);
         }
         let database = criteria.is_some();
-        let mut ctx = FnCtx { ev: self, criteria, lambda };
-        let v = gridcraft_functions::call(spec, &evaluated, &mut ctx);
+        let v = self.call_function(spec, &evaluated, criteria, lambda);
         // A computed criterion that ran out of work counted as not met: the result leaves
         // records out.
         if database && self.exhausted {
@@ -445,6 +472,23 @@ impl<'h> Evaluator<'h> {
         for a in args {
             let ev = self.eval(a);
             let steps = match ev {
+                Ev::R(areas) if areas.len() > 1 => {
+                    // A union, as `builtin` flattens one, through `Gather`. A union can hold
+                    // millions of areas: the first error is kept as the loop goes, not a result
+                    // per area.
+                    let summed = Gather::new(&*self).each(self, &areas, |ev, area| {
+                        if let Err(e) = ev.aggregate_area(kind, area, &mut acc)
+                            && first_error.is_none()
+                        {
+                            first_error = Some(e);
+                        }
+                        Ok(())
+                    });
+                    if let Err(e) = summed {
+                        return e;
+                    }
+                    Vec::new()
+                }
                 Ev::R(areas) => areas.iter().map(|area| self.aggregate_area(kind, area, &mut acc)).collect(),
                 ev => {
                     let value = self.deref(ev);
@@ -463,12 +507,13 @@ impl<'h> Evaluator<'h> {
         if !a.range.is_single() {
             // Adding the block's remembered sum to anything but +0.0 would add in another order.
             // COUNT never reads the sum, so it may reuse every block.
-            if (kind == Agg::Count || acc.sum.to_bits() == 0)
-                && let Some((sum, count)) = self.host.range_sum(a.sheet, a.range)
-            {
-                acc.sum = sum;
-                acc.count = acc.count.saturating_add(count);
-                return Ok(());
+            if kind == Agg::Count || acc.sum.to_bits() == 0 {
+                let known = self.read_sum(a.sheet, a.range);
+                if let Some((sum, count)) = known {
+                    acc.sum = sum;
+                    acc.count = acc.count.saturating_add(count);
+                    return Ok(());
+                }
             }
             // Folded without building an array, but still walked: the part inside the used
             // range counts against the cell's work.
@@ -477,7 +522,7 @@ impl<'h> Evaluator<'h> {
                 return Err(err(CellError::Calc));
             }
             let mut error = None;
-            let walked = self.host.visit_range(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
+            let walked = self.read_visit(a.sheet, a.range, &mut |v| match acc.add_cell(kind, v) {
                 Ok(()) => true,
                 Err(e) => {
                     error = Some(e);
@@ -503,13 +548,13 @@ impl<'h> Evaluator<'h> {
         };
         let args = [Arg { value, from_ref, blank_value: false }];
         if kind != Agg::Count {
-            match gridcraft_functions::call(sum, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
+            match self.call_function(sum, &args, None, None) {
                 Value::Number(n) => acc.sum += n,
                 other => return Err(Ev::V(other)),
             }
         }
         if kind != Agg::Sum {
-            match gridcraft_functions::call(count, &args, &mut FnCtx { ev: self, criteria: None, lambda: None }) {
+            match self.call_function(count, &args, None, None) {
                 Value::Number(n) => acc.count = acc.count.saturating_add(n as u64),
                 other => return Err(Ev::V(other)),
             }

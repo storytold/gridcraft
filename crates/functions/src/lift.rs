@@ -4,7 +4,7 @@
 use gridcraft_core::{Array, CellError, Value};
 
 use crate::util::MAX_CELLS;
-use crate::{Arg, Ctx, FnSpec};
+use crate::{Arg, Ctx, FnSpec, Gather};
 
 /// Value-parameter masks (see [`FnSpec::value_args`]), observed in Excel 365: a reference to more
 /// than one cell at these positions gives `#VALUE!` in dynamic-array and legacy formulas alike (no
@@ -184,23 +184,38 @@ fn call_lifted_within(spec: &FnSpec, args: &[Arg], ctx: &mut dyn Ctx, budget: us
             }
         }
     }
-    let mut data = Vec::with_capacity(rows * cols);
-    for r in 0..rows {
-        for c in 0..cols {
-            element_args(spec, args, r, c, &mut cell_args);
-            let out = (spec.imp)(&cell_args, ctx);
-            data.push(match out {
-                Value::Array(a) => {
-                    spent = spent.saturating_add(a.data.len());
-                    if spent > budget {
-                        return Value::Error(CellError::Num);
-                    }
-                    a.data.first().cloned().unwrap_or(Value::Empty)
+    lifted_calls(spec, args, ctx, (rows, cols), &mut cell_args, spent, budget)
+}
+
+/// The calls of [`call_lifted_within`], one per element, through [`Gather`] (see
+/// [`crate::Halt`]): where a call can end the evaluation (a draw on a calculation thread), the
+/// calls end after it, and the result is reserved only once the first call has not.
+fn lifted_calls(
+    spec: &FnSpec,
+    args: &[Arg],
+    ctx: &mut dyn Ctx,
+    (rows, cols): (usize, usize),
+    cell_args: &mut [Arg],
+    mut spent: usize,
+    budget: usize,
+) -> Value {
+    let calls = Gather::new(ctx).grid(ctx, (rows, cols), |ctx, r, c| {
+        element_args(spec, args, r, c, cell_args);
+        match (spec.imp)(cell_args, ctx) {
+            Value::Array(a) => {
+                spent = spent.saturating_add(a.data.len());
+                if spent > budget {
+                    return Err(CellError::Num);
                 }
-                v => v,
-            });
+                Ok(a.data.first().cloned().unwrap_or(Value::Empty))
+            }
+            v => Ok(v),
         }
-    }
+    });
+    let mut data = match calls {
+        Ok(data) => data,
+        Err(e) => return Value::Error(e),
+    };
     if rows == 1 && cols == 1 {
         return data.pop().unwrap_or(Value::Empty);
     }
@@ -406,5 +421,42 @@ mod tests {
         assert!(crate::lookup("WORKDAY.INTL").is_some_and(|s| !s.is_value_arg(2) && s.is_scalar_arg(2)));
         assert!(crate::lookup("SUM").is_some_and(|s| s.value_args.is_empty()));
         assert!(crate::lookup("ISOWEEKNUM").is_some_and(|s| s.value_args.is_empty()));
+    }
+
+    /// A host where every draw ends the evaluation (a calculation thread's), counting the draws.
+    struct HandingBack {
+        drawn: usize,
+    }
+
+    impl Ctx for HandingBack {
+        fn date_system(&self) -> gridcraft_core::DateSystem {
+            gridcraft_core::DateSystem::D1900
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            self.drawn += 1;
+            0.5
+        }
+        fn can_halt(&self) -> bool {
+            true
+        }
+        fn halted(&mut self, _: crate::Asked) -> bool {
+            self.drawn > 0
+        }
+    }
+
+    #[test]
+    fn a_lifted_draw_that_ends_the_evaluation_reserves_nothing_for_the_rest() {
+        // A size no formula can give (the lift stops at `MAX_CELLS`): reserving it would fail, so
+        // the first element's draw must end the calls before anything is reserved.
+        let Some(spec) = crate::lookup("RANDBETWEEN") else { panic!("RANDBETWEEN") };
+        let args = [Arg::val(Value::Number(1.0)), Arg::val(Value::Number(6.0))];
+        let mut cell_args = args.to_vec();
+        let mut ctx = HandingBack { drawn: 0 };
+        let out = super::lifted_calls(spec, &args, &mut ctx, (usize::MAX / 2, 1), &mut cell_args, 0, usize::MAX);
+        assert_eq!(out, Value::Error(CellError::Calc));
+        assert_eq!(ctx.drawn, 1);
     }
 }

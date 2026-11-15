@@ -8,11 +8,12 @@ use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
 use gridcraft_formula::{BinOp, Expr, Reference, SheetSel, StructItem, StructRef, UnOp};
-use gridcraft_functions::{Arg, Ctx};
+use gridcraft_functions::{Arg, Asked, Ctx, Halt};
 use gridcraft_model::Workbook;
 
 mod array;
 mod call;
+mod fence;
 mod format;
 mod lambda;
 mod reference_fns;
@@ -21,12 +22,13 @@ mod special;
 use array::map_unary;
 pub use array::{binary_values, zip2};
 pub use call::{CallGives, call_gives};
+use fence::Reader;
 pub use format::r1c1_to_a1;
 #[cfg(test)]
-pub(crate) use special::{
-    AREAS_SIFTED, BOUND_NAMES_COMPARED, BOXES_LOOKED_AT, FOLD_BUDGET, FREE_NAMES_COPIED, NAME_INDEXES_BUILT, NAME_LOOKUPS_SCANNED, SCANNED_UP_TO,
-};
-pub(crate) use special::{NameCache, NameLookup, precedents_with};
+pub(crate) use special::precedents_with;
+#[cfg(test)]
+pub(crate) use special::{AREAS_SIFTED, BOUND_NAMES_COMPARED, BOXES_LOOKED_AT, FOLD_BUDGET, FREE_NAMES_COPIED, NAME_INDEXES_BUILT, SCANNED_UP_TO};
+pub(crate) use special::{NAME_LOOKUPS_SCANNED, NameCache, NameIndex, NameLookup, precedents_drawing};
 pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
 
 /// Largest array a reference may expand to.
@@ -209,10 +211,27 @@ pub trait Host {
     }
     /// Called when a formula's evaluation runs past the stack budget.
     fn stack_exhausted(&mut self) {}
+    /// Whether the result of the evaluation will be thrown away whatever it comes to (a worker
+    /// thread handing its formula back). Only a read of cells or a random draw makes it so. The
+    /// evaluator asks only through its `fence` module, after each read and each call of a
+    /// volatile function, and its loops through `Gather`; then it stops (see
+    /// [`gridcraft_functions::Halt`]).
+    fn halted(&self) -> bool {
+        false
+    }
+    /// Whether `halted` can become true on this host at all (a worker thread's), where every
+    /// random draw makes it so. Asked once when an [`Evaluator`] is made: where it can't (one
+    /// thread, the main thread) nothing is asked after a read and a loop has no check per item.
+    fn can_halt(&self) -> bool {
+        false
+    }
 }
 
 pub struct Evaluator<'h> {
-    pub host: &'h mut dyn Host,
+    /// Its reads go through the evaluator's `fence` methods (see [`gridcraft_functions::Halt`]).
+    pub(crate) host: Reader<'h>,
+    /// `Host::can_halt`, asked once.
+    can_halt: bool,
     pub sheet: usize,
     pub at: CellRef,
     env: Vec<(String, Ev)>,
@@ -253,6 +272,8 @@ impl Ctx for FnCtx<'_, '_> {
     fn now_serial(&self) -> f64 {
         self.ev.host.now_serial()
     }
+    /// The evaluation stops after a volatile function's call (`Evaluator::call_function`), not
+    /// after each draw: a function drawing many draws through `Gather`.
     fn random(&mut self) -> f64 {
         self.ev.host.random()
     }
@@ -282,7 +303,8 @@ impl Ctx for FnCtx<'_, '_> {
             })
             .collect();
         let mut ev = Evaluator {
-            host: &mut *self.ev.host,
+            host: self.ev.host.reborrow(),
+            can_halt: self.ev.can_halt,
             sheet: area.sheet,
             at,
             env,
@@ -308,12 +330,21 @@ impl Ctx for FnCtx<'_, '_> {
     fn exhausted(&self) -> bool {
         self.ev.exhausted
     }
+    fn can_halt(&self) -> bool {
+        Halt::can_halt(&*self.ev)
+    }
+    fn halted(&mut self, asked: Asked) -> bool {
+        self.ev.draws_halted(asked)
+    }
     fn has_lambda(&self) -> bool {
         self.lambda.is_some()
     }
     /// A LAMBDA must give one value per group; an array result is #CALC!.
     fn call_lambda(&mut self, arg: Value) -> Option<Value> {
         let l = self.lambda.clone()?;
+        if self.ev.refuses_calls() {
+            return Some(Value::Error(CellError::Calc));
+        }
         let [p] = l.params.as_slice() else { return Some(Value::Error(CellError::Value)) };
         let r = self.ev.call_lambda_values(&l, vec![(p.clone(), Ev::V(arg))]);
         Some(match self.ev.deref(r) {
@@ -325,7 +356,9 @@ impl Ctx for FnCtx<'_, '_> {
 
 impl<'h> Evaluator<'h> {
     pub fn new(host: &'h mut dyn Host, sheet: usize, at: CellRef) -> Self {
+        let host = Reader::new(host);
         Evaluator {
+            can_halt: host.can_halt(),
             host,
             sheet,
             at,
@@ -417,7 +450,7 @@ impl<'h> Evaluator<'h> {
 
     pub fn area_value(&mut self, a: &Area) -> Value {
         if a.range.is_single() {
-            return self.host.cell_value(a.sheet, a.range.start);
+            return self.read_cell(a.sheet, a.range.start);
         }
         // A reference keeps its size, so the array has its shape and its blanks count
         // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
@@ -429,7 +462,7 @@ impl<'h> Evaluator<'h> {
         if !self.spend((h as u64) * (w as u64)) {
             return Value::Error(CellError::Calc);
         }
-        let data = self.host.range_values(a.sheet, range);
+        let data = self.read_values(a.sheet, range);
         Array::new(h, w, data).map(Value::from).unwrap_or(Value::Error(CellError::Value))
     }
 
@@ -664,7 +697,7 @@ impl<'h> Evaluator<'h> {
         if op == UnOp::Spill {
             return match self.eval(x) {
                 Ev::R(areas) => match areas.as_slice() {
-                    [a] if a.range.is_single() => match self.host.spill_range(a.sheet, a.range.start) {
+                    [a] if a.range.is_single() => match self.read_spill(a.sheet, a.range.start) {
                         Some(range) => Ev::R(vec![Area { sheet: a.sheet, range }]),
                         None => err(CellError::Ref),
                     },
@@ -679,7 +712,7 @@ impl<'h> Evaluator<'h> {
             return match ev {
                 Ev::R(areas) => match areas.as_slice() {
                     [a] => match self.implicit_intersect(a) {
-                        Some(c) => Ev::V(self.host.cell_value(a.sheet, c)),
+                        Some(c) => Ev::V(self.read_cell(a.sheet, c)),
                         None => err(CellError::Value),
                     },
                     _ => err(CellError::Value),
@@ -930,6 +963,125 @@ mod fuel_tests {
         };
         assert_eq!(run("=B2>0"), Value::number(2.0), "a cheap criterion counts every record");
         assert!(is_calc(&run("=Step60>0")), "{:?}", run("=Step60>0"));
+    }
+
+    #[test]
+    fn a_summed_union_ends_with_its_first_error() {
+        // The union's areas are added in order, and the first error among the arguments, in
+        // order, is the result, also when a later area or argument holds another.
+        use gridcraft_model::Cell;
+        let mut wb = Workbook::new();
+        let sheet = wb.sheet_mut(0).unwrap();
+        for (at, v) in [("A1", Value::Error(CellError::NA)), ("A2", Value::Error(CellError::Div0)), ("A3", Value::number(1.0))] {
+            sheet.cells.set(CellRef::parse(at).unwrap(), Cell::value(v));
+        }
+        let run = |src: &str| {
+            let mut host = Stored { wb: wb.clone() };
+            let mut ev = Evaluator::new(&mut host, 0, CellRef::new(9, 9));
+            ev.value(&gridcraft_formula::parser::parse(src).unwrap())
+        };
+        assert_eq!(run("=SUM((A3,A1,A2))"), Value::Error(CellError::NA));
+        assert_eq!(run("=SUM((A3,A2,A1))"), Value::Error(CellError::Div0));
+        assert_eq!(run("=AVERAGE((A2,A3),(A1,A3))"), Value::Error(CellError::Div0));
+        assert_eq!(run("=SUM(A1,(A2,A3))"), Value::Error(CellError::NA));
+        assert_eq!(run("=SUM((A3,A3))"), Value::number(2.0));
+    }
+
+    /// Serves the workbook's stored values, and on a read of A9 notes how many copies of `text`
+    /// there are (the cells holding it, `text` and this host's copy, and any row holding it).
+    struct Watching {
+        wb: Workbook,
+        text: Arc<str>,
+        seen: Option<usize>,
+    }
+    impl Host for Watching {
+        fn workbook(&self) -> &Workbook {
+            &self.wb
+        }
+        fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value {
+            if c == CellRef::new(8, 0) {
+                self.seen = Some(Arc::strong_count(&self.text));
+                return Value::number(1.0);
+            }
+            self.wb.sheet(sheet).and_then(|s| s.cell(c)).map_or(Value::Empty, |cell| cell.value.clone())
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+    }
+
+    #[test]
+    fn a_union_row_past_the_work_left_is_read_but_not_kept() {
+        // A9 reports how many copies of the text C1:C5 share while it is read: the row must not
+        // hold C5's copy, read after the row already held more values than the work left.
+        use gridcraft_model::Cell;
+        let text: Arc<str> = Arc::from("shared");
+        let mut wb = Workbook::new();
+        for r in 0..5 {
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 2), Cell::value(Value::Text(text.clone())));
+        }
+        let run = |work: u64| {
+            let mut host = Watching { wb: wb.clone(), text: text.clone(), seen: None };
+            let mut ev = Evaluator::new(&mut host, 0, CellRef::new(9, 9));
+            ev.work = work;
+            let v = ev.value(&gridcraft_formula::parser::parse("=MAX((C1:C4,C5,A9))").unwrap());
+            let left = ev.work;
+            (v, host.seen, left)
+        };
+        // Stored: the five cells, `text` and the host's copy.
+        let stored = 7;
+        let runs: Vec<_> = (0..40).map(run).collect();
+        for (v, seen, left) in &runs {
+            if is_calc(v) {
+                assert_eq!(*left, 0);
+                // A row that keeps C5 must also keep C1:C4: one that holds C5 alone is a row
+                // whose C1:C4 read ran out of work, and then the row has no work left either.
+                assert!(seen.is_none_or(|s| s == stored || s == stored + 4 || s == stored + 5), "{seen:?}");
+            }
+        }
+        // C1:C4 copied, more values than the work left: C5 is read (A9 comes after it) but let go.
+        assert!(runs.iter().any(|(v, seen, _)| is_calc(v) && *seen == Some(stored + 4)), "{runs:?}");
+        // With enough work the row keeps every value, and the function sees them.
+        let (v, seen, _) = run(40);
+        assert_eq!(v, Value::number(1.0));
+        assert_eq!(seen, Some(stored + 5));
+    }
+
+    #[test]
+    fn union_rows_together_past_the_work_left_are_read_but_not_kept() {
+        // The charge counts the values of every argument, so the second union's row stops
+        // copying once it and the first union's row together hold more values than the work left,
+        // not only once it alone does. A9, read last, reports how many copies of the text in
+        // C1:C6 the rows hold.
+        use gridcraft_model::Cell;
+        let text: Arc<str> = Arc::from("shared");
+        let mut wb = Workbook::new();
+        for r in 0..6 {
+            wb.sheet_mut(0).unwrap().cells.set(CellRef::new(r, 2), Cell::value(Value::Text(text.clone())));
+        }
+        // Stored: the six cells, `text` and the host's copy.
+        let stored = 8;
+        let run = |work: u64| {
+            let mut host = Watching { wb: wb.clone(), text: text.clone(), seen: None };
+            let mut ev = Evaluator::new(&mut host, 0, CellRef::new(9, 9));
+            ev.work = work;
+            let v = ev.value(&gridcraft_formula::parser::parse("=MAX((C1:C2,C3),(C4,C5,C6,A9))").unwrap());
+            (v, host.seen.map(|s| s - stored))
+        };
+        let runs: Vec<_> = (0..40).map(run).collect();
+        // With the least work that reaches A9, the first row is whole and the second keeps C4
+        // only: no work is left when C4 is kept.
+        let least = runs.iter().position(|(_, kept)| kept.is_some()).unwrap();
+        assert_eq!(runs[least], (Value::Error(CellError::Calc), Some(4)), "{runs:?}");
+        // C5 is kept only once the work left when C4 is kept covers C4 and the first row's three
+        // values: four units more. Counted alone, the second row would keep it with one more.
+        let first_keeping = |copies| runs.iter().position(|(_, kept)| *kept == Some(copies)).unwrap();
+        assert_eq!(first_keeping(5) - least, 4, "{runs:?}");
+        // With enough work every value is kept, and the function sees them.
+        assert_eq!(run(40), (Value::number(1.0), Some(6)));
     }
 
     #[test]

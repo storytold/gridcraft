@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use super::{Area, BinOp, Ev, Expr, Reference, SheetSel, UnOp, Value, Workbook, may_be_cut};
+use crate::recalc::Draws;
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 
 /// SUMIF and AVERAGEIF with a sum range: Excel sizes the sum range like the criteria range.
@@ -106,6 +107,18 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
 /// [`precedents`] with the defined names resolved through `names`, shared across the formulas of
 /// one graph build.
 pub fn precedents_with(wb: &Workbook, sheet: usize, e: &Expr, names: &mut NameCache) -> (Vec<Area>, bool) {
+    let (areas, dynamic, ..) = precedents_drawing(wb, sheet, e, names);
+    (areas, dynamic)
+}
+
+/// [`precedents_with`], and from the same walk what `random_use` answers for `e` (whether it calls
+/// a function that draws random numbers, and whether evaluating it may draw any): the walk visits
+/// the formula's own tree (LAMBDA parameters and LET parts it skips are looked at through
+/// `draw_in_unvisited`); once the walk passes [`MAX_PRECEDENT_NODES`] nodes, definitions included,
+/// `random_use` walks the tree on its own. Last, from the same walk, the places in `e` that may look
+/// a defined name up (`name_lookups`), counted up to one past [`NAME_LOOKUPS_SCANNED`] as
+/// `Node::name_lookups` keeps them; past the node bound, `name_lookups` walks the tree on its own.
+pub(crate) fn precedents_drawing(wb: &Workbook, sheet: usize, e: &Expr, names: &mut NameCache) -> (Vec<Area>, bool, Draws, u8) {
     // Room for the formula's list and a few nested ones (a range's operands, a name's
     // definition), without growing.
     let mut taken = Vec::with_capacity(4);
@@ -123,8 +136,22 @@ pub fn precedents_with(wb: &Workbook, sheet: usize, e: &Expr, names: &mut NameCa
         names_met: false,
         budgeted: false,
         bound_only: HashMap::new(),
+        draws: Draws::default(),
+        name_lookups: 0,
     };
     let (mut out, mut dynamic) = walk.collect(sheet, e, 0);
+    let draws = if walk.nodes > MAX_PRECEDENT_NODES {
+        crate::recalc::random_use(e)
+    } else {
+        let Draws { calls, may_draw } = walk.draws;
+        Draws { calls, may_draw: calls || may_draw }
+    };
+    let lookups = if walk.nodes > MAX_PRECEDENT_NODES {
+        crate::recalc::name_lookups(e, NAME_LOOKUPS_SCANNED)
+    } else {
+        walk.name_lookups.min(NAME_LOOKUPS_SCANNED + 1)
+    };
+    let lookups = u8::try_from(lookups).unwrap_or(u8::MAX);
     // A database function's computed criteria read cells no reference names (see
     // `computed_criterion`): a formula calling one is dynamic.
     dynamic |= walk.database;
@@ -153,7 +180,7 @@ pub fn precedents_with(wb: &Workbook, sheet: usize, e: &Expr, names: &mut NameCa
     if walk.names_met && !dynamic {
         dynamic = out.iter().any(|a| may_be_cut(&a.range));
     }
-    (out, dynamic)
+    (out, dynamic, draws, lookups)
 }
 
 /// Lists of up to this many areas, or boxes, are searched by comparison rather than through a set
@@ -336,7 +363,8 @@ pub(crate) const NAME_LOOKUPS_SCANNED: usize = 16;
 
 #[cfg(test)]
 thread_local! {
-    /// [`NameIndex`]es built on this thread, which a test reads.
+    /// [`NameIndex`]es built on this thread, which a test reads; a level's workers add theirs to
+    /// the main thread's after the level.
     pub(crate) static NAME_INDEXES_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -361,6 +389,48 @@ impl NameLookup {
             return wb.name_position(name, sheet);
         }
         self.index.insert(NameIndex::new(wb)).find(name, sheet)
+    }
+
+    /// The index, once built.
+    pub fn index(&self) -> Option<&NameIndex> {
+        self.index.as_ref()
+    }
+
+    /// [`NameLookup::find`] for one of several threads that share `shared`, one index for all of
+    /// them, built by the first that needs it: this lookup's own scans first, while it has any
+    /// left, and then that index, built once whichever thread gets there first.
+    pub fn find_shared(&mut self, wb: &Workbook, name: &str, sheet: usize, shared: &std::sync::OnceLock<NameIndex>) -> Option<usize> {
+        if let Some(index) = shared.get() {
+            return index.find(name, sheet);
+        }
+        if self.scans < NAME_LOOKUPS_SCANNED {
+            self.scans += 1;
+            return wb.name_position(name, sheet);
+        }
+        shared.get_or_init(|| NameIndex::new(wb)).find(name, sheet)
+    }
+
+    /// Takes `index` as its own, when it has none yet: one the threads sharing it built (see
+    /// [`NameLookup::find_shared`]), so that it is not built again.
+    pub fn adopt(&mut self, index: NameIndex) {
+        if self.index.is_none() {
+            self.index = Some(index);
+        }
+    }
+
+    /// Before `lookups` lookups made where [`NameLookup::find`] can't be called (by the worker
+    /// threads of a level, which read [`NameLookup::index`]): counted as scans while they fit in
+    /// what is left of [`NAME_LOOKUPS_SCANNED`], else the index is built now, once, for them to
+    /// share.
+    pub fn expect(&mut self, wb: &Workbook, lookups: usize) {
+        if self.index.is_some() {
+            return;
+        }
+        if lookups <= NAME_LOOKUPS_SCANNED.saturating_sub(self.scans) {
+            self.scans += lookups;
+        } else {
+            self.index = Some(NameIndex::new(wb));
+        }
     }
 }
 
@@ -808,6 +878,14 @@ struct Walk<'w, 'n> {
     /// a free name of a definition moves to [`NameCache`]'s `spellings` with its number, which the
     /// bound names in scope hold.
     bound_only: HashMap<String, usize>,
+    /// What the formula's own tree (not the definitions of the names it reads) shows of random
+    /// draws so far: a call to a function that draws, and a call or name with `RAND` in it (see
+    /// `random_use`).
+    draws: Draws,
+    /// The places in the formula's own tree met so far that may look a defined name up (see
+    /// `name_lookups`): a name or a call of a name not built in that no LET variable or LAMBDA
+    /// parameter in scope binds, found unbound at its `Lookup`, and a call of INDIRECT.
+    name_lookups: usize,
 }
 
 /// A definition being resolved: what it leaves to its callers so far.
@@ -1257,6 +1335,7 @@ impl Walk<'_, '_> {
                     let folded = (state.bound.distinct() > 0 || !self.frames.is_empty()).then(|| bound_name(name));
                     let spelling = folded.as_ref().filter(|_| state.bound.distinct() > 0).and_then(|f| self.find_spelling(f));
                     if !spelling.is_some_and(|n| state.bound.contains(n)) {
+                        self.name_lookups = self.name_lookups.saturating_add(usize::from(depth == 0));
                         // In a definition, a name it doesn't bind is left free to its callers.
                         if let Some(folded) = folded
                             && !self.frames.is_empty()
@@ -1295,7 +1374,12 @@ impl Walk<'_, '_> {
                     }
                 }
                 // Looked up next, before any other step.
-                Expr::Name(n) => state.pending.push(Step::Lookup { name: n, in_range }),
+                Expr::Name(n) => {
+                    if depth == 0 {
+                        self.draws.may_draw |= crate::recalc::mentions_rand(n);
+                    }
+                    state.pending.push(Step::Lookup { name: n, in_range })
+                }
                 Expr::Struct(_) => state.dynamic = true,
                 Expr::Array(rows) => state.pending.extend(rows.iter().flatten().rev().map(|x| visit(x, false))),
                 Expr::Unary(UnOp::Percent, a) => state.pending.push(visit(a, matches!(**a, Expr::Unary(UnOp::Percent, _)))),
@@ -1332,7 +1416,16 @@ impl Walk<'_, '_> {
                     state.pending.extend(args.iter().rev().map(|x| visit(x, false)));
                     state.pending.push(visit(callee, matches!(**callee, Expr::Invoke(..))));
                 }
-                Expr::Call(n, args) => self.visit_call(sheet, Site { depth, in_range }, n, args, ranges.last_mut().unwrap_or(&mut out), &mut state),
+                Expr::Call(n, args) => {
+                    if depth == 0 && crate::recalc::mentions_rand(n) {
+                        self.draws.calls |= crate::recalc::call_draws(n);
+                        self.draws.may_draw = true;
+                    }
+                    if depth == 0 && n == "INDIRECT" {
+                        self.name_lookups = self.name_lookups.saturating_add(1);
+                    }
+                    self.visit_call(sheet, Site { depth, in_range }, n, args, ranges.last_mut().unwrap_or(&mut out), &mut state)
+                }
                 Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Missing => {}
             }
         }
@@ -1365,6 +1458,10 @@ impl Walk<'_, '_> {
             ("LAMBDA", Some((body, parameters))) => {
                 let mut added = 0;
                 for p in parameters {
+                    // A parameter is not visited: what `random_use` sees in it is looked at here.
+                    if site.depth == 0 {
+                        self.draw_in_unvisited(p);
+                    }
                     if let Expr::Name(pn) = p {
                         let spelling = self.bound_spelling(bound_name(pn));
                         state.bound.push(spelling);
@@ -1381,6 +1478,14 @@ impl Walk<'_, '_> {
                 state.pending.push(Step::Unbind(added));
                 state.pending.push(visit(result, false));
                 for pair in pairs.chunks(2).rev() {
+                    // A variable, or a pair not starting with one, is not visited.
+                    if site.depth == 0 {
+                        match pair {
+                            [variable @ Expr::Name(_), _] => self.draw_in_unvisited(variable),
+                            [_] => {}
+                            other => other.iter().for_each(|x| self.draw_in_unvisited(x)),
+                        }
+                    }
                     match pair {
                         [Expr::Name(variable), value] => {
                             state.pending.push(Step::Bind(variable));
@@ -1401,6 +1506,16 @@ impl Walk<'_, '_> {
                 state.pending.extend(args.iter().rev().map(|x| visit(x, false)));
             }
         }
+    }
+}
+
+impl Walk<'_, '_> {
+    /// Folds into `draws` what `random_use` sees in `e`, a part of the formula's tree the walk
+    /// doesn't visit.
+    fn draw_in_unvisited(&mut self, e: &Expr) {
+        let drawn = crate::recalc::random_use(e);
+        self.draws.calls |= drawn.calls;
+        self.draws.may_draw |= drawn.may_draw;
     }
 }
 

@@ -8513,3 +8513,28 @@ fn a_refused_cut_paste_leaves_the_cut_to_paste_plainly() {
     s.execute("edit.paste", json!({})).unwrap();
     assert_eq!((v(&s, "E1"), v(&s, "C3"), v(&s, "D3")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
 }
+
+/// A JSON workbook holding a PivotTable whose output range has its corners the wrong way round
+/// (the format reads a range as stored) opens and calculates: GETPIVOTDATA over the report gives
+/// `#REF!` as on main, and an edit recalculates the array and its reader, on four threads with a
+/// formula that draws random numbers, so the rounds are planned.
+#[test]
+fn a_json_workbook_with_a_report_range_the_wrong_way_round_opens_and_calculates() {
+    let mut s = s();
+    for (cell, input) in [("Q1", "1"), ("J1", "=GETPIVOTDATA(\"Sales\",A1:F6)"), ("D10", "=SEQUENCE(3)+Q1"), ("H20", "=D11+1"), ("M1", "=RAND()")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    wb.calc.multi_threaded = true;
+    wb.calc.threads = 4;
+    let backward = gridcraft_core::RangeRef { start: CellRef::parse("F6").unwrap(), end: CellRef::parse("A1").unwrap() };
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).pivots.push(gridcraft_model::PivotTable { last_range: Some(backward), ..Default::default() });
+    let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
+    let (opened, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    assert_eq!(opened.sheets[0].pivots[0].last_range, Some(backward), "read as stored");
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(opened, None, "Book".into(), crate::Trust::FromFile));
+    assert_eq!((v(&t, "J1"), v(&t, "H20")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(4.0)));
+    t.execute("cell.set", json!({"cell": "Q1", "input": "2"})).unwrap();
+    assert_eq!((v(&t, "J1"), v(&t, "H20")), (Value::Error(gridcraft_core::CellError::Ref), Value::Number(5.0)));
+}

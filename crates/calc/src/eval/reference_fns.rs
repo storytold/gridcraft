@@ -1,6 +1,7 @@
 use super::format::{cell_format_code, r1c1_to_a1};
-use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, MAX_CELLS, Value, err};
+use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, MAX_CELLS, Value, err};
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
+use gridcraft_functions::Gather;
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
@@ -114,48 +115,54 @@ impl<'h> Evaluator<'h> {
             if (h as u64).saturating_mul(w as u64) > MAX_CELLS {
                 return err(CellError::Num);
             }
-            let mut out = Vec::with_capacity(h * w);
-            for r in 0..h {
-                for c in 0..w {
-                    let pos = (num(&Some(ra.get_broadcast(r, c))), num(&Some(ca.get_broadcast(r, c))));
-                    let v = match pos {
-                        // A position that picks several cells is #CALC!. That is decided from the
-                        // shape: reading the block first, for every position, let a short formula
-                        // read one large range over and over only to discard it.
-                        (Ok(row), Ok(col)) if index_picks_several_values(&src, row, col, two) => Value::Error(CellError::Calc),
-                        (Ok(row), Ok(col)) => {
-                            let one = self.index_one(src.clone(), row, col, area_n, two);
-                            let cells = match &one {
-                                Ev::R(areas) => match areas.as_slice() {
-                                    [a] => self.area_cells(a),
-                                    _ => 0,
-                                },
-                                _ => 0,
-                            };
-                            if cells > MAX_CELLS {
-                                // As reading it would answer.
-                                Value::Error(CellError::Num)
-                            } else if cells > 1 {
-                                Value::Error(CellError::Calc)
-                            } else {
-                                match self.deref(one) {
-                                    Value::Array(a) if a.rows * a.cols > 1 => Value::Error(CellError::Calc),
-                                    v => v.scalar(),
-                                }
-                            }
-                        }
-                        (Err(e), _) | (_, Err(e)) => Value::Error(e),
-                    };
-                    out.push(v);
-                }
-            }
-            return Ev::V(Array::new(h, w, out).map(Value::from).unwrap_or(Value::Error(CellError::Value)));
+            return self.index_positions(&src, &ra, &ca, (h, w), area_n, two);
         }
         let (row, col) = match (num(&rows), num(&cols)) {
             (Ok(r), Ok(c)) => (r, c),
             (Err(e), _) | (_, Err(e)) => return err(e),
         };
         self.index_one(src, row, col, area_n, two)
+    }
+
+    /// INDEX with arrays of positions `ra` and `ca` (broadcast to `h` x `w`): a value for each,
+    /// read through `Gather` (see `gridcraft_functions::Halt`).
+    fn index_positions(&mut self, src: &Ev, ra: &Array, ca: &Array, (h, w): (usize, usize), area_n: i64, two: bool) -> Ev {
+        let position = |v: Value| v.to_number().map(|n| n.trunc() as i64);
+        let picked = Gather::new(&*self).grid(self, (h, w), |ev, r, c| {
+            let pos = (position(ra.get_broadcast(r, c)), position(ca.get_broadcast(r, c)));
+            Ok(match pos {
+                // A position that picks several cells is #CALC!. That is decided from the
+                // shape: reading the block first, for every position, let a short formula
+                // read one large range over and over only to discard it.
+                (Ok(row), Ok(col)) if index_picks_several_values(src, row, col, two) => Value::Error(CellError::Calc),
+                (Ok(row), Ok(col)) => {
+                    let one = ev.index_one(src.clone(), row, col, area_n, two);
+                    let cells = match &one {
+                        Ev::R(areas) => match areas.as_slice() {
+                            [a] => ev.area_cells(a),
+                            _ => 0,
+                        },
+                        _ => 0,
+                    };
+                    if cells > MAX_CELLS {
+                        // As reading it would answer.
+                        Value::Error(CellError::Num)
+                    } else if cells > 1 {
+                        Value::Error(CellError::Calc)
+                    } else {
+                        match ev.deref(one) {
+                            Value::Array(a) if a.rows * a.cols > 1 => Value::Error(CellError::Calc),
+                            v => v.scalar(),
+                        }
+                    }
+                }
+                (Err(e), _) | (_, Err(e)) => Value::Error(e),
+            })
+        });
+        match picked {
+            Ok(out) => Ev::V(Array::new(h, w, out).map(Value::from).unwrap_or(Value::Error(CellError::Value))),
+            Err(e) => e,
+        }
     }
 
     /// Cells that reading `a` gives: its own size, or for a large block the part inside the
@@ -252,8 +259,7 @@ impl<'h> Evaluator<'h> {
                         }
                     }
                 }
-                let mut ctx = FnCtx { ev: self, criteria: None, lambda: None };
-                return match gridcraft_functions::call(spec, &xargs, &mut ctx) {
+                return match self.call_function(spec, &xargs, None, None) {
                     Value::Number(p) if p >= 1.0 => {
                         let k = p as u32 - 1;
                         let range = if vertical {
@@ -297,9 +303,9 @@ impl<'h> Evaluator<'h> {
             "address" => Ev::V(Value::text(format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1))),
             "row" => Ev::V(Value::number(c.row as f64 + 1.0)),
             "col" => Ev::V(Value::number(c.col as f64 + 1.0)),
-            "contents" => Ev::V(self.host.cell_value(a.sheet, c)),
+            "contents" => Ev::V(self.read_cell(a.sheet, c)),
             "type" => {
-                let v = self.host.cell_value(a.sheet, c);
+                let v = self.read_cell(a.sheet, c);
                 Ev::V(Value::text(match v {
                     Value::Empty => "b",
                     Value::Text(_) => "l",
@@ -401,12 +407,14 @@ impl<'h> Evaluator<'h> {
                 Ev::L(_) => return err(CellError::Value),
             }
         }
+        // The cells are read one at a time, through `Gather` (see `gridcraft_functions::Halt`).
+        let gather = Gather::new(&*self);
         for input in inputs {
             match input {
                 Input::Cells(sheet, range) => {
-                    for c in range.iter() {
+                    let read = gather.each(self, range.iter(), |ev, c| {
                         let (hidden, nested) = {
-                            let wb = self.host.workbook();
+                            let wb = ev.host.workbook();
                             let s = wb.sheet(sheet);
                             let hidden =
                                 s.is_some_and(|s| if skip_hidden { s.is_row_hidden(c.row) } else { skip_filtered && s.is_row_filtered(c.row) });
@@ -418,13 +426,16 @@ impl<'h> Evaluator<'h> {
                             (hidden, nested)
                         };
                         if hidden || nested {
-                            continue;
+                            return Ok(());
                         }
-                        let v = self.host.cell_value(sheet, c);
-                        if skip_errors && v.is_error() {
-                            continue;
+                        let v = ev.read_cell(sheet, c);
+                        if !(skip_errors && v.is_error()) {
+                            values.push(v);
                         }
-                        values.push(v);
+                        Ok(())
+                    });
+                    if let Err(e) = read {
+                        return e;
                     }
                 }
                 Input::Values(Value::Array(a)) => values.extend(a.data.iter().filter(|v| !(skip_errors && v.is_error())).cloned()),
@@ -503,5 +514,63 @@ mod tests {
         // Single cells are still read.
         let (v, _) = eval("=INDEX({1,2,3;4,5,6;7,8,9},{1,3},2)");
         assert!(matches!(&v, Value::Array(a) if a.data == vec![Value::number(2.0), Value::number(8.0)]), "{v:?}");
+    }
+
+    /// A sheet of ones that counts the cells read one at a time. As a worker's host, when
+    /// `worker`: the first read hands the formula back.
+    struct HandingBack {
+        wb: Workbook,
+        worker: bool,
+        reads: usize,
+    }
+    impl Host for HandingBack {
+        fn workbook(&self) -> &Workbook {
+            &self.wb
+        }
+        fn cell_value(&mut self, _sheet: usize, _c: CellRef) -> Value {
+            self.reads += 1;
+            Value::number(1.0)
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+        fn can_halt(&self) -> bool {
+            self.worker
+        }
+        fn halted(&self) -> bool {
+            self.worker && self.reads > 0
+        }
+    }
+
+    fn eval_on(worker: bool, src: &str) -> (Value, usize) {
+        let mut host = HandingBack { wb: Workbook::default(), worker, reads: 0 };
+        let mut ev = Evaluator::new(&mut host, 0, CellRef::new(9, 9));
+        let v = ev.value(&gridcraft_formula::parser::parse(src).unwrap_or_else(|e| panic!("{e}")));
+        (v, host.reads)
+    }
+
+    #[test]
+    fn a_loop_over_single_cells_ends_when_a_read_hands_the_formula_back() {
+        // INDEX with an array of positions, a union summed or flattened into a function's
+        // argument, and MAP and MAKEARRAY over a LAMBDA giving a cell: each reads its cells one
+        // at a time. On a worker the first read hands the formula back, and the loop ends there
+        // with #CALC! (no array of the rest); elsewhere each reads all of its cells.
+        let cases = [
+            ("=INDEX(A1:A5,SEQUENCE(5))", 5),
+            ("=SUM((A1,A2,A3,A4))", 4),
+            ("=MAX((A1,A2,A3,A4))", 4),
+            ("=MAP(SEQUENCE(4),LAMBDA(i,A1))", 4),
+            ("=MAKEARRAY(2,2,LAMBDA(r,c,A1))", 4),
+        ];
+        for (src, cells) in cases {
+            let (v, reads) = eval_on(true, src);
+            assert_eq!((v, reads), (Value::Error(CellError::Calc), 1), "{src} on a worker");
+            let (v, reads) = eval_on(false, src);
+            assert!(!v.is_error(), "{src} on the main thread: {v:?}");
+            assert_eq!(reads, cells, "{src} on the main thread");
+        }
     }
 }

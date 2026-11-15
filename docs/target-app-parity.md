@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-18 · **Change:** minor (performance: formulas using most defined names no longer recalculate on every edit; earlier: `cargo xtask bench`: measured recalc baselines; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change; earlier: form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-21 · **Change:** minor (recalculation runs levels of independent formulas on worker threads; two workbooks timed on one and four threads; earlier: performance: formulas using most defined names no longer recalculate on every edit; earlier: `cargo xtask bench`: measured recalc baselines; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change; earlier: form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -80,7 +80,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 
 | Area | Weight | Breadth | Ready | Hours | Evidence |
 |---|---|---|---|---|---|
-| Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134). Single-threaded |
+| Formula language and calculation | 18 | ~92% | ~72% | 20–30 | A1/R1C1 parser, reference adjustment, dependency-graph recalc, dynamic arrays and `#SPILL!`, `A1#`, LET/LAMBDA and helpers, structured references, names, 3-D references. Open correctness bugs: 15-digit equality (#57), stale spills after structural edits and cleared blockers (#133, #139), 3-D span endpoint deletion (#140), sheet rename and qualified names (#134) |
 | Worksheet functions | 12 | 98.3% (measured) | ~82% | 15–25 | 514 / 523 names, 505 working. Missing: IMAGE plus cloud functions. No conformance suite against Excel-computed oracles; edge-case bugs keep surfacing (#137, #138). [function-parity.md](function-parity.md) |
 | Editing, navigation, clipboard, fill | 12 | ~90% | ~70% | 15–25 | Point mode, F4, AutoComplete, Paste Special, AutoFill, Flash Fill, Find/Replace, Go To Special. Bugs: rectangular drag-select (#28), monthly fill (#132), cut across sheets (#128), Insert Copied Cells missing (#21), key tips only on part of the Home tab (#43; #33, #49). [ui-parity.md](ui-parity.md) |
 | Cell formatting, styles, conditional formatting | 10 | ~95% | ~80% | 8–14 | Full number-format language, borders, 47 cell styles, 60 table styles, all CF rule kinds including data bars, colour scales and icon sets. Gaps: font weights beyond regular/bold (#168), system fonts list (#4), themes |
@@ -105,7 +105,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Performance | 8 | ~35% | 35–55 | [Performance](#performance) |
 | Stability | 8 | ~60% | 15–25 | Never-crash rules enforced by lint, every command fuzzed with hostile params, random command sequences fuzzed against undo/redo, XLSX round-trip and full-recalc invariants, last-resort guard in `Session::execute`. Field reports: Windows Intel GPU crash (#120), error on close (#117), freeze opening from Finder (#166), screen flashing (#76) |
 | Localization | 4 | ~10% | 100–165 | Ribbon-only catalog in five languages (ja, zh, ko, pt-BR, ru; ~12% of strings each), CJK/Thai/Hebrew font fallback, no shaping or RTL. [localization-parity.md](localization-parity.md) |
-| Hardware | 2 | ~40% | 25–40 | GPU UI via wgpu; single-threaded calc; no pen pressure; a native window per workbook window, Arrange All on one monitor. [hardware-parity.md](hardware-parity.md) |
+| Hardware | 2 | ~45% | 17–30 | GPU UI via wgpu; multi-core calc (2026-11-21); no pen pressure; a native window per workbook window, Arrange All on one monitor. [hardware-parity.md](hardware-parity.md) |
 | Platforms | 2 | ~80% | 30–60 | [Platforms](#platforms) |
 | Ecosystem / add-ins | 2 | ~10% | 25–40 | [Ecosystem and AI](#ecosystem-and-ai) |
 | AI features | 2 | ~15% | 30–50 | [Ecosystem and AI](#ecosystem-and-ai) |
@@ -202,7 +202,7 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Measure | GridCraft | Excel | Kind |
 |---|---|---|---|
 | Sheet size limits | 1,048,576 × 16,384 | same | measured (`crates/core/src/addr.rs`) |
-| Recalc threads | 1 | all cores | measured (no threading in `crates/calc`) |
+| Recalc threads | levels of a planned round with 512 or more independent formulas (the default) on worker threads when more than one thread is in use, up to every core and at most 64 (2026-11-21); wasm and iterative calculation single-threaded, and no level on workers after a round calculated again in row-major order or a plan given up for its budget, until a formula cell changes or the workbook becomes able to draw random numbers | all cores | measured in code (`thread_count` in `crates/calc/src/recalc/threads.rs`) |
 | Edit → recalc, 100k-deep chain | 90–106 ms (target < 100 ms) | tens of ms | measured (`cargo xtask bench`, `edit.chain`) |
 | Edit → recalc, 100k formulas reading one cell | 71–87 ms | tens of ms | measured (`edit.fanout`) |
 | Edit → 100 whole-column SUMIFS / XLOOKUP over 100k rows | 420–590 ms / 160–250 ms | not measured | measured (`edit.sumifs`, `edit.lookup`) |
@@ -210,20 +210,24 @@ Excel recalculates on every core (multi-threaded recalculation), streams large f
 | Save the 100k-row model (300k formulas) as XLSX | ~530 ms | not measured | measured (`xlsx.save`) |
 | Reopen that file | drops the last ~9,000 rows (element cap from #2413; fix in PR #2527, then ~1.3 s with full recalc) | opens | measured (`xlsx.open`) |
 | Formulas referencing defined names | static dependencies where the cells a name reads are known when the graph is built; the cases that stay dynamic are listed on the precedent walk (`precedents` in `crates/calc/src/eval/special.rs`) (2026-11-18; were dynamic: every name made its formula recalculate on every edit). A known regression: when an array is laid out in a later round because its condition reads a cell through a name, a dynamic formula (INDIRECT, OFFSET) that read the array's cells earlier keeps a stale value until a full recalculation, where main gives the settled one (main does the same for a direct reference, #4469) | static | measured (release build, 2011 four-core i5-2500S iMac, Linux): LAMBDA-heavy workbook of 51,014 formulas, one-cell edit 49,098 formulas in ~295 s → 2 formulas in under 1 s (measured 2026-11-18 on main of that day; not timed again after later rebases; main's XLSX open has become slower since, issue #4585) |
-| Open a LAMBDA-heavy XLSX of 51,014 formulas (no cached values) | ~75 s single-threaded (2026-11-18; was ~302 s); a lookup-heavy one of 41,232 formulas ~18 s (was ~34 s) | seconds, multi-threaded | measured on a 2011 four-core iMac (i5-2500S), Linux, release build (measured 2026-11-18 on main of that day; not timed again after later rebases; main's XLSX open has become slower since, issue #4585) |
+| Open a LAMBDA-heavy XLSX of 51,014 formulas (no cached values) | ~15 s on four threads, ~57 s on one (measured 2026-11-21 on the code of that day; not timed again after later changes, and main's XLSX open has become slower since, issue #4585); a lookup-heavy one of 41,232 formulas ~7 s on four threads, ~15 s on one | seconds, multi-threaded | measured on a 2011 four-core iMac (i5-2500S), Linux, release CLI |
 | Grid scrolling | virtualised, O(log n) geometry with custom row heights | smooth | measured in code |
 | Open a ~100 MB XLSX | fails (#175) | opens | user report |
 | Whole-sheet operations | Fill and Remove Duplicates on a whole-sheet selection run out of memory or time (fix in PR #152) | fine | open PR |
 
-Work: streaming XLSX reader with shared-string and style dedup, multi-threaded recalc of
-independent chains (native only; WASM stays single-threaded), whole-column reference
+Work: streaming XLSX reader with shared-string and style dedup, whole-column reference
 clamping, and faster whole-column SUMIFS and lookups (each formula rescans the column on every
 edit).
+Multi-threaded recalc landed 2026-11-21 (levels of independent formulas on worker threads,
+per-worker copies of the blocks read twice; wasm stays single-threaded; each planned round is
+checked against row-major order and calculated again in row-major order when the two could
+differ). Still to do there: block copies for the main thread, and skipping the plan and the
+threads for cheap levels.
 
 Benchmarks: `cargo xtask bench` builds ten fixed workbooks in code, times each operation through
 `Session::execute` (median of 7 after a warm-up, results checked) and compares with a baseline
 saved by `--save`. The numbers above are ranges over several runs on an Apple M2 Pro, release
-build, 100,000 rows, 2026-10-26; recalculation is single-threaded, so core count doesn't change
+build, 100,000 rows, 2026-10-26, when recalculation was single-threaded, so core count didn't change
 them.
 
 ## Platforms
@@ -348,6 +352,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-21 | minor | Performance: recalculation runs levels of independent formulas on worker threads; open times of two workbooks measured on one and four threads |
 | 2026-11-18 | minor | Performance: defined names are static precedents (formulas calling LAMBDA names no longer recalculate on every edit), parsed names cached per pass, `TEXT(n,"0")` integer fast path; measured on a LAMBDA-heavy and a lookup-heavy workbook (no score change) |
 | 2026-11-15 | minor | Performance: formula entry 465 → 420 ms and XLSX save 540 → 488 ms on the 100k-row benchmark (#2654); Sandbox refuses fcntl's asynchronous notification and notifying socket ioctls on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change |
 | 2026-11-02 | minor | Form controls (buttons, scroll bars, spin buttons) in Insert objects and Automation; catalog 277 / 292 → 281 / 296 (Developer › Controls) |
