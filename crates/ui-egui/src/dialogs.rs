@@ -27,6 +27,7 @@ mod paste;
 mod ref_edit;
 mod show;
 mod spelling;
+mod text_import;
 mod zoom;
 
 use analysis::toolpak_defaults;
@@ -38,6 +39,7 @@ use names::pasteable_names;
 pub(crate) use ref_edit::SHEET_DELETED;
 pub(crate) use show::build_params;
 pub use show::show;
+use text_import::text_import_dialog;
 use zoom::zoom_preset;
 
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
@@ -461,6 +463,7 @@ impl Dialog {
                     values,
                 )
             }
+            "textImport" => text_import_dialog(&params),
             "unprotectSheet" => Dialog::form(
                 "unprotectSheet",
                 "Unprotect Sheet",
