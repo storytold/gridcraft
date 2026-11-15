@@ -86,6 +86,34 @@ pub(crate) fn criterion_matches(v: &Value, text: &str, crit: &Value) -> bool {
 /// Most (list row, criteria row) pairs one Advanced Filter tests.
 const MAX_FILTER_TESTS: u64 = 50_000_000;
 
+/// The sheet scoped built-in name (ECMA-376 `_xlnm.Extract`) that records where a sheet's last
+/// copied extract went, so the next copy to the same place can clear rows the shorter result no
+/// longer fills (#4178).
+const EXTRACT_NAME: &str = "_xlnm.Extract";
+
+/// `$F$1:$G$4`.
+fn absolute_a1(r: RangeRef) -> String {
+    let cell = |c: CellRef| format!("${}${}", gridcraft_core::col_to_letters(c.col), c.row + 1);
+    format!("{}:{}", cell(r.start), cell(r.end))
+}
+
+/// The previous extract on sheet `dsi` to clear before writing a new one at `dest`: only one that
+/// starts at `dest`, has the list's width, is no taller than the list, and stays off the list, so a
+/// recorded range (perhaps from a file) can only ever cover what an earlier extract here wrote.
+fn previous_extract(wb: &gridcraft_model::Workbook, dsi: usize, dest: CellRef, list: (usize, RangeRef)) -> Option<RangeRef> {
+    let name = wb.names.iter().find(|n| n.scope == Some(dsi) && n.name.eq_ignore_ascii_case(EXTRACT_NAME))?;
+    let (sheet, body) = gridcraft_core::split_sheet(&name.formula);
+    if let Some(sheet) = sheet
+        && !sheet.eq_ignore_ascii_case(&wb.sheet(dsi)?.name)
+    {
+        return None;
+    }
+    let old = RangeRef::parse(body)?;
+    let (si, list) = list;
+    let fits = old.start == dest && old.width() == list.width() && old.height() <= list.height();
+    (fits && !(si == dsi && old.intersects(&list))).then_some(old)
+}
+
 pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     const CMD: &str = "data.advancedFilter";
     let d = s.doc()?;
@@ -184,6 +212,11 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
         if dsi == si && out_range.intersects(&list) {
             return Err(EngineError::Other("The extract range can't overlap the list range.".into()));
         }
+        // A shorter result clears the rows the last extract here wrote below it; cells no extract
+        // wrote are never touched (#1031).
+        let stale = previous_extract(wb, dsi, dest, (si, list));
+        let extract_formula =
+            format!("{}!{}", gridcraft_core::quote_sheet(&wb.sheet(dsi).ok_or(EngineError::NoDocument)?.name), absolute_a1(out_range));
         let cells: Vec<(CellRef, Cell)> = rows_out
             .iter()
             .enumerate()
@@ -199,7 +232,10 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
             .collect();
         edit(s, |cx| {
             let shm = cx.sheet_mut(dsi)?;
-            let old: Vec<CellRef> = shm.cells.iter_range(out_range).map(|(c, _)| c).collect();
+            let mut old: Vec<CellRef> = shm.cells.iter_range(out_range).map(|(c, _)| c).collect();
+            if let Some(prev) = stale {
+                old.extend(shm.cells.iter_range(prev).map(|(c, _)| c).filter(|c| !out_range.contains(*c)));
+            }
             for c in &old {
                 shm.remove_cell(*c);
             }
@@ -212,6 +248,14 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
             for c in out_range.iter() {
                 cx.touch(dsi, c);
             }
+            cx.wb.names.retain(|n| !(n.scope == Some(dsi) && n.name.eq_ignore_ascii_case(EXTRACT_NAME)));
+            cx.wb.names.push(gridcraft_model::DefinedName {
+                name: EXTRACT_NAME.into(),
+                scope: Some(dsi),
+                formula: extract_formula,
+                comment: String::new(),
+                hidden: true,
+            });
             Ok(())
         })?;
         return Ok(json!({"matched": matched, "range": out_range.a1()}));
