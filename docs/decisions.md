@@ -148,7 +148,9 @@ workbooks:
   width with no flags, `bestFit` alone, or both, keeps widening after the file is opened again.
 
 `LineInfo::custom`, already used for rows set by hand, now marks columns set by hand too; GridCraft
-writes and reads the two flags as Excel does (and `.xls` COLINFO's fUserSet and fBestFit alike).
+writes and reads the two flags as Excel does. In `.xls`, COLINFO's fUserSet marks a column set by
+hand; the shared craft-xls reader does not report fBestFit, so a `.xls` width with both flags also
+counts as set by hand.
 Files that earlier GridCraft versions saved have `customWidth` without `bestFit` on every stored
 width, so those columns open as set by hand and keep their width.
 
