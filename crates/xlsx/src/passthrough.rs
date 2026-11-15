@@ -9,6 +9,8 @@
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
 //! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
 //! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! Chart sheets are kept whole, and each embedded chart GridCraft reads keeps its original chart
+//! part with the style, colour and shape parts behind it, together with the chart as it was read.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -21,6 +23,9 @@
 //! - Sheet content lives on the sheet: deleting the sheet drops it, Copy Sheet doesn't copy it.
 //!   Cell references inside kept parts (a control's linked cell, a query table's range, a cell
 //!   mapped to an XML element) are kept as they were, not adjusted to inserted or deleted rows.
+//! - An embedded chart's original XML is written back only while the model's chart still equals
+//!   what was read from it (its position aside) and every sheet its formulas name still exists;
+//!   otherwise GridCraft writes the chart from the model, as it does for charts it created.
 //! - Strict Open XML files are not passed through (their namespaces differ from what we write).
 //! - Sizes are bounded: per part and per workbook.
 
@@ -30,7 +35,9 @@ use std::fmt::Write as _;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
-use gridcraft_model::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook};
+use gridcraft_model::{
+    Anchor, Chart, Preserved, PreservedChart, PreservedPart, PreservedRel, PreservedSheet, PreservedXml, Sheet, Visibility, Workbook,
+};
 use quick_xml::events::attributes::Attribute;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
@@ -50,7 +57,7 @@ pub use read::KeptReader;
 pub use rebase::{SheetKept, rebase_links};
 #[cfg(test)]
 pub(crate) use write::sheet_names_in;
-pub use write::{KeptOut, SheetIds, WorkbookKept, workbook_elements, write_package_rels, write_workbook};
+pub use write::{KeptOut, SheetIds, WorkbookKept, kept_chart, workbook_elements, write_kept_chart, write_package_rels, write_workbook};
 
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
@@ -154,6 +161,10 @@ const REWRITTEN: &[&str] = &[
 /// their style, colour and shape parts are kept byte for byte (the chart sheet is not modelled).
 const CHART_SHEET_GRAPH: &[&str] = &["chartsheet", "drawing", "chart", "chartex", "chartstyle", "chartcolorstyle", "chartusershapes"];
 
+/// Relationship kinds an embedded chart part reaches that are otherwise rewritten: its style,
+/// colour and user-shape parts are kept with it. A drawing or worksheet is never reached.
+const CHART_GRAPH: &[&str] = &["chart", "chartstyle", "chartcolorstyle", "chartusershapes"];
+
 /// Part-name prefixes (lower case) GridCraft's writer never produces: kept parts there keep their
 /// original names. Anything else is renamed so it can't collide with written parts.
 const OWN_DIRS: &[&str] = &[
@@ -182,6 +193,11 @@ fn is_kind(r: &PreservedRel, kinds: &[&str]) -> bool {
 
 fn rewritten(r: &PreservedRel) -> bool {
     !r.external && REWRITTEN.contains(&kind(&r.rel_type).to_ascii_lowercase().as_str())
+}
+
+/// A chart without its id and position: what a kept chart is compared on.
+fn unplaced(ch: &Chart) -> Chart {
+    Chart { id: 0, anchor: Anchor::default(), ..ch.clone() }
 }
 
 fn rels_part_name(part: &str) -> String {
