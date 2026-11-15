@@ -2356,6 +2356,7 @@ dependencies = [
  "craft-offcrypto",
  "craft-opc",
  "craft-xls",
+ "craft-xml",
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-functions",
