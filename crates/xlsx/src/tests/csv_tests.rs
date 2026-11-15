@@ -1,8 +1,8 @@
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, Value};
 use gridcraft_model::{Sheet, Workbook};
 
-use crate::csv::{decode_text, parse_records, sniff_delimiter};
 use crate::{CsvOptions, Format, IoError, read_csv, read_csv_with_report, sniff, write_csv, write_csv_limited};
+use craft_csv::{decode_text, parse_records, sniff_delimiter};
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
     wb.sheet(0).unwrap().value(CellRef::new(r, c))
@@ -149,33 +149,6 @@ fn encodings() {
 }
 
 #[test]
-fn windows_1256_table_matches_the_unicode_mapping() {
-    let at = |b: u8| crate::csv::CP1256.get(usize::from(b - 0x80)).and_then(|&c| char::from_u32(c));
-    let expected = [
-        (0x80, '€'),
-        (0x81, 'پ'),
-        (0x8D, 'چ'),
-        (0x98, 'ک'),
-        (0x9D, '\u{200C}'),
-        (0xA1, '،'),
-        (0xBA, '؛'),
-        (0xBF, '؟'),
-        (0xC7, 'ا'),
-        (0xC8, 'ب'),
-        (0xDC, 'ـ'),
-        (0xE1, 'ل'),
-        (0xE3, 'م'),
-        (0xE9, 'é'),
-        (0xFD, '\u{200E}'),
-        (0xFE, '\u{200F}'),
-        (0xFF, 'ے'),
-    ];
-    for (b, c) in expected {
-        assert_eq!(at(b), Some(c), "0x{b:02X}");
-    }
-}
-
-#[test]
 fn arabic_csv_in_windows_1256_reads_as_arabic() {
     let bytes = [
         0xC7, 0xE1, 0xC7, 0xD3, 0xE3, b',', 0xC7, 0xE1, 0xDE, 0xED, 0xE3, 0xC9, b'\n', 0xE3, 0xD1, 0xCD, 0xC8, 0xC7, b' ', b'1', b'2', b'3', 0xA1,
@@ -302,8 +275,9 @@ fn sniffing_formats() {
     assert_eq!(sniff(b"a,b\n1,2"), Format::Csv);
     // An Excel password-protected file is a CFB/OLE2 compound file with an EncryptedPackage
     // stream; any other compound file is a legacy binary (.xls), not an encrypted workbook.
-    assert_eq!(sniff(&crate::cfb::tests::build(&["EncryptionInfo", "EncryptedPackage"])), Format::Encrypted);
-    assert_eq!(sniff(&crate::cfb::tests::build(&["Workbook"])), Format::LegacyBinary);
+    let compound = crate::testing::compound_file;
+    assert_eq!(sniff(&compound(&[("EncryptionInfo", b"x"), ("EncryptedPackage", b"x")])), Format::Encrypted);
+    assert_eq!(sniff(&compound(&[("WordDocument", b"x")])), Format::LegacyBinary);
     assert_eq!(sniff(&[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0, 0]), Format::LegacyBinary);
     assert_eq!(sniff(&[0xD0, 0xCF, 0x11, 0xE0, 0, 0, 1, 2]), Format::Unknown);
     assert_eq!(sniff(b""), Format::Unknown);
@@ -393,14 +367,14 @@ fn parser_stops_collecting_fields_at_max_cols() {
     let mut text = ",".repeat((MAX_COLS + extra) as usize - 1);
     text.push_str("end\nx,y\n");
     let mut lens = vec![];
-    parse_records(&text, ',', '"', |rec| {
+    parse_records(&text, ',', '"', MAX_COLS as usize, |rec| {
         lens.push(rec.len());
         true
     });
     assert_eq!(lens, vec![MAX_COLS as usize, 2]);
     // An unterminated last row is capped the same way.
     let mut lens = vec![];
-    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), ',', '"', |rec| {
+    parse_records(&",".repeat(MAX_COLS as usize + extra as usize), ',', '"', MAX_COLS as usize, |rec| {
         lens.push(rec.len());
         true
     });
