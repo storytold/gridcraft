@@ -441,6 +441,8 @@ fn run(args: &[String]) -> Result<(), String> {
             "cmd" => parse_command(value)?.map(|(id, p)| vec![(id, p, "--cmd".to_string())]).unwrap_or_default(),
             "script" => {
                 let text = std::fs::read_to_string(value).map_err(|e| format!("{value}: {e}"))?;
+                // Editors can mark UTF-8 files with a BOM; it is not part of the first command.
+                let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
                 let mut v = Vec::new();
                 for (i, line) in text.lines().enumerate() {
                     if let Some((id, p)) = parse_command(line).map_err(|e| format!("{value}:{}: {e}", i + 1))? {
