@@ -43,6 +43,9 @@ impl SheetApp {
         ) {
             self.commit_text_box_edit()?;
         }
+        if let Some(r) = crate::chart_templates::command(self, id, &params) {
+            return r;
+        }
         if let Some(r) = self.run_ui_command(id, &params) {
             return r;
         }
@@ -56,7 +59,7 @@ impl SheetApp {
         }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
-        let r = self.session.run(id, params);
+        let r = if id == "insert.chart" { crate::chart_templates::insert(self, params) } else { self.session.run(id, params) };
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }

@@ -393,6 +393,9 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let resp = egui::Area::new(egui::Id::unique("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
+            if kind == "chart" {
+                close |= crate::chart_templates::menu(app, ui, id);
+            }
             let mut items = vec![];
             if kind == "control" {
                 if crate::control_ui::is_button(app, id) {
@@ -430,6 +433,7 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     if close
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
         || (ui.input(|i| i.pointer.any_pressed())
+            && !egui::Popup::is_any_open(ui.ctx())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()
             && ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| !resp.response.rect.contains(p)))

@@ -1,4 +1,5 @@
 use super::frame::Bx;
+use super::lines::style_series;
 use super::trend::supports_trendline;
 use super::{
     Chart, ChartData, ChartKind, Ctx, DOWN, HAlign, LABEL_SIZE, MAX_CATS, MAX_SERIES, MAX_TRENDLINES, Prim, Rgba, SeriesData, TEXT, Theme, UP,
@@ -64,10 +65,20 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
                 .enumerate()
                 .map(|(i, s)| {
                     let sw = match plot_kind(chart, s, i) {
-                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
-                        ChartKind::LineMarkers => Swatch::LineMarker,
+                        ChartKind::Line | ChartKind::LineStacked | ChartKind::LineStacked100 | ChartKind::Radar | ChartKind::ScatterLines => {
+                            Swatch::Line
+                        }
+                        ChartKind::LineMarkers | ChartKind::LineStacked100Markers => Swatch::LineMarker,
                         ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
                         _ => Swatch::Box,
+                    };
+                    let spec = chart.format.series.get(&i);
+                    let sw = if matches!(sw, Swatch::Line | Swatch::LineMarker | Swatch::Marker)
+                        && spec.is_some_and(|s| s.marker_size.is_some() || s.marker.as_deref().is_some_and(|m| m != "none"))
+                    {
+                        if sw == Swatch::Line { Swatch::LineMarker } else { sw }
+                    } else {
+                        sw
                     };
                     (s.name.clone(), s.color, sw)
                 })
@@ -101,10 +112,16 @@ pub(super) fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, co
     }
 }
 
-pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx) -> Bx {
-    let size = LABEL_SIZE;
-    let row_h = size * 1.6;
-    let s = size * 0.8;
+pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos: LegendPos, area: Bx, chart: &Chart, series_count: usize) -> Bx {
+    let size = ctx.font_size("legend", LABEL_SIZE);
+    // Category entries do not correspond to series indices.
+    let series_count = match chart.kind {
+        ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Waterfall => 0,
+        _ => series_count,
+    };
+    let marker_size = if series_count > 0 { chart.format.series.values().filter_map(|s| s.marker_size).fold(0.0f32, f32::max) } else { 0.0 };
+    let row_h = (size * 1.6).max(marker_size + 4.0);
+    let s = (size * 0.8).max(marker_size / 2.0);
     let gap = 4.0;
     let spacing = size * 1.3;
     let item_w = |ctx: &Ctx, e: &(String, Rgba, Swatch)| swatch_w(e.2, s) + gap + ctx.tw(&e.0, size);
@@ -137,10 +154,14 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
                 let yc = y0 + ri as f32 * row_h + row_h / 2.0;
                 for &(i, iw) in row {
                     if let Some(e) = entries.get(i) {
+                        let start = ctx.out.len();
                         draw_swatch(ctx, e.2, x, yc, s, e.1);
+                        if i < series_count {
+                            style_series(ctx, start, chart.format.series.get(&i), e.1);
+                        }
                         let sx = swatch_w(e.2, s) + gap;
                         let t = ctx.fit(&e.0, size, (iw - sx).max(0.0) + 0.5);
-                        ctx.text(x + sx, yc, &t, size, TEXT, (HAlign::Left, VAlign::Middle));
+                        ctx.text_role("legend", x + sx, yc, &t, size, TEXT, HAlign::Left, VAlign::Middle);
                     }
                     x += iw + spacing;
                 }
@@ -166,10 +187,14 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
             let x0 = if pos == LegendPos::Right { area.right() - colw } else { area.x };
             for (i, e) in entries.iter().take(n).enumerate() {
                 let yc = y0 + i as f32 * row_h + row_h / 2.0;
+                let start = ctx.out.len();
                 draw_swatch(ctx, e.2, x0, yc, s, e.1);
+                if i < series_count {
+                    style_series(ctx, start, chart.format.series.get(&i), e.1);
+                }
                 let sx = swatch_w(e.2, s) + gap;
                 let t = ctx.fit(&e.0, size, (colw - sx).max(0.0) + 0.5);
-                ctx.text(x0 + sx, yc, &t, size, TEXT, (HAlign::Left, VAlign::Middle));
+                ctx.text_role("legend", x0 + sx, yc, &t, size, TEXT, HAlign::Left, VAlign::Middle);
             }
             let used = colw + 8.0;
             if pos == LegendPos::Right { Bx { w: area.w - used, ..area } } else { Bx { x: area.x + used, w: area.w - used, ..area } }
