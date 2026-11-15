@@ -18,6 +18,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 pub mod backstage;
 mod border_preview;
 mod cell_pictures;
+mod chartcache;
 pub mod chartview;
 pub mod code_editor;
 pub mod control;
@@ -59,6 +60,7 @@ pub mod theme;
 mod updates_ui;
 pub mod widgets;
 mod window_ui;
+pub mod wordart;
 
 pub use window_ui::WindowUi;
 
@@ -80,6 +82,20 @@ pub use clock::{monotonic_ms, now_ms};
 pub use services::{Chrome, Inbox, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
+
+fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
+    match value {
+        "north" => Some(egui::ResizeDirection::North),
+        "south" => Some(egui::ResizeDirection::South),
+        "east" => Some(egui::ResizeDirection::East),
+        "west" => Some(egui::ResizeDirection::West),
+        "northeast" => Some(egui::ResizeDirection::NorthEast),
+        "northwest" => Some(egui::ResizeDirection::NorthWest),
+        "southeast" => Some(egui::ResizeDirection::SouthEast),
+        "southwest" => Some(egui::ResizeDirection::SouthWest),
+        _ => None,
+    }
+}
 
 /// Persisted UI preferences.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -287,6 +303,8 @@ pub struct SheetApp {
     pub(crate) capture_geometry_from_raw: bool,
     /// The floating object selected on the sheet (chart, picture, shape, equation or slicer).
     pub selected_object: Option<gridcraft_engine::model::ObjRef>,
+    /// Rendered charts kept between frames ([`chartcache`]).
+    pub(crate) chart_cache: std::sync::Mutex<chartcache::ChartCache>,
     /// The system clipboard's text when GridCraft last copied without publishing to it (a
     /// control-channel or MCP `edit.copy`/`edit.cut`). While the system clipboard still holds this
     /// text, GridCraft's copy is the newer one and Paste uses it.
@@ -304,6 +322,10 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// Linux/BSD: the window has no system frame; the title bar draws minimize, maximize and
+    /// close, and the window resizes from its edges (`ribbon::window_frame`).
+    pub window_controls: bool,
+    viewport_commands: Vec<egui::ViewportCommand>,
     /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
     /// to the front, also when the app is hidden or the window minimized (a Dock quit).
     pub bring_forward: bool,
@@ -336,4 +358,33 @@ pub fn clean_error(e: &str) -> String {
 
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
+}
+
+#[cfg(test)]
+mod viewport_command_tests {
+    use super::parse_resize_direction;
+
+    #[test]
+    fn resize_direction_parser_accepts_all_edges_and_rejects_unknown_values() {
+        for name in ["north", "south", "east", "west", "northeast", "northwest", "southeast", "southwest"] {
+            assert!(parse_resize_direction(name).is_some(), "{name}");
+        }
+        assert!(parse_resize_direction("middle").is_none());
+    }
+
+    #[test]
+    fn window_commands_queue_viewport_commands_without_a_workbook() {
+        use egui::ViewportCommand;
+        let mut a = crate::SheetApp::new(gridcraft_engine::Session::new(), crate::Services::default());
+        for (id, params, expected) in [
+            ("ui.window.minimize", serde_json::json!({}), ViewportCommand::Minimized(true)),
+            ("ui.window.maximize", serde_json::json!({"on": true}), ViewportCommand::Maximized(true)),
+            ("ui.window.close", serde_json::json!({}), ViewportCommand::Close),
+            ("ui.window.beginResize", serde_json::json!({"direction": "east"}), ViewportCommand::BeginResize(egui::ResizeDirection::East)),
+        ] {
+            assert!(a.run(id, params).is_ok(), "{id} should route without a workbook");
+            assert!(a.viewport_commands.contains(&expected), "{id} queues {expected:?}");
+        }
+        assert!(a.run("ui.window.beginResize", serde_json::json!({"direction": "diagonal"})).is_err());
+    }
 }
