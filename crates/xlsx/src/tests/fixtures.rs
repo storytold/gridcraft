@@ -39,7 +39,11 @@ fn shared_formulas_and_value_types() {
     let c5 = s.cell(at("C5")).unwrap().formula.clone().unwrap();
     assert_eq!(c5.array, None, "dynamic arrays are not legacy CSE arrays");
     assert_eq!(c5.text, "SEQUENCE(3)");
-    assert!(s.cell(at("C6")).is_none(), "spilled cached values are dropped so the formula can spill");
+    assert!(s.cell(at("C6")).is_none(), "spilled cached values stay out of the cells so the formula can spill");
+    assert_eq!(s.spill_ranges.get(&at("C5")), Some(&RangeRef::parse("C5:C7").unwrap()));
+    assert_eq!(s.value(at("C6")), Value::Number(2.0), "a spilled cached value is readable before recalculation");
+    assert_eq!(s.value(at("C7")), Value::Empty, "no cached value, nothing to show");
+    assert!(!s.spill.contains_key(&at("B5")), "a legacy array's cached values are not spill values");
     // Rows/cells without r continue from the previous position.
     assert_eq!(s.value(at("A7")), Value::Number(9.0));
     assert_eq!(s.value(at("B7")), Value::Number(10.0));
