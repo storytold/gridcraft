@@ -1,5 +1,6 @@
 use super::draw::{Block, Look, rgb_of};
 use super::{CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, Sheet, Style, StyleTable, Underline, VAlign, Value};
+use unicode_segmentation::UnicodeSegmentation;
 
 const PAD_PX: f32 = 2.0;
 
@@ -11,7 +12,11 @@ const MAX_WRAP_LINES: usize = 2000;
 /// Widths are kept as running sums of glyph widths (the sum `text_width` makes), so each
 /// character is measured once: re-measuring the line for every word, or the rest of an
 /// over-long word for every piece cut from it, made a long paragraph or word quadratic.
+/// Shaped text is not a sum of glyph widths, so [`wrap_shaped_lines`] measures it as drawn.
 pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    if gridcraft_pdf::is_shaped(font, text) {
+        return wrap_shaped_lines(text, font, size, width);
+    }
     let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(font.char_width(c))).sum() };
     let fits = |units: u64| units as f32 * size / 1000.0 <= width;
     let space = units_of(" ");
@@ -33,13 +38,11 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
                 line.push_str(word);
                 line_units = word_units;
             }
-            // Break a single over-long word by characters: each piece is the longest that fits
-            // (at least one character).
-            if !fits(line_units) && line.chars().nth(1).is_some() {
+            if !fits(line_units) && line.graphemes(true).nth(1).is_some() {
                 let mut piece = String::new();
                 let mut units: u64 = 0;
-                for c in line.chars() {
-                    let w = u64::from(font.char_width(c));
+                for g in line.graphemes(true) {
+                    let w = units_of(g);
                     if !piece.is_empty() && !fits(units + w) {
                         out.push(std::mem::take(&mut piece));
                         units = 0;
@@ -47,7 +50,7 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
                             return out;
                         }
                     }
-                    piece.push(c);
+                    piece.push_str(g);
                     units += w;
                 }
                 line = piece;
@@ -60,6 +63,73 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<S
         out.push(line);
     }
     out
+}
+
+/// [`wrap_lines`] for shaped text, measuring each candidate line in its final joined form.
+fn wrap_shaped_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
+    let fits = |s: &str| gridcraft_pdf::text_width(font, size, s) <= width;
+    let mut out = Vec::new();
+    for para in text.split('\n') {
+        let mut line = String::new();
+        for word in para.split(' ') {
+            if !line.is_empty() {
+                let candidate = format!("{line} {word}");
+                if fits(&candidate) {
+                    line = candidate;
+                    continue;
+                }
+                out.push(std::mem::take(&mut line));
+            }
+            line = if fits(word) { word.to_string() } else { break_shaped_word(word, &fits, &mut out) };
+            if out.len() > MAX_WRAP_LINES {
+                return out;
+            }
+        }
+        out.push(line);
+    }
+    out
+}
+
+/// Cuts `word` into the longest grapheme prefixes that fit (at least one grapheme each), pushes
+/// all but the last to `out` and returns the last. Each cut gallops from one grapheme, so it
+/// measures prefixes about as long as the piece rather than the rest of the word.
+fn break_shaped_word(word: &str, fits: &impl Fn(&str) -> bool, out: &mut Vec<String>) -> String {
+    let ends: Vec<usize> = word.grapheme_indices(true).map(|(i, g)| i + g.len()).collect();
+    let (mut start, mut first) = (0, 0);
+    loop {
+        let len = ends.len().saturating_sub(first);
+        let end = |count: usize| ends.get(first + count.saturating_sub(1)).copied().unwrap_or(word.len());
+        let fits_prefix = |count: usize| fits(word.get(start..end(count)).unwrap_or_default());
+        let (mut fit, mut over, mut probe) = (1, len + 1, 2);
+        while fit < len {
+            let count = probe.min(len);
+            if fits_prefix(count) {
+                fit = count;
+                probe = count.saturating_mul(2);
+            } else {
+                over = count;
+                break;
+            }
+        }
+        if fit >= len {
+            return word.get(start..).unwrap_or_default().to_string();
+        }
+        while over - fit > 1 {
+            let mid = fit + (over - fit) / 2;
+            if fits_prefix(mid) {
+                fit = mid;
+            } else {
+                over = mid;
+            }
+        }
+        let cut = end(fit);
+        out.push(word.get(start..cut).unwrap_or_default().to_string());
+        start = cut;
+        first += fit;
+        if out.len() > MAX_WRAP_LINES {
+            return word.get(start..).unwrap_or_default().to_string();
+        }
+    }
 }
 
 fn font_for(style: &Style) -> Font {
@@ -203,12 +273,25 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
         (false, _) => vec![text],
     };
-    let line_h = size * 1.2;
+    let extents = lines
+        .iter()
+        .filter_map(|line| pg.text_vertical_extents(font, size, line))
+        .reduce(|a, b| (a.0.max(b.0), a.1.max(b.1)))
+        .map(|(ascent, descent)| (ascent.max(size * 0.8), descent.max(size * 0.22)));
+    let line_h = extents.map_or(size * 1.2, |(ascent, descent)| (ascent + descent + size * 0.2).max(size * 1.2));
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + size * 0.8,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-        VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+    let first_baseline = if let Some((ascent, descent)) = extents {
+        match st.align.v {
+            VAlign::Top => y + pad + ascent,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
+            VAlign::Bottom => y + h - pad - descent - (n - 1.0) * line_h,
+        }
+    } else {
+        match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        }
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -233,9 +316,9 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         for (i, t) in lines.iter().enumerate() {
             let i = i as f32;
             let (ox, oy) = if deg > 0.0 {
-                (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
+                (x + pad + extents.map_or(size * 0.8, |e| e.0) * deg.to_radians().sin() + i * line_h, y + h - pad)
             } else {
-                (x + pad + (last - i) * line_h, y + pad + size * 0.8)
+                (x + pad + (last - i) * line_h, y + pad + extents.map_or(size * 0.8, |e| e.0))
             };
             pg.text_rotated(Point::new(ox, oy), size, font, color, t, angle);
         }
@@ -244,12 +327,12 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     }
     if rot == 255 {
         // Vertical stacked text.
-        let chars: Vec<char> = lines.concat().chars().take(500).collect();
-        let mut yy = y + pad + size * 0.8;
+        let stacked = lines.concat();
+        let chars: Vec<&str> = stacked.graphemes(true).take(500).collect();
+        let mut yy = y + pad + extents.map_or(size * 0.8, |e| e.0);
         for ch in chars {
-            let s = ch.to_string();
-            let cw = gridcraft_pdf::text_width(font, size, &s);
-            pg.text(x + (w - cw) / 2.0, yy, size, font, color, &s);
+            let cw = gridcraft_pdf::text_width(font, size, ch);
+            pg.text(x + (w - cw) / 2.0, yy, size, font, color, ch);
             yy += line_h;
             if yy > y + h + line_h {
                 break;
