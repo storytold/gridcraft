@@ -236,6 +236,31 @@ fn name_box_shows_a_name_defined_on_a_sheet_with_an_apostrophe() {
 }
 
 #[test]
+fn name_box_dropdown_qualifies_foreign_scopes_and_lists_only_ranges() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({"name": "Bob's"})).unwrap();
+    for (name, refers_to, scope) in [
+        ("Spot", "=Sheet1!$B$2", "Workbook"),
+        ("Spot", "='Bob''s'!$D$4", "Bob's"),
+        ("Rate", "=0.07", "Workbook"),
+    ] {
+        s.execute("formulas.defineName", json!({"name": name, "refersTo": refers_to, "scope": scope})).unwrap();
+    }
+    s.execute("selection.set", json!({"sheet": 0, "cell": "A1"})).unwrap();
+    let mut h = harness(s);
+    let name_box = gridcraft_ui_egui::formula_bar::BarLayout::get(&h.ctx).name_box;
+    click(&mut h, egui::pos2(name_box.right() - 9.0, name_box.top() + 12.0));
+    assert!(h.query_by_label("'Bob''s'!Spot").is_some(), "a foreign local name keeps its sheet scope");
+    assert!(h.query_by_label("Spot").is_some(), "the workbook range name remains available");
+    assert!(h.query_by_label("Rate").is_none(), "constants cannot be selected as ranges");
+    h.get_by_label("'Bob''s'!Spot").click();
+    h.run_steps(2);
+    let d = h.state().session.active().unwrap();
+    assert_eq!(d.wb.active_sheet(), 1);
+    assert_eq!(d.selection.active, CellRef::new(3, 3));
+}
+
+#[test]
 /// Typing and Enter commit 42 in A1; `=A1*2` and Tab commit 84 in A2 and move to B2, with accessibility checks.
 fn typing_enters_values_and_moves_down() {
     let mut h = harness(blank());
