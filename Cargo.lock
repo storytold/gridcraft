@@ -938,6 +938,16 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
 
 [[package]]
+name = "craft-gridcraft-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=1ff72a0445f370cdaba156ecb87013badbb58147#1ff72a0445f370cdaba156ecb87013badbb58147"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "craft-i18n"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
@@ -2204,6 +2214,7 @@ name = "gridcraft-engine"
 version = "0.19.1"
 dependencies = [
  "craft-csv",
+ "craft-gridcraft-format",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
