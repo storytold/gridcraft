@@ -343,6 +343,10 @@ fn main() -> eframe::Result<()> {
     // Linux/BSD: Excel's layout — no window-manager title bar above ours; our title bar carries the
     // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
     app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();
+    // A frameless window must draw its own title bar: it handles drag-to-move and the
+    // double-click maximize, and reserves room for the controls (`title_bar` does both when
+    // `window_controls` is set). Without it the window has nothing to drag it by.
+    app.chrome.title_bar |= app.window_controls;
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])
