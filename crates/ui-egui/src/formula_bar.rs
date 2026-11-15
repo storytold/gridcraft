@@ -422,12 +422,11 @@ fn name_box(app: &mut SheetApp, ui: &mut egui::Ui, t: &Tokens) -> Rect {
     }
     ui.allocate_space(vec2(118.0, 24.0));
     // Dropdown of names.
-    let names: Vec<String> =
-        app.session.active().map(|d| d.wb.names.iter().filter(|n| !n.hidden).map(|n| n.name.clone()).collect()).unwrap_or_default();
     let mb = Rect::from_min_size(pos2(rect.right() - 16.0, rect.top() + 4.0), vec2(14.0, 16.0));
     icons::paint(ui.painter(), mb, Icon::Chevron, t.text_dim);
     let r = ui.interact(mb, id.with("drop"), Sense::click());
     egui::Popup::menu(&r).show(|ui| {
+        let names = app.session.active().map(|d| gridcraft_engine::cmd::edit::go_to_names(&d.wb, d.wb.active_sheet())).unwrap_or_default();
         if names.is_empty() {
             ui.label(egui::RichText::new("No names defined").italics());
         }
