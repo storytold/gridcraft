@@ -254,7 +254,7 @@ fn visible_windows(app: &SheetApp) -> Vec<u64> {
 
 /// A native window's title: the window's ("Book1", "Book1:2"), marked while its workbook has
 /// unsaved changes.
-fn window_title(app: &SheetApp, window: u64) -> String {
+pub(crate) fn window_title(app: &SheetApp, window: u64) -> String {
     let title = app.session.window_title(window).unwrap_or_default();
     let dirty = app.session.window(window).and_then(|w| app.session.documents().iter().find(|d| d.uid == w.doc_uid)).is_some_and(|d| d.is_dirty());
     if dirty { format!("{title} — Edited") } else { title }

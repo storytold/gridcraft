@@ -715,3 +715,57 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// macOS asks Save Changes as a sheet on the workbook's window (`Services::save_prompt`): the
+/// built-in dialog isn't drawn while the sheet is up, the close waits on its answer, and each
+/// unsaved workbook gets a sheet of its own. A host with no sheet for the window falls back to the
+/// built-in dialog.
+#[test]
+fn closing_the_window_asks_each_unsaved_workbook_in_a_sheet() {
+    type Asked = Arc<Mutex<Vec<(String, std::sync::mpsc::Sender<String>)>>>;
+    let asked: Asked = Arc::default();
+    let log = asked.clone();
+    let services = Services {
+        save_prompt: Some(Box::new(move |_window, question, _detail| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            log.lock().unwrap().push((question.to_string(), tx));
+            Some(rx)
+        })),
+        ..Default::default()
+    };
+    let mut h = harness(services);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(asked.lock().unwrap().len(), 1, "one sheet at a time");
+    assert!(h.query_by_label("Don't Save").is_none(), "the built-in dialog isn't drawn under the sheet");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "the close waits on the sheet");
+    let (_, answer) = asked.lock().unwrap().remove(0);
+    answer.send("cancel".into()).unwrap();
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "Cancel keeps the app open");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.documents().len(), 2);
+
+    request_window_close(&mut h);
+    let (_, answer) = asked.lock().unwrap().remove(0);
+    answer.send("dontSave".into()).unwrap();
+    step_commands(&mut h);
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(asked.lock().unwrap().len(), 1, "then a sheet about the next workbook");
+    let (question, answer) = asked.lock().unwrap().remove(0);
+    assert!(question.starts_with("Do you want to save the changes you made to "), "{question}");
+    answer.send("dontSave".into()).unwrap();
+    let sent = step_commands(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "once every workbook is answered the window closes: {sent:?}");
+
+    // No sheet for the window: the built-in dialog asks.
+    let mut h = harness(Services { save_prompt: Some(Box::new(|_, _, _| None)), ..Default::default() });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.run_steps(2);
+    request_window_close(&mut h);
+    assert!(h.query_by_label("Don't Save").is_some(), "the built-in dialog asks");
+}
