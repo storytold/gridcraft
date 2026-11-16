@@ -301,7 +301,8 @@ impl<'h> Evaluator<'h> {
 
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
-            // A defined name holding a LAMBDA, or a LET-bound lambda.
+            // A defined name holding a LAMBDA, or a LET-bound lambda. `Walk::collect` in
+            // `eval/special.rs` follows such a call as a name lookup by the same rule.
             return match self.name(name) {
                 Ev::L(l) => self.apply_lambda(&l, args),
                 Ev::V(Value::Error(x)) => err(x),

@@ -1,5 +1,6 @@
 use super::graph::{HashMap, HashSet, Key};
 use super::{Evaluator, Host, Workbook, stack_position};
+use crate::eval::NameLookup;
 use crate::spill_index::{Cover, SpillIndex};
 use gridcraft_core::{Array, CellError, CellRef, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -13,6 +14,17 @@ const MAX_NESTED: usize = 64;
 /// Formula evaluations iterative calculation may spend on one recalculation (passes × formulas
 /// evaluated again), however high Maximum Iterations is.
 const MAX_ITERATION_WORK: usize = 10_000_000;
+/// Most definition text, in bytes, whose parsed formulas a pass keeps. A parsed formula takes
+/// about a hundred times its text, so a workbook of many long names would otherwise hold gigabytes
+/// for the pass; past this, about 100 MB of trees, a name is parsed again at each use. A library
+/// of LAMBDA names is a few kilobytes.
+const MAX_PASS_NAME_TEXT: usize = 1 << 20;
+
+#[cfg(test)]
+thread_local! {
+    /// Definitions [`PassHost`] parsed on this thread for the evaluator, which a test reads.
+    pub(crate) static NAMES_PARSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// A block's results by last row: its sum and count, or `None` when it can't be summed from constants.
 type BlockSums = std::collections::BTreeMap<u32, Option<(f64, u64)>>;
@@ -87,6 +99,19 @@ pub(super) struct PassHost<'a> {
     /// result is laid out (an array spills from the cell, as a formula's does). Each one is in
     /// `pending` until it is laid out, so a formula that reads it first gets its new value.
     python: HashMap<Key, Value>,
+    /// Parsed defined names, by their place in the workbook's list: the workbook doesn't change
+    /// during a pass, and a column of cells calling one LAMBDA name would otherwise parse that
+    /// name's formula (and every name it calls) once per cell.
+    names: HashMap<usize, Option<std::sync::Arc<Expr>>>,
+    /// Finds the workbook's names for the pass (see [`NameLookup`]).
+    name_lookup: NameLookup,
+    /// Bytes of the definitions kept in `names`.
+    names_text: usize,
+    /// Set by `evaluate_expr` for a one-shot evaluation (a conditional format per painted cell, a
+    /// validation, a filter criterion per row), which gets a fresh host at every call: `name_expr`
+    /// then scans the workbook's names at every lookup instead of going through `name_lookup`,
+    /// whose index would cost a String and a hash insert per defined name at each call.
+    pub(super) one_shot: bool,
 }
 
 impl<'a> PassHost<'a> {
@@ -126,6 +151,10 @@ impl<'a> PassHost<'a> {
             out_of_stack: false,
             sums: HashMap::default(),
             python: HashMap::default(),
+            names: HashMap::default(),
+            name_lookup: NameLookup::default(),
+            names_text: 0,
+            one_shot: false,
         }
     }
 
@@ -135,6 +164,12 @@ impl<'a> PassHost<'a> {
         self.pending.extend(python.keys().copied());
         self.python = python;
         self
+    }
+
+    /// Whether the pass keeps the parsed definition of the name at `index` in the workbook's list.
+    #[cfg(test)]
+    pub(super) fn keeps_name(&self, index: usize) -> bool {
+        self.names.contains_key(&index)
     }
 }
 
@@ -564,6 +599,36 @@ impl Host for PassHost<'_> {
     }
     fn stack_exhausted(&mut self) {
         self.out_of_stack = true;
+    }
+    /// Found through `name_lookup`, which scans the workbook's names for the pass's first lookups
+    /// and then indexes them once, as they don't change while it runs; in a one-shot evaluation
+    /// always by a scan (see `one_shot`).
+    fn name_position(&mut self, name: &str, scope_sheet: usize) -> Option<usize> {
+        let wb = self.wb;
+        if self.one_shot {
+            // See `one_shot`.
+            wb.name_position(name, scope_sheet)
+        } else {
+            self.name_lookup.find(wb, name, scope_sheet)
+        }
+    }
+    /// The parsed definition, cached for the pass: the workbook's names don't change while it runs.
+    /// Parsed once per definition, whichever sheets ask for it, and kept for the pass while the
+    /// definitions kept stay within [`MAX_PASS_NAME_TEXT`]; past that, parsed at each use.
+    fn name_expr(&mut self, position: usize) -> Option<std::sync::Arc<Expr>> {
+        if let Some(expr) = self.names.get(&position) {
+            return expr.clone();
+        }
+        let def = self.wb.names.get(position)?;
+        #[cfg(test)]
+        NAMES_PARSED.with(|n| n.set(n.get().saturating_add(1)));
+        let expr = gridcraft_formula::parse_name(&def.formula).ok().map(std::sync::Arc::new);
+        let kept = self.names_text.saturating_add(def.formula.len());
+        if kept <= MAX_PASS_NAME_TEXT {
+            self.names_text = kept;
+            self.names.insert(position, expr.clone());
+        }
+        expr
     }
     fn spill_range(&mut self, sheet: usize, anchor: CellRef) -> Option<RangeRef> {
         let k = (sheet, anchor);
