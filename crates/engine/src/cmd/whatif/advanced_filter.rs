@@ -98,9 +98,15 @@ fn absolute_a1(r: RangeRef) -> String {
 }
 
 /// The previous extract on sheet `dsi` to clear before writing a new one at `dest`: only one that
-/// starts at `dest`, has the list's width, is no taller than the list, and stays off the list, so a
-/// recorded range (perhaps from a file) can only ever cover what an earlier extract here wrote.
-fn previous_extract(wb: &gridcraft_model::Workbook, dsi: usize, dest: CellRef, list: (usize, RangeRef)) -> Option<RangeRef> {
+/// starts at `dest` and stays off the list and the criteria. Its size is not compared with the
+/// current list, since the list may have been made shorter or narrower since that extract was written.
+fn previous_extract(
+    wb: &gridcraft_model::Workbook,
+    dsi: usize,
+    dest: CellRef,
+    list: (usize, RangeRef),
+    criteria: Option<(usize, RangeRef)>,
+) -> Option<RangeRef> {
     let name = wb.names.iter().find(|n| n.scope == Some(dsi) && n.name.eq_ignore_ascii_case(EXTRACT_NAME))?;
     let (sheet, body) = gridcraft_core::split_sheet(&name.formula);
     if let Some(sheet) = sheet
@@ -109,9 +115,8 @@ fn previous_extract(wb: &gridcraft_model::Workbook, dsi: usize, dest: CellRef, l
         return None;
     }
     let old = RangeRef::parse(body)?;
-    let (si, list) = list;
-    let fits = old.start == dest && old.width() == list.width() && old.height() <= list.height();
-    (fits && !(si == dsi && old.intersects(&list))).then_some(old)
+    let clashes = |(si, r): (usize, RangeRef)| si == dsi && old.intersects(&r);
+    (old.start == dest && !clashes(list) && !criteria.is_some_and(clashes)).then_some(old)
 }
 
 pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
@@ -214,7 +219,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
         }
         // A shorter result clears the rows the last extract here wrote below it; cells no extract
         // wrote are never touched (#1031).
-        let stale = previous_extract(wb, dsi, dest, (si, list));
+        let stale = previous_extract(wb, dsi, dest, (si, list), criteria);
         let extract_formula =
             format!("{}!{}", gridcraft_core::quote_sheet(&wb.sheet(dsi).ok_or(EngineError::NoDocument)?.name), absolute_a1(out_range));
         let cells: Vec<(CellRef, Cell)> = rows_out

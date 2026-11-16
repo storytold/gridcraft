@@ -376,6 +376,47 @@ fn advanced_filter_copy_clears_rows_a_shorter_repeat_no_longer_fills() {
     assert_eq!(n(&s, "J1"), 0.0);
 }
 
+fn copy_list_to_f1(s: &mut Session, range: &str) {
+    s.execute("data.advancedFilter", json!({"range": range, "copyTo": "F1", "unique": false})).unwrap();
+}
+
+#[test]
+fn advanced_filter_stale_clear_follows_a_list_made_shorter() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    assert_eq!(n(&s, "J1"), 3.0);
+    copy_list_to_f1(&mut s, "A1:B2");
+    assert_eq!(n(&s, "G2"), 101.0);
+    for a in ["F3", "G3", "F4", "G4"] {
+        assert_eq!(v(&s, a), Value::Empty, "{a} held a row of the taller extract");
+    }
+    assert_eq!(n(&s, "J1"), 1.0);
+}
+
+#[test]
+fn advanced_filter_stale_clear_follows_a_list_made_narrower() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    copy_list_to_f1(&mut s, "A1:A4");
+    assert_eq!(v(&s, "F4"), Value::from("Other"));
+    for a in ["G1", "G2", "G3", "G4"] {
+        assert_eq!(v(&s, a), Value::Empty, "{a} held a column of the wider extract");
+    }
+    assert_eq!(n(&s, "J1"), 0.0);
+}
+
+#[test]
+fn advanced_filter_stale_clear_leaves_criteria_inside_the_recorded_range() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    s.execute("range.setValues", json!({"range": "F6", "values": [["Label"], ["Keep"]]})).unwrap();
+    let names = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names;
+    names.iter_mut().find(|n| n.name == "_xlnm.Extract").unwrap().formula = "Sheet1!$F$1:$G$9".into();
+    s.execute("data.advancedFilter", json!({"range": "A1:B4", "criteria": "F6:F7", "copyTo": "F1", "unique": false})).unwrap();
+    assert_eq!(v(&s, "F7"), Value::from("Keep"), "the criteria survive");
+    assert_eq!(n(&s, "G2"), 101.0);
+}
+
 #[test]
 fn advanced_filter_stale_clear_keeps_cells_no_extract_wrote() {
     let mut s = stale_extract_fixture();
@@ -415,7 +456,7 @@ fn advanced_filter_stale_clear_undoes_and_survives_an_xlsx_reopen() {
 
 #[test]
 fn advanced_filter_ignores_a_recorded_extract_an_extract_here_could_not_have_written() {
-    for recorded in ["Sheet1!$F$1:$G$100", "Sheet1!$F$1:$H$4", "Sheet1!$F$2:$G$4", "Other!$F$1:$G$4"] {
+    for recorded in ["Sheet1!$F$2:$G$4", "Other!$F$1:$G$4", "Sheet1!F1:", "Sheet1!$F$1:$Q"] {
         let mut s = stale_extract_fixture();
         s.execute("range.setValues", json!({"range": "F2", "values": [["Mine", 1], ["Mine", 2], ["Mine", 3]]})).unwrap();
         s.execute("cell.set", json!({"cell": "H3", "input": "Mine"})).unwrap();
