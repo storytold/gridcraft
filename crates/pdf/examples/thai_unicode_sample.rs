@@ -12,6 +12,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         page.text_unicode(40.0, 60.0 + i as f32 * 54.0, 18.0, font_id, [0, 0, 0], text)?;
     }
-    std::fs::write(output, doc.finish())?;
+    std::fs::write(output, doc.finish()?)?;
     Ok(())
 }

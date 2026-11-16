@@ -1,4 +1,5 @@
-use super::{Font, FontCatalog, Page, PdfFont, Point, Rgb};
+use super::text::TextLine;
+use super::{Baseline, Font, FontCatalog, Page, PdfFont, Rgb, TextDirection};
 
 pub(super) fn needs_unicode_text(text: &str) -> bool {
     text.chars().any(|ch| !ch.is_control() && ch != '?' && gridcraft_pdf::win_ansi(ch) == b'?')
@@ -13,8 +14,10 @@ pub(super) struct TextRun {
     pub(super) font: TextRunFont,
     pub(super) text: String,
     pub(super) width: f32,
+    pub(super) direction: TextDirection,
 }
 
+#[cfg(test)]
 pub(super) fn shaped_runs(
     catalog: &FontCatalog,
     family: &str,
@@ -23,73 +26,115 @@ pub(super) fn shaped_runs(
     text: &str,
     size: f32,
 ) -> std::result::Result<Vec<TextRun>, String> {
-    let standard = Font::styled(Font::family_for(family), bold, italic);
-    let mut runs: Vec<TextRun> = Vec::new();
-    let mut thai_fallback: Option<PdfFont> = None;
-    for (_, cluster) in gridcraft_pdf::text_clusters(text) {
-        let is_thai = cluster.chars().any(|c| ('\u{0e00}'..='\u{0e7f}').contains(&c));
-        let latin = cluster.chars().all(|c| c.is_ascii() || c == '?' || gridcraft_pdf::win_ansi(c) != b'?');
-        let embedded = if latin {
-            catalog.family_face_for(family, bold, italic, cluster).ok()
-        } else if is_thai {
-            match thai_fallback.as_ref().filter(|face| face.covers(cluster)) {
-                Some(face) => Some(face.clone()),
-                None => catalog.face_for(family, bold, italic, cluster).ok().inspect(|face| {
-                    thai_fallback = Some(face.clone());
-                }),
-            }
-        } else {
-            catalog.face_for(family, bold, italic, cluster).ok()
-        };
-        let runfont = match embedded {
-            Some(face) => TextRunFont::Embedded(face),
-            None => TextRunFont::Standard(standard),
-        };
-        let same = runs.last().is_some_and(|run| match (&run.font, &runfont) {
-            (TextRunFont::Standard(a), TextRunFont::Standard(b)) => a == b,
-            (TextRunFont::Embedded(a), TextRunFont::Embedded(b)) => a.same_face(b),
-            _ => false,
-        });
-        if same {
-            if let Some(last) = runs.last_mut() {
-                last.text.push_str(cluster);
-            }
-        } else {
-            runs.push(TextRun { font: runfont, text: cluster.to_string(), width: 0.0 });
-        }
-    }
-    for run in &mut runs {
-        run.width = match &run.font {
-            TextRunFont::Embedded(font) => font.text_width(&run.text, size)?,
-            TextRunFont::Standard(font) => gridcraft_pdf::text_width(*font, size, &run.text),
-        };
-    }
-    Ok(runs)
+    shaped_runs_with_direction(catalog, family, bold, italic, text, size, TextDirection::Auto)
 }
 
-pub(super) fn shaped_width(catalog: &FontCatalog, family: &str, bold: bool, italic: bool, text: &str, size: f32) -> std::result::Result<f32, String> {
-    Ok(shaped_runs(catalog, family, bold, italic, text, size)?.iter().map(|r| r.width).sum())
-}
-
-pub(super) fn shaped_extents(
+pub(super) fn shaped_runs_with_direction(
     catalog: &FontCatalog,
     family: &str,
     bold: bool,
     italic: bool,
     text: &str,
     size: f32,
-) -> std::result::Result<(f32, f32), String> {
+    direction: TextDirection,
+) -> std::result::Result<Vec<TextRun>, String> {
+    let standard = Font::styled(Font::family_for(family), bold, italic);
+    let mut runs: Vec<TextRun> = Vec::new();
+    let mut thai_fallback: Option<PdfFont> = None;
+    for visual in gridcraft_pdf::visual_text_runs(text, direction).map_err(|error| error.to_string())? {
+        let mut visual_runs: Vec<TextRun> = Vec::new();
+        for (_, cluster) in gridcraft_pdf::text_clusters(visual.text) {
+            let is_thai = cluster.chars().any(|c| ('\u{0e00}'..='\u{0e7f}').contains(&c));
+            let latin = cluster.chars().all(|c| c.is_ascii() || c == '?' || gridcraft_pdf::win_ansi(c) != b'?');
+            let arabic = gridcraft_pdf::uses_arabic_shaping(cluster);
+            let embedded = if arabic {
+                None
+            } else if latin {
+                catalog.family_face_for(family, bold, italic, cluster).ok()
+            } else if is_thai {
+                match thai_fallback.as_ref().filter(|face| face.covers(cluster)) {
+                    Some(face) => Some(face.clone()),
+                    None => catalog.face_for(family, bold, italic, cluster).ok().inspect(|face| {
+                        thai_fallback = Some(face.clone());
+                    }),
+                }
+            } else {
+                catalog.face_for(family, bold, italic, cluster).ok()
+            };
+            let runfont = match embedded {
+                Some(face) => TextRunFont::Embedded(face),
+                None => TextRunFont::Standard(standard),
+            };
+            let same = visual_runs.last().is_some_and(|run| {
+                run.direction == visual.direction
+                    && match (&run.font, &runfont) {
+                        (TextRunFont::Standard(a), TextRunFont::Standard(b)) => a == b,
+                        (TextRunFont::Embedded(a), TextRunFont::Embedded(b)) => a.same_face(b),
+                        _ => false,
+                    }
+            });
+            if same {
+                if let Some(last) = visual_runs.last_mut() {
+                    last.text.push_str(cluster);
+                }
+            } else {
+                visual_runs.push(TextRun { font: runfont, text: cluster.to_string(), width: 0.0, direction: visual.direction });
+            }
+        }
+        if visual.direction == TextDirection::RightToLeft {
+            visual_runs.reverse();
+        }
+        runs.extend(visual_runs);
+    }
+    for run in &mut runs {
+        run.width = match &run.font {
+            TextRunFont::Embedded(font) => font.text_width(&run.text, size)?,
+            TextRunFont::Standard(font) => gridcraft_pdf::text_width_with_direction(*font, size, &run.text, run.direction),
+        };
+    }
+    Ok(runs)
+}
+
+pub(super) fn shaped_width(catalog: &FontCatalog, family: &str, bold: bool, italic: bool, text: &str, size: f32) -> std::result::Result<f32, String> {
+    shaped_width_with_direction(catalog, family, bold, italic, text, size, TextDirection::Auto)
+}
+
+pub(super) fn shaped_width_with_direction(
+    catalog: &FontCatalog,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    text: &str,
+    size: f32,
+    direction: TextDirection,
+) -> std::result::Result<f32, String> {
+    Ok(shaped_runs_with_direction(catalog, family, bold, italic, text, size, direction)?.iter().map(|run| run.width).sum())
+}
+
+pub(super) fn shaped_lines_extents(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    lines: &[TextLine],
+    size: f32,
+) -> std::result::Result<Option<(f32, f32)>, String> {
     let mut above: f32 = 0.0;
     let mut below: f32 = 0.0;
-    for run in shaped_runs(catalog, family, bold, italic, text, size)? {
-        let (a, d) = match run.font {
-            TextRunFont::Embedded(font) => font.vertical_extents(size),
-            TextRunFont::Standard(_) => (size * 0.8, size * 0.22),
-        };
-        above = above.max(a);
-        below = below.max(d);
+    for line in lines {
+        for run in shaped_runs_with_direction(catalog, family, bold, italic, &line.text, size, line.direction)? {
+            let extents = match run.font {
+                TextRunFont::Embedded(font) => Some(font.vertical_extents(size)),
+                TextRunFont::Standard(font) => pg.text_vertical_extents_with_direction(font, size, &run.text, run.direction),
+            };
+            if let Some((ascent, descent)) = extents {
+                above = above.max(ascent);
+                below = below.max(descent);
+            }
+        }
     }
-    Ok((above, below))
+    Ok((above > 0.0 || below > 0.0).then_some((above.max(size * 0.8), below.max(size * 0.22))))
 }
 
 /// Returns the next run's baseline origin after advancing along the rotated text baseline.
@@ -98,9 +143,25 @@ pub(super) fn advance_text_baseline(x: f32, y: f32, advance: f32, angle: f32) ->
     (x + advance * cs, y + advance * sn)
 }
 
+#[cfg(test)]
 pub(super) fn draw_text_runs(
     pg: &mut Page,
     runs: Vec<TextRun>,
+    x: f32,
+    y: f32,
+    size: f32,
+    color: Rgb,
+    angle: f32,
+) -> std::result::Result<f32, String> {
+    let semantic_text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
+    draw_text_runs_with_semantics(pg, runs, &semantic_text, x, y, size, color, angle)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_runs_with_semantics(
+    pg: &mut Page,
+    runs: Vec<TextRun>,
+    semantic_text: &str,
     x: f32,
     y: f32,
     size: f32,
@@ -111,8 +172,7 @@ pub(super) fn draw_text_runs(
         return Ok(0.0);
     }
     let total_width = runs.iter().map(|run| run.width).sum();
-    let semantic_text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
-    pg.begin_actual_text(&semantic_text);
+    pg.begin_actual_text(semantic_text);
     let mut origin = (x, y);
     let result: std::result::Result<(), String> = (|| {
         for run in runs {
@@ -121,7 +181,14 @@ pub(super) fn draw_text_runs(
                     let id = pg.register_unicode_font(font);
                     pg.text_unicode_rotated_without_actual_text(origin.0, origin.1, size, id, color, &run.text, angle)?;
                 }
-                TextRunFont::Standard(font) => pg.text_rotated(Point::new(origin.0, origin.1), size, font, color, &run.text, angle),
+                TextRunFont::Standard(font) => pg.text_rotated_with_direction_without_actual_text(
+                    Baseline { origin: super::Point::new(origin.0, origin.1), angle },
+                    size,
+                    font,
+                    color,
+                    &run.text,
+                    run.direction,
+                ),
             }
             origin = advance_text_baseline(origin.0, origin.1, run.width, angle);
         }
@@ -146,8 +213,26 @@ pub(super) fn draw_shaped_text(
     text: &str,
     angle: f32,
 ) -> std::result::Result<f32, String> {
-    let runs = shaped_runs(catalog, family, bold, italic, text, size)?;
-    draw_text_runs(pg, runs, x, y, size, color, angle)
+    draw_shaped_text_with_direction(pg, catalog, x, y, size, family, bold, italic, color, text, angle, TextDirection::Auto)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn draw_shaped_text_with_direction(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    x: f32,
+    y: f32,
+    size: f32,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    color: Rgb,
+    text: &str,
+    angle: f32,
+    direction: TextDirection,
+) -> std::result::Result<f32, String> {
+    let runs = shaped_runs_with_direction(catalog, family, bold, italic, text, size, direction)?;
+    draw_text_runs_with_semantics(pg, runs, text, x, y, size, color, angle)
 }
 
 /// Bracket a line-sized prefix before binary search. Every probe measures a complete run,
@@ -230,6 +315,7 @@ pub(super) fn fitting_candidate_count(
     Ok(low)
 }
 
+#[cfg(test)]
 pub(super) fn wrap_shaped(
     text: &str,
     catalog: &FontCatalog,
@@ -239,6 +325,20 @@ pub(super) fn wrap_shaped(
     size: f32,
     width: f32,
 ) -> std::result::Result<Vec<String>, String> {
+    Ok(wrap_shaped_with_direction(text, catalog, family, bold, italic, size, width, TextDirection::Auto)?.into_iter().map(|line| line.text).collect())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn wrap_shaped_with_direction(
+    text: &str,
+    catalog: &FontCatalog,
+    family: &str,
+    bold: bool,
+    italic: bool,
+    size: f32,
+    width: f32,
+    direction: TextDirection,
+) -> std::result::Result<Vec<TextLine>, String> {
     const MAX_GRAPHEMES_PER_LINE: usize = 8192;
 
     fn prefix_for_clusters(text: &str, limit: usize) -> (usize, usize) {
@@ -258,8 +358,9 @@ pub(super) fn wrap_shaped(
         std::mem::take(line)
     }
 
-    let mut out = Vec::new();
+    let mut out: Vec<TextLine> = Vec::new();
     for paragraph in text.split('\n') {
+        let paragraph_direction = direction.resolve(paragraph);
         let mut line = String::new();
         let mut line_clusters = 0usize;
         let mut words = paragraph.split_inclusive(char::is_whitespace).peekable();
@@ -267,7 +368,7 @@ pub(super) fn wrap_shaped(
             let mut remaining = word;
             while !remaining.is_empty() {
                 if line_clusters >= MAX_GRAPHEMES_PER_LINE {
-                    out.push(take_wrapped_line(&mut line));
+                    out.push(TextLine { text: take_wrapped_line(&mut line), direction: paragraph_direction });
                     line_clusters = 0;
                     if out.len() >= 2000 {
                         return Ok(out);
@@ -275,8 +376,9 @@ pub(super) fn wrap_shaped(
                 }
                 let capacity = MAX_GRAPHEMES_PER_LINE.saturating_sub(line_clusters);
                 if line.is_empty() {
-                    let (fit_end, fit_clusters) =
-                        fitting_text_prefix(remaining, capacity, width, |prefix| shaped_width(catalog, family, bold, italic, prefix, size))?;
+                    let (fit_end, fit_clusters) = fitting_text_prefix(remaining, capacity, width, |prefix| {
+                        shaped_width_with_direction(catalog, family, bold, italic, prefix, size, paragraph_direction)
+                    })?;
                     if fit_end == 0 || fit_clusters == 0 {
                         break;
                     }
@@ -286,7 +388,7 @@ pub(super) fn wrap_shaped(
                     line_clusters = fit_clusters;
                     remaining = remaining.get(fit_end..).unwrap_or_default();
                     if !remaining.is_empty() {
-                        out.push(take_wrapped_line(&mut line));
+                        out.push(TextLine { text: take_wrapped_line(&mut line), direction: paragraph_direction });
                         line_clusters = 0;
                     }
                     if out.len() >= 2000 {
@@ -326,10 +428,18 @@ pub(super) fn wrap_shaped(
                             let end = endpoints.get(count.saturating_sub(1)).map(|(end, _)| *end).unwrap_or(0);
                             let addition = additions.get(..end).ok_or("word boundary is outside wrapped PDF text")?;
                             let candidate = format!("{line}{addition}");
-                            shaped_width(catalog, family, bold, italic, candidate.trim_end_matches(char::is_whitespace), size)
+                            shaped_width_with_direction(
+                                catalog,
+                                family,
+                                bold,
+                                italic,
+                                candidate.trim_end_matches(char::is_whitespace),
+                                size,
+                                paragraph_direction,
+                            )
                         })?;
                         if fitting == 0 {
-                            out.push(take_wrapped_line(&mut line));
+                            out.push(TextLine { text: take_wrapped_line(&mut line), direction: paragraph_direction });
                             line_clusters = 0;
                             if out.len() >= 2000 {
                                 return Ok(out);
@@ -348,21 +458,29 @@ pub(super) fn wrap_shaped(
                     }
                 }
                 let candidate = format!("{line}{segment}");
-                let fits = shaped_width(catalog, family, bold, italic, candidate.trim_end_matches(char::is_whitespace), size)? <= width;
+                let fits = shaped_width_with_direction(
+                    catalog,
+                    family,
+                    bold,
+                    italic,
+                    candidate.trim_end_matches(char::is_whitespace),
+                    size,
+                    paragraph_direction,
+                )? <= width;
                 if fits {
                     line.push_str(segment);
                     line_clusters = combined_clusters;
                     remaining = remaining.get(segment_end..).unwrap_or_default();
                     continue;
                 }
-                out.push(take_wrapped_line(&mut line));
+                out.push(TextLine { text: take_wrapped_line(&mut line), direction: paragraph_direction });
                 line_clusters = 0;
                 if out.len() >= 2000 {
                     return Ok(out);
                 }
             }
         }
-        out.push(line);
+        out.push(TextLine { text: line, direction: paragraph_direction });
         if out.len() >= 2000 {
             return Ok(out);
         }

@@ -1,75 +1,214 @@
 use super::draw::{Block, Look, rgb_of};
-use super::text_unicode::{draw_shaped_text, shaped_extents, shaped_width, wrap_shaped};
-use super::{CellRef, Color, Font, FontCatalog, HAlign, MAX_COLS, Page, RangeRef, Sheet, StyleTable, Underline, VAlign, Value};
+use super::text_unicode::{
+    draw_shaped_text_with_direction, needs_unicode_text, shaped_lines_extents, shaped_width, shaped_width_with_direction, wrap_shaped_with_direction,
+};
+use super::{
+    Baseline, CellRef, Color, Font, FontCatalog, HAlign, MAX_COLS, Page, Point, RangeRef, ReadingOrder, Sheet, Style, StyleTable, TextDirection,
+    Underline, VAlign, Value,
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 const PAD_PX: f32 = 2.0;
 
 /// Most lines [`wrap_lines`] returns (it may return one more, the rest of a paragraph).
 const MAX_WRAP_LINES: usize = 2000;
 
-/// Word-wraps `text` to `width` points.
+pub(super) struct TextLine {
+    pub(super) text: String,
+    pub(super) direction: TextDirection,
+}
+
+/// Word-wraps `text` to `width` points, keeping each paragraph's base direction on every
+/// continuation line.
 ///
 /// Widths are kept as running sums of glyph widths (the sum `text_width` makes), so each
 /// character is measured once: re-measuring the line for every word, or the rest of an
 /// over-long word for every piece cut from it, made a long paragraph or word quadratic.
-pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32) -> Vec<String> {
-    let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(font.char_width(c))).sum() };
-    let fits = |units: u64| units as f32 * size / 1000.0 <= width;
-    let space = units_of(" ");
+/// A paragraph whose width is not that sum is measured as drawn by [`wrap_measured_paragraph`].
+pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32, direction: TextDirection) -> Vec<TextLine> {
     let mut out = Vec::new();
     for para in text.split('\n') {
-        let mut line = String::new();
-        let mut line_units: u64 = 0;
-        for word in para.split(' ') {
-            let word_units = units_of(word);
-            if line.is_empty() {
-                line.push_str(word);
-                line_units = word_units;
-            } else if fits(line_units + space + word_units) {
-                line.push(' ');
-                line.push_str(word);
-                line_units += space + word_units;
-            } else {
-                out.push(std::mem::take(&mut line));
-                line.push_str(word);
-                line_units = word_units;
-            }
-            // Break a single over-long word by characters: each piece is the longest that fits
-            // (at least one character).
-            if !fits(line_units) && line.chars().nth(1).is_some() {
-                let mut piece = String::new();
-                let mut units: u64 = 0;
-                for c in line.chars() {
-                    let w = u64::from(font.char_width(c));
-                    if !piece.is_empty() && !fits(units + w) {
-                        out.push(std::mem::take(&mut piece));
-                        units = 0;
-                        if out.len() > MAX_WRAP_LINES {
-                            return out;
-                        }
-                    }
-                    piece.push(c);
-                    units += w;
-                }
-                line = piece;
-                line_units = units;
-            }
-            if out.len() > MAX_WRAP_LINES {
-                return out;
-            }
+        let direction = direction.resolve(para);
+        if gridcraft_pdf::width_is_char_sum(font, para, direction) {
+            wrap_summed_paragraph(para, font, size, width, direction, &mut out);
+        } else {
+            let fits = |s: &str| gridcraft_pdf::text_width_with_direction(font, size, s, direction) <= width;
+            wrap_measured_paragraph(para, &fits, direction, &mut out);
         }
-        out.push(line);
+        if out.len() > MAX_WRAP_LINES {
+            return out;
+        }
     }
     out
 }
 
-fn text_align(align: HAlign, value: &Value) -> HAlign {
+fn wrap_summed_paragraph(para: &str, font: Font, size: f32, width: f32, direction: TextDirection, out: &mut Vec<TextLine>) {
+    let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(font.char_width(c))).sum() };
+    let fits = |units: u64| units as f32 * size / 1000.0 <= width;
+    let space = units_of(" ");
+    let mut line = String::new();
+    let mut line_units: u64 = 0;
+    for word in para.split(' ') {
+        let word_units = units_of(word);
+        if line.is_empty() {
+            line.push_str(word);
+            line_units = word_units;
+        } else if fits(line_units + space + word_units) {
+            line.push(' ');
+            line.push_str(word);
+            line_units += space + word_units;
+        } else {
+            out.push(TextLine { text: std::mem::take(&mut line), direction });
+            line.push_str(word);
+            line_units = word_units;
+        }
+        if !fits(line_units) && line.graphemes(true).nth(1).is_some() {
+            let mut piece = String::new();
+            let mut units: u64 = 0;
+            for g in line.graphemes(true) {
+                let w = units_of(g);
+                if !piece.is_empty() && !fits(units + w) {
+                    out.push(TextLine { text: std::mem::take(&mut piece), direction });
+                    units = 0;
+                    if out.len() > MAX_WRAP_LINES {
+                        return;
+                    }
+                }
+                piece.push_str(g);
+                units += w;
+            }
+            line = piece;
+            line_units = units;
+        }
+        if out.len() > MAX_WRAP_LINES {
+            return;
+        }
+    }
+    out.push(TextLine { text: line, direction });
+}
+
+/// One paragraph of [`wrap_lines`] whose width is not a sum of character widths (shaped Arabic,
+/// right-to-left reordering or bidi controls), measuring each candidate line as drawn.
+fn wrap_measured_paragraph(para: &str, fits: &impl Fn(&str) -> bool, direction: TextDirection, out: &mut Vec<TextLine>) {
+    let mut line = String::new();
+    for word in para.split(' ') {
+        if !line.is_empty() {
+            let candidate = format!("{line} {word}");
+            if fits(&candidate) {
+                line = candidate;
+                continue;
+            }
+            out.push(TextLine { text: std::mem::take(&mut line), direction });
+        }
+        line = if fits(word) { word.to_string() } else { break_measured_word(word, fits, direction, out) };
+        if out.len() > MAX_WRAP_LINES {
+            return;
+        }
+    }
+    out.push(TextLine { text: line, direction });
+}
+
+/// Cuts `word` into the longest grapheme prefixes that fit (at least one grapheme each), pushes
+/// all but the last to `out` and returns the last. Each cut gallops from one grapheme, so it
+/// measures prefixes about as long as the piece rather than the rest of the word.
+fn break_measured_word(word: &str, fits: &impl Fn(&str) -> bool, direction: TextDirection, out: &mut Vec<TextLine>) -> String {
+    let ends: Vec<usize> = word.grapheme_indices(true).map(|(i, g)| i + g.len()).collect();
+    let (mut start, mut first) = (0, 0);
+    loop {
+        let len = ends.len().saturating_sub(first);
+        let end = |count: usize| ends.get(first + count.saturating_sub(1)).copied().unwrap_or(word.len());
+        let fits_prefix = |count: usize| fits(word.get(start..end(count)).unwrap_or_default());
+        let (mut fit, mut over, mut probe) = (1, len + 1, 2);
+        while fit < len {
+            let count = probe.min(len);
+            if fits_prefix(count) {
+                fit = count;
+                probe = count.saturating_mul(2);
+            } else {
+                over = count;
+                break;
+            }
+        }
+        if fit >= len {
+            return word.get(start..).unwrap_or_default().to_string();
+        }
+        while over - fit > 1 {
+            let mid = fit + (over - fit) / 2;
+            if fits_prefix(mid) {
+                fit = mid;
+            } else {
+                over = mid;
+            }
+        }
+        let cut = end(fit);
+        out.push(TextLine { text: word.get(start..cut).unwrap_or_default().to_string(), direction });
+        start = cut;
+        first += fit;
+        if out.len() > MAX_WRAP_LINES {
+            return word.get(start..).unwrap_or_default().to_string();
+        }
+    }
+}
+
+fn text_direction(order: ReadingOrder) -> TextDirection {
+    match order {
+        ReadingOrder::Context => TextDirection::Context,
+        ReadingOrder::LeftToRight => TextDirection::LeftToRight,
+        ReadingOrder::RightToLeft => TextDirection::RightToLeft,
+    }
+}
+
+fn font_for(style: &Style) -> Font {
+    Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text_line(
+    pg: &mut Page,
+    catalog: &FontCatalog,
+    style: &Style,
+    x: f32,
+    y: f32,
+    size: f32,
+    color: [u8; 3],
+    text: &str,
+    angle: f32,
+    direction: TextDirection,
+) -> Result<(), String> {
+    let has_requested_face = catalog.family_face_for(&style.font.name, style.font.bold, style.font.italic, text).is_ok();
+    if needs_unicode_text(text) || has_requested_face {
+        draw_shaped_text_with_direction(
+            pg,
+            catalog,
+            x,
+            y,
+            size,
+            &style.font.name,
+            style.font.bold,
+            style.font.italic,
+            color,
+            text,
+            angle,
+            direction,
+        )?;
+    } else {
+        pg.text_rotated_with_direction(Baseline { origin: Point::new(x, y), angle }, size, font_for(style), color, text, direction);
+    }
+    Ok(())
+}
+
+/// The alignment a cell is laid out with before a right-to-left sheet is mirrored. Explicit Left
+/// and Right are swapped there, as in the grid, so they print on the side the user chose.
+fn text_align(align: HAlign, value: &Value, direction: TextDirection, right_to_left_sheet: bool) -> HAlign {
     match align {
         HAlign::General => match value {
             Value::Number(_) => HAlign::Right,
             Value::Bool(_) | Value::Error(_) => HAlign::Center,
+            _ if direction == TextDirection::RightToLeft && !right_to_left_sheet => HAlign::Right,
             _ => HAlign::Left,
         },
+        HAlign::Left if right_to_left_sheet => HAlign::Right,
+        HAlign::Right if right_to_left_sheet => HAlign::Left,
         HAlign::CenterAcross | HAlign::Distributed => HAlign::Center,
         HAlign::Justify | HAlign::Fill => HAlign::Left,
         other => other,
@@ -179,7 +318,8 @@ pub(super) fn draw_text(pg: &mut Page, catalog: &FontCatalog, b: &Block, placeme
     if text.is_empty() {
         return Ok(());
     }
-    let measure = |text: &str, size: f32| shaped_width(catalog, &st.font.name, st.font.bold, st.font.italic, text, size);
+    let direction = text_direction(st.align.reading_order.unwrap_or_default()).resolve(&text);
+    let measure = |text: &str, size: f32| shaped_width_with_direction(catalog, &st.font.name, st.font.bold, st.font.italic, text, size, direction);
     let mut tw = measure(&text, size)?;
     if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
@@ -190,23 +330,33 @@ pub(super) fn draw_text(pg: &mut Page, catalog: &FontCatalog, b: &Block, placeme
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = measure(&text, size)?;
     }
-    let h_align = text_align(st.align.h, &v);
+    let h_align = text_align(st.align.h, &v, direction, sh.right_to_left);
     let rot = st.align.rotation;
     let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
-    let lines: Vec<String> = match (wrap, rotated) {
-        (true, false) => wrap_shaped(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, avail.max(size))?,
-        (true, true) if rot.abs() == 90 => wrap_shaped(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, (h - 2.0 * pad).max(size))?,
-        (true, true) => vec![text.lines().next().unwrap_or_default().to_string()],
-        (false, _) => vec![text],
+    let lines: Vec<TextLine> = match (wrap, rotated) {
+        (true, false) => wrap_shaped_with_direction(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, avail.max(size), direction)?,
+        (true, true) if rot.abs() == 90 => {
+            wrap_shaped_with_direction(&text, catalog, &st.font.name, st.font.bold, st.font.italic, size, (h - 2.0 * pad).max(size), direction)?
+        }
+        (true, true) => vec![TextLine { text: text.lines().next().unwrap_or_default().to_string(), direction }],
+        (false, _) => vec![TextLine { text, direction }],
     };
-    let (line_above, line_below) = shaped_extents(catalog, &st.font.name, st.font.bold, st.font.italic, &lines.concat(), size)?;
-    let line_h = (size * 1.2).max(line_above + line_below);
+    let extents = shaped_lines_extents(pg, catalog, &st.font.name, st.font.bold, st.font.italic, &lines, size)?;
+    let line_h = extents.map_or(size * 1.2, |(ascent, descent)| (ascent + descent + size * 0.2).max(size * 1.2));
     let n = lines.len().max(1) as f32;
-    let first_baseline = match st.align.v {
-        VAlign::Top => y + pad + line_above,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_above,
-        VAlign::Bottom => y + h - pad - line_below - (n - 1.0) * line_h,
+    let first_baseline = if let Some((ascent, descent)) = extents {
+        match st.align.v {
+            VAlign::Top => y + pad + ascent,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
+            VAlign::Bottom => y + h - pad - descent - (n - 1.0) * line_h,
+        }
+    } else {
+        match st.align.v {
+            VAlign::Top => y + pad + size * 0.8,
+            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
+        }
     };
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
@@ -220,7 +370,7 @@ pub(super) fn draw_text(pg: &mut Page, catalog: &FontCatalog, b: &Block, placeme
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
     pg.save();
-    pg.clip_rect(clip_l, y, (clip_r - clip_l).max(0.0), h);
+    pg.clip_rect(b.text_x(clip_l, clip_r - clip_l), y, (clip_r - clip_l).max(0.0), h);
     if rotated {
         // Rotated text: anchored at the bottom-left (upward) or top-left (downward) of the cell.
         // Wrapped lines stack rightward for upward text and leftward for downward text, so
@@ -231,23 +381,28 @@ pub(super) fn draw_text(pg: &mut Page, catalog: &FontCatalog, b: &Block, placeme
         for (i, t) in lines.iter().enumerate() {
             let i = i as f32;
             let (ox, oy) = if deg > 0.0 {
-                (x + pad + size * 0.8 * deg.to_radians().sin() + i * line_h, y + h - pad)
+                (x + pad + extents.map_or(size * 0.8, |e| e.0) * deg.to_radians().sin() + i * line_h, y + h - pad)
             } else {
-                (x + pad + (last - i) * line_h, y + pad + size * 0.8)
+                (x + pad + (last - i) * line_h, y + pad + extents.map_or(size * 0.8, |e| e.0))
             };
-            draw_shaped_text(pg, catalog, ox, oy, size, &st.font.name, st.font.bold, st.font.italic, color, t, angle)?;
+            let tw = measure(&t.text, size)?;
+            let (sn, cs) = angle.sin_cos();
+            let (ascent, descent) = extents.unwrap_or((size * 0.8, size * 0.22));
+            let ox = if sh.right_to_left { b.mirror_axis - ox - tw * cs - (ascent - descent) * sn } else { ox };
+            draw_text_line(pg, catalog, st, ox, oy, size, color, &t.text, angle, t.direction)?;
         }
         pg.restore();
         return Ok(());
     }
     if rot == 255 {
         // Vertical stacked text.
-        let vertical_text = lines.concat();
+        let vertical_text = lines.iter().map(|line| line.text.as_str()).collect::<String>();
         let chars: Vec<&str> = gridcraft_pdf::text_clusters(&vertical_text).take(500).map(|(_, cluster)| cluster).collect();
-        let mut yy = y + pad + size * 0.8;
+        let mut yy = y + pad + extents.map_or(size * 0.8, |extent| extent.0);
         for ch in chars {
             let cw = measure(ch, size)?;
-            draw_shaped_text(pg, catalog, x + (w - cw) / 2.0, yy, size, &st.font.name, st.font.bold, st.font.italic, color, ch, 0.0)?;
+            let line_x = b.text_x(x + (w - cw) / 2.0, cw);
+            draw_text_line(pg, catalog, st, line_x, yy, size, color, ch, 0.0, direction)?;
             yy += line_h;
             if yy > y + h + line_h {
                 break;
@@ -257,7 +412,7 @@ pub(super) fn draw_text(pg: &mut Page, catalog: &FontCatalog, b: &Block, placeme
         return Ok(());
     }
     for (i, line) in lines.iter().enumerate() {
-        let lw = measure(line, size)?;
+        let lw = measure(&line.text, size)?;
         let lx = match h_align {
             HAlign::Right => x + w - pad - lw - indent,
             HAlign::Center => x + (w + across - lw) / 2.0,
@@ -267,7 +422,8 @@ pub(super) fn draw_text(pg: &mut Page, catalog: &FontCatalog, b: &Block, placeme
         if ly - size > y + h || ly < y - line_h {
             continue;
         }
-        draw_shaped_text(pg, catalog, lx, ly, size, &st.font.name, st.font.bold, st.font.italic, color, line, 0.0)?;
+        let lx = b.text_x(lx, lw);
+        draw_text_line(pg, catalog, st, lx, ly, size, color, &line.text, 0.0, line.direction)?;
         if st.font.underline != Underline::None {
             let uw = (size * 0.06).max(0.2);
             pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);

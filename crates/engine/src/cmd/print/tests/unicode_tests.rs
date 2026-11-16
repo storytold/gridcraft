@@ -1,4 +1,4 @@
-use super::super::text_unicode::{TextRun, TextRunFont, draw_text_runs};
+use super::super::text_unicode::{TextRun, TextRunFont, draw_shaped_text_with_direction, draw_text_runs, shaped_runs_with_direction};
 use super::*;
 
 fn thai_catalog() -> Option<(FontCatalog, PdfFont)> {
@@ -240,7 +240,7 @@ fn long_unspaced_thai_wrapping_preserves_text_and_reports_time() {
         session.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
         session.execute("home.columnWidth", json!({"cols": "A:A", "chars": 20})).unwrap();
         let start = std::time::Instant::now();
-        let (pdf, _) = build_pdf(&session, &json!({}), "file.exportPdf").unwrap();
+        let (pdf, _) = build_pdf(&mut session, &json!({}), "file.exportPdf").unwrap();
         eprintln!("exported one wrapped cell with {count} Thai characters in {:?}", start.elapsed());
         assert!(contains(&pdf, "/FontFile2") && contains(&pdf, "/ToUnicode"));
     }
@@ -306,16 +306,19 @@ fn serialized_mixed_font_runs_share_rotated_baselines() {
                 font: TextRunFont::Standard(Font::Helvetica),
                 text: latin_before.to_string(),
                 width: gridcraft_pdf::text_width(Font::Helvetica, size, latin_before),
+                direction: TextDirection::LeftToRight,
             },
             TextRun {
                 font: TextRunFont::Embedded(embedded.clone()),
                 text: thai.to_string(),
                 width: embedded.text_width(thai, size).expect("validated font width"),
+                direction: TextDirection::LeftToRight,
             },
             TextRun {
                 font: TextRunFont::Standard(Font::Helvetica),
                 text: latin_after.to_string(),
                 width: gridcraft_pdf::text_width(Font::Helvetica, size, latin_after),
+                direction: TextDirection::LeftToRight,
             },
         ]
     };
@@ -333,7 +336,7 @@ fn serialized_mixed_font_runs_share_rotated_baselines() {
         let page = doc.add_page(200.0, 300.0);
         let width = draw_text_runs(page, runs(), 20.0, 40.0, size, [0, 0, 0], angle).expect("runs render");
         assert!((width - total_width).abs() < 0.001, "returned width stays on baseline at {degrees} degrees");
-        let pdf = doc.finish();
+        let pdf = doc.finish().expect("the mixed-font PDF is valid");
         assert_eq!(
             pdf.windows(b"/ActualText".len()).filter(|window| *window == b"/ActualText").count(),
             1,
@@ -368,6 +371,39 @@ fn serialized_mixed_font_runs_share_rotated_baselines() {
 }
 
 #[test]
+fn mixed_thai_arabic_english_keeps_bidi_and_one_logical_text_span() {
+    let catalog = FontCatalog::bundled();
+    let text = "Total ภาษาไทย مرحبا 123 OK";
+    let runs = shaped_runs_with_direction(&catalog, "Calibri", false, false, text, 12.0, TextDirection::Auto)
+        .expect("mixed Thai, Arabic, and English should be assigned to supported PDF font paths");
+    assert!(
+        runs.iter().any(|run| run.text.contains("ภาษาไทย") && matches!(&run.font, TextRunFont::Embedded(_))),
+        "Thai uses the subset font pipeline"
+    );
+    assert!(
+        runs.iter().any(|run| {
+            run.text.contains("مرحبا") && run.direction == TextDirection::RightToLeft && matches!(&run.font, TextRunFont::Standard(_))
+        }),
+        "Arabic remains in the Type3 shaping and bidi pipeline"
+    );
+
+    let mut doc = PdfDoc::new();
+    let page = doc.add_page(300.0, 100.0);
+    draw_shaped_text_with_direction(page, &catalog, 20.0, 40.0, 12.0, "Calibri", false, false, [0, 0, 0], text, 0.0, TextDirection::Auto)
+        .expect("mixed-script text should draw");
+    assert!(!doc.missing_arabic_font(), "the pinned craft-fonts bundle supplies the Arabic outline");
+    let pdf = doc.finish().expect("mixed-script PDF should serialize");
+    assert!(contains(&pdf, "/Subtype /Type3"), "Arabic keeps its Type3 subset resource");
+    assert!(contains(&pdf, "/FontFile2"), "Thai uses a TrueType subset resource");
+    assert!(has_actual_text(&pdf, text), "extraction keeps the original logical Unicode string");
+    assert_eq!(
+        pdf.windows(b"/ActualText".len()).filter(|window| *window == b"/ActualText").count(),
+        1,
+        "mixed font and bidi runs must share one semantic replacement span"
+    );
+}
+
+#[test]
 fn unicode_drawing_paths_use_supplied_faces_and_preserve_standard_latin() {
     let mut catalog = FontCatalog::empty();
     // An original generated face covers Greek, without depending on installed fonts.
@@ -390,7 +426,7 @@ fn unicode_drawing_paths_use_supplied_faces_and_preserve_standard_latin() {
                     rotation: 0.0,
                 };
                 draw_prims(pg, &catalog, &[prim], Xf { ox: 0.0, oy: 0.0, k: 1.0 }).unwrap();
-                doc.finish()
+                doc.finish().unwrap()
             } else {
                 let mut session = s();
                 session.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
@@ -402,7 +438,7 @@ fn unicode_drawing_paths_use_supplied_faces_and_preserve_standard_latin() {
                 let document = session.doc().unwrap();
                 let opts = PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap();
                 let lays = layouts(&document.wb, &opts);
-                render_pdf_with_catalog(&document.wb, &lays, "Book1", "", &catalog).unwrap().0
+                render_pdf_with_catalog(&document.wb, &lays, "Book1", "", &catalog).unwrap().bytes
             };
             if text == "Ω" {
                 assert!(contains(&pdf, "/FontFile2"), "{path} must embed the supplied Unicode face");
@@ -457,7 +493,7 @@ fn api_and_print_pipeline_embed_and_shape_thai_text() {
     let d = s.doc().unwrap();
     let opts = PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap();
     let lays = layouts(&d.wb, &opts);
-    let (fallback, _) = render_pdf_with_catalog(&d.wb, &lays, "Book1", "", &FontCatalog::empty()).unwrap();
+    let fallback = render_pdf_with_catalog(&d.wb, &lays, "Book1", "", &FontCatalog::empty()).unwrap().bytes;
     assert!(!contains(&fallback, "/FontFile2"));
     assert!(!contains(&fallback, "/ToUnicode"), "the predefined CID fallback needs no embedded-font CMap");
     assert!(has_actual_text(&fallback, "ภาษาไทย"), "export without a Thai font preserves the logical text and succeeds");
@@ -528,14 +564,14 @@ fn supplied_pdf_font_size_errors_identify_the_limit() {
     assert_eq!(checked_pdf_font_total(64 * MIB, 1), Err("supplied PDF font data exceeds the 64 MiB total limit"));
     assert_eq!(checked_pdf_font_total(usize::MAX, 1), Err("supplied font data size overflow"));
 
-    let session = s();
+    let mut session = s();
     let mut params = json!({"pdfFonts": [{"base64": "A".repeat(48 * MIB + 1)}]});
-    let error = build_pdf(&session, &params, "file.exportPdf").unwrap_err().to_string();
+    let error = build_pdf(&mut session, &params, "file.exportPdf").unwrap_err().to_string();
     assert!(error.contains("48 MiB encoded"), "the pre-decode limit names the encoded size: {error}");
     if let Json::String(encoded) = &mut params["pdfFonts"][0]["base64"] {
         encoded.pop();
     }
-    let error = build_pdf(&session, &params, "file.exportPdf").unwrap_err().to_string();
+    let error = build_pdf(&mut session, &params, "file.exportPdf").unwrap_err().to_string();
     assert!(error.contains("32 MiB decoded"), "an encoded string at the limit reaches the separate decoded-size check: {error}");
 }
 

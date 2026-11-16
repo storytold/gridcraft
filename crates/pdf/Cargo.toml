@@ -3,17 +3,25 @@ name = "gridcraft-pdf"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "GridCraft PDF 1.7 writer with shaped Unicode TrueType text, standard fonts, vector drawing and RGBA images"
+description = "GridCraft PDF 1.7 writer with shaped Arabic and Unicode TrueType text, standard fonts, vector drawing and RGBA images"
 readme = "README.md"
 
 [lints]
 workspace = true
 
 [dependencies]
-harfrust = "0.12"
+craft-stream-codecs.workspace = true
+harfrust = "=0.12.0"
 subsetter = { version = "0.2.6", default-features = false }
+skrifa = { workspace = true }
 ttf-parser = "0.25"
+unicode-bidi = "=0.3.18"
 unicode-segmentation = "1.13"
 
 [build-dependencies]
+sha2 = { workspace = true }
+skrifa = { workspace = true }
 ttf-parser = "0.25"
+
+[dev-dependencies]
+sha2.workspace = true

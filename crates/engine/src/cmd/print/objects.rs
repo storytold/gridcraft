@@ -1,7 +1,7 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
-use super::text::wrap_lines;
-use super::text_unicode::{draw_shaped_text, needs_unicode_text, shaped_width, wrap_shaped};
-use super::{Anchor, Font, FontCatalog, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::text::{TextLine, wrap_lines};
+use super::text_unicode::{draw_shaped_text_with_direction, needs_unicode_text, shaped_width_with_direction, wrap_shaped_with_direction};
+use super::{Anchor, Font, FontCatalog, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -85,9 +85,11 @@ pub(super) fn draw_objects(
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
-    let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
+    let place = |r: (f64, f64, f64, f64)| {
+        (b.text_x(bx + ((r.0 - sx0) as f32) * b.k, r.2 as f32 * b.k), by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k)
+    };
     pg.save();
-    pg.clip_rect(bx, by, bw, bh);
+    pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     draw_sparklines(pg, catalog, wb, si, sh, b, block)?;
     for (imi, im) in sh.images.iter().enumerate() {
         let r = anchor_rect(sh, &im.anchor);
@@ -163,9 +165,19 @@ fn draw_sparklines(pg: &mut Page, catalog: &FontCatalog, wb: &Workbook, si: usiz
             v => vec![v.as_f64()],
         };
         let color = rgb_of(sp.color, wb).unwrap_or([0x15, 0x60, 0x82]);
-        let (x, y, w, h) = b.rect(RangeRef::cell(sp.cell));
+        let (x, y, w, h) = b.drawn_rect(RangeRef::cell(sp.cell));
         let (wpx, hpx) = (w / b.k, h / b.k);
-        let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        let mut prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        if sh.right_to_left {
+            for prim in &mut prims {
+                match prim {
+                    gridcraft_chart::Prim::Rect { x, w, .. } => *x = wpx - *x - *w,
+                    gridcraft_chart::Prim::Line { pts, .. } => pts.iter_mut().for_each(|p| p[0] = wpx - p[0]),
+                    gridcraft_chart::Prim::Circle { cx, .. } => *cx = wpx - *cx,
+                    _ => {}
+                }
+            }
+        }
         draw_prims(pg, catalog, &prims, Xf { ox: x, oy: y, k: b.k })?;
     }
     Ok(())
@@ -218,11 +230,12 @@ fn draw_shape(
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
+    let direction = TextDirection::Auto.resolve(&shp.text);
     let unicode = needs_unicode_text(&shp.text);
-    let lines = if unicode {
-        wrap_shaped(&shp.text, catalog, family, fm.bold, fm.italic, size, (w - 4.0 * b.k).max(size))?
+    let lines: Vec<TextLine> = if unicode {
+        wrap_shaped_with_direction(&shp.text, catalog, family, fm.bold, fm.italic, size, (w - 4.0 * b.k).max(size), direction)?
     } else {
-        wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size))
+        wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size), direction)
     };
     let block_h = lines.len().min(500) as f32 * size * 1.2;
     let mut yy = match anchor {
@@ -231,7 +244,11 @@ fn draw_shape(
         ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
     } + size * 0.8;
     for l in lines.iter().take(500) {
-        let lw = if unicode { shaped_width(catalog, family, fm.bold, fm.italic, l, size)? } else { gridcraft_pdf::text_width(font, size, l) };
+        let lw = if unicode {
+            shaped_width_with_direction(catalog, family, fm.bold, fm.italic, &l.text, size, l.direction)?
+        } else {
+            gridcraft_pdf::text_width_with_direction(font, size, &l.text, l.direction)
+        };
         let lx = match align {
             ShapeTextAlign::Left => x + 2.0 * b.k,
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
@@ -241,9 +258,9 @@ fn draw_shape(
         if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
             let off = (size * 0.06).max(0.5);
             if unicode {
-                draw_shaped_text(pg, catalog, lx + off, yy + off, size, family, fm.bold, fm.italic, sc, l, 0.0)?;
+                draw_shaped_text_with_direction(pg, catalog, lx + off, yy + off, size, family, fm.bold, fm.italic, sc, &l.text, 0.0, l.direction)?;
             } else {
-                pg.text(lx + off, yy + off, size, font, sc, l);
+                pg.text_with_direction(Point::new(lx + off, yy + off), size, font, sc, &l.text, l.direction);
             }
         }
         // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
@@ -254,16 +271,29 @@ fn draw_shape(
             let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
             for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
                 if unicode {
-                    draw_shaped_text(pg, catalog, lx + dx * d, yy + dy * d, size, family, fm.bold, fm.italic, oc, l, 0.0)?;
+                    draw_shaped_text_with_direction(
+                        pg,
+                        catalog,
+                        lx + dx * d,
+                        yy + dy * d,
+                        size,
+                        family,
+                        fm.bold,
+                        fm.italic,
+                        oc,
+                        &l.text,
+                        0.0,
+                        l.direction,
+                    )?;
                 } else {
-                    pg.text(lx + dx * d, yy + dy * d, size, font, oc, l);
+                    pg.text_with_direction(Point::new(lx + dx * d, yy + dy * d), size, font, oc, &l.text, l.direction);
                 }
             }
         }
         if unicode {
-            draw_shaped_text(pg, catalog, lx, yy, size, family, fm.bold, fm.italic, color, l, 0.0)?;
+            draw_shaped_text_with_direction(pg, catalog, lx, yy, size, family, fm.bold, fm.italic, color, &l.text, 0.0, l.direction)?;
         } else {
-            pg.text(lx, yy, size, font, color, l);
+            pg.text_with_direction(Point::new(lx, yy), size, font, color, &l.text, l.direction);
         }
         yy += size * 1.2;
     }
