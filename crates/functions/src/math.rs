@@ -202,8 +202,10 @@ fn rounddown(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn trunc(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(round_dir(num(a, 0)?, digits_arg(a, 1)?, false))
 }
+/// INT rounds down what Excel keeps of the number, its 15 significant digits, as FLOOR.MATH does:
+/// `3-2^-51` is 3, not 2, and `-3-2^-51` is -3 (#4291).
 fn int_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    unary(a, |x| Ok(x.floor()))
+    unary(a, |x| Ok(clean(x).floor()))
 }
 
 fn mround(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
