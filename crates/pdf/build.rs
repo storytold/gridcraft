@@ -19,12 +19,12 @@ fn main() -> Result<(), String> {
     let required = !wasm && env::var_os("CRAFT_FONTS_REQUIRED").is_some();
     let thai_required = !wasm && env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_some();
     let configured = if wasm { None } else { env::var_os("CRAFT_FONTS_DIR").map(PathBuf::from) };
-    let root = match configured {
-        Some(path) => match path.canonicalize() {
-            Ok(root) => Some(root),
-            Err(error) if required || thai_required => return Err(format!("CRAFT_FONTS_DIR={}: {error}", path.display())),
+    let bundle = match configured {
+        Some(path) => match load_bundle(&path) {
+            Ok(bundle) => Some(bundle),
+            Err(error) if required || thai_required => return Err(error),
             Err(error) => {
-                println!("cargo:warning=building without craft-fonts: CRAFT_FONTS_DIR={}: {error}", path.display());
+                println!("cargo:warning=building without craft-fonts: {error}");
                 None
             }
         },
@@ -32,8 +32,8 @@ fn main() -> Result<(), String> {
         None => None,
     };
 
-    let arabic = match root.as_deref() {
-        Some(root) => arabic_font_entries(root),
+    let arabic = match &bundle {
+        Some((root, entries)) => arabic_font_entries(root, entries),
         None => Ok(String::new()),
     };
     let arabic = match arabic {
@@ -49,8 +49,8 @@ fn main() -> Result<(), String> {
     // The web UI owns its font budget. PDF faces are supplied per export through `pdfFonts`,
     // so this crate must not add the desktop font manifest to the WASM binary.
     let mut catalog = String::from("pub const CRAFT_FONTS: &[(&str, &[u8])] = &[];\n");
-    if let Some(root) = root.as_deref() {
-        match generated_catalog(root) {
+    if let Some((root, entries)) = &bundle {
+        match generated_catalog(root, entries) {
             Ok(generated) => catalog = generated,
             Err(error) if required || thai_required => return Err(error),
             Err(error) => println!("cargo:warning=building without bundled TrueType PDF fonts: {error}"),
@@ -65,42 +65,75 @@ fn write_generated(file: &str, contents: String) -> Result<(), String> {
     fs::write(&out, contents).map_err(|error| format!("writing {}: {error}", out.display()))
 }
 
-/// Embed only Arabic fallback faces from the optional, separately licensed font bundle.
-fn arabic_font_entries(root: &Path) -> Result<String, String> {
-    use skrifa::MetadataProvider;
+struct ManifestEntry {
+    line_number: usize,
+    family: String,
+    style: String,
+    file: String,
+    scripts: String,
+    licence_file: String,
+    checksum: String,
+}
 
+fn load_bundle(path: &Path) -> Result<(PathBuf, Vec<ManifestEntry>), String> {
+    let root = path.canonicalize().map_err(|error| format!("CRAFT_FONTS_DIR={}: {error}", path.display()))?;
     let manifest = root.join("fonts/manifest.txt");
     println!("cargo:rerun-if-changed={}", manifest.display());
-    let text = String::from_utf8(read_font_input(&manifest, 1 << 20)?).map_err(|error| error.to_string())?;
-    let mut out = String::new();
-    let mut has_regular = false;
-    for (line_number, line) in text.lines().enumerate() {
+    let text = String::from_utf8(read_font_input(&manifest, 1 << 20)?).map_err(|error| format!("{}: {error}", manifest.display()))?;
+    let mut entries = Vec::new();
+    for (index, line) in text.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
+        let line_number = index + 1;
         let fields: Vec<_> = line.split(" | ").map(str::trim).collect();
         let [family, style, file, scripts, _licence, licence_file, checksum, _source] = fields.as_slice() else {
-            return Err(format!("malformed craft-fonts manifest line {}", line_number + 1));
+            return Err(format!("{}:{line_number}: expected eight manifest fields separated by a pipe delimiter", manifest.display()));
         };
-        if !scripts.split(',').any(|script| script.trim() == "Arab") {
-            continue;
-        }
-        let path = checked_manifest_path(root, file, line_number + 1)?;
-        let licence = checked_manifest_path(root, licence_file, line_number + 1)?;
+        entries.push(ManifestEntry {
+            line_number,
+            family: family.to_string(),
+            style: style.to_string(),
+            file: file.to_string(),
+            scripts: scripts.to_string(),
+            licence_file: licence_file.to_string(),
+            checksum: checksum.to_string(),
+        });
+    }
+    Ok((root, entries))
+}
+
+impl ManifestEntry {
+    fn read_font(&self, root: &Path) -> Result<(PathBuf, Vec<u8>), String> {
+        let path = checked_manifest_path(root, &self.file, self.line_number)?;
+        let licence = checked_manifest_path(root, &self.licence_file, self.line_number)?;
         println!("cargo:rerun-if-changed={}", path.display());
         println!("cargo:rerun-if-changed={}", licence.display());
         let bytes = read_font_input(&path, MAX_FONT_BYTES)?;
-        if sha256(&bytes) != *checksum {
-            return Err(format!("checksum mismatch for {file}"));
+        if sha256(&bytes) != self.checksum {
+            return Err(format!("checksum mismatch for {}", self.file));
         }
+        Ok((path, bytes))
+    }
+}
+
+/// Embed only Arabic fallback faces from the optional, separately licensed font bundle.
+fn arabic_font_entries(root: &Path, entries: &[ManifestEntry]) -> Result<String, String> {
+    use skrifa::MetadataProvider;
+
+    let mut out = String::new();
+    let mut has_regular = false;
+    for entry in entries.iter().filter(|entry| entry.scripts.split(',').any(|script| script.trim() == "Arab")) {
+        let (path, bytes) = entry.read_font(root)?;
+        let ManifestEntry { family, style, file, .. } = entry;
         let font = skrifa::FontRef::from_index(&bytes, 0).map_err(|error| format!("invalid Arabic font {file}: {error:?}"))?;
         if !"العربية١٢٣".chars().all(|character| font.charmap().map(character).is_some()) {
             return Err(format!("{file} lacks Arabic glyphs"));
         }
         writeln!(out, "    ({:?}, include_bytes!({:?})),", format!("craft:{family}:{style}"), path)
             .map_err(|error| format!("generating Arabic font catalog: {error}"))?;
-        has_regular |= *style != "Bold";
+        has_regular |= style != "Bold";
     }
     if out.is_empty() {
         return Err("craft-fonts manifest contains no Arabic face; update the checkout".into());
@@ -140,34 +173,12 @@ fn has_truetype_outlines(bytes: &[u8]) -> bool {
     (1..=128).contains(&count) && (0..count).all(|index| ttf_parser::Face::parse(bytes, index).is_ok_and(|face| face.tables().glyf.is_some()))
 }
 
-fn manifest_fonts(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
-    let manifest = root.join("fonts/manifest.txt");
-    println!("cargo:rerun-if-changed={}", manifest.display());
-    let contents = read_font_input(&manifest, 1 << 20)?;
-    let contents = String::from_utf8(contents).map_err(|error| format!("{}: {error}", manifest.display()))?;
+fn manifest_fonts(root: &Path, entries: &[ManifestEntry]) -> Result<Vec<(String, PathBuf)>, String> {
     let mut fonts = Vec::new();
     let mut total_bytes = 0u64;
 
-    for (line_number, line) in contents.lines().enumerate() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let fields: Vec<_> = line.split(" | ").map(str::trim).collect();
-        let [_, _, file, scripts, _, licence_file, checksum, _] = fields.as_slice() else {
-            return Err(format!("{}:{}: expected eight manifest fields separated by a pipe delimiter", manifest.display(), line_number + 1));
-        };
-        if !bundled_scripts(scripts) {
-            continue;
-        }
-        let path = checked_manifest_path(root, file, line_number + 1)?;
-        let licence = checked_manifest_path(root, licence_file, line_number + 1)?;
-        println!("cargo:rerun-if-changed={}", path.display());
-        println!("cargo:rerun-if-changed={}", licence.display());
-        let bytes = read_font_input(&path, MAX_FONT_BYTES)?;
-        if sha256(&bytes) != *checksum {
-            return Err(format!("checksum mismatch for {file}"));
-        }
+    for entry in entries.iter().filter(|entry| bundled_scripts(&entry.scripts)) {
+        let (path, bytes) = entry.read_font(root)?;
         if !has_truetype_outlines(&bytes) {
             continue;
         }
@@ -175,7 +186,7 @@ fn manifest_fonts(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
         if total_bytes > MAX_FONT_BYTES {
             return Err(format!("fonts in the manifest exceed the {MAX_FONT_BYTES}-byte build limit"));
         }
-        fonts.push((file.to_string(), path));
+        fonts.push((entry.file.clone(), path));
         if fonts.len() > MAX_FONTS {
             return Err(format!("fonts/manifest.txt contains more than {MAX_FONTS} font files"));
         }
@@ -183,9 +194,9 @@ fn manifest_fonts(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(fonts)
 }
 
-fn generated_catalog(root: &Path) -> Result<String, String> {
+fn generated_catalog(root: &Path, entries: &[ManifestEntry]) -> Result<String, String> {
     let mut generated = String::from("pub const CRAFT_FONTS: &[(&str, &[u8])] = &[\n");
-    for (relative, path) in manifest_fonts(root)? {
+    for (relative, path) in manifest_fonts(root, entries)? {
         let absolute = path.to_string_lossy();
         writeln!(generated, "({relative:?}, include_bytes!({absolute:?})),").map_err(|error| format!("generating TrueType font catalog: {error}"))?;
     }
@@ -229,9 +240,9 @@ mod tests {
             assert!(env::var_os("GRIDCRAFT_REQUIRE_THAI_FONT").is_none(), "CI must exercise the font manifest filter");
             return;
         };
-        let root = PathBuf::from(root).canonicalize().expect("craft-fonts directory must exist");
-        let fonts = manifest_fonts(&root).expect("manifest fonts should validate");
-        let generated = generated_catalog(&root).expect("font catalog should generate");
+        let (root, entries) = load_bundle(Path::new(&root)).expect("craft-fonts manifest should load");
+        let fonts = manifest_fonts(&root, &entries).expect("manifest fonts should validate");
+        let generated = generated_catalog(&root, &entries).expect("font catalog should generate");
         for (relative, path) in fonts {
             assert!(has_truetype_outlines(&fs::read(path).expect("font should be readable")), "{relative}");
             assert!(generated.contains(&relative));

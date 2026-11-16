@@ -108,33 +108,27 @@ pub(super) fn shaped_width_with_direction(
     size: f32,
     direction: TextDirection,
 ) -> std::result::Result<f32, String> {
-    Ok(shaped_runs_with_direction(catalog, family, bold, italic, text, size, direction)?.iter().map(|run| run.width).sum())
+    Ok(runs_width(&shaped_runs_with_direction(catalog, family, bold, italic, text, size, direction)?))
 }
 
-pub(super) fn shaped_lines_extents(
-    pg: &mut Page,
-    catalog: &FontCatalog,
-    family: &str,
-    bold: bool,
-    italic: bool,
-    lines: &[TextLine],
-    size: f32,
-) -> std::result::Result<Option<(f32, f32)>, String> {
+pub(super) fn runs_width(runs: &[TextRun]) -> f32 {
+    runs.iter().map(|run| run.width).sum()
+}
+
+pub(super) fn shaped_lines_extents<'a>(pg: &mut Page, runs: impl Iterator<Item = &'a TextRun>, size: f32) -> Option<(f32, f32)> {
     let mut above: f32 = 0.0;
     let mut below: f32 = 0.0;
-    for line in lines {
-        for run in shaped_runs_with_direction(catalog, family, bold, italic, &line.text, size, line.direction)? {
-            let extents = match run.font {
-                TextRunFont::Embedded(font) => Some(font.vertical_extents(size)),
-                TextRunFont::Standard(font) => pg.text_vertical_extents_with_direction(font, size, &run.text, run.direction),
-            };
-            if let Some((ascent, descent)) = extents {
-                above = above.max(ascent);
-                below = below.max(descent);
-            }
+    for run in runs {
+        let extents = match &run.font {
+            TextRunFont::Embedded(font) => Some(font.vertical_extents(size)),
+            TextRunFont::Standard(font) => pg.text_vertical_extents_with_direction(*font, size, &run.text, run.direction),
+        };
+        if let Some((ascent, descent)) = extents {
+            above = above.max(ascent);
+            below = below.max(descent);
         }
     }
-    Ok((above > 0.0 || below > 0.0).then_some((above.max(size * 0.8), below.max(size * 0.22))))
+    (above > 0.0 || below > 0.0).then_some((above.max(size * 0.8), below.max(size * 0.22)))
 }
 
 /// Returns the next run's baseline origin after advancing along the rotated text baseline.
@@ -154,13 +148,13 @@ pub(super) fn draw_text_runs(
     angle: f32,
 ) -> std::result::Result<f32, String> {
     let semantic_text = runs.iter().map(|run| run.text.as_str()).collect::<String>();
-    draw_text_runs_with_semantics(pg, runs, &semantic_text, x, y, size, color, angle)
+    draw_text_runs_with_semantics(pg, &runs, &semantic_text, x, y, size, color, angle)
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_text_runs_with_semantics(
+pub(super) fn draw_text_runs_with_semantics(
     pg: &mut Page,
-    runs: Vec<TextRun>,
+    runs: &[TextRun],
     semantic_text: &str,
     x: f32,
     y: f32,
@@ -171,20 +165,20 @@ fn draw_text_runs_with_semantics(
     if runs.is_empty() {
         return Ok(0.0);
     }
-    let total_width = runs.iter().map(|run| run.width).sum();
+    let total_width = runs_width(runs);
     pg.begin_actual_text(semantic_text);
     let mut origin = (x, y);
     let result: std::result::Result<(), String> = (|| {
         for run in runs {
-            match run.font {
+            match &run.font {
                 TextRunFont::Embedded(font) => {
-                    let id = pg.register_unicode_font(font);
+                    let id = pg.register_unicode_font(font.clone());
                     pg.text_unicode_rotated_without_actual_text(origin.0, origin.1, size, id, color, &run.text, angle)?;
                 }
                 TextRunFont::Standard(font) => pg.text_rotated_with_direction_without_actual_text(
                     Baseline { origin: super::Point::new(origin.0, origin.1), angle },
                     size,
-                    font,
+                    *font,
                     color,
                     &run.text,
                     run.direction,
@@ -232,7 +226,7 @@ pub(super) fn draw_shaped_text_with_direction(
     direction: TextDirection,
 ) -> std::result::Result<f32, String> {
     let runs = shaped_runs_with_direction(catalog, family, bold, italic, text, size, direction)?;
-    draw_text_runs_with_semantics(pg, runs, text, x, y, size, color, angle)
+    draw_text_runs_with_semantics(pg, &runs, text, x, y, size, color, angle)
 }
 
 /// Bracket a line-sized prefix before binary search. Every probe measures a complete run,

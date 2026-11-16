@@ -1406,6 +1406,7 @@ fn subset_tags_are_deterministic_and_follow_the_glyph_set() {
     assert_ne!(tag(&first), tag(&one_run_document(&font, &shorter)), "a different glyph set gets a different tag");
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn faces_that_forbid_subsetting_or_fail_to_subset_are_embedded_whole() {
     let Some((mut font, text)) = any_face() else { return };

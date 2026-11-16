@@ -46,6 +46,7 @@ pub struct PdfFont {
     pub(crate) ascent: i16,
     pub(crate) descent: i16,
     pub(crate) bbox: [i16; 4],
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fs_type: u16,
     pub(crate) bold: bool,
     pub(crate) italic: bool,
@@ -157,6 +158,7 @@ impl PdfFont {
             ascent,
             descent,
             bbox,
+            #[cfg(not(target_arch = "wasm32"))]
             fs_type,
             bold,
             italic,
@@ -169,14 +171,6 @@ impl PdfFont {
 
     pub fn family(&self) -> &str {
         &self.family
-    }
-
-    pub fn postscript_name(&self) -> &str {
-        &self.postscript_name
-    }
-
-    pub fn embedding_permissions(&self) -> u16 {
-        self.fs_type
     }
 
     pub fn is_bold(&self) -> bool {
