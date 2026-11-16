@@ -2331,6 +2331,85 @@ fn median_large_values_recalculate_dependents() {
     }
 }
 
+/// #2183: `INDEX(…):INDEX(…):…` used to re-walk each operand of the left-associative range chain,
+/// costing 2^k for k operands (28 took 40 s; 60 would take millennia), on open and on every edit.
+#[test]
+fn range_operator_chain_precedents_are_linear() {
+    let operands: Vec<String> = (1..=60).map(|i| format!("INDEX(A{i},1)")).collect();
+    let src = format!("=SUM({})", operands.join(":"));
+    let e = gridcraft_formula::parse(&src).unwrap();
+    let wb = Workbook::new();
+    // With the old 2^k walk this call would never return; #2183 asks for under 100 ms.
+    #[allow(clippy::disallowed_methods)] // a native test: the clock is there
+    let t0 = std::time::Instant::now();
+    let (areas, dynamic) = crate::eval::precedents(&wb, 0, &e);
+    let took = t0.elapsed();
+    assert!(took < std::time::Duration::from_millis(100), "precedents took {took:?}");
+    assert!(!dynamic);
+    // The chain covers A1:A60, not only the 60 cells named in it.
+    let whole = gridcraft_core::RangeRef::new(c("A1"), c("A60"));
+    assert!(areas.iter().any(|a| a.sheet == 0 && a.range == whole), "{areas:?}");
+    // Each node is visited once: 60 references plus one box per range operator.
+    assert!(areas.len() < 200, "{} areas", areas.len());
+
+    // Through the recalculation engine: setting it finishes and editing a cell in the box recalculates.
+    let mut t = T::new();
+    for i in 1..=60 {
+        t.set(&format!("A{i}"), "1");
+    }
+    t.set("B1", &src);
+    assert_eq!(t.num("B1"), 60.0);
+    t.set("A30", "5");
+    assert_eq!(t.num("B1"), 64.0);
+}
+
+/// A chained range of plain references (`A1:B2:C3`, which the parser can't fold into one
+/// reference) covers their bounding box, as the evaluator expands it: an edit inside the box but
+/// outside each operand still recalculates.
+#[test]
+fn chained_plain_range_precedents_cover_the_bounding_box() {
+    let e = gridcraft_formula::parse("=SUM(A1:B2:C3)").unwrap();
+    let (areas, dynamic) = crate::eval::precedents(&Workbook::new(), 0, &e);
+    assert!(!dynamic);
+    let whole = gridcraft_core::RangeRef::new(c("A1"), c("C3"));
+    assert!(areas.iter().any(|a| a.sheet == 0 && a.range == whole), "{areas:?}");
+
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("E1", "=SUM(A1:B2:C3)");
+    assert_eq!(t.num("E1"), 1.0);
+    t.set("C1", "4");
+    assert_eq!(t.num("E1"), 5.0);
+}
+
+/// `precedents` walks with an explicit stack: an expression nested deeper than any formula
+/// within the length limit can build still finds its references, on a small stack.
+#[test]
+fn precedents_of_deep_nesting_do_not_recurse() {
+    let (areas, dynamic) = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut e = gridcraft_formula::parse("=A1").unwrap();
+            for _ in 0..10_000 {
+                e = gridcraft_formula::Expr::Paren(Box::new(e));
+            }
+            let found = crate::eval::precedents(&Workbook::new(), 0, &e);
+            // Dropping the deep tree recurses; leak it so only `precedents` is under test.
+            std::mem::forget(e);
+            found
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(!dynamic);
+    assert_eq!(areas.len(), 1);
+    // Shallow nesting stays static.
+    let e = gridcraft_formula::parse("=((((A1))))").unwrap();
+    let (areas, dynamic) = crate::eval::precedents(&Workbook::new(), 0, &e);
+    assert!(!dynamic);
+    assert_eq!(areas.len(), 1);
+}
+
 #[test]
 fn cell_filename_names_the_workbook_file() {
     // Excel returns `<folder>/[<file>]<sheet>`, and the classic sheet-name formula splits it on
@@ -2911,6 +2990,105 @@ fn text_keeps_reading_with_a_decimal_point_by_default() {
     assert_eq!(t.get("C1"), Value::Error(CellError::Value));
     t.set("C2", "=\"1.5\"*2");
     assert_eq!(t.num("C2"), 3.0);
+}
+
+#[test]
+fn disjoint_spills_do_not_scan_every_spill_owner() {
+    // Many independent two-cell arrays: write-back must not walk all earlier owners for each one.
+    let mut t = T::new();
+    for i in 1..=2000 {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{}", i * 2 - 1)), Cell::formula(Formula::new("=SEQUENCE(2)")));
+    }
+    crate::recalc::OWNER_SCANS.with(|n| n.set(0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A2"), t.num("A4000")), (2.0, 2.0));
+    let scans = crate::recalc::OWNER_SCANS.with(|n| n.get());
+    assert!(scans < 10, "{scans} owner scans for 2000 disjoint spills");
+}
+
+#[test]
+fn overlapping_spill_edit_sequences_match_a_full_recalc() {
+    // Random short edit sequences on a small grid of arrays that run into each other (sizes from
+    // shared cells, so one edit resizes several at once), with constants and clears in their way.
+    // After every edit the incremental result must equal a full recalc of the same workbook.
+    let seeds: u64 = std::env::var("GRIDCRAFT_SPILL_SEEDS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let steps: usize = std::env::var("GRIDCRAFT_SPILL_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let only: Option<u64> = std::env::var("GRIDCRAFT_SPILL_SEED").ok().and_then(|v| v.parse().ok());
+    let next = |state: &mut u64| {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let seeds: Vec<u64> = match only {
+        Some(s) => vec![s],
+        None => (0..seeds).collect(),
+    };
+    for seed in seeds {
+        let mut state = seed;
+        let mut t = T::new();
+        // Sizes in J1:J4.
+        for (i, n) in [2, 3, 1, 4].iter().enumerate() {
+            t.set(&format!("J{}", i + 1), &n.to_string());
+        }
+        let mut log: Vec<(String, String)> = Vec::new();
+        for step in 0..steps {
+            let r = next(&mut state);
+            let at = format!("{}{}", (b'A' + (r % 6) as u8) as char, 1 + (r >> 8) % 6);
+            let kind = (r >> 16) % 14;
+            let (at, input) = match kind {
+                0..=3 => {
+                    let a = 1 + (r >> 24) % 4;
+                    let b = 1 + (r >> 28) % 4;
+                    (at, format!("=SEQUENCE($J${a},$J${b})"))
+                }
+                4 => (at, format!("=SEQUENCE({},{})", 1 + (r >> 24) % 3, 1 + (r >> 28) % 3)),
+                5 => (format!("J{}", 1 + (r >> 24) % 4), (1 + (r >> 28) % 4).to_string()),
+                6 => (at, "x".to_string()),
+                7 | 8 => (at, String::new()),
+                9 => (format!("K{}", 1 + (r >> 24) % 6), "=SUM(A1:F6)".to_string()),
+                10 => {
+                    // An earlier edit again (often putting back what a cell held before, as undo does).
+                    match log.len() {
+                        0 => (at, String::new()),
+                        n => log[(r >> 24) as usize % n].clone(),
+                    }
+                }
+                11 => (format!("{}{}", (b'A' + ((r >> 24) % 6) as u8) as char, 1 + (r >> 32) % 6), (1 + (r >> 40) % 3).to_string()),
+                // Several cells in one edit (a fill, or clearing a range): a 2x2 block from `at`.
+                12 => (format!("{at}+"), String::new()),
+                _ => (format!("{at}+"), format!("=SEQUENCE($J${},$J${})", 1 + (r >> 24) % 4, 1 + (r >> 28) % 4)),
+            };
+            log.push((at.clone(), input.clone()));
+            if let Some(from) = at.strip_suffix('+') {
+                let from = c(from);
+                let keys: Vec<(usize, CellRef)> =
+                    (0..2).flat_map(|dr| (0..2).map(move |dc| (0, CellRef { row: from.row + dr, col: from.col + dc }))).collect();
+                for k in &keys {
+                    let cell = if input.is_empty() { Cell::value(Value::Empty) } else { Cell::formula(Formula::new(&input)) };
+                    t.wb.sheet_mut(0).unwrap().cells.set(k.1, cell);
+                }
+                t.calc.cells_changed(&mut t.wb, &keys);
+            } else {
+                t.set(&at, &input);
+            }
+            let mut fresh = t.wb.clone();
+            Calc::new().recalc_all(&mut fresh);
+            let (a, b) = (t.wb.sheet(0).unwrap(), fresh.sheet(0).unwrap());
+            for row in 0..12 {
+                for col in 0..12 {
+                    let cell = CellRef { row, col };
+                    assert_eq!(a.value(cell), b.value(cell), "seed {seed} step {step}: {cell} incremental vs full recalc after {log:?}");
+                }
+            }
+            let mut ka: Vec<_> = a.spill_ranges.iter().map(|(k, v)| (*k, *v)).collect();
+            let mut kb: Vec<_> = b.spill_ranges.iter().map(|(k, v)| (*k, *v)).collect();
+            ka.sort_by_key(|(k, _)| (k.row, k.col));
+            kb.sort_by_key(|(k, _)| (k.row, k.col));
+            assert_eq!(ka, kb, "seed {seed} step {step}: spill layout after {log:?}");
+        }
+    }
 }
 
 /// A computed criterion whose formula runs a database function over the same criteria counts as
