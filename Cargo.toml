@@ -41,6 +41,8 @@ craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0
 # Delimited text (CSV, TSV) and SYLK; `crates/xlsx/src/csv.rs` and `crates/engine/src/io/sylk.rs`
 # turn them into workbooks.
 craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+# The native JSON workbook (`.json`, `.scjson`): read, written, and kept newer macros written back.
+craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "9a6d894200221fcfedc274870c30394d404f859d", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
