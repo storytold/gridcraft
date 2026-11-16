@@ -241,6 +241,10 @@ impl SheetApp {
                 self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
                 Ok(json!({"on": self.ui.highlight_active_row}))
             }
+            "options.csvSplit" => {
+                self.ui.csv_split = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.csv_split);
+                Ok(json!({"on": self.ui.csv_split}))
+            }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
                 let percent = match p.get("percent") {

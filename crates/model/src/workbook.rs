@@ -247,6 +247,12 @@ pub struct Workbook {
     /// separator back (a `;` file stays a `;` file). `None` = not read from CSV: CSV saves use `,`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub csv_delimiter: Option<u8>,
+    /// The CSV this workbook was read from was opened without splitting its lines into columns:
+    /// each line is one text cell in column A, kept exactly as in the file. Saving it as CSV writes
+    /// column A back line by line, with no quoting, so the file comes back as it was; cells the user
+    /// filled in other columns follow on their row, after [`Workbook::csv_delimiter`], unquoted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub csv_unsplit: bool,
     /// GridCraft macros (typed command lists, not VBA), in the order the macro list shows them.
     /// The JSON format keeps them as this field; xlsx keeps them in hidden defined names.
     #[serde(default, skip_serializing_if = "crate::macros::Macros::is_empty", skip_deserializing)]
@@ -365,6 +371,7 @@ impl Workbook {
             phonetics: vec![],
             vba_project: None,
             csv_delimiter: None,
+            csv_unsplit: false,
             macros: crate::macros::Macros::default(),
             macros_read: vec![],
             macros_unread: Arc::default(),
