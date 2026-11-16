@@ -359,31 +359,11 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
 
 // ---------------------------------------------------------------- writing helpers
 
-/// Escapes text content.
-pub fn esc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    push_esc(&mut o, s);
-    o
-}
-
-/// Appends [`esc`]`(s)` to `o`.
-pub fn push_esc(o: &mut String, s: &str) {
-    if s.bytes().all(|b| matches!(b, b'\t' | b'\n' | 0x20..=0x7E) && !matches!(b, b'&' | b'<' | b'>')) {
-        o.push_str(s);
-        return;
-    }
-    o.reserve(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '\r' => o.push_str("&#13;"),
-            c if is_xml_char(c) => o.push(c),
-            _ => {}
-        }
-    }
-}
+// XML 1.0 byte escaping is shared; spreadsheet string and phonetic policy stays here.
+use craft_xml::is_xml_char;
+#[cfg(test)]
+use craft_xml::push_esc;
+pub use craft_xml::{esc, esc_attr};
 
 /// Appends `n` in decimal.
 pub fn push_u64(o: &mut String, mut n: u64) {
@@ -420,29 +400,6 @@ pub fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
         o.push(char::from(l));
     }
     push_u64(o, u64::from(c.row) + 1);
-}
-
-/// Escapes an attribute value (double-quoted).
-pub fn esc_attr(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            '\n' => o.push_str("&#10;"),
-            '\r' => o.push_str("&#13;"),
-            '\t' => o.push_str("&#9;"),
-            c if is_xml_char(c) => o.push(c),
-            _ => {}
-        }
-    }
-    o
-}
-
-fn is_xml_char(c: char) -> bool {
-    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 
 /// ST_Xstring encoding for cell text: characters XML can't carry and carriage returns become
@@ -803,5 +760,21 @@ mod tests {
         assert_eq!(num(-3.0), "-3");
         assert_eq!(num(1.5e20), "1.5E20");
         assert_eq!("1.5E20".parse::<f64>().unwrap(), 1.5e20);
+    }
+}
+
+#[cfg(test)]
+mod shared_escape_parity {
+    use super::*;
+    #[test]
+    fn xml_content_and_attributes_preserve_grid_bytes() {
+        let value = "&<>\"'\t\n\r\0\u{1f}\u{fffe}\u{ffff}é😀";
+        assert_eq!(esc(value), "&amp;&lt;&gt;\"'\t\n&#13;é😀");
+        assert_eq!(esc_attr(value), "&amp;&lt;&gt;&quot;'&#9;&#10;&#13;é😀");
+        let mut appended = "prefix:".to_owned();
+        push_esc(&mut appended, value);
+        assert_eq!(appended, format!("prefix:{}", esc(value)));
+        assert_eq!(esc("plain ASCII\t\n"), "plain ASCII\t\n");
+        assert_eq!(decode_xstring(&encode_xstring("_x000D_\r\0😀")), "_x000D_\r\0😀");
     }
 }
