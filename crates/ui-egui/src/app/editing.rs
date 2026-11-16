@@ -199,9 +199,9 @@ impl SheetApp {
         let r = if unchanged {
             Ok(json!({}))
         } else if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+            self.run_shared("range.fill", json!({"input": text}))
         } else {
-            self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
+            self.run_shared("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
         };
         match r {
             Ok(_) => {

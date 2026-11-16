@@ -26,6 +26,8 @@ mod api;
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(any(target_arch = "wasm32", test))]
+mod host_session;
+#[cfg(any(target_arch = "wasm32", test))]
 mod hostmode;
 #[cfg(any(target_arch = "wasm32", test))]
 mod prefs;

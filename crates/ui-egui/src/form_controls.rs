@@ -219,7 +219,7 @@ pub fn look(app: &SheetApp, geo: &Geo, c: &FormControl, r: Rect, hover: Option<P
 impl SheetApp {
     /// Sets a slider or spin button's value; inside a gesture, keeps it one undo step.
     fn control_set(&mut self, id: u32, value: f64) -> bool {
-        match self.session.run("control.setValue", json!({"id": id, "value": value})) {
+        match self.run_shared("control.setValue", json!({"id": id, "value": value})) {
             Ok(_) => {
                 if let Some(start) = self.grid.control.as_ref().map(|g| g.undo_start)
                     && let Some(d) = self.session.active_mut()

@@ -65,6 +65,22 @@ pub mod shared {
     }
 }
 
+/// Base64 for a shared byte slice (`Arc<[u8]>`), such as a kept package part.
+pub mod arc_slice {
+    use std::sync::Arc;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(v: &Arc<[u8]>, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&super::encode(v))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<[u8]>, D::Error> {
+        let s = String::deserialize(d)?;
+        super::decode(&s).map(Arc::from).ok_or_else(|| serde::de::Error::custom("invalid base64"))
+    }
+}
+
 /// Base64 for optional shared byte blobs (VBA projects): `null`/missing stays `None`.
 pub mod opt {
     use std::sync::Arc;

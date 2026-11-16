@@ -16,6 +16,20 @@ impl SheetApp {
         r
     }
 
+    /// Runs a command the sheet UI issues by itself — a committed cell edit, a form control's
+    /// new value — through the collaboration layer when the session is shared, and through the
+    /// engine otherwise.
+    ///
+    /// These paths used to call `Session::run` straight: in a live session the edit stayed on
+    /// this replica and never reached the room, while the server and every other replica kept
+    /// the old cell.
+    pub(crate) fn run_shared(&mut self, id: &str, params: Json) -> Result<Json, String> {
+        if let Some(r) = self.collab.as_mut().and_then(|collab| collab.execute(&mut self.session, id, params.clone())) {
+            return r;
+        }
+        self.session.run(id, params)
+    }
+
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
@@ -25,6 +39,22 @@ impl SheetApp {
         }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
+        }
+        // A live session behind the host bridge: the cabinet owns the file, so
+        // Save asks it to commit (`gridcraft:commit`) instead of downloading a
+        // possibly stale local copy. Save As and exports stay local.
+        if id == "file.save"
+            && let Some(session) = self.host_session_id.clone()
+            && let Some(commit) = self.host_commit.as_ref()
+        {
+            let result = commit(&session, None);
+            return match result {
+                Ok(()) => {
+                    self.message = Some(("GridCraft".into(), "Committing…".into()));
+                    Ok(json!({ "committed": true }))
+                }
+                Err(error) => Err(error),
+            };
         }
         if matches!(
             id,
@@ -56,7 +86,11 @@ impl SheetApp {
         }
         let before = self.session.active_window();
         let zoom_from = matches!(id, "view.zoom" | "view.zoom100" | "view.zoomToSelection").then(|| crate::grid::Trace::key(self));
-        let r = self.session.run(id, params);
+        let shared = self.collab.as_mut().and_then(|collab| collab.execute(&mut self.session, id, params.clone()));
+        let r = match shared {
+            Some(r) => r,
+            None => self.session.run(id, params),
+        };
         if let Some(from) = zoom_from {
             crate::grid::Trace::keep_through_zoom(self, from);
         }

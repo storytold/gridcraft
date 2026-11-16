@@ -27,12 +27,12 @@ pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
-mod geo;
+pub(crate) mod geo;
 mod interact;
 mod keyboard;
 mod menus;
 mod quadrant;
-mod selection;
+pub(crate) mod selection;
 mod show;
 mod tables;
 

@@ -26,10 +26,13 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use craft_web_host::Participant as HostPerson;
 use craft_web_host::web::{FileData, Host, Message};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 
+use crate::host_session::{self, HostInbox};
 use crate::hostmode::open_name;
+use gridcraft_collab_web::{HostEvent, HostParticipant};
 
 /// The app id in the host messages (`gridcraft:ready`).
 const APP: &str = "gridcraft";
@@ -60,8 +63,8 @@ impl Bridge {
 
     /// Send saved and exported files to the host instead of downloading them, and hear files
     /// from it.
-    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+    pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context, events: HostInbox) {
+        self.listen(inbox, ctx, events);
         let bridge = self.clone();
         services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
             if let Err(e) = bridge.post_save(name, bytes) {
@@ -102,6 +105,21 @@ impl Bridge {
         self.host.post_dirty(app.session.documents().iter().any(|d| d.is_dirty()));
     }
 
+    /// `gridcraft:session-state`: the cabinet's sync indicator and who is here.
+    pub(crate) fn post_session_state(&self, status: &str, participants: &[HostParticipant]) -> Result<(), String> {
+        self.host.post_session_state(status, &host_people(participants))
+    }
+
+    /// `gridcraft:presence`: the participant list at the sync server's pace.
+    pub(crate) fn post_presence(&self, participants: &[HostParticipant]) -> Result<(), String> {
+        self.host.post_presence(&host_people(participants))
+    }
+
+    /// `gridcraft:commit`: the cabinet stores the session (it owns the file).
+    pub(crate) fn post_commit(&self, session_id: &str, bytes: Option<&[u8]>) -> Result<(), String> {
+        self.host.post_commit(session_id, bytes)
+    }
+
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
         let name = file_name(path);
         self.host.post_save(&name, bytes, None, false)?;
@@ -109,13 +127,31 @@ impl Bridge {
         Ok(())
     }
 
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
-        self.host.listen(move |message| {
-            if let Message::Open { name, data } = message {
-                deliver_open(&inbox, &ctx, &name, &data);
+    /// Hear `gridcraft:open`, `gridcraft:session` and `gridcraft:committed`.
+    fn listen(&self, inbox: Inbox, ctx: egui::Context, events: HostInbox) {
+        self.host.listen(move |message| match message {
+            Message::Open { name, data } => deliver_open(&inbox, &ctx, &name, &data),
+            Message::Session { session_id, ws_url, token, role } => {
+                host_session::deliver(&events, HostEvent::Session(host_session::HostSession::new(session_id, ws_url, token, role)));
+                // The event is applied on the next frame; without a repaint request an idle app
+                // draws none, and the session would open only on the next unrelated input.
+                ctx.request_repaint();
             }
+            Message::Committed { version, etag } => {
+                host_session::deliver(&events, HostEvent::Committed { version, etag });
+                ctx.request_repaint();
+            }
+            Message::Host { .. } | Message::Saved { .. } | Message::HandoffDone { .. } => {}
         });
     }
+}
+
+/// The crate's participant shape, from the session's.
+fn host_people(participants: &[HostParticipant]) -> Vec<HostPerson> {
+    participants
+        .iter()
+        .map(|participant| HostPerson { client_id: participant.client_id.clone(), role: participant.role.clone(), color: participant.color.clone() })
+        .collect()
 }
 
 /// The file an open message carries, pushed onto the inbox for the next frame, like a dropped

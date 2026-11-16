@@ -55,6 +55,10 @@ pub struct Calc {
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
     spill_errors: SpillErrors,
+    /// Formulas the last recalculation evaluated, in the order it did, with repeats when a
+    /// formula was evaluated again (iterative calculation, a dynamic-array pass). Handed to a
+    /// front end that has to report which cells changed (`Session::take_changed`).
+    pub last_evaluated: Vec<Key>,
 }
 
 /// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
@@ -144,6 +148,7 @@ impl Default for Calc {
             last_recalc_cells: 0,
             standing: Standing::default(),
             spill_errors: SpillErrors::default(),
+            last_evaluated: vec![],
         }
     }
 }
@@ -306,6 +311,13 @@ impl Calc {
     fn unblock_candidates(&self, wb: &Workbook, sheet: usize, end: CellRef) -> Vec<Key> {
         let cells = self.spill_errors_in(wb, sheet, (0, end.row), (0, end.col));
         cells.into_iter().filter(|c| self.graph.nodes.contains_key(&(sheet, *c))).map(|c| (sheet, c)).collect()
+    }
+
+    /// Takes the formulas the last recalculation evaluated, leaving the list empty. Repeats are
+    /// possible (iterative calculation, a second dynamic-array pass); the caller deduplicates if
+    /// it needs a set.
+    pub fn take_evaluated(&mut self) -> Vec<Key> {
+        std::mem::take(&mut self.last_evaluated)
     }
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
@@ -531,6 +543,7 @@ impl Calc {
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
+        self.last_evaluated.clear();
         let mut seen: HashSet<Key> = HashSet::default();
         if !full {
             self.standing = Standing::default();
@@ -539,6 +552,7 @@ impl Calc {
             if dirty.is_empty() {
                 break;
             }
+            self.last_evaluated.extend(dirty.iter().copied());
             if !full {
                 // What each formula held before this calculation touched it.
                 for &k in &dirty {

@@ -10,8 +10,17 @@ description = "GridCraft desktop app"
 [lints]
 workspace = true
 
+[features]
+default = []
+# Real-time collaboration: links the WebSocket client. Off by default; the single-user build
+# carries no network code. Runtime: GRIDCRAFT_COLLAB_URL and GRIDCRAFT_COLLAB_TOKEN.
+collab = ["dep:gridcraft-collab", "dep:gridcraft-collab-client", "dep:tokio"]
+
 [dependencies]
 gridcraft-engine = { workspace = true }
+gridcraft-collab = { workspace = true, optional = true }
+gridcraft-collab-client = { workspace = true, optional = true }
+tokio = { version = "1", features = ["rt"], optional = true }
 gridcraft-ui-egui = { workspace = true }
 gridcraft-sandbox = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard"] }
