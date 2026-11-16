@@ -2563,3 +2563,122 @@ The commit that carries this section (`docs(collab): …`) is one above `4303b5a
 fork is `4303b5aa` until a push, as §29.6's `ls-remote` says at its instant. That is the rule of the
 record in play, not a contradiction — the page names what the commands returned when they were run,
 and the commit that delivers the page is what makes the name historical.
+
+## 30. The sixteen open threads of #3613, read against `4a265a93` (2026-11-16, 04:23Z)
+
+The PR carried 39 review threads at 04:10Z, 16 of them unresolved, and three of those sixteen had no
+answer at all: `4532845977` (`synced.rs:497`), `4535207012` (`synced.rs:209`) and `4535207024`
+(`synced.rs:244`), all on `crates/collab-client/src/synced.rs`. The other 13 were answered by
+`copoka` between 2026-11-10 and 2026-11-12 and each answer names a fix commit and a test.
+
+This section is the pass that read each of the sixteen against the **code**, not against the diff
+line the finding quotes, answered the three that had none, and checked that the references the
+thirteen older answers make still land where they say. Nothing was pushed and no thread was
+resolved (the fork's author cannot resolve another account's threads); see §30.5.
+
+```text
+$ gh pr view 3613 --repo storytold/gridcraft --json headRefOid,baseRefOid,mergeable,mergeStateStatus
+  headRefOid        4303b5aaeda9960aee5d8801ed4495553dc8ca74
+  baseRefOid        407e0e1fa9146df5ddf632750a93aabfbb079208
+  mergeable         MERGEABLE
+  mergeStateStatus  UNSTABLE
+$ git -C upstream rev-parse --short HEAD
+4a265a93            # docs above 4303b5aa, local, tree clean
+$ gh api graphql … reviewThreads(first:100) | count isResolved=false
+16                  # 39 threads in all
+```
+
+`4a265a93` is a docs commit; the code of the branch is `4303b5aa`'s, so a line number quoted here
+is the line the code has on both.
+
+### 30.1 The three findings that had no answer: all three are already covered
+
+Each was checked in `crates/collab-client/src/synced.rs` at `4a265a93`. The findings quote the file
+as it was in `915d994e`; the sites they describe have moved and, in all three cases, the fix they ask
+for is in the branch already (it came with `7b42c82a`, `2a5f3e00` and `4ae789c6`, §23–§28).
+
+| Comment | What it asks for | Where the code already does it | Verdict |
+|---|---|---|---|
+| `4532845977` (`:497`) | a snapshot that fails to open **or** to swap must not leave the replica claiming the head | `install_snapshot` is all-or-nothing — `open_bytes` `.ok()?` (`:203`), `self.doc_uid?` (`:205`), `swap_document` `.ok()?` (`:209`) — and the `Event::Snapshot` arm answers `None` with `snapshot_failed()` (`:521`). That sets a notice and asks for the whole workbook (`:239-240`); the second way back is `Resync { from: self.document_version }` (`:244`), the version the content is at, not `link.state().version`, which the transport already moved onto the snapshot; the third failure stops with "reopen the session" (`:228-230`). `document_version` moves only on a successful install (`:506`) and the `Resynced` arm moves it only while `snapshot_failures == 0` (`:533`) | covered; reply `4581950962`, tests `a_snapshot_that_cannot_be_opened_claims_nothing_and_asks_again` (`tests/document.rs:303`), `a_snapshot_for_a_workbook_that_was_closed_is_never_claimed` (`:336`) |
+| `4535207012` (`:209`) | stop recovery when the shared workbook is closed, and never apply an event when `enter_shared` fails | `apply` asks `enter_shared` first and returns before `apply_here` when it fails — notice, `return false`, no document and no version touched (`:691-699`). Recovery is bounded at `SNAPSHOT_ATTEMPTS` = 3 (`:228-230`) and never reads the advanced cursor (`:244`) | covered; reply `4581951169`, test `an_operation_for_a_closed_document_is_not_written_into_another_workbook` (`tests/document.rs:167` — it does leave a second workbook open, which the finding says no test did), plus `:336` |
+| `4535207024` (`:244`) | a refused preview must never be repaired by a journal tail | a preview refused under a later one sets `authoritative_only` and asks for a workbook (`:485-486`); `snapshot_failed` reads the flag **before** choosing a way back (`:232`) and sends `ClientMessage::Snapshot` again (`:234`) — the `Resync` at `:244` is unreachable while it is set; the flag clears on a successful install (`:508`) | covered; reply `4581951359`, test `a_refused_preview_is_repaired_by_a_workbook_not_a_journal_tail` (`tests/rollback.rs:128`: two failed installs, three `Snapshot` requests, no `Resync`, then "reopen") |
+
+The third one is the "heavy lift" of the three, and it needed no RFC change: the rule it asks for —
+recovery only from an installed authoritative workbook — is what `2a5f3e00` wrote, and
+`rollback.rs:128` pins it. Nothing was deferred, so there is no question for the bus beyond the pass
+status.
+
+### 30.2 The references in the older answers, checked against the same head
+
+Only two of the thirteen answers cite a `file:line`; both were checked on `4a265a93`.
+
+| Answer | Reference | At `4a265a93` |
+|---|---|---|
+| `4532196988` (thread `4531928945`) | `synced.rs:565` for "an answer the snapshot already covers" | **moved**: `:565` is a blank line; the check is `let stale = applied.version <= self.document_version;` at `synced.rs:455` (the doc comment on `document_version` at `:111-114` still cites the old number). A correction was appended in the thread (`4581951525`) |
+| `4532196988` (thread `4531928945`) | `collab-web/src/link.rs:169` for the snapshot buffer | **exact**: `:169` is the `snapshot_chunk(&mut self.snapshot, …)` call |
+
+The other eleven answers point at commits, tests and `STATUS.md`/RFC sections, not at lines. Every
+commit they name is an ancestor of `4a265a93` — `3e04a7eb`, `1878b640`, `deffb80f`, `5d8cc3c4`,
+`f51237ea`, `8e76f729`, `00b146df`, `2a5f3e00`, `7b42c82a`, `4ae789c6`, `adc4dcd1` — so each "fixed
+in …" still names work that is in the branch. The section references (`§20.2`, `§21`, `§22`) resolve
+in this file.
+
+### 30.3 The sixteen unresolved threads, and where each answer points
+
+| # | Comment | File:line (thread anchor) | Verdict | Answer points at |
+|---|---|---|---|---|
+| 1 | `4526668679` | `apps/gridcraft-collab-server/src/lib.rs:520` | fixed `3e04a7eb` | reply `4527212043`; `a_snapshot_with_nothing_new_does_not_rewrite_the_base` |
+| 2 | `4526668809` | `crates/collab-client/src/synced.rs:832` | fixed `1878b640` | reply `4527216572`; `an_edit_in_another_workbook_stays_local`, `a_remote_operation_lands_in_the_shared_workbook` |
+| 3 | `4526668825` | `crates/collab-web/src/lib.rs` (outdated) | fixed `1878b640` | reply `4527217350`; `the_actor_and_the_window_come_from_the_server` |
+| 4 | `4526668870` | `crates/collab/src/room.rs:244` | fixed `deffb80f` | reply `4527220016`; `an_undo_does_not_wait_for_a_recalculated_dependent` |
+| 5 | `4526668882` | `crates/collab/src/room.rs` (outdated) | fixed `deffb80f` | reply `4527220596`; `an_undo_delta_carries_the_restored_formula_and_the_dependents`, `a_command_less_undo_restores_the_formula_on_a_peer` |
+| 6 | `4526668912` | `crates/ui-egui/src/app/commands.rs:93` | fixed `5d8cc3c4` | reply `4527221711`; `a_committed_cell_edit_goes_through_the_session`, `a_fill_committed_from_the_editor_goes_through_the_session` |
+| 7 | `4528385372` | `apps/gridcraft-collab-server/src/store.rs:260` | fixed `f51237ea` | reply `4529066278`; `a_torn_journal_tail_is_dropped_before_the_next_append` |
+| 8 | `4528385423` | `apps/gridcraft-collab-server/src/store.rs:366` | fixed `f51237ea` | reply `4529067166`; `the_meta_file_is_the_commit_point_of_a_snapshot` |
+| 9 | `4528385507` | `apps/gridcraft/src/collab_ui.rs:36` | fixed `f51237ea` | reply `4529069297`; `a_join_of_a_session_opened_from_bytes_receives_the_workbook`, `a_join_of_a_room_that_started_empty_gets_no_workbook` |
+| 10 | `4528385577` | `docs/collab/rfc.md` (outdated) | fixed `f51237ea` | reply `4529071203`; RFC §4.2 envelopes |
+| 11 | `4530172634` | `crates/collab-client/src/synced.rs:486` | fixed `8e76f729` | replies `4530313437`, `4530367295`; `a_preview_made_while_the_workbook_was_in_transit_is_replayed` |
+| 12 | `4530172648` | `docs/collab/rfc.md` (outdated) | fixed `8e76f729` | reply `4530313796`; serialized `Value`, `skip_serializing_if`, `objects_deleted`/`objects_created` in RFC §4.2 |
+| 13 | `4531928945` | `crates/collab-client/src/synced.rs:713` | fixed `00b146df` | replies `4532196988`, `4581951525` (line correction); `an_answer_at_or_below_the_snapshot_changes_nothing`, `a_snapshot_buffer_does_not_mix_two_catch_ups` |
+| 14 | `4532845977` | `crates/collab-client/src/synced.rs:497` | covered, no change | reply `4581950962`; `synced.rs:202-211`, `:226-247`, `:497-522`; `tests/document.rs:303`, `:336` |
+| 15 | `4535207012` | `crates/collab-client/src/synced.rs:209` | covered, no change | reply `4581951169`; `synced.rs:691-699`, `:226-247`; `tests/document.rs:167`, `:336` |
+| 16 | `4535207024` | `crates/collab-client/src/synced.rs:244` | covered, no change | reply `4581951359`; `synced.rs:232-236`, `:478-486`; `tests/rollback.rs:128` |
+
+Read back after the replies: 16 unresolved threads, and every one of them carries a `copoka` comment
+(two of them carry two — #11 and #13). The three new replies are `4581950962`, `4581951169`,
+`4581951359`; the correction on #13 is `4581951525`.
+
+### 30.4 The run that backs "already covered"
+
+No code was changed in this pass, so the gate is a confirmation run rather than a feature gate: the
+three verdicts rest on tests that exist at `4a265a93` and pass there.
+
+```text
+$ git -C upstream rev-parse HEAD                     4a265a93c194246da929a7e709f7ce459e52e5de
+$ scripts/remote-build.sh cargo gridcraft test -p gridcraft-collab-client -j 8
+   lib               4 passed
+   converge         14 passed
+   document         11 passed
+   parts             5 passed
+   rollback          5 passed
+                    39 passed, 0 failed, EXIT 0
+log .craft/logs/gate-gridcraft-collab-client-4a265a93.log, host `agents`, umask 022, -j 8
+```
+
+Every test the three new answers and the correction name is inside this run — `document.rs:167`,
+`:303`, `:336`, `:383`, `rollback.rs:104`, `:128` — except `a_snapshot_buffer_does_not_mix_two_catch_ups`,
+which lives in `collab-web` and is covered by §29.7's workspace run. The full
+workspace gate on this code is §29.7's on `4303b5aa`: 173 collaboration tests, 130 calc, 989 lib +
+120 integration engine, clippy and `fmt` clean, `EXIT 0`. No workflow of the branch has executed on
+any head, so neither number is a runner's.
+
+### 30.5 What this pass did not do
+
+- **No push.** The fork and the PR still name `4303b5aa` (§29.6); this section's commit is one above
+  `4a265a93` and local. The three replies and the correction are on GitHub, the branch is not.
+- **No thread resolved.** The account that owns the fork is not the reviewer that opened these
+  threads; GitHub's UI offers no resolve for them there, and a resolve would in any case be the
+  reviewer's call, not the author's.
+- **No code, no CI file, no `main`.** `git diff --stat 4303b5aa..HEAD` is this page only.
+- **The PR's own reading is still a reading.** `MERGEABLE` / `UNSTABLE` was true at 01:14:29Z; a
+  later push of this page is what makes GitHub recompute it on a new head.
