@@ -3,6 +3,8 @@
 /// Returns the Czech translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagram",
+        "Decorative Text" => "Ozdobný text",
         "Paste" => "Vložit",
         "Paste Values" => "Vložit hodnoty",
         "Paste Formulas" => "Vložit vzorce",
@@ -276,6 +278,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Uložit",
         "Save As" => "Uložit jako",
         "Export" => "Exportovat",
+        "Minimize" => "Minimalizovat",
+        "Maximize" => "Maximalizovat",
+        "Restore Down" => "Obnovit dolů",
         "Close" => "Zavřít",
         "Options" => "Možnosti",
         "Account" => "Účet",
