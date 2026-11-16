@@ -1,11 +1,15 @@
 # Real-time collaboration: status and acceptance evidence
 
 - Date: 2026-11-13, measured at 21:33Z; a second read of the same PR at 21:35Z returned the same
-  values. Every hash and number below is the state at that instant;
+  values. Every hash and number below is the state at that instant unless it names another;
   §27.5 and §28.5 name what the 13:27Z, 17:31Z, 23:20Z and 01:12Z pushes changed and what remains, so
   a later reader can tell a stale line from a wrong one. The measurements of 2026-11-12 (23:37Z,
   20:32Z, 17:31Z and earlier) stay where they were taken, with the instant and the head they
   describe; a later push makes them historical, not wrong.
+- **Measured again at 2026-11-16T00:12Z (§29):** the PR reads `CONFLICTING` / `DIRTY` on head
+  `6c100112`, because `main` reached `407e0e1f`; the local branch carries the merge `45748012` of that
+  `main` and is unpushed. The 2026-11-13 numbers below stand as that instant's, and the merge bullet
+  and the PR bullet name the new reading.
 - **Rule of the record — pushes:** a sentence that says a commit is or is not pushed is written only
   after `git ls-remote fork refs/heads/feature/realtime-collaboration` at the measurement instant. A
   local `git rev-list` cannot tell a pushed head from an unpushed one, and the 16:40Z version of this
@@ -37,19 +41,33 @@
   (main's `6308fc9e`, the merge that cleared the conflict, §27) → `ff26e8a0`. Each of the four commits
   above `4ae789c6` changes one file, this page. `git diff --stat 6308fc9e..6c100112` is 84 files,
   +18748/−34 — the PR's own numbers — so no code of the branch's was dropped and none came from the
-  merge itself. Every branch commit is on the fork and in the PR.
-- Base: `main`. The base SHA the PR reports — `6308fc9e`, last computed with the mergeable fields at
-  the 2026-11-13T01:12Z push — is the tip `57c9e21e` merged, so the head contains its own base and
-  there is nothing left for `f800472b`'s deletions to conflict with (§27.2). `origin/main` is
-  `c0ee120a` at 21:33Z, 101 commits further (91 past the `37941f06` of the previous measurement), and
-  `git merge-tree --write-tree origin/main HEAD` is clean (tree `88d47c85`), so the next
-  computation keeps `MERGEABLE`. The base of §25 was `01abd954`; that tree, and the gate it was
-  given, stay in §25.
+  merge itself. Every branch commit up to `6c100112` is on the fork and in the PR, as the 21:33Z read
+  found; the two commits above it (`82e8d0bd`, the docs commit, and the merge `45748012`) are local
+  (§29.5).
+- Base: `main`, measured at **2026-11-16T00:12Z** against `origin/main` `407e0e1f` (the merge of
+  #4314). `git merge-tree --write-tree origin/main 6c100112` exits **1**, tree `6897b157`, with
+  exactly two conflicted paths — `apps/gridcraft/src/main.rs` and `crates/calc/src/recalc.rs` — which
+  is why the PR's `mergeStateStatus` read `DIRTY` from 2026-11-14T15:12:48Z (§29.1). The merge that
+  resolves them is `45748012` (parents `82e8d0bd` and `407e0e1f`); on it
+  `git merge-tree --write-tree origin/main HEAD` exits **0**, tree `028f5ff6` (§29.2, §29.3).
+  The earlier version of this bullet said `origin/main` was `c0ee120a` and that the same command was
+  clean at tree `88d47c85`: true at the 2026-11-13T21:33Z instant it named, false by 2026-11-14,
+  because `main` moved 101 commits further. The base SHA the PR *reports* — `6308fc9e`, last computed
+  with the mergeable fields at the 2026-11-13T01:12Z push — is still the tip `57c9e21e` merged, so the
+  branch contains its own base and there is nothing left for `f800472b`'s deletions to conflict with
+  (§27.2); what the 2026-11-14 `main` added is a different conflict, and §29 is its resolution. The
+  base of §25 was `01abd954`; that tree, and the gate it was given, stay in §25.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z, `mergeable = true`, `mergeable_state = unstable`, head `6c100112`, base
-  `main` at `6308fc9e`, last update 2026-11-13T01:12:38Z, `reviewDecision` empty, 84 commits, 84
-  files, +18748/−34. `unstable` names the four runs of `6c100112` that wait for a maintainer's
-  approval; no job has failed (§27.5). `4ae789c6` is the code head — §23.2's closure (§28).
+  2026-11-10T14:56:54Z. At **2026-11-16T00:12Z** `gh pr view 3613` reads `headRefOid = 6c100112`,
+  `baseRefOid = 6308fc9e`, `mergeable = CONFLICTING`, `mergeStateStatus = DIRTY`,
+  `updatedAt = 2026-11-14T15:12:48Z`, `reviewDecision` empty, 84 files, +18748/−34 — the head is the
+  last pushed one and the conflict is `main`'s (§29.1). The local branch is `45748012`, one merge
+  above the local docs commit `82e8d0bd`, and `git rev-list --count --left-right
+  fork/feature/realtime-collaboration...HEAD` reads `0 128`: the merge is not on the fork, and no
+  push was made in this pass (§29.5). The 2026-11-13T21:33Z reading — `mergeable = true`,
+  `mergeable_state = unstable`, head `6c100112`, 84 commits, +18748/−34 — stays as that instant's;
+  `unstable` then named the four runs of `6c100112` that wait for a maintainer's approval (§27.5).
+  `4ae789c6` is the code head — §23.2's closure (§28).
 - Gate on the delivered head `6c100112`: **no executed CI run.** The four workflows the 01:12Z push
   created — `CI` (`43343147444`), `House rules` (`43343147321`), `Nix` (`43343147448`) and
   `SonarCloud` (`43343147558`) — ended `completed / action_required` with **zero jobs**: the
@@ -2271,3 +2289,138 @@ their tests — so §27.4's 3557/2 run stands for them.
   is needed anew. No CI has executed on any head of this branch (§27.1, §27.5).
 - **The review reply** to comment `4532845977`'s thread can now name `4ae789c6`: §23.2's finding is
   closed, not merely recorded.
+
+## 29. The PR went `DIRTY`: the merge of `origin/main` `407e0e1f` into the branch, `45748012` (2026-11-16)
+
+Between the 2026-11-13T21:33Z reading and 2026-11-14T15:12:48Z, `main` moved from `c0ee120a` to
+`407e0e1f` ("Merge pull request #4314 from storytold/cutover/shared-pdf-runlength"), and the PR's
+`mergeStateStatus` became `DIRTY` (`mergeable = CONFLICTING`) with nothing pushed to the branch. This
+section records the measurement that named the two conflicts, the merge that resolves them, and the
+gate on it. Nothing was pushed: the fork's head is still `6c100112` (§29.5).
+
+### 29.1 What the PR reports, and what the merge test says
+
+`gh pr view 3613` at **2026-11-16T00:12Z**: `headRefOid = 6c100112`, `baseRefOid = 6308fc9e`,
+`mergeable = CONFLICTING`, `mergeStateStatus = DIRTY`, `updatedAt = 2026-11-14T15:12:48Z`,
+`reviewDecision` empty, 84 files, +18748/−34. `git ls-remote fork
+refs/heads/feature/realtime-collaboration` reads `6c1001129a9e9cf9b5e9243339b21466b333577b`.
+
+Against `origin/main` `407e0e1f` (fetched at 00:11Z), before any merge, the tree-level test exits 1
+and names exactly two paths:
+
+```text
+$ git merge-tree --write-tree origin/main 6c100112
+6897b157a00249014e730711593a4f417f1f2373
+100644 f05b421dfce6d0ec30ead15c6ff3fc3bfd37f642 1	apps/gridcraft/src/main.rs
+100644 f5232b17c6a8c0a3abf2fc2650e953a360f2824f 2	apps/gridcraft/src/main.rs
+100644 729efece5877c28e0363928ca612eb6cb57f53f6 3	apps/gridcraft/src/main.rs
+100644 2b2ae70190f22330d3744fbc705862a62126b91f 1	crates/calc/src/recalc.rs
+100644 ab1b5bd03955843ee85e0123673f7b6f52bb64f0 2	crates/calc/src/recalc.rs
+100644 02c4453d16f77557751019f2e383c97cc597511a 3	crates/calc/src/recalc.rs
+EXIT 1
+```
+
+`Cargo.lock`, `Cargo.toml`, `crates/engine/src/{cmd,lib,tests}.rs` and the `ui-egui` files that
+conflicted in the 2026-11-11 merge (§25.1) now merge cleanly; the two paths above are new, and both
+are places where the branch and `main` added different things at the same spot rather than
+competing rewrites of the same lines. An earlier note of this repair quoted the pre-merge tree as
+`82c1716c`; the same command on the same pair of commits, git 2.53.0, returns `6897b157`, and the
+conflicted path set is identical — the hash is not load-bearing, the exit code and the two paths are.
+
+### 29.2 The two conflicts, and how each side was kept
+
+The merge is `45748012`, parents `82e8d0bd` (the local docs commit above `6c100112`) and `407e0e1f`,
+committed with `--no-ff` and no other change: `git diff --stat origin/main..45748012` is 84 files,
++18763/−34 — the PR's own 84 files, +15 lines over the pre-merge +18748, which is exactly the two
+resolutions below.
+
+| File | What the branch (HEAD) added there | What `main` added there | Resolution |
+|---|---|---|---|
+| `apps/gridcraft/src/main.rs` | `#[cfg(feature = "collab")] collab_ui::start_from_env();` after the command-line files are opened, and the `collab_ui` module with its `tick` in the app update — the collab wiring of §28 | the Linux/BSD title-bar rule `app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && …GRIDCRAFT_SYSTEM_TITLEBAR…`, which the `ViewportBuilder` below reads through `.with_decorations(!app.window_controls)` | both, in that order: the collab start, then main's assignment, both before the viewport is built. The `with_decorations` line came through the automatic merge; neither side changes behaviour |
+| `crates/calc/src/recalc.rs` | `self.last_evaluated.clear();` at the top of `Recalc::run` and `self.last_evaluated.extend(dirty.iter().copied());` in the round loop — the hook `Session::take_changed` reads, `last_evaluated`/`take_evaluated` being the branch's | the `Standing` bookkeeping: `let mut seen: HashSet<Key>` and the `if !full { self.standing = Standing::default(); }` reset, plus the `if !full { … self.standing.keys.insert(k) … }` block that remembers which formulas held no spill before the calculation | both: the branch's `clear()` first, then main's `seen`/`standing` reset; in the loop the branch's `extend(…)` first, then main's `if !full { … }` block. The two touch disjoint state, so the order does not change either result |
+
+The rest of `recalc.rs` (`Standing`'s definition, its `spill_is_blocked` use, the `pass_host.rs`
+change) merged without a conflict, and `git diff` against each side's blob shows the resolved file
+differs from `main`'s only by the two branch lines and from the branch's only by main's `Standing`
+block — nothing of either was dropped.
+
+### 29.3 The measurement after the merge
+
+```text
+$ git rev-parse --short HEAD
+45748012
+$ git status --short | wc -l
+0
+$ git merge-tree --write-tree origin/main HEAD
+028f5ff6606b6272177bc2dd97ac68b18b01d0ab
+EXIT 0
+$ git diff --stat origin/main..HEAD | tail -1
+84 files changed, 18763 insertions(+), 34 deletions(-)
+$ git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD
+0	128
+```
+
+So the tree is clean, the merge test is exit 0, and the branch is one merge above the fork with
+nothing behind it: every commit the fork has is an ancestor, and the 128 commits it lacks are
+`main`'s new line plus the two local commits above `6c100112` (`82e8d0bd` and `45748012`).
+
+### 29.4 Gates (remote host `agents`, 2026-11-16, on `45748012`, `umask 022`)
+
+One run through `scripts/remote-build.sh sh gridcraft`, the host's cached `target/`, `-j 8`, umask
+022 (what a GitHub runner uses; §25.4.1 records why the host's default 0002 breaks one of main's
+tests):
+
+```text
+cargo metadata --locked --format-version 1                        ok, EXIT 0
+cargo fmt --all -- --check                                        clean, EXIT 0
+cargo clippy --workspace --all-targets --keep-going -j 8
+  -- -D warnings                                                  clean, EXIT 0
+cargo clippy -p gridcraft --features collab --all-targets -j 8
+  -- -D warnings                                                  clean, EXIT 0
+cargo test -p gridcraft-collab-client --all-targets -j 8          4 lib + 14 converge + 11 document
+                                                                 + 5 parts + 5 rollback = 39 passed,
+                                                                 0 failed, EXIT 0
+cargo test -p gridcraft-calc -j 8                                 130 passed, 3 ignored, 0 failed,
+                                                                 EXIT 0
+cargo test -p gridcraft-engine --lib -j 8                         989 passed, 0 failed, EXIT 0
+cargo check -p gridcraft --features collab -j 8                   ok, EXIT 0
+```
+
+A second run on the same head carries the suites the first one did not, and the engine's
+integration targets:
+
+```text
+cargo test -p gridcraft-collab -p gridcraft-collab-server
+  -p gridcraft-collab-web -j 8                                   49 + (40 unit + 5 acceptance + 6 commit
+                                                                 callback + 2 logging + 9 persistence
+                                                                 + 12 socket = 74) + 11 passed,
+                                                                 0 failed, EXIT 0
+cargo test -p gridcraft-engine -j 8                              989 lib + 120 it + 7 other passed,
+                                                                 0 failed, EXIT 0
+```
+
+The engine's lib suite is 989 here, not §27.4's 962: `main`'s 101 commits added tests, and all of
+them pass on the merge — under `umask 022` the file-mode test §25.4.1 describes passes as it does on
+a runner. The client suite is the same 39 as §28.4, and the other three collaboration packages match
+§27.4's 49 / 74 / 11: this merge changed no collaboration test. The two changed files are covered
+twice: the workspace clippy compiles `gridcraft-calc` with `-D warnings` on main's `Standing` code
+and the branch's hook, and `gridcraft --features collab` is what compiles the `main.rs` resolution
+with the collab wiring on.
+Both runs are `EXIT 0` end to end (`gate.log` and `gate2.log` on the host); nothing was marked
+`--keep-going` except the workspace clippy, and nothing failed before the end.
+
+### 29.5 What was not done, and what remains
+
+- **No push.** The task of this pass was the merge and the gate, not a delivery: the fork's
+  `refs/heads/feature/realtime-collaboration` is still `6c100112` (ls-remote at 00:12Z), and the PR
+  therefore still reads `CONFLICTING` / `DIRTY`. A push of `45748012` is what makes GitHub recompute
+  the field, as the 13:27Z push of `ce9f48db` did in §27.5. Until then the docs commit that carries
+  this section is local too, so `rev-list fork...HEAD` reads `0 128`.
+- **The runs of `6c100112`** (`CI` `43343147444`, `House rules` `43343147321`, `Nix` `43343147448`,
+  `SonarCloud` `43343147558`) still wait for approval. If `45748012` is pushed, GitHub creates a new
+  set on it and these no longer cover the PR; approving an older head is what §28.5 warns against.
+  No CI has executed on any head of this branch.
+- **`mergeable` is not asserted here.** §29.1 is a reading with its instant; the field changes only
+  when GitHub recomputes it, which a push is what triggers.
+- **No CI file, no `main`.** `git diff --name-only origin/main..45748012 -- .github` is empty and no
+  file of `main` was modified: the merge takes `main`'s side everywhere it does not conflict.
