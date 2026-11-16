@@ -670,6 +670,37 @@ fn a_web_page_saved_as_xls_opens_its_table() {
 }
 
 #[test]
+fn a_web_page_keeps_its_cell_links() {
+    // #4325: Excel reads back an external link and a same-sheet link (`#RANGE!A5`) from its own Web
+    // Page export; the plain labels stay plain.
+    let page = "<html xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><head><!--[if gte mso 9]><xml><x:ExcelWorksheets><x:ExcelWorksheet>\
+        <x:Name>Data</x:Name></x:ExcelWorksheet></x:ExcelWorksheets></xml><![endif]--></head><body><table>\
+        <tr><td><a href=\"https://example.com/?a=1&amp;b=2\" title=\"Say &quot;hi&quot;\">Visit</a></td><td><a href=\"#RANGE!A5\">Jump</a></td>\
+        <td><a href=\"mailto:someone@example.com\">Mail</a></td><td><a href=\"#'Other sheet'!B2\">Far</a></td></tr>\
+        <tr><td>Visit</td><td>Jump</td><td><a href=\"javascript:alert(1)\">Bad</a></td><td><a href=\"page2.htm\">File</a></td></tr>\
+        <tr><td></td></tr><tr><td></td></tr><tr><td><a name=\"RANGE!A5\">Target</a></td></tr></table></body></html>";
+    let (wb, _) = open_bytes("links.htm", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let link = |a: &str| sh.hyperlinks.get(&CellRef::parse(a).unwrap()).map(|h| (h.target.as_str(), h.tooltip.as_deref(), h.external));
+    assert_eq!(link("A1"), Some(("https://example.com/?a=1&b=2", Some("Say \"hi\""), true)));
+    assert_eq!(link("B1"), Some(("Data!A5", None, false)));
+    assert_eq!(link("C1"), Some(("mailto:someone@example.com", None, true)));
+    assert_eq!(link("D1"), Some(("'Other sheet'!B2", None, false)));
+    // The plain controls, a script, a page file and a named anchor (no href) bring no link.
+    for a in ["A2", "B2", "C2", "D2", "A5"] {
+        assert_eq!(link(a), None, "{a}");
+    }
+    assert_eq!(sh.hyperlinks.len(), 4);
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::text("Visit"));
+    assert_eq!(sh.value(CellRef::parse("A5").unwrap()), gridcraft_core::Value::text("Target"));
+    // A sheet whose name needs quotes is quoted in the target.
+    let page = page.replace("<x:Name>Data</x:Name>", "<x:Name>My Data</x:Name>");
+    let (wb, _) = open_bytes("links.htm", page.as_bytes()).unwrap();
+    let b1 = wb.sheet(0).unwrap().hyperlinks.get(&CellRef::parse("B1").unwrap()).map(|h| h.target.clone());
+    assert_eq!(b1.as_deref(), Some("'My Data'!A5"));
+}
+
+#[test]
 fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
     // A page saved in Windows-1252 keeps its accented letters (it read as replacement characters).
     let mut page = b"<html><body><table><tr><th>Caf".to_vec();

@@ -455,12 +455,44 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
             Some(sheet) => set_first_sheet_name(&mut wb, &sheet),
             None => rename_first_sheet(&mut wb, name),
         }
+        if let Some(sh) = wb.sheet_mut(0) {
+            for (r, row) in rows.iter().enumerate() {
+                for (c, cell) in row.iter().enumerate() {
+                    let Some((href, title)) = &cell.link else { continue };
+                    if let Some(link) = html_cell_link(&sh.name, href, title.as_deref()) {
+                        sh.hyperlinks.insert(CellRef::new(r as u32, c as u32), link);
+                    }
+                }
+            }
+        }
         let mut warnings = report.warnings;
         if !matches!(kind, Some(FileKind::Html)) {
             warnings.insert(0, format!("'{name}' is a web page (HTML), not a workbook in the format its name says: its table was opened as a sheet. Save as .xlsx to keep your changes."));
         }
         (wb, warnings)
     }))
+}
+
+/// A cell's link read from a web page, as Excel reads its own Web Page export back (#4325):
+/// - an `http`, `https` or `mailto` address is a link out of the workbook;
+/// - `#RANGE!A5`, the anchor Excel names a cell of the page's sheet with, is that cell of `sheet`;
+/// - another fragment (`#Sheet2!A1`) is that place.
+///
+/// Anything else (a relative file, a script) is left out: the cell keeps its text alone.
+fn html_cell_link(sheet: &str, href: &str, title: Option<&str>) -> Option<gridcraft_model::Hyperlink> {
+    let tooltip = title.map(str::trim).filter(|t| !t.is_empty()).map(str::to_string);
+    if let Some(place) = href.trim().strip_prefix('#') {
+        let target = match place.strip_prefix("RANGE!") {
+            Some(cell) => format!("{}!{}", gridcraft_core::addr::quote_sheet(sheet), RangeRef::parse(cell)?.a1()),
+            None => place.to_string(),
+        };
+        return (!target.is_empty() && matches!(crate::links::classify(&target), crate::links::LinkKind::Internal(_)))
+            .then_some(gridcraft_model::Hyperlink { target, tooltip, external: false });
+    }
+    match crate::links::classify(href) {
+        crate::links::LinkKind::External(url) => Some(gridcraft_model::Hyperlink { target: url, tooltip, external: true }),
+        _ => None,
+    }
 }
 
 /// The text between the first `open` and the `close` after it, matched case-insensitively.

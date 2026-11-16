@@ -24,6 +24,8 @@ pub(crate) struct HtmlCell {
     pub text: String,
     pub num: Option<f64>,
     pub header: bool,
+    /// The first link in the cell: its `href` and `title`, entities decoded.
+    pub link: Option<(String, Option<String>)>,
 }
 
 /// The cells of the first table in `html`, row by row, read no further than `max_rows` rows of
@@ -90,9 +92,14 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
+                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th", link: None }, colspan, rowspan });
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
+            ("a", false) => {
+                if let Some(c) = cell.as_mut().filter(|c| c.cell.link.is_none()) {
+                    c.cell.link = attr(attrs, "href").map(|href| (decode(href), attr(attrs, "title").map(decode)));
+                }
+            }
             ("br", _) => {
                 if let Some(c) = cell.as_mut() {
                     c.cell.text.push(' ');
