@@ -4,7 +4,7 @@
 use std::str::FromStr;
 use std::sync::mpsc::{Receiver, channel};
 
-use gridcraft_ui_egui::{OpenWindow, SheetApp};
+use gridcraft_ui_egui::SheetApp;
 use muda::accelerator::Accelerator;
 use muda::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
 use serde_json::{Value, json};
@@ -168,16 +168,8 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Calculate Now", "formulas.calculateNow", None),
             ],
         ),
-        // The open workbooks follow the separator (`NativeMenu::sync_windows`).
-        (
-            "Window",
-            vec![
-                ("New Window", "view.newWindow", None),
-                ("Next Sheet", "sheet.next", None),
-                ("Previous Sheet", "sheet.previous", None),
-                ("-", "", None),
-            ],
-        ),
+        // AppKit lists the workbook windows after these (it is NSApp's windowsMenu).
+        ("Window", vec![("New Window", "view.newWindow", None), ("Next Sheet", "sheet.next", None), ("Previous Sheet", "sheet.previous", None)]),
         (
             "Help",
             vec![
@@ -195,14 +187,7 @@ pub struct NativeMenu {
     _menu: Menu,
     events: Receiver<MenuEvent>,
     theme_items: Vec<(&'static str, CheckMenuItem)>,
-    window_menu: Option<Submenu>,
-    /// The Window menu's window items and what they last showed.
-    window_items: Vec<CheckMenuItem>,
-    windows: Vec<OpenWindow>,
 }
-
-/// Menu id of the Window menu item that brings workbook `doc` forward.
-const WINDOW_ITEM: &str = "window:id:";
 
 /// The Quit item: asks about each unsaved workbook in its window first
 /// (`SheetApp::request_quit`), which AppKit's own Quit (terminate:) would skip.
@@ -277,39 +262,7 @@ impl NativeMenu {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new() }
-    }
-
-    /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
-    /// step with the session.
-    fn sync_windows(&mut self, app: &SheetApp) {
-        let windows = app.open_windows();
-        if windows != self.windows
-            && let Some(menu) = &self.window_menu
-        {
-            let same_windows = windows.len() == self.windows.len() && windows.iter().zip(&self.windows).all(|(a, b)| a.window == b.window);
-            if same_windows {
-                for (item, w) in self.window_items.iter().zip(&windows) {
-                    item.set_text(w.label());
-                }
-            } else {
-                for item in self.window_items.drain(..) {
-                    let _ = menu.remove(&item);
-                }
-                for w in &windows {
-                    let item = CheckMenuItem::with_id(format!("{WINDOW_ITEM}{}", w.window), w.label(), true, w.active, None);
-                    let _ = menu.append(&item);
-                    self.window_items.push(item);
-                }
-            }
-            self.windows = windows;
-        }
-        // AppKit flips a check item when it is chosen, so the active check is put back every poll.
-        for (item, w) in self.window_items.iter().zip(&self.windows) {
-            if item.is_checked() != w.active {
-                item.set_checked(w.active);
-            }
-        }
+        NativeMenu { _menu: menu, events: rx, theme_items }
     }
 
     /// Runs the chosen menu items. Commands go to the active window, the most recently focused;
@@ -319,10 +272,6 @@ impl NativeMenu {
             let id = ev.id.as_ref().to_string();
             if id == QUIT {
                 app.request_quit(ctx);
-                continue;
-            }
-            if let Some(window) = id.strip_prefix(WINDOW_ITEM).and_then(|w| w.parse::<u64>().ok()) {
-                app.run_or_alert("view.switchWindows", json!({"window": window}));
                 continue;
             }
             // Text selection belongs to the inline editor, not the worksheet clipboard/undo.
@@ -384,7 +333,6 @@ impl NativeMenu {
                 item.set_checked(checked);
             }
         }
-        self.sync_windows(app);
     }
 }
 
