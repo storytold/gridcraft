@@ -138,6 +138,32 @@ fn ods_dates_and_durations_use_formats_and_unsupported_values_stay_text() {
 }
 
 #[test]
+fn ods_error_cells_open_as_errors() {
+    // #4301: a typed error (no formula) and a formula's cached error are errors, not text; a string
+    // that reads like one, and a code Excel has no error for, stay text.
+    let xml = content(r##"<table:table table:name="Data"><table:table-row>
+        <table:table-cell office:value-type="error" office:string-value="#DIV/0!"><text:p>#DIV/0!</text:p></table:table-cell>
+        <table:table-cell office:value-type="string"><text:p>plain text</text:p></table:table-cell>
+        <table:table-cell table:formula="of:=1/0" office:value-type="string" office:string-value="" calcext:value-type="error"><text:p>#DIV/0!</text:p></table:table-cell>
+        <table:table-cell office:value-type="error"><text:p>#N/A</text:p></table:table-cell>
+        <table:table-cell office:value-type="error" office:string-value=" #value! "/>
+        <table:table-cell office:value-type="string" office:string-value="#DIV/0!"><text:p>#DIV/0!</text:p></table:table-cell>
+        <table:table-cell office:value-type="error"><text:p>Err:502</text:p></table:table-cell>
+    </table:table-row></table:table>"##)
+    .replace("xmlns:of=", "xmlns:calcext=\"urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0\" xmlns:of=");
+    let (wb, report) = read_ods(&make_zip(&[("mimetype", MIME), ("META-INF/manifest.xml", MANIFEST), ("content.xml", xml.as_bytes())])).unwrap();
+    let v = |c: u32| wb.sheets[0].value(CellRef::new(0, c));
+    assert_eq!(v(0), Value::Error(gridcraft_core::CellError::Div0));
+    assert_eq!(v(1), text("plain text"));
+    assert_eq!(v(2), Value::Error(gridcraft_core::CellError::Div0), "a formula's cached error");
+    assert_eq!(v(3), Value::Error(gridcraft_core::CellError::NA), "the code from the cell's text");
+    assert_eq!(v(4), Value::Error(gridcraft_core::CellError::Value), "case and spaces don't matter");
+    assert_eq!(v(5), text("#DIV/0!"), "a string is text whatever it says");
+    assert_eq!(v(6), text("Err:502"));
+    assert!(report.warnings.iter().any(|w| w.contains("unsupported")), "Err:502 is still reported: {:?}", report.warnings);
+}
+
+#[test]
 fn ods_namespaces_are_resolved_not_inferred_from_prefix_or_local_name() {
     let xml = content(r#"<table:table table:name="Actual"><table:table-row><table:table-cell office:value-type="float" office:value="9"/></table:table-row></table:table>"#)
         .replace("<office:", "<o:").replace("</office:", "</o:").replace(" office:", " o:").replace("xmlns:office=", "xmlns:o=")
@@ -243,8 +269,9 @@ fn ods_extension_error_cache_never_imports_its_placeholder_zero() {
         r#"<table:table-cell xmlns:calcext="urn:org:documentfoundation:names:experimental:calc:xmlns:calcext:1.0" calcext:value-type="error" office:value-type="float" office:value="0" table:formula="of:=1/0"><text:p>#DIV/0!</text:p></table:table-cell>"#,
     );
     let (wb, report) = read_ods(&bytes).unwrap();
-    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), text("#DIV/0!"));
-    assert!(report.warnings.iter().any(|w| w.contains("unsupported or missing")));
+    // The cached error itself, not the placeholder zero beside it (and, since #4301, not its text).
+    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), Value::Error(gridcraft_core::CellError::Div0));
+    assert!(!report.warnings.iter().any(|w| w.contains("unsupported or missing")), "{:?}", report.warnings);
 }
 
 #[test]
