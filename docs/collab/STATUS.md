@@ -2906,3 +2906,34 @@ The fix (`2f545007`): a failed install answers with `Snapshot`, then with a tail
 Gate on `2f545007` (host `agents`, `umask 022`, `-j 4`, tree clean before and after): `metadata --locked` rc=0, `fmt` rc=0, workspace `clippy -D warnings` rc=0, `test --workspace --no-fail-fast` rc=101 with **4146 passed, 2 failed, 5 ignored** over 66 result lines. The two are the §15 host-font pair (`column_autocomplete_folds_case_beyond_ascii`, `language_switch_renders_the_ribbon_and_persists`); the collaboration suites are 175 passed, 13 of them in `collab-client`'s `document`. A first run of this pass used the host's `umask 002` and failed `engine::io::save_keeps_the_destination_access_restrictions` (mode 664) — the umask, not the branch.
 
 No approval, no merge, no CI file, no `main`. The two commits (`2f545007` code and this page) are local: this session's `bash` policy denies `git push`, so pushing the branch to the fork is the owner's step; `fork/feature/realtime-collaboration` still reads `d06871e7`.
+
+## 33. `synced.rs:508`: an answer no longer moves a document waiting for its workbook (2026-11-16, 20:38Z)
+
+`PRRT_kwDOU_C7js61_A6I` was the last current thread of #3613. CodeRabbit's 17:01Z word on it — that
+the head it read, `d06871e7`, had no reconnect retry and no tests for one — was delivery, not code:
+`2f545007` was local then, and `a9920b42` carries it.
+
+The half that was still real is the sentence "a later `Applied` event can advance `document_version`
+without restoring the missing changes". While a workbook — or the tail asked for after one could not
+be installed — is on its way, the transport's cursor is ahead of the document, and `Synced::poll`
+applied *any* answer above `document_version`. A frame from the live broadcast ran its command on
+content the room had moved past, and the version it then claimed hid the operations still missing:
+they were skipped as already covered. During a recovery only the answer that continues the document
+exactly (`applied.version == document_version + 1`, where a tail starts) is applied and moves the
+version (`synced.rs:474`); anything above waits for the workbook or the tail, which carry it. An ack
+still leaves the resend queue and still counts as the person's undo step.
+
+Tests: `an_answer_above_the_next_version_waits_for_the_recovery` (`document.rs:408`) — a broken
+workbook at 4, an answer at 5 on a document at 0 neither lands nor moves the version, then the tail
+asked for from 0 lands one version at a time; and `a_snapshot_that_cannot_be_opened_claims_nothing_
+and_asks_again` (`:312`) now ends with the answer held back and the room's workbook carrying it.
+
+Gate on `a9920b42` (host `agents`, `umask 022`, tree clean before and after): `cargo xtask ci` —
+i18n-report ok, `fmt --all -- --check` ok, `clippy --workspace --all-targets -- -D warnings` ok,
+tests **4147 passed, 2 failed** over 48 result lines, then `test --doc` rc=0 and `assets`, `layers`,
+`wasm`, `parity`, `keytips` rc=0 each. The two are the §15 host-font pair of
+`crates/ui-egui/tests/it/interaction.rs`, which fail on this host without `CRAFT_FONTS_DIR` and on
+`main` alike (§31.3); the collaboration suites are 175 passed, 0 failed.
+
+The thread is answered and resolved; #3613 has no current open thread, and the four that stay open
+are outdated, as in §30. Pushed to the fork only: no approval, no merge, no CI file, no `main`.
