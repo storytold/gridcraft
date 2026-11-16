@@ -215,7 +215,9 @@ impl Expr {
     /// Visits every node depth-first, parents before children, left to right.
     pub fn walk<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
         // An explicit stack: a long operator chain must not recurse once per operand.
-        let mut pending = vec![self];
+        // Room for a typical formula up front, so walking one costs one allocation, not several.
+        let mut pending = Vec::with_capacity(8);
+        pending.push(self);
         while let Some(e) = pending.pop() {
             f(e);
             match e {
@@ -236,6 +238,19 @@ impl Expr {
     }
     /// Rewrites every node bottom-up, children left to right before their parent.
     pub fn map(self, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
+        // One operator on a non-chain operand (`A1*2`), the common case, needs no spine: rewrite
+        // the operands in their boxes.
+        if let Expr::Binary(op, mut a, mut b) = self {
+            if !matches!(*a, Expr::Binary(..)) {
+                *a = std::mem::replace(&mut *a, Expr::Missing).map(f);
+                *b = std::mem::replace(&mut *b, Expr::Missing).map(f);
+                return f(Expr::Binary(op, a, b));
+            }
+            return Expr::Binary(op, a, b).map_chain(f);
+        }
+        self.map_chain(f)
+    }
+    fn map_chain(self, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
         // Unwind the left spine of a long operator chain into a list, then rebuild it from the
         // innermost operand outwards, in the order a recursive rewrite would visit the nodes.
         let mut spine = Vec::new();
@@ -283,6 +298,12 @@ impl Expr {
 
 impl Clone for Expr {
     fn clone(&self) -> Self {
+        // One operator on a non-chain operand needs no spine.
+        if let Expr::Binary(op, a, b) = self
+            && !matches!(**a, Expr::Binary(..))
+        {
+            return Expr::Binary(*op, a.clone(), b.clone());
+        }
         // Copy the left spine of an operator chain in a loop (see [`Expr`]).
         let mut spine = Vec::new();
         let mut node = self;
