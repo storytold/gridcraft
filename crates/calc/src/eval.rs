@@ -102,6 +102,10 @@ pub trait Host {
     fn workbook(&self) -> &Workbook;
     /// The current value of a cell (evaluating it first if it is dirty).
     fn cell_value(&mut self, sheet: usize, c: CellRef) -> Value;
+    /// A lookup's selected result also depends on the anchor when it is a spill child.
+    fn lookup_result(&mut self, sheet: usize, c: CellRef) -> Value {
+        self.cell_value(sheet, c)
+    }
     fn now_serial(&self) -> f64;
     fn random(&mut self) -> f64;
     /// Called when a volatile or dynamic-reference function is used.

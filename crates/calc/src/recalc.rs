@@ -314,8 +314,12 @@ impl Calc {
         // The layout the sheets hold now decides who keeps cells two arrays both want.
         // (A Python cell that holds a spill counts too, as it does in the incremental pass.)
         let mut held = HashSet::default();
+        let mut prior_spills = SpillIndex::default();
         for i in 0..wb.sheets.len() {
             if let Some(sh) = wb.sheet(i) {
+                for (anchor, range) in &sh.spill_ranges {
+                    prior_spills.insert((i, *anchor), range.height() as usize, range.width() as usize);
+                }
                 held.extend(sh.spill_ranges.keys().filter(|a| sh.cell(**a).is_some_and(|c| c.formula.is_some() || c.py.is_some())).map(|a| (i, *a)));
             }
         }
@@ -331,7 +335,7 @@ impl Calc {
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
         self.standing = Standing { held: true, keys: held };
-        self.run(wb, all, true);
+        self.run(wb, all, true, prior_spills);
         self.standing = Standing::default();
     }
 
@@ -393,7 +397,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, false);
+            self.run(wb, own, false, SpillIndex::default());
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -466,7 +470,7 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds, &areas);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, false);
+        self.run(wb, dirty, false, SpillIndex::default());
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -528,7 +532,7 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool, mut prior_spills: SpillIndex) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         let mut seen: HashSet<Key> = HashSet::default();
@@ -545,6 +549,13 @@ impl Calc {
                     if seen.insert(k) && wb.sheet(k.0).is_some_and(|s| !s.spill_ranges.contains_key(&k.1)) {
                         self.standing.keys.insert(k);
                     }
+                }
+            }
+            // Keep spill ownership through rounds that temporarily replace an anchor with
+            // #CIRC!: otherwise removing that spill makes the same loop look blank next round.
+            for (sheet, sh) in wb.sheets.iter().enumerate() {
+                for (anchor, range) in &sh.spill_ranges {
+                    prior_spills.insert((sheet, *anchor), range.height() as usize, range.width() as usize);
                 }
             }
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
@@ -565,6 +576,7 @@ impl Calc {
             let (results, spills, cycles) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.standing = Some(&self.standing);
+                host.prior_spills = Some(&prior_spills);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);

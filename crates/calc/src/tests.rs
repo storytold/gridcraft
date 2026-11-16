@@ -3205,3 +3205,43 @@ fn lifted_reference_lookups_share_the_scan_limit() {
         assert_eq!(crate::evaluate(&wb, 0, c("E1"), formula), Value::Error(CellError::Num), "{formula}");
     }
 }
+
+#[test]
+fn selected_lookup_spill_child_preserves_genuine_cycles() {
+    for (formula, spill, cells) in [
+        ("=VLOOKUP(2,A1:B3,2,FALSE)", "=SEQUENCE(3,1,E1)", [("A1", "1"), ("A2", "2"), ("A3", "3")]),
+        ("=HLOOKUP(2,A1:C2,2,FALSE)", "=SEQUENCE(1,3,E1)", [("A1", "1"), ("B1", "2"), ("C1", "3")]),
+    ] {
+        let mut t = T::new();
+        for (at, value) in cells {
+            t.set(at, value);
+        }
+        let anchor = if formula.contains("VLOOKUP") { "B1" } else { "A2" };
+        t.set(anchor, spill);
+        t.set("E1", formula);
+        assert_eq!(t.get("E1"), Value::Error(CellError::Circ), "incremental: {formula}");
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.get("E1"), Value::Error(CellError::Circ), "full: {formula}");
+        assert!(!t.calc.circular.is_empty());
+        t.set("E1", "7");
+        assert!(t.calc.circular.is_empty());
+        assert_eq!(t.num("B2"), 8.0);
+    }
+}
+
+#[test]
+fn selected_spill_child_updates_and_releases_old_layout() {
+    let mut t = T::new();
+    for (at, input) in [("A1", "1"), ("A2", "2"), ("A3", "3"), ("D1", "3"), ("B1", "=SEQUENCE(D1,1,10)"), ("E1", "=VLOOKUP(2,A1:B3,2,FALSE)")] {
+        t.set(at, input);
+    }
+    assert_eq!(t.num("E1"), 11.0);
+    t.set("D1", "1");
+    assert_eq!(t.num("E1"), 0.0);
+    t.set("D1", "3");
+    assert_eq!(t.num("E1"), 11.0);
+    t.set("B2", "99");
+    assert_eq!(t.num("E1"), 99.0);
+    t.set("B2", "");
+    assert_eq!(t.num("E1"), 11.0);
+}

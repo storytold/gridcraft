@@ -305,7 +305,7 @@ impl<'h> Evaluator<'h> {
                         CellRef::new(area.range.start.row.saturating_add(index), area.range.start.col.saturating_add(offset))
                     };
                     // Keep blanks for ISBLANK and concatenation; final-result coercion displays 0.
-                    self.host.cell_value(area.sheet, cell)
+                    self.host.lookup_result(area.sheet, cell)
                 }
                 v => v,
             }

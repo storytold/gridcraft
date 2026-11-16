@@ -27,6 +27,8 @@ pub(super) struct PassHost<'a> {
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
     /// Where the areas in `spills` are, so a read finds the ones it meets without scanning them all.
     spill_index: SpillIndex,
+    /// Spill ownership before this pass, retained while cyclic anchors have no new array yet.
+    pub(super) prior_spills: Option<&'a SpillIndex>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -99,6 +101,7 @@ impl<'a> PassHost<'a> {
             in_progress: HashSet::default(),
             spills: HashMap::default(),
             spill_index: SpillIndex::default(),
+            prior_spills: None,
             used: HashMap::default(),
             rng,
             standing: None,
@@ -605,6 +608,38 @@ impl Host for PassHost<'_> {
             return arr.get(dr, dc).cloned().unwrap_or_default();
         }
         self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
+    }
+    fn lookup_result(&mut self, sheet: usize, c: CellRef) -> Value {
+        // A selected spill child depends on its anchor even before the new spill is laid out.
+        // Stored cells (including a newly typed spill blocker) keep their own values.
+        let vacant =
+            self.wb.sheet(sheet).and_then(|sh| sh.cell(c)).is_none_or(|cell| cell.formula.is_none() && cell.py.is_none() && cell.value.is_empty());
+        // Iteration reads previous values through its existing spill/taint path.
+        if !self.iterate
+            && vacant
+            && let Some(prior) = self.prior_spills
+        {
+            let anchor = match prior.covering(sheet, c) {
+                Cover::One(anchor) => Some(anchor),
+                // Valid laid-out spills do not overlap; ambiguous historical coverage is not
+                // enough to assign this cell to an anchor.
+                Cover::None | Cover::Many => None,
+            };
+            if let Some(anchor) = anchor.filter(|anchor| *anchor != c) {
+                let anchor = (sheet, anchor);
+                if self.pending.contains(&anchor) || self.results.contains_key(&anchor) {
+                    let value = self.compute(anchor);
+                    if matches!(value, Value::Error(CellError::Circ | CellError::Calc)) {
+                        return value;
+                    }
+                    // A resized, blocked or errored anchor no longer supplies its old children.
+                    if !self.spills.get(&anchor).is_some_and(|arr| spill_covers(anchor.1, arr, c)) {
+                        return Value::Empty;
+                    }
+                }
+            }
+        }
+        self.cell_value(sheet, c)
     }
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         let (h, w) = (range.height() as usize, range.width() as usize);
