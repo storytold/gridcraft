@@ -5,11 +5,21 @@
   §27.5 and §28.5 name what the 13:27Z, 17:31Z, 23:20Z and 01:12Z pushes changed and what remains, so
   a later reader can tell a stale line from a wrong one. The measurements of 2026-11-12 (23:37Z,
   20:32Z, 17:31Z and earlier) stay where they were taken, with the instant and the head they
-  describe; a later push makes them historical, not wrong.
-- **Measured again at 2026-11-16T00:12Z (§29):** the PR reads `CONFLICTING` / `DIRTY` on head
-  `6c100112`, because `main` reached `407e0e1f`; the local branch carries the merge `45748012` of that
-  `main` and is unpushed. The 2026-11-13 numbers below stand as that instant's, and the merge bullet
-  and the PR bullet name the new reading.
+  describe; a later push makes them historical, not wrong. §29.6 names the 2026-11-16T01:14Z push,
+  which published the merge of §29 and the docs commits above it, and the fields the PR read on that
+  head at 03:47Z; §29.7 is its gate.
+- **Measured again at 2026-11-16T03:47Z (§29.6):** the PR reads `headRefOid = 4303b5aa`,
+  `baseRefOid = 407e0e1f`, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`,
+  `updatedAt = 2026-11-16T01:14:29Z`, `reviewDecision` empty, 84 files, +18922/−34;
+  `git ls-remote fork refs/heads/feature/realtime-collaboration` reads
+  `4303b5aaeda9960aee5d8801ed4495553dc8ca74`, the local HEAD is the same commit, and
+  `git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD` is `0 0` on a clean
+  tree. The merge `45748012` (§29.2) was published by the 01:14Z push, so the 2026-11-16T00:12Z
+  reading — head `6c100112`, `CONFLICTING` / `DIRTY`, merge local and unpushed — is that instant's,
+  not this head's; §29.5 keeps it with a note on what the push changed. The numbers of 2026-11-13
+  below stand as their instant's. (The commit that carries this page sits one above `4303b5aa` and is
+  local: the fork stays at `4303b5aa` until a push, and this bullet is the 03:47Z reading, not a claim
+  about the page's own commit — the rule below.)
 - **Rule of the record — pushes:** a sentence that says a commit is or is not pushed is written only
   after `git ls-remote fork refs/heads/feature/realtime-collaboration` at the measurement instant. A
   local `git rev-list` cannot tell a pushed head from an unpushed one, and the 16:40Z version of this
@@ -42,33 +52,51 @@
   above `4ae789c6` changes one file, this page. `git diff --stat 6308fc9e..6c100112` is 84 files,
   +18748/−34 — the PR's own numbers — so no code of the branch's was dropped and none came from the
   merge itself. Every branch commit up to `6c100112` is on the fork and in the PR, as the 21:33Z read
-  found; the two commits above it (`82e8d0bd`, the docs commit, and the merge `45748012`) are local
-  (§29.5).
+  found; the four commits above it (`82e8d0bd`, the docs commit, the merge `45748012`, `cd0ddb3d` and
+  this page's `4303b5aa`) are on the fork too: the push of 2026-11-16T01:14Z published the merge and
+  both docs commits (§29.6), and `git rev-list --count --left-right
+  fork/feature/realtime-collaboration...HEAD` reads `0 0`. `git diff --stat 407e0e1f..4303b5aa` is
+  84 files, +18922/−34 — this page's own growth over 84 files, +18748/−34.
 - Base: `main`, measured at **2026-11-16T00:12Z** against `origin/main` `407e0e1f` (the merge of
-  #4314). `git merge-tree --write-tree origin/main 6c100112` exits **1**, tree `6897b157`, with
+  #4314), which the PR reports as its base at 2026-11-16T03:47Z too (§29.6).
+  `git merge-tree --write-tree origin/main 6c100112` exits **1**, tree `6897b157`, with
   exactly two conflicted paths — `apps/gridcraft/src/main.rs` and `crates/calc/src/recalc.rs` — which
   is why the PR's `mergeStateStatus` read `DIRTY` from 2026-11-14T15:12:48Z (§29.1). The merge that
   resolves them is `45748012` (parents `82e8d0bd` and `407e0e1f`); on it
-  `git merge-tree --write-tree origin/main HEAD` exits **0**, tree `028f5ff6` (§29.2, §29.3).
+  `git merge-tree --write-tree origin/main HEAD` exits **0**, tree `028f5ff6` (§29.2, §29.3), and on
+  the delivered head `4303b5aa` it still exits **0** — tree `9a5acc5a` against `origin/main`
+  `19f07f3a`, which is where `main` stood at 2026-11-16T03:55Z, past the PR's base: the branch merges
+  cleanly with today's `main` as well (§29.7).
   The earlier version of this bullet said `origin/main` was `c0ee120a` and that the same command was
   clean at tree `88d47c85`: true at the 2026-11-13T21:33Z instant it named, false by 2026-11-14,
-  because `main` moved 101 commits further. The base SHA the PR *reports* — `6308fc9e`, last computed
-  with the mergeable fields at the 2026-11-13T01:12Z push — is still the tip `57c9e21e` merged, so the
+  because `main` moved 101 commits further. The base SHA the PR *reported* at the
+  2026-11-13T01:12Z push — `6308fc9e` — is still the tip `57c9e21e` merged, so the
   branch contains its own base and there is nothing left for `f800472b`'s deletions to conflict with
   (§27.2); what the 2026-11-14 `main` added is a different conflict, and §29 is its resolution. The
   base of §25 was `01abd954`; that tree, and the gate it was given, stay in §25.
 - PR: <https://github.com/storytold/gridcraft/pull/3613> — open, **not a draft** since
-  2026-11-10T14:56:54Z. At **2026-11-16T00:12Z** `gh pr view 3613` reads `headRefOid = 6c100112`,
-  `baseRefOid = 6308fc9e`, `mergeable = CONFLICTING`, `mergeStateStatus = DIRTY`,
-  `updatedAt = 2026-11-14T15:12:48Z`, `reviewDecision` empty, 84 files, +18748/−34 — the head is the
-  last pushed one and the conflict is `main`'s (§29.1). The local branch is `45748012`, one merge
-  above the local docs commit `82e8d0bd`, and `git rev-list --count --left-right
-  fork/feature/realtime-collaboration...HEAD` reads `0 128`: the merge is not on the fork, and no
-  push was made in this pass (§29.5). The 2026-11-13T21:33Z reading — `mergeable = true`,
+  2026-11-10T14:56:54Z. At **2026-11-16T03:47Z** `gh pr view 3613` reads `headRefOid = 4303b5aa`,
+  `baseRefOid = 407e0e1f`, `mergeable = MERGEABLE`, `mergeStateStatus = UNSTABLE`,
+  `updatedAt = 2026-11-16T01:14:29Z`, `reviewDecision` empty, 84 files, +18922/−34; the local HEAD is
+  the same commit and `git rev-list --count --left-right
+  fork/feature/realtime-collaboration...HEAD` reads `0 0` on a clean tree (§29.6). The
+  2026-11-16T00:12Z reading — head `6c100112`, `baseRefOid = 6308fc9e`, `CONFLICTING` / `DIRTY`,
+  `updatedAt = 2026-11-14T15:12:48Z`, 84 files, +18748/−34, the merge `45748012` local and the branch
+  `0 128` behind the fork — stays as that instant's: it was true before the 01:14Z push, and §29.5
+  keeps it with a note on what the push changed. The 2026-11-13T21:33Z reading — `mergeable = true`,
   `mergeable_state = unstable`, head `6c100112`, 84 commits, +18748/−34 — stays as that instant's;
   `unstable` then named the four runs of `6c100112` that wait for a maintainer's approval (§27.5).
   `4ae789c6` is the code head — §23.2's closure (§28).
-- Gate on the delivered head `6c100112`: **no executed CI run.** The four workflows the 01:12Z push
+- Gate on the delivered head `4303b5aa`: **no executed CI run.** The commit's check-runs read one
+  entry — CodeRabbit `completed / skipped` at 2026-11-16T01:14:30Z — and its status API `pending` with
+  0 statuses, so the rollup shows nothing but that skip and no workflow has executed on any head of
+  this branch (§29.7). **The host gate is green on this head (§29.7):** `cargo metadata --locked`,
+  `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --keep-going -D warnings`,
+  the collaboration suites 173 passed (49 + 39 + 74 + 11), `gridcraft-calc` 130 passed / 3 ignored,
+  `gridcraft-engine` 989 lib + 120 integration + 7 legacy, and `cargo check -p gridcraft --features
+  collab`, every step `rc=0`, log `.craft/logs/gate-gridcraft-3613-4303b5aa.log`.
+- Gate on the head `6c100112`, which was the delivered head until the 01:14Z push:
+  **no executed CI run.** The four workflows the 01:12Z push
   created — `CI` (`43343147444`), `House rules` (`43343147321`), `Nix` (`43343147448`) and
   `SonarCloud` (`43343147558`) — ended `completed / action_required` with **zero jobs**: the
   repository needs a maintainer to approve a run from a fork. The commit's status API holds no
@@ -99,8 +127,8 @@
   296 catalog commands (94.9%), the keytips tables already matching (`--check`), and
   `cargo metadata --locked` silent. The code head `42e2dbe5` keeps §26.3's gate, whose test step
   stopped on the same `umask` test. No line of this paragraph is a CI result: no run of `42e2dbe5`,
-  `b46ed3c3`, `dff6971a`, `4ae789c6`, `ce9f48db`, `bfa13a40`, `8e3610b0` or `6c100112` ever
-  executed. Under earlier pages, the code is
+  `b46ed3c3`, `dff6971a`, `4ae789c6`, `ce9f48db`, `bfa13a40`, `8e3610b0`, `6c100112`, `45748012`,
+  `cd0ddb3d` or `4303b5aa` ever executed (§29.7 for the last three). Under earlier pages, the code is
   `5bcdf3c9`'s, gated in
   §25.4; `b9773627`'s code is `2a5f3e00`'s, gated in §24.4; `915d994e`'s code is `7b42c82a`'s,
   gated in §23.4; and the code of `00b146df` was gated in §22.3: `fmt` clean, `clippy -D warnings`
@@ -2296,7 +2324,9 @@ Between the 2026-11-13T21:33Z reading and 2026-11-14T15:12:48Z, `main` moved fro
 `407e0e1f` ("Merge pull request #4314 from storytold/cutover/shared-pdf-runlength"), and the PR's
 `mergeStateStatus` became `DIRTY` (`mergeable = CONFLICTING`) with nothing pushed to the branch. This
 section records the measurement that named the two conflicts, the merge that resolves them, and the
-gate on it. Nothing was pushed: the fork's head is still `6c100112` (§29.5).
+gate on it. Nothing was pushed *by that pass*: its fork head was still `6c100112` (§29.5, true at
+00:12Z). The delivery came at 01:14Z; §29.6 records the pushed head and what the PR reads on it, and
+§29.7 its gate.
 
 ### 29.1 What the PR reports, and what the merge test says
 
@@ -2412,7 +2442,8 @@ a runner. The client suite is the same 39 as §28.4, and the other three collabo
 twice: the workspace clippy compiles `gridcraft-calc` with `-D warnings` on main's `Standing` code
 and the branch's hook, and `gridcraft --features collab` is what compiles the `main.rs` resolution
 with the collab wiring on.
-Both runs are `EXIT 0` end to end (`gate.log` and `gate2.log` on the host); nothing was marked
+Both runs are `EXIT 0` end to end (`gate.log` and `gate2.log` on the host, moved on 2026-11-16 to
+`~/gridcraft-gate-logs/3613-45748012/` so the host's worktree reads clean); nothing was marked
 `--keep-going` except the workspace clippy, and nothing failed before the end.
 
 ### 29.5 What was not done, and what remains
@@ -2430,3 +2461,105 @@ Both runs are `EXIT 0` end to end (`gate.log` and `gate2.log` on the host); noth
   when GitHub recomputes it, which a push is what triggers.
 - **No CI file, no `main`.** `git diff --name-only origin/main..45748012 -- .github` is empty and no
   file of `main` was modified: the merge takes `main`'s side everywhere it does not conflict.
+
+**Superseded at 2026-11-16T01:14Z.** The push this subsection says was not made was made by the PR
+pass: `4303b5aa` (the docs commit above `cd0ddb3d`) is on the fork, the PR recomputed its fields, and
+those three bullets are the 00:12Z state, kept as that instant's. §29.6 is the new reading and §29.7
+the gate on it.
+
+### 29.6 Delivered: `4303b5aa` on the fork, the PR reads `MERGEABLE` / `UNSTABLE` (2026-11-16T03:47Z)
+
+```text
+$ gh pr view 3613 --repo storytold/gridcraft \
+    --json headRefOid,baseRefOid,mergeable,mergeStateStatus,updatedAt,reviewDecision
+  headRefOid        4303b5aaeda9960aee5d8801ed4495553dc8ca74
+  baseRefOid        407e0e1fa9146df5ddf632750a93aabfbb079208
+  mergeable         MERGEABLE
+  mergeStateStatus  UNSTABLE
+  updatedAt         2026-11-16T01:14:29Z
+  reviewDecision    ""
+  files / lines     84 files, +18922/−34
+$ git ls-remote fork refs/heads/feature/realtime-collaboration
+4303b5aaeda9960aee5d8801ed4495553dc8ca74	refs/heads/feature/realtime-collaboration
+$ git rev-parse HEAD
+4303b5aaeda9960aee5d8801ed4495553dc8ca74
+$ git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD
+0	0
+$ git status --porcelain | wc -l
+0
+```
+
+The push of **2026-11-16T01:14Z** published three commits the previous pass had left local — the
+merge `45748012` (committed 00:10Z), `cd0ddb3d` (00:31Z) and `4303b5aa` (00:31Z) — and GitHub
+recomputed the mergeable fields on it: `updatedAt` moved from 2026-11-14T15:12:48Z to 01:14:29Z,
+`mergeable` from `CONFLICTING` to `MERGEABLE`, `mergeStateStatus` from `DIRTY` to `UNSTABLE`, and
+`baseRefOid` from `6308fc9e` to `407e0e1f`. `UNSTABLE` here is not a red build: no workflow of this
+branch has ever executed (§29.7), and the only check run on the head is CodeRabbit's skip. The fork,
+the branch and the PR now name one commit, and `0 0` says nothing is ahead of or behind the fork.
+
+`git diff --stat 407e0e1f..4303b5aa` is 84 files, +18922/−34: the PR's own 84 files. Of the +174
+over §29.1's +18748, +15 are the two merge resolutions (§29.2) and the rest is the two docs commits
+on this page (`cd0ddb3d`, `4303b5aa`).
+
+### 29.7 Gate on the delivered head `4303b5aa` (remote host `agents`, `umask 022`)
+
+One run through `scripts/remote-build.sh sh gridcraft` on a clean tree, the host's cached `target/`,
+`-j 8`, `umask 022` (what a GitHub runner uses, §25.4.1), log
+`.craft/logs/gate-gridcraft-3613-4303b5aa.log`:
+
+```text
+$ git rev-parse HEAD                                   4303b5aaeda9960aee5d8801ed4495553dc8ca74
+$ cargo metadata --locked --format-version 1           EXIT 0
+$ git status --porcelain | wc -l   after metadata      0
+$ cargo fmt --all -- --check                           EXIT 0
+$ cargo clippy --workspace --all-targets --keep-going -j 8 -- -D warnings
+                                                       EXIT 0
+$ cargo test -p gridcraft-collab -p gridcraft-collab-client \
+    -p gridcraft-collab-server -p gridcraft-collab-web -j 8
+   gridcraft-collab              49 passed
+   gridcraft-collab-client        4 lib + 14 converge + 11 document + 5 parts + 5 rollback = 39
+   gridcraft-collab-server       40 unit + 5 acceptance + 6 commit callback + 2 logging
+                                 + 9 persistence + 12 socket = 74
+   gridcraft-collab-web          11 passed                          173 passed, 0 failed, EXIT 0
+$ cargo test -p gridcraft-calc -j 8                    130 passed, 3 ignored, 0 failed, EXIT 0
+$ cargo test -p gridcraft-engine -j 8                  989 lib + 120 it + 7 legacy passed,
+                                                       0 failed, EXIT 0
+$ cargo check -p gridcraft --features collab -j 8      EXIT 0
+$ git status --porcelain | wc -l   at the end          0
+```
+
+The first run of this pass wrote `git status --porcelain` as `2` before any command and after
+`metadata --locked` alike; the two lines were `?? gate.log` and `?? gate2.log`, the scratch logs of
+the 00:12Z pass (§29.4) left in the worktree, not files of the branch. They were moved to
+`~/gridcraft-gate-logs/3613-45748012/` and both readings are `0` in the log above: the tree the gate
+ran on is the commit's own.
+
+**The two resolved conflicts lost neither side**, read against each side's blob rather than asserted:
+
+```text
+$ git diff 82e8d0bd 4303b5aa -- apps/gridcraft/src/main.rs
+  only main's side is added: app.window_controls = …, .with_decorations(!app.window_controls)
+$ git diff 407e0e1f 4303b5aa -- apps/gridcraft/src/main.rs
+  only the branch's side is added: mod collab_ui, collab_ui::tick(&mut self.0),
+  collab_ui::start_from_env() after the files are opened
+$ git diff 82e8d0bd 4303b5aa -- crates/calc/src/recalc.rs
+  only main's side is added: Standing, its Default, recalc_all's held layout, run's seen/standing
+$ git diff 407e0e1f 4303b5aa -- crates/calc/src/recalc.rs
+  only the branch's side is added: last_evaluated, take_evaluated, run's clear()/extend()
+```
+
+So each resolved file equals one side plus exactly the other side's lines: `main.rs` keeps both the
+collab wiring and the Linux/BSD title-bar rule, `recalc.rs` keeps both `last_evaluated`/`take_evaluated`
+and `Standing`, and the two added `-D warnings` steps that compile them — the workspace clippy and
+`gridcraft --features collab` — are green. `git merge-tree --write-tree origin/main HEAD` on this head
+against `origin/main` `19f07f3a` (where `main` stood at 03:55Z, past the PR's base `407e0e1f`) exits
+**0**, tree `9a5acc5a`: the branch merges cleanly with today's `main` too, at tree level.
+
+No CI ran on this head either: check-runs list one entry, CodeRabbit `completed / skipped` at
+2026-11-16T01:14:30Z, the status API reads `pending` with 0 statuses, and no workflow run exists for
+`4303b5aa`, `cd0ddb3d` or `45748012`. This gate is the host's, not a runner's.
+
+The commit that carries this section (`docs(collab): …`) is one above `4303b5aa` and **local**: the
+fork is `4303b5aa` until a push, as §29.6's `ls-remote` says at its instant. That is the rule of the
+record in play, not a contradiction — the page names what the commands returned when they were run,
+and the commit that delivers the page is what makes the name historical.
