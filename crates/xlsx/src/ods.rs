@@ -614,6 +614,14 @@ fn parse_date(s: &str) -> Option<(f64, &'static str)> {
     let h: u32 = digits(h)?.parse().ok()?;
     let m: u32 = digits(m)?.parse().ok()?;
     let sec = decimal(sec)?;
+    // XML Schema's `24:00:00` (with nothing after it) is the next day's midnight, as ODF's
+    // dateOrDateTime allows and Excel reads it (#4359); `24:00:01` and later aren't times. The
+    // midnight after the last day there is has no date, so it stays text.
+    if h == 24 && m == 0 && sec == 0.0 {
+        let next = day + 1.0;
+        let last = serial_from_ymd(DateSystem::D1900, 9999, 12, 31)?;
+        return (next <= last).then_some((next, "yyyy-mm-dd hh:mm:ss.000"));
+    }
     if h >= 24 || m >= 60 || sec >= 60.0 {
         return None;
     }
