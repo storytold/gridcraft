@@ -84,6 +84,7 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
             ("tr", false) if in_table => {
                 grid.finish(&mut cell);
                 grid.start_row();
+                grid.blank_rows = xl_row_span(attrs) - 1;
             }
             ("td" | "th", false) if in_table => {
                 grid.finish(&mut cell);
@@ -111,6 +112,18 @@ fn span(attrs: &str, name: &str, max: usize) -> usize {
     attr(attrs, name).and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, max)
 }
 
+/// How many sheet rows a `<tr>` stands for. Excel's Web Page export writes a run of blank rows as
+/// one row styled `mso-xlrowspan:N`, and Excel reads it back as N rows (#4327). At least 1, at
+/// most the sheet's height.
+fn xl_row_span(attrs: &str) -> usize {
+    const KEY: &str = "mso-xlrowspan";
+    let Some(style) = attr(attrs, "style") else { return 1 };
+    let Some(at) = find_ci(style, KEY) else { return 1 };
+    let Some(value) = style.get(at + KEY.len()..).map(str::trim_start).and_then(|s| s.strip_prefix(':')) else { return 1 };
+    let digits: String = value.trim_start().chars().take_while(char::is_ascii_digit).take(12).collect();
+    digits.parse::<usize>().unwrap_or(1).clamp(1, MAX_ROW_SPAN)
+}
+
 /// A cell whose closing tag hasn't been seen yet.
 struct OpenCell {
     cell: HtmlCell,
@@ -129,6 +142,8 @@ struct Grid {
     covered_until: Vec<usize>,
     /// The row or cell budget ran out: nothing more is read.
     full: bool,
+    /// Blank rows the last `<tr>` still stands for (`mso-xlrowspan`), opened before the next one.
+    blank_rows: usize,
 }
 
 impl Grid {
@@ -136,11 +151,19 @@ impl Grid {
         let max_rows = max_rows.min(MAX_ROW_SPAN);
         let max_cols = max_cols.min(MAX_SPAN);
         let budget = MAX_HTML_CELLS.min(max_rows.saturating_mul(max_cols));
-        Grid { rows: Vec::new(), max_rows, max_cols, budget, covered_until: Vec::new(), full: false }
+        Grid { rows: Vec::new(), max_rows, max_cols, budget, covered_until: Vec::new(), full: false, blank_rows: 0 }
     }
 
-    /// Opens a new row, or marks the grid full when the pasted text has no more rows.
+    /// Opens a new row, after the blank rows the previous one stood for, or marks the grid full
+    /// when the pasted text has no more rows.
     fn start_row(&mut self) {
+        for _ in 0..std::mem::take(&mut self.blank_rows) {
+            if self.rows.len() >= self.max_rows {
+                self.full = true;
+                return;
+            }
+            self.rows.push(Vec::new());
+        }
         if self.rows.len() >= self.max_rows {
             self.full = true;
         } else {
@@ -444,6 +467,27 @@ mod tests {
         assert_eq!(rows[0][0].num, Some(1.0));
         assert!(table_cells(&html, 0, 5).is_empty());
         assert!(table_cells(&html, 4, 0).iter().all(Vec::is_empty));
+    }
+
+    #[test]
+    fn an_excel_row_span_of_blank_rows_keeps_later_rows_in_place() {
+        // #4327: Excel writes blank rows 3 and 4 as one `<tr>` styled `mso-xlrowspan:2`, and reads
+        // the value after them back at row 5.
+        let html = "<table><tr><td>one</td></tr><tr><td>two</td></tr>\
+            <tr height=40 style='height:30.0pt;mso-xlrowspan:2'><td colspan=2 style='mso-ignore:colspan'></td></tr>\
+            <tr><td>five</td><td x:num=\"5\">5</td></tr><tr style='MSO-XLROWSPAN: 3'><td></td></tr><tr><td>nine</td></tr></table>";
+        let rows = table_cells(html, 20, 3);
+        let first: Vec<&str> = rows.iter().map(|r| r.first().map_or("", |c| c.text.as_str())).collect();
+        assert_eq!(first, ["one", "two", "", "", "five", "", "", "", "nine"]);
+        assert_eq!(rows[4][1].num, Some(5.0));
+        // Without the style, or with a value that isn't a count, a row is one row.
+        for style in ["", " style='height:15pt'", " style='mso-xlrowspan:x'", " style='mso-xlrowspan:0'"] {
+            let html = format!("<table><tr{style}><td></td></tr><tr><td>b</td></tr></table>");
+            assert_eq!(table_cells(&html, 5, 1).len(), 2, "{style}");
+        }
+        // A hostile span stops at the row limit.
+        let html = "<table><tr style='mso-xlrowspan:99999999999999'><td>a</td></tr><tr><td>b</td></tr></table>";
+        assert_eq!(table_cells(html, 10, 1).len(), 10);
     }
 
     #[test]
