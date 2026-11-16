@@ -67,6 +67,8 @@ pub struct Dialog {
     pub result: Option<Json>,
     /// "Show password" is ticked: password fields show their text.
     pub show_password: bool,
+    /// A popup embedded in this dialog owns Enter/Escape for the current frame.
+    pub(crate) popup_owns_shortcuts: bool,
     /// The first text or number field still has to take keyboard focus (set when a form opens,
     /// used once): like Excel, Column Width opens ready to type, its value selected.
     focus_first_field: bool,
@@ -235,6 +237,7 @@ impl Dialog {
             list_index: 0,
             result: None,
             show_password: false,
+            popup_owns_shortcuts: false,
             focus_first_field: true,
             picture_inbox: None,
             picture_target: None,
@@ -260,6 +263,7 @@ impl Dialog {
             list_index: 0,
             result: None,
             show_password: false,
+            popup_owns_shortcuts: false,
             focus_first_field: false,
             picture_inbox: None,
             picture_target: None,

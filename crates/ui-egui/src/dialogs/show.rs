@@ -146,6 +146,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let mut open = true;
     let mut win_open = true;
     let mut confirm = false;
+    // Capture popup state before drawing: the popup itself consumes Enter/Escape during this
+    // frame, so checking only after rendering would let the dialog act on the same key.
+    d.popup_owns_shortcuts = egui::Popup::is_any_open(ctx);
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 820.0,
@@ -399,7 +402,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open_url(&u);
         }
     }
-    if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
+    if (ctx.input(|i| i.key_pressed(Key::Escape)) && !d.popup_owns_shortcuts) || !win_open {
         // In Solver Options, Escape (or closing the window) cancels the options only.
         if in_solver_options(&d) {
             cancel_solver_options(&mut d);
@@ -523,6 +526,10 @@ pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), 
 }
 
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+    ok_cancel_with_enter(ui, confirm, open, true);
+}
+
+pub(super) fn ok_cancel_with_enter(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool, allow_enter: bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the
     // height it is offered, which stretched every form dialog to the screen's height.
@@ -531,7 +538,7 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
             let lang = crate::i18n::current(ui.ctx());
             let t = crate::theme::Tokens::get(ui.ctx());
             let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
-            if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
+            if ok.clicked() || (allow_enter && ui.input(|i| i.key_pressed(Key::Enter))) {
                 *confirm = true;
             }
             if ui.button(format!(" {} ", lang.tr("Cancel"))).clicked() {
