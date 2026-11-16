@@ -305,6 +305,13 @@ fn xsearch(x: &Value, hay: &[Value], match_mode: i64, search_mode: i64) -> R<Opt
 }
 
 fn bsearch_exact(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
+    if matches!(x, Value::Empty) {
+        // A blank needle only matches a blank entry. The coercing comparison below would read it
+        // as numeric zero, so handle it here: blanks sort last in both directions, so the first
+        // blank entry is the only possible exact match.
+        let p = hay.partition_point(|v| !matches!(v, Value::Empty));
+        return matches!(hay.get(p)?, Value::Empty).then_some(p);
+    }
     let p = bsearch_first(x, hay, desc)?;
     let v = hay.get(p)?;
     if binary_order(v, x, desc) == Ordering::Equal { Some(p) } else { None }
@@ -784,9 +791,23 @@ mod tests {
         let keys = || rf(col(&[0.0, 1.0, 3.0]));
         let values = || av(col(&[10.0, 20.0, 30.0]));
         close(ev("XLOOKUP", vec![blank(), keys(), values(), n(999.0), n(0.0)]), 999.0);
+        // Binary exact search (search mode 2 ascending, -2 descending) does not coerce the blank
+        // needle to zero either: {0} has no blank entry, {0;blank} has one last.
+        let zero = || rf(col(&[0.0]));
+        let zero_then_blank = || rf(arr(vec![vec![nv(0.0)], vec![Value::Empty]]));
+        let just_blank = || rf(arr(vec![vec![Value::Empty]]));
+        for mode in [2.0, -2.0] {
+            is_err(ev("XMATCH", vec![blank(), zero(), n(0.0), n(mode)]), CellError::NA);
+            close(ev("XMATCH", vec![blank(), zero_then_blank(), n(0.0), n(mode)]), 2.0);
+            close(ev("XMATCH", vec![blank(), just_blank(), n(0.0), n(mode)]), 1.0);
+            close(ev("XLOOKUP", vec![blank(), zero(), av(col(&[10.0])), n(999.0), n(0.0), n(mode)]), 999.0);
+            close(ev("XLOOKUP", vec![blank(), just_blank(), av(col(&[10.0])), n(999.0), n(0.0), n(mode)]), 10.0);
+        }
         // Controls: numeric zero is still a key, and a written blank stays zero.
         close(ev("XMATCH", vec![n(0.0), numbers()]), 1.0);
         close(ev("XLOOKUP", vec![n(0.0), keys(), values(), n(999.0), n(0.0)]), 10.0);
+        is_err(ev("XMATCH", vec![n(0.0), just_blank(), n(0.0), n(2.0)]), CellError::NA);
+        close(ev("XMATCH", vec![empty(), zero(), n(0.0), n(2.0)]), 1.0);
         close(ev("MATCH", vec![blank(), numbers(), n(0.0)]), 1.0);
         close(ev("XMATCH", vec![empty(), numbers()]), 1.0);
     }
