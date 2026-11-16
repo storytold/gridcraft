@@ -1002,3 +1002,15 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
 }
+
+#[test]
+fn csv_opened_unsplit_saves_spilled_values() {
+    let mut s = crate::Session::new();
+    let b64 = base64_encode(b"ART;313.10;\r\n");
+    s.execute("file.open", serde_json::json!({"name": "import.csv", "base64": b64, "csvSplit": false})).unwrap();
+    s.execute("cell.set", serde_json::json!({"cell": "B1", "input": "=SEQUENCE(2,2)"})).unwrap();
+    let saved = s.execute("file.saveBytes", serde_json::json!({"format": "csv"})).unwrap();
+    let bytes = base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    // Column A as it was, then the spilled values after the file's separator.
+    assert_eq!(String::from_utf8(bytes).unwrap(), "ART;313.10;;1;2\r\n;3;4\r\n");
+}

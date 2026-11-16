@@ -394,10 +394,19 @@ pub fn write_csv_lines(sheet: &Sheet, delimiter: u8, mut cell_text: impl FnMut(C
     // The last stored column past A on each row, so a row is read only as far as its own cells go
     // (one value in XFD1 doesn't make every other line format 16,383 empty cells).
     let mut last_col: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut reach = |row: u32, col: u32| {
+        if col > 0 {
+            let last = last_col.entry(row).or_insert(col);
+            *last = (*last).max(col);
+        }
+    };
     for (c, _) in sheet.cells.iter() {
-        if c.col > 0 {
-            let last = last_col.entry(c.row).or_insert(c.col);
-            *last = (*last).max(c.col);
+        reach(c.row, c.col);
+    }
+    // Spilled values are not stored cells: their ranges reach as far as they spill.
+    for range in sheet.spill_ranges.values() {
+        for row in range.start.row..=range.end.row {
+            reach(row, range.end.col);
         }
     }
     let mut extra: Vec<String> = Vec::new();

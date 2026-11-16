@@ -432,3 +432,22 @@ fn unsplit_save_reads_each_row_only_as_far_as_its_own_cells() {
     assert_eq!(lines.next().unwrap(), "line 1");
     assert_eq!(lines.next().unwrap(), "line 2;;c");
 }
+
+#[test]
+fn unsplit_save_writes_spilled_values_past_column_a() {
+    let mut sheet = Sheet::new("Sheet1");
+    sheet.set_value(CellRef::new(0, 0), Value::text("line"));
+    // A 2×2 spill anchored in B1, as `=SEQUENCE(2,2)` leaves it: values in `spill`, not in cells.
+    let range = gridcraft_core::RangeRef::new(CellRef::new(0, 1), CellRef::new(1, 2));
+    sheet.spill_ranges.insert(CellRef::new(0, 1), range);
+    for (i, c) in range.iter().enumerate() {
+        sheet.spill.insert(c, Value::Number(i as f64 + 1.0));
+    }
+    let out = write_csv_lines(&sheet, b';', |c| match sheet.value(c) {
+        Value::Text(t) => t.to_string(),
+        Value::Number(n) => n.to_string(),
+        _ => String::new(),
+    })
+    .unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), "line;1;2\r\n;3;4\r\n");
+}
