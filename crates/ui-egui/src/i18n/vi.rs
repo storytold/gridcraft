@@ -4,6 +4,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Sơ đồ",
+        "Decorative Text" => "Chữ trang trí",
         "Paste" => "Dán",
         "Paste Values" => "Dán giá trị",
         "Paste Formulas" => "Dán công thức",
@@ -365,6 +367,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Lưu",
         "Save As" => "Lưu thành",
         "Export" => "Xuất",
+        "Minimize" => "Thu nhỏ",
+        "Maximize" => "Phóng to",
+        "Restore Down" => "Khôi phục",
         "Close" => "Đóng",
         "Options" => "Tùy chọn",
         "Blank workbook" => "Sổ làm việc trống",

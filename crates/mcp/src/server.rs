@@ -1,6 +1,6 @@
 //! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources / prompts methods.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Read, Write};
 
 use serde_json::{Value, json};
 
@@ -45,6 +45,45 @@ fn response(id: Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "result": result})
 }
 
+/// Reads the next newline-delimited message into `buf`, keeping at most `MAX_LINE` bytes of it:
+/// a client sending no newline can't make the server allocate more (#2164). `None` at the end of
+/// `input`; `Some(false)` for a line over the limit, whose rest is read and dropped so the next
+/// message is read whole.
+pub(crate) fn read_message(input: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result<Option<bool>> {
+    buf.clear();
+    // One byte past the limit tells an over-long line from one of exactly `MAX_LINE` bytes.
+    let limit = u64::try_from(MAX_LINE).unwrap_or(u64::MAX).saturating_add(1);
+    if input.take(limit).read_until(b'\n', buf)? == 0 {
+        return Ok(None);
+    }
+    if buf.len() > MAX_LINE && buf.last() != Some(&b'\n') {
+        skip_line(input)?;
+        buf.clear();
+        return Ok(Some(false));
+    }
+    Ok(Some(true))
+}
+
+/// Reads up to and including the next newline (or to the end of `input`) without keeping it.
+fn skip_line(input: &mut impl BufRead) -> std::io::Result<()> {
+    loop {
+        let chunk = input.fill_buf()?;
+        if chunk.is_empty() {
+            return Ok(());
+        }
+        match chunk.iter().position(|&b| b == b'\n') {
+            Some(i) => {
+                input.consume(i + 1);
+                return Ok(());
+            }
+            None => {
+                let n = chunk.len();
+                input.consume(n);
+            }
+        }
+    }
+}
+
 fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
 }
@@ -68,14 +107,13 @@ impl Server {
     pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
         let mut buf = Vec::new();
         loop {
-            buf.clear();
-            let n = input.read_until(b'\n', &mut buf)?;
-            if n == 0 {
-                return Ok(());
-            }
-            let reply = match std::str::from_utf8(&buf) {
-                Ok(line) => self.handle_line(line),
-                Err(_) => Some(error(Value::Null, PARSE_ERROR, "message is not valid UTF-8").to_string()),
+            let reply = match read_message(&mut input, &mut buf)? {
+                None => return Ok(()),
+                Some(false) => Some(error(Value::Null, INVALID_REQUEST, "message too large (16 MB max)").to_string()),
+                Some(true) => match std::str::from_utf8(&buf) {
+                    Ok(line) => self.handle_line(line),
+                    Err(_) => Some(error(Value::Null, PARSE_ERROR, "message is not valid UTF-8").to_string()),
+                },
             };
             if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;
