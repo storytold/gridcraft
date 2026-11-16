@@ -190,7 +190,12 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     if p.get("sheet").is_some() {
         wb.set_active_sheet(target_sheet(s, p)?);
     }
-    let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
+    // A path whose extension already names the export's format keeps it, in any letter case and in
+    // the format's other spelling (`.htm`, `.HTML`, `.CSV`); any other path gets the format's
+    // extension added (#4355).
+    let kind = crate::io::FileKind::from_path;
+    let named = kind(&path).is_some_and(|k| kind(&format!("export.{ext}")) == Some(k));
+    let target = if named { path.clone() } else { format!("{path}.{ext}") };
     let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
         crate::io::csv_values_bytes(&wb)?
     } else {
