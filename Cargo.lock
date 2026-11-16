@@ -2352,6 +2352,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "gridcraft-vba"
+version = "0.19.1"
+dependencies = [
+ "gridcraft-core",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "gridcraft-web"
 version = "0.19.1"
 dependencies = [
