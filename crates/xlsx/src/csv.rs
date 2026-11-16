@@ -341,14 +341,13 @@ pub fn read_csv_lines(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, Read
     wb.csv_unsplit = true;
     let mut sheet = Sheet::new("Sheet1");
     let mut row: u32 = 0;
+    // The first non-empty line: the used range runs from it to the last one stored.
+    let mut first: Option<u32> = None;
     let mut rest = text.as_str();
     while !rest.is_empty() {
         if row >= MAX_ROWS {
             report.warn(format!("The file has more than {MAX_ROWS} lines; only the first {MAX_ROWS} were opened."));
             break;
-        }
-        if opts.max_used_cells.is_some_and(|max| u64::from(row) + 1 > max) {
-            return Err(IoError::TooLarge(format!("the CSV's used range is over the limit of {} cells", opts.max_used_cells.unwrap_or(0))));
         }
         let (line, next) = match rest.find(['\r', '\n']) {
             // `end` is at an ASCII byte, so both slices are on character boundaries.
@@ -359,6 +358,13 @@ pub fn read_csv_lines(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, Read
             None => (rest, ""),
         };
         if !line.is_empty() {
+            // Stop at the line that takes the used range past the limit, before it is stored.
+            let top = *first.get_or_insert(row);
+            if let Some(max) = opts.max_used_cells
+                && u64::from(row - top) + 1 > max
+            {
+                return Err(IoError::TooLarge(format!("the CSV's used range is over the limit of {max} cells")));
+            }
             sheet.cells.set(CellRef::new(row, 0), Cell::value(Value::Text(Arc::from(line))));
         }
         rest = next;
@@ -385,11 +391,20 @@ pub fn write_csv_lines(sheet: &Sheet, delimiter: u8, mut cell_text: impl FnMut(C
     if (u64::from(r.end.row) + 1).saturating_mul(2) > limit as u64 {
         return Err(too_large(r.end.row));
     }
+    // The last stored column past A on each row, so a row is read only as far as its own cells go
+    // (one value in XFD1 doesn't make every other line format 16,383 empty cells).
+    let mut last_col: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    for (c, _) in sheet.cells.iter() {
+        if c.col > 0 {
+            let last = last_col.entry(c.row).or_insert(c.col);
+            *last = (*last).max(c.col);
+        }
+    }
     let mut extra: Vec<String> = Vec::new();
     for row in 0..=r.end.row {
         let line = cell_text(CellRef::new(row, 0));
         extra.clear();
-        for col in 1..=r.end.col {
+        for col in 1..=last_col.get(&row).copied().unwrap_or(0) {
             extra.push(cell_text(CellRef::new(row, col)));
         }
         while extra.last().is_some_and(String::is_empty) {

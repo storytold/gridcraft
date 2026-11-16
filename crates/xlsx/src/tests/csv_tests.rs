@@ -1,7 +1,7 @@
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, Value};
 use gridcraft_model::{Sheet, Workbook};
 
-use crate::{CsvOptions, Format, IoError, read_csv, read_csv_with_report, sniff, write_csv, write_csv_limited};
+use crate::{CsvOptions, Format, IoError, read_csv, read_csv_lines, read_csv_with_report, sniff, write_csv, write_csv_limited, write_csv_lines};
 use craft_csv::{decode_text, parse_records, sniff_delimiter};
 
 fn v(wb: &Workbook, r: u32, c: u32) -> Value {
@@ -394,4 +394,41 @@ fn csv_used_range_limit_is_enforced_while_reading() {
     assert!(matches!(read_csv(b"a\nb\nc\n,,,,d\n", &opts(10)), Err(IoError::TooLarge(_))));
     // No limit by default.
     assert!(read_csv(dense, &CsvOptions::default()).is_ok());
+}
+
+#[test]
+fn unsplit_lines_count_the_used_range_from_the_first_non_empty_line() {
+    let opts = |max| CsvOptions { max_used_cells: Some(max), ..CsvOptions::default() };
+    // Leading empty lines are outside the used range.
+    let (wb, _) = read_csv_lines(b"\r\n\r\nx\r\n", &opts(1)).unwrap();
+    assert_eq!(v(&wb, 2, 0), Value::text("x"));
+    // Two non-empty lines with an empty one between them span three rows.
+    assert!(read_csv_lines(b"\r\na\r\n\r\nb\r\n", &opts(3)).is_ok());
+    assert!(matches!(read_csv_lines(b"\r\na\r\n\r\nb\r\n", &opts(2)), Err(IoError::TooLarge(_))));
+}
+
+#[test]
+fn unsplit_save_reads_each_row_only_as_far_as_its_own_cells() {
+    let mut sheet = Sheet::new("Sheet1");
+    for row in 0..1000 {
+        sheet.set_value(CellRef::new(row, 0), Value::text(format!("line {row}")));
+    }
+    sheet.set_value(CellRef::new(0, MAX_COLS - 1), Value::text("far"));
+    sheet.set_value(CellRef::new(2, 2), Value::text("c"));
+    let mut asked = 0usize;
+    let out = write_csv_lines(&sheet, b';', |c| {
+        asked += 1;
+        match sheet.value(c) {
+            Value::Text(t) => t.to_string(),
+            _ => String::new(),
+        }
+    })
+    .unwrap();
+    // Column A of every row, row 1 out to XFD and row 3 out to C: nothing else.
+    assert_eq!(asked, 1000 + (MAX_COLS as usize - 1) + 2);
+    let text = String::from_utf8(out).unwrap();
+    let mut lines = text.split("\r\n");
+    assert_eq!(lines.next().unwrap(), format!("line 0{}far", ";".repeat(MAX_COLS as usize - 1)));
+    assert_eq!(lines.next().unwrap(), "line 1");
+    assert_eq!(lines.next().unwrap(), "line 2;;c");
 }
