@@ -20,6 +20,13 @@
   below stand as their instant's. (The commit that carries this page sits one above `4303b5aa` and is
   local: the fork stays at `4303b5aa` until a push, and this bullet is the 03:47Z reading, not a claim
   about the page's own commit — the rule below.)
+- **Measured again at 2026-11-16T09:51Z (§31.1, §31.4):** `origin/main` is `1476d4e7`, the branch
+  stood 90 ahead and 16 behind it, and `git merge-tree --write-tree origin/main HEAD` exits **0**
+  (tree `e7350314`); the merge of it into the branch is `3e98fe45` (§31.2) and its gate is §31.3.
+  The fork and PR #3613 read `0846b194` at that instant — `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` and `headRefOid` — while the local branch is one merge
+  above it; the delta above the §29.7 head `4303b5aa` is this page only, +275/−23, so §29.7 stays
+  the gate for that code; no workflow has executed on `0846b194` either (§31.4).
 - **Rule of the record — pushes:** a sentence that says a commit is or is not pushed is written only
   after `git ls-remote fork refs/heads/feature/realtime-collaboration` at the measurement instant. A
   local `git rev-list` cannot tell a pushed head from an unpushed one, and the 16:40Z version of this
@@ -2682,3 +2689,198 @@ any head, so neither number is a runner's.
 - **No code, no CI file, no `main`.** `git diff --stat 4303b5aa..HEAD` is this page only.
 - **The PR's own reading is still a reading.** `MERGEABLE` / `UNSTABLE` was true at 01:14:29Z; a
   later push of this page is what makes GitHub recompute it on a new head.
+
+## 31. `origin/main` moved to `1476d4e7`, the merge into the branch is `3e98fe45`, and the delivered head is `0846b194` (2026-11-16, 09:51Z)
+
+This section records one pass: the readings at 09:51Z (§31.1), the single merge commit that takes
+`main`'s new line into the branch (§31.2), the gate on that merge (§31.3), and the correction the
+same instant made to the previous two sections — the head that is delivered is `0846b194`, not
+`4303b5aa`, and it still has no executed run (§31.4). Nothing was pushed and no thread was resolved
+(§31.5).
+
+### 31.1 The readings before the merge (2026-11-16T09:51Z)
+
+```text
+$ git status --porcelain | wc -l                        0
+$ git rev-parse HEAD                                   0846b19462390a5d37bbe75a4b841e8c1d6a5783
+$ git ls-remote fork refs/heads/feature/realtime-collaboration
+0846b19462390a5d37bbe75a4b841e8c1d6a5783	refs/heads/feature/realtime-collaboration
+$ git rev-list --count --left-right fork/feature/realtime-collaboration...HEAD
+0	0
+$ git fetch origin && git rev-parse origin/main        1476d4e7abef470886aeb5a1a7d870c9377a3050
+$ git rev-list --count --left-right origin/main...HEAD
+16	90
+$ git merge-tree --write-tree origin/main HEAD
+e7350314622faa894a3d0bcd80694a427eacccc1
+rc 0
+$ gh pr view 3613 --repo storytold/gridcraft \
+    --json headRefOid,baseRefOid,mergeable,mergeStateStatus,updatedAt,reviewDecision
+  headRefOid        0846b19462390a5d37bbe75a4b841e8c1d6a5783
+  baseRefOid        407e0e1fa9146df5ddf632750a93aabfbb079208
+  mergeable         MERGEABLE
+  mergeStateStatus  UNSTABLE
+  updatedAt         2026-11-16T05:23:04Z
+  reviewDecision    ""
+```
+
+The branch was clean, the fork and the local HEAD were the same commit, and `0 0` says nothing was
+ahead of or behind the fork. **`0846b194` is delivered** — it was published by the push that moved the
+PR's `updatedAt` to 05:23:04Z, and the two commands agree with the local `rev-parse`, so this is not a
+local-only commit. It is the second docs commit above `4303b5aa`: `4a265a93` (§29.6/§29.7 corrections)
+and `0846b194` (§30, the sixteen threads), and `git diff --stat 4303b5aa..0846b194` is one file —
+`docs/collab/STATUS.md`, +275/−23 — with no code and no `main`. That is why §29.7's gate on
+`4303b5aa` remains the gate for this head's code: the only thing above it is this page.
+
+`origin/main` is `1476d4e7` ("Merge pull request #4184 from ZIDAN44/fix/3945-subtotal-grand-total-outline"):
+16 commits it has and the branch did not, and 90 the branch had and it did not. The conflict test
+exits 0 before any merge, so `main`'s line comes in without a resolution step; it is still a real
+merge commit (`--no-ff`), not a fast-forward.
+
+### 31.2 The merge: `3e98fe45`, parents `0846b194` and `1476d4e7`
+
+```text
+$ git merge --no-ff origin/main -m "Merge remote-tracking branch 'origin/main' into feature/realtime-collaboration"
+Merge made by the 'ort' strategy.
+ 36 files changed, 1984 insertions(+), 64 deletions(-)
+$ git rev-parse HEAD
+3e98fe451ca8623862da2c9e51a6ca758ade2a14
+$ git log -1 --format='%H %P'
+3e98fe451ca8623862da2c9e51a6ca758ade2a14 0846b19462390a5d37bbe75a4b841e8c1d6a5783 1476d4e7abef470886aeb5a1a7d870c9377a3050
+$ git status --porcelain | wc -l                        0
+$ git merge-tree --write-tree origin/main HEAD
+e7350314622faa894a3d0bcd80694a427eacccc1
+rc 0
+$ git diff --stat origin/main..HEAD | tail -1
+84 files changed, 19174 insertions(+), 34 deletions(-)
+$ git rev-list --count --left-right origin/main...HEAD
+0	91
+$ git diff --name-only 0846b194..3e98fe45 -- .github | wc -l
+0
+```
+
+One commit, two parents, no other change: the 36 files are exactly `main`'s side since the merge base
+— `git diff --name-only 0846b194...1476d4e7` and `git diff --name-only 0846b194..3e98fe45` are the
+same 36 paths — the pivot `GroupBy`/`PivotData` work, its golden files, the paste-special and sort
+fixes, the roadmap and parity docs. No collaboration crate and no `ui-egui` file is among them, so
+the merge adds `main`'s line without editing the branch's. The tree the merge test wrote before the
+merge (`e7350314`) is the tree the merge committed (`git rev-parse 3e98fe45^{tree}` reads the same
+hash), which is what a conflict-free merge of these two commits must produce. `git merge-tree
+--write-tree origin/main HEAD` still exits 0 on the merge itself, and the branch now contains `main`:
+`0 91` behind/ahead, the 91 being the 90 branch commits plus this merge. The PR's own file set is
+unchanged at 84 files, +19174/−34 — the same 84 files it had at `0846b194`, because the merge adds no
+file of its own.
+
+### 31.3 Gate on `3e98fe45` (remote host `agents`, 2026-11-16T09:51Z, `umask 022`, `-j 4`)
+
+One run through `scripts/remote-build.sh sh gridcraft`, the host's cached `target/`, `rustc 1.99.1
+(58cf8f9c3 2026-10-13)`, `umask 022` (§25.4.1), log
+`.craft/logs/gate-gridcraft-3e98fe45.log`:
+
+```text
+$ git rev-parse HEAD                                   3e98fe451ca8623862da2c9e51a6ca758ade2a14
+$ git status --porcelain | wc -l    at the start       0
+$ cargo metadata --locked --format-version 1           STEP metadata rc=0
+$ cargo fmt --all -- --check                           STEP fmt rc=0
+$ cargo clippy --workspace --all-targets -j 4 -- -D warnings
+                                                       STEP clippy rc=0
+$ cargo test --workspace -j 4                          STEP test rc=101
+  stopped at gridcraft-ui-egui: 44 test result lines, 3698 passed, 2 failed
+    gridcraft-collab              49 passed
+    gridcraft-collab-client        4 lib + 14 converge + 11 document + 5 parts + 5 rollback = 39 passed
+    gridcraft-collab-server       40 unit + 5 acceptance + 6 commit callback + 2 logging
+                                  + 9 persistence + 12 socket = 74 passed
+    gridcraft-collab-web          11 passed                        (173 collaboration in all)
+    gridcraft-calc                130 passed, 3 ignored
+    gridcraft-engine              1010 lib (+1 ignored) + 120 integration + 7 legacy_array_functions
+    gridcraft-ui-egui --test it   1193 passed, 2 failed   <- the two of §15
+$ git status --porcelain | wc -l    at the end         0
+EXIT=1
+```
+
+`metadata`, `fmt` and the workspace clippy are `rc=0`; the test step is **not** green, and the two
+failures are the host-font pair §15 has recorded since 2026-11-09:
+
+```text
+failures:
+    interaction::column_autocomplete_folds_case_beyond_ascii
+    interaction::language_switch_renders_the_ribbon_and_persists
+  No glyph for "ẞ" (U+1E9E) in Name("cell") … installed fonts: Ubuntu-Light, egui-icons, …
+  No glyph for "ẻ" (U+1EBB) in Name("ui")   … installed fonts: Ubuntu-Light, egui-icons, …
+```
+
+They are not this merge's: `git diff --name-only 0846b194..3e98fe45 -- crates/ui-egui` is 0 paths,
+`git diff 1476d4e7..3e98fe45 -- crates/ui-egui/tests/it/interaction.rs` is empty (the test file is
+byte-identical to `main`'s), and §27.4 recorded the same two failing on `572bec28` and `dff6971a`
+alike. The host's font set lacks the glyphs; the repository takes fonts from
+`storytold/craft-fonts` as an optional input (`CRAFT_FONTS_DIR`, `AGENTS.md`).
+
+Cargo stops at the first failing target, so the first pass never reached the crates after
+`gridcraft-ui-egui`. The same step was run again on the same head with `--no-fail-fast`, appended to
+the same log, to cover the rest:
+
+```text
+== gate pass 2 (--no-fail-fast) start 2026-11-16T10:00:18Z
+$ cargo test --workspace -j 4 --no-fail-fast            STEP test-no-fail-fast rc=101
+  test result lines: 66 (4144 passed, 2 failed, 5 ignored)
+                                                  ← the same two tests, nothing else
+$ git status --porcelain | wc -l                       0
+EXIT=101
+```
+
+So the second pass reached every target and the failing set is exactly the two §15 tests: there is no
+other failure in the workspace, and the collaboration suites are 173 passed, 0 failed. The gate's
+mechanical `EXIT` is 1 because of those two host-font tests; on everything the merge touches — no
+`ui-egui` file, no CI file, no font code — every step is `rc=0`. The tree was clean before and after
+each pass, so both ran on the commit's own files.
+
+### 31.4 The delivered head is `0846b194`, and there is still no run to approve
+
+```text
+$ git ls-remote fork refs/heads/feature/realtime-collaboration
+0846b19462390a5d37bbe75a4b841e8c1d6a5783	refs/heads/feature/realtime-collaboration
+$ gh api repos/storytold/gridcraft/commits/0846b194/check-runs
+  total_count 1   (CodeRabbit, status completed, conclusion skipped, 2026-11-16T05:23:06Z)
+$ gh api "repos/storytold/gridcraft/actions/runs?head_sha=0846b194"
+  total_count 0
+$ gh api repos/storytold/gridcraft/commits/0846b194/status
+  state pending, total_count 0
+$ git diff --name-only 4303b5aa..0846b194
+docs/collab/STATUS.md
+$ git diff --stat 4303b5aa..0846b194
+ 1 file changed, 275 insertions(+), 23 deletions(-)
+```
+
+Three corrections to §29 and §30 follow from this reading:
+
+1. **The head moved to `0846b194`, and it is delivered.** §29.6 and §30.5 say the docs commit above
+   `4303b5aa` is local; that was true until the push that moved the PR's `updatedAt` to 05:23:04Z.
+   The fork and the PR now name `0846b194`, so the two commits above `4303b5aa` are published and
+   `rev-list fork...HEAD` is `0 0`.
+2. **There is nothing to approve on this head.** "Check-runs = 0" is the useful fact but not the
+   literal one: the check-runs API returns `total_count = 1`, and that one is CodeRabbit
+   `completed / skipped` at 05:23:06Z. What is genuinely zero is every other number — the Actions
+   runs for the SHA (`total_count 0`) and the status API's statuses (0) — so **no workflow has
+   executed** on `0846b194`, and approving any older head (the four `action_required` runs of
+   `6c100112`, §29.5) would approve a commit that is not the PR's head.
+3. **§29.7 stays in force for the code of `0846b194`.** The delta above the §29.7 head is one file,
+   this page, +275/−23. §30.4 already leaned on that; this section measures it instead of repeating
+   it. The code gate that is newer than §29.7 is §31.3, on the merge `3e98fe45`, which contains both
+   `0846b194` and today's `main`.
+
+The gate on `3e98fe45` also answers the question §29.7 could not: `main`'s sixteen new commits,
+including the pivot and sort changes, compile and pass their tests under the branch's collaboration
+code — the engine's lib suite is 1010 here against §29.7's 989, and every added test passes.
+
+### 31.5 What this pass did not do
+
+- **No push.** The task of the pass was the merge and its gate. The fork, the branch and PR #3613
+  still read `0846b194`; the merge `3e98fe45` and this section's commit are local. A push is what
+  moves `headRefOid` and makes GitHub recompute the mergeable fields on the new head (§29.6 is the
+  same mechanic one push earlier).
+- **No approval, no resolve, no comment.** The two host-font failures are reported here, not
+  dismissed on GitHub; no review thread was resolved and no review was submitted.
+- **No CI file, no `main`, no `storytold/*` branch.** `git diff --name-only 0846b194..3e98fe45 --
+  .github` is 0, and the merge takes `main`'s side everywhere — it adds `main`'s commits, it changes
+  none of them.
+- **No branch code changed.** The only local commit above the merge is this page; the collaboration
+  code of `3e98fe45` is `0846b194`'s, which is `4303b5aa`'s.
