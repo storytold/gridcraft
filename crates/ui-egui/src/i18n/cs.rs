@@ -600,6 +600,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Zobrazit",
         "Collapse dialog" => "Sbalit dialogové okno",
         "Expand dialog" => "Rozbalit dialogové okno",
+        "has formula" => "obsahuje vzorec",
         _ => return None,
     })
 }

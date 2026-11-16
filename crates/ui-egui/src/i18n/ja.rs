@@ -1027,6 +1027,7 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
 /// Portuguese catalog has no entry for them either). Kept apart so the two catalogs above keep the
 /// same key set; it never overlaps them.
 pub(super) const EXTRA: &[(&str, &str)] = &[
+    ("has formula", "数式あり"),
     ("Cut (⌘X)", "切り取り (⌘X)"),
     ("Copy (⌘C)", "コピー (⌘C)"),
     ("Bold (⌘B)", "太字 (⌘B)"),

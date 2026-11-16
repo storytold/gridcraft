@@ -1071,6 +1071,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        "has formula" => "conține formulă",
         _ => return None,
     })
 }
