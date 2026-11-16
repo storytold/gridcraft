@@ -351,21 +351,23 @@ impl Dialog {
                 json!({"name": app.session.active().and_then(|d| d.wb.active().map(|s| s.name.clone()))}),
             ),
             "moveSheet" => {
-                let sheets: Vec<String> = app.session.active().map(|d| d.wb.sheets.iter().map(|s| s.name.clone()).collect()).unwrap_or_default();
+                let doc = app.session.active();
                 let mut d = Dialog::form(
                     "moveSheet",
                     "Move or Copy",
                     "sheet.move",
-                    vec![
-                        Number { key: "to", label: "Before sheet (position, 0 = first):" },
-                        Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
-                    ],
-                    json!({"to": 0, "copy": false}),
+                    vec![],
+                    json!({"to":0,"copy":false,"sourceWorkbook":doc.map(|d| d.uid),"targetWorkbook":doc.map(|d| d.uid)}),
                 );
-                if let Some(s) = params.get("sheet") {
-                    d.values.insert("sheet".into(), s.clone());
-                }
+                let sheet = params.get("sheet").cloned().unwrap_or_else(|| json!(doc.map(|d| d.wb.active_sheet()).unwrap_or(0)));
+                let index = sheet
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .or_else(|| sheet.as_str().and_then(|name| doc.and_then(|d| d.wb.sheet_index(name))))
+                    .unwrap_or_else(|| doc.map(|d| d.wb.active_sheet()).unwrap_or(0));
+                let name = sheet.as_str().map(str::to_string).or_else(|| doc.and_then(|d| d.wb.sheet(index)).map(|sh| sh.name.clone()));
+                d.values.insert("sheet".into(), json!(name));
+                d.values.insert("sourceSheetIndex".into(), json!(index));
                 d
             }
             "protectSheet" => Dialog::form(

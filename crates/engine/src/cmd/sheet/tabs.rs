@@ -140,12 +140,28 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(uid) = p.get("sourceWorkbook")
+        && uid.as_u64() != Some(s.doc()?.uid)
+    {
+        return Err(bad("sheet.move", "return to the original workbook or reopen the dialog"));
+    }
+    if p.get("copy").is_some_and(|v| !v.is_boolean()) {
+        return Err(bad("sheet.move", "copy must be a boolean"));
+    }
+    if p.get("sheet").and_then(Json::as_u64).is_some_and(|v| usize::try_from(v).is_err()) {
+        return Err(bad("sheet.move", "no such sheet"));
+    }
     if s.doc()?.wb.protected_structure {
         return Err(EngineError::Other("The workbook is protected and cannot be changed.".into()));
     }
     let i = target_sheet(s, p)?;
     let copy = bool_param(p, "copy").unwrap_or(false);
-    let to = p.get("to").and_then(Json::as_u64).map(|v| v as usize).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
+    let to = p.get("to").and_then(Json::as_u64).and_then(|v| usize::try_from(v).ok()).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
+    if let Some(target) = p.get("targetWorkbook")
+        && target.as_u64() != Some(s.doc()?.uid)
+    {
+        return crate::sheet_transfer::run(s, target, i, to, copy);
+    }
     edit(s, |cx| {
         let n = cx.wb.sheets.len();
         let Some(src) = cx.wb.sheets.get(i).cloned() else { return Err(bad("sheet.move", "no such sheet")) };

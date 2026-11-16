@@ -613,15 +613,24 @@ fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
             assert_eq!(y.gridlines, x.gridlines);
             assert_eq!((&y.x_title, &y.y_title), (&x.x_title, &x.y_title));
         }
-        assert_eq!(y.series.len(), x.series.len());
-        for (sx, sy) in x.series.iter().zip(&y.series) {
-            assert_eq!(sy.name, sx.name);
-            assert_eq!(sy.categories, sx.categories);
-            assert_eq!(sy.values, sx.values);
-            assert_eq!(sy.color, sx.color);
-            assert_eq!(sy.secondary, sx.secondary);
-        }
+        assert_chart_series_roundtrip(x, y);
         assert!(close(y.anchor.width, x.anchor.width) && close(y.anchor.height, x.anchor.height));
+    }
+}
+
+fn assert_chart_series_roundtrip(x: &Chart, y: &Chart) {
+    assert_eq!(y.series.len(), x.series.len());
+    for (sx, sy) in x.series.iter().zip(&y.series) {
+        // Literal XML names retain an explicit marker in the model on read.
+        let expected_name = match sx.name.as_deref() {
+            Some("Literal") => Some("\"Literal\""),
+            name => name,
+        };
+        assert_eq!(sy.name.as_deref(), expected_name);
+        assert_eq!(sy.categories, sx.categories);
+        assert_eq!(sy.values, sx.values);
+        assert_eq!(sy.color, sx.color);
+        assert_eq!(sy.secondary, sx.secondary);
     }
 }
 

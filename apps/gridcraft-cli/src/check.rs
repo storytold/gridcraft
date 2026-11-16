@@ -284,6 +284,8 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 /// depth each directory was scanned from; `rescan` is set below a directory reached again from a
 /// shallower path (its depth-limited subtree may now fit), where already collected files are skipped.
 #[cfg_attr(not(unix), allow(unused_mut))]
+// Directory identities are Unix-only; on other systems these parameters are forwarded.
+#[cfg_attr(not(unix), allow(clippy::only_used_in_recursion))]
 fn walk(dir: &Path, depth: usize, mut rescan: bool, out: &mut Discovery, seen: &mut std::collections::HashMap<(u64, u64), usize>) -> bool {
     // A directory is visited once by identity (dev+inode on unix) unless reached from a shallower
     // path: several links to the same directory are aliases, not exponential branches of the scan

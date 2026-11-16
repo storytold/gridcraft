@@ -123,9 +123,12 @@ fn data_ref(e: Option<&El>) -> Option<String> {
 }
 
 fn read_series(s: &El) -> Series {
-    let name = s
-        .child("tx")
-        .and_then(|tx| tx.path(&["strRef", "f"]).map(|f| chart_ref_from_file(&f.text)).or_else(|| tx.child("v").map(|v| v.text.clone())));
+    // OOXML c:v is literal even when its text matches a sheet reference or defined name.
+    let name = s.child("tx").and_then(|tx| {
+        tx.path(&["strRef", "f"])
+            .map(|f| chart_ref_from_file(&f.text))
+            .or_else(|| tx.child("v").map(|v| format!("\"{}\"", v.text.replace('"', "\"\""))))
+    });
     let sp = s.child("spPr");
     let color = sp
         .and_then(|p| p.child("solidFill"))
@@ -542,8 +545,8 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         if is_ref(n) || is_defined_name(wb, si, n) {
             x.push_str(&str_data("tx", n, wb, si));
         } else {
-            let lit = n.trim().strip_prefix('"').and_then(|t| t.strip_suffix('"')).unwrap_or(n);
-            let _ = write!(x, "<c:tx><c:v>{}</c:v></c:tx>", esc(lit));
+            let lit = n.trim().strip_prefix('"').and_then(|t| t.strip_suffix('"')).map(|t| t.replace("\"\"", "\"")).unwrap_or_else(|| n.clone());
+            let _ = write!(x, "<c:tx><c:v>{}</c:v></c:tx>", esc(&lit));
         }
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));

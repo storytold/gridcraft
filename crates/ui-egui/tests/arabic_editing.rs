@@ -1,5 +1,7 @@
 //! Arabic word navigation must not panic or delete unrelated cell text.
 
+mod common;
+
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Shape, vec2};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::{
@@ -13,15 +15,7 @@ fn editing(text: &str, formula_bar: bool) -> egui_kittest::Harness<'static, Shee
     let mut session = Session::new();
     session.new_workbook();
     session.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
+    let mut h = common::os_harness(session, egui::os::OperatingSystem::Windows);
     if formula_bar {
         h.get_by_label(text).click();
     } else {

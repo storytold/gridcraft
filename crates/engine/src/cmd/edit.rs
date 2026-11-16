@@ -193,10 +193,14 @@ fn coalesce(cells: &[CellRef]) -> Vec<RangeRef> {
 
 fn undo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
-    let d = s.doc_mut()?;
     let mut label = String::new();
-    let now = d.wb.clone();
     for _ in 0..steps {
+        if s.doc()?.undo.last().is_some_and(|e| e.group.is_some()) {
+            let Some(next) = s.restore_linked_history(false)? else { break };
+            label = next;
+            continue;
+        }
+        let d = s.doc_mut()?;
         let Some(e) = d.undo.pop() else { break };
         let cur_wb = d.wb.clone();
         // Redo goes back to the undone edit's cells, not wherever the user clicked before undoing (#1855).
@@ -206,20 +210,24 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
         // Step by step: a rename and a new sheet undone together match up only one step apart.
         super::extra::keep_view_modes(d, &cur_wb);
-        crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
+        crate::push_history(&mut d.redo, label.clone(), cur_wb.clone(), &d.wb, cur_selection);
+        super::extra::keep_watch_list(&cur_wb, &mut d.wb);
+        d.calc.rebuild(&d.wb);
+        d.revision += 1;
     }
-    super::extra::keep_watch_list(&now, &mut d.wb);
-    d.calc.rebuild(&d.wb);
-    d.revision += 1;
     Ok(json!({"undone": label}))
 }
 
 fn redo(s: &mut Session, p: &Json) -> Result<Json> {
     let steps = u32_param(p, "steps").unwrap_or(1).max(1);
-    let d = s.doc_mut()?;
     let mut label = String::new();
-    let now = d.wb.clone();
     for _ in 0..steps {
+        if s.doc()?.redo.last().is_some_and(|e| e.group.is_some()) {
+            let Some(next) = s.restore_linked_history(true)? else { break };
+            label = next;
+            continue;
+        }
+        let d = s.doc_mut()?;
         let Some(e) = d.redo.pop() else { break };
         let cur_wb = d.wb.clone();
         let cur_selection = d.selection.clone();
@@ -227,11 +235,11 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
         super::extra::keep_view_modes(d, &cur_wb);
-        crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
+        crate::push_history(&mut d.undo, label.clone(), cur_wb.clone(), &d.wb, cur_selection);
+        super::extra::keep_watch_list(&cur_wb, &mut d.wb);
+        d.calc.rebuild(&d.wb);
+        d.revision += 1;
     }
-    super::extra::keep_watch_list(&now, &mut d.wb);
-    d.calc.rebuild(&d.wb);
-    d.revision += 1;
     Ok(json!({"redone": label}))
 }
 
