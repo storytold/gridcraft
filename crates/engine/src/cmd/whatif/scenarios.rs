@@ -54,12 +54,12 @@ fn string_literals(f: &str) -> String {
 }
 
 fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) {
-    wb.names.retain(|n| !(n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)));
+    wb.names_mut().retain(|n| !(n.scope.is_none() && n.name.eq_ignore_ascii_case(SCENARIO_NAME)));
     if list.is_empty() {
         return;
     }
     let text = serde_json::to_string(list).unwrap_or_else(|_| "[]".into());
-    wb.names.push(DefinedName {
+    wb.names_mut().push(DefinedName {
         name: SCENARIO_NAME.into(),
         scope: None,
         // Excel caps string literals at 255 characters: store `"…"&"…"` chunks.

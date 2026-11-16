@@ -395,7 +395,7 @@ fn implicit_intersection_metadata_resolves_names_in_formula_sheet_scope() {
         ("Scoped", Some(0), "2"),
         ("LocalInputs", Some(1), "Results!$A$1:$A$3"),
     ] {
-        wb.names.push(DefinedName { name: name.into(), scope, formula: text.into(), comment: String::new(), hidden: false });
+        wb.names_mut().push(DefinedName { name: name.into(), scope, formula: text.into(), comment: String::new(), hidden: false });
     }
     check_formula_metadata(
         wb.clone(),
@@ -418,7 +418,7 @@ fn implicit_intersection_metadata_resolves_names_in_formula_sheet_scope() {
 fn cyclic_names_preserve_array_evaluation_without_unbounded_export_recursion() {
     let mut wb = Workbook::new();
     for (name, formula) in [("First", "Second"), ("Second", "First")] {
-        wb.names.push(DefinedName { name: name.into(), scope: None, formula: formula.into(), comment: String::new(), hidden: false });
+        wb.names_mut().push(DefinedName { name: name.into(), scope: None, formula: formula.into(), comment: String::new(), hidden: false });
     }
     check_formula_metadata(wb, 0, &[("First", true), ("SUM(First)", true)]);
 }
@@ -484,7 +484,7 @@ fn defined_names_are_analysed_once_for_many_formulas() {
     // A large definition: many operations, ending in a range.
     let big = (1..=500).map(|i| format!("Sheet1!$A${i}")).collect::<Vec<_>>().join("+");
     for (name, text) in [("Big", format!("({big})*Sheet1!$B$1:$B$3")), ("Rng", "Sheet1!$A$1:$A$3".to_string()), ("Alias", "Rng".to_string())] {
-        wb.names.push(DefinedName { name: name.into(), scope: None, formula: text, comment: String::new(), hidden: false });
+        wb.names_mut().push(DefinedName { name: name.into(), scope: None, formula: text, comment: String::new(), hidden: false });
     }
     let texts = ["SUM(Big)", "SQRT(Big)", "Big*2", "SQRT(Alias)", "SUM(Alias)", "Alias", "SUM(Rng*2)", "Missing*2"];
     let mut shared = NameCache::default();
@@ -510,7 +510,7 @@ fn shared_name_analysis_keeps_each_formulas_limits_and_position() {
     // its 16,384-node budget, one using a few does not.
     for i in 0..20 {
         let text = format!("({})*Sheet1!$B$1:$B$3", terms(500));
-        wb.names.push(DefinedName { name: format!("Big_{i}"), scope: None, formula: text, comment: String::new(), hidden: false });
+        wb.names_mut().push(DefinedName { name: format!("Big_{i}"), scope: None, formula: text, comment: String::new(), hidden: false });
     }
     for (name, text) in [
         ("Cyc1", "Cyc2".to_string()),
@@ -518,7 +518,7 @@ fn shared_name_analysis_keeps_each_formulas_limits_and_position() {
         ("Deep", format!("{}1{}", "(".repeat(100), ")".repeat(100))),
         ("Tbl", "Table1[Col]".to_string()),
     ] {
-        wb.names.push(DefinedName { name: name.into(), scope: None, formula: text, comment: String::new(), hidden: false });
+        wb.names_mut().push(DefinedName { name: name.into(), scope: None, formula: text, comment: String::new(), hidden: false });
     }
     assert!(wb.names.iter().all(|n| gridcraft_formula::parse(&n.formula).is_ok()), "every name must parse");
     let uses = |n: usize| (0..n).map(|i| format!("SQRT(Big_{i})")).collect::<Vec<_>>().join("+");
@@ -558,7 +558,7 @@ fn shared_name_analysis_of_names_defined_by_names_matches_fresh_in_both_orders()
         defs.push((format!("Via_{i}"), format!("Big_{i}")));
     }
     for (name, formula) in defs {
-        wb.names.push(DefinedName { name, scope: None, formula, comment: String::new(), hidden: false });
+        wb.names_mut().push(DefinedName { name, scope: None, formula, comment: String::new(), hidden: false });
     }
     // Ten names of about a thousand nodes, each reached twice: within the budget only if the
     // second reference is free.

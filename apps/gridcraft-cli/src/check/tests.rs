@@ -208,7 +208,7 @@ fn full_calc_on_load_means_no_oracle() {
 #[test]
 fn volatile_names_propagate() {
     let mut wb = book(&[("A1", "=Stamp+1", n(1.0))]);
-    wb.names.push(gridcraft_engine::model::DefinedName {
+    wb.names_mut().push(gridcraft_engine::model::DefinedName {
         name: "Stamp".into(),
         scope: None,
         formula: "TODAY()".into(),
@@ -230,10 +230,10 @@ fn volatile_names_propagate_through_a_long_chain_in_one_walk() {
         |name: String, formula: String| gridcraft_engine::model::DefinedName { name, scope: None, formula, comment: String::new(), hidden: false };
     for i in 0..LEN {
         let formula = if i + 1 == LEN { "NOW()".to_string() } else { format!("Chain{}+1", i + 1) };
-        wb.names.push(name(format!("Chain{i}"), formula));
+        wb.names_mut().push(name(format!("Chain{i}"), formula));
     }
-    wb.names.push(name("Plain".into(), "Chain0*0+Other".into()));
-    wb.names.push(name("Other".into(), "1".into()));
+    wb.names_mut().push(name("Plain".into(), "Chain0*0+Other".into()));
+    wb.names_mut().push(name("Other".into(), "1".into()));
     let set = volatile_names(&wb);
     assert!((0..LEN).all(|i| set.contains(&format!("CHAIN{i}"))));
     assert!(set.contains("PLAIN"));

@@ -413,10 +413,10 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
             if !old_name.eq_ignore_ascii_case(&name) {
                 rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name)?;
             }
-            cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
+            cx.wb.names_mut().retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
         }
-        cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
-        cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
+        cx.wb.names_mut().retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
+        cx.wb.names_mut().push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
         cx.structural = true;
         Ok(json!({"name": name, "refersTo": format!("={refers}")}))
     })
@@ -573,7 +573,7 @@ fn delete_name(s: &mut Session, p: &Json) -> Result<Json> {
     };
     edit(s, |cx| {
         let before = cx.wb.names.len();
-        cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && scope.is_none_or(|sc| n.scope == sc)));
+        cx.wb.names_mut().retain(|n| !(n.name.eq_ignore_ascii_case(&name) && scope.is_none_or(|sc| n.scope == sc)));
         if cx.wb.names.len() == before {
             return Err(bad("formulas.deleteName", "no such name"));
         }
@@ -660,8 +660,8 @@ fn create_from_selection(s: &mut Session, p: &Json) -> Result<Json> {
     let n = made.len();
     edit(s, |cx| {
         for (name, f) in made {
-            cx.wb.names.retain(|x| !(x.name.eq_ignore_ascii_case(&name) && x.scope.is_none()));
-            cx.wb.names.push(DefinedName { name, scope: None, formula: f, comment: String::new(), hidden: false });
+            cx.wb.names_mut().retain(|x| !(x.name.eq_ignore_ascii_case(&name) && x.scope.is_none()));
+            cx.wb.names_mut().push(DefinedName { name, scope: None, formula: f, comment: String::new(), hidden: false });
         }
         cx.structural = true;
         Ok(json!({"created": n, "skipped": skipped}))
@@ -1042,13 +1042,15 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         let c = &cx.wb.calc;
-        // Switching to automatic, or changing how circular references are calculated outside
-        // manual mode, recalculates the workbook.
+        // Switching to automatic, leaving manual mode for any other mode (what waited in manual
+        // mode is calculated, as F9 calculates it), or changing how circular references are
+        // calculated outside manual mode, recalculates the workbook.
         let iteration_changed = (c.iterative, c.max_iterations, c.max_change) != (before.iterative, before.max_iterations, before.max_change);
         // Switching precision as displayed recalculates the workbook, in manual mode too, so the
         // values change as soon as it is switched on or off.
         let precision_changed = c.precision_as_displayed != before.precision_as_displayed;
-        if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) || precision_changed {
+        let leaves_manual = before.mode == CalcMode::Manual && c.mode != CalcMode::Manual;
+        if mode == Some(CalcMode::Automatic) || leaves_manual || (iteration_changed && c.mode != CalcMode::Manual) || precision_changed {
             cx.structural = true;
         }
         Ok(json!({
@@ -1093,10 +1095,10 @@ mod tests {
         let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
         let text = "m".repeat(9_000);
         stash::set(wb, "macro_1", &text).unwrap();
-        wb.names.push(DefinedName { name: "_sc_watch".into(), scope: None, formula: "\"[]\"".into(), comment: String::new(), hidden: true });
+        wb.names_mut().push(DefinedName { name: "_sc_watch".into(), scope: None, formula: "\"[]\"".into(), comment: String::new(), hidden: true });
         // A legacy item is read whether or not it is hidden, so a visible one is data too.
-        wb.names.push(DefinedName { name: "_sc_old".into(), scope: None, formula: "\"[]\"".into(), comment: String::new(), hidden: false });
-        let names = |s: &Session| s.doc().unwrap().wb.names.clone();
+        wb.names_mut().push(DefinedName { name: "_sc_old".into(), scope: None, formula: "\"[]\"".into(), comment: String::new(), hidden: false });
+        let names = |s: &Session| s.doc().unwrap().wb.names.to_vec();
         let before = names(&s);
         assert!(before.len() >= 3, "the item takes two chunks");
         for params in [
@@ -1122,10 +1124,10 @@ mod tests {
         // A visible name of the shape is the person's own (the stash never reads it): the name
         // commands change and remove it without `force`, as Name Manager cannot pass one.
         let own = DefinedName { name: "_gc_rate_0".into(), scope: None, formula: "=1".into(), comment: String::new(), hidden: false };
-        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names.push(own.clone());
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names_mut().push(own.clone());
         s.execute("formulas.defineName", json!({"name": "Rate0", "refersTo": "=2", "oldName": "_gc_rate_0"})).unwrap();
         s.execute("formulas.deleteName", json!({"name": "Rate0"})).unwrap();
-        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names.push(own);
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names_mut().push(own);
         s.execute("formulas.deleteName", json!({"name": "_gc_rate_0"})).unwrap();
         assert_eq!(stash::get(&s.doc().unwrap().wb, "macro_1").as_deref(), Some(text.as_str()), "the hidden item is untouched");
         // Ordinary names and forced calls go ahead.
@@ -1201,9 +1203,9 @@ mod tests {
             comment: String::new(),
             hidden,
         };
-        wb.names.push(name("_Filter", None, "Sheet1!$A$1:$B$9", true));
-        wb.names.push(name("TAX", Some(0), "0.25", false));
-        wb.names.push(name("Other", Some(1), "1", false));
+        wb.names_mut().push(name("_Filter", None, "Sheet1!$A$1:$B$9", true));
+        wb.names_mut().push(name("TAX", Some(0), "0.25", false));
+        wb.names_mut().push(name("Other", Some(1), "1", false));
         s
     }
 

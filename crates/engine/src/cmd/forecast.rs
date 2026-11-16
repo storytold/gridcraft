@@ -463,7 +463,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             pivot: None,
         });
         cx.wb.sheets.insert(at, Arc::new(sheet));
-        for nm in cx.wb.names.iter_mut() {
+        for nm in cx.wb.names_mut().iter_mut() {
             if let Some(sc) = nm.scope.as_mut()
                 && *sc >= at
             {

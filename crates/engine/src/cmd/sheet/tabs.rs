@@ -16,7 +16,7 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let at = before.unwrap_or(cx.wb.active_sheet() + 1).min(cx.wb.sheets.len());
         cx.wb.sheets.insert(at, Arc::new(Sheet::new(name.clone())));
         // Names scoped to later sheets shift.
-        for n in cx.wb.names.iter_mut() {
+        for n in cx.wb.names_mut().iter_mut() {
             if let Some(sc) = n.scope.as_mut()
                 && *sc >= at
             {
@@ -50,11 +50,11 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     edit_doc(d, |cx| {
         cx.wb.sheets.remove(i);
-        cx.wb.names.retain(|n| n.scope != Some(i));
+        cx.wb.names_mut().retain(|n| n.scope != Some(i));
         // Every reference into the deleted sheet becomes #REF!.
         cx.wb.rewrite_references(&|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order));
         crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order))?;
-        for n in cx.wb.names.iter_mut() {
+        for n in cx.wb.names_mut().iter_mut() {
             if let Some(sc) = n.scope.as_mut()
                 && *sc > i
             {
@@ -187,14 +187,14 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     gridcraft_model::DefinedName { scope: Some(at), formula, ..nm.clone() }
                 })
                 .collect();
-            for nm in cx.wb.names.iter_mut() {
+            for nm in cx.wb.names_mut().iter_mut() {
                 if let Some(sc) = nm.scope.as_mut()
                     && *sc >= at
                 {
                     *sc += 1;
                 }
             }
-            cx.wb.names.extend(copies);
+            cx.wb.names_mut().extend(copies);
             cx.wb.sheets.insert(at, Arc::new(sh));
             cx.wb.set_active_sheet(at);
         } else {
@@ -203,7 +203,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             cx.wb.sheets.insert(at, sh);
             cx.wb.set_active_sheet(at);
             // Sheet-level names follow their sheet.
-            for nm in cx.wb.names.iter_mut() {
+            for nm in cx.wb.names_mut().iter_mut() {
                 if let Some(sc) = nm.scope.as_mut() {
                     *sc = match *sc {
                         x if x == i => at,

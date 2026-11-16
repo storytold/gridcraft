@@ -4,6 +4,42 @@ use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
 use std::sync::Arc;
 
+/// What a call of a function can evaluate to, by [`Evaluator::call`]'s dispatch (see
+/// [`call_gives`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CallGives {
+    /// A value or a LAMBDA, never a reference.
+    Value,
+    /// A reference, on some arguments.
+    MayBeReference,
+    /// Not a function: the call of a name (a LAMBDA in a defined name or a LET variable), which
+    /// gives what that LAMBDA gives.
+    ByName,
+}
+
+/// Whether a call of `name` (as the parser stores it: upper case, `_xlfn.` dropped) can evaluate to
+/// a reference. The source is [`Evaluator::call`] and what it dispatches to, so a change there
+/// changes this: IF, IFS, IFERROR, IFNA, CHOOSE and SWITCH give what the branch they pick gives;
+/// OFFSET, INDIRECT, INDEX, XLOOKUP and TRIMRANGE make references; LET gives what its result gives,
+/// and LAMBDA's body gives whatever it gives where the LAMBDA is called. The other functions it
+/// handles itself give values, and so does every function in the registry
+/// (`gridcraft_functions::call` returns a `Value`). A function the evaluator handles itself and
+/// this list doesn't name counts as one that may. Every name [`Evaluator::call`] dispatches on is
+/// listed here, which a test checks against its source.
+pub fn call_gives(name: &str) -> CallGives {
+    match name {
+        "IF" | "IFS" | "IFERROR" | "IFNA" | "CHOOSE" | "SWITCH" | "OFFSET" | "INDIRECT" | "INDEX" | "XLOOKUP" | "TRIMRANGE" | "LET" | "LAMBDA" => {
+            CallGives::MayBeReference
+        }
+        "ROW" | "COLUMN" | "ROWS" | "COLUMNS" | "AREAS" | "ISREF" | "ISFORMULA" | "FORMULATEXT" | "SHEET" | "SHEETS" | "CELL" | "GETPIVOTDATA"
+        | "SUBTOTAL" | "AGGREGATE" | "TEXT" | "ISOMITTED" | "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY" | "GROUPBY" | "PIVOTBY"
+        | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" => CallGives::Value,
+        _ if super::special::is_special(name) => CallGives::MayBeReference,
+        _ if gridcraft_functions::lookup(name).is_some() => CallGives::Value,
+        _ => CallGives::ByName,
+    }
+}
+
 impl<'h> Evaluator<'h> {
     /// `IF` with an array condition: element-wise.
     pub(super) fn if_elementwise(&mut self, arr: &Array, args: &[Expr]) -> Ev {
@@ -312,7 +348,8 @@ impl<'h> Evaluator<'h> {
 
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
-            // A defined name holding a LAMBDA, or a LET-bound lambda.
+            // A defined name holding a LAMBDA, or a LET-bound lambda. `Walk::collect` in
+            // `eval/special.rs` follows such a call as a name lookup by the same rule.
             return match self.name(name) {
                 Ev::L(l) => self.apply_lambda(&l, args),
                 Ev::V(Value::Error(x)) => err(x),
@@ -490,5 +527,55 @@ impl<'h> Evaluator<'h> {
         }
         let u = n.to_ascii_uppercase();
         gridcraft_functions::lookup(&u).map(|_| u)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CallGives, call_gives};
+
+    /// The quoted upper-case words (function names) in `text`.
+    fn quoted_names(text: &str) -> Vec<&str> {
+        text.split('"')
+            .skip(1)
+            .step_by(2)
+            .filter(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '.' || c == '_'))
+            .collect()
+    }
+
+    /// The text of `source` from `start` to the first `end` after it.
+    fn between<'s>(source: &'s str, start: &str, end: &str) -> &'s str {
+        let from = source.find(start).unwrap_or_else(|| panic!("`{start}` not found")) + start.len();
+        let to = source[from..].find(end).unwrap_or_else(|| panic!("`{end}` not found after `{start}`"));
+        &source[from..from + to]
+    }
+
+    #[test]
+    fn call_gives_names_every_function_the_evaluator_dispatches_on() {
+        // `call_gives` is read where a name's definition is judged by its tree: a function the
+        // evaluator handles itself that `call_gives` doesn't list falls to a default, which must
+        // not be what a new arm gives. So every name `Evaluator::call` matches is in one of
+        // `call_gives`'s explicit lists, read from the source of both, and every special function
+        // is a function to `call_gives`.
+        let source = include_str!("call.rs");
+        let dispatch = between(source, "pub(super) fn call(&mut self, name: &str, args: &[Expr]) -> Ev {", "\n        }\n");
+        let arms: Vec<&str> = dispatch
+            .lines()
+            .filter(|line| line.starts_with("            \"") || line.starts_with("            | \""))
+            .flat_map(|line| quoted_names(line.split("=>").next().unwrap_or(line)))
+            .collect();
+        for expected in ["IF", "INDIRECT", "XLOOKUP", "GROUPBY", "RANDARRAY"] {
+            assert!(arms.contains(&expected), "the scan of the dispatch finds {expected}: {arms:?}");
+        }
+        let listed = quoted_names(between(source, "pub fn call_gives(name: &str) -> CallGives {", "_ if super::special::is_special"));
+        for name in &arms {
+            assert!(listed.contains(name), "{name} is dispatched by `Evaluator::call` but not listed in `call_gives`");
+        }
+        let special = include_str!("special.rs");
+        let is_special = quoted_names(between(special, "pub(super) fn is_special(n: &str) -> bool {", "\n}\n"));
+        assert!(is_special.contains(&"LAMBDA"), "the scan of `is_special` finds LAMBDA: {is_special:?}");
+        for name in is_special.iter().chain(crate::SPECIAL_FUNCTIONS) {
+            assert_ne!(call_gives(name), CallGives::ByName, "{name}");
+        }
     }
 }

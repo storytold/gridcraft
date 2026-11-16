@@ -77,7 +77,13 @@ fn workbook() -> Workbook {
         table_type: None,
         connection_id: None,
     });
-    wb.names.push(DefinedName { name: "SalesData".into(), scope: None, formula: "Data!$A$1:$F$9".into(), comment: String::new(), hidden: false });
+    wb.names_mut().push(DefinedName {
+        name: "SalesData".into(),
+        scope: None,
+        formula: "Data!$A$1:$F$9".into(),
+        comment: String::new(),
+        hidden: false,
+    });
 
     let mut report = Sheet::new("Report");
     // Pivot 1: tabular, page filter, custom and built-in value formats, collapsed item, Enable

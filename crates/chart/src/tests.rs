@@ -1756,7 +1756,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
         s.set_value(CellRef::new(1, 0), Value::Number(4.0));
         s.set_value(CellRef::new(2, 0), Value::Number(9.0));
     }
-    wb.names.push(gridcraft_model::DefinedName {
+    wb.names_mut().push(gridcraft_model::DefinedName {
         name: "Title".into(),
         scope: Some(0),
         formula: "'Bob''s'!$A$1".into(),
@@ -1794,7 +1794,7 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
         s.set_value(CellRef::new(1, 0), Value::Number(4.0));
         s.set_value(CellRef::new(2, 0), Value::Number(9.0));
     }
-    wb.names.push(gridcraft_model::DefinedName {
+    wb.names_mut().push(gridcraft_model::DefinedName {
         name: "Title".into(),
         scope: Some(0),
         formula: "'a!b'!$A$1".into(),
@@ -1882,13 +1882,13 @@ fn volatile_defined_names_are_followed() {
     };
     let mut wb = Workbook::new();
     wb.sheet_mut(0).unwrap().name = "Bob's".into();
-    wb.names.push(name("FreshClock", None, "NOW()"));
-    wb.names.push(name("Later", None, "FreshClock+1"));
-    wb.names.push(name("Dice", Some(0), "RANDBETWEEN(1,6)"));
-    wb.names.push(name("Rates", None, "'Bob''s'!$A$1:$A$3"));
-    wb.names.push(name("Loop", None, "Loop+1"));
-    wb.names.push(name("Spin", None, "Spin+NOW()"));
-    wb.names.push(name("Roll", None, "LAMBDA(n,n*RAND())"));
+    wb.names_mut().push(name("FreshClock", None, "NOW()"));
+    wb.names_mut().push(name("Later", None, "FreshClock+1"));
+    wb.names_mut().push(name("Dice", Some(0), "RANDBETWEEN(1,6)"));
+    wb.names_mut().push(name("Rates", None, "'Bob''s'!$A$1:$A$3"));
+    wb.names_mut().push(name("Loop", None, "Loop+1"));
+    wb.names_mut().push(name("Spin", None, "Spin+NOW()"));
+    wb.names_mut().push(name("Roll", None, "LAMBDA(n,n*RAND())"));
     // A workbook-scoped name, a name used inside another, and a sheet-scoped one, bare or qualified.
     assert!(has_volatile_series(&wb, 0, &with("=FreshClock")));
     assert!(has_volatile_series(&wb, 0, &with("=SUM(Later, 1)")));
@@ -1906,7 +1906,7 @@ fn volatile_defined_names_are_followed() {
     assert!(!has_volatile_series(&wb, 0, &many));
     // Names nested deeper than the limit are not known to be stable.
     for i in 0..10 {
-        wb.names.push(name(&format!("Deep{i}"), None, &format!("Deep{}", i + 1)));
+        wb.names_mut().push(name(&format!("Deep{i}"), None, &format!("Deep{}", i + 1)));
     }
     assert!(has_volatile_series(&wb, 0, &with("=Deep0")));
     // A name that refers to cells, a name inside a string and a name of another scope are stable.

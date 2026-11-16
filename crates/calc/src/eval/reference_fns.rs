@@ -4,9 +4,10 @@ use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
-    /// Whole rows/columns trimmed for ROW()/COLUMN() arrays.
+    /// Whole rows/columns trimmed for ROW()/COLUMN() arrays (the rule is `lines_are_cut`, which the
+    /// precedent walk asks too).
     pub(super) fn trim_lines(&mut self, a: &Area) -> RangeRef {
-        if a.range.is_full_cols() || a.range.is_full_rows() { self.trim(a) } else { a.range }
+        if super::lines_are_cut(&a.range) { self.trim(a) } else { a.range }
     }
 
     pub(super) fn offset(&mut self, args: &[Expr]) -> Ev {

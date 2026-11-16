@@ -1,7 +1,7 @@
 //! Workbooks.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use gridcraft_core::DateSystem;
 use gridcraft_formula::Expr;
@@ -194,6 +194,75 @@ impl TextDefaults {
     }
 }
 
+/// A workbook's defined names, in order, with a revision that moves on every write.
+///
+/// Read through `Deref` (it reads as `&[DefinedName]`); every write goes through
+/// [`Workbook::names_mut`], which takes a new revision first. So a writer can't leave the
+/// revision behind, and when two workbooks' revisions are equal their names are too: the engine's
+/// commit then skips comparing the names definition by definition. Revisions are drawn from one
+/// process-wide counter, also for a new or deserialised list, so two lists that weren't copied one
+/// from the other never share one. The counter wraps (`fetch_add`): it would have to take 2^64
+/// revisions to come back to one in use, where saturating would give every later write the same
+/// revision and skip real changes.
+///
+/// Serialised as the list alone, and compared by the list alone: two workbooks with the same names
+/// are equal whatever their revisions.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct DefinedNames {
+    list: Vec<DefinedName>,
+    #[serde(skip, default = "next_names_revision")]
+    revision: u64,
+}
+
+/// The next revision of any workbook's defined names.
+fn next_names_revision() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
+impl DefinedNames {
+    /// The list for writing, under a new revision.
+    fn edit(&mut self) -> &mut Vec<DefinedName> {
+        self.revision = next_names_revision();
+        &mut self.list
+    }
+}
+
+impl Default for DefinedNames {
+    fn default() -> Self {
+        DefinedNames { list: Vec::new(), revision: next_names_revision() }
+    }
+}
+
+impl std::ops::Deref for DefinedNames {
+    type Target = [DefinedName];
+    fn deref(&self) -> &[DefinedName] {
+        &self.list
+    }
+}
+
+impl<'a> IntoIterator for &'a DefinedNames {
+    type Item = &'a DefinedName;
+    type IntoIter = std::slice::Iter<'a, DefinedName>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.list.iter()
+    }
+}
+
+impl PartialEq for DefinedNames {
+    fn eq(&self, other: &Self) -> bool {
+        self.list == other.list
+    }
+}
+
+/// As the list alone, as it printed before it had a revision.
+impl std::fmt::Debug for DefinedNames {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.list.fmt(f)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocProps {
     pub title: String,
@@ -248,7 +317,8 @@ pub struct PhoneticString {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Workbook {
     pub sheets: Vec<Arc<Sheet>>,
-    pub names: Vec<DefinedName>,
+    /// Written through [`Workbook::names_mut`] only (see [`DefinedNames`]).
+    pub names: DefinedNames,
     pub styles: StyleTable,
     pub theme: Theme,
     pub date_system: DateSystem,
@@ -462,7 +532,7 @@ impl Workbook {
     /// stays shared.
     pub fn rewrite_references(&mut self, f: &dyn Fn(RefHost<'_>, Expr) -> Expr) {
         let sheet_names: Vec<String> = self.sheets.iter().map(|s| s.name.clone()).collect();
-        for n in &mut self.names {
+        for n in self.names_mut() {
             let name = n.scope.and_then(|i| sheet_names.get(i)).map_or(NAME_HOST, String::as_str);
             let host = RefHost { sheet: n.scope, name };
             rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
@@ -619,7 +689,7 @@ impl Workbook {
     pub fn new() -> Workbook {
         Workbook {
             sheets: vec![Arc::new(Sheet::new("Sheet1"))],
-            names: vec![],
+            names: DefinedNames::default(),
             styles: StyleTable::default(),
             theme: Theme::default(),
             date_system: DateSystem::D1900,
@@ -646,6 +716,17 @@ impl Workbook {
             region: gridcraft_core::region::default_region(),
             source_path: None,
         }
+    }
+    /// The defined names for writing. Every write to them goes through here, which moves
+    /// [`Workbook::names_revision`] first.
+    pub fn names_mut(&mut self) -> &mut Vec<DefinedName> {
+        self.names.edit()
+    }
+    /// The revision of the defined names: equal in two workbooks only when one's names are a copy
+    /// of the other's, unchanged since (see [`DefinedNames`]). A write may leave the names as they
+    /// were and still move it.
+    pub fn names_revision(&self) -> u64 {
+        self.names.revision
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
         self.sheets.get(i).map(|s| s.as_ref())
@@ -699,11 +780,16 @@ impl Workbook {
         Ok(())
     }
     /// Finds a defined name visible from `sheet`: sheet scope first, then workbook scope.
+    /// Its indexed twin is `NameIndex::find` in the calc crate, which must find the same name.
     pub fn name(&self, name: &str, sheet: usize) -> Option<&DefinedName> {
+        self.names.get(self.name_position(name, sheet)?)
+    }
+    /// Where in `names` [`Workbook::name`] finds `name` seen from `sheet`.
+    pub fn name_position(&self, name: &str, sheet: usize) -> Option<usize> {
         self.names
             .iter()
-            .find(|n| n.scope == Some(sheet) && n.name.eq_ignore_ascii_case(name))
-            .or_else(|| self.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(name)))
+            .position(|n| n.scope == Some(sheet) && n.name.eq_ignore_ascii_case(name))
+            .or_else(|| self.names.iter().position(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(name)))
     }
     /// Spells calls of LAMBDA names the way the names are defined (`Double(4)`, where the
     /// parser gives `DOUBLE(4)`: it upper-cases function names, as built-in ones are shown).
@@ -738,7 +824,7 @@ impl Workbook {
                 }
             }
         }
-        for n in self.names.iter_mut() {
+        for n in self.names_mut().iter_mut() {
             if let Ok(e) = gridcraft_formula::parse_name(&n.formula) {
                 let ne = spell_calls(e.clone(), &lambdas);
                 if ne != e {

@@ -89,7 +89,7 @@ fn chart_names_are_written_qualified() {
         pivot: None,
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new("My Data"))];
-    wb.names = vec![
+    *wb.names_mut() = vec![
         name("Items", None, "Data!$A$2:$A$4"),
         name("Amounts", None, "OFFSET(Items,0,1)"),
         name("Title", None, "Data!$B$1"),
@@ -170,7 +170,7 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
         pivot: None,
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new(" Sales "))];
-    wb.names = vec![
+    *wb.names_mut() = vec![
         name("Items", None, "Sales!$A$2:$A$4"),
         name("Data", Some(0), "Sales!$B$2:$B$4"),
         name("Data", Some(1), "' Sales '!$B$2:$B$4"),

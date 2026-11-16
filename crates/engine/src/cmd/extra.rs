@@ -364,8 +364,8 @@ fn stash_map(wb: &Workbook, key: &str) -> Json {
 fn stash_set(wb: &mut Workbook, key: &str, v: &Json) {
     let text = v.to_string();
     let formula = format!("\"{}\"", text.replace('"', "\"\""));
-    wb.names.retain(|n| n.name != key);
-    wb.names.push(DefinedName { name: key.into(), scope: None, formula, comment: String::new(), hidden: true });
+    wb.names_mut().retain(|n| n.name != key);
+    wb.names_mut().push(DefinedName { name: key.into(), scope: None, formula, comment: String::new(), hidden: true });
 }
 
 /// Number format that marks checkbox cells (TRUE/FALSE values drawn as boxes).

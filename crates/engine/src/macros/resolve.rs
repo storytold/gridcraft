@@ -579,14 +579,14 @@ mod tests {
         for (i, h) in ["Name", "Amount", "Date"].iter().enumerate() {
             sh.set_value(CellRef::new(1, 1 + i as u32), gridcraft_core::Value::text(*h));
         }
-        wb.names.push(gridcraft_model::DefinedName {
+        wb.names_mut().push(gridcraft_model::DefinedName {
             name: "Total".into(),
             scope: None,
             formula: "Sheet1!$F$20".into(),
             comment: String::new(),
             hidden: false,
         });
-        wb.names.push(gridcraft_model::DefinedName {
+        wb.names_mut().push(gridcraft_model::DefinedName {
             name: "Rates".into(),
             scope: None,
             formula: "'My Data'!$A$1:$A$5".into(),
@@ -797,7 +797,7 @@ mod tests {
         // a method. The longest name that exists is used, and methods follow it.
         let mut wb = wb();
         for (name, formula) in [("Sales", "Sheet1!$A$1"), ("Sales.Q1", "Sheet1!$B$2:$C$5"), ("Data.row", "'My Data'!$E$1:$E$3")] {
-            wb.names.push(gridcraft_model::DefinedName {
+            wb.names_mut().push(gridcraft_model::DefinedName {
                 name: name.into(),
                 scope: None,
                 formula: formula.into(),
@@ -944,7 +944,7 @@ mod tests {
     fn a_defined_name_on_a_sheet_with_a_dollar_sign_resolves() {
         let mut wb = wb();
         wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("US$")));
-        wb.names.push(gridcraft_model::DefinedName {
+        wb.names_mut().push(gridcraft_model::DefinedName {
             name: "Dollars".into(),
             scope: None,
             formula: "'US$'!$F$20".into(),
