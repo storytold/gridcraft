@@ -110,6 +110,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
             "Format",
             vec![
                 ("Cells…", "dialog:formatCells", None),
+                ("Font…", FONTS, None),
                 ("Row Height…", "dialog:rowHeight", None),
                 ("AutoFit Row Height", "home.autofitRowHeight", None),
                 ("Column Width…", "dialog:columnWidth", None),
@@ -199,6 +200,8 @@ pub struct NativeMenu {
     /// The Window menu's window items and what they last showed.
     window_items: Vec<CheckMenuItem>,
     windows: Vec<OpenWindow>,
+    /// Format › Font… was chosen: the app opens the system font panel (`font_panel.rs`).
+    pub show_fonts: bool,
 }
 
 /// Menu id of the Window menu item that brings workbook `doc` forward.
@@ -207,6 +210,9 @@ const WINDOW_ITEM: &str = "window:id:";
 /// The Quit item: asks about each unsaved workbook in its window first
 /// (`SheetApp::request_quit`), which AppKit's own Quit (terminate:) would skip.
 const QUIT: &str = "app.quit";
+
+/// Format › Font…: the system font panel. No shortcut: ⌘D is Fill Down and ⌘T Insert Table.
+const FONTS: &str = "format.fontPanel";
 
 fn select_theme(app: &mut SheetApp, id: &str) -> bool {
     let mode = match id {
@@ -277,7 +283,7 @@ impl NativeMenu {
             let _ = tx.send(e);
             ctx.request_repaint();
         }));
-        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new() }
+        NativeMenu { _menu: menu, events: rx, theme_items, window_menu, window_items: Vec::new(), windows: Vec::new(), show_fonts: false }
     }
 
     /// Keeps the Window menu's list of open windows (title, unsaved bullet, active check) in
@@ -319,6 +325,10 @@ impl NativeMenu {
             let id = ev.id.as_ref().to_string();
             if id == QUIT {
                 app.request_quit(ctx);
+                continue;
+            }
+            if id == FONTS {
+                self.show_fonts = true;
                 continue;
             }
             if let Some(window) = id.strip_prefix(WINDOW_ITEM).and_then(|w| w.parse::<u64>().ok()) {
@@ -410,6 +420,14 @@ mod tests {
         assert_eq!(item.1, "app.checkForUpdates");
         let mut app = super::SheetApp::new(gridcraft_engine::Session::new(), Default::default());
         assert!(app.run(item.1, serde_json::json!({})).is_ok());
+    }
+
+    #[test]
+    fn format_menu_opens_the_font_panel_without_a_shortcut() {
+        let tree = super::tree();
+        let (_, format) = tree.iter().find(|(title, _)| *title == "Format").expect("Format menu");
+        let item = format.iter().find(|e| e.0 == "Font…").expect("Font… in the Format menu");
+        assert_eq!((item.1, item.2), (super::FONTS, None), "⌘D is Fill Down and ⌘T Insert Table");
     }
 
     #[test]

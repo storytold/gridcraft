@@ -12,6 +12,8 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+#[cfg(target_os = "macos")]
+mod font_panel;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
@@ -27,8 +29,15 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-/// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
-struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app, its native window per workbook window, and (macOS) the menu bar, Finder events and
+/// the system font panel (made the first time Format › Font… is chosen).
+struct App(
+    SheetApp,
+    DocWindows,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "macos")] Option<font_panel::FontPanel>,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -39,8 +48,19 @@ impl eframe::App for App {
             }
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
+                if std::mem::take(&mut m.show_fonts)
+                    && let Some(mtm) = objc2::MainThreadMarker::new()
+                {
+                    self.4.get_or_insert_with(|| font_panel::FontPanel::new(mtm)).show(&self.0);
+                }
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
+            if let Some(panel) = &self.4 {
+                for pick in panel.picks() {
+                    font_panel::apply(&mut self.0, &pick);
+                }
+                panel.follow(&self.0);
+            }
         }
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
@@ -417,6 +437,8 @@ fn main() -> eframe::Result<()> {
                     None,
                     #[cfg(target_os = "macos")]
                     apple_events.connect(&cc.egui_ctx),
+                    #[cfg(target_os = "macos")]
+                    None,
                 )))
             }),
         )

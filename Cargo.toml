@@ -88,7 +88,8 @@ epaint_default_fonts = "0.37"
 craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", default-features = false, features = ["egui"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`, so the one exception AGENTS.md names can allow it.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 cognitive_complexity = "deny"
