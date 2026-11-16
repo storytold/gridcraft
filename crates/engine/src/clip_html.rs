@@ -120,8 +120,13 @@ fn xl_row_span(attrs: &str) -> usize {
     let Some(style) = attr(attrs, "style") else { return 1 };
     let Some(at) = find_ci(style, KEY) else { return 1 };
     let Some(value) = style.get(at + KEY.len()..).map(str::trim_start).and_then(|s| s.strip_prefix(':')) else { return 1 };
-    let digits: String = value.trim_start().chars().take_while(char::is_ascii_digit).take(12).collect();
-    digits.parse::<usize>().unwrap_or(1).clamp(1, MAX_ROW_SPAN)
+    // The whole declaration value must be a count: `2x` or `2.5` is one row, not 2.
+    let count = value.split(';').next().unwrap_or_default().trim();
+    if count.is_empty() || !count.bytes().all(|b| b.is_ascii_digit()) {
+        return 1;
+    }
+    // A count past `usize` is still a count: it clamps to the sheet's height.
+    count.parse::<usize>().unwrap_or(MAX_ROW_SPAN).clamp(1, MAX_ROW_SPAN)
 }
 
 /// A cell whose closing tag hasn't been seen yet.
@@ -481,13 +486,27 @@ mod tests {
         assert_eq!(first, ["one", "two", "", "", "five", "", "", "", "nine"]);
         assert_eq!(rows[4][1].num, Some(5.0));
         // Without the style, or with a value that isn't a count, a row is one row.
-        for style in ["", " style='height:15pt'", " style='mso-xlrowspan:x'", " style='mso-xlrowspan:0'"] {
+        for style in [
+            "",
+            " style='height:15pt'",
+            " style='mso-xlrowspan:x'",
+            " style='mso-xlrowspan:0'",
+            " style='mso-xlrowspan:2x'",
+            " style='mso-xlrowspan:2.5'",
+            " style='mso-xlrowspan:-2'",
+            " style='mso-xlrowspan:'",
+        ] {
             let html = format!("<table><tr{style}><td></td></tr><tr><td>b</td></tr></table>");
             assert_eq!(table_cells(&html, 5, 1).len(), 2, "{style}");
         }
-        // A hostile span stops at the row limit.
-        let html = "<table><tr style='mso-xlrowspan:99999999999999'><td>a</td></tr><tr><td>b</td></tr></table>";
-        assert_eq!(table_cells(html, 10, 1).len(), 10);
+        // The count ends at the declaration's `;`, with spaces around it.
+        let html = "<table><tr style='mso-xlrowspan: 2 ;height:30pt'><td></td></tr><tr><td>b</td></tr></table>";
+        assert_eq!(table_cells(html, 5, 1).len(), 3);
+        // A hostile span, even one past `usize`, stops at the row limit.
+        for n in ["99999999999999", "999999999999999999999999999999"] {
+            let html = format!("<table><tr style='mso-xlrowspan:{n}'><td>a</td></tr><tr><td>b</td></tr></table>");
+            assert_eq!(table_cells(&html, 10, 1).len(), 10, "{n}");
+        }
     }
 
     #[test]
