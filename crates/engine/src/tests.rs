@@ -2402,6 +2402,35 @@ fn merging_over_a_spill_blocks_it_and_unmerging_unblocks_it() {
 }
 
 #[test]
+fn inserting_a_link_without_text_preserves_a_spill_child() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    s.execute("insert.link", json!({"cell": "A2", "target": "https://example.org"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    let d = s.doc().unwrap();
+    let at = CellRef::parse("A2").unwrap();
+    assert_eq!(d.wb.active().unwrap().hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
+}
+
+#[test]
+fn inserting_a_link_without_text_preserves_an_empty_spill_child() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:C3", "values": [["a", "x", 1], ["b", "x", 2], ["a", "y", 3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "K1", "input": "=PIVOTBY(A1:A3,B1:B3,C1:C3,LAMBDA(x,SUM(x)))"})).unwrap();
+    assert_eq!(v(&s, "K1"), Value::Empty);
+    let at = CellRef::parse("M3").unwrap();
+    assert_eq!(v(&s, "M3"), Value::Empty);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().spill_anchor(at), Some(CellRef::parse("K1").unwrap()));
+    s.execute("insert.link", json!({"cell": "M3", "target": "https://example.org"})).unwrap();
+    assert_eq!(v(&s, "K1"), Value::Empty);
+    assert_eq!(v(&s, "M3"), Value::Empty);
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
+}
+
+#[test]
 fn multi_cell_array_formulas_and_tables_dont_overlap() {
     // Found by the command-sequence fuzzer: an array over a table header lost its value to the
     // header name written as text, then showed #SPILL! (and reloaded from XLSX differently).
@@ -2938,6 +2967,127 @@ fn validation_formulas_are_relative_and_see_the_new_value() {
     assert!(!ok(&mut s, "A2", "5"));
     assert!(ok(&mut s, "C2", "50"));
     assert!(!ok(&mut s, "C1", "50"));
+}
+
+/// Every value of the active sheet as the incremental recalculation left it must equal a full one.
+fn assert_matches_full_recalc(s: &Session) {
+    let wb = &s.doc().unwrap().wb;
+    let mut fresh = (**wb).clone();
+    gridcraft_calc::Calc::new().recalc_all(&mut fresh);
+    let (a, b) = (wb.active().unwrap(), fresh.active().unwrap());
+    for row in 0..30 {
+        for col in 0..12 {
+            let cell = CellRef { row, col };
+            assert_eq!(a.value(cell), b.value(cell), "{cell} in memory vs after a full recalc");
+        }
+    }
+}
+
+#[test]
+fn filling_a_formula_next_to_a_spill_matches_a_full_recalc() {
+    // Found by the command-sequence fuzzer: C14 spills along row 14; filling `=D14:E18` over
+    // E13:F13 puts two array formulas whose areas run into that spill and into each other. The
+    // incremental pass left F13 as #SPILL! while a full recalc gave F13 its array and C14
+    // #SPILL!. The spill that already exists keeps its cells (as in Excel), in both.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "B18", "values": [[1], [2], [3], [4], [5], [6], [7]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "C14", "input": "=TRANSPOSE(B18:B24)"})).unwrap();
+    s.execute("selection.set", json!({"range": "E13"})).unwrap();
+    s.execute("range.fill", json!({"range": "E13:F13", "input": "=D14:E18"})).unwrap();
+    assert_eq!(v(&s, "C14"), Value::Number(1.0));
+    assert_eq!(v(&s, "I14"), Value::Number(7.0));
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_matches_full_recalc(&s);
+}
+
+#[test]
+fn overlapping_spills_keep_the_one_that_exists_whichever_anchor_is_first() {
+    use gridcraft_core::CellError::Spill;
+    // E10 spills along row 10, F8 down over F10: F8 is first in reading order, E10 may be first
+    // to spill. Excel keeps whichever spilled first.
+    for (first, second) in [(("E10", "=SEQUENCE(1,3)"), ("F8", "=SEQUENCE(5)")), (("F8", "=SEQUENCE(5)"), ("E10", "=SEQUENCE(1,3)"))] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": first.0, "input": first.1})).unwrap();
+        s.execute("cell.set", json!({"cell": second.0, "input": second.1})).unwrap();
+        assert_ne!(v(&s, first.0), Value::Error(Spill), "{} keeps its cells", first.0);
+        assert_eq!(v(&s, second.0), Value::Error(Spill), "{} is blocked", second.0);
+        assert_matches_full_recalc(&s);
+        // Clearing the winner lets the other one spill.
+        s.execute("edit.clearContents", json!({"range": first.0})).unwrap();
+        assert_ne!(v(&s, second.0), Value::Error(Spill), "{} spills once {} is cleared", second.0, first.0);
+        assert_matches_full_recalc(&s);
+    }
+}
+
+#[test]
+fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
+    use gridcraft_core::CellError::Spill;
+    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, takes
+    // its cells, shrinks back and lets it spill again, then the steps are undone, redone, edited
+    // inside the contested area and cleared. Every state must match a full recalc.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "H1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(H1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,3)*10"})).unwrap();
+    assert_eq!(v(&s, "G10"), Value::Number(30.0));
+    assert_matches_full_recalc(&s);
+    let steps: [(&str, serde_json::Value); 9] = [
+        ("cell.set", json!({"cell": "H1", "input": "5"})),
+        ("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,2)*10"})),
+        ("cell.set", json!({"cell": "H1", "input": "1"})),
+        ("edit.undo", json!({})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("cell.set", json!({"cell": "F11", "input": "x"})),
+        ("cell.set", json!({"cell": "H1", "input": "2"})),
+        ("edit.clearContents", json!({"range": "E8:F10"})),
+    ];
+    for (i, (id, params)) in steps.iter().enumerate() {
+        s.execute(id, params.clone()).unwrap();
+        assert_matches_full_recalc(&s);
+        if i == 0 {
+            // Both held a spill: reading order gives F8 the cells.
+            assert_eq!(v(&s, "F12"), Value::Number(5.0));
+            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+        }
+        if i == 2 {
+            assert_eq!(v(&s, "E10"), Value::Number(10.0));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
+        }
+        if i == 3 {
+            // Undone back to the grown F8.
+            assert_eq!(v(&s, "F12"), Value::Number(5.0));
+            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+        }
+        if i == 8 {
+            assert_eq!((v(&s, "F8"), v(&s, "E10"), v(&s, "F9")), (Value::Empty, Value::Empty, Value::Empty));
+        }
+    }
+}
+
+#[test]
+fn overlapping_spills_with_no_history_go_to_the_earlier_anchor() {
+    use gridcraft_core::CellError::Spill;
+    // A workbook calculated for the first time (a file that carries no layout) has no entry
+    // order: the anchor first in reading order wins, whatever order the formulas were set in.
+    for order in [["E10", "F8"], ["F8", "E10"]] {
+        let mut s = s();
+        for a in order {
+            let input = if a == "E10" { "=SEQUENCE(1,3)" } else { "=SEQUENCE(5)" };
+            s.execute("cell.set", json!({"cell": a, "input": input})).unwrap();
+        }
+        let mut fresh = (*s.doc().unwrap().wb).clone();
+        for i in 0..fresh.sheets.len() {
+            let sh = fresh.sheet_mut(i).unwrap();
+            sh.spill.clear();
+            sh.spill_ranges.clear();
+        }
+        gridcraft_calc::Calc::new().recalc_all(&mut fresh);
+        let a = fresh.active().unwrap();
+        let cell = |r: &str| a.value(CellRef::parse(r).unwrap());
+        assert_ne!(cell("F8"), Value::Error(Spill), "order {order:?}");
+        assert_eq!(cell("E10"), Value::Error(Spill), "order {order:?}");
+    }
 }
 
 #[test]
@@ -6375,11 +6525,22 @@ fn a_script_cannot_switch_windows() {
 
 mod controls;
 mod equation;
+mod json_golden;
 mod macros;
 mod objects;
 mod python_cells;
 mod python_commands;
 mod python_files;
+
+#[test]
+fn text_to_columns_keeps_a_mid_field_quote() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "'5\" pipe,abc"})).unwrap();
+    s.execute("data.textToColumns", json!({"range": "A1", "delimiters": [","]})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("5\" pipe"));
+    assert_eq!(v(&s, "B1"), Value::text("abc"));
+}
+
 mod seams;
 
 #[test]
