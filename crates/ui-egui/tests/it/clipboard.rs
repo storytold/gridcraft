@@ -64,9 +64,7 @@ fn missing_or_failed_rich_clipboard_falls_back_to_plain_text() {
         h.input_mut().events.push(Event::Copy);
         h.step();
         let expected = if cfg!(windows) { "Name\tScore\r\nAda\t42\r\n" } else { "Name\tScore\nAda\t42\n" };
-        assert!(
-            h.output().platform_output.commands.iter().any(|c| { matches!(c, OutputCommand::CopyText(text) if text == expected) })
-        );
+        assert!(h.output().platform_output.commands.iter().any(|c| { matches!(c, OutputCommand::CopyText(text) if text == expected) }));
     }
 }
 
@@ -571,10 +569,7 @@ fn tsv_to_crlf_converts_row_delimiters_across_various_shapes() {
     assert_eq!(SheetApp::tsv_to_crlf("A\nB\n"), "A\r\nB\r\n");
 
     // Multi-row, multi-col
-    assert_eq!(
-        SheetApp::tsv_to_crlf("A1\tB1\tC1\nA2\tB2\tC2\nA3\tB3\tC3\n"),
-        "A1\tB1\tC1\r\nA2\tB2\tC2\r\nA3\tB3\tC3\r\n"
-    );
+    assert_eq!(SheetApp::tsv_to_crlf("A1\tB1\tC1\nA2\tB2\tC2\nA3\tB3\tC3\n"), "A1\tB1\tC1\r\nA2\tB2\tC2\r\nA3\tB3\tC3\r\n");
 
     // Single cell with trailing LF
     assert_eq!(SheetApp::tsv_to_crlf("A1\n"), "A1\r\n");
@@ -637,10 +632,7 @@ fn tsv_to_crlf_handles_quotes_in_unquoted_cells() {
     assert_eq!(SheetApp::tsv_to_crlf("12\"\tlength\n"), "12\"\tlength\r\n");
 
     // Unquoted cells across multiple rows
-    assert_eq!(
-        SheetApp::tsv_to_crlf("say \"hi\"\t1\n\"hi\" there\t2\n12\"\t3\n"),
-        "say \"hi\"\t1\r\n\"hi\" there\t2\r\n12\"\t3\r\n"
-    );
+    assert_eq!(SheetApp::tsv_to_crlf("say \"hi\"\t1\n\"hi\" there\t2\n12\"\t3\n"), "say \"hi\"\t1\r\n\"hi\" there\t2\r\n12\"\t3\r\n");
 }
 
 #[test]
@@ -784,12 +776,12 @@ fn cut_and_paste_with_crlf_text_does_not_double_paste_or_regress() {
     h.run_steps(2);
     h.state_mut().run("selection.set", json!({"cell": "D4"})).unwrap();
     // Simulate host pasting back the text (even if CRLF)
-    h.input_mut().events.push(Event::Paste(text.replace('\n', "\r\n")));
+    h.input_mut().events.push(Event::Paste(SheetApp::tsv_to_crlf(&text)));
     h.run_steps(2);
     assert_eq!(value_at(&h, "D4"), Some(Value::from("line1\nline2")));
 
     // Second paste reports nothing to paste (Excel cut rule)
-    h.input_mut().events.push(Event::Paste(text.replace('\n', "\r\n")));
+    h.input_mut().events.push(Event::Paste(SheetApp::tsv_to_crlf(&text)));
     h.run_steps(2);
     assert!(h.state().toast.is_some() || h.state().message.is_some());
 }
