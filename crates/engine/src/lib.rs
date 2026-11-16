@@ -334,6 +334,7 @@ impl DocState {
         trust: Trust,
         images: Option<Arc<dyn calc::ImageFetcher>>,
     ) -> DocState {
+        let _ = gridcraft_model::PIVOT_INDEXER.set(pivot::index_cells);
         let mut calc = Calc::new();
         calc.set_image_fetcher(images);
         calc.recalc_all(&mut wb);
