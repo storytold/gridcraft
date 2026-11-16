@@ -97,7 +97,8 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("a", false) => {
                 if let Some(c) = cell.as_mut().filter(|c| c.cell.link.is_none()) {
-                    c.cell.link = attr(attrs, "href").map(|href| (decode(href), attr(attrs, "title").map(decode)));
+                    // The address keeps its spacing (a sheet name's two spaces are part of it).
+                    c.cell.link = attr(attrs, "href").map(|href| (decode_entities(href).trim().to_string(), attr(attrs, "title").map(decode)));
                 }
             }
             ("br", _) => {
@@ -282,9 +283,42 @@ fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
 /// when a paste holds many bare `&`).
 const ENTITY_WINDOW: usize = 12;
 
-/// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
-/// space, trimmed. The text only serves to match a cell with the tab-separated text.
-fn decode(raw: &str) -> String {
+/// The character a named reference stands for: the five of XML, HTML 4's Latin-1 set
+/// (`&eacute;`, `&nbsp;` … `&yuml;`, U+00A0–U+00FF in order) and the common typographic ones.
+fn named_entity(name: &str) -> Option<char> {
+    const LATIN1: [&str; 96] = [
+        "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf", "laquo", "not", "shy", "reg", "macr", "deg",
+        "plusmn", "sup2", "sup3", "acute", "micro", "para", "middot", "cedil", "sup1", "ordm", "raquo", "frac14", "frac12", "frac34", "iquest",
+        "Agrave", "Aacute", "Acirc", "Atilde", "Auml", "Aring", "AElig", "Ccedil", "Egrave", "Eacute", "Ecirc", "Euml", "Igrave", "Iacute", "Icirc",
+        "Iuml", "ETH", "Ntilde", "Ograve", "Oacute", "Ocirc", "Otilde", "Ouml", "times", "Oslash", "Ugrave", "Uacute", "Ucirc", "Uuml", "Yacute",
+        "THORN", "szlig", "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig", "ccedil", "egrave", "eacute", "ecirc", "euml", "igrave",
+        "iacute", "icirc", "iuml", "eth", "ntilde", "ograve", "oacute", "ocirc", "otilde", "ouml", "divide", "oslash", "ugrave", "uacute", "ucirc",
+        "uuml", "yacute", "thorn", "yuml",
+    ];
+    let c = match name {
+        "amp" => '&',
+        "lt" => '<',
+        "gt" => '>',
+        "quot" => '"',
+        "apos" => '\'',
+        "euro" => '€',
+        "ndash" => '–',
+        "mdash" => '—',
+        "lsquo" => '‘',
+        "rsquo" => '’',
+        "ldquo" => '“',
+        "rdquo" => '”',
+        "hellip" => '…',
+        "bull" => '•',
+        "trade" => '™',
+        _ => return LATIN1.iter().position(|n| *n == name).and_then(|i| char::from_u32(0xA0 + i as u32)),
+    };
+    Some(c)
+}
+
+/// `raw` with its character references decoded (named, decimal and hex), whitespace as it is: an
+/// attribute such as a link's `href` keeps it, as a sheet name's two spaces are part of the name.
+fn decode_entities(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
     while let Some(amp) = rest.find('&') {
@@ -294,14 +328,9 @@ fn decode(raw: &str) -> String {
         // boundary used to fall back to the complete suffix, re-scanning per '&'.
         let semi = rest.get(..ENTITY_WINDOW.min(rest.len())).and_then(|w| w.find(';'));
         let entity = semi.and_then(|e| rest.get(1..e));
-        let ch = entity.and_then(|e| match e {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some('\u{a0}'),
-            _ => {
+        let ch = entity.and_then(|e| match named_entity(e) {
+            Some(c) => Some(c),
+            None => {
                 let n = e
                     .strip_prefix("#x")
                     .or_else(|| e.strip_prefix("#X"))
@@ -322,6 +351,13 @@ fn decode(raw: &str) -> String {
         }
     }
     out.push_str(rest);
+    out
+}
+
+/// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
+/// space, trimmed. The text only serves to match a cell with the tab-separated text.
+fn decode(raw: &str) -> String {
+    let out = decode_entities(raw);
     let mut text = String::with_capacity(out.len());
     let mut space = false;
     for c in out.chars() {
@@ -410,6 +446,19 @@ mod tests {
         assert_eq!(decode("&#x266A;"), "\u{266A}");
         assert_eq!(decode("a&amp;b&nbsp;c"), "a&b\u{a0}c");
         assert_eq!(decode("amp&"), "amp&");
+    }
+
+    #[test]
+    fn named_references_cover_latin_1_and_attributes_keep_their_spacing() {
+        assert_eq!(decode("Caf&eacute; &Agrave; &yuml; &nbsp;&euro;&hellip;"), "Café À ÿ \u{a0}€…");
+        assert_eq!(decode("&iexcl;&szlig;&times;&divide;&THORN;"), "¡ß×÷Þ");
+        // A name that isn't one stays as written.
+        assert_eq!(decode("&foo; &eacutex;"), "&foo; &eacutex;");
+        // Decoding alone keeps whitespace; the cell text collapses it.
+        assert_eq!(decode_entities("#'Other  sheet'!B2"), "#'Other  sheet'!B2");
+        assert_eq!(decode("Other  sheet"), "Other sheet");
+        let rows = table_cells("<table><tr><td><a href=\" #'Caf&eacute;  Bar'!B2 \" title=\"Caf&eacute;  menu\">x</a></td></tr></table>", 1, 1);
+        assert_eq!(rows[0][0].link, Some(("#'Café  Bar'!B2".to_string(), Some("Café menu".to_string()))));
     }
 
     #[test]
