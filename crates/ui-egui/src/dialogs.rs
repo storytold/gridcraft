@@ -992,7 +992,7 @@ impl Dialog {
                 }],
                 json!({"kind": "blanks"}),
             ),
-            "sort" => sort_dialog::open(app, &params),
+            "sort" => sort_dialog::open(app, &params)?,
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
             "pasteName" => {
                 // F3 opens it only when the workbook has names to paste, as in Excel.

@@ -183,6 +183,59 @@ fn sorting_by_the_seeded_column_orders_the_rows() {
     assert_eq!(nums, vec![10, 20, 30], "sort ran on the seeded column B");
 }
 
+/// A request whose range cannot be read opens nothing, so OK cannot sort the selection instead.
+#[test]
+fn sort_dialog_rejects_an_invalid_range_instead_of_sorting_the_selection() {
+    let mut h = harness(sales());
+    h.state_mut().open_dialog("sort", json!({"range": "not a range"}));
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "no dialog opens for a range that cannot be read");
+    assert!(h.state().message.is_some(), "the rejection is explained");
+    assert!(!h.state().session.journal.iter().any(|(id, _)| id == "data.sort"), "nothing was sorted");
+}
+
+/// A range on another worksheet is sorted there, not on the worksheet that happened to be active.
+#[test]
+fn sort_dialog_keeps_the_worksheet_the_range_names() {
+    let mut s = sales();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Other!A1", "values": [["Item", "Qty"], ["z", 3], ["x", 1], ["y", 2]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().run("data.sort", json!({"range": "Other!A1:B4"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("sort"));
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Other", "the dialog shows the worksheet it sorts");
+    assert_eq!(col(&h), "A");
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    let doc = h.state().session.active().unwrap();
+    let qty =
+        |sheet: &str, row| doc.wb.sheet(doc.wb.sheet_index(sheet).unwrap()).unwrap().value(gridcraft_engine::core::CellRef::new(row, 1)).as_f64();
+    assert_eq!((1..4).map(|r| qty("Other", r)).collect::<Vec<_>>(), [Some(1.0), Some(2.0), Some(3.0)]);
+    assert_eq!((1..4).map(|r| qty("Sheet1", r)).collect::<Vec<_>>(), [Some(30.0), Some(10.0), Some(20.0)], "the other worksheet is untouched");
+}
+
+/// An open filter menu closes when Sort opens, so it cannot take the Enter that confirms Sort.
+#[test]
+fn sort_dialog_closes_an_open_filter_menu() {
+    let mut h = harness(sales());
+    h.state_mut().grid.filter_menu = Some((1, 0, egui::pos2(100.0, 100.0)));
+    h.state_mut().open_dialog("sort", json!({}));
+    h.run_steps(2);
+    assert!(h.state().grid.filter_menu.is_none());
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: Some(Key::Enter),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(2);
+    assert!(h.state().session.journal.iter().any(|(id, _)| id == "data.sort"), "Enter confirmed Sort");
+    assert!(!h.state().session.journal.iter().any(|(id, _)| id == "data.filterBy"), "and applied no filter");
+}
+
 /// Worksheet-changing commands are refused while Sort is open.
 #[test]
 fn sheet_tabs_cannot_switch_while_sort_is_open() {

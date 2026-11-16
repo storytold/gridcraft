@@ -43,27 +43,36 @@ struct ChoicesCache {
 /// A column of the sorted range: its letters, its label and whether its values are numbers.
 type Choice = (String, String, bool);
 
-/// Opens Custom Sort on the range and header guess of `data.sort`, seeding "Sort by" from the active column (#1906).
-pub(super) fn open(app: &mut SheetApp, params: &Json) -> Dialog {
+/// Opens Custom Sort on the range, worksheet and header guess of `data.sort`, seeding "Sort by" from the
+/// active column (#1906). A request that can't be resolved is reported and opens nothing.
+pub(super) fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
+    let (sheet, range, header) = match gridcraft_engine::cmd::data::sort_context(&app.session, params) {
+        Ok(context) => context,
+        Err(e) => {
+            app.message = Some(("Sort".into(), crate::clean_error(&e.to_string())));
+            return None;
+        }
+    };
+    // Sort works on the worksheet shown, so a request for another one shows it first.
+    if app.session.active().is_some_and(|doc| doc.wb.active_sheet() != sheet)
+        && let Err(e) = app.run("sheet.activate", json!({"sheet": sheet}))
+    {
+        app.message = Some(("Sort".into(), crate::clean_error(&e)));
+        return None;
+    }
+    // An open filter menu would take the Enter that confirms Sort (and apply its filter).
+    app.grid.filter_menu = None;
     let restore = app.session.active().map(|doc| doc.selection.clone());
     let home = sheet_key(app);
-    let (range, header) = gridcraft_engine::cmd::data::sort_context(&app.session, params).map_or((None, true), |(r, h)| (Some(r), h));
     let active_col = app.session.active().map(|doc| doc.selection.active.col);
-    let first = match (range, active_col) {
-        (Some(r), c) => col_to_letters(c.filter(|c| (r.start.col..=r.end.col).contains(c)).unwrap_or(r.start.col)),
-        (None, c) => col_to_letters(c.unwrap_or(0)),
-    };
-    if header
-        && let Some(r) = range
-        && r.height() > 1
-    {
-        let _ = app.run("selection.set", json!({"range": body_of(r).a1()}));
+    let first = col_to_letters(active_col.filter(|c| (range.start.col..=range.end.col).contains(c)).unwrap_or(range.start.col));
+    if header && range.height() > 1 {
+        let _ = app.run("selection.set", json!({"range": body_of(range).a1()}));
     }
-    let mut d =
-        Dialog::custom("sort", "Sort", json!({"header": header, "range": range.map(|r| r.a1()), "levels": [{"column": first, "order": "asc"}]}));
+    let mut d = Dialog::custom("sort", "Sort", json!({"header": header, "range": range.a1(), "levels": [{"column": first, "order": "asc"}]}));
     d.sort.restore = restore;
     d.sort.home = home;
-    d
+    Some(d)
 }
 
 /// `r` without its header row.
@@ -137,7 +146,7 @@ fn toolbar_width(ctx: &egui::Context, lang: Language) -> f32 {
 }
 
 /// The label of a column that has no header text: `Column A`, in the interface language.
-fn headerless_label(lang: Language, letters: &str) -> String {
+fn column_label(lang: Language, letters: &str) -> String {
     lang.tr("Column {letters}").replace("{letters}", letters)
 }
 
@@ -157,7 +166,7 @@ fn column_choices(app: &SheetApp, range: Option<RangeRef>, header: bool) -> Vec<
                 (true, Some(sh)) => sh.value(CellRef::new(r.start.row, c)).display().trim().to_string(),
                 _ => String::new(),
             };
-            let label = if text.is_empty() { headerless_label(lang, &letters) } else { text };
+            let label = if text.is_empty() { column_label(lang, &letters) } else { text };
             let numeric =
                 sh.is_some_and(|sh| values_are_numeric((body_start..=r.end.row).take(rows_per_col).map(|row| sh.value(CellRef::new(row, c)))));
             (letters, label, numeric)
@@ -327,7 +336,7 @@ fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, ch
             let shown = choices
                 .iter()
                 .find(|(l, _, _)| l.eq_ignore_ascii_case(&col))
-                .map_or_else(|| headerless_label(lang, &col.to_ascii_uppercase()), |(_, t, _)| t.clone());
+                .map_or_else(|| column_label(lang, &col.to_ascii_uppercase()), |(_, t, _)| t.clone());
             let r = craft_ui::ComboBox::from_id_salt(("col", i)).selected_text(shown).width(w).show_ui(ui, |ui| {
                 for (letters, label, _) in choices {
                     ui.selectable_value(&mut col, letters.clone(), label);

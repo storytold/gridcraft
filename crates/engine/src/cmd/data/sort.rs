@@ -28,17 +28,19 @@ fn sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef)> {
     Ok((sheet, data_range(s, p)?))
 }
 
-/// The range the Custom Sort dialog works on and whether its first row looks like a header.
-pub fn sort_context(s: &Session, p: &Json) -> Result<(RangeRef, bool)> {
+/// The worksheet (index), range and header guess the Custom Sort dialog works on: the sheet named by
+/// `sheet` or a `Sheet!` prefix on `range`, else the active one.
+pub fn sort_context(s: &Session, p: &Json) -> Result<(usize, RangeRef, bool)> {
+    let (sheet, explicit) = sort_target(s, p)?;
     let d = s.doc()?;
-    let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
+    let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let sel = d.selection.current();
     // An explicit block wins over the table range, so a selected totals row can be sorted.
     let r = match sh.used_range() {
         Some(used) if p.get("range").is_none() && !sel.is_single() => sel.intersection(&used).unwrap_or(sel),
-        _ => data_range(s, p)?,
+        _ => explicit,
     };
-    Ok((r, bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r))))
+    Ok((sheet, r, bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r))))
 }
 
 pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
@@ -81,8 +83,9 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         });
     }
     if keys.is_empty() {
-        let (r, header) = sort_context(s, p)?;
-        s.ui_requests.push(crate::UiRequest::Dialog("sort".into(), json!({"range": r.a1(), "header": header})));
+        let (sheet, r, header) = sort_context(s, p)?;
+        let name = s.doc()?.wb.sheet(sheet).map(|sh| sh.name.clone()).ok_or(EngineError::NoDocument)?;
+        s.ui_requests.push(crate::UiRequest::Dialog("sort".into(), json!({"range": r.a1(), "header": header, "sheet": name})));
         return ok();
     }
     if keys.len() > 64 {
