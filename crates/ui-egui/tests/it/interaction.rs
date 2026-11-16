@@ -1510,6 +1510,30 @@ fn status_bar_names_a_circular_reference_by_its_address() {
 }
 
 #[test]
+fn turkish_status_bar_translates_circular_reference_and_macro_badges() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=B2+1"})).unwrap();
+    let mut wb = (*s.active().unwrap().wb).clone();
+    wb.vba_project = Some(vec![0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1].into());
+    s.active_mut().unwrap().wb = std::sync::Arc::new(wb);
+    let mut h = harness(s);
+    h.state_mut().ui.language = Language::Tr;
+    h.run_steps(3);
+    assert!(h.query_by_label("Döngüsel Başvurular: B2").is_some());
+    assert!(h.query_by_label("Makrolar korundu (çalıştırılmadı)").is_some());
+}
+
+#[test]
+fn turkish_formula_bar_buttons_have_translated_accessible_labels() {
+    let mut h = harness(blank());
+    h.state_mut().ui.language = Language::Tr;
+    h.run_steps(3);
+    for label in ["İptal", "Girişi Onayla", "İşlev Ekle"] {
+        assert!(h.query_all_by_label(label).next().is_some(), "formula bar control {label} should be translated");
+    }
+}
+
+#[test]
 fn status_bar_names_no_cell_when_every_circular_reference_is_on_another_sheet() {
     let mut s = blank();
     s.execute("home.insertSheet", json!({"name": "Data"})).unwrap();

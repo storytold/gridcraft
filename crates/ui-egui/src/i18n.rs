@@ -25,6 +25,7 @@ mod ro;
 mod ru;
 mod sr;
 mod tr;
+mod tr_functions;
 mod uk;
 mod vi;
 mod zh;
@@ -247,6 +248,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::Tr => Some((tr_functions::DESCRIPTIONS, tr_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -293,6 +295,12 @@ fn lang_key() -> egui::Id {
 /// The language the current frame is drawing in. `En` when unset.
 pub fn current(ctx: &egui::Context) -> Language {
     ctx.data(|d| d.get_temp(lang_key())).unwrap_or_default()
+}
+
+/// A label in the language the frame is drawing in (English when the catalog has no entry), for
+/// widgets that take their text directly: `ui.button(i18n::tr(ui, "Find Next"))`.
+pub(crate) fn tr<'a>(ui: &egui::Ui, text: &'a str) -> &'a str {
+    current(ui.ctx()).tr(text)
 }
 
 /// Sets the language for the current frame; call once per frame before anything is drawn.

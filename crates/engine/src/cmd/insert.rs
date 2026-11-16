@@ -84,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, defaultTitle?: title when there is no series name (\"Chart Title\"), at?: \"H2\", width?, height?}",
             has_doc,
             insert_chart
         ),

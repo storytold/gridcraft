@@ -4,6 +4,7 @@ use egui::{Event, Key, Modifiers, os::OperatingSystem};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
+use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
@@ -99,4 +100,22 @@ fn the_font_colour_menu_has_them_too_and_shares_the_recent_colours() {
     h.get_by_label("Automatic");
     h.get_by_label("Recent Colors");
     h.get_by_label("More Colors…");
+}
+
+#[test]
+fn turkish_palette_labels_keep_the_colour_action() {
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "tr"})).unwrap();
+    h.run_steps(3);
+    open_fill_palette(&mut h);
+    for label in ["Tema Renkleri", "Standart Renkler", "Dolgu Yok", "Diğer Renkler…"] {
+        h.get_by_label(label);
+    }
+    h.get_by_label("Diğer Renkler…").click();
+    h.run_steps(3);
+    h.get_by_label("Onaltılık");
+    h.get_by_label("Yeni");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "İptal").click();
+    h.run_steps(3);
+    assert!(h.state().session.journal.iter().all(|(id, _)| id != "home.fillColor"));
 }

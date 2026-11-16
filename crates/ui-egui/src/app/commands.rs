@@ -16,7 +16,14 @@ impl SheetApp {
         r
     }
 
-    pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
+    pub(super) fn run_command(&mut self, id: &str, mut params: Json) -> Result<Json, String> {
+        // A new chart title is written into the workbook: in the interface language, as Excel does.
+        if (id.starts_with("insert.chart") || id == "chart.addElement")
+            && self.ui.language != crate::i18n::Language::En
+            && let Some(p) = params.as_object_mut()
+        {
+            p.entry("defaultTitle").or_insert_with(|| Json::from(self.ui.language.tr("Chart Title")));
+        }
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
             || (id == "view.switchWindows" && ["window", "doc"].iter().any(|k| params.get(*k).is_some_and(|d| !d.is_null())));

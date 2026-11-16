@@ -2,6 +2,7 @@ use super::{Dialog, Key, SheetApp, json, vec2};
 
 /// Shows enabled commands and their shortcuts from engine metadata.
 pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let lang = app.ui.language;
     let (down, up, home, end, pgup, pgdn) = ui.input_mut(|i| {
         (
             i.consume_key(egui::Modifiers::NONE, Key::ArrowDown),
@@ -13,7 +14,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         )
     });
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(lang.tr("Type a command, e.g. freeze, chart, bold…")));
 
     if !d.focus_initialized {
         r.request_focus();
@@ -21,14 +22,36 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let q = d.search.to_ascii_lowercase();
+    let fold_label = |text: &str| {
+        if lang == crate::i18n::Language::Tr {
+            // Turkish pairs I with dotless i, and dotted capital I with i.
+            text.replace('I', "\u{131}").replace('\u{130}', "i").to_lowercase()
+        } else {
+            text.to_lowercase()
+        }
+    };
+    let q = fold_label(&d.search);
+    // English labels and stable command IDs remain searchable in every language.
+    let english_q = d.search.to_lowercase();
     let cmds: Vec<(String, String, String, Option<String>)> = app
         .session
         .commands()
         .into_iter()
         .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
+        .filter(|c| {
+            q.is_empty()
+                || fold_label(lang.tr(c.label)).contains(&q)
+                || c.label.to_lowercase().contains(&english_q)
+                || c.id.to_ascii_lowercase().contains(&english_q)
+        })
+        .map(|c| {
+            (
+                c.id.to_string(),
+                lang.tr(c.label).to_string(),
+                c.menu.iter().map(|part| lang.tr(part)).collect::<Vec<_>>().join(" › "),
+                c.shortcut_for_platform(mac),
+            )
+        })
         .take(40)
         .collect();
 
