@@ -31,6 +31,8 @@ gridcraft-math = { path = "crates/math" }
 # craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "=0.1.0", features = ["egui"] }
+# PDF RunLength encoding; this revision also fixes the vendored JBIG2 dependency for Git consumers.
+craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "f7e0d7fd5577e102b4634bcbe062e649eb68165f", version = "0.1.0" }
 # Compound files ([MS-CFB]) and password-encrypted OOXML packages ([MS-OFFCRYPTO]).
 craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
 craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
@@ -40,6 +42,7 @@ craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f
 # turn them into workbooks.
 craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
 
 # foundation
