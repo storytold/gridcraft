@@ -3286,3 +3286,24 @@ fn lookup_spill_child_does_not_inherit_the_anchors_first_element_error() {
         assert_eq!(t.get(anchor), Value::Error(CellError::Calc));
     }
 }
+
+#[test]
+fn unchanged_spill_values_still_validate_lookup_child_cycles() {
+    for (anchor, initial, cyclic, lookup, cells) in [
+        ("B1", "=SEQUENCE(3,1,10)", "=SEQUENCE(3,1,10)+0*E1", "=VLOOKUP(2,A1:B3,2,FALSE)", [("A1", "1"), ("A2", "2"), ("A3", "3")]),
+        ("A2", "=SEQUENCE(1,3,10)", "=SEQUENCE(1,3,10)+0*E1", "=HLOOKUP(2,A1:C2,2,FALSE)", [("A1", "1"), ("B1", "2"), ("C1", "3")]),
+    ] {
+        let mut t = T::new();
+        for (at, value) in cells {
+            t.set(at, value);
+        }
+        t.set(anchor, initial);
+        t.set("E1", lookup);
+        assert_eq!(t.num("E1"), 11.0);
+        t.set(anchor, cyclic);
+        assert_eq!(t.get("E1"), Value::Error(CellError::Circ), "{lookup}");
+        assert!(!t.calc.circular.is_empty());
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.get("E1"), Value::Error(CellError::Circ), "full: {lookup}");
+    }
+}

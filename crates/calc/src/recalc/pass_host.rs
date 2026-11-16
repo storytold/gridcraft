@@ -29,6 +29,8 @@ pub(super) struct PassHost<'a> {
     spill_index: SpillIndex,
     /// Spill ownership before this pass, retained while cyclic anchors have no new array yet.
     pub(super) prior_spills: Option<&'a SpillIndex>,
+    /// A lookup read a stored spill child before this pass validated its current ownership.
+    pub(super) lookup_needs_validation: bool,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -102,6 +104,7 @@ impl<'a> PassHost<'a> {
             spills: HashMap::default(),
             spill_index: SpillIndex::default(),
             prior_spills: None,
+            lookup_needs_validation: false,
             used: HashMap::default(),
             rng,
             standing: None,
@@ -614,6 +617,11 @@ impl Host for PassHost<'_> {
         // Stored cells (including a newly typed spill blocker) keep their own values.
         let vacant =
             self.wb.sheet(sheet).and_then(|sh| sh.cell(c)).is_none_or(|cell| cell.formula.is_none() && cell.py.is_none() && cell.value.is_empty());
+        // We cannot infer a current cycle from an old rectangle. Ask the caller to validate
+        // against this pass's finished spill layouts, even when all spilled values stay equal.
+        if !self.iterate && vacant && self.prior_spills.is_none() && self.wb.sheet(sheet).is_some_and(|sh| sh.spill.contains_key(&c)) {
+            self.lookup_needs_validation = true;
+        }
         // Iteration reads previous values through its existing spill/taint path.
         if !self.iterate
             && vacant

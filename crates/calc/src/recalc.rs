@@ -573,7 +573,7 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
+            let (results, spills, cycles, validate_lookups) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.standing = Some(&self.standing);
                 host.prior_spills = (round > 0).then_some(&prior_spills);
@@ -587,7 +587,7 @@ impl Calc {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                (host.results, host.spills, host.cycles, host.lookup_needs_validation)
             };
             // An evaluated scalar, resized spill or non-cycle error supersedes its previous
             // footprint. Retain ownership only for an unresolved cycle with no current array.
@@ -609,6 +609,11 @@ impl Calc {
             }
             self.circular.extend(cycles);
             let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            // A lookup may have used a stored child while its anchor was still computing.
+            // Unchanged spill values also need this check: the new dependency can be circular.
+            if round == 0 && validate_lookups && !spills.is_empty() {
+                spill_changes.extend(dirty.iter().copied());
+            }
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
