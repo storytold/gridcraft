@@ -61,10 +61,14 @@ pub struct Chrome {
     /// The ribbon's File tab and the Backstage view it opens (also reached by keyboard and
     /// commands such as `ui.backstage`).
     pub file_tab: bool,
+    /// The New sheet (+) button after the sheet tabs, whose room the tabs then take. Only the
+    /// button: Shift+F11, Insert Sheet in the ribbon and the tab menu, and `home.insertSheet` still
+    /// add sheets (a workbook with its structure protected refuses them).
+    pub new_sheet: bool,
 }
 
 impl Default for Chrome {
     fn default() -> Self {
-        Chrome { title_bar: true, file_tab: true }
+        Chrome { title_bar: true, file_tab: true, new_sheet: true }
     }
 }
