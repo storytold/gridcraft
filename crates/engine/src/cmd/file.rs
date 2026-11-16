@@ -87,7 +87,10 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     // Someone else may have made the file: its active content asks before it runs.
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+    // A workbook package under a name that says something else (no extension, an unknown one, or
+    // `.csv`, `.tsv`, `.html`, `.pdf`) keeps being a workbook package: ordinary Save writes it back
+    // as one, never as a one-sheet text or PDF copy over the original (#4350).
+    if crate::io::FileKind::from_path(&name) != Some(crate::io::FileKind::Xlsx) && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
@@ -114,15 +117,20 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
+    // The document's own file keeps the format its content had when opened. An ordinary Save (no
+    // destination given) writes it back in that format whatever the file's name says; a path the
+    // caller names goes by its extension, as before.
+    let explicit = str_param(p, "path").is_some();
+    let own_kind = s.active().and_then(|d| d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
+    let keep_own = !explicit && own_kind.is_some();
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
-    if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+    if !keep_own && std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
     let d = s.doc_mut()?;
-    // The document's own file keeps the format its content had when opened; any other path
-    // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
-    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
+    // Relative paths to linked workbooks are rewritten for the new folder.
+    let kind = if keep_own { own_kind } else { crate::io::FileKind::from_path(&path).or(own_kind) };
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
     let bytes = match kind {

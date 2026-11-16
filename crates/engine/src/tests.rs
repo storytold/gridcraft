@@ -2807,6 +2807,52 @@ fn ods_import_never_reuses_source_as_save_target() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #4350: a workbook package opened from a file named `.csv`, `.tsv`, `.html` or `.pdf` is saved
+/// back as that package by an ordinary Save, not replaced by a one-sheet text or PDF copy. A path
+/// named explicitly still goes by its extension.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn ordinary_save_keeps_a_workbook_opened_under_another_extension() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-misnamed-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let seed = dir.join("seed.xlsx");
+    let mut s = self::s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "FIRST"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Second"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "SECOND"})).unwrap();
+    s.execute("file.saveAs", json!({"path": seed})).unwrap();
+    let seed_bytes = std::fs::read(&seed).unwrap();
+    let sheets_of = |bytes: &[u8]| {
+        assert_eq!(gridcraft_xlsx::sniff(bytes), gridcraft_xlsx::Format::Xlsx, "still a workbook package");
+        let (wb, _) = crate::io::open_bytes("check.xlsx", bytes).unwrap();
+        wb.sheets.iter().map(|sh| (sh.name.clone(), sh.value(gridcraft_core::CellRef::new(0, 0)))).collect::<Vec<_>>()
+    };
+    let both = sheets_of(&seed_bytes);
+    assert_eq!(both.len(), 2);
+    for ext in ["csv", "tsv", "html", "pdf", "CSV"] {
+        let path = dir.join(format!("workbook.{ext}"));
+        std::fs::write(&path, &seed_bytes).unwrap();
+        let mut s = self::s();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        let saved = std::fs::read(&path).unwrap();
+        let sheets = sheets_of(&saved);
+        assert_eq!(sheets.len(), 2, "{ext}: both sheets kept");
+        assert_eq!(sheets.iter().map(|(n, v)| (n.clone(), v.clone())).collect::<Vec<_>>(), both, "{ext}");
+        assert!(!s.active().unwrap().is_dirty(), "{ext}: the save is the document's own");
+    }
+    // A path named explicitly is a choice of format: Save As to the same `.csv` writes CSV.
+    let path = dir.join("named.csv");
+    std::fs::write(&path, &seed_bytes).unwrap();
+    let mut s = self::s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s.execute("file.saveAs", json!({"path": path})).unwrap();
+    assert_ne!(gridcraft_xlsx::sniff(&std::fs::read(&path).unwrap()), gridcraft_xlsx::Format::Xlsx);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Open a `;` CSV by path (a double-click), edit, Save: the file keeps its `;` separator.
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
