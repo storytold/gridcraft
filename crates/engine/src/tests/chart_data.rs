@@ -120,6 +120,37 @@ fn series_in_rows_grow_across_the_columns() {
     assert_eq!(chart(&s).series[1].values, "Sheet1!$A$2:$G$2");
 }
 
+/// Changes the first chart on the first sheet in place, as a file can leave it.
+fn edit_chart(s: &mut Session, f: impl FnOnce(&mut Chart)) {
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    f(&mut wb.sheet_mut(0).unwrap().charts[0]);
+}
+
+#[test]
+fn category_labels_written_with_and_without_equals_are_one_block() {
+    let mut s = table();
+    edit_chart(&mut s, |c| c.series[1].categories = Some("=Sheet1!$A$2:$A$4".into()));
+    assert_eq!(data(&s).unwrap().categories, Some(r("A2:A4")));
+    s.execute("chart.setValuesRange", json!({"range": "B2:C6"})).unwrap();
+    assert!(chart(&s).series.iter().all(|se| se.categories.as_deref() == Some("Sheet1!$A$2:$A$6")), "both series' labels follow");
+}
+
+#[test]
+fn series_read_in_rows_stay_resizable_after_shrinking_to_one_cell_each() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4, 5], [5, 4, 3, 2, 1]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:E2"})).unwrap();
+    s.execute("insert.chart", json!({"type": "line"})).unwrap();
+    // A file can carry series in rows without saying so; the layout is read from the series.
+    edit_chart(&mut s, |c| c.by_rows = false);
+    assert_eq!(data(&s).map(|d| d.by_rows), Some(true));
+    s.execute("chart.setValuesRange", json!({"range": "A1:A2"})).unwrap();
+    assert!(chart(&s).by_rows);
+    assert_eq!(data(&s).map(|d| (d.values, d.by_rows)), Some((r("A1:A2"), true)), "still one block, still in rows");
+    s.execute("chart.setValuesRange", json!({"range": "A1:C2"})).unwrap();
+    assert_eq!(points(&s), [3, 3]);
+}
+
 #[test]
 fn set_values_range_refuses_what_it_cannot_do() {
     let mut s = table();

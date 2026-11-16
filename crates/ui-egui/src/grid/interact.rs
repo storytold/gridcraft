@@ -644,22 +644,30 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
     keyboard(app, &ctx, resp, geo, sh);
 }
 
+/// Whether Esc was pressed this frame, with any modifiers; every Esc press is then spent, so the
+/// grid's own Esc doesn't also drop a pending copy or Format Painter.
+fn spend_escape(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|i| {
+        let pressed = i.key_pressed(egui::Key::Escape);
+        if pressed {
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
+        }
+        pressed
+    })
+}
+
 fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, sel, pos) = (input.geo, input.sheet, input.workbook, &input.selection, input.position);
     let resp = input.response;
     // Esc during a header-boundary drag cancels it: undo the preview, ignore the release. egui
     // aborts the drag on Esc, so `resp.dragged()` is already false in this frame. The key is
     // spent on the drag, so the grid's Esc doesn't also drop a pending copy or Format Painter.
-    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. })
-        && input.context.input_mut(|i| {
-            let pressed = i.key_pressed(egui::Key::Escape);
-            if pressed {
-                // With any modifiers, as before: the drag is cancelled and every Esc press spent.
-                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
-            }
-            pressed
-        })
-    {
+    // Esc during a drag of a chart's values outline drops it: the chart keeps its data, whatever
+    // modifiers are held (egui ends the drag on any Esc, so the release must not apply it).
+    if matches!(app.grid.drag, Drag::ChartData { .. }) && spend_escape(&input.context) {
+        app.grid.drag = Drag::None;
+    }
+    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. }) && spend_escape(&input.context) {
         // Undo back to where the drag began, but never past it into an earlier edit.
         let steps = resize_steps(app);
         if steps > 0 {
@@ -841,9 +849,17 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                     coalesce_resize_undo(app);
                 }
             }
-            // Esc ends the drag too (egui stops it), and leaves the chart as it was.
-            Drag::ChartData { chart, orig, to: Some(to), .. } => {
-                if to != orig && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            // The release may be the first frame to report the pointer's last position, so the
+            // block is taken from there. (Esc already dropped a cancelled drag.)
+            Drag::ChartData { chart, orig, corner, to } => {
+                let to = if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
+                    Some(chart_data_target(geo, sh, orig, corner, p))
+                } else {
+                    to
+                };
+                if let Some(to) = to.filter(|to| *to != orig) {
                     app.run_or_alert("chart.setValuesRange", json!({"chart": chart, "range": to.a1()}));
                 }
             }
@@ -1217,13 +1233,18 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
 /// selection does. The release gives the chart the block (`chart.setValuesRange`).
 fn drag_chart_data(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     let Drag::ChartData { chart, orig, corner, .. } = app.grid.drag else { return };
+    app.grid.drag = Drag::ChartData { chart, orig, corner, to: Some(chart_data_target(geo, sh, orig, corner, p)) };
+}
+
+/// The values block `orig` with its `corner` dragged to the cell under `p`.
+fn chart_data_target(geo: &Geo, sh: &Sheet, orig: RangeRef, corner: crate::objects::Handle, p: Pos2) -> RangeRef {
     let (sx, sy) = corner.sides();
     let fixed = CellRef::new(if sy < 0 { orig.end.row } else { orig.start.row }, if sx < 0 { orig.end.col } else { orig.start.col });
     let at = CellRef::new(
         geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
         geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
     );
-    app.grid.drag = Drag::ChartData { chart, orig, corner, to: Some(RangeRef::new(fixed, at)) };
+    RangeRef::new(fixed, at)
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's

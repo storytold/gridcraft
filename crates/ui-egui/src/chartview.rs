@@ -575,14 +575,21 @@ pub(crate) fn selected_chart_data(
     }
     let id = app.selected_chart()?;
     let ch = sh.charts.iter().find(|ch| ch.id == id)?;
-    if !anchor_rect(geo, sh, &ch.anchor).intersects(clip) {
+    let dragged = match app.grid.drag {
+        crate::grid::Drag::ChartData { chart, to, .. } if chart == id => Some(to),
+        _ => None,
+    };
+    // A drag that scrolls the chart away keeps its preview: the block is still being dragged.
+    if dragged.is_none() && !anchor_rect(geo, sh, &ch.anchor).intersects(clip) {
         return None;
     }
     let data = gridcraft_engine::chart_data::chart_data(wb, si, ch).filter(|d| d.sheet == si)?;
-    Some(match app.grid.drag {
-        crate::grid::Drag::ChartData { chart, to: Some(to), .. } if chart == id => (id, data.moved(to)),
-        _ => (id, data),
-    })
+    Some((id, dragged.flatten().map_or(data, |to| data.moved(to))))
+}
+
+/// Where the handle on corner `h` of the values outline `rr` is painted.
+fn data_handle_rect(h: crate::objects::Handle, rr: Rect) -> Rect {
+    Rect::from_center_size(h.pos(rr), vec2(7.0, 7.0))
 }
 
 /// Outlines a chart's data as Excel does: series names in red, category labels in purple and
@@ -598,9 +605,8 @@ fn paint_chart_data(p: &Painter, geo: &Geo, sh: &Sheet, data: &gridcraft_engine:
             pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
             if handles {
                 for h in DATA_HANDLES {
-                    let at = h.pos(rr);
-                    pp.rect_filled(Rect::from_center_size(at, vec2(7.0, 7.0)), 0.0, Color32::WHITE);
-                    pp.rect_filled(Rect::from_center_size(at, vec2(5.0, 5.0)), 0.0, color);
+                    pp.rect_filled(data_handle_rect(h, rr), 0.0, Color32::WHITE);
+                    pp.rect_filled(data_handle_rect(h, rr).shrink(1.0), 0.0, color);
                 }
             }
         }
@@ -617,8 +623,12 @@ pub fn chart_data_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Opti
     let wb = &app.session.active()?.wb;
     let (id, data) = selected_chart_data(app, geo, wb, wb.active_sheet(), sh, geo.cells)?;
     let rr = geo.range_rect(sh, data.values);
+    // Only a corner some pane paints: with frozen panes, a corner scrolled under the frozen band
+    // is hidden, and the frozen cells it lies under keep the press.
+    let panes = geo.range_panes(data.values);
     DATA_HANDLES
         .into_iter()
+        .filter(|h| panes.iter().any(|pane| pane.intersects(data_handle_rect(*h, rr))))
         .map(|h| (h, h.pos(rr).distance(p)))
         .filter(|(_, d)| *d <= DATA_HANDLE_REACH)
         .min_by(|a, b| a.1.total_cmp(&b.1))

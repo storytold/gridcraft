@@ -259,6 +259,7 @@ pub(super) fn set_values_range(s: &mut Session, p: &Json) -> Result<Json> {
     with_chart(s, p, move |c| {
         c.series = new.series;
         c.source = new.source;
+        c.by_rows = new.by_rows;
         Ok(())
     })
     .map(|r| json!({"chart": r["chart"], "values": values}))

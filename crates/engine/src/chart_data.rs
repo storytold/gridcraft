@@ -102,12 +102,12 @@ pub fn chart_data(wb: &Workbook, home: usize, chart: &Chart) -> Option<ChartData
             return None;
         }
     }
-    // Category labels shared by every series, in one line beside the points.
-    let cats = &first.categories;
-    if let Some(text) = cats
-        && chart.series.iter().all(|se| se.categories.as_ref() == Some(text))
-        && let Some((s, c)) = block(wb, home, text)
+    // Category labels shared by every series, in one line beside the points. Compared as blocks,
+    // not text: `=Sheet1!$A$2:$A$4` and `Sheet1!$A$2:$A$4` are the same labels.
+    let cats = |se: &Series| se.categories.as_deref().and_then(|t| block(wb, home, t));
+    if let Some((s, c)) = cats(first)
         && s == sheet
+        && chart.series.iter().all(|se| cats(se) == Some((s, c)))
     {
         let lines_up = if by_rows {
             c.height() == 1
@@ -168,6 +168,9 @@ pub fn with_values(wb: &Workbook, home: usize, chart: &Chart, to: RangeRef) -> R
     let moved = data.moved(to);
     let shared_cats = chart.series.first().and_then(|se| se.categories.clone());
     let mut out = chart.clone();
+    // Keep the orientation the series were read in: a block of one cell per series is read by
+    // `by_rows`, so a stale flag would make the moved series unreadable as a block.
+    out.by_rows = data.by_rows;
     out.series = (0..data.count(to))
         .filter_map(|i| {
             let line = moved.line(to, i)?;
