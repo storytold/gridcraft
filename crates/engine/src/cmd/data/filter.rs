@@ -166,12 +166,13 @@ fn filter_blank(v: &Value) -> bool {
 /// A table's own filter is left to the table, and a row typed after a blank row does not count.
 /// A formula counts before it is calculated: this runs inside the edit, ahead of the recalc.
 pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
-    if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
-        return;
-    }
+    // The AutoFilter checks come first: they are cheap, and most sheets have none.
     let Some(af) = sh.autofilter.as_ref() else { return };
     let r = af.range;
     if r.end.row.checked_add(1) != Some(at.row) || at.col < r.start.col || at.col > r.end.col || sh.tables.iter().any(|t| t.range == r) {
+        return;
+    }
+    if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
         return;
     }
     let grown = RangeRef::new(r.start, CellRef::new(at.row, r.end.col));
