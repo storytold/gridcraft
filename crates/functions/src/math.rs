@@ -289,8 +289,9 @@ fn floor_precise(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 fn even_odd(x: f64, odd: bool) -> f64 {
     let sign = if x < 0.0 { -1.0 } else { 1.0 };
-    let ax = clean(x.abs());
-    let mut v = ax.ceil();
+    // No 15-digit cleanup first: Excel rounds the stored value, so 4 + 2^-50 is above 4 and EVEN
+    // gives 6 (#4290).
+    let mut v = x.abs().ceil();
     if odd {
         if v % 2.0 == 0.0 {
             v += 1.0;
