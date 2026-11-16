@@ -159,6 +159,12 @@ fn db_with_a_life_under_a_year_has_one_partial_period() {
     // A full first year leaves no period for a life under a year.
     is_err(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(1.0), n(12.0)]), CellError::Num);
     is_err(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(1.0)]), CellError::Num);
+    // A period below one is still the first, and a full first year accepts it.
+    close(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(0.1), n(1.0)]), 82.5);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(0.1), n(6.0)]), 495.0);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(0.1), n(12.0)]), 990.0);
+    close(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(0.1)]), 990.0);
+    close_tol(ev("DB", vec![n(1000.0), n(100.0), n(0.5), n(1.0), n(1.0)]), 832.63125, 1e-9);
     // A life of a year or more is as before.
     close(ev("DB", vec![n(1000.0), n(100.0), n(1.0), n(1.0), n(6.0)]), 450.0);
     close(ev("DB", vec![n(1000.0), n(100.0), n(1.0), n(1.0), n(12.0)]), 900.0);
