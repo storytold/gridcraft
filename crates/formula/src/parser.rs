@@ -66,12 +66,12 @@ fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Resu
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
-    let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
+    let mut p = Parser { src: body, toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
     let e = p.expr(0, allow_union)?;
     match p.peek() {
         Tok::Eof if wrapper_height(&e) > MAX_DEPTH => Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 }),
         Tok::Eof => Ok(e),
-        t => Err(p.err(format!("unexpected {}", describe(t)))),
+        _ => Err(p.err(format!("unexpected {}", p.typed(p.i)))),
     }
 }
 
@@ -98,13 +98,35 @@ fn wrapper_height(e: &Expr) -> usize {
     most
 }
 
+/// A token in canonical form, in backticks, for error messages: the token a message expects, or
+/// one whose source text is unavailable. No wildcard arm, so a new token kind has to choose its
+/// own text.
 fn describe(t: &Tok) -> String {
-    match t {
-        Tok::RParen => "`)`".into(),
-        Tok::Comma => "`,`".into(),
-        Tok::Eof => "end of formula".into(),
-        other => format!("{other:?}"),
-    }
+    let typed = match t {
+        Tok::Number(n) => n.to_string(),
+        Tok::Text(s) => format!("\"{}\"", s.replace('"', "\"\"")),
+        Tok::Bool(b) => if *b { "TRUE" } else { "FALSE" }.into(),
+        Tok::Error(e) => e.as_str().into(),
+        Tok::Word(w) => w.clone(),
+        Tok::Sheet(first, None) => format!("{first}!"),
+        Tok::Sheet(first, Some(last)) => format!("{first}:{last}!"),
+        Tok::Func(name) => format!("{name}("),
+        Tok::Struct(body) => format!("[{body}]"),
+        Tok::Op(op) => (*op).into(),
+        Tok::LParen => "(".into(),
+        Tok::RParen => ")".into(),
+        Tok::LBrace => "{".into(),
+        Tok::RBrace => "}".into(),
+        Tok::Comma => ",".into(),
+        Tok::Semicolon => ";".into(),
+        Tok::Colon => ":".into(),
+        Tok::Trim(TrimMode::Leading) => ".:".into(),
+        Tok::Trim(TrimMode::Trailing) => ":.".into(),
+        Tok::Trim(TrimMode::All) => ".:.".into(),
+        Tok::Space => " ".into(),
+        Tok::Eof => return "end of formula".into(),
+    };
+    format!("`{typed}`")
 }
 
 /// Keeps a space token only where it is the intersection operator: between the end of an
@@ -126,7 +148,9 @@ fn significant_spaces(toks: Vec<Token>) -> Vec<Token> {
     out
 }
 
-struct Parser {
+struct Parser<'a> {
+    /// The text the tokens were read from, so errors quote what the user typed (`;`, `1,5`).
+    src: &'a str,
     toks: Vec<Token>,
     i: usize,
     depth: usize,
@@ -167,7 +191,22 @@ pub fn normalize_function_name(name: &str) -> String {
     }
 }
 
-impl Parser {
+impl Parser<'_> {
+    /// Token `index` as typed, in backticks, for error messages; `end of formula` past the end.
+    fn typed(&self, index: usize) -> String {
+        match self.toks.get(index) {
+            None | Some(Token { tok: Tok::Eof, .. }) => "end of formula".into(),
+            Some(t) => self.src.get(t.start..t.end).map_or_else(|| describe(&t.tok), |text| format!("`{text}`")),
+        }
+    }
+    /// The token [`Self::next`] just returned, as typed.
+    /// The argument separator the formula is written with (`;` in Spanish), for error messages.
+    fn list_separator(&self) -> char {
+        if self.input { crate::FormulaLocale::Es.list_separator() } else { crate::FormulaLocale::En.list_separator() }
+    }
+    fn typed_last(&self) -> String {
+        self.typed(self.i.saturating_sub(1))
+    }
     fn peek(&self) -> &Tok {
         self.toks.get(self.i).map(|t| &t.tok).unwrap_or(&Tok::Eof)
     }
@@ -192,7 +231,7 @@ impl Parser {
             self.next();
             Ok(())
         } else {
-            Err(self.err(format!("expected {}, found {}", describe(&t), describe(self.peek()))))
+            Err(self.err(format!("expected {}, found {}", describe(&t), self.typed(self.i))))
         }
     }
 
@@ -292,7 +331,7 @@ impl Parser {
             match self.next() {
                 Tok::Comma => continue,
                 Tok::RParen => break,
-                t => return Err(self.err(format!("expected `,` or `)`, found {}", describe(&t)))),
+                _ => return Err(self.err(format!("expected `{}` or `)`, found {}", self.list_separator(), self.typed_last()))),
             }
         }
         if args.len() > 255 {
@@ -360,7 +399,7 @@ impl Parser {
                 match self.next() {
                     Tok::Word(w) => self.reference_from_word(sheet, &w),
                     Tok::Error(CellError::Ref) => Ok(Expr::Error(CellError::Ref)),
-                    t => Err(self.err(format!("expected a reference after the sheet name, found {}", describe(&t)))),
+                    _ => Err(self.err(format!("expected a reference after the sheet name, found {}", self.typed_last()))),
                 }
             }
             Tok::Word(w) => {
@@ -374,7 +413,7 @@ impl Parser {
                 self.reference_from_word(SheetSel::Current, &w)
             }
             Tok::Struct(body) => parse_struct("", &body).map(Expr::Struct).map_err(|msg| self.err(msg)),
-            t => Err(self.err(format!("unexpected {}", describe(&t)))),
+            _ => Err(self.err(format!("unexpected {}", self.typed_last()))),
         }
     }
 
@@ -454,19 +493,19 @@ impl Parser {
                 Tok::Number(n) => Expr::Number(n),
                 Tok::Op("-") => match self.next() {
                     Tok::Number(n) => Expr::Number(-n),
-                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
+                    _ => return Err(self.err(format!("expected a number in array, found {}", self.typed_last()))),
                 },
                 Tok::Op("+") => match self.next() {
                     Tok::Number(n) => Expr::Number(n),
-                    t => return Err(self.err(format!("expected a number in array, found {}", describe(&t)))),
+                    _ => return Err(self.err(format!("expected a number in array, found {}", self.typed_last()))),
                 },
                 Tok::Text(s) => Expr::Text(Arc::from(s)),
                 Tok::Bool(b) => Expr::Bool(b),
                 Tok::Word(w) if self.input => crate::input::boolean_alias(&w)
                     .map(Expr::Bool)
-                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", describe(&Tok::Word(w)))))?,
+                    .ok_or_else(|| self.err(format!("array constants may only contain constants, found {}", self.typed_last())))?,
                 Tok::Error(e) => Expr::Error(e),
-                t => return Err(self.err(format!("array constants may only contain constants, found {}", describe(&t)))),
+                _ => return Err(self.err(format!("array constants may only contain constants, found {}", self.typed_last()))),
             };
             if let Some(r) = rows.last_mut() {
                 r.push(el);
@@ -475,7 +514,7 @@ impl Parser {
                 Tok::Comma => {}
                 Tok::Semicolon => rows.push(Vec::new()),
                 Tok::RBrace => break,
-                t => return Err(self.err(format!("expected `,`, `;` or `}}`, found {}", describe(&t)))),
+                _ => return Err(self.err(format!("expected `,`, `;` or `}}`, found {}", self.typed_last()))),
             }
         }
         let w = rows.first().map_or(0, Vec::len);

@@ -86,6 +86,22 @@ impl SheetApp {
         }
     }
 
+    /// Paste Special with nothing copied in GridCraft pastes the system clipboard's text (copied
+    /// in another program, or in a GridCraft window running as another process) as text read in
+    /// the workbook region, as Excel's Text paste format does. False when there is no such text.
+    pub(crate) fn paste_special_external(&mut self) -> bool {
+        if self.session.clipboard.is_some() {
+            return false;
+        }
+        match self.system_clipboard_text() {
+            Some(text) => {
+                self.paste_external(text);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// The system clipboard's plain text, with the line endings of egui's `Event::Paste` text.
     /// `None` when it holds no text or the host can't read it.
     pub(super) fn system_clipboard_text(&mut self) -> Option<String> {
