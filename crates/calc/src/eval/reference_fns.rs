@@ -452,17 +452,43 @@ fn calls_subtotal(text: &str) -> bool {
     const NAMES: [&[u8]; 2] = [b"SUBTOTAL(", b"AGGREGATE("];
     let b = text.as_bytes();
     let mut i = 0;
-    let mut in_string = false;
+    // What the scanner is inside: a string literal (`""` is a quote), a quoted sheet name (`''` is
+    // an apostrophe, and a `"` in it is just a character), or brackets, where a structured
+    // reference escapes the next character with `'`.
+    let (mut in_string, mut in_sheet, mut brackets) = (false, false, 0usize);
     while let Some(&c) = b.get(i) {
-        if c == b'"' {
-            // Inside a literal, `""` is a quote character; anywhere else a quote opens or closes one.
-            if in_string && b.get(i + 1) == Some(&b'"') {
-                i += 2;
-                continue;
+        let doubled = b.get(i + 1) == Some(&c);
+        if in_string {
+            if c == b'"' {
+                if doubled {
+                    i += 1;
+                } else {
+                    in_string = false;
+                }
             }
-            in_string = !in_string;
-        } else if !in_string && NAMES.iter().any(|n| b.get(i..i + n.len()).is_some_and(|w| w.eq_ignore_ascii_case(n))) {
-            return true;
+        } else if in_sheet {
+            if c == b'\'' {
+                if doubled {
+                    i += 1;
+                } else {
+                    in_sheet = false;
+                }
+            }
+        } else if brackets > 0 {
+            match c {
+                b'\'' => i += 1,
+                b'[' => brackets += 1,
+                b']' => brackets -= 1,
+                _ => {}
+            }
+        } else {
+            match c {
+                b'"' => in_string = true,
+                b'\'' => in_sheet = true,
+                b'[' => brackets = 1,
+                _ if NAMES.iter().any(|n| b.get(i..i + n.len()).is_some_and(|w| w.eq_ignore_ascii_case(n))) => return true,
+                _ => {}
+            }
         }
         i += 1;
     }
@@ -508,6 +534,29 @@ mod tests {
 
     fn all_calc(v: &Value, n: usize) -> bool {
         matches!(v, Value::Array(a) if a.data.len() == n && a.data.iter().all(|x| *x == Value::Error(CellError::Calc)))
+    }
+
+    #[test]
+    fn calls_subtotal_reads_past_strings_sheet_names_and_structured_references() {
+        // Real calls, also after each kind of quoted text.
+        for f in [
+            "=SUBTOTAL(9,A1)",
+            "=x+aggregate(9,0,A1)",
+            "=LEN(\"a\"\"b\")+SUBTOTAL(9,A1)",
+            "='a\"b'!B1+SUBTOTAL(9,'a\"b'!B2:B3)",
+            "='it''s'!B1+SUBTOTAL(9,B2)",
+            "=SUM(Table1[a'#b])+SUBTOTAL(9,B2)",
+            "=SUM(Table1[[#This Row],[x'[y]])+AGGREGATE(9,0,B2)",
+            "=SUM(Table1[o'']])+SUBTOTAL(9,B2)",
+        ] {
+            assert!(calls_subtotal(f), "{f}");
+        }
+        // Only text that looks like a call.
+        for f in
+            ["=IF(\"SUBTOTAL(\"=\"\",0,20)", "=\"say \"\"AGGREGATE(\"\"\"", "='SUBTOTAL(x'!A1", "=Table1[SUBTOTAL(]", "=IF(\"SUBTOTAL\"=\"\",0,20)"]
+        {
+            assert!(!calls_subtotal(f), "{f}");
+        }
     }
 
     #[test]
