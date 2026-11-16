@@ -95,7 +95,7 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("br", _) => {
                 if let Some(c) = cell.as_mut() {
-                    c.cell.text.push(' ');
+                    c.cell.text.push(BR);
                 }
             }
             _ => {}
@@ -275,8 +275,14 @@ fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
 /// when a paste holds many bare `&`).
 const ENTITY_WINDOW: usize = 12;
 
-/// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
-/// space, trimmed. The text only serves to match a cell with the tab-separated text.
+/// Stands for a `<br>` in a cell's raw text until [`decode`] turns it into a line feed. A
+/// noncharacter, so page text doesn't hold it.
+const BR: char = '\u{ffff}';
+
+/// HTML text to plain text: entities decoded, whitespace runs collapsed to one space, trimmed.
+/// A `<br>` is a line break in the cell, as Excel reads its own Web Page export (#4329); the
+/// whitespace around it, which is only the page's layout, goes. Paste compares the text with the
+/// tab-separated text through [`normalized`], where a line break counts as a space.
 fn decode(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
@@ -317,15 +323,25 @@ fn decode(raw: &str) -> String {
     out.push_str(rest);
     let mut text = String::with_capacity(out.len());
     let mut space = false;
+    let mut breaks = 0usize;
     for c in out.chars() {
+        if c == BR {
+            breaks += 1;
+            continue;
+        }
         if c.is_whitespace() && c != '\u{a0}' {
             space = true;
             continue;
         }
-        if space && !text.is_empty() {
-            text.push(' ');
+        if !text.is_empty() {
+            if breaks > 0 {
+                text.extend(std::iter::repeat_n('\n', breaks));
+            } else if space {
+                text.push(' ');
+            }
         }
         space = false;
+        breaks = 0;
         text.push(c);
     }
     text
@@ -457,6 +473,19 @@ mod tests {
         assert_eq!((rows[1][0].clone(), rows[1][1].clone()), (HtmlCell::default(), HtmlCell::default()));
         assert_eq!(rows[1][2].num, Some(2.0));
         assert_eq!(rows[2][0].num, Some(3.0), "the span ends after its second row");
+    }
+
+    #[test]
+    fn a_br_is_a_line_break_in_the_cell() {
+        // #4329: Excel's Web Page export writes an in-cell line break as `<br>`, and Excel reads
+        // it back as a line feed. The page's own layout whitespace around it goes.
+        let html = "<table><tr><td>alpha<br />\n    beta</td><td>alpha beta</td></tr>\
+            <tr><td>a<br><br>b</td><td>  x <br> </td><td><br>y</td><td>a &amp;<BR style='mso-data-placement:same-cell'>b</td></tr></table>";
+        let rows = table_cells(html, 2, 4);
+        let text: Vec<Vec<&str>> = rows.iter().map(|r| r.iter().map(|c| c.text.as_str()).collect()).collect();
+        assert_eq!(text, [vec!["alpha\nbeta", "alpha beta"], vec!["a\n\nb", "x", "y", "a &\nb"]]);
+        // Paste matches the HTML with the tab-separated text, where the break reads as a space.
+        assert_eq!(normalized(text[0][0]), normalized("alpha beta"));
     }
 
     #[test]
