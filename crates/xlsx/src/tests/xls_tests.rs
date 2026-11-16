@@ -133,18 +133,18 @@ pub(crate) fn compound(name: &str, data: &[u8]) -> Vec<u8> {
     out
 }
 
-fn rec(id: u16, payload: &[u8]) -> Vec<u8> {
+pub(super) fn rec(id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = id.to_le_bytes().to_vec();
     v.extend_from_slice(&(payload.len() as u16).to_le_bytes());
     v.extend_from_slice(payload);
     v
 }
 
-fn cat(parts: &[&[u8]]) -> Vec<u8> {
+pub(super) fn cat(parts: &[&[u8]]) -> Vec<u8> {
     parts.concat()
 }
 
-fn u16s(v: &[u16]) -> Vec<u8> {
+pub(super) fn u16s(v: &[u16]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
