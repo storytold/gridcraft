@@ -2884,3 +2884,25 @@ code — the engine's lib suite is 1010 here against §29.7's 989, and every add
   none of them.
 - **No branch code changed.** The only local commit above the merge is this page; the collaboration
   code of `3e98fe45` is `0846b194`'s, which is `4303b5aa`'s.
+
+## 32. The nine current threads of #3613: eight were already in `d06871e7`, one needed a fix (2026-11-16, 16:57Z)
+
+At 16:39Z #3613 had 13 unresolved threads, four outdated (the `collab-web`, `room.rs:null` and two `rfc.md` ones), so nine current. Eight already carry their fix in the delivered head `d06871e7` — CodeRabbit kept them open because the 2026-11-10 replies named commits that were local then — and those eight are answered with the line that holds the fix and resolved. The ninth, the reconnect half of `synced.rs:497`, is fixed in `2f545007`, answered, and left open until that commit reaches the fork.
+
+| thread | where the fix is |
+|---|---|
+| `apps/gridcraft-collab-server/src/lib.rs:520` | `snapshot_lock` `lib.rs:196`, taken `:493`, nothing-new skip `:503`; per-write temp `store.rs:413` |
+| `apps/gridcraft-collab-server/src/store.rs:260` | `read_journal_repairing` `store.rs:274`, called by `load_stored` `lib.rs:423` |
+| `apps/gridcraft-collab-server/src/store.rs:366` | versioned `base/keys/seen` `store.rs:6-17,40`, `meta.json` the commit point |
+| `crates/collab/src/room.rs:244` | `take_written` `crates/engine/src/lib.rs:1430`, step from it `room.rs:223` |
+| `crates/collab-client/src/synced.rs:832` | `doc_uid` `synced.rs:103,261`; another workbook → `OtherDocument` `:275` |
+| `crates/collab-client/src/synced.rs:486` | pending kept and unpreviewed `:529`; own-only gate `:733` |
+| `crates/collab-client/src/synced.rs:497` | `ask_for_recovery` `:242`, asked again on `Reconnected` `:544` — `2f545007` |
+| `gridcraft/src/collab_ui.rs:36` | `Doc::seeded` `lib.rs:190-192,291`; `ws.rs:51,181` |
+| `crates/ui-egui/src/app/commands.rs:93` | `run_shared` `commands.rs:26`, `editing.rs:202,204` |
+
+The fix (`2f545007`): a failed install answers with `Snapshot`, then with a tail from `document_version`; that request is in no queue, so a socket that closes before it leaves loses it and the next `hello` claims the cursor the snapshot already moved. `Event::Reconnected` now asks again when a recovery is outstanding, with the workbook when a refused preview forbids a tail, and without counting a new attempt. Tests `a_recovery_request_lost_with_the_socket_is_sent_again_after_reconnect`, `a_reconnect_keeps_a_refused_preview_on_the_workbook_path` (`crates/collab-client/tests/document.rs`).
+
+Gate on `2f545007` (host `agents`, `umask 022`, `-j 4`, tree clean before and after): `metadata --locked` rc=0, `fmt` rc=0, workspace `clippy -D warnings` rc=0, `test --workspace --no-fail-fast` rc=101 with **4146 passed, 2 failed, 5 ignored** over 66 result lines. The two are the §15 host-font pair (`column_autocomplete_folds_case_beyond_ascii`, `language_switch_renders_the_ribbon_and_persists`); the collaboration suites are 175 passed, 13 of them in `collab-client`'s `document`. A first run of this pass used the host's `umask 002` and failed `engine::io::save_keeps_the_destination_access_restrictions` (mode 664) — the umask, not the branch.
+
+No approval, no merge, no CI file, no `main`. The two commits (`2f545007` code and this page) are local: this session's `bash` policy denies `git push`, so pushing the branch to the fork is the owner's step; `fork/feature/realtime-collaboration` still reads `d06871e7`.
