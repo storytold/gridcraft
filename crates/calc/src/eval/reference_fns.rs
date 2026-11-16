@@ -410,10 +410,7 @@ impl<'h> Evaluator<'h> {
                             let hidden =
                                 s.is_some_and(|s| if skip_hidden { s.is_row_hidden(c.row) } else { skip_filtered && s.is_row_filtered(c.row) });
                             let nested = skip_nested
-                                && s.and_then(|s| s.cell(c)).and_then(|cell| cell.formula.as_ref()).is_some_and(|f| {
-                                    let u = f.text.to_ascii_uppercase();
-                                    u.contains("SUBTOTAL(") || u.contains("AGGREGATE(")
-                                });
+                                && s.and_then(|s| s.cell(c)).and_then(|cell| cell.formula.as_ref()).is_some_and(|f| calls_subtotal(&f.text));
                             (hidden, nested)
                         };
                         if hidden || nested {
@@ -446,6 +443,30 @@ fn index_picks_several_values(src: &Ev, row: i64, col: i64, two_args: bool) -> b
         return false;
     }
     (row == 0 && arr.rows > 1) || (col == 0 && arr.cols > 1)
+}
+
+/// Whether a formula calls SUBTOTAL or AGGREGATE, which SUBTOTAL and AGGREGATE leave out of
+/// their own ranges: the name followed by `(`, outside string literals. `=IF("SUBTOTAL("="",0,20)`
+/// calls neither, and Excel includes its result (#4269).
+fn calls_subtotal(text: &str) -> bool {
+    const NAMES: [&[u8]; 2] = [b"SUBTOTAL(", b"AGGREGATE("];
+    let b = text.as_bytes();
+    let mut i = 0;
+    let mut in_string = false;
+    while let Some(&c) = b.get(i) {
+        if c == b'"' {
+            // Inside a literal, `""` is a quote character; anywhere else a quote opens or closes one.
+            if in_string && b.get(i + 1) == Some(&b'"') {
+                i += 2;
+                continue;
+            }
+            in_string = !in_string;
+        } else if !in_string && NAMES.iter().any(|n| b.get(i..i + n.len()).is_some_and(|w| w.eq_ignore_ascii_case(n))) {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 #[cfg(test)]
