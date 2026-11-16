@@ -501,7 +501,10 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     let stats = selection_statistics(app);
                     let font = theme::ui_font(12.5);
                     let widths: Vec<f32> = stats.iter().map(|p| ui.painter().layout_no_wrap(p.clone(), font.clone(), t.text_dim).size().x).collect();
-                    let keep = fitting_statistics(&widths, ui.available_width(), 10.0);
+                    // Each label is followed by egui's automatic item spacing as well as the
+                    // explicit 10 points of `add_space` below.
+                    let gap = 10.0 + ui.spacing().item_spacing.x;
+                    let keep = fitting_statistics(&widths, ui.available_width(), gap);
                     let span = stats.len();
                     for p in stats.into_iter().skip(span - keep).rev() {
                         let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
