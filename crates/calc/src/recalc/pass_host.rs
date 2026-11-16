@@ -629,13 +629,16 @@ impl Host for PassHost<'_> {
                 let anchor = (sheet, anchor);
                 if self.pending.contains(&anchor) || self.results.contains_key(&anchor) {
                     let value = self.compute(anchor);
+                    // The anchor's scalar value is its first element, which may be an error
+                    // even while a different child is valid. Prefer the current child value.
+                    if self.spills.get(&anchor).is_some_and(|arr| spill_covers(anchor.1, arr, c)) {
+                        return self.cell_value(sheet, c);
+                    }
                     if matches!(value, Value::Error(CellError::Circ | CellError::Calc)) {
                         return value;
                     }
                     // A resized, blocked or errored anchor no longer supplies its old children.
-                    if !self.spills.get(&anchor).is_some_and(|arr| spill_covers(anchor.1, arr, c)) {
-                        return Value::Empty;
-                    }
+                    return Value::Empty;
                 }
             }
         }

@@ -3245,3 +3245,44 @@ fn selected_spill_child_updates_and_releases_old_layout() {
     t.set("B2", "");
     assert_eq!(t.num("E1"), 11.0);
 }
+
+#[test]
+fn lookup_spill_shape_change_does_not_preserve_a_historical_cycle() {
+    for (lookup, anchor, spill, cells) in [
+        ("=VLOOKUP(2,A1:B3,2,FALSE)", "B1", "=IF(D1=3,SEQUENCE(3,1,10),SEQUENCE(1,1,E1))", [("A1", "1"), ("A2", "2"), ("A3", "3")]),
+        ("=HLOOKUP(2,A1:C2,2,FALSE)", "A2", "=IF(D1=3,SEQUENCE(1,3,10),SEQUENCE(1,1,E1))", [("A1", "1"), ("B1", "2"), ("C1", "3")]),
+    ] {
+        let mut t = T::new();
+        for (at, value) in cells {
+            t.set(at, value);
+        }
+        t.set("D1", "3");
+        t.set(anchor, spill);
+        t.set("E1", lookup);
+        assert_eq!(t.num("E1"), 11.0);
+        t.set("D1", "1");
+        assert_eq!(t.get("E1"), Value::Number(0.0), "{lookup}");
+        assert!(t.calc.circular.is_empty());
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.num("E1"), 0.0);
+        assert!(t.calc.circular.is_empty());
+    }
+}
+
+#[test]
+fn lookup_spill_child_does_not_inherit_the_anchors_first_element_error() {
+    for (anchor, spill, lookup, cells) in [
+        ("B1", "={#CALC!;42}", "=VLOOKUP(2,A1:B2,2,FALSE)", [("A1", "1"), ("A2", "2")]),
+        ("A2", "={#CALC!,42}", "=HLOOKUP(2,A1:B2,2,FALSE)", [("A1", "1"), ("B1", "2")]),
+    ] {
+        let mut t = T::new();
+        for (at, value) in cells {
+            t.set(at, value);
+        }
+        t.set(anchor, spill);
+        t.set("E1", lookup);
+        t.calc.recalc_all(&mut t.wb);
+        assert_eq!(t.get("E1"), Value::Number(42.0), "{lookup}");
+        assert_eq!(t.get(anchor), Value::Error(CellError::Calc));
+    }
+}
