@@ -149,6 +149,10 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         }
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
+        // The file's format is what was just written. Only a name that says otherwise needs it
+        // kept, so a Save As to `book.json` is saved as JSON from then on, not as the package
+        // the old misnamed file held.
+        d.content_kind = kind.filter(|&k| crate::io::FileKind::from_path(&path) != Some(k));
     }
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }

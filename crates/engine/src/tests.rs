@@ -2850,6 +2850,23 @@ fn ordinary_save_keeps_a_workbook_opened_under_another_extension() {
     s.execute("file.open", json!({"path": path})).unwrap();
     s.execute("file.saveAs", json!({"path": path})).unwrap();
     assert_ne!(gridcraft_xlsx::sniff(&std::fs::read(&path).unwrap()), gridcraft_xlsx::Format::Xlsx);
+    // A Save As in a full-fidelity format makes that file the document's own, in its own format:
+    // the next ordinary Save writes JSON to `book.json`, and a package to `book.xlsx`.
+    for (ext, check) in [("json", false), ("xlsx", true)] {
+        let path = dir.join("again.csv");
+        std::fs::write(&path, &seed_bytes).unwrap();
+        let mut s = self::s();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        let moved = dir.join(format!("book.{ext}"));
+        s.execute("file.saveAs", json!({"path": moved})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": "later"})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        let saved = std::fs::read(&moved).unwrap();
+        assert_eq!(gridcraft_xlsx::sniff(&saved) == gridcraft_xlsx::Format::Xlsx, check, "{ext}: saved in its own format");
+        let (wb, _) = crate::io::open_bytes(&format!("check.{ext}"), &saved).unwrap();
+        assert_eq!(wb.sheets.len(), 2, "{ext}");
+        assert!(!s.active().unwrap().is_dirty(), "{ext}");
+    }
     std::fs::remove_dir_all(dir).unwrap();
 }
 
