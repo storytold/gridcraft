@@ -229,6 +229,17 @@ impl Synced {
             self.notice = Some("the session's document could not be loaded; reopen the session to reload it".into());
             return;
         }
+        self.ask_for_recovery();
+    }
+
+    /// Sends the request that can restore the shared document, without counting an attempt.
+    ///
+    /// Separate from [`Self::snapshot_failed`] because a request can be lost a second way: the
+    /// socket may close after the install failed and before the message reached the server. The
+    /// transport's cursor already sits on the snapshot version, so the `hello` of the next
+    /// connection claims that version and the server sends no catch-up for it; only asking again
+    /// on the new connection can restore the document (CodeRabbit 5855372513, `synced.rs:497`).
+    fn ask_for_recovery(&mut self) {
         if self.authoritative_only {
             self.notice = Some("an earlier edit was refused; reloading the document from the session".into());
             self.link.send_message(ClientMessage::Snapshot);
@@ -522,7 +533,17 @@ impl Synced {
                     }
                 }
                 Event::Reconnected { .. } => {
-                    // Catch-up frames follow; the pending queue is resent by the transport.
+                    // Catch-up frames follow; the pending queue is resent by the transport. The
+                    // request that failed to install a workbook is not in any queue, though: if
+                    // the socket closed before it reached the server, the new connection's
+                    // `hello` carries the cursor the snapshot already moved, and the server
+                    // sends nothing. Asking again here is what restores a document that would
+                    // otherwise stay behind while later answers move it on
+                    // (CodeRabbit 5855372513, `synced.rs:497`). It is not a new attempt: the
+                    // first request may never have left the browser.
+                    if self.authoritative_only || (self.snapshot_failures > 0 && self.snapshot_failures < SNAPSHOT_ATTEMPTS) {
+                        self.ask_for_recovery();
+                    }
                 }
                 Event::Resynced { version, .. } => {
                     // The catch-up is over: the tail (or the snapshot branch above) left the

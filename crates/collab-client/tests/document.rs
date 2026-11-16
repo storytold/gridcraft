@@ -6,11 +6,13 @@
 //! remote operation was applied to whatever was in front. These tests pin the two directions and
 //! the snapshot that replaces the shared workbook only.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 
-use gridcraft_collab::{Applied, CellChange, ClientMessage, ClientOp, CommandEcho, Outcome, Presence, Role, SheetDelta, SheetName};
+use gridcraft_collab::{
+    Applied, CellChange, ClientMessage, ClientOp, CommandEcho, Outcome, Presence, RejectCode, Rejected, Role, SheetDelta, SheetName,
+};
 use gridcraft_collab_client::{Event, Link, State, Synced, Welcome};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -21,6 +23,8 @@ struct Sink {
     state: Rc<RefCell<State>>,
     events: Rc<RefCell<VecDeque<Event>>>,
     sent: Rc<RefCell<Vec<ClientMessage>>>,
+    /// The socket is gone: nothing reaches the server and nothing is queued for it.
+    offline: Rc<Cell<bool>>,
 }
 
 impl Sink {
@@ -52,6 +56,9 @@ impl Link for FakeLink {
     }
 
     fn send_message(&self, message: ClientMessage) -> bool {
+        if self.0.offline.get() {
+            return false;
+        }
         self.0.sent.borrow_mut().push(message);
         true
     }
@@ -85,6 +92,7 @@ fn replica() -> (Synced, Sink, Session) {
         })),
         events: Rc::new(RefCell::new(VecDeque::new())),
         sent: Rc::new(RefCell::new(Vec::new())),
+        offline: Rc::new(Cell::new(false)),
     };
     let welcome = Welcome {
         session_id: "session".into(),
@@ -267,6 +275,7 @@ fn a_catch_up_queued_before_the_session_was_built_still_lands() {
         })),
         events: Rc::new(RefCell::new(VecDeque::new())),
         sent: Rc::new(RefCell::new(Vec::new())),
+        offline: Rc::new(Cell::new(false)),
     };
     // The connection is already running: the room's three operations are queued and the cursor
     // sits on the head by the time the caller builds the replica.
@@ -461,4 +470,72 @@ fn applied_set(op_id: &str, version: u64, input: i64) -> Applied {
         more: false,
         image_part: None,
     }
+}
+
+fn snapshots(sink: &Sink) -> usize {
+    sink.sent().iter().filter(|message| matches!(message, ClientMessage::Snapshot)).count()
+}
+
+/// A recovery request is not queued by the transport: if the socket closes after the install
+/// failed and before the message reached the server, the request is gone. The next `hello` carries
+/// the cursor the snapshot already moved, so the server sends no catch-up for it and the document
+/// would stay behind while later answers move it on. The new connection asks again
+/// (CodeRabbit 5855372513, `synced.rs:497`).
+#[test]
+fn a_recovery_request_lost_with_the_socket_is_sent_again_after_reconnect() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("the shared workbook is bound");
+
+    // The transport moves its cursor onto the snapshot, the install fails, and the socket is gone
+    // before the request for the whole workbook is sent.
+    sink.state.borrow_mut().version = 4;
+    sink.offline.set(true);
+    sink.push(Event::Snapshot { version: 4, epoch: 0, bytes: b"PK\x03\x04 broken workbook".to_vec() });
+    let _ = synced.poll(&mut session);
+    assert!(sink.sent().is_empty(), "nothing was sent while the socket was gone: {:?}", sink.sent());
+    assert_eq!(synced.document_version(), 0, "the failed snapshot is not a version the replica holds");
+
+    // The new connection reports the cursor the snapshot moved, so its catch-up covers nothing.
+    sink.offline.set(false);
+    sink.push(Event::Disconnected { reason: "the socket closed".into() });
+    sink.push(Event::Reconnected { version: 4 });
+    let _ = synced.poll(&mut session);
+    assert_eq!(snapshots(&sink), 1, "the lost request is made again on the new connection: {:?}", sink.sent());
+
+    // The answer installs: the replica holds the room's workbook at the version it claims.
+    let mut room = Session::new();
+    room.new_workbook();
+    room.execute("cell.set", json!({ "cell": "B1", "input": 7 })).expect("the room's own edit");
+    let bytes = gridcraft_engine::io::save_bytes(&room.doc().expect("a document").wb, "session.xlsx").expect("a workbook");
+    sink.push(Event::Snapshot { version: 4, epoch: 0, bytes });
+    let _ = synced.poll(&mut session);
+    assert_eq!(value(&session, 0, "B1"), Value::Number(7.0), "the room's document arrives");
+    assert_eq!(synced.document_version(), 4, "the version it holds is the one it claims");
+}
+
+/// The same reconnect, for a replica that may only accept a workbook: a refused preview under a
+/// later one means no journal tail can take the edit back, so the request made again after the
+/// reconnect is the whole workbook, never a `Resync` (CodeRabbit 5855372513, `synced.rs:497`).
+#[test]
+fn a_reconnect_keeps_a_refused_preview_on_the_workbook_path() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("preview A");
+    synced.execute(&mut session, "cell.set", json!({ "cell": "B1", "input": 2 })).expect("preview B");
+
+    // The refusal arrives while the socket is down: the request for the workbook is lost.
+    sink.offline.set(true);
+    sink.push(Event::Rejected(Rejected { op_id: "w1-0".into(), code: RejectCode::Invalid, retryable: false, hint: None, message: None }));
+    let _ = synced.poll(&mut session);
+    assert!(sink.sent().is_empty(), "nothing was sent while the socket was gone: {:?}", sink.sent());
+
+    sink.offline.set(false);
+    sink.push(Event::Disconnected { reason: "the socket closed".into() });
+    sink.push(Event::Reconnected { version: 0 });
+    let _ = synced.poll(&mut session);
+    assert_eq!(snapshots(&sink), 1, "the workbook is asked for again: {:?}", sink.sent());
+    assert!(
+        !sink.sent().iter().any(|message| matches!(message, ClientMessage::Resync { .. })),
+        "no tail from a document that still holds the refused preview: {:?}",
+        sink.sent()
+    );
 }
