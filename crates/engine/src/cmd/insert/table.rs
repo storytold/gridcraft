@@ -312,6 +312,19 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
             })
         };
         cx.wb.rewrite_references(&|host, e| rename(host.sheet, e));
+        // A bare PivotTable source binds to a table before a defined name (`pivot::resolve_source`),
+        // so a defined name with the old name doesn't shadow it: it follows the rename regardless.
+        for i in 0..cx.wb.sheets.len() {
+            let names_old = |src: &str| src.trim().trim_start_matches('=').trim().eq_ignore_ascii_case(&old);
+            if !cx.wb.sheet(i).is_some_and(|sh| sh.pivots.iter().any(|pt| names_old(&pt.source))) {
+                continue;
+            }
+            for pt in &mut cx.sheet_mut(i)?.pivots {
+                if names_old(&pt.source) {
+                    pt.source = name.clone();
+                }
+            }
+        }
         crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|host, e| rename(sheet_of.get(&host.to_ascii_lowercase()).copied(), e))?;
         cx.structural = true;
         Ok(Json::Null)

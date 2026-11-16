@@ -1428,3 +1428,20 @@ fn legacy_count_numbers_caption_follows_the_function() {
         assert_eq!(text(&s, "E3"), after, "{legacy}");
     }
 }
+
+/// A defined name with a table's name doesn't stop a PivotTable's table source following a rename
+/// of the table: a bare source binds to the table first.
+#[test]
+fn a_table_rename_moves_a_pivot_source_a_defined_name_shadows() {
+    let mut s = sales();
+    s.execute("insert.table", json!({"range": "A1:E13"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    s.execute("table.summarizePivot", json!({"rows": ["Product"], "values": ["Units"]})).unwrap();
+    assert_eq!(pt(&s).source, "Table1");
+    s.execute("formulas.defineName", json!({"name": "Table1", "refersTo": "=Sheet1!$A$1:$B$3"})).unwrap();
+    s.execute("table.rename", json!({"table": "Table1", "name": "Data"})).unwrap();
+    assert_eq!(pt(&s).source, "Data");
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
+}
