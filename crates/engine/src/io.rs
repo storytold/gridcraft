@@ -826,6 +826,9 @@ fn html_too_big() -> EngineError {
 fn html_link(sh: &Sheet, link: &gridcraft_model::Hyperlink) -> Option<(String, Option<CellRef>)> {
     match crate::links::classify(&link.target) {
         crate::links::LinkKind::External(url) => Some((url, None)),
+        // A link out of the workbook (a relationship in the file) whose target reads like a cell,
+        // such as a file named `FY24` or `A1`, is a file, not a place on this sheet.
+        crate::links::LinkKind::Internal(_) if link.external => None,
         crate::links::LinkKind::Internal(place) => {
             let (on, body) = gridcraft_core::addr::split_sheet(place.trim_start_matches('#'));
             if on.is_some_and(|name| !name.eq_ignore_ascii_case(&sh.name)) {

@@ -124,6 +124,9 @@ fn html_export_keeps_cell_hyperlinks() {
     sh.hyperlinks.insert(CellRef::parse("C1").unwrap(), link("Sheet2!A1", None));
     sh.hyperlinks.insert(CellRef::parse("D1").unwrap(), link("javascript:alert(1)", None));
     sh.hyperlinks.insert(CellRef::parse("E1").unwrap(), link("#Sheet1!B2:B3", None));
+    // A file outside the workbook whose name reads like a cell is no place on this sheet.
+    sh.set_value(CellRef::parse("F1").unwrap(), text("File"));
+    sh.hyperlinks.insert(CellRef::parse("F1").unwrap(), gridcraft_model::Hyperlink { target: "A5".into(), tooltip: None, external: true });
     let html = to_html(&wb, 0).unwrap();
     assert!(html.contains(">Visit</td>"), "the unlinked control stays plain: {html}");
     assert!(html.contains("<a href=\"https://example.com/?a=1&amp;b=2\" title=\"Say &quot;hi&quot;\">Visit</a>"), "{html}");
@@ -131,7 +134,7 @@ fn html_export_keeps_cell_hyperlinks() {
     assert!(html.contains(" id=\"RANGE!A5\">Target</td>"), "the link's anchor: {html}");
     assert!(html.contains("<a href=\"#RANGE!B2\">Up</a>") && html.contains(" id=\"RANGE!B2\">Jump</td>"), "{html}");
     // Another sheet isn't on the page, and a script link isn't written.
-    assert!(html.contains(">Other</td>") && html.contains(">Bad</td>"), "{html}");
+    assert!(html.contains(">Other</td>") && html.contains(">Bad</td>") && html.contains(">File</td>"), "{html}");
     assert!(!html.contains("javascript") && !html.contains("Sheet2"), "{html}");
     assert_eq!(html.matches("<a href").count(), 3, "{html}");
 }
