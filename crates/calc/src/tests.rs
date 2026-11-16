@@ -1429,6 +1429,15 @@ fn text_function() {
 }
 
 #[test]
+fn text_with_an_array_of_codes_formats_the_value_by_each() {
+    // TEXT converts a single format code once per call; an array of codes still formats by each.
+    let mut t = T::new();
+    t.set("A1", "=TEXT(1234.5,{\"0\",\"0.0\"})");
+    assert_eq!(t.get("A1"), Value::text("1235"));
+    assert_eq!(t.get("B1"), Value::text("1234.5"));
+}
+
+#[test]
 fn long_operator_chains() {
     let mut t = T::new();
     t.set("A1", "1");
