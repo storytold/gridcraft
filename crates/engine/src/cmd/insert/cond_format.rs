@@ -1,7 +1,13 @@
 use super::{
-    Anchor, BorderLine, BorderStyle, Borders, CfOperator, CfRule, CfValueKind, Color, CondFormat, EngineError, Fill, Json, Result, Session, Shape,
-    ShapeKind, Style, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, str_param, target_ranges, target_sheet, u32_param,
+    Anchor, BorderLine, BorderStyle, Borders, CfOperator, CfRule, CfValueKind, Color, CondFormat, EngineError, Fill, Json, RangeRef, Result, Session,
+    Shape, ShapeKind, Style, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, str_param, target_ranges, target_sheet,
+    u32_param,
 };
+
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
 
 // ---------------------------------------------------------------- conditional formatting
 
@@ -271,7 +277,15 @@ pub(super) fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cond_formats.clear();
         } else {
             for cf in sh.cond_formats.iter_mut() {
+                let before = RangeRef::top_left(&cf.ranges);
                 cf.ranges.retain(|r| !ranges.iter().any(|x| x.intersects(r)));
+                // The relative formulas are written for the top-left cell: when it goes, they're
+                // rewritten for the new one, so the areas left keep reading the same cells.
+                if let (Some(from), Some(to)) = (before, RangeRef::top_left(&cf.ranges)) {
+                    for f in cf.rule.relative_formulas_mut() {
+                        *f = crate::cmd::data::move_rule_formula(f, from, to);
+                    }
+                }
             }
             sh.cond_formats.retain(|c| !c.ranges.is_empty());
         }
