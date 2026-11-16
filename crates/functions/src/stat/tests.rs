@@ -646,6 +646,22 @@ fn frequency_prob() {
     // Excel: any probability <= 0 is #NUM!, even when it sums to one and lies outside the limits.
     is_err(ev("PROB", vec![x.clone(), c(&[0.5, 0.0, 0.25, 0.25]), n(0.0), n(3.0)]), CellError::Num);
     is_err(ev("PROB", vec![x, c(&[0.5, 0.0, 0.25, 0.25]), n(2.0), n(3.0)]), CellError::Num);
+    // #4284: the weights total 1 to Excel's 15 digits. 1.00000001 and 0.99999999 are #NUM!, for
+    // the whole interval and for one outcome, as are 1.000001 and 0.9999999999999 (13 nines).
+    let x2 = c(&[1.0, 2.0]);
+    for w2 in [0.500_000_01, 0.499_999_99, 0.500_001, 0.499_999_999_999_9] {
+        is_err(ev("PROB", vec![x2.clone(), c(&[0.5, w2]), n(1.0), n(2.0)]), CellError::Num);
+        is_err(ev("PROB", vec![x2.clone(), c(&[0.5, w2]), n(1.0)]), CellError::Num);
+    }
+    assert_eq!(ev("PROB", vec![x2.clone(), c(&[0.5, 0.5]), n(1.0), n(2.0)]), nv(1.0));
+    assert_eq!(ev("PROB", vec![x2, c(&[0.5, 0.5]), n(1.0)]), nv(0.5));
+    // Binary noise in the total isn't a different total: ten weights of 0.1, and 0.7 + 0.2 + 0.1,
+    // sum to 0.9999999999999999.
+    let ten: Vec<f64> = (0..10).map(f64::from).collect();
+    assert_ne!([0.1; 10].iter().sum::<f64>(), 1.0);
+    close(ev("PROB", vec![c(&ten), c(&[0.1; 10]), n(0.0), n(9.0)]), 1.0);
+    assert_ne!([0.7, 0.2, 0.1].iter().sum::<f64>(), 1.0);
+    close(ev("PROB", vec![c(&[1.0, 2.0, 3.0]), c(&[0.7, 0.2, 0.1]), n(1.0)]), 0.7);
 }
 
 #[test]
