@@ -215,6 +215,12 @@ pub(super) fn outline_settings(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, r) = data_target(s, p, "data.subtotal")?;
     let header = bool_param(p, "header").unwrap_or(true);
+    // A header row and nothing under it has no group to total. Excel refuses it and leaves the
+    // sheet as it was; inserting rows here would subtotal the header and move everything below
+    // (#4263).
+    if r.start.row + u32::from(header) > r.end.row {
+        return Err(bad("data.subtotal", "there are no rows of data below the header row to subtotal; nothing was changed"));
+    }
     let group_col = col_param(p.get("groupBy"), r.start.col).unwrap_or(r.start.col);
     let func = str_param(p, "function").unwrap_or("sum");
     let code = match func {
