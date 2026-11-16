@@ -333,9 +333,25 @@ fn a_snapshot_that_cannot_be_opened_claims_nothing_and_asks_again() {
     let _ = synced.poll(&mut session);
     assert_eq!(synced.document_version(), 0, "a failed snapshot is not a version the replica holds");
 
+    // An answer from the room does not land either: version 3 sits above the next version this
+    // document holds, so its command would run on content the room has moved past, and claiming
+    // its version would hide the operations still missing. The workbook the replica asked for
+    // carries that operation instead (CodeRabbit 5855372513, `synced.rs:508`).
     sink.deliver(&applied_set("bob-3", 3, 7));
+    let events = synced.poll(&mut session);
+    assert!(!events.iter().any(|event| matches!(event, Event::Applied(_))), "the caller is not told a change happened");
+    assert_eq!(value(&session, 0, "A1"), Value::Number(1.0), "the document is unchanged");
+    assert_eq!(synced.document_version(), 0, "an answer does not move the version the replica claims");
+
+    // The room's workbook, which holds the operation the document missed, is the way back.
+    let mut room = Session::new();
+    room.new_workbook();
+    room.execute("cell.set", json!({ "cell": "A1", "input": 7 })).expect("the operation the document missed");
+    let bytes = gridcraft_engine::io::save_bytes(&room.doc().expect("a document").wb, "session.xlsx").expect("a workbook");
+    sink.push(Event::Snapshot { version: 4, epoch: 0, bytes });
     let _ = synced.poll(&mut session);
-    assert_eq!(value(&session, 0, "A1"), Value::Number(7.0), "the operation the document missed still lands");
+    assert_eq!(value(&session, 0, "A1"), Value::Number(7.0), "the operation the document missed lands with the workbook");
+    assert_eq!(synced.document_version(), 4, "the replica claims the version whose content it holds");
 }
 
 /// A snapshot for a workbook that is no longer open cannot be installed: the replica keeps its
@@ -382,6 +398,44 @@ fn a_snapshot_for_a_workbook_that_was_closed_is_never_claimed() {
     let _ = synced.poll(&mut session);
     assert_eq!(sink.sent().len(), before, "no endless stream of workbooks");
     assert!(synced.take_notice().is_some_and(|notice| notice.contains("reopen")), "the user is told what to do");
+}
+
+/// While a recovery is outstanding the document is behind the transport's cursor, so an answer
+/// above the next version is not patched in and does not move the version: the recovery starts
+/// exactly at `document_version + 1` and is the only stream that may (CodeRabbit 5855372513,
+/// `synced.rs:508`).
+#[test]
+fn an_answer_above_the_next_version_waits_for_the_recovery() {
+    let (mut synced, sink, mut session) = replica();
+    synced.execute(&mut session, "cell.set", json!({ "cell": "A1", "input": 1 })).expect("the shared workbook is bound");
+
+    sink.state.borrow_mut().version = 4;
+    sink.push(Event::Snapshot { version: 4, epoch: 0, bytes: b"PK\x03\x04 broken workbook".to_vec() });
+    let _ = synced.poll(&mut session);
+    assert_eq!(synced.document_version(), 0, "the failed snapshot is not a version the replica holds");
+
+    // The room moved on while the workbook is on its way: version 5 would patch a document that
+    // never saw versions 1..4.
+    sink.deliver(&applied_set("bob-4", 5, 9));
+    let events = synced.poll(&mut session);
+    assert!(!events.iter().any(|event| matches!(event, Event::Applied(_))), "the caller is not told a change happened");
+    assert_eq!(value(&session, 0, "A1"), Value::Number(1.0), "the document is unchanged");
+    assert_eq!(synced.document_version(), 0, "and so is the version it claims");
+
+    // A second workbook that cannot be opened asks for the tail from the version the document
+    // holds. That tail starts at version 1, and it is what may move the document.
+    sink.push(Event::Snapshot { version: 5, epoch: 0, bytes: b"PK\x03\x04 broken workbook".to_vec() });
+    let _ = synced.poll(&mut session);
+    assert!(
+        sink.sent().iter().any(|message| matches!(message, ClientMessage::Resync { from: 0 })),
+        "the tail from the version the document holds: {:?}",
+        sink.sent()
+    );
+
+    sink.deliver(&applied_set("bob-0", 1, 3));
+    let _ = synced.poll(&mut session);
+    assert_eq!(value(&session, 0, "A1"), Value::Number(3.0), "the first answer of the tail lands");
+    assert_eq!(synced.document_version(), 1, "one version at a time, in order");
 }
 
 /// An answer the document already covers must not run its command again: the server answers a

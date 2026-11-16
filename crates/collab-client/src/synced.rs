@@ -464,7 +464,16 @@ impl Synced {
                     // still leaves the resend queue, and the step still counts as this person's
                     // undo step, because the document does hold it (CodeRabbit 5851190259).
                     let stale = applied.version <= self.document_version;
-                    let written = !stale && self.apply(session, applied);
+                    // While a workbook — or the tail this replica asked for after a workbook could
+                    // not be installed — is on its way, the document is behind the transport's
+                    // cursor. An answer above the next version therefore runs its command on
+                    // content the room has moved past, and moving `document_version` onto its
+                    // version is what hides the operations still missing. The recovery carries
+                    // those answers itself: it starts exactly at `document_version + 1`, and only
+                    // that stream may move the document (CodeRabbit 5855372513, `synced.rs:508`).
+                    let recovering = self.snapshot_failures > 0 || self.authoritative_only;
+                    let continues = applied.version == self.document_version.saturating_add(1);
+                    let written = !stale && !(recovering && !continues) && self.apply(session, applied);
                     if written {
                         self.document_version = applied.version;
                     }
