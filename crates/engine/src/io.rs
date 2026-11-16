@@ -819,6 +819,25 @@ fn html_too_big() -> EngineError {
 
 /// A sheet as a standalone HTML table (Save as Web Page). A sheet with pictures gets the sheet's
 /// own column widths and row heights so each picture and chart (inline SVG) can sit at its anchor.
+/// Where a cell's hyperlink points on the page: an `http`, `https` or `mailto` address as it is, or
+/// a cell of this sheet as `#RANGE!A5`, the anchor Excel's Web Page export names it with (#4323).
+/// The cell for that anchor comes along. Links the app wouldn't open, and places the page doesn't
+/// hold (another sheet, a defined name), stay plain text.
+fn html_link(sh: &Sheet, link: &gridcraft_model::Hyperlink) -> Option<(String, Option<CellRef>)> {
+    match crate::links::classify(&link.target) {
+        crate::links::LinkKind::External(url) => Some((url, None)),
+        crate::links::LinkKind::Internal(place) => {
+            let (on, body) = gridcraft_core::addr::split_sheet(place.trim_start_matches('#'));
+            if on.is_some_and(|name| !name.eq_ignore_ascii_case(&sh.name)) {
+                return None;
+            }
+            let at = RangeRef::parse(body)?.start;
+            Some((format!("#RANGE!{}", at.a1()), Some(at)))
+        }
+        crate::links::LinkKind::Refused(_) => None,
+    }
+}
+
 pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     let Some(sh) = wb.sheet(sheet) else { return Ok(String::new()) };
     let fixed = !(sh.images.is_empty() && sh.charts.is_empty());
@@ -871,6 +890,9 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             }
             v
         };
+        // Cells a link on this sheet points at get the anchor it names.
+        let link_targets: std::collections::HashSet<CellRef> =
+            sh.hyperlinks.iter().filter(|(at, _)| r.contains(**at)).filter_map(|(_, link)| html_link(sh, link)?.1).collect();
         let rows_before = visible_before(&|y| sh.is_row_hidden(y), r.start.row, r.end.row);
         let cols_before = visible_before(&|x| sh.is_col_hidden(x), r.start.col, r.end.col);
         let visible = |before: &[u32], from: u32, a: u32, b: u32| {
@@ -916,7 +938,15 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                     .unwrap_or_default();
                 // The text is escaped only as far as the page still has room for it.
                 let Some(escaped) = esc_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
-                let _ = write!(out, "<td style=\"{css}\"{}{span}>{escaped}</td>", dir.attr());
+                let anchor = if link_targets.contains(&c) { format!(" id=\"RANGE!{}\"", c.a1()) } else { String::new() };
+                let content = match sh.hyperlinks.get(&c).and_then(|link| Some((html_link(sh, link)?.0, link.tooltip.as_deref()))) {
+                    Some((href, tip)) => {
+                        let title = tip.map(|t| format!(" title=\"{}\"", esc(t))).unwrap_or_default();
+                        format!("<a href=\"{}\"{title}>{escaped}</a>", esc(&href))
+                    }
+                    None => escaped,
+                };
+                let _ = write!(out, "<td style=\"{css}\"{}{span}{anchor}>{content}</td>", dir.attr());
                 if out.len() > HTML_EXPORT_MAX_BYTES {
                     return Err(html_too_big());
                 }
