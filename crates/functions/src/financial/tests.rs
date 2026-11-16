@@ -317,3 +317,28 @@ fn securities_read_dates_in_the_1904_system() {
     let odd = vec![d4(2008, 11, 11), d4(2021, 3, 1), d4(2008, 10, 15), d4(2009, 3, 1), n(0.0785), n(0.0625), n(100.0), n(2.0), n(1.0)];
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
+
+/// Excel truncates ACCRINTM's dates to whole days and accrues nothing when issue equals
+/// settlement, in every basis and both date systems; only issue after settlement is #NUM! (#4096).
+#[test]
+fn accrintm_equal_dates_accrue_zero() {
+    let day = serial_from_ymd(DateSystem::D1900, 2025, 1, 15).unwrap();
+    for basis in 0..=4 {
+        close(ev("ACCRINTM", vec![n(day), n(day), n(0.05), n(1000.0), n(f64::from(basis))]), 0.0);
+    }
+    // Distinct times on the same day truncate to equal dates.
+    close(ev("ACCRINTM", vec![n(day + 0.1), n(day + 0.9), n(0.05), n(1000.0), n(2.0)]), 0.0);
+    close_tol(ev("ACCRINTM", vec![n(day), n(day + 1.0), n(0.05), n(1000.0), n(2.0)]), 0.1388888888888889, 1e-15);
+    is_err(ev("ACCRINTM", vec![n(day + 1.0), n(day), n(0.05), n(1000.0), n(2.0)]), CellError::Num);
+    // Equal dates do not excuse a zero rate or par, or an invalid basis.
+    is_err(ev("ACCRINTM", vec![n(day), n(day), n(0.0), n(1000.0), n(2.0)]), CellError::Num);
+    is_err(ev("ACCRINTM", vec![n(day), n(day), n(0.05), n(0.0), n(2.0)]), CellError::Num);
+    is_err(ev("ACCRINTM", vec![n(day), n(day), n(0.05), n(1000.0), n(5.0)]), CellError::Num);
+
+    let day4 = serial_from_ymd(DateSystem::D1904, 2025, 1, 15).unwrap();
+    for basis in 0..=4 {
+        let mut ctx = TestCtx { sys: DateSystem::D1904, ..TestCtx::default() };
+        let args = vec![n(day4), n(day4), n(0.05), n(1000.0), n(f64::from(basis))];
+        close(crate::call(crate::lookup("ACCRINTM").unwrap(), &args, &mut ctx), 0.0);
+    }
+}
