@@ -137,6 +137,45 @@ fn html_export_keeps_cell_hyperlinks() {
 }
 
 #[test]
+fn html_export_links_only_to_cells_the_page_draws() {
+    // A same-sheet link whose cell isn't drawn (past the used range, on a hidden row, inside a
+    // merge) would point at nothing: it stays text. A merge's first cell is drawn.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    for (at, label) in [("A1", "Far"), ("B1", "Hidden"), ("C1", "Inside"), ("D1", "Merged"), ("A3", "x"), ("C4", "m"), ("D5", "y")] {
+        sh.set_value(CellRef::parse(at).unwrap(), gridcraft_core::Value::Text(label.into()));
+    }
+    let link = |target: &str| gridcraft_model::Hyperlink { target: target.into(), tooltip: None, external: false };
+    sh.hyperlinks.insert(CellRef::parse("A1").unwrap(), link("Z99"));
+    sh.hyperlinks.insert(CellRef::parse("B1").unwrap(), link("A3"));
+    sh.hyperlinks.insert(CellRef::parse("C1").unwrap(), link("D5"));
+    sh.hyperlinks.insert(CellRef::parse("D1").unwrap(), link("C4"));
+    sh.rows.insert(2, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+    sh.merges.push(RangeRef::parse("C4:D5").unwrap());
+    let html = to_html(&wb, 0).unwrap();
+    for label in ["Far", "Hidden", "Inside"] {
+        assert!(html.contains(&format!(">{label}</td>")), "{label}: {html}");
+    }
+    assert!(html.contains("<a href=\"#RANGE!C4\">Merged</a>") && html.contains(" id=\"RANGE!C4\">m</td>"), "{html}");
+    assert_eq!(html.matches("<a href").count(), 1, "{html}");
+    assert_eq!(html.matches(" id=\"RANGE!").count(), 1, "{html}");
+}
+
+#[test]
+fn html_export_keeps_a_link_tooltip_within_the_page_budget() {
+    // A tooltip escapes to six bytes per quote; one past the page's room fails the export instead
+    // of being built in full first.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("Visit".into()));
+    let tooltip = "\"".repeat(45_000_000);
+    sh.hyperlinks
+        .insert(CellRef::new(0, 0), gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: Some(tooltip), external: true });
+    let err = to_html(&wb, 0).unwrap_err();
+    assert!(err.to_string().contains("MiB"), "{err}");
+}
+
+#[test]
 fn html_export_embeds_images_as_data_uris() {
     let mut wb = Workbook::new();
     wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {

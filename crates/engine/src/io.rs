@@ -890,9 +890,17 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             }
             v
         };
+        // A cell the table draws: in the used range, on a visible row (and column, when hidden
+        // columns are left out) and not covered by a merge. A link to any other cell would point at
+        // nothing on the page, so it stays text.
+        let drawn = |c: CellRef| {
+            r.contains(c) && !sh.is_row_hidden(c.row) && !(fixed && sh.is_col_hidden(c.col)) && merges.get(&c).is_none_or(|m| m.start == c)
+        };
+        // Where a cell's link points, when the page can hold it.
+        let page_link = |link: &gridcraft_model::Hyperlink| html_link(sh, link).filter(|(_, at)| at.is_none_or(drawn));
         // Cells a link on this sheet points at get the anchor it names.
         let link_targets: std::collections::HashSet<CellRef> =
-            sh.hyperlinks.iter().filter(|(at, _)| r.contains(**at)).filter_map(|(_, link)| html_link(sh, link)?.1).collect();
+            sh.hyperlinks.iter().filter(|(at, _)| drawn(**at)).filter_map(|(_, link)| page_link(link)?.1).collect();
         let rows_before = visible_before(&|y| sh.is_row_hidden(y), r.start.row, r.end.row);
         let cols_before = visible_before(&|x| sh.is_col_hidden(x), r.start.col, r.end.col);
         let visible = |before: &[u32], from: u32, a: u32, b: u32| {
@@ -939,10 +947,16 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 // The text is escaped only as far as the page still has room for it.
                 let Some(escaped) = esc_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
                 let anchor = if link_targets.contains(&c) { format!(" id=\"RANGE!{}\"", c.a1()) } else { String::new() };
-                let content = match sh.hyperlinks.get(&c).and_then(|link| Some((html_link(sh, link)?.0, link.tooltip.as_deref()))) {
+                let content = match sh.hyperlinks.get(&c).and_then(|link| Some((page_link(link)?.0, link.tooltip.as_deref()))) {
                     Some((href, tip)) => {
-                        let title = tip.map(|t| format!(" title=\"{}\"", esc(t))).unwrap_or_default();
-                        format!("<a href=\"{}\"{title}>{escaped}</a>", esc(&href))
+                        // The address and tooltip come from the file: escaped within the page's room.
+                        let room = HTML_EXPORT_MAX_BYTES.saturating_sub(out.len());
+                        let Some(href) = esc_within(&href, room) else { return Err(html_too_big()) };
+                        let title = match tip {
+                            Some(t) => format!(" title=\"{}\"", esc_within(t, room).ok_or_else(html_too_big)?),
+                            None => String::new(),
+                        };
+                        format!("<a href=\"{href}\"{title}>{escaped}</a>")
                     }
                     None => escaped,
                 };
