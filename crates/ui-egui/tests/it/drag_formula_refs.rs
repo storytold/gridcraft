@@ -164,3 +164,54 @@ fn a_reference_scrolled_under_frozen_rows_is_not_grabbed_there() {
     drag(&mut h, b1.center(), to);
     assert!(h.state().editor.is_none() || text(&h) == "=SUM(B3:B10)", "got {}", text(&h));
 }
+
+/// #2459: numbers in F16:F22, `=SUM(F16:F22)` below them in F23, and the edit opened by
+/// double-clicking F23 rather than F2.
+fn double_clicked_sum() -> Harness {
+    let mut session = Session::new();
+    session.new_workbook();
+    for row in 16..=22 {
+        session.execute("cell.set", json!({"cell": format!("F{row}"), "input": row.to_string()})).unwrap();
+    }
+    session.execute("cell.set", json!({"cell": "F23", "input": "=SUM(F16:F22)"})).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        SheetApp::new(session, Default::default()),
+    );
+    h.run_steps(45);
+    let at = center(&h, "F23");
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.input_mut().events.push(Event::PointerMoved(at));
+            h.input_mut().events.push(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.step();
+        }
+        h.run_steps(2);
+    }
+    assert_eq!(text(&h), "=SUM(F16:F22)", "double-clicking F23 edits its formula");
+    h
+}
+
+#[test]
+fn issue_2459_dragging_the_sum_range_corner_resizes_it() {
+    let mut h = double_clicked_sum();
+    let range = rect(&h, "F16:F22");
+    let to = center(&h, "G20");
+    drag(&mut h, range.right_bottom(), to);
+    assert_eq!(text(&h), "=SUM(F16:G20)");
+    assert!(h.state().editor.is_some(), "the edit stays open after the drag");
+}
+
+#[test]
+fn issue_2459_dragging_the_sum_range_border_moves_it() {
+    let mut h = double_clicked_sum();
+    let f16 = rect(&h, "F16");
+    let grab = Pos2::new(f16.left() + 1.0, f16.center().y);
+    let to = center(&h, "H17") + (grab - f16.center());
+    drag(&mut h, grab, to);
+    assert_eq!(text(&h), "=SUM(H17:H23)");
+}
