@@ -2364,6 +2364,12 @@ So the tree is clean, the merge test is exit 0, and the branch is one merge abov
 nothing behind it: every commit the fork has is an ancestor, and the 128 commits it lacks are
 `main`'s new line plus the two local commits above `6c100112` (`82e8d0bd` and `45748012`).
 
+Repeated on the docs commit that carries this section, `cd0ddb3d`: `git status --short` empty,
+`git merge-tree --write-tree origin/main HEAD` exit 0, tree `390d9193` (it moves with this page, which
+is why the tree of the merge above is the one quoted for the code), and
+`git diff --stat origin/main..HEAD` is 84 files, +18916/−34 — this page's +166/−13 on top of the
+merge's numbers.
+
 ### 29.4 Gates (remote host `agents`, 2026-11-16, on `45748012`, `umask 022`)
 
 One run through `scripts/remote-build.sh sh gridcraft`, the host's cached `target/`, `-j 8`, umask
