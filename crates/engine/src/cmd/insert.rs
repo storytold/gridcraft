@@ -363,6 +363,34 @@ mod tests {
         assert_eq!(charts_on(&s, "Summary").iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["E2"]);
     }
 
+    /// A chart is a drawing object: a protected destination sheet refuses it, whether `at` names it
+    /// or it is the active sheet, and also when the data is on another, unprotected sheet.
+    #[test]
+    fn chart_on_a_protected_sheet_is_refused() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Month", "Sales"], ["Jan", 3], ["Feb", 5]]})).unwrap();
+        s.execute("home.insertSheet", json!({"name": "Board"})).unwrap();
+        s.execute("review.protectSheet", json!({"sheet": "Board"})).unwrap();
+        let counts = |s: &Session| (charts_on(s, "Data").len(), charts_on(s, "Board").len());
+
+        // Board is active and protected; the data is on Data.
+        let e = s.execute("insert.chart", json!({"range": "Data!A1:B3", "type": "line"})).unwrap_err();
+        assert_eq!(e.to_string(), PROTECTED);
+        // Board named by `at` from the unprotected data sheet.
+        s.execute("sheet.activate", json!({"sheet": "Data"})).unwrap();
+        let e = s.execute("insert.chart", json!({"range": "A1:B3", "type": "line", "at": "Board!E2"})).unwrap_err();
+        assert_eq!(e.to_string(), PROTECTED);
+        assert_eq!(counts(&s), (0, 0));
+
+        // The unprotected sheet still takes one, and so does Board once unprotected.
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "line"})).unwrap();
+        s.execute("review.unprotectSheet", json!({"sheet": "Board"})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "line", "at": "Board!E2"})).unwrap();
+        assert_eq!(counts(&s), (1, 1));
+    }
+
     #[test]
     fn chart_from_whole_columns_uses_the_rows_in_use() {
         // #3114: selecting two whole columns of data refused the chart as "range too large".

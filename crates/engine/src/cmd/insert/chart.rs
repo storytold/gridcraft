@@ -1,6 +1,7 @@
 use super::{
-    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, MAX_COLS, MAX_ROWS, RangeRef, Result, Series, Session, Sheet, anchor_mode_param,
-    bad, block, bool_param, cell_param_on, edit, f64_param, json, size_cap, split_sheet, str_param, target_ranges, target_sheet, u32_param,
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, MAX_COLS, MAX_ROWS, PROTECTED, RangeRef, Result, Series, Session, Sheet,
+    anchor_mode_param, bad, block, bool_param, cell_param_on, edit, f64_param, json, size_cap, split_sheet, str_param, target_ranges, target_sheet,
+    u32_param,
 };
 
 #[cfg(test)]
@@ -310,8 +311,14 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
     Ok((host, chart))
 }
 
+/// Insert › Chart (`insert.chart`): the chart [`build_chart`] makes, on its sheet. Sheet protection
+/// locks drawing objects, as for pictures and shapes, so a protected destination sheet refuses it,
+/// whichever sheet holds the data.
 pub(super) fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, chart) = build_chart(s, p)?;
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     let id = chart.id;
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.charts.push(chart);
