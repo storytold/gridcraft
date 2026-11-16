@@ -179,10 +179,7 @@ fn guessed_range(sh: &gridcraft_model::sheet::Sheet, at: CellRef) -> Option<Rang
     let mut range = None;
     if at.row > 0 && (numeric(CellRef::new(at.row - 1, at.col)) || at.col == 0 || !numeric(CellRef::new(at.row, at.col - 1))) {
         let mut top = at.row - 1;
-        while top > 0
-            && (numeric(CellRef::new(top - 1, at.col))
-                || sh.value(CellRef::new(top - 1, at.col)).is_empty() && top > 1 && numeric(CellRef::new(top - 2, at.col)))
-        {
+        while top > 0 && numeric(CellRef::new(top - 1, at.col)) {
             top -= 1;
         }
         if numeric(CellRef::new(at.row - 1, at.col)) {
@@ -293,6 +290,12 @@ pub fn function_list() -> Vec<Json> {
         ("SHEETS", "Information", "SHEETS([reference])", "Number of sheets."),
         ("AREAS", "Lookup", "AREAS(reference)", "Number of areas in a reference."),
         ("TRIMRANGE", "Lookup", "TRIMRANGE(range, [trim_rows], [trim_cols])", "A range or array without its blank outer rows and columns."),
+        (
+            "GETPIVOTDATA",
+            "Lookup",
+            "GETPIVOTDATA(data_field, pivot_table, [field1, item1], ...)",
+            "A value from a PivotTable report, by value field and items.",
+        ),
         ("ISOMITTED", "Information", "ISOMITTED(argument)", "TRUE when a LAMBDA argument was left out."),
     ];
     for (n, c, sig, d) in specials {

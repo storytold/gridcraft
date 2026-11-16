@@ -3,6 +3,8 @@
 /// Returns the French translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagramme",
+        "Decorative Text" => "Texte décoratif",
         "Different First Page" => "Première page différente",
         "Different Odd & Even Pages" => "Pages paires et impaires différentes",
         "Scale with Document" => "Mettre à l'échelle avec le document",
@@ -368,6 +370,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Enregistrer",
         "Save As" => "Enregistrer sous",
         "Export" => "Exporter",
+        "Minimize" => "Réduire",
+        "Maximize" => "Agrandir",
+        "Restore Down" => "Restaurer",
         "Close" => "Fermer",
         "Options" => "Options",
         "Account" => "Compte",
