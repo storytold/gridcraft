@@ -316,6 +316,29 @@ fn named_entity(name: &str) -> Option<char> {
     Some(c)
 }
 
+/// The numeric reference `text` starts with (`&#49;`, `&#x31;`, leading zeros allowed) and the text
+/// after it. `None` when there is none, or it names no character.
+fn numeric_reference(text: &str) -> Option<(char, &str)> {
+    let body = text.strip_prefix("&#")?;
+    let (radix, digits) = match body.strip_prefix(['x', 'X']) {
+        Some(hex) => (16, hex),
+        None => (10, body),
+    };
+    let len = digits.bytes().take_while(|b| (*b as char).is_digit(radix)).count();
+    let number = digits.get(..len).filter(|n| !n.is_empty())?;
+    let after = digits.get(len..)?.strip_prefix(';')?;
+    let significant = number.trim_start_matches('0');
+    // More significant digits than any character has can't name one (and would overflow).
+    let value = if significant.is_empty() {
+        0
+    } else if significant.len() > 8 {
+        return None;
+    } else {
+        u32::from_str_radix(significant, radix).ok()?
+    };
+    Some((char::from_u32(value)?, after))
+}
+
 /// `raw` with its character references decoded (named, decimal and hex), whitespace as it is: an
 /// attribute such as a link's `href` keeps it, as a sheet name's two spaces are part of the name.
 fn decode_entities(raw: &str) -> String {
@@ -324,6 +347,14 @@ fn decode_entities(raw: &str) -> String {
     while let Some(amp) = rest.find('&') {
         out.push_str(rest.get(..amp).unwrap_or_default());
         rest = rest.get(amp..).unwrap_or_default();
+        // A numeric reference may carry any number of leading zeros (`&#00000000049;` is `1`), so
+        // its digits are read to their end rather than within the window. They hold no `&`, so the
+        // text is still read once.
+        if let Some((c, after)) = numeric_reference(rest) {
+            out.push(c);
+            rest = after;
+            continue;
+        }
         // `.min(len)` (not an `unwrap_or(rest)`) — a `get(..12)` that fails on a multibyte
         // boundary used to fall back to the complete suffix, re-scanning per '&'.
         // Searched as bytes: a window that ends inside a multibyte character (`&eacute;☕☕`) would
@@ -459,6 +490,11 @@ mod tests {
         assert_eq!(decode("Caf&eacute;☕☕"), "Café☕☕");
         assert_eq!(decode("&amp;☕☕☕ &#233;☕☕☕"), "&☕☕☕ é☕☕☕");
         assert_eq!(decode_entities("#'Caf&eacute;☕☕'!C3"), "#'Café☕☕'!C3");
+        // Leading zeros are allowed in a numeric reference however many there are.
+        assert_eq!(decode_entities("https://example.com/&#00000000049;"), "https://example.com/1");
+        assert_eq!(decode("&#x000000000041;&#0000000233;"), "Aé");
+        // Too many significant digits, no digits, or no semicolon: kept as written.
+        assert_eq!(decode("&#99999999999; &#; &#x; &#49"), "&#99999999999; &#; &#x; &#49");
         // A name that isn't one stays as written.
         assert_eq!(decode("&foo; &eacutex;"), "&foo; &eacutex;");
         // Decoding alone keeps whitespace; the cell text collapses it.
