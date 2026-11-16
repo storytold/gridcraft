@@ -324,3 +324,71 @@ fn xlsb_phonetic_runs_use_documented_size_and_tolerate_padding() {
     }
     assert!(read_xlsb(&file(&worksheet(&[row(0), cell(62, 0, &phonetic(2, 12))].concat(), &[]))).is_err());
 }
+
+/// A workbook part listing `sheets` as (relationship, name, visibility), with a book view whose
+/// active tab is `active` when given.
+fn book_with_view(sheets: &[(Option<&str>, &str, u32)], active: Option<u32>) -> Vec<u8> {
+    let mut out = record(131, &[]);
+    if let Some(tab) = active {
+        // BrtBeginBookViews, BrtBookView (xWn, yWn, dxWn, dyWn, iTabRatio, itabFirst, itabCur, flags),
+        // BrtEndBookViews.
+        out.extend(record(135, &[]));
+        let mut view = Vec::new();
+        for v in [240u32, 105, 14_805, 8_010, 600, 0, tab] {
+            view.extend(v.to_le_bytes());
+        }
+        view.push(0x78);
+        out.extend(record(158, &view));
+        out.extend(record(136, &[]));
+    }
+    let mut props = 0u32.to_le_bytes().to_vec();
+    props.extend(0u32.to_le_bytes());
+    props.extend(wide(""));
+    out.extend(record(153, &props));
+    out.extend(record(143, &[]));
+    for (i, (rel, name, state)) in sheets.iter().enumerate() {
+        let mut data = state.to_le_bytes().to_vec();
+        data.extend((i as u32 + 1).to_le_bytes());
+        match rel {
+            Some(rel) => data.extend(wide(rel)),
+            None => data.extend(u32::MAX.to_le_bytes()),
+        }
+        data.extend(wide(name));
+        out.extend(record(156, &data));
+    }
+    out.extend(record(144, &[]));
+    out.extend(record(132, &[]));
+    out
+}
+
+#[test]
+fn xlsb_opens_on_the_sheet_it_was_saved_on() {
+    // #4300: Excel saves the active tab in the workbook's first book view (`itabCur`).
+    let first = worksheet(&[row(0), cell(8, 0, &wide("FIRST"))].concat(), &[]);
+    let open = |book: Vec<u8>| {
+        let bytes = make_zip(&[
+            ("[Content_Types].xml", TYPES.as_bytes()),
+            ("_rels/.rels", ROOT.as_bytes()),
+            ("records/book.bin", &book),
+            ("records/_rels/book.bin.rels", RELS.as_bytes()),
+            ("data/one.bin", &first),
+            ("data/two.bin", &worksheet(&[row(0), cell(8, 0, &wide("SECOND"))].concat(), &[])),
+            ("text/strings.bin", &sst()),
+        ]);
+        let (wb, _) = read_xlsb(&bytes).unwrap();
+        wb.active().map(|s| s.name.clone()).unwrap()
+    };
+    let two = [(Some("one"), "First", 0), (Some("two"), "Second", 0)];
+    assert_eq!(open(book_with_view(&two, Some(1))), "Second");
+    assert_eq!(open(book_with_view(&two, Some(0))), "First");
+    // No book view, an index past the list, or a hidden tab: the first visible sheet, as before.
+    assert_eq!(open(book_with_view(&two, None)), "First");
+    assert_eq!(open(book_with_view(&two, Some(7))), "First");
+    assert_eq!(open(book_with_view(&[(Some("one"), "First", 0), (Some("two"), "Second", 1)], Some(1))), "First");
+    // The index counts a module sheet the import skips: tab 2 is the second imported sheet.
+    let with_module = [(None, "Module1", 2), (Some("one"), "First", 0), (Some("two"), "Second", 0)];
+    assert_eq!(open(book_with_view(&with_module, Some(2))), "Second");
+    assert_eq!(open(book_with_view(&with_module, Some(1))), "First");
+    // The module sheet itself can't be active: fall back to the first visible sheet.
+    assert_eq!(open(book_with_view(&with_module, Some(0))), "First");
+}
