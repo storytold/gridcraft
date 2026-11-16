@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-13 · **Change:** minor (§5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-18 · **Change:** minor (§2: defined names are static precedents; earlier: §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -29,7 +29,18 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Missing:** streaming read for ~100 MB XLSX; multi-threaded recalc; 100k-dependent edit under
   100 ms (was ~0.4 s); whole-sheet operations bounded.
 - **Evidence:** #175; no threading in `crates/calc`; PR #152 (whole-sheet Fill/Remove Duplicates
-  out of memory), PR #151 (current region past 10,000 rows).
+  out of memory), PR #151 (current region past 10,000 rows). Landed 2026-11-18: formulas
+  referencing most defined names, or using LET variables or LAMBDA parameters (also volatile
+  before), are static dependencies (were volatile: a 49K-cell column of LAMBDA calls recalculated
+  on every edit; each name is resolved once per graph build and sheet, so a definition mentioning
+  another name many times costs its size, not k^depth), names parsed once per pass (up to 1 MiB of
+  definitions), `TEXT(n,"0")` fast path; on a 2011 four-core iMac (i5-2500S, Linux, release build)
+  a LAMBDA-heavy workbook of 51,014 formulas opens in ~75 s instead of ~302 s, and a one-cell edit
+  recalculates 2 formulas in under 1 s instead of 49,098 in ~295 s; a lookup-heavy workbook of
+  41,232 formulas opens in ~18 s instead of ~34 s, and a one-cell edit recalculates 2 formulas in
+  under 1 s instead of 37,401 in ~34 s (measured 2026-11-18). A formula reading cells of its own
+  spill through a defined name still loops as on main and is not reported as a circular reference
+  (#4470). Still single-threaded, and cached values are still ignored on open.
 - **Impact:** finance and data users routinely have big workbooks.
 - **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
@@ -196,6 +207,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | §2: names as static precedents, per-pass name parse cache, TEXT fast path; measured ~302 s → ~75 s open, ~295 s → under 1 s edit on a LAMBDA-heavy workbook of 51,014 formulas |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
