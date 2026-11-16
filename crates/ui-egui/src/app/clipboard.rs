@@ -143,6 +143,7 @@ fn encode_png(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
 
 /// Converts record separators (row endings) in TSV text to CRLF for the Windows clipboard,
 /// while leaving newlines inside quoted cells unchanged.
+#[allow(clippy::collapsible_if)]
 pub(crate) fn tsv_to_crlf(tsv: &str) -> String {
     let mut out = String::with_capacity(tsv.len().saturating_add(16));
     let mut rest = tsv;
