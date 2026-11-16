@@ -326,7 +326,10 @@ fn decode_entities(raw: &str) -> String {
         rest = rest.get(amp..).unwrap_or_default();
         // `.min(len)` (not an `unwrap_or(rest)`) — a `get(..12)` that fails on a multibyte
         // boundary used to fall back to the complete suffix, re-scanning per '&'.
-        let semi = rest.get(..ENTITY_WINDOW.min(rest.len())).and_then(|w| w.find(';'));
+        // Searched as bytes: a window that ends inside a multibyte character (`&eacute;☕☕`) would
+        // make a `str` slice fail and leave the reference undecoded. `;` is ASCII, so the byte it is
+        // found at is a character boundary.
+        let semi = rest.as_bytes().get(..ENTITY_WINDOW.min(rest.len())).and_then(|w| w.iter().position(|&b| b == b';'));
         let entity = semi.and_then(|e| rest.get(1..e));
         let ch = entity.and_then(|e| match named_entity(e) {
             Some(c) => Some(c),
@@ -452,6 +455,10 @@ mod tests {
     fn named_references_cover_latin_1_and_attributes_keep_their_spacing() {
         assert_eq!(decode("Caf&eacute; &Agrave; &yuml; &nbsp;&euro;&hellip;"), "Café À ÿ \u{a0}€…");
         assert_eq!(decode("&iexcl;&szlig;&times;&divide;&THORN;"), "¡ß×÷Þ");
+        // A window that ends inside a multibyte character still finds the semicolon.
+        assert_eq!(decode("Caf&eacute;☕☕"), "Café☕☕");
+        assert_eq!(decode("&amp;☕☕☕ &#233;☕☕☕"), "&☕☕☕ é☕☕☕");
+        assert_eq!(decode_entities("#'Caf&eacute;☕☕'!C3"), "#'Café☕☕'!C3");
         // A name that isn't one stays as written.
         assert_eq!(decode("&foo; &eacutex;"), "&foo; &eacutex;");
         // Decoding alone keeps whitespace; the cell text collapses it.
