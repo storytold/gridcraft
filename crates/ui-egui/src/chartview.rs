@@ -298,9 +298,12 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         return painted;
     }
     // Source outlines stay in cell space beneath every floating object.
-    if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart() == Some(ch.id))
+    if let Some((_, data)) = selected_chart_data(app, geo, wb, si, sh, p.clip_rect()) {
+        paint_chart_data(p, geo, sh, &data);
+    } else if let Some(ch) = sh.charts.iter().find(|ch| app.selected_chart() == Some(ch.id))
         && anchor_rect(geo, sh, &ch.anchor).intersects(p.clip_rect())
     {
+        // Series that are not one block of cells: each series' values on this sheet.
         for s in &ch.series {
             if let Ok(gridcraft_engine::formula::Expr::Ref(rf)) = gridcraft_engine::formula::parse(&s.values)
                 && rf.sheet_name().is_none_or(|n| n.eq_ignore_ascii_case(&sh.name))
@@ -548,6 +551,78 @@ fn selection_frame(p: &Painter, r: Rect) {
         p.circle_filled(c, 4.0, t.sheet_control_bg);
         p.circle_stroke(c, 4.0, Stroke::new(1.0, t.sheet_control_border));
     }
+}
+
+/// How far from a corner of a selected chart's values outline a press still grabs it.
+const DATA_HANDLE_REACH: f32 = 6.0;
+/// The corners of a values outline, which drag it (#4389).
+const DATA_HANDLES: [crate::objects::Handle; 4] =
+    [crate::objects::Handle::TopLeft, crate::objects::Handle::TopRight, crate::objects::Handle::BottomLeft, crate::objects::Handle::BottomRight];
+
+/// The selected chart and its data as blocks on sheet `si` (`sh`), while the chart lies on screen
+/// within `clip`: the blocks a drag of its values outline previews, else where they are. `None`
+/// when no chart is selected, its data is on another sheet or its series are not one block.
+pub(crate) fn selected_chart_data(
+    app: &SheetApp,
+    geo: &Geo,
+    wb: &Workbook,
+    si: usize,
+    sh: &Sheet,
+    clip: Rect,
+) -> Option<(u32, gridcraft_engine::chart_data::ChartData)> {
+    if objects_hidden(wb) {
+        return None;
+    }
+    let id = app.selected_chart()?;
+    let ch = sh.charts.iter().find(|ch| ch.id == id)?;
+    if !anchor_rect(geo, sh, &ch.anchor).intersects(clip) {
+        return None;
+    }
+    let data = gridcraft_engine::chart_data::chart_data(wb, si, ch).filter(|d| d.sheet == si)?;
+    Some(match app.grid.drag {
+        crate::grid::Drag::ChartData { chart, to: Some(to), .. } if chart == id => (id, data.moved(to)),
+        _ => (id, data),
+    })
+}
+
+/// Outlines a chart's data as Excel does: series names in red, category labels in purple and
+/// values in blue (#4390), with a handle on each corner of the values (#4389). Each pane clips
+/// its own part, so frozen panes show the block once.
+fn paint_chart_data(p: &Painter, geo: &Geo, sh: &Sheet, data: &gridcraft_engine::chart_data::ChartData) {
+    let t = Tokens::get(p.ctx());
+    let blocks = [(data.names, 1, false), (data.categories, 2, false), (Some(data.values), 0, true)];
+    for (range, color, handles) in blocks.into_iter().filter_map(|(r, c, h)| r.map(|r| (r, t.ref_color(c, true), h))) {
+        let rr = geo.range_rect(sh, range);
+        for pane in geo.range_panes(range) {
+            let pp = p.with_clip_rect(pane.intersect(p.clip_rect()));
+            pp.rect_stroke(rr, 0.0, Stroke::new(1.5, color), StrokeKind::Inside);
+            if handles {
+                for h in DATA_HANDLES {
+                    let at = h.pos(rr);
+                    pp.rect_filled(Rect::from_center_size(at, vec2(7.0, 7.0)), 0.0, Color32::WHITE);
+                    pp.rect_filled(Rect::from_center_size(at, vec2(5.0, 5.0)), 0.0, color);
+                }
+            }
+        }
+    }
+}
+
+/// The corner of the selected chart's values outline under `p`, with the chart and its values
+/// block. Like [`hit`], only over the cell area and while objects show; the caller asks
+/// [`hit`] first, since objects paint over the outline.
+pub fn chart_data_handle(app: &SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) -> Option<(u32, gridcraft_engine::core::RangeRef, crate::objects::Handle)> {
+    if !geo.cells.contains(p) {
+        return None;
+    }
+    let wb = &app.session.active()?.wb;
+    let (id, data) = selected_chart_data(app, geo, wb, wb.active_sheet(), sh, geo.cells)?;
+    let rr = geo.range_rect(sh, data.values);
+    DATA_HANDLES
+        .into_iter()
+        .map(|h| (h, h.pos(rr).distance(p)))
+        .filter(|(_, d)| *d <= DATA_HANDLE_REACH)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(h, _)| (id, data.values, h))
 }
 
 /// Where object `o` sits on the sheet (logical coordinates), when it exists on `sh`.

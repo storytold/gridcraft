@@ -6624,6 +6624,7 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod chart_data;
 mod controls;
 mod equation;
 mod json_golden;

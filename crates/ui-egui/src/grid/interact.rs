@@ -157,6 +157,20 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
             }
             return;
         }
+        // A corner of the selected chart's values outline drags the block the chart plots
+        // (#4389); a click on it keeps the chart selected.
+        if let Some(p) = at
+            && app.editor.is_none()
+            && let Some((chart, orig, corner)) = crate::chartview::chart_data_handle(app, geo, sh, p)
+        {
+            if primary_drag {
+                app.grid.drag = Drag::ChartData { chart, orig, corner, to: None };
+                if let Some(now) = pos {
+                    drag_chart_data(app, geo, sh, now);
+                }
+            }
+            return;
+        }
         app.selected_object = None;
     }
     // A right-click on a chart, picture, shape, slicer or form control opens the object's menu, not
@@ -743,6 +757,10 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 scroll_by(app, auto);
             }
             Drag::Object { .. } => drag_object(app, geo, sh, p),
+            Drag::ChartData { .. } => {
+                drag_chart_data(app, geo, sh, p);
+                scroll_by(app, auto);
+            }
             Drag::None => {}
         }
     }
@@ -821,6 +839,12 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 if rows != format!("{}:{}", row + 1, row + 1) {
                     let _ = app.session.run("home.rowHeight", json!({"rows": rows, "height": h.round()}));
                     coalesce_resize_undo(app);
+                }
+            }
+            // Esc ends the drag too (egui stops it), and leaves the chart as it was.
+            Drag::ChartData { chart, orig, to: Some(to), .. } => {
+                if to != orig && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                    app.run_or_alert("chart.setValuesRange", json!({"chart": chart, "range": to.a1()}));
                 }
             }
             Drag::MoveCols { source, before: Some(before) } => {
@@ -1186,6 +1210,20 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
         // The first step of this drag stays apart from an earlier drag's step of the same name.
         *stepped = true;
     }
+}
+
+/// Previews the selected chart's values block with the grabbed corner on the cell under `p`
+/// (logical coordinates); the opposite corner stays, and the block may flip past it as a
+/// selection does. The release gives the chart the block (`chart.setValuesRange`).
+fn drag_chart_data(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
+    let Drag::ChartData { chart, orig, corner, .. } = app.grid.drag else { return };
+    let (sx, sy) = corner.sides();
+    let fixed = CellRef::new(if sy < 0 { orig.end.row } else { orig.start.row }, if sx < 0 { orig.end.col } else { orig.start.col });
+    let at = CellRef::new(
+        geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
+        geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
+    );
+    app.grid.drag = Drag::ChartData { chart, orig, corner, to: Some(RangeRef::new(fixed, at)) };
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
