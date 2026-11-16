@@ -179,6 +179,25 @@ fn spread() {
 }
 
 #[test]
+fn quartile_inc_refuses_negative_fractions() {
+    // Native Excel (#4279): a quart just below zero is #NUM!, in QUARTILE, QUARTILE.INC and
+    // AGGREGATE 17; zero and small positive quarts are quartile 0.
+    let d = || c(&[10.0, 20.0, 30.0, 40.0]);
+    let vals = [nv(10.0), nv(20.0), nv(30.0), nv(40.0)];
+    for q in [-0.9999, -0.1, -0.0001, -1.0] {
+        is_err(ev("QUARTILE.INC", vec![d(), n(q)]), CellError::Num);
+        is_err(ev("QUARTILE", vec![d(), n(q)]), CellError::Num);
+        is_err(aggregate_values_k(17, &vals, &nv(q)), CellError::Num);
+    }
+    for q in [0.0, 0.0001, 0.9999] {
+        close(ev("QUARTILE.INC", vec![d(), n(q)]), 10.0);
+        close(ev("QUARTILE", vec![d(), n(q)]), 10.0);
+        close(aggregate_values_k(17, &vals, &nv(q)), 10.0);
+    }
+    is_err(ev("QUARTILE.INC", vec![d(), n(5.0)]), CellError::Num);
+}
+
+#[test]
 fn min_max_order() {
     close(ev("MIN", vec![c(&[3.0, -1.0, 2.0]), n(0.0)]), -1.0);
     close(ev("MAX", vec![c(&[3.0, -1.0, 2.0]), n(10.0)]), 10.0);

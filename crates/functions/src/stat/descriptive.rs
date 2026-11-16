@@ -210,6 +210,10 @@ pub(super) fn percentile_exc(v: Vec<f64>, k: f64) -> R<f64> {
 }
 
 pub(super) fn quartile_inc(v: Vec<f64>, q: f64) -> R<f64> {
+    // A negative quart is refused before truncating, so -0.1 doesn't become quartile 0 (#4279).
+    if q < 0.0 {
+        return Err(CellError::Num);
+    }
     let q = q.trunc();
     if !(0.0..=4.0).contains(&q) {
         return Err(CellError::Num);
