@@ -603,12 +603,23 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         ed.point_anchor = None;
         // Typing ends the pointing: the next arrow starts again from the edited cell, as in Excel.
         ed.point_cell = None;
-        let names: Vec<String> = function_names()
+        let mut names: Vec<String> = function_names()
             .iter()
             .map(|name| {
                 app.session.active().map(|d| crate::formula_locale::completion_name(name, ed.locale, &d.wb, ed.sheet)).unwrap_or(name).to_string()
             })
             .collect();
+        if let Some(d) = app.session.active() {
+            names.extend(
+                d.wb.names
+                    .iter()
+                    .filter(|n| n.scope.is_none() || n.scope == Some(ed.sheet))
+                    .filter(|n| custom_lambda(&d.wb, ed.sheet, &n.name, ed.locale).is_some())
+                    .map(|n| n.name.clone()),
+            );
+        }
+        names.sort_by_cached_key(|n| n.to_ascii_uppercase());
+        names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         ed.update_autocomplete(&names);
         app.session.mode = if ed.can_point() {
             gridcraft_engine::Mode::Point
@@ -931,6 +942,36 @@ pub fn function_description(name: &str) -> Option<String> {
     function_info(name).and_then(|f| f["description"].as_str().map(str::to_string))
 }
 
+fn custom_lambda(
+    wb: &gridcraft_engine::model::Workbook,
+    sheet: usize,
+    name: &str,
+    locale: gridcraft_engine::formula::FormulaLocale,
+) -> Option<(String, String)> {
+    let n = wb.name(name, sheet)?;
+    if n.hidden {
+        return None;
+    }
+    let gridcraft_engine::formula::Expr::Call(head, args) = gridcraft_engine::formula::parse_name(&n.formula).ok()? else { return None };
+    if !head.eq_ignore_ascii_case("LAMBDA") {
+        return None;
+    }
+    let params: Vec<String> = args
+        .iter()
+        .take(args.len().saturating_sub(1))
+        .filter_map(|arg| match arg {
+            gridcraft_engine::formula::Expr::Name(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect();
+    Some((format!("{}({})", n.name, params.join(&format!("{} ", locale.list_separator()))), n.comment.clone()))
+}
+
+fn custom_lambda_here(app: &SheetApp, ed: &crate::editor::EditState, name: &str) -> Option<(String, String)> {
+    let d = app.session.active()?;
+    custom_lambda(&d.wb, ed.sheet, name, ed.locale)
+}
+
 #[cfg(test)]
 mod spill_tests {
     use super::*;
@@ -940,6 +981,37 @@ mod spill_tests {
         let mut s = Session::new();
         s.new_workbook();
         SheetApp::new(s, Default::default())
+    }
+
+    #[test]
+    fn custom_lambda_uses_the_edit_locale_separator() {
+        let mut wb = gridcraft_engine::model::Workbook::new();
+        wb.names.push(gridcraft_engine::model::DefinedName {
+            name: "BI_Rate".into(),
+            scope: None,
+            formula: "LAMBDA(amount,rate,amount*rate)".into(),
+            comment: "Applies a rate".into(),
+            hidden: false,
+        });
+
+        assert_eq!(
+            custom_lambda(&wb, 0, "BI_Rate", gridcraft_engine::formula::FormulaLocale::Es),
+            Some(("BI_Rate(amount; rate)".into(), "Applies a rate".into()))
+        );
+    }
+
+    #[test]
+    fn custom_lambda_hides_the_effective_name() {
+        let mut wb = gridcraft_engine::model::Workbook::new();
+        wb.names.push(gridcraft_engine::model::DefinedName {
+            name: "BI_HiddenRate".into(),
+            scope: None,
+            formula: "LAMBDA(rate,rate)".into(),
+            comment: "Private".into(),
+            hidden: true,
+        });
+
+        assert_eq!(custom_lambda(&wb, 0, "BI_HiddenRate", gridcraft_engine::formula::FormulaLocale::En), None);
     }
 
     fn set(app: &mut SheetApp, cell: &str, input: &str) {
@@ -1170,6 +1242,7 @@ fn show_editor_suggestions(ui: &mut egui::Ui, suggestion: EditorSuggestion<'_>) 
         egui::Area::new(id.with("ac")).fixed_pos(below).constrain_to(bounds).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
                 if !ed.autocomplete.is_empty() {
+                    let selected_lambda = ed.autocomplete.get(ed.ac_index).and_then(|n| custom_lambda_here(app, ed, n));
                     let mut pick = None;
                     for (i, n) in ed.autocomplete.iter().enumerate() {
                         let sel = i == ed.ac_index;
@@ -1180,11 +1253,20 @@ fn show_editor_suggestions(ui: &mut egui::Ui, suggestion: EditorSuggestion<'_>) 
                         if r.clicked() {
                             pick = Some(i);
                         }
-                        if sel && let Some(desc) = crate::formula_locale::description(n, ed.locale, language) {
+                        if sel
+                            && let Some(desc) = selected_lambda
+                                .as_ref()
+                                .map(|(_, description)| description.clone())
+                                .or_else(|| crate::formula_locale::description(n, ed.locale, language))
+                        {
                             r.on_hover_text(desc);
                         }
                     }
-                    if let Some(desc) = ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale, language)) {
+                    if let Some(desc) = selected_lambda
+                        .as_ref()
+                        .map(|(_, description)| description.clone())
+                        .or_else(|| ed.autocomplete.get(ed.ac_index).and_then(|n| crate::formula_locale::description(n, ed.locale, language)))
+                    {
                         ui.separator();
                         ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
                     }
@@ -1193,31 +1275,40 @@ fn show_editor_suggestions(ui: &mut egui::Ui, suggestion: EditorSuggestion<'_>) 
                         ed.accept_autocomplete();
                         ed.request_focus = true;
                     }
-                } else if let Some((name, arg)) = ed.current_function()
-                    && let Some(sig) = crate::formula_locale::signature(&name, ed.locale, language)
-                {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.x = 0.0;
-                        let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
-                        ui.label(egui::RichText::new(format!("{head}(")).font(theme::ui_font(12.0)));
-                        let inner = rest.trim_end_matches(')');
-                        let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
-                        for (i, part) in parts.iter().enumerate() {
-                            let is_cur = i == arg.min(parts.len().saturating_sub(1)) || (part.contains("...") && arg >= i);
-                            let txt = egui::RichText::new(*part).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
-                            ui.label(txt);
-                            if i + 1 < parts.len() {
-                                ui.label(egui::RichText::new(format!("{} ", ed.locale.list_separator())).font(theme::ui_font(12.0)));
+                } else if let Some((name, arg)) = ed.current_function() {
+                    let lambda = custom_lambda_here(app, ed, &name);
+                    if let Some(sig) = lambda
+                        .as_ref()
+                        .map(|(signature, _)| signature.clone())
+                        .or_else(|| crate::formula_locale::signature(&name, ed.locale, language))
+                    {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            let (head, rest) = sig.split_once('(').unwrap_or((&sig, ""));
+                            ui.label(egui::RichText::new(format!("{head}(")).font(theme::ui_font(12.0)));
+                            let inner = rest.trim_end_matches(')');
+                            let parts: Vec<&str> = inner.split(&format!("{} ", ed.locale.list_separator())).collect();
+                            for (i, part) in parts.iter().enumerate() {
+                                let is_cur = i == arg.min(parts.len().saturating_sub(1)) || (part.contains("...") && arg >= i);
+                                let txt = egui::RichText::new(*part).font(if is_cur { theme::ui_bold(12.0) } else { theme::ui_font(12.0) });
+                                ui.label(txt);
+                                if i + 1 < parts.len() {
+                                    ui.label(egui::RichText::new(format!("{} ", ed.locale.list_separator())).font(theme::ui_font(12.0)));
+                                }
                             }
+                            ui.label(egui::RichText::new(")").font(theme::ui_font(12.0)));
+                        });
+                        // The description too, so values an argument takes (DATEDIF's units, #363) show
+                        // while it's typed; wrapped to the hint's width.
+                        if let Some(desc) = lambda
+                            .as_ref()
+                            .map(|(_, description)| description.clone())
+                            .or_else(|| crate::formula_locale::description(&name, ed.locale, language))
+                        {
+                            ui.set_max_width(ui.min_rect().width().max(220.0));
+                            ui.separator();
+                            ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
                         }
-                        ui.label(egui::RichText::new(")").font(theme::ui_font(12.0)));
-                    });
-                    // The description too, so values an argument takes (DATEDIF's units, #363) show
-                    // while it's typed; wrapped to the hint's width.
-                    if let Some(desc) = crate::formula_locale::description(&name, ed.locale, language) {
-                        ui.set_max_width(ui.min_rect().width().max(220.0));
-                        ui.separator();
-                        ui.add(egui::Label::new(egui::RichText::new(desc).small()).wrap());
                     }
                 }
             });
