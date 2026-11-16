@@ -40,7 +40,7 @@ craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0
 # turn them into workbooks.
 craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 # The native JSON workbook (`.json`, `.scjson`): read, written, and kept newer macros written back.
-craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "1ff72a0445f370cdaba156ecb87013badbb58147", version = "0.1.0" }
+craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "9a6d894200221fcfedc274870c30394d404f859d", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 

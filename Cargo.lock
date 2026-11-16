@@ -940,7 +940,7 @@ source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7e
 [[package]]
 name = "craft-gridcraft-format"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=1ff72a0445f370cdaba156ecb87013badbb58147#1ff72a0445f370cdaba156ecb87013badbb58147"
+source = "git+https://github.com/storytold/craft-libs?rev=9a6d894200221fcfedc274870c30394d404f859d#9a6d894200221fcfedc274870c30394d404f859d"
 dependencies = [
  "serde",
  "serde_json",
