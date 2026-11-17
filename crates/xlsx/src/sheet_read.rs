@@ -268,6 +268,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                 }
                 // `downThenOver` when absent (ECMA-376's default); an unknown value reads as that too.
                 sheet.print.page_order = e.attr("pageOrder").and_then(PageOrder::parse).unwrap_or_default();
+                // The number counts only when `useFirstPageNumber` says so; otherwise it's Automatic.
+                sheet.print.first_page_number = e.flag("useFirstPageNumber", false).then(|| e.attr_u32("firstPageNumber")).flatten();
                 if let Some(p) = e.attr_u32("paperSize").and_then(paper_name) {
                     sheet.print.paper = p.to_string();
                 }
