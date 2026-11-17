@@ -23,6 +23,8 @@ craft-csv = { workspace = true }
 craft-offcrypto = { workspace = true }
 craft-opc = { workspace = true }
 craft-xls = { workspace = true }
+craft-xml = { workspace = true }
+craft-xlsx = { workspace = true }
 thiserror = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
