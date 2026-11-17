@@ -1104,16 +1104,23 @@ pub struct AutoFilter {
 impl AutoFilter {
     /// Moves the criteria and hidden arrows, which are column offsets in the range, with an edit
     /// that moved the range from `old` to `self.range`: `map` gives a range's place after the edit
-    /// (None when it was deleted). Each column is followed through its strip of the range, so
-    /// deleting the header row keeps it; a column that was deleted, or that the edit split or
-    /// moved out of the range, loses its criterion and its hidden arrow.
+    /// (None when it was deleted). Each column is followed through its cells in the range, so
+    /// deleting the header row keeps it. A column that was deleted, moved out of the range, or
+    /// split (an insert of cells that moved some of its rows and not the others) loses its
+    /// criterion and its hidden arrow.
     pub fn remap_columns(&mut self, old: RangeRef, mut map: impl FnMut(RangeRef) -> Option<RangeRef>) {
         let new = self.range;
         let mut offset = |o: u32| {
             let col = old.start.col.checked_add(o)?;
-            map(RangeRef::new(CellRef::new(old.start.row, col), CellRef::new(old.end.row, col)))
-                .filter(|r| r.start.col == r.end.col && (new.start.col..=new.end.col).contains(&r.start.col))
-                .map(|r| r.start.col - new.start.col)
+            let mut landed: Option<u32> = None;
+            for row in old.start.row..=old.end.row {
+                let Some(r) = map(RangeRef::cell(CellRef::new(row, col))) else { continue };
+                match landed {
+                    Some(c) if c != r.start.col => return None,
+                    _ => landed = Some(r.start.col),
+                }
+            }
+            landed.filter(|c| (new.start.col..=new.end.col).contains(c)).map(|c| c - new.start.col)
         };
         self.criteria = std::mem::take(&mut self.criteria).into_iter().filter_map(|(o, c)| Some((offset(o)?, c))).collect();
         self.hidden_buttons = std::mem::take(&mut self.hidden_buttons).into_iter().filter_map(&mut offset).collect();

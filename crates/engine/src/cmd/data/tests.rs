@@ -589,4 +589,9 @@ fn autofilter_criteria_and_hidden_arrows_follow_their_columns() {
     s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
     let a = af(&s);
     assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:C2"), vec![(2, crit)], vec![0, 2]));
+    // Cells inserted over part of a column (C1 alone, shifted right) split it: its criterion and
+    // arrow go, as they name no one column any more; A's arrow stays (CodeRabbit's review).
+    s.execute("home.insertCells", json!({"range": "C1", "shift": "right"})).unwrap();
+    let a = af(&s);
+    assert!(a.criteria.is_empty() && a.hidden_buttons == vec![0], "{a:?}");
 }
