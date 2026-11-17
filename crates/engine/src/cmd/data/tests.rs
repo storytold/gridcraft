@@ -31,6 +31,34 @@ fn subtotal_honours_header_false() {
     assert_eq!(get(&mut s, "B7")["value"], json!(100.0), "the grand total counts every data row");
 }
 
+/// #4268: the grand total's range ends at the last data row, as Excel writes it, so a value
+/// typed over the last group's total doesn't change the grand total, as one typed over any other
+/// group's total doesn't.
+#[test]
+fn subtotal_grand_total_ends_at_the_last_data_row() {
+    // (function, SUBTOTAL code, label, grand total, after B6 = 100, after B6 = =50+50, after B4 = 100)
+    for (function, code, label, steps) in
+        [("sum", 9, "Total", [60.0, 60.0, 60.0, 160.0]), ("count", 3, "Count", [3.0, 3.0, 3.0, 4.0]), ("max", 4, "Max", [30.0, 30.0, 30.0, 100.0])]
+    {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"], ["A", 10], ["A", 20], ["B", 30]]})).unwrap();
+        s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["B"], "function": function})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "A7")["text"], json!(format!("Grand {label}")));
+        assert_eq!(get(&mut s, "B4")["formula"], json!(format!("=SUBTOTAL({code},B2:B3)")), "{function}");
+        assert_eq!(get(&mut s, "B6")["formula"], json!(format!("=SUBTOTAL({code},B5)")), "{function}");
+        assert_eq!(get(&mut s, "B7")["formula"], json!(format!("=SUBTOTAL({code},B2:B5)")), "{function}");
+        assert_eq!(get(&mut s, "B7")["value"], json!(steps[0]), "{function}");
+        // A value over the last group's total doesn't reach the grand total, as one over the
+        // first group's total does (it isn't a nested SUBTOTAL any more), in both apps.
+        for ((cell, input), want) in [("B6", "100"), ("B6", "=50+50"), ("B4", "100")].into_iter().zip(&steps[1..]) {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+            assert_eq!(get(&mut s, "B7")["value"], json!(want), "{function}: {cell} = {input}");
+        }
+    }
+}
+
 #[test]
 fn subtotal_puts_summary_rows_below_their_detail() {
     let mut s = Session::new();

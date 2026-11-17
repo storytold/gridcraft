@@ -279,8 +279,11 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let lbl = CellRef::new(last, group_col).a1();
     s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", last + 1, last + 1)}))?;
     s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("Grand {label}")}))?;
+    // The grand total's range ends at the last group's last data row, above that group's total,
+    // as Excel writes it: a value typed over that total doesn't reach the grand total, as a value
+    // typed over any other group's total doesn't either (SUBTOTAL skips only nested SUBTOTALs).
     for c in &cols {
-        let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
+        let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 2, *c)).a1();
         s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
     }
     // One outer group over every data and subtotal row, summarised by the grand total, as in
