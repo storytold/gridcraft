@@ -74,8 +74,21 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                     .filter_map(move |col| sh.hyperlinks.get(&CellRef::new(*row, col)).map(|h| (CellRef::new(start + i as u32, col), h.clone())))
             })
             .collect();
+        // A kept row moves up to `start + i`; its formulas' relative references move with it, as
+        // in Sort and in Excel, so `=B4*2` moved to row 3 reads `=B3*2` (#3734).
+        let moved = |row: u32, to: u32, c: u32| {
+            let mut cell = sh.cell(CellRef::new(row, c)).cloned()?;
+            if to != row
+                && let Some(f) = cell.formula.as_deref()
+                && let Some(e) = f.expr()
+            {
+                let shifted = gridcraft_model::Formula::from_expr(gridcraft_formula::adjust::shift_relative(e, i64::from(to) - i64::from(row), 0));
+                cell.formula = Some(std::sync::Arc::new(gridcraft_model::Formula { array: f.array, dynamic: f.dynamic, ..shifted }));
+            }
+            Some(cell)
+        };
         let rows: Vec<Vec<Option<Cell>>> =
-            keep.iter().map(|row| (r.start.col..=r.end.col).map(|c| sh.cell(CellRef::new(*row, c)).cloned()).collect()).collect();
+            keep.iter().enumerate().map(|(i, row)| (r.start.col..=r.end.col).map(|c| moved(*row, start + i as u32, c)).collect()).collect();
         let shm = cx.sheet_mut(sheet)?;
         for row in start..=r.end.row {
             for c in r.start.col..=r.end.col {
