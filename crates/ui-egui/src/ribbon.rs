@@ -28,7 +28,7 @@ mod view;
 
 use automate::automate;
 use contextual::{chart_design, table_design};
-pub(crate) use controls::{ComboResult, editable_combo};
+pub(crate) use controls::{ComboResult, GROUP_CAPTION_H, HEADER_FOOTER_CAPTIONS, editable_combo, group};
 use controls::{act, keytip};
 use data::data;
 use formulas::formulas;
@@ -49,7 +49,7 @@ const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a 
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
-    let h = if collapsed { 34.0 } else { 34.0 + 92.0 };
+    let h = if collapsed { 34.0 } else { 34.0 + 92.0 + GROUP_CAPTION_H };
     // A contextual tab exists only while its object is selected (Excel hides Table Design once the
     // cell leaves the table); a remembered one that is gone would draw an empty ribbon.
     if CONTEXTUAL_TABS.contains(&app.ui.ribbon_tab.as_str()) && !contextual_tabs(app).contains(&app.ui.ribbon_tab.as_str()) {
@@ -121,7 +121,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             let left = ui.cursor().min.x;
             let screen = ui.ctx().content_rect();
             let fits = (screen.right() - left - (left - screen.left()).max(0.0)).max(0.0);
-            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0));
+            let card = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width().min(fits), 88.0 + GROUP_CAPTION_H));
             ui.painter().rect_filled(card, 10.0, t.ribbon);
             ui.painter().rect_stroke(card, 10.0, Stroke::new(1.0, t.ribbon_border), StrokeKind::Inside);
             let inner = card.shrink2(vec2(10.0, 6.0));
@@ -141,7 +141,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     area = area.horizontal_scroll_offset(x);
                 }
                 let scroll = area.show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    // Top-aligned so the caption band hangs under the controls.
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
@@ -295,6 +296,113 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
 }
 
 #[cfg(test)]
+mod group_caption_ui {
+    use egui_kittest::kittest::Queryable as _;
+    use serde_json::json;
+
+    use super::controls::{
+        AUTOMATE_CAPTIONS, CHART_CAPTIONS, DATA_CAPTIONS, DRAW_CAPTIONS, FORMULAS_CAPTIONS, HOME_CAPTIONS, INSERT_CAPTIONS, PAGE_LAYOUT_CAPTIONS,
+        REVIEW_CAPTIONS, TABLE_CAPTIONS, VIEW_CAPTIONS,
+    };
+    use crate::SheetApp;
+    use crate::i18n::Language;
+
+    fn harness(app: SheetApp) -> egui_kittest::Harness<'static, SheetApp> {
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1680.0, 900.0))
+            .with_context_setup(|ctx| {
+                ctx.set_fonts(crate::theme::pinned_font_definitions());
+                crate::theme::apply(ctx, false);
+            })
+            // A text field on a later tab has no accessible name. This test checks group
+            // captions, not that unrelated gap.
+            .with_accessibility_check(false)
+            .renderer(egui_kittest::LazyRenderer::Uninitialized { textures_delta: Default::default(), builder: None })
+            .build_ui_state(
+                |ui, app: &mut SheetApp| {
+                    app.logic(ui.ctx());
+                    app.ui(ui);
+                },
+                app,
+            );
+        h.run_steps(4);
+        h
+    }
+
+    fn app_on(tab: &str, session: gridcraft_engine::Session) -> egui_kittest::Harness<'static, SheetApp> {
+        let mut app = SheetApp::new(session, Default::default());
+        app.ui.language = Language::De;
+        app.ui.ribbon_tab = tab.to_string();
+        app.use_prepared_fonts();
+        harness(app)
+    }
+
+    fn assert_captions(tab: &str, h: &egui_kittest::Harness<'_, SheetApp>, keys: &[&str]) {
+        assert!(!keys.is_empty(), "{tab}");
+        for key in keys {
+            let caption = Language::De.tr(key);
+            assert!(!caption.is_empty(), "{tab} {key}");
+            assert!(h.query_by_label(caption).is_some(), "{tab} does not show {caption} ({key})");
+        }
+    }
+
+    #[test]
+    fn start_formulas_data_and_view_show_a_caption_on_every_group() {
+        let tabs: &[(&str, &[&str])] = &[
+            ("Home", HOME_CAPTIONS.as_slice()),
+            ("Formulas", FORMULAS_CAPTIONS.as_slice()),
+            ("Data", DATA_CAPTIONS.as_slice()),
+            ("View", VIEW_CAPTIONS.as_slice()),
+        ];
+        for (tab, keys) in tabs {
+            let mut session = gridcraft_engine::Session::new();
+            session.new_workbook();
+            let h = app_on(tab, session);
+            assert_captions(tab, &h, keys);
+        }
+        assert_eq!(Language::De.tr("Ribbon group|Type format"), "Schriftformat");
+        assert_eq!(Language::De.tr("Ribbon group|Number format"), "Zahlenformat");
+    }
+
+    #[test]
+    fn the_other_visible_tabs_show_a_caption_on_every_group() {
+        let tabs: &[(&str, &[&str])] = &[
+            ("Insert", INSERT_CAPTIONS.as_slice()),
+            ("Draw", DRAW_CAPTIONS.as_slice()),
+            ("Page Layout", PAGE_LAYOUT_CAPTIONS.as_slice()),
+            ("Review", REVIEW_CAPTIONS.as_slice()),
+            ("Automate", AUTOMATE_CAPTIONS.as_slice()),
+        ];
+        for (tab, keys) in tabs {
+            let mut session = gridcraft_engine::Session::new();
+            session.new_workbook();
+            let h = app_on(tab, session);
+            assert_captions(tab, &h, keys);
+        }
+        let mut table = gridcraft_engine::Session::new();
+        table.new_workbook();
+        assert!(table.execute("range.setValues", json!({"range": "A1", "values": [["Nord", "Menge"], ["Ost", 1], ["West", 2]]})).is_ok());
+        assert!(table.execute("insert.table", json!({"range": "A1:B3", "header": true})).is_ok());
+        assert!(table.execute("selection.set", json!({"range": "A2"})).is_ok());
+        let h = app_on("Table Design", table);
+        assert_eq!(h.state().ui.ribbon_tab, "Table Design");
+        assert_captions("Table Design", &h, TABLE_CAPTIONS.as_slice());
+        let mut chart = gridcraft_engine::Session::new();
+        chart.new_workbook();
+        assert!(chart.execute("range.setValues", json!({"range": "A1", "values": [["Nord", "Menge"], ["Ost", 4], ["West", 6]]})).is_ok());
+        let made = chart.execute("insert.chart", json!({"range": "A1:B3", "type": "column"}));
+        let id = made.as_ref().ok().and_then(|v| v.get("chart")).and_then(|c| c.as_u64());
+        assert!(id.is_some(), "chart id");
+        let id = id.unwrap_or(0);
+        let mut h = app_on("Chart Design", chart);
+        h.state_mut().select_object_id(Some(id as u32));
+        h.state_mut().ui.ribbon_tab = "Chart Design".to_string();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.ribbon_tab, "Chart Design");
+        assert_captions("Chart Design", &h, CHART_CAPTIONS.as_slice());
+    }
+}
+
 mod tooltip_tests {
     /// A ribbon tooltip names its control only; `widgets::tooltip_shortcut` adds the shortcut of
     /// the platform it runs on. A Command-key glyph written into the text would show on Windows

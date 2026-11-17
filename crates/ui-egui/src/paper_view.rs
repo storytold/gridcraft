@@ -879,71 +879,80 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
     let (sheet_name, file) =
         app.session.active().map(|d| (d.wb.sheet(e.sheet).map(|s| s.name.clone()).unwrap_or_default(), d.display_title())).unwrap_or_default();
     // Header & Footer presets (shown with sample values, as the result will read).
-    for (label, part) in [("Header", false), ("Footer", true)] {
-        let r = big_button(ui, if part { Icon::Footer } else { Icon::Header }, label, label, true);
-        egui::Popup::menu(&r).show(|ui| {
-            let presets: [(String, &str); 7] = [
-                (tr(app, "(none)").to_string(), ""),
-                ("Page 1".into(), "&CPage &P"),
-                ("Page 1 of ?".into(), "&CPage &P of &N"),
-                (sheet_name.clone(), "&C&A"),
-                (file.clone(), "&C&F"),
-                (format!("{sheet_name}, Page 1"), "&C&A, Page &P"),
-                (format!("{file}, Page 1"), "&C&F, Page &P"),
-            ];
-            for (text, spec) in presets {
-                if ui.button(text).clicked() {
-                    let sheet = app.grid.hf_edit.as_ref().map(|e| e.sheet).unwrap_or(0);
-                    cancel(app);
-                    app.run_or_alert("pageLayout.headerFooter", json!({"sheet": sheet, hf_key(kind, part): spec}));
-                    ui.close();
+
+    crate::ribbon::group(ui, app.ui.language.tr(crate::ribbon::HEADER_FOOTER_CAPTIONS[0]), |ui| {
+        for (label, part) in [("Header", false), ("Footer", true)] {
+            let r = big_button(ui, if part { Icon::Footer } else { Icon::Header }, label, label, true);
+            egui::Popup::menu(&r).show(|ui| {
+                let presets: [(String, &str); 7] = [
+                    (tr(app, "(none)").to_string(), ""),
+                    ("Page 1".into(), "&CPage &P"),
+                    ("Page 1 of ?".into(), "&CPage &P of &N"),
+                    (sheet_name.clone(), "&C&A"),
+                    (file.clone(), "&C&F"),
+                    (format!("{sheet_name}, Page 1"), "&C&A, Page &P"),
+                    (format!("{file}, Page 1"), "&C&F, Page &P"),
+                ];
+                for (text, spec) in presets {
+                    if ui.button(text).clicked() {
+                        let sheet = app.grid.hf_edit.as_ref().map(|e| e.sheet).unwrap_or(0);
+                        cancel(app);
+                        app.run_or_alert("pageLayout.headerFooter", json!({"sheet": sheet, hf_key(kind, part): spec}));
+                        ui.close();
+                    }
                 }
-            }
-        });
-    }
-    sep(ui);
-    for (icon, label, tip, field) in [
-        (Icon::PageNumber, "Page\nNumber", "Page Number", "&[Page]"),
-        (Icon::PageCount, "Number\nof Pages", "Number of Pages", "&[Pages]"),
-        (Icon::Calendar, "Current\nDate", "Current Date", "&[Date]"),
-        (Icon::Clock, "Current\nTime", "Current Time", "&[Time]"),
-        (Icon::Folder, "File\nPath", "File Path", "&[Path]&[File]"),
-        (Icon::FileName, "File\nName", "File Name", "&[File]"),
-        (Icon::Sheet, "Sheet\nName", "Sheet Name", "&[Tab]"),
-    ] {
-        if big_button(ui, icon, label, tip, false).clicked() {
-            insert_field(app, field);
-        }
-    }
-    sep(ui);
-    if big_button(ui, Icon::Header, "Go to\nHeader", "Go to Header", false).clicked() && footer {
-        go_to(app, false);
-    }
-    if big_button(ui, Icon::Footer, "Go to\nFooter", "Go to Footer", false).clicked() && !footer {
-        go_to(app, true);
-    }
-    sep(ui);
-    let (first, odd_even, scale_doc, align) =
-        app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
-            (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)
-        });
-    ui.vertical(|ui| {
-        let (mut f, mut o) = (first, odd_even);
-        if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
-            set_option(app, "differentFirst", f);
-        }
-        if ui.checkbox(&mut o, tr(app, "Different Odd & Even Pages")).changed() {
-            set_option(app, "differentOddEven", o);
+            });
         }
     });
-    ui.vertical(|ui| {
-        let (mut sd, mut am) = (scale_doc, align);
-        if ui.checkbox(&mut sd, tr(app, "Scale with Document")).changed() {
-            set_option(app, "scaleWithDoc", sd);
+    sep(ui);
+    crate::ribbon::group(ui, app.ui.language.tr(crate::ribbon::HEADER_FOOTER_CAPTIONS[1]), |ui| {
+        for (icon, label, tip, field) in [
+            (Icon::PageNumber, "Page\nNumber", "Page Number", "&[Page]"),
+            (Icon::PageCount, "Number\nof Pages", "Number of Pages", "&[Pages]"),
+            (Icon::Calendar, "Current\nDate", "Current Date", "&[Date]"),
+            (Icon::Clock, "Current\nTime", "Current Time", "&[Time]"),
+            (Icon::Folder, "File\nPath", "File Path", "&[Path]&[File]"),
+            (Icon::FileName, "File\nName", "File Name", "&[File]"),
+            (Icon::Sheet, "Sheet\nName", "Sheet Name", "&[Tab]"),
+        ] {
+            if big_button(ui, icon, label, tip, false).clicked() {
+                insert_field(app, field);
+            }
         }
-        if ui.checkbox(&mut am, tr(app, "Align with Page Margins")).changed() {
-            set_option(app, "alignWithMargins", am);
+    });
+    sep(ui);
+    crate::ribbon::group(ui, app.ui.language.tr(crate::ribbon::HEADER_FOOTER_CAPTIONS[2]), |ui| {
+        if big_button(ui, Icon::Header, "Go to\nHeader", "Go to Header", false).clicked() && footer {
+            go_to(app, false);
         }
+        if big_button(ui, Icon::Footer, "Go to\nFooter", "Go to Footer", false).clicked() && !footer {
+            go_to(app, true);
+        }
+    });
+    sep(ui);
+    crate::ribbon::group(ui, app.ui.language.tr(crate::ribbon::HEADER_FOOTER_CAPTIONS[3]), |ui| {
+        let (first, odd_even, scale_doc, align) =
+            app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
+                (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)
+            });
+        ui.vertical(|ui| {
+            let (mut f, mut o) = (first, odd_even);
+            if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
+                set_option(app, "differentFirst", f);
+            }
+            if ui.checkbox(&mut o, tr(app, "Different Odd & Even Pages")).changed() {
+                set_option(app, "differentOddEven", o);
+            }
+        });
+        ui.vertical(|ui| {
+            let (mut sd, mut am) = (scale_doc, align);
+            if ui.checkbox(&mut sd, tr(app, "Scale with Document")).changed() {
+                set_option(app, "scaleWithDoc", sd);
+            }
+            if ui.checkbox(&mut am, tr(app, "Align with Page Margins")).changed() {
+                set_option(app, "alignWithMargins", am);
+            }
+        });
     });
 }
 
