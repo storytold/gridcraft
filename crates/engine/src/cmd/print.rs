@@ -27,6 +27,7 @@ mod draw;
 mod header_footer;
 mod layout;
 mod objects;
+mod overflow;
 mod text;
 
 use draw::{Block, PrintedBlock, draw_block, draw_block_links, draw_headings, make_block, printed_target};
@@ -137,6 +138,15 @@ pub fn specs() -> Vec<CommandSpec> {
             print_preview
         ),
         cmd!(
+            query "sheet.overflow",
+            "Check Text Overflow",
+            [],
+            None,
+            "{sheet?: name|index|all (default all)} → {items: [{sheet, cell|shape, kind: clipped|tall|shrunk|shape, needed, available, over, text, scale?}]}: text that doesn't fit where it prints, in points, measured as the PDF export lays it out. clipped: unwrapped text wider than its cell plus the empty cells it may spill into (merged ranges don't spill); tall: wrapped text with more lines than the row height shows; shrunk: Shrink to fit draws it at scale; shape: a text box or shape whose text is taller than the shape. Rotated text is not checked",
+            has_doc,
+            overflow
+        ),
+        cmd!(
             "pageLayout.pageSetup",
             "Page Setup…",
             ["Page Layout", "Page Setup"],
@@ -146,6 +156,19 @@ pub fn specs() -> Vec<CommandSpec> {
             page_setup
         ),
     ]
+}
+
+fn overflow(s: &mut Session, p: &Json) -> Result<Json> {
+    let all = p.get("sheet").is_none_or(|v| v.as_str() == Some("all"));
+    let only = if all { None } else { Some(target_sheet(s, p)?) };
+    let d = s.doc()?;
+    let mut items = Vec::new();
+    for (i, sh) in d.wb.sheets.iter().enumerate() {
+        if only.is_none_or(|o| o == i) {
+            overflow::sheet_overflow(&d.wb, sh, &mut items);
+        }
+    }
+    Ok(json!({"items": items}))
 }
 
 /// Sheet geometry is in pixels at 96 dpi; PDF units are points.

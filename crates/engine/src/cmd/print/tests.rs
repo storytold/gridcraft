@@ -1222,3 +1222,31 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
+
+fn overflow_items(s: &mut Session) -> Vec<Json> {
+    s.execute("sheet.overflow", json!({})).unwrap()["items"].as_array().cloned().unwrap_or_default()
+}
+
+#[test]
+fn sheet_overflow_finds_text_cut_off_where_it_prints() {
+    let mut s = s();
+    let long = "Die Schranke öffnet sich automatisch und schließt danach wieder";
+    // spills into the empty B1: fits
+    s.execute("cell.set", json!({"cell": "A1", "input": long})).unwrap();
+    assert!(overflow_items(&mut s).is_empty(), "{:?}", overflow_items(&mut s));
+    // a neighbour stops the spill: clipped, wider than its cell
+    s.execute("cell.set", json!({"cell": "B1", "input": "x"})).unwrap();
+    let items = overflow_items(&mut s);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!((items[0]["cell"].as_str(), items[0]["kind"].as_str()), (Some("A1"), Some("clipped")));
+    assert!(items[0]["needed"].as_f64() > items[0]["available"].as_f64());
+    // wrapped in a row kept at a set height: more lines than the row shows (a row that fits its text grows instead)
+    s.execute("cell.set", json!({"cell": "A3", "input": long})).unwrap();
+    s.execute("home.wrapText", json!({"range": "A3", "on": true})).unwrap();
+    s.execute("home.rowHeight", json!({"rows": "3:3", "height": 20})).unwrap();
+    let items = overflow_items(&mut s);
+    assert!(items.iter().any(|i| i["cell"] == "A3" && i["kind"] == "tall"), "{items:?}");
+    // a short text fits its cell
+    s.execute("cell.set", json!({"cell": "A5", "input": "ok"})).unwrap();
+    assert!(!overflow_items(&mut s).iter().any(|i| i["cell"] == "A5"));
+}

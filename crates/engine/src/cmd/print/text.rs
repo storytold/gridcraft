@@ -5,7 +5,7 @@ use super::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-const PAD_PX: f32 = 2.0;
+pub(super) const PAD_PX: f32 = 2.0;
 
 /// Most lines [`wrap_lines`] returns (it may return one more, the rest of a paragraph).
 const MAX_WRAP_LINES: usize = 2000;
@@ -147,11 +147,11 @@ fn break_measured_word(word: &str, fits: &impl Fn(&str) -> bool, direction: Text
     }
 }
 
-fn font_for(style: &Style) -> Font {
+pub(super) fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
-fn text_direction(order: ReadingOrder) -> TextDirection {
+pub(super) fn text_direction(order: ReadingOrder) -> TextDirection {
     match order {
         ReadingOrder::Context => TextDirection::Context,
         ReadingOrder::LeftToRight => TextDirection::LeftToRight,
@@ -161,7 +161,7 @@ fn text_direction(order: ReadingOrder) -> TextDirection {
 
 /// The alignment a cell is laid out with before a right-to-left sheet is mirrored. Explicit Left
 /// and Right are swapped there, as in the grid, so they print on the side the user chose.
-fn text_align(align: HAlign, value: &Value, direction: TextDirection, right_to_left_sheet: bool) -> HAlign {
+pub(super) fn text_align(align: HAlign, value: &Value, direction: TextDirection, right_to_left_sheet: bool) -> HAlign {
     match align {
         HAlign::General => match value {
             Value::Number(_) => HAlign::Right,
@@ -182,7 +182,7 @@ fn empty_for_overflow(sh: &Sheet, c: CellRef, merges: &[RangeRef]) -> bool {
     sh.value_ref(c).is_none_or(|v| v.is_empty()) && !merges.iter().any(|m| m.contains(c))
 }
 
-fn extend_text_bounds(sh: &Sheet, c: CellRef, merges: &[RangeRef], k: f32, need: f32, align: HAlign, bounds: (f32, f32)) -> (f32, f32) {
+pub(super) fn extend_text_bounds(sh: &Sheet, c: CellRef, merges: &[RangeRef], k: f32, need: f32, align: HAlign, bounds: (f32, f32)) -> (f32, f32) {
     let (mut clip_l, mut clip_r) = bounds;
     let grow = |dir: i64, mut remaining: f32| -> f32 {
         let mut ext = 0.0;
