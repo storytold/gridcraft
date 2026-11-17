@@ -22,6 +22,12 @@ fn navigator_items(sheets: &[Arc<Sheet>]) -> Vec<(String, String)> {
     sheets.iter().enumerate().filter(|(_, s)| s.visibility == Visibility::Visible).map(|(i, s)| (i.to_string(), s.name.clone())).collect()
 }
 
+/// Workbook index of the first (or, with `last`, the last) visible sheet: where Ctrl-clicking a tab arrow lands.
+fn edge_sheet(sheets: &[Arc<Sheet>], last: bool) -> Option<usize> {
+    let mut visible = sheets.iter().enumerate().filter(|(_, s)| s.visibility == Visibility::Visible).map(|(i, _)| i);
+    if last { visible.next_back() } else { visible.next() }
+}
+
 /// Switch to sheet `i` from the tab strip or the navigator. In point mode the formula being typed keeps going on the
 /// other sheet; otherwise the edit is committed first.
 fn activate_sheet(app: &mut SheetApp, i: usize) {
@@ -53,6 +59,18 @@ fn tab_drop(i: usize, steps: i64, copy: bool) -> Option<serde_json::Value> {
         return Some(json!({"sheet": i, "to": to, "copy": true}));
     }
     Some(json!({"sheet": i, "to": to}))
+}
+
+/// Where a request to scroll the active tab into view is kept until the tabs are drawn.
+fn reveal_request_id(scope: egui::Id) -> egui::Id {
+    scope.with("worksheet_tabs_reveal_request")
+}
+
+/// Asks the tab strip to bring the active tab into view in this frame, even when the active sheet
+/// did not change (a Ctrl-click on an arrow whose edge sheet is already active).
+fn request_reveal(ui: &Ui) {
+    let id = reveal_request_id(ui.scope_id());
+    ui.ctx().data_mut(|data| data.insert_temp(id, true));
 }
 
 /// The New sheet (+) button and the gap before it.
@@ -117,10 +135,28 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             ui.add_space(8.0);
             if view.show_sheet_tabs {
                 if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
-                    app.run_or_alert("sheet.previous", json!({}));
+                    // Ctrl-click jumps to the first visible sheet, like Excel's tab scroll buttons.
+                    let edge =
+                        if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, false)) } else { None };
+                    match edge {
+                        Some(i) => {
+                            activate_sheet(app, i);
+                            request_reveal(ui);
+                        }
+                        None => app.run_or_alert("sheet.previous", json!({})),
+                    }
                 }
                 if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
-                    app.run_or_alert("sheet.next", json!({}));
+                    // Ctrl-click jumps to the last visible sheet.
+                    let edge =
+                        if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, true)) } else { None };
+                    match edge {
+                        Some(i) => {
+                            activate_sheet(app, i);
+                            request_reveal(ui);
+                        }
+                        None => app.run_or_alert("sheet.next", json!({})),
+                    }
                 }
                 let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, app.ui.language.tr("All sheets"), vec2(24.0, 24.0));
                 all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
@@ -163,10 +199,13 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             // allow browsing other tabs without snapping back on every frame.
             let reveal_key = egui::Id::unique((d.uid, d.wb.active_sheet(), &sheets, tabs_width.to_bits()));
             let reveal_id = ui.scope_id().with("worksheet_tabs_reveal");
+            let request_id = reveal_request_id(ui.scope_id());
             let reveal_active = ui.ctx().data_mut(|data| {
                 let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
                 data.insert_temp(reveal_id, reveal_key);
-                changed
+                // A Ctrl-click on an arrow whose edge sheet is already active changes nothing above,
+                // yet asks to bring that tab into view.
+                changed | data.remove_temp::<bool>(request_id).unwrap_or(false)
             });
             if view.show_sheet_tabs {
                 ui.allocate_ui_with_layout(vec2(tabs_width, 30.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -381,7 +420,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => app.ui.language.tr("Circular References: {cell}").replace("{cell}", &c.a1()),
+                            Some((_, c)) => app.ui.language.tr_fill("Circular References: {cell}", &[("cell", &c.a1())]),
                             None => app.ui.language.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
@@ -480,28 +519,30 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
         gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
     };
+    // The label the right-click menu shows, then the value: clicking a statistic copies the part
+    // after `": "`.
     let lang = app.ui.language;
-    let stat = |pattern: &str, value: String| lang.tr(pattern).replace("{value}", &value);
+    let part = |label: &str, value: String| format!("{}: {value}", lang.tr(label));
     let mut parts = Vec::new();
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(stat("Average: {value}", fmt(a)));
+        parts.push(part("Average", fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(stat("Count: {value}", st.count.to_string()));
+        parts.push(part("Count", st.count.to_string()));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(stat("Numerical Count: {value}", st.numeric.to_string()));
+        parts.push(part("Numerical Count", st.numeric.to_string()));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(stat("Minimum: {value}", fmt(st.min)));
+        parts.push(part("Minimum", fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(stat("Maximum: {value}", fmt(st.max)));
+        parts.push(part("Maximum", fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(stat("Sum: {value}", fmt(st.sum)));
+        parts.push(part("Sum", fmt(st.sum)));
     }
     parts
 }
@@ -527,7 +568,8 @@ fn status_bar_menu(app: &mut SheetApp, ui: &mut Ui) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, navigator_items, rename_needs_focus, tab_drop,
+        MIN_TRACK, NEW_SHEET_WIDTH, SPLIT_WIDTH, activate_sheet, dragged_share, drop_copies_sheet, edge_sheet, navigator_items, rename_needs_focus,
+        tab_drop,
     };
     use crate::SheetApp;
     use egui::Modifiers;
@@ -549,6 +591,26 @@ mod tests {
 
     fn names(app: &SheetApp) -> Vec<String> {
         app.session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect()
+    }
+
+    #[test]
+    fn status_bar_statistics_follow_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        for (cell, input) in [("A1", "1"), ("A2", "2"), ("A3", "3")] {
+            app.run("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        app.run("selection.set", json!({"range": "A1:A3"})).unwrap();
+        app.run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
+        let parts = [("Average", "2"), ("Count", "3"), ("Numerical Count", "3"), ("Minimum", "1"), ("Maximum", "3"), ("Sum", "6")];
+        let english: Vec<String> = parts.iter().map(|(label, value)| format!("{label}: {value}")).collect();
+        assert_eq!(super::selection_statistics(&app), english);
+        app.ui.language = Language::It;
+        let italian: Vec<String> = parts.iter().map(|(label, value)| format!("{}: {value}", Language::It.tr(label))).collect();
+        assert_eq!(super::selection_statistics(&app), italian, "each label as the right-click menu shows it");
+        assert!(italian.iter().zip(&english).all(|(it, en)| it != en), "the Italian catalog translates every label: {italian:?}");
     }
 
     #[test]
@@ -617,6 +679,16 @@ mod tests {
         very_hidden.visibility = Visibility::VeryHidden;
         let sheets = [Sheet::new("Data"), hidden, very_hidden, Sheet::new("Summary")].map(Arc::new);
         assert_eq!(navigator_items(&sheets), vec![("0".to_string(), "Data".to_string()), ("3".to_string(), "Summary".to_string())]);
+    }
+
+    #[test]
+    fn ctrl_click_on_the_tab_arrows_lands_on_the_first_and_last_visible_sheet() {
+        let mut hidden = Sheet::new("Hidden");
+        hidden.visibility = Visibility::Hidden;
+        let sheets = [hidden.clone(), Sheet::new("A"), Sheet::new("B"), Sheet::new("C"), hidden].map(Arc::new);
+        assert_eq!(edge_sheet(&sheets, false), Some(1));
+        assert_eq!(edge_sheet(&sheets, true), Some(3));
+        assert_eq!(edge_sheet(&[], true), None);
     }
 
     #[test]
