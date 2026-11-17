@@ -10,7 +10,7 @@ use skrifa::{
 };
 use unicode_bidi::BidiInfo;
 
-use crate::{CID_FONT, Error, Font, TextDirection, dict_obj, n, needs_cid, pdf_string, pdf_utf16_string, stream_obj};
+use crate::{CID_FONT, Error, Font, TextDirection, n, needs_cid, pdf_string, pdf_utf16_string};
 
 include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
 
@@ -490,7 +490,7 @@ impl Subset {
     }
 
     /// Writes the subset fonts into `out` and returns their page resource entries.
-    pub(crate) fn write_objects(&self, next: &mut u32, out: &mut Vec<u8>, offsets: &mut Vec<usize>) -> String {
+    pub(crate) fn write_objects(&self, next: &mut u32, out: &mut craft_pdf::classic::Writer) -> Result<String, Error> {
         let mut resources = String::new();
         for (batch, glyphs) in self.glyphs.chunks(255).enumerate() {
             let id = *next;
@@ -507,7 +507,7 @@ impl Subset {
                 let _ = write!(names, "/g{code} ");
                 let _ = write!(widths, "{} ", n(glyph.width));
                 let body = glyph_procedure(glyph);
-                stream_obj(out, offsets, *next, "", body.as_bytes());
+                out.stream(*next, "", body.as_bytes())?;
                 *next += 1;
                 bounds[0] = bounds[0].min(glyph.bounds[0]);
                 bounds[1] = bounds[1].min(glyph.bounds[1]);
@@ -526,11 +526,8 @@ impl Subset {
                 cmap.push_str("endbfchar\n");
             }
             cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-            stream_obj(out, offsets, cmap_id, "", cmap.as_bytes());
-            dict_obj(
-                out,
-                offsets,
-                id,
+            out.stream(cmap_id, "", cmap.as_bytes())?;
+            out.object(id,
                 &format!(
                     "<< /Type /Font /Subtype /Type3 /Name /GridCraftArabic /FontBBox [{} {} {} {}] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {procs}>> /Encoding << /Type /Encoding /Differences [1 {names}] >> /FirstChar 1 /LastChar {} /Widths [{widths}] /Resources << >> /ToUnicode {cmap_id} 0 R >>",
                     n(bounds[0]),
@@ -539,10 +536,10 @@ impl Subset {
                     n(bounds[3]),
                     glyphs.len()
                 ),
-            );
+            )?;
             let _ = write!(resources, "/A{} {id} 0 R ", batch + 1);
         }
-        resources
+        Ok(resources)
     }
 }
 
