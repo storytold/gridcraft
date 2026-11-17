@@ -100,7 +100,7 @@ fn save_keeps_the_destination_access_restrictions() {
         write_file(dest.to_str().unwrap(), b"v3").unwrap();
         assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, old);
     }
-    assert!(!dir.join("private.xlsx.sctmp").exists());
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2, "successful saves leave no temporary files");
     // And a brand-new file is created with the restrictive, not permissive, default.
     let fresh = dir.path().join("new.xlsx");
     write_file(fresh.to_str().unwrap(), b"v").unwrap();

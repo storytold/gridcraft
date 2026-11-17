@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-02 · **Change:** minor (§17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-13 · **Change:** minor (§5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -54,15 +54,15 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** cross-platform script coverage, Thai cell AutoFit row height, Devanagari shaping,
-  non-Latin PDF export and Arabic UI layout.
+- **Missing:** cross-platform script coverage, Thai cell AutoFit row height, Devanagari and Thai
+  shaping verification, non-Latin PDF coverage beyond Arabic, and Arabic UI layout.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32). Thai
   committed-cell wrapping uses craft-text with ICU4X LSTM, greedy measurement, exact UTF-8 byte
   ranges and an LRU cache; AutoFit row-height measurement remains separate. Arabic shared
   shaping/bidi, editing and cell Context/LTR/RTL have focused regressions and full gates; Arabic
-  font delivery and PDF output are separate PRs. #142 (Chinese text) awaits confirmation; #54
-  tracks symbols as boxes on Fedora; other script shaping still needs verification. The PDF writer
-  uses 14 standard fonts only.
+  font fallback uses system, fontconfig or craft-fonts faces. PDF shapes Arabic with licensed glyph
+  outlines, preserves cell reading direction and mirrors RTL sheets. #142 (Chinese text) awaits
+  confirmation and #54 tracks symbols as boxes on Fedora.
 - **Performance:** the 2026-10-27 snapshot's 500-visible-cell Windows release benchmark at 100% / 1x measured warm p50/p95 4.0449/5.1826 ms for the Thai candidate versus 2.4476/2.8611 ms on pinned upstream `63038650`. Candidate was slower in all six tested configurations; fixed run order and host noise limit the comparison. Instrumented cold candidate required four renderer passes versus one baseline pass. These results predate the later grid integration; no newer performance measurement is claimed.
 - **Impact:** blocks most of the world's users even with an English UI.
 - **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
@@ -90,8 +90,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
-  `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
-  and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
+  `insert.pivotChart`, `table.insertSlicer`; calculated items and Generate GetPivotData missing (calculated fields,
+  values on rows and GETPIVOTDATA done). Show Details (double-click a value, subtotal or grand total cell) lists
   its source records on a new sheet. The "Enable show details" option (`pivot.options`
   `enableShowDetails`, saved as `enableDrill`) turns it off; it has no PivotTable Options dialog
   yet (command only).
@@ -141,10 +141,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   Margins are dragged on the rulers (#792). Remaining: pictures in headers/footers, Different First Page / Odd & Even pages. Desktop now submits directly through craft-print with printer choice, copies, duplex and grayscale; browser printing stays available. Print ranges and driver tray/options UI remain. **Estimate:** 5–10 h.
 
 ### 15. Remaining functions and an oracle suite (F)
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 16–26 h.
-- 20 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 17–29 h.
-- 21 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
-- 18 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 18–30 h.
+- 9 missing, 9 stubs; no Excel-computed oracle corpus; #137, #138. **Estimate:** 15–25 h.
   [function-parity.md](function-parity.md)
 
 ### 16. Collaboration and review (F)
@@ -202,6 +199,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-30 | minor | Distinguish the Thai benchmark snapshot from the later upstream grid integration; no parity score change |
 | 2026-10-28 | minor | Record post-integration Thai benchmark regression and scope; no parity score change |
 | 2026-10-26 | minor | §5: Thai line wrapping for committed cells landed (ICU4X LSTM segmenter, greedy measurement, LRU cache) |
+| 2026-10-26 | minor | §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry. Other script and UI gaps remain. |
 | 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
 | 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
 | 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
@@ -213,6 +211,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |
 | 2026-10-12 | minor | §9: next/previous sheet commands retain the current visible sheet and selection when there is no visible destination |
+| 2026-10-12 | minor | §8, §15: GETPIVOTDATA added (9 functions missing) |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

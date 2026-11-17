@@ -42,7 +42,7 @@ impl FileKind {
             "ods" => FileKind::Ods,
             "csv" => FileKind::Csv,
             "tsv" | "tab" | "txt" => FileKind::Tsv,
-            "json" | "scjson" => FileKind::Json,
+            ext if craft_gridcraft_format::is_extension(ext) => FileKind::Json,
             "html" | "htm" => FileKind::Html,
             "slk" => FileKind::Sylk,
             _ => return None,
@@ -316,7 +316,7 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     }
     match kind {
         Some(FileKind::Json) => {
-            let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
+            let mut wb: Workbook = craft_gridcraft_format::read(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
                 // The file's macros are read after this (`macros::load`), so they come along.
@@ -1048,17 +1048,24 @@ fn save_parent(path: &std::path::Path) -> &std::path::Path {
 
 /// Creates an exclusive temporary sibling and restores the destination's permissions when present.
 #[cfg(not(target_arch = "wasm32"))]
-fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Permissions>) -> std::io::Result<tempfile::NamedTempFile> {
+fn create_save_temp(path: &std::path::Path, prior: Option<&std::fs::Metadata>) -> std::io::Result<tempfile::NamedTempFile> {
     let mut builder = tempfile::Builder::new();
     builder.prefix(".gridcraft-save-").suffix(".sctmp");
     let temp = builder.tempfile_in(save_parent(path))?;
     // Apply existing permissions after creation: Builder::permissions applies the
     // process umask, which can silently remove bits from the destination mode.
-    if let Some(p) = prior {
+    if let Some(prior) = prior {
         #[cfg(unix)]
-        temp.as_file().set_permissions(p.clone())?;
+        {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let file = temp.as_file();
+            // Restore the original group before granting any of its access bits.
+            let _ = std::os::unix::fs::fchown(file, None, Some(prior.gid()));
+            let group_kept = file.metadata()?.gid() == prior.gid();
+            let _ = file.set_permissions(std::fs::Permissions::from_mode(restored_mode(prior.mode(), group_kept)));
+        }
         #[cfg(not(unix))]
-        let _ = temp.as_file().set_permissions(p.clone());
+        let _ = temp.as_file().set_permissions(prior.permissions());
     }
     Ok(temp)
 }
@@ -1072,7 +1079,7 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     // saves. RAII removes only our own temporary file if writing or replacement fails;
     // an open failure never removes somebody else's path. A crash may leave this unique
     // file behind, but cannot leave a partially written destination workbook.
-    let prior = std::fs::metadata(path).ok().map(|m| m.permissions());
+    let prior = std::fs::metadata(path).ok();
     let destination = std::path::Path::new(path);
     let mut temp = create_save_temp(destination, prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     temp.write_all(bytes).and_then(|()| temp.as_file().sync_all()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
