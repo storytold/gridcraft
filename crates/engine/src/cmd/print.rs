@@ -478,11 +478,14 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(t) = title_cols {
             pr.title_cols = t;
         }
+        // A break kept from the list keeps its extent; a removed one loses it.
         if let Some(b) = &row_breaks {
             pr.row_breaks = b.clone();
+            pr.row_break_extents.retain(|r, _| b.contains(r));
         }
         if let Some(b) = &col_breaks {
             pr.col_breaks = b.clone();
+            pr.col_break_extents.retain(|c, _| b.contains(c));
         }
         if let Some(o) = page_order {
             pr.page_order = o;

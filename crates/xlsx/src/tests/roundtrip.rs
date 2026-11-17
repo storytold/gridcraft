@@ -301,6 +301,8 @@ fn sample() -> Workbook {
         footer: "&C&F".into(),
         row_breaks: vec![15, 30],
         col_breaks: vec![4],
+        row_break_extents: [(15, (0, 7))].into(),
+        col_break_extents: Default::default(),
         different_first: true,
         different_odd_even: true,
         first_header: "&CCover".into(),

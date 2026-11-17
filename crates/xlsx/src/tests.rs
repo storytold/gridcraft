@@ -20,6 +20,7 @@ mod malformed;
 mod multilevel_category_roundtrip;
 mod note_box;
 mod ods_tests;
+mod page_breaks;
 mod page_order;
 mod passthrough_tests;
 mod phonetic_tests;

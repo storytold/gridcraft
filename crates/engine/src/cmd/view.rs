@@ -394,6 +394,8 @@ fn breaks(s: &mut Session, p: &Json) -> Result<Json> {
         if reset {
             pr.row_breaks.clear();
             pr.col_breaks.clear();
+            pr.row_break_extents.clear();
+            pr.col_break_extents.clear();
         } else if insert || !remove {
             if at.row > 0 && !pr.row_breaks.contains(&at.row) {
                 pr.row_breaks.push(at.row);
@@ -406,6 +408,9 @@ fn breaks(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             pr.row_breaks.retain(|r| *r != at.row);
             pr.col_breaks.retain(|c| *c != at.col);
+            // A break inserted here again spans the whole sheet.
+            pr.row_break_extents.remove(&at.row);
+            pr.col_break_extents.remove(&at.col);
         }
         Ok(Json::Null)
     })
