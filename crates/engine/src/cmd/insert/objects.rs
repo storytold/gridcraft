@@ -305,7 +305,7 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some((gid, r)) = group_target(sh, &kind, id) {
             let a = match r {
                 gridcraft_model::DrawingRef::Group(g) => sh.group_anchor(g),
-                leaf => sh.object_anchor(leaf),
+                _ => o.and_then(|o| sh.object_anchor(o)),
             };
             let Some(mut a) = a else { return Err(bad("object.move", "no such object")) };
             let from = sh.anchor_rect(&a);
