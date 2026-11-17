@@ -296,12 +296,16 @@ fn column_slots(fams: &[Fam], sec: &[bool]) -> (Vec<usize>, f32) {
 /// end of a series' segment, also a negative or zero one, to the same end in the next category.
 /// `edges` gives a segment's two corners at that end, nearest the previous category first, and
 /// `slot` where a series' bar would be along the category axis, also in a category it has no value in.
+/// When the bars are hairlines (`dense`), each series' lines become one path that keeps, per pixel
+/// column, only where it enters and leaves and its extremes, as the merged bars do.
+#[allow(clippy::too_many_arguments)]
 fn draw_series_lines(
     ctx: &mut Ctx,
     style: Option<(crate::Rgba, f32)>,
     fams: &[Fam],
     ncat: usize,
     horizontal: bool,
+    dense: bool,
     slot: impl Fn(usize, usize) -> (f32, f32),
     edges: impl Fn(usize, usize) -> Option<([f32; 2], [f32; 2])>,
 ) {
@@ -310,17 +314,50 @@ fn draw_series_lines(
         if !is_col(*fam) || *fam == Fam::Col {
             continue;
         }
+        let mut path: Vec<[f32; 2]> = Vec::new();
         let mut last: Option<(usize, [f32; 2])> = None;
         for j in 0..ncat {
             let Some((near, far)) = edges(i, j) else { continue };
-            if let Some((from_cat, from)) = last {
+            if dense {
+                path.extend([near, far]);
+            } else if let Some((from_cat, from)) = last {
                 for (a, b) in skipped_pieces(from_cat, from, j, near, horizontal, |k| slot(i, k)) {
                     ctx.out.push(Prim::Line { pts: vec![a, b], color, width, dash: false });
                 }
             }
             last = Some((j, far));
         }
+        let pts = pixel_envelope(&path, usize::from(horizontal));
+        if pts.len() > 1 {
+            ctx.out.push(Prim::Line { pts, color, width, dash: false });
+        }
     }
+}
+
+/// `path` reduced to at most four points per pixel column along axis `u`: where it enters the
+/// column, its lowest and highest point there in the order it reaches them, and where it leaves.
+fn pixel_envelope(path: &[[f32; 2]], u: usize) -> Vec<[f32; 2]> {
+    let v = 1 - u;
+    let mut out = Vec::new();
+    let mut rest = path;
+    while let Some(first) = rest.first() {
+        let col = first[u].floor();
+        let n = rest.iter().take_while(|p| p[u].floor() == col).count();
+        let (group, tail) = rest.split_at(n);
+        let lo = group.iter().enumerate().min_by(|a, b| a.1[v].total_cmp(&b.1[v])).map_or(0, |(k, _)| k);
+        let hi = group.iter().enumerate().max_by(|a, b| a.1[v].total_cmp(&b.1[v])).map_or(0, |(k, _)| k);
+        let mut keep = [0, lo.min(hi), lo.max(hi), n - 1];
+        keep.sort_unstable();
+        let mut prev = None;
+        for k in keep {
+            if prev != Some(k) {
+                out.push(group[k]);
+                prev = Some(k);
+            }
+        }
+        rest = tail;
+    }
+    out
 }
 
 /// A series line from category `from_cat` to `to_cat`. Excel joins over a category the series has no
@@ -525,7 +562,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
             }
         }
-        draw_series_lines(ctx, data.series_lines.filter(|_| pass == 1), &fams, ncat, horizontal, bar_slot, segment_end);
+        draw_series_lines(ctx, data.series_lines.filter(|_| pass == 1), &fams, ncat, horizontal, bw < MIN_BAR_PX, bar_slot, segment_end);
         draw_bar_labels(ctx, &mut bar_labels);
         for (x, y, t) in area_labels.drain(..) {
             ctx.text(x, y, &t, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));

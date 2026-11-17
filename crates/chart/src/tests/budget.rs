@@ -306,3 +306,33 @@ fn multi_level_categories_longer_than_the_cap_are_cut_together_with_their_levels
     assert_eq!(d.categories[cap - 1], format!("C{}", cap - 1));
     assert_eq!(d.category_levels[0][cap - 3], format!("Y{}", (cap - 3) / 3));
 }
+
+#[test]
+fn series_lines_of_a_dense_stack_stay_within_the_pixel_columns() {
+    // Four stacked series over 20,000 categories in 400 px: one path per series, a few points per
+    // pixel column, not a line per category.
+    for kind in [ChartKind::ColumnStacked, ChartKind::BarStacked] {
+        let mut c = chart(kind);
+        c.data_labels = false;
+        c.legend = LegendPos::None;
+        let mut d = data_of(4, 20_000);
+        for (s, series) in d.series.iter_mut().enumerate() {
+            for (i, v) in series.values.iter_mut().enumerate() {
+                *v = Some(10.0 + ((i * 7 + s) % 5) as f64);
+            }
+        }
+        let ink = [1, 2, 3, 255];
+        d.series_lines = Some((ink, 0.75));
+        let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+        let lines: Vec<&Vec<[f32; 2]>> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Line { pts, color, .. } if *color == ink => Some(pts),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 4, "{kind:?}: one path per series");
+        let points: usize = lines.iter().map(|l| l.len()).sum();
+        assert!(points > 400 && points <= 4 * 4 * 400, "{kind:?}: {points} points");
+    }
+}
