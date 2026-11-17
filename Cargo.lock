@@ -999,6 +999,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pdf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=bc358686389892a3827e64fc26bedc278ef1e299#bc358686389892a3827e64fc26bedc278ef1e299"
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
@@ -2306,6 +2311,7 @@ dependencies = [
 name = "gridcraft-pdf"
 version = "0.19.1"
 dependencies = [
+ "craft-pdf",
  "craft-stream-codecs",
  "harfrust",
  "sha2 0.11.1",
