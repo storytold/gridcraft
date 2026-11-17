@@ -283,5 +283,8 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
         let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
         s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
     }
+    // One outer group over every data and subtotal row, summarised by the grand total, as in
+    // Excel: outline level 1 then shows only the grand total, and level 2 the subtotals.
+    s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", first + 1, last)}))?;
     Ok(json!({"groups": inserted}))
 }
