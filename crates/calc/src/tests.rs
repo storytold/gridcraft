@@ -1430,7 +1430,8 @@ fn subtotal_skips_filtered_rows() {
         table_type: None,
         connection_id: None,
     });
-    sh.autofilter = Some(AutoFilter { range: gridcraft_core::RangeRef::parse("C1:C7").unwrap(), criteria: crit(), hidden_buttons: vec![] });
+    sh.autofilter =
+        Some(AutoFilter { range: gridcraft_core::RangeRef::parse("C1:C7").unwrap(), criteria: crit(), hidden_buttons: vec![], sort: None });
     // Rows 3 and 5 are filtered out; row 9 (outside both filters) is hidden by hand.
     for row in [2, 4, 8] {
         sh.rows.insert(row, LineInfo { hidden: true, ..Default::default() });

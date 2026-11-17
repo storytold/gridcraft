@@ -1099,6 +1099,36 @@ pub struct AutoFilter {
     /// Excel's `VisibleDropDown:=False`). Kept whether or not the column has a criterion.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hidden_buttons: Vec<u32>,
+    /// The sort Excel last applied from the filter's dropdowns (`autoFilter/sortState`), kept
+    /// so Data › Reapply in Excel sorts by it again. GridCraft doesn't apply it itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<SortState>,
+}
+
+/// A saved sort: the rows it sorts and its keys, first key first (`sortState`). Only sorts by
+/// value are kept; a state with a colour or icon key isn't read.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SortState {
+    pub range: RangeRef,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub case_sensitive: bool,
+    pub keys: Vec<SortKey>,
+}
+
+/// One key of a [`SortState`]: the cells sorted by (`sortCondition ref`), and the direction.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SortKey {
+    pub range: RangeRef,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub descending: bool,
+}
+
+impl SortState {
+    /// The state with every range moved by `map`; None when its range or a key goes away.
+    pub fn mapped(&self, mut map: impl FnMut(RangeRef) -> Option<RangeRef>) -> Option<SortState> {
+        let keys = self.keys.iter().map(|k| Some(SortKey { range: map(k.range)?, descending: k.descending })).collect::<Option<Vec<_>>>()?;
+        Some(SortState { range: map(self.range)?, case_sensitive: self.case_sensitive, keys })
+    }
 }
 
 /// A slicer: an on-sheet filter widget bound to one column of a table. Clicking its value tiles

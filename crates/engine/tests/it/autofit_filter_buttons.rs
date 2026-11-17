@@ -67,6 +67,7 @@ fn autofit_supports_ordinary_autofilters_without_double_counting_table_buttons()
         range: gridcraft_engine::core::RangeRef::parse("A1:A2").unwrap(),
         criteria: vec![],
         hidden_buttons: vec![],
+        sort: None,
     });
     assert_eq!(fit(&mut s), table_width, "overlapping filters occupy one button slot");
     sheet_mut(&mut s).tables.clear();

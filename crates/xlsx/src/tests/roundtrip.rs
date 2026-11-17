@@ -276,6 +276,7 @@ fn sample() -> Workbook {
             (3, FilterCriterion::FillColor(Color::Rgb(0xFF0000))),
         ],
         hidden_buttons: vec![],
+        sort: None,
     });
     s.protection = Some(SheetProtection {
         format_cells: true,
@@ -1785,6 +1786,7 @@ fn a_table_filter_criteria_survive_a_round_trip() {
         range: rr("A1:A4"),
         criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })],
         hidden_buttons: vec![],
+        sort: None,
     });
     s.rows.entry(1).or_default().hidden = true;
 
@@ -1831,6 +1833,7 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
         range: rr("B1:B3"),
         criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })],
         hidden_buttons: vec![],
+        sort: None,
     });
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();

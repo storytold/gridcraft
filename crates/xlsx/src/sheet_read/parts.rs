@@ -59,6 +59,23 @@ fn filter_op(s: Option<&str>) -> &'static str {
     }
 }
 
+/// A `sortState` of value keys; None when it has no keys, a range doesn't parse, or a key sorts by
+/// colour or icon, which this model doesn't keep (keeping the other keys would change the sort).
+fn read_sort_state(e: &El) -> Option<gridcraft_model::SortState> {
+    let range = e.attr("ref").and_then(RangeRef::parse)?;
+    let mut keys = vec![];
+    for c in e.kids("sortCondition") {
+        if c.attr("sortBy").is_some_and(|b| b != "value") || c.attr("customList").is_some() {
+            return None;
+        }
+        keys.push(gridcraft_model::SortKey { range: c.attr("ref").and_then(RangeRef::parse)?, descending: c.flag("descending", false) });
+    }
+    if keys.is_empty() || e.flag("columnSort", false) {
+        return None;
+    }
+    Some(gridcraft_model::SortState { range, case_sensitive: e.flag("caseSensitive", false), keys })
+}
+
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
     let mut criteria = vec![];
@@ -105,7 +122,7 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
         criteria.push((col, crit));
     }
     hidden_buttons.sort_unstable();
-    Some(AutoFilter { range, criteria, hidden_buttons })
+    Some(AutoFilter { range, criteria, hidden_buttons, sort: e.child("sortState").and_then(read_sort_state) })
 }
 
 pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {

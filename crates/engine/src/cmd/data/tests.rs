@@ -557,3 +557,33 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// #4292: the AutoFilter's saved sort moves with its rows, and goes with them.
+#[test]
+fn an_autofilter_sort_moves_with_its_rows() {
+    use gridcraft_model::{AutoFilter, SortKey, SortState};
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Amount"], ["a", 2], ["b", 5], ["c", 3]]})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().autofilter = Some(AutoFilter {
+        range: r("A1:B4"),
+        criteria: vec![],
+        hidden_buttons: vec![],
+        sort: Some(SortState { range: r("A2:B4"), case_sensitive: false, keys: vec![SortKey { range: r("B2:B4"), descending: true }] }),
+    });
+    let sort = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().autofilter.as_ref().and_then(|af| af.sort.clone());
+    s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+    let st = sort(&s).unwrap();
+    assert_eq!((st.range, st.keys[0].range, st.keys[0].descending), (r("A4:B6"), r("B4:B6"), true));
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    assert_eq!(sort(&s).unwrap().keys[0].range, r("C4:C6"));
+    // Undo puts it back where it was.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(sort(&s).unwrap().keys[0].range, r("B2:B4"));
+    // Deleting the sorted column drops the sort, not the filter.
+    s.execute("home.deleteColumns", json!({"cols": "B:B"})).unwrap();
+    let af = s.doc().unwrap().wb.sheet(0).unwrap().autofilter.clone();
+    assert!(af.is_some_and(|af| af.sort.is_none()));
+}

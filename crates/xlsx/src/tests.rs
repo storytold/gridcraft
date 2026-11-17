@@ -2,6 +2,7 @@
 
 mod array_export;
 mod autofilter_buttons;
+mod autofilter_sort;
 mod cellmetadata;
 mod chart_book_names;
 mod chart_bool_default;

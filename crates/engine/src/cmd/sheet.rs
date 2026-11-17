@@ -178,7 +178,11 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     sh.tables.retain(|t| t.range != RangeRef::default() && !t.columns.is_empty());
     if let Some(af) = sh.autofilter.as_mut() {
         match map_range(af.range) {
-            Some(r) => af.range = r,
+            Some(r) => {
+                af.range = r;
+                // The saved sort moves with its rows; one whose rows go away is dropped.
+                af.sort = af.sort.as_ref().and_then(|st| st.mapped(&map_range));
+            }
             None => sh.autofilter = None,
         }
     }
@@ -779,7 +783,10 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     sh.tables.retain(|t| t.range != RangeRef::default() && !t.columns.is_empty());
     if let Some(af) = sh.autofilter.as_mut() {
         match map_range(af.range, e) {
-            Some(r) => af.range = r,
+            Some(r) => {
+                af.range = r;
+                af.sort = af.sort.as_ref().and_then(|st| st.mapped(|x| map_range(x, e)));
+            }
             None => sh.autofilter = None,
         }
     }
