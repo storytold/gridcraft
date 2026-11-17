@@ -5,9 +5,10 @@ use serde_json::{Value as Json, json};
 use super::{CommandSpec, Result, Session, always, bad, bool_param, cmd, edit, has_doc, ok, str_param, target_sheet, u32_param};
 use crate::DocState;
 
+/// Registers file and window commands with their public parameter metadata.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
+        cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\", bookPrefix?: string (default Book), sheetPrefix?: string (default Sheet)} (prefixes apply to blank workbooks)", always, new_workbook),
         cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
@@ -31,6 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Creates a blank or sample workbook, validating optional UI-provided naming prefixes before using them.
 fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     let i = match str_param(p, "sample") {
         Some(name) => {
@@ -38,7 +40,18 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
             let title = crate::sample::title(name);
             s.add_document(DocState::new(wb, None, title, crate::Trust::Local))
         }
-        None => s.new_workbook(),
+        None => {
+            for key in ["bookPrefix", "sheetPrefix"] {
+                if p.get(key).is_some_and(|value| !value.is_string()) {
+                    return Err(bad("file.new", format!("`{key}` must be a string")));
+                }
+            }
+            let book = str_param(p, "bookPrefix").unwrap_or("Book");
+            let sheet = str_param(p, "sheetPrefix").unwrap_or("Sheet");
+            super::check_generated_prefix("file.new", book, false)?;
+            super::check_generated_prefix("file.new", sheet, true)?;
+            s.new_workbook_named(book, sheet)
+        }
     };
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }
@@ -267,4 +280,17 @@ fn close_window(s: &mut Session, p: &Json) -> Result<Json> {
     }
     s.close_window(id);
     Ok(json!({"closed": true, "document": true}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_workbook_rejects_non_string_prefixes() {
+        let mut session = Session::default();
+        assert!(new_workbook(&mut session, &json!({"bookPrefix": 42})).is_err());
+        assert!(new_workbook(&mut session, &json!({"sheetPrefix": false})).is_err());
+        assert!(new_workbook(&mut session, &json!({})).is_ok());
+    }
 }

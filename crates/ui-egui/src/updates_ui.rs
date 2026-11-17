@@ -5,7 +5,16 @@
 use craft_update::CheckResultResponse;
 use craft_update::updater::{Action, Status, Updater};
 
-use crate::SheetApp;
+use crate::{SheetApp, i18n::Language};
+
+thread_local! {
+    static UPDATE_LANGUAGE: std::cell::Cell<Language> = const { std::cell::Cell::new(Language::En) };
+}
+
+/// Translates the shared updater UI using the language of the window drawing it.
+fn translate_update(text: &str, args: &[(&str, &str)]) -> String {
+    UPDATE_LANGUAGE.with(|language| craft_update::translate::fill(language.get().tr(text), args))
+}
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -19,7 +28,7 @@ pub(crate) struct Runtime {
 
 impl Default for Runtime {
     fn default() -> Self {
-        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION), startup: false, manual: false }
+        Self { updater: Updater::new(&crate::UPDATE_APP, VERSION).with_translator(translate_update), startup: false, manual: false }
     }
 }
 
@@ -57,7 +66,10 @@ fn result_window_shows(status: &Status, prompt_open: bool) -> bool {
 pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
     // The close for a ready update waits until no workbook holds unsaved work.
     let clean = !app.session.documents().iter().any(|d| d.is_dirty());
-    match app.updates_rt.updater.show_if(ctx, clean) {
+    // The shared dialogs are drawn in the language of the window that opened them.
+    let previous_language = UPDATE_LANGUAGE.replace(app.ui.language);
+    let action = app.updates_rt.updater.show_if(ctx, clean);
+    match action {
         Action::OpenUrl(url) => {
             if let Some(open) = &app.services.open_url {
                 open(&url);
@@ -69,7 +81,8 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     let rt = &mut app.updates_rt;
     if result_window_shows(rt.updater.status(), rt.updater.prompt_open()) {
-        match craft_update::CheckResultDialog::new(&crate::UPDATE_APP, VERSION).show(ctx, rt.updater.status()) {
+        let dialog = craft_update::CheckResultDialog::new(&crate::UPDATE_APP, VERSION).with_translator(translate_update);
+        match dialog.show(ctx, rt.updater.status()) {
             CheckResultResponse::Close => rt.updater.dismiss_status(),
             CheckResultResponse::CheckAgain => rt.updater.check_now(ctx),
             // The next `show_if` asks the window to close once nothing is unsaved.
@@ -77,6 +90,7 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
             CheckResultResponse::None => {}
         }
     }
+    UPDATE_LANGUAGE.set(previous_language);
 }
 
 #[cfg(test)]

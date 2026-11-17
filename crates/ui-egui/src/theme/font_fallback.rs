@@ -110,18 +110,17 @@ pub(super) fn covers_arabic(bytes: &[u8], index: u32) -> bool {
 /// Every fallback face we look for, in chain order: `(key, candidate files)`. One file per script
 /// family is enough — epaint picks the first face with the glyph, and a script's glyphs live in one
 /// file. Order only matters between faces that both cover a glyph (Japanese vs Chinese kanji), so
-/// the interface language reorders the two Han entries and nothing else.
+/// the interface language reorders the Han entries, adding a TC face for Traditional Chinese.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u32)>)> {
     let ja = ("sys-cjk-han-ja", cjk_han_japanese());
     let zh = ("sys-cjk-han-zh", cjk_han_simplified());
-    let (first, second) = match han {
-        HanOrder::Japanese => (ja, zh),
-        HanOrder::Chinese => (zh, ja),
+    let mut han_faces = match han {
+        HanOrder::Japanese => vec![ja, zh],
+        HanOrder::Chinese => vec![zh, ja],
+        HanOrder::TraditionalChinese => vec![("sys-cjk-han-tc", cjk_han_traditional()), zh, ja],
     };
-    vec![
-        first,
-        second,
+    han_faces.extend([
         ("sys-cjk-hangul", cjk_hangul()),
         ("sys-thai", thai()),
         ("sys-lao", lao()),
@@ -129,7 +128,8 @@ pub(super) fn fallback_faces(han: HanOrder) -> Vec<(&'static str, Vec<(String, u
         ("sys-arabic", arabic()),
         ("sys-symbols", symbols()),
         ("sys-symbols-2", symbols_more()),
-    ]
+    ]);
+    han_faces
 }
 
 /// Linux directories that hold CJK fonts across distributions: Debian/Ubuntu (`opentype/noto`,
@@ -170,7 +170,7 @@ fn windows_fonts() -> String {
     std::env::var("WINDIR").map(|w| format!("{w}\\Fonts")).unwrap_or_else(|_| "C:\\Windows\\Fonts".into())
 }
 
-/// The Noto Sans CJK faces for one locale (`jp`, `sc`, `kr`): the per-locale OTF, then the
+/// The Noto Sans CJK faces for one locale (`jp`, `sc`, `tc`, `kr`): the per-locale OTF, then the
 /// region-merged TTC at `face`, in every Linux font directory.
 #[cfg(not(target_arch = "wasm32"))]
 fn noto_cjk(locale: &str, face: u32) -> Vec<(String, u32)> {
@@ -218,6 +218,29 @@ pub(super) fn cjk_han_simplified() -> Vec<(String, u32)> {
         v.push((format!("{d}/wenquanyi/wqy-microhei.ttc"), 0));
         v.push((format!("{d}/wqy-microhei.ttc"), 0));
     }
+    v
+}
+
+/// Installed Taiwan-standard faces. Prefer the OFL Noto TC face when installed; no font bytes
+/// are bundled. The merged Noto collection's TC face is index 3, not the SC face at index 2.
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn cjk_han_traditional() -> Vec<(String, u32)> {
+    let win = windows_fonts();
+    let mut v = Vec::new();
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        v.push((format!("{local}\\Microsoft\\Windows\\Fonts\\NotoSansCJKtc\\NotoSansCJKtc-Regular.otf"), 0));
+        v.push((format!("{local}\\Microsoft\\Windows\\Fonts\\NotoSansCJKtc-Regular.otf"), 0));
+    }
+    v.push((format!("{win}\\NotoSansCJKtc-Regular.otf"), 0));
+    v.push(("/Library/Fonts/NotoSansCJKtc-Regular.otf".into(), 0));
+    if let Ok(home) = std::env::var("HOME") {
+        for dir in ["Library/Fonts", ".local/share/fonts", ".fonts"] {
+            v.push((format!("{home}/{dir}/NotoSansCJKtc-Regular.otf"), 0));
+            v.push((format!("{home}/{dir}/NotoSansCJK-Regular.ttc"), 3));
+        }
+    }
+    v.extend(noto_cjk("tc", 3));
+    v.push((format!("{win}\\msjh.ttc"), 0)); // Microsoft JhengHei
     v
 }
 

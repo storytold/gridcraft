@@ -4,7 +4,7 @@ use super::{
 };
 
 impl SheetApp {
-    /// Runs an engine command (or a UI command) and handles UI requests it makes.
+    /// Runs a command with language-independent naming defaults and handles its UI requests.
     pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let r = self.run_command(id, params);
         // This copy leaves the system clipboard alone: note what it holds, so Paste can tell
@@ -16,6 +16,7 @@ impl SheetApp {
         r
     }
 
+    /// Settles affected drafts and dispatches engine or interface commands with the supplied parameters.
     pub(super) fn run_command(&mut self, id: &str, params: Json) -> Result<Json, String> {
         let switches_window = id.starts_with("window.")
             || matches!(id, "view.newWindow" | "view.hideWindow" | "view.unhideWindow")
@@ -114,6 +115,24 @@ impl SheetApp {
         r
     }
 
+    /// Supplies localized generated-name defaults only for a command invoked by the interface.
+    pub(crate) fn run_from_ui(&mut self, id: &str, mut params: Json) -> Result<Json, String> {
+        if matches!(id, "insert.table" | "home.formatAsTable")
+            && let Some(object) = params.as_object_mut()
+        {
+            object.entry("columnPrefix").or_insert_with(|| json!(self.ui.language.tr("Generated|Column")));
+        }
+        if let Some(object) = params.as_object_mut() {
+            if id == "file.new" {
+                object.entry("bookPrefix").or_insert_with(|| json!(self.ui.language.tr("Book")));
+                object.entry("sheetPrefix").or_insert_with(|| json!(self.ui.language.tr("Sheet")));
+            } else if id == "home.insertSheet" {
+                object.entry("namePrefix").or_insert_with(|| json!(self.ui.language.tr("Sheet")));
+            }
+        }
+        self.run(id, params)
+    }
+
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
@@ -141,7 +160,7 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
-        match self.run(id, params) {
+        match self.run_from_ui(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
             Err(e) => self.alert(e),

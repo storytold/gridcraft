@@ -12,7 +12,11 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     general_options(app, ui, lang);
     ui.add_space(6.0);
     let mut formula_bar = app.session.prefs.formula_bar;
-    if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
+    if ui
+        .checkbox(&mut formula_bar, lang.tr("Show formula bar"))
+        .on_hover_text(lang.tr("Show or hide the formula bar used to view and edit the active cell."))
+        .changed()
+    {
         app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
     }
     let mut highlight_row = app.ui.highlight_active_row;
@@ -22,13 +26,21 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;
-    if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
+    if ui
+        .checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values"))
+        .on_hover_text(lang.tr("Complete text from a matching value in the same column while typing in a cell."))
+        .changed()
+    {
         app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
     let mut autosave = app.ui.autosave;
-    if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
+    if ui
+        .checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change"))
+        .on_hover_text(lang.tr("Save changes automatically to .xlsx workbooks that already have a file path."))
+        .changed()
+    {
         app.toggle_autosave();
     }
     let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
@@ -74,7 +86,8 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
                 }
             })
             .response
-            .labelled_by(label.id);
+            .labelled_by(label.id)
+            .on_hover_text(lang.tr("Choose a light or dark appearance, or follow your system's theme."));
         ui.end_row();
         let label = ui.label(lang.tr("Interface language"));
         craft_ui::ComboBox::from_id_salt("backstage_language")
@@ -88,7 +101,8 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
                 }
             })
             .response
-            .labelled_by(label.id);
+            .labelled_by(label.id)
+            .on_hover_text(lang.tr("Choose the language used by the interface."));
         ui.end_row();
     });
 }
@@ -96,18 +110,28 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
 /// The calculation mode, and iterative calculation, of the active workbook.
 fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings) {
     use gridcraft_engine::model::CalcMode;
-    for (mode, id, label) in [
-        (CalcMode::Automatic, "automatic", "Automatic"),
-        (CalcMode::AutomaticExceptTables, "automaticExceptTables", "Automatic Except for Data Tables"),
-        (CalcMode::Manual, "manual", "Manual"),
+    for (mode, id, label, tip) in [
+        (CalcMode::Automatic, "automatic", "Automatic", "Recalculate formulas automatically when workbook values or formulas change."),
+        (
+            CalcMode::AutomaticExceptTables,
+            "automaticExceptTables",
+            "Automatic Except for Data Tables",
+            "Recalculate formulas automatically. What-if data tables are currently snapshots; run Data Table again to update them.",
+        ),
+        (
+            CalcMode::Manual,
+            "manual",
+            "Manual",
+            "Defer updates to dependent formulas until Calculate Now or Calculate Sheet. Formulas you edit still calculate immediately.",
+        ),
     ] {
-        if ui.radio(calc.mode == mode, lang.tr(label)).clicked() && calc.mode != mode {
+        if ui.radio(calc.mode == mode, lang.tr(label)).on_hover_text(lang.tr(tip)).clicked() && calc.mode != mode {
             app.run_or_alert("formulas.calculationOptions", json!({"mode": id}));
         }
     }
     ui.add_space(4.0);
     let mut iterative = calc.iterative;
-    if ui.checkbox(&mut iterative, lang.tr("Enable iterative calculation")).changed() {
+    if ui.checkbox(&mut iterative, lang.tr("Enable iterative calculation")).on_hover_text(lang.tr("Repeatedly calculate circular references until results converge or the iteration limit is reached. Enable only for intentional circular formulas.")).changed() {
         app.run_or_alert("formulas.calculationOptions", json!({"iterative": iterative}));
     }
     // Maximum Iterations and Maximum Change apply only while iteration is on, as in Excel.

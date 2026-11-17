@@ -10,7 +10,15 @@ pub(super) fn compiled() -> bool {
 
 // ---------------------------------------------------------------- tables
 
+/// Creates a structured table, retaining supplied headers and numbering missing headers with the requested prefix.
 pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
+    let column_prefix = match p.get("columnPrefix") {
+        None => "Column",
+        Some(Json::String(value)) if !value.trim().is_empty() && value.chars().count() <= 64 && !value.chars().any(char::is_control) => {
+            value.as_str()
+        }
+        _ => return Err(bad("insert.table", "columnPrefix must be a nonempty string of at most 64 characters")),
+    };
     let r = block(s, p)?;
     let sheet = target_sheet(s, p)?;
     let d = s.doc()?;
@@ -68,7 +76,7 @@ pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             rewrite(cx, &name, &e)?;
             let sh = cx.sheet_mut(sheet)?;
             for (i, c) in (r.start.col..=r.end.col).enumerate() {
-                sh.set_value(CellRef::new(r.start.row, c), gridcraft_core::Value::text(format!("Column{}", i + 1)));
+                sh.set_value(CellRef::new(r.start.row, c), gridcraft_core::Value::text(format!("{column_prefix}{}", i + 1)));
             }
             cx.structural = true;
             RangeRef::new(r.start, CellRef::new((r.end.row + 1).min(MAX_ROWS - 1), r.end.col))
@@ -82,7 +90,7 @@ pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
         for c in r.start.col..=r.end.col {
             let mut n = sh.value(CellRef::new(r.start.row, c)).display();
             if n.is_empty() {
-                n = format!("Column{}", c - r.start.col + 1);
+                n = format!("{column_prefix}{}", c - r.start.col + 1);
             }
             let base = n.clone();
             let key = base.to_ascii_lowercase();
@@ -215,10 +223,26 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
     for (i, col) in t.columns.iter().enumerate() {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
-            let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
+            let f = gridcraft_formula::Expr::Call(
+                "SUBTOTAL".into(),
+                vec![
+                    gridcraft_formula::Expr::Number(f64::from(code)),
+                    gridcraft_formula::Expr::Struct(gridcraft_formula::StructRef {
+                        table: t.name.clone(),
+                        specifiers: vec![],
+                        col_start: Some(col.name.clone()),
+                        col_end: None,
+                    }),
+                ],
+            );
             sh.set_cell(
                 c,
-                Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
+                Cell {
+                    formula: Some(std::sync::Arc::new(Formula::from_expr(f))),
+                    value: gridcraft_core::Value::Empty,
+                    style: sh.style_id(c),
+                    py: None,
+                },
             );
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));

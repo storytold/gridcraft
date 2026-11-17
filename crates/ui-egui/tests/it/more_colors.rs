@@ -36,7 +36,7 @@ fn open_fill_palette(h: &mut Harness) {
 }
 
 fn type_hex(h: &mut Harness, hex: &str) {
-    h.get_by_label("Hex").click();
+    h.get_by_label(h.state().ui.language.tr("Hex")).click();
     h.run_steps(2);
     press(h, Key::A, Modifiers::COMMAND);
     h.input_mut().events.push(Event::Text(hex.to_string()));
@@ -51,7 +51,7 @@ fn more_colors_applies_the_typed_colour_and_remembers_it() {
     h.get_by_label("More Colors…").click();
     h.run_steps(3);
     type_hex(&mut h, "#12AB34");
-    h.get_by_label("  OK  ").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, h.state().ui.language.tr("OK")).click();
     h.run_steps(4);
     assert_eq!(h.state().grid.last_fill, "#12AB34");
     assert_eq!(h.state().session.journal.iter().filter(|(id, _)| id == "home.fillColor").count(), 1);
@@ -90,7 +90,7 @@ fn the_font_colour_menu_has_them_too_and_shares_the_recent_colours() {
     h.get_by_label("More Colors…").click();
     h.run_steps(3);
     type_hex(&mut h, "#00FF7F");
-    h.get_by_label("  OK  ").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, h.state().ui.language.tr("OK")).click();
     h.run_steps(4);
     for k in [Key::F10, Key::H, Key::F, Key::C] {
         press(&mut h, k, Modifiers::NONE);
@@ -99,4 +99,24 @@ fn the_font_colour_menu_has_them_too_and_shares_the_recent_colours() {
     h.get_by_label("Automatic");
     h.get_by_label("Recent Colors");
     h.get_by_label("More Colors…");
+}
+
+/// Localized palette labels keep the same typed-colour application and recent-colour behavior.
+#[test]
+fn russian_palette_applies_a_typed_colour() {
+    let mut h = harness();
+    let language = gridcraft_ui_egui::i18n::Language::Ru;
+    h.state_mut().ui.language = language;
+    h.run_steps(3);
+    open_fill_palette(&mut h);
+    h.get_by_label(language.tr("Theme Colors"));
+    h.get_by_label(language.tr("Standard Colors"));
+    h.get_by_label(language.tr("More Colors…")).click();
+    h.run_steps(3);
+    type_hex(&mut h, "#12AB34");
+    h.get_by_role_and_label(egui::accesskit::Role::Button, language.tr("OK")).click();
+    h.run_steps(4);
+    assert_eq!(h.state().grid.last_fill, "#12AB34");
+    open_fill_palette(&mut h);
+    h.get_by_label(language.tr("Recent Colors"));
 }

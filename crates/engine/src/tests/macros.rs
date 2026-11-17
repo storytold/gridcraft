@@ -9,6 +9,20 @@ use serde_json::{Value as Json, json};
 use super::{s, v};
 use crate::{EngineError, Session};
 
+#[test]
+fn macro_sheet_pairing_uses_identity_across_case_variants_renames_and_deletions() {
+    let mut before = crate::model::Workbook::new();
+    before.sheets[0] = Arc::new(crate::model::Sheet::new("лист1"));
+    before.sheets.push(Arc::new(crate::model::Sheet::new("ЛИСТ1")));
+    let mut after = before.clone();
+    Arc::make_mut(&mut after.sheets[1]).name = "Renamed".into();
+    assert_eq!(crate::macros::run::pair_sheets(&before, &after), (vec![(0, Some(0)), (1, Some(1))], vec![]));
+
+    after.sheets.remove(0);
+    after.sheets.push(Arc::new(crate::model::Sheet::new("Copy")));
+    assert_eq!(crate::macros::run::pair_sheets(&before, &after), (vec![(0, None), (1, Some(0))], vec![1]));
+}
+
 fn undo_labels(s: &Session) -> Vec<String> {
     s.doc().unwrap().undo.iter().map(|e| e.label.clone()).collect()
 }

@@ -296,6 +296,23 @@ pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
 
 /// Distinct display values of a filter column (for the dropdown list).
 pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
+    filter_entries(wb, sheet, col).into_iter().map(|entry| (entry.label, entry.selected)).collect()
+}
+
+/// A canonical filter label with its underlying type, so interfaces can localize constants without changing text.
+#[derive(Clone)]
+pub struct FilterValue {
+    pub label: String,
+    pub selected: bool,
+    pub value: Value,
+    pub formula_shown: bool,
+    /// Representative source cell, allowing interfaces to retain its numeric format for display.
+    /// Commands continue to use the canonical `label`, independently of this presentation metadata.
+    pub source: CellRef,
+}
+
+/// Distinct filter choices retaining typed values; blanks use Empty while command labels stay canonical.
+pub fn filter_entries(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterValue> {
     let Some(sh) = wb.sheet(sheet) else { return vec![] };
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
@@ -317,11 +334,16 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
             _ => true,
         };
         let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-        seen.entry((key, t)).or_insert(on);
+        let formula_shown =
+            !blank && sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) && !crate::display::formula_hidden(wb, sh, c);
+        seen.entry((key, t)).or_insert((on, if blank { Value::Empty } else { v }, c, formula_shown));
     }
     let mut values: Vec<_> = seen.into_iter().collect();
     values.sort_by(|((a, ta), _), ((b, tb), _)| {
         a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
     });
-    values.into_iter().map(|((_, t), on)| (t, on)).collect()
+    values
+        .into_iter()
+        .map(|((_, label), (selected, value, source, formula_shown))| FilterValue { label, selected, value, formula_shown, source })
+        .collect()
 }

@@ -34,6 +34,7 @@ pub mod equation;
 mod floating_pictures;
 pub mod fonts;
 pub mod form_controls;
+mod format_locale;
 pub mod formula_bar;
 mod formula_locale;
 pub mod function_library;
@@ -350,6 +351,9 @@ pub struct SheetApp {
 
 /// Strips the engine's error prefixes for message boxes.
 pub fn clean_error(e: &str) -> String {
+    if let Some(rest) = e.strip_prefix("command `").and_then(|s| s.split_once("` is not available right now: ")).map(|(_, message)| message) {
+        return rest.to_string();
+    }
     if let Some(rest) = e.split_once("`: ").map(|(_, r)| r) {
         return rest.to_string();
     }

@@ -29,6 +29,7 @@ use cond_format::{add_cf, clear_cf, insert_icon, manage_cf};
 use links::{comment, delete_comment, insert_link, open_link, reply_comment, resolve_comment, show_note};
 use objects::{delete_object, insert_picture, insert_shape, insert_sparkline, move_object, set_anchor_mode, shape_set_text};
 use table::{format_as_table, insert_table, table_convert, table_flag, table_rename, table_style, table_total_fn};
+/// Registers insertion commands and their canonical parameter schemas.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -36,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Table",
             ["Insert", "Tables"],
             Some("Cmd+T"),
-            "{range?, header?: true, style?: \"TableStyleMedium2\", name?}",
+            "{range?, columnPrefix?: string (default Column), header?: true, style?: \"TableStyleMedium2\", name?}",
             has_doc,
             insert_table
         ),
@@ -45,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Format as Table",
             ["Home", "Styles"],
             None,
-            "{range?, style: \"TableStyleMedium2\", header?} (inside a table: restyles it)",
+            "{range?, style: \"TableStyleMedium2\", header?, columnPrefix?: string (default Column)} (inside a table: restyles it)",
             has_doc,
             format_as_table
         ),

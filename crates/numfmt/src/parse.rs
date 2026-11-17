@@ -146,6 +146,7 @@ pub(crate) struct Section {
     /// Date sections: has `AM/PM` or `A/P`, so hours show on the 12-hour clock.
     pub ampm: bool,
     pub calendar: Calendar,
+    pub date_lcid: Option<u16>,
     /// Excel rejects the whole code because of this section: a `B` and digit that is not a
     /// calendar prefix, or a prefix before a number format (`B20.00`).
     pub invalid: bool,
@@ -279,6 +280,7 @@ struct Raw {
     cond: Option<Cond>,
     currency: bool,
     calendar: Calendar,
+    date_lcid: Option<u16>,
     /// The section's calendar prefix as written, `'1'` or `'2'` (whether or not a locale tag
     /// cancels it).
     prefix: Option<char>,
@@ -305,7 +307,16 @@ fn after_leading_brackets(cs: &[char]) -> (usize, bool) {
 
 fn tokenize(src: &str) -> Raw {
     let cs: Vec<char> = src.chars().collect();
-    let mut raw = Raw { toks: Vec::new(), color: None, cond: None, currency: false, calendar: Calendar::Gregorian, prefix: None, invalid: false };
+    let mut raw = Raw {
+        toks: Vec::new(),
+        color: None,
+        cond: None,
+        currency: false,
+        calendar: Calendar::Gregorian,
+        date_lcid: None,
+        prefix: None,
+        invalid: false,
+    };
     let toks = &mut raw.toks;
     // With no `]` at or after a `[`, that `[` is a literal; checking this once keeps the scan linear.
     let last_close = cs.iter().rposition(|&c| c == ']');
@@ -378,6 +389,10 @@ fn tokenize(src: &str) -> Raw {
                 let close = if last_close.is_some_and(|l| l > i) { cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']')) } else { None };
                 if let Some(p) = close {
                     let content: String = cs.get(i + 1..i + 1 + p).unwrap_or(&[]).iter().collect();
+                    if let Some((_, tag)) = content.strip_prefix('$').and_then(|s| s.split_once('-')) {
+                        raw.date_lcid =
+                            u32::from_str_radix(tag, 16).ok().map(|id| id as u16).or_else(|| gridcraft_core::region::find(tag).map(|r| r.lcid));
+                    }
                     bracket(&mut raw_parts(toks, &mut raw.color, &mut raw.cond, &mut raw.currency), &content);
                     i += p + 2;
                 } else {
@@ -515,7 +530,7 @@ fn date_part(t: &Tok) -> Option<DatePart> {
 }
 
 fn analyze(raw: Raw) -> Section {
-    let Raw { toks, color, cond, currency, calendar, prefix, invalid } = raw;
+    let Raw { toks, color, cond, currency, calendar, date_lcid, prefix, invalid } = raw;
     let is_date = toks.iter().any(|t| matches!(t, Tok::Date(_)));
     let has_general = toks.iter().any(|t| matches!(t, Tok::General));
     let mut sec = Section {
@@ -536,6 +551,7 @@ fn analyze(raw: Raw) -> Section {
         needs_date: false,
         ampm: false,
         calendar,
+        date_lcid,
         invalid,
     };
     if is_date {
