@@ -280,6 +280,160 @@ fn hostile_formula_text_does_not_overflow_the_stack() {
     assert_eq!(a_value, gridcraft_core::Value::Number(3.0));
 }
 
+/// #2173: a hyperlink is copied into every cell it covers, so oversized targets are dropped,
+/// ScreenTips are cut to 255 characters and the cell cap holds across `<hyperlinks>` blocks.
+#[test]
+fn hyperlink_copies_are_bounded() {
+    let long = "A".repeat(20_000);
+    let tip = "t".repeat(20_000);
+    let body = format!(
+        r#"<sheetData/><hyperlinks><hyperlink ref="A1:A10000" location="{long}" tooltip="{tip}"/><hyperlink ref="B1:B3" location="Data!C1" tooltip="{tip}"/></hyperlinks>"#
+    );
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let links = &wb.sheets[0].hyperlinks;
+    assert_eq!(links.len(), 3);
+    assert!(links.values().all(|l| l.target == "Data!C1" && l.tooltip.as_ref().map(|t| t.chars().count()) == Some(255)));
+    assert!(rep.warnings.iter().any(|w| w.contains("longer than")), "{:?}", rep.warnings);
+
+    let blocks: String =
+        ["A", "B", "C"].iter().map(|c| format!(r#"<hyperlinks><hyperlink ref="{c}1:{c}8000" location="Data!A1"/></hyperlinks>"#)).collect();
+    let (wb, _) = read_xlsx(&minimal(&format!("<sheetData/>{blocks}"), &[], "", "")).unwrap();
+    assert_eq!(wb.sheets[0].hyperlinks.len(), 10_000);
+}
+
+/// #2173: every rule of a conditional-format block copies the block's ranges; the kept range
+/// cells (ranges x rules) are capped per sheet.
+#[test]
+fn conditional_format_range_copies_are_bounded() {
+    let sq = (1..=10_000).map(|r| format!("A{r}")).collect::<Vec<_>>().join(" ");
+    let rules = r#"<cfRule type="containsBlanks" priority="1"/>"#.repeat(500);
+    let body = format!(r#"<sheetData/><conditionalFormatting sqref="{sq}">{rules}</conditionalFormatting>"#);
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let cfs = &wb.sheets[0].cond_formats;
+    // 400 rules of 10,000 one-cell ranges reach the 4,000,000 kept-cell cap.
+    assert_eq!(cfs.len(), 400);
+    assert!(cfs.iter().all(|c| c.ranges.len() == 10_000));
+    assert!(rep.warnings.iter().any(|w| w.contains("kept range cells")), "{:?}", rep.warnings);
+}
+
+/// #2173: the kept-range-cell cap counts every block of the sheet. A large block that fills the
+/// cap leaves no room for a later one-cell block.
+#[test]
+fn conditional_format_cap_holds_across_blocks() {
+    let block = |sq: &str, n: usize| {
+        format!(r#"<conditionalFormatting sqref="{sq}">{}</conditionalFormatting>"#, r#"<cfRule type="containsBlanks" priority="1"/>"#.repeat(n))
+    };
+    let body = format!("<sheetData/>{}{}", block("A1:D1000000", 1), block("E1", 1));
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let cfs = &wb.sheets[0].cond_formats;
+    assert_eq!(cfs.len(), 1, "4,000,000 cells fill the cap; the one-cell block would exceed it");
+    assert_eq!(cfs[0].ranges, vec![gridcraft_core::RangeRef::parse("A1:D1000000").unwrap()]);
+    assert!(rep.warnings.iter().any(|w| w.contains("kept range cells")), "{:?}", rep.warnings);
+}
+
+/// #2173: earlier blocks are charged their own cells, not the later block's size times the rule
+/// count, so a large block after a few small rules still fits under the cap.
+#[test]
+fn conditional_format_cap_admits_a_large_block_after_small_ones() {
+    let block = |sq: &str, n: usize| {
+        format!(r#"<conditionalFormatting sqref="{sq}">{}</conditionalFormatting>"#, r#"<cfRule type="containsBlanks" priority="1"/>"#.repeat(n))
+    };
+    let body = format!("<sheetData/>{}{}", block("E1", 3), block("A1:C1000000", 1));
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    assert_eq!(wb.sheets[0].cond_formats.len(), 4, "3 + 3,000,000 kept cells are under the cap");
+    assert!(!rep.warnings.iter().any(|w| w.contains("kept range cells")), "{:?}", rep.warnings);
+}
+
+/// #2173: cell formats share one copy of each custom number format (even an over-long one, which
+/// is kept as stored) and font names are cut to 255 characters.
+#[test]
+fn style_copies_are_bounded() {
+    let code = "0".repeat(50_000);
+    let font = "F".repeat(100_000);
+    let xfs = r#"<xf numFmtId="164" fontId="0"/>"#.repeat(10_000);
+    let styles = format!(
+        r#"<styleSheet><numFmts><numFmt numFmtId="164" formatCode="{code}"/><numFmt numFmtId="165" formatCode="0.000&quot;x&quot;"/></numFmts><fonts><font><name val="{font}"/></font></fonts><cellXfs>{xfs}<xf numFmtId="165"/><xf numFmtId="165"/></cellXfs><dxfs><dxf><numFmt numFmtId="166" formatCode="{code}"/></dxf></dxfs></styleSheet>"#
+    );
+    let st = crate::styles::read_styles(&crate::xml::parse(styles.as_bytes()).unwrap(), &[], "");
+    assert_eq!(st.xfs.len(), 10_002);
+    let first = &st.xfs[0].num_fmt.0;
+    assert_eq!(first.len(), 50_000);
+    assert!(st.xfs[..10_000].iter().all(|s| std::sync::Arc::ptr_eq(&s.num_fmt.0, first) && s.font.name.chars().count() == 255));
+    assert_eq!(st.xfs[10_000].num_fmt.as_str(), "0.000\"x\"");
+    assert!(std::sync::Arc::ptr_eq(&st.xfs[10_000].num_fmt.0, &st.xfs[10_001].num_fmt.0));
+    assert_eq!(st.dxfs[0].num_fmt.as_str(), code);
+
+    // The same styles part read through the package.
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let sheet = r#"<sheetData><row r="1"><c r="A1" s="1"><v>1</v></c></row></sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(sheet, &[("xl/styles.xml", &styles)], rels, "")).unwrap();
+    assert_eq!(wb.sheets.len(), 1);
+}
+
+/// #2173: a shared formula's master is copied into every dependent; an over-long master keeps
+/// the dependents' cached values instead of copying it into each of them.
+#[test]
+fn shared_formula_copies_are_bounded() {
+    use gridcraft_core::{CellRef, Value};
+    let master = format!("SUM({}1)", "1,".repeat(500_000));
+    let mut rows = format!(r#"<row r="1"><c r="A1"><f t="shared" si="0" ref="A1:A20000">{master}</f><v>1</v></c></row>"#);
+    for r in 2..=20_000 {
+        rows.push_str(&format!(r#"<row r="{r}"><c r="A{r}"><f t="shared" si="0"/><v>7</v></c></row>"#));
+    }
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let cells = &wb.sheets[0].cells;
+    for r in [1, 9_999, 19_999] {
+        let c = cells.get(CellRef::new(r, 0)).unwrap();
+        assert!(c.formula.is_none());
+        assert_eq!(c.value, Value::Number(7.0));
+    }
+    assert!(rep.warnings.iter().any(|w| w.contains("shared formula is longer")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn a_long_shared_master_expands_into_only_part_of_many_cells() {
+    use gridcraft_core::{CellRef, Value};
+    // About 4,000 characters and 2,000 operands: parseable, but far more than an ordinary
+    // formula cell, so each copy pays for its excess and ten thousand of them exceed the budget.
+    let master = vec![format!("SUM({}1)", "1,".repeat(199)); 10].join("+");
+    let mut rows = format!(r#"<row r="1"><c r="A1"><f t="shared" si="0" ref="A1:A10000">{master}</f><v>1</v></c></row>"#);
+    for r in 2..=10_000 {
+        rows.push_str(&format!(r#"<row r="{r}"><c r="A{r}"><f t="shared" si="0"/><v>7</v></c></row>"#));
+    }
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let cells = &wb.sheets[0].cells;
+    assert!(cells.get(CellRef::new(1, 0)).unwrap().formula.is_some(), "the first dependents still expand");
+    let last = cells.get(CellRef::new(9_999, 0)).unwrap();
+    assert!(last.formula.is_none());
+    assert_eq!(last.value, Value::Number(7.0));
+    assert!(rep.warnings.iter().any(|w| w.contains("expand to too much data")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn many_ordinary_shared_formulas_all_expand() {
+    let mut rows =
+        String::from(r#"<row r="1"><c r="B1"><f t="shared" si="0" ref="B1:B60000">IF(A1>0,SUM(A1:A10)/COUNT(A1:A10),"")</f><v>1</v></c></row>"#);
+    for r in 2..=60_000 {
+        rows.push_str(&format!(r#"<row r="{r}"><c r="B{r}"><f t="shared" si="0"/><v>7</v></c></row>"#));
+    }
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let cells = &wb.sheets[0].cells;
+    assert!(cells.get(gridcraft_core::CellRef::new(59_999, 1)).unwrap().formula.is_some());
+    assert!(!rep.warnings.iter().any(|w| w.contains("shared formula")), "{:?}", rep.warnings);
+}
+
+#[test]
+fn an_unparseable_multibyte_shared_master_gets_no_length_warning() {
+    // 5,001 characters but over 10,000 bytes, and unparseable for another reason (an open string).
+    let master = format!("\"{}", "\u{e9}".repeat(5_000));
+    assert!(master.len() > gridcraft_formula::MAX_FORMULA_LEN && master.chars().count() < gridcraft_formula::MAX_FORMULA_LEN);
+    let rows = format!(
+        r#"<row r="1"><c r="A1"><f t="shared" si="0" ref="A1:A2">{master}</f><v>1</v></c></row><row r="2"><c r="A2"><f t="shared" si="0"/><v>7</v></c></row>"#
+    );
+    let (_, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("longer than")), "{:?}", rep.warnings);
+}
+
 #[test]
 fn repeated_column_ranges_have_one_worksheet_work_budget() {
     // 62 * 16,384 = 1,015,808 assignments, while the map holds at most 16,384 columns.
@@ -384,4 +538,19 @@ fn outline_summary_directions_round_trip() {
     let bytes = write_xlsx(&wb).unwrap();
     let xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/worksheets/sheet1.xml").unwrap().unwrap()).unwrap();
     assert!(!xml.contains("outlinePr"), "{xml}");
+}
+
+/// A shared follower whose copy is refused keeps its cached value even inside an array range.
+#[test]
+fn refused_shared_copies_keep_their_values_inside_array_ranges() {
+    let master = format!("1+(\"{}", "a".repeat(gridcraft_formula::MAX_FORMULA_LEN));
+    let rows = format!(
+        r#"<row r="1"><c r="B1"><f t="array" ref="B1:C3">1</f><v>1</v></c><c r="C1"><f t="shared" ref="C1:C3" si="0">{master}</f><v>1</v></c></row><row r="2"><c r="C2"><f t="shared" si="0"/><v>7</v></c></row>"#
+    );
+    let (wb, rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    let c2 = gridcraft_core::CellRef::new(1, 2);
+    assert!(s.cell(c2).is_some_and(|c| c.formula.is_none()));
+    assert_eq!(s.value(c2), gridcraft_core::Value::Number(7.0));
+    assert!(rep.warnings.iter().any(|w| w.contains("longer than")), "{:?}", rep.warnings);
 }

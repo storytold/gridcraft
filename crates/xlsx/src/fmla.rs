@@ -47,6 +47,7 @@ fn prefix_params(e: Expr, scope: &[String]) -> Expr {
         Expr::Name(n) if scope.iter().any(|s| s.eq_ignore_ascii_case(&n)) => Expr::Name(format!("{PARAM_PREFIX}{n}")),
         Expr::Unary(op, x) => Expr::Unary(op, sub(x, scope)),
         Expr::Paren(x) => Expr::Paren(sub(x, scope)),
+        Expr::Binary(op, a, b) if !matches!(*a, Expr::Binary(..)) => Expr::Binary(op, sub(a, scope), sub(b, scope)),
         Expr::Binary(op, a, b) => {
             // A long chain such as A1+A2+… nests on its left: follow it in a loop, not one
             // level of recursion per operand.
@@ -111,8 +112,16 @@ fn expr_to_file(e: Expr) -> String {
         // reference that became `#REF!` (its cell was deleted) as plain `#REF!`.
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) if matches!(*r, Expr::Error(_)) => *r,
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) => Expr::Call("_xlfn.ANCHORARRAY".into(), vec![*r]),
-        // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`.
-        Expr::Unary(gridcraft_formula::UnOp::At, x) => Expr::Call("_xlfn.SINGLE".into(), vec![*x]),
+        // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`. The reader puts back the
+        // parentheses of `@(A1:A3*2)`, `@(-A1:A3)` and the like, so only those are dropped;
+        // others (a union's, redundant ones) are kept so the text reads back the same.
+        Expr::Unary(gridcraft_formula::UnOp::At, x) => Expr::Call(
+            "_xlfn.SINGLE".into(),
+            vec![match *x {
+                Expr::Paren(inner) if rewrapped_by_single(&inner) => *inner,
+                other => other,
+            }],
+        ),
         // Nor the `[@Col]` shorthand: files spell it `[[#This Row],[Col]]`, or Excel repairs
         // the file and drops the table. Carried as a name, which prints verbatim.
         Expr::Struct(st) => Expr::Name(gridcraft_formula::printer::struct_ref_file(&st)),
@@ -126,6 +135,13 @@ fn expr_to_file(e: Expr) -> String {
         other => other,
     });
     gridcraft_formula::print(&e)
+}
+
+/// The operands whose parentheses the reader adds back to `_xlfn.SINGLE(x)` (see the formula
+/// parser): a binary operation other than a union, and a prefix or postfix operator.
+fn rewrapped_by_single(e: &Expr) -> bool {
+    use gridcraft_formula::{BinOp, UnOp};
+    matches!(e, Expr::Binary(op, ..) if *op != BinOp::Union) || matches!(e, Expr::Unary(UnOp::Neg | UnOp::Plus | UnOp::Percent, _))
 }
 
 /// `_xlpm.x` → `x` (any case, as the parser upper-cases function names).
