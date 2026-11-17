@@ -974,7 +974,6 @@ fn an_array_reading_its_own_area_still_settles_when_its_spill_resizes() {
     }
 }
 
-
 #[test]
 fn references_keep_their_size_past_the_used_range() {
     let mut t = T::new();
