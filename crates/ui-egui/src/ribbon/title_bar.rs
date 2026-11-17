@@ -51,7 +51,8 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
         ui.horizontal_centered(|ui| {
-            ui.add_space(TITLE_LEFT_PAD);
+            // The traffic lights are in native points at every interface size; egui's are zoomed.
+            ui.add_space(if MAC { TITLE_LEFT_PAD / ui.ctx().zoom_factor() } else { TITLE_LEFT_PAD });
             // AutoSave toggle (saves after each change when the workbook has a file).
             ui.label(egui::RichText::new(app.ui.language.tr("AutoSave")).font(theme::ui_font(12.5)).color(t.text_dim));
             let on = app.ui.autosave;
