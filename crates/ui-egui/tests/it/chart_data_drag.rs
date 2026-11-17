@@ -115,6 +115,28 @@ fn a_drag_back_to_the_grabbed_corner_or_along_its_edge_keeps_the_other_axis() {
     assert_eq!(values(&h), "Sheet1!$A$1:$A$6");
 }
 
+/// #4391 review: the drag read the pointer from the middle of the grabbed row, so with a tall
+/// row 5 the pointer could reach the bottom of a short row 6 and the block stayed at A1:A5.
+#[test]
+fn a_drag_past_rows_of_unequal_height_follows_the_rows_under_the_pointer() {
+    let (mut h, _) = fixture();
+    h.state_mut().run("home.rowHeight", json!({"rows": "5:5", "height": 120})).unwrap();
+    h.run_steps(2);
+    let corner = rect(&h, "A1:A5").right_bottom();
+    let row6 = rect(&h, "A6");
+    assert!(rect(&h, "A5").height() > 3.0 * row6.height(), "row 5 is much taller than row 6");
+    // Short of the middle of row 6 the edge stays on row 5's bottom gridline.
+    let short = corner + vec2(0.0, row6.height() * 0.4);
+    press_and_move(&mut h, corner, short);
+    assert!(values_outline_at(&h, "A1:A5"));
+    // At the bottom of row 6 the block takes row 6, in the preview and on release.
+    let target = row6.right_bottom();
+    press_and_move_on(&mut h, short, target);
+    assert!(values_outline_at(&h, "A1:A6"), "the preview takes row 6");
+    button(&mut h, target, false);
+    assert_eq!(values(&h), "Sheet1!$A$1:$A$6");
+}
+
 #[test]
 fn escape_cancels_a_values_drag() {
     let (mut h, _) = fixture();

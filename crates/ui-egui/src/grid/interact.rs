@@ -164,10 +164,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
             && let Some((chart, orig, corner)) = crate::chartview::chart_data_handle(app, geo, sh, p)
         {
             if primary_drag {
-                let (sx, sy) = corner.sides();
-                let cell = CellRef::new(if sy < 0 { orig.start.row } else { orig.end.row }, if sx < 0 { orig.start.col } else { orig.end.col });
-                let grab = geo.range_rect(sh, RangeRef::cell(cell)).center() - p;
-                app.grid.drag = Drag::ChartData { chart, orig, corner, grab, to: None };
+                app.grid.drag = Drag::ChartData { chart, orig, corner, to: None };
                 if let Some(now) = pos {
                     drag_chart_data(app, geo, sh, now);
                 }
@@ -854,11 +851,11 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             // The release may be the first frame to report the pointer's last position, so the
             // block is taken from there. (Esc already dropped a cancelled drag.)
-            Drag::ChartData { chart, orig, corner, grab, to } => {
+            Drag::ChartData { chart, orig, corner, to } => {
                 let to = if resp.drag_stopped()
                     && let Some(p) = pos
                 {
-                    Some(chart_data_target(geo, sh, orig, corner, p + grab))
+                    Some(chart_data_target(geo, sh, orig, corner, p))
                 } else {
                     to
                 };
@@ -1231,24 +1228,48 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     }
 }
 
-/// Previews the selected chart's values block with the grabbed corner on the cell under `p`
-/// (logical coordinates); the opposite corner stays, and the block may flip past it as a
-/// selection does. The release gives the chart the block (`chart.setValuesRange`).
+/// Previews the selected chart's values block with the grabbed corner dragged to `p` (logical
+/// coordinates); the opposite corner stays. The release gives the chart the block
+/// (`chart.setValuesRange`).
 fn drag_chart_data(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
-    let Drag::ChartData { chart, orig, corner, grab, .. } = app.grid.drag else { return };
-    app.grid.drag = Drag::ChartData { chart, orig, corner, grab, to: Some(chart_data_target(geo, sh, orig, corner, p + grab)) };
+    let Drag::ChartData { chart, orig, corner, .. } = app.grid.drag else { return };
+    app.grid.drag = Drag::ChartData { chart, orig, corner, to: Some(chart_data_target(geo, sh, orig, corner, p)) };
 }
 
-/// The values block `orig` with its `corner` dragged to the cell under `p` (the pointer moved
-/// by the drag's `grab` offset into the cell the corner started in).
+/// The values block `orig` with its `corner` dragged to `p`. Each edge the corner moves snaps
+/// to the gridline nearest the pointer, so every row and column changes over at its own middle
+/// whatever its height or width, and a release where the press was (on the corner's own
+/// gridlines) changes nothing. The block may flip past its fixed edges, as a selection does; a
+/// moving edge dropped on its fixed edge keeps one row or column.
 fn chart_data_target(geo: &Geo, sh: &Sheet, orig: RangeRef, corner: crate::objects::Handle, p: Pos2) -> RangeRef {
     let (sx, sy) = corner.sides();
-    let fixed = CellRef::new(if sy < 0 { orig.end.row } else { orig.start.row }, if sx < 0 { orig.end.col } else { orig.start.col });
-    let at = CellRef::new(
-        geo.row_at(sh, p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0)),
-        geo.col_at(sh, p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0)),
-    );
-    RangeRef::new(fixed, at)
+    let (x, y) = (p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0), p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
+    // Gridline `k` is the top (left) edge of row (column) `k`; the last one closes the sheet.
+    let row = geo.row_at(sh, y);
+    let row_line = nearest_line(geo.y(sh, row), sh.row_height(row) * geo.z, row, y, MAX_ROWS);
+    let col = geo.col_at(sh, x);
+    let col_line = nearest_line(geo.x(sh, col), sh.col_width(col) * geo.z, col, x, MAX_COLS);
+    let (r0, r1) = between_lines(if sy < 0 { orig.end.row.saturating_add(1) } else { orig.start.row }, row_line, sy);
+    let (c0, c1) = between_lines(if sx < 0 { orig.end.col.saturating_add(1) } else { orig.start.col }, col_line, sx);
+    RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1))
+}
+
+/// The gridline nearest `v` for line `index`, which starts at `start` and is `size` long: its
+/// own start, or the next line's past its middle (never past `last`).
+fn nearest_line(start: f32, size: f32, index: u32, v: f32, last: u32) -> u32 {
+    if v - start < size / 2.0 { index } else { index.saturating_add(1).min(last) }
+}
+
+/// The rows (columns) from gridline `fixed` to gridline `moving`. A moving edge on the fixed one
+/// keeps one line on its own side: after it for a bottom or right edge (`dir` > 0), before it
+/// for a top or left edge.
+fn between_lines(fixed: u32, moving: u32, dir: i8) -> (u32, u32) {
+    let moving = match (moving == fixed, dir > 0) {
+        (false, _) => moving,
+        (true, true) => fixed.saturating_add(1),
+        (true, false) => fixed.saturating_sub(1),
+    };
+    (fixed.min(moving), fixed.max(moving).saturating_sub(1))
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
@@ -1302,6 +1323,28 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
 #[cfg(test)]
 mod resize_tests {
     use super::*;
+
+    #[test]
+    fn a_chart_data_edge_snaps_to_the_nearest_gridline_of_any_size() {
+        // Row 5 starts at 100 and is 20 tall: before its middle the line is its own, past it the next.
+        assert_eq!(nearest_line(100.0, 20.0, 5, 109.0, MAX_ROWS), 5);
+        assert_eq!(nearest_line(100.0, 20.0, 5, 111.0, MAX_ROWS), 6);
+        // A 100-tall row changes over at 50 into it, not at the grabbed row's middle.
+        assert_eq!(nearest_line(100.0, 100.0, 5, 149.0, MAX_ROWS), 5);
+        assert_eq!(nearest_line(100.0, 100.0, 5, 151.0, MAX_ROWS), 6);
+        assert_eq!(nearest_line(0.0, 20.0, MAX_ROWS - 1, 19.0, MAX_ROWS), MAX_ROWS);
+        // A1:A5 (lines 0 and 5) by its bottom edge: on line 5 it stays, on 8 it grows, on 2 it shrinks.
+        assert_eq!(between_lines(0, 5, 1), (0, 4));
+        assert_eq!(between_lines(0, 8, 1), (0, 7));
+        assert_eq!(between_lines(0, 2, 1), (0, 1));
+        // Dropped on its fixed edge it keeps one row; past it the block flips.
+        assert_eq!(between_lines(4, 4, 1), (4, 4));
+        assert_eq!(between_lines(4, 2, 1), (2, 3));
+        // By its top edge (fixed line 5, below A5).
+        assert_eq!(between_lines(5, 0, -1), (0, 4));
+        assert_eq!(between_lines(5, 5, -1), (4, 4));
+        assert_eq!(between_lines(5, 7, -1), (5, 6));
+    }
 
     #[test]
     fn resize_targets_follow_the_selection_only_when_the_dragged_line_is_in_it() {

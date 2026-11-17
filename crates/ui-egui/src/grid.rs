@@ -157,10 +157,6 @@ pub enum Drag {
         chart: u32,
         orig: RangeRef,
         corner: crate::objects::Handle,
-        /// From the press point to the centre of the grabbed corner's cell. The corner lies on a
-        /// cell boundary, which belongs to the next row and column, so the pointer is read with
-        /// this offset: the press point stays in the corner's own cell.
-        grab: egui::Vec2,
         to: Option<RangeRef>,
     },
 }
