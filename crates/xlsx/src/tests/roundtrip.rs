@@ -310,6 +310,7 @@ fn sample() -> Workbook {
         hf_scale_with_doc: false,
         hf_align_with_margins: true,
         page_order: PageOrder::OverThenDown,
+        first_page_number: Some(7),
     };
     s.sparklines.push(Sparkline { cell: at("J2"), source: "B2:B3".into(), kind: SparklineKind::WinLoss, color: Color::Rgb(0x112233), markers: true });
     s.tables.push(Table {
@@ -1537,6 +1538,76 @@ fn table_newline_column_and_backslash_name_survive() {
     assert_eq!(s.value(at("A1")), Value::text("Handle\nBars"));
     assert_eq!(s.cell(at("D1")).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("COUNTA(\\_Prime.1[Name])"));
     assert!(gridcraft_formula::parse("COUNTA(\\_Prime.1[Name])").is_ok(), "backslash table name parses as a structured reference");
+}
+
+/// #4296: a table whose Total Row is turned off keeps each column's calculation in the file, as
+/// Excel writes it, so turning the row back on in Excel restores a custom formula or Average.
+#[test]
+fn hidden_total_row_keeps_its_calculations() {
+    let col = |name: &str, totals: TotalsFn, label: Option<&str>| TableColumn {
+        name: name.into(),
+        totals,
+        totals_label: label.map(str::to_string),
+        formula: None,
+        unique_name: None,
+        xml: None,
+    };
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.tables.push(Table {
+        id: 1,
+        name: "Table1".into(),
+        range: rr("A1:C3"),
+        header_row: true,
+        totals_row: false,
+        columns: vec![
+            col("Group", TotalsFn::None, Some("Total")),
+            col("Amount", TotalsFn::Custom, Some("SUM(B2:B3)+10")),
+            col("Mean", TotalsFn::Average, None),
+        ],
+        style: "TableStyleMedium2".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: true,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut xml = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/tables/table1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    // Still a table without a total row: no totalsRowCount, and its range unchanged.
+    assert!(xml.contains(r#"ref="A1:C3""#) && xml.contains(r#"totalsRowShown="0""#) && !xml.contains("totalsRowCount"), "{xml}");
+    for part in [
+        r#"name="Group" totalsRowLabel="Total"/>"#,
+        r#"name="Amount" totalsRowFunction="custom"><totalsRowFormula>SUM(B2:B3)+10</totalsRowFormula></tableColumn>"#,
+        r#"name="Mean" totalsRowFunction="average"/>"#,
+    ] {
+        assert!(xml.contains(part), "{part}: {xml}");
+    }
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let t = &back.sheet(0).unwrap().tables[0];
+    assert!(!t.totals_row);
+    assert_eq!(t.range.a1(), "A1:C3");
+    let got: Vec<_> = t.columns.iter().map(|c| (c.totals, c.totals_label.clone())).collect();
+    assert_eq!(got, vec![(TotalsFn::None, Some("Total".into())), (TotalsFn::Custom, Some("SUM(B2:B3)+10".into())), (TotalsFn::Average, None)]);
+    // A table that never had a total row writes no calculation.
+    let mut plain = wb.clone();
+    plain.sheet_mut(0).unwrap().tables[0].columns =
+        vec![col("Group", TotalsFn::None, None), col("Amount", TotalsFn::None, None), col("Mean", TotalsFn::None, None)];
+    let mut xml = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(write_xlsx(&plain).unwrap()))
+        .unwrap()
+        .by_name("xl/tables/table1.xml")
+        .unwrap()
+        .read_to_string(&mut xml)
+        .unwrap();
+    for attr in ["totalsRowFunction", "totalsRowLabel", "totalsRowFormula"] {
+        assert!(!xml.contains(attr), "{attr}: {xml}");
+    }
 }
 
 /// A table that is only a header row and a totals row (Insert Table on one row, then Total
