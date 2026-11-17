@@ -52,12 +52,29 @@ fn a_break_limited_to_the_print_area_stays_limited() {
 
 #[test]
 fn a_break_across_the_whole_sheet_stays_whole() {
-    // Written across the sheet, without `max`, with `max="0"`, past the sheet, and backwards.
-    for brk in [r#"max="16383""#, "", r#"max="0""#, r#"max="99999""#, r#"min="5" max="2""#] {
+    // Written across the sheet, without `max`, past the sheet, and backwards.
+    for brk in [r#"max="16383""#, "", r#"max="99999""#, r#"min="5" max="2""#] {
         let (rows, _, back) = round_trip(&format!(r#"<rowBreaks count="1" manualBreakCount="1"><brk id="14" {brk} man="1"/></rowBreaks>"#));
         assert_eq!(rows.as_deref(), Some(r#"<rowBreaks count="1" manualBreakCount="1"><brk id="14" max="16383" man="1"/></rowBreaks>"#), "{brk}");
         assert!(back.sheet(0).unwrap().print.row_break_extents.is_empty(), "{brk}");
     }
     let (_, cols, _) = round_trip(r#"<colBreaks count="1" manualBreakCount="1"><brk id="4" max="1048575" man="1"/></colBreaks>"#);
     assert_eq!(cols.as_deref(), Some(r#"<colBreaks count="1" manualBreakCount="1"><brk id="4" max="1048575" man="1"/></colBreaks>"#));
+}
+
+/// A print area one column (or row) wide limits a break to that column: `max="0"` is kept, not
+/// read as a missing `max` (after CodeRabbit's review).
+#[test]
+fn a_break_limited_to_the_first_column_or_row_stays_limited() {
+    let (rows, cols, back) = round_trip(
+        r#"<rowBreaks count="1" manualBreakCount="1"><brk id="14" max="0" man="1"/></rowBreaks><colBreaks count="1" manualBreakCount="1"><brk id="4" max="0" man="1"/></colBreaks>"#,
+    );
+    assert_eq!(rows.as_deref(), Some(r#"<rowBreaks count="1" manualBreakCount="1"><brk id="14" max="0" man="1"/></rowBreaks>"#));
+    assert_eq!(cols.as_deref(), Some(r#"<colBreaks count="1" manualBreakCount="1"><brk id="4" max="0" man="1"/></colBreaks>"#));
+    let p = &back.sheet(0).unwrap().print;
+    assert_eq!(p.row_break_extents.get(&14), Some(&(0, 0)));
+    assert_eq!(p.col_break_extents.get(&4), Some(&(0, 0)));
+    // Saved again from what was read back, it's still the first column or row.
+    let xml = sheet_xml(&write_xlsx(&back).unwrap());
+    assert!(xml.contains(r#"<brk id="14" max="0" man="1"/>"#) && xml.contains(r#"<brk id="4" max="0" man="1"/>"#), "{xml}");
 }

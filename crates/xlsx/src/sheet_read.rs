@@ -168,7 +168,8 @@ const MAX_COND_CELLS: u64 = 4_000_000;
 
 /// A `rowBreaks` or `colBreaks` list: the breaks (`id`, the line the break sits above, on an
 /// axis of `lines`), and the extent across the other axis (of `across` lines) of each break that
-/// doesn't span the whole sheet. A missing or zero `max` is the whole sheet.
+/// doesn't span the whole sheet. A missing `max` is the whole sheet; `max="0"` is the first
+/// column or row alone (a print area one column or row wide).
 fn read_breaks(e: &El, lines: u32, across: u32) -> (Vec<u32>, BTreeMap<u32, (u32, u32)>) {
     let mut ids = vec![];
     let mut extents = BTreeMap::new();
@@ -176,7 +177,7 @@ fn read_breaks(e: &El, lines: u32, across: u32) -> (Vec<u32>, BTreeMap<u32, (u32
         let Some(id) = b.attr_u32("id").filter(|&i| i > 0 && i < lines) else { continue };
         ids.push(id);
         let min = b.attr_u32("min").unwrap_or(0);
-        let max = b.attr_u32("max").filter(|&m| m > 0).map_or(across - 1, |m| m.min(across - 1));
+        let max = b.attr_u32("max").map_or(across - 1, |m| m.min(across - 1));
         if min <= max && (min, max) != (0, across - 1) {
             extents.insert(id, (min, max));
         }
