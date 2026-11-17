@@ -1095,6 +1095,10 @@ pub struct AutoFilter {
     pub range: RangeRef,
     /// Column offset within `range` → criterion.
     pub criteria: Vec<(u32, FilterCriterion)>,
+    /// Column offsets within `range` whose dropdown arrow is hidden (`filterColumn hiddenButton`,
+    /// Excel's `VisibleDropDown:=False`). Kept whether or not the column has a criterion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_buttons: Vec<u32>,
 }
 
 /// A slicer: an on-sheet filter widget bound to one column of a table. Clicking its value tiles

@@ -63,8 +63,11 @@ fn autofit_matches_excel_filter_allowance_across_zoom_and_row_heights() {
 fn autofit_supports_ordinary_autofilters_without_double_counting_table_buttons() {
     let mut s = table();
     let table_width = fit(&mut s);
-    sheet_mut(&mut s).autofilter =
-        Some(gridcraft_engine::model::AutoFilter { range: gridcraft_engine::core::RangeRef::parse("A1:A2").unwrap(), criteria: vec![] });
+    sheet_mut(&mut s).autofilter = Some(gridcraft_engine::model::AutoFilter {
+        range: gridcraft_engine::core::RangeRef::parse("A1:A2").unwrap(),
+        criteria: vec![],
+        hidden_buttons: vec![],
+    });
     assert_eq!(fit(&mut s), table_width, "overlapping filters occupy one button slot");
     sheet_mut(&mut s).tables.clear();
     assert_eq!(fit(&mut s), table_width, "ordinary filter headers reserve the same space");

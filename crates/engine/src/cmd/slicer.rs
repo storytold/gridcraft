@@ -88,7 +88,7 @@ fn reapply_slicer(wb: &mut Workbook, sheet: usize, id: u32) {
     let Some((table_range, abs_col, selected)) = info else { return };
     {
         let Some(sh) = wb.sheet_mut(sheet) else { return };
-        let af = sh.autofilter.get_or_insert_with(|| AutoFilter { range: table_range, criteria: vec![] });
+        let af = sh.autofilter.get_or_insert_with(|| AutoFilter { range: table_range, criteria: vec![], hidden_buttons: vec![] });
         let off = abs_col.saturating_sub(af.range.start.col);
         af.criteria.retain(|(o, _)| *o != off);
         if let Some(values) = selected {

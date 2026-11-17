@@ -25,7 +25,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             if let Some(d) = d {
                 let wbm = Arc::make_mut(&mut d.wb);
                 if let Some(s) = wbm.sheet_mut(si) {
-                    s.autofilter = Some(gridcraft_engine::model::AutoFilter { range: r, criteria: vec![] });
+                    s.autofilter = Some(gridcraft_engine::model::AutoFilter { range: r, criteria: vec![], hidden_buttons: vec![] });
                 }
             }
         }

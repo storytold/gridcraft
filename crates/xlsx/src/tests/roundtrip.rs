@@ -275,6 +275,7 @@ fn sample() -> Workbook {
             (2, FilterCriterion::Top10 { bottom: true, percent: false, count: 3 }),
             (3, FilterCriterion::FillColor(Color::Rgb(0xFF0000))),
         ],
+        hidden_buttons: vec![],
     });
     s.protection = Some(SheetProtection {
         format_cells: true,
@@ -1780,8 +1781,11 @@ fn a_table_filter_criteria_survive_a_round_trip() {
     });
     // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
     // range, and `data.filterBy` stores its criteria there.
-    s.autofilter =
-        Some(AutoFilter { range: rr("A1:A4"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:A4"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })],
+        hidden_buttons: vec![],
+    });
     s.rows.entry(1).or_default().hidden = true;
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1823,8 +1827,11 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
         table_type: None,
         connection_id: None,
     });
-    s.autofilter =
-        Some(AutoFilter { range: rr("B1:B3"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });
+    s.autofilter = Some(AutoFilter {
+        range: rr("B1:B3"),
+        criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })],
+        hidden_buttons: vec![],
+    });
 
     let (back, rep) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
