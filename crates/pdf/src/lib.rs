@@ -1,4 +1,4 @@
-//! A tiny, self-contained PDF 1.7 writer for GridCraft's print and PDF export.
+//! PDF 1.7 drawing for GridCraft print/export, with shared object and xref framing.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
 //!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
@@ -52,7 +52,7 @@ impl TextDirection {
     }
 }
 
-/// A PDF export could not preserve the requested text.
+/// A PDF export could not preserve the requested text or serialize its object envelope.
 #[derive(Clone, Debug)]
 pub struct Error(String);
 
@@ -62,6 +62,12 @@ impl std::fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
+
+impl From<craft_pdf::classic::Error> for Error {
+    fn from(error: craft_pdf::classic::Error) -> Self {
+        Self(error.to_string())
+    }
+}
 
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -1001,49 +1007,6 @@ fn pdf_text_string(text: &str) -> String {
     s
 }
 
-/// Starts object `id` at the current end of `out` and records its offset for the xref table.
-fn begin_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32) {
-    let i = id as usize;
-    if offsets.len() <= i {
-        offsets.resize(i + 1, 0);
-    }
-    if let Some(slot) = offsets.get_mut(i) {
-        *slot = out.len();
-    }
-    let _ = writeln!(Utf8(out), "{id} 0 obj");
-}
-
-/// Writes `id 0 obj <body> endobj`.
-fn dict_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32, body: &str) {
-    begin_obj(out, offsets, id);
-    out.extend_from_slice(body.as_bytes());
-    out.extend_from_slice(b"\nendobj\n");
-}
-
-/// Writes a stream object: `dict` (the dictionary entries without `<<`, `>>` and `/Length`, may be
-/// empty) and `data` as the stream body.
-fn stream_obj(out: &mut Vec<u8>, offsets: &mut Vec<usize>, id: u32, dict: &str, data: &[u8]) {
-    begin_obj(out, offsets, id);
-    out.extend_from_slice(b"<<");
-    if !dict.is_empty() {
-        out.push(b' ');
-        out.extend_from_slice(dict.as_bytes());
-    }
-    let _ = write!(Utf8(out), " /Length {} >>\nstream\n", data.len());
-    out.extend_from_slice(data);
-    out.extend_from_slice(b"\nendstream\nendobj\n");
-}
-
-/// Lets `write!` append text to a byte buffer.
-struct Utf8<'a>(&'a mut Vec<u8>);
-
-impl std::fmt::Write for Utf8<'_> {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        self.0.extend_from_slice(s.as_bytes());
-        Ok(())
-    }
-}
-
 impl PdfDoc {
     pub fn new() -> PdfDoc {
         PdfDoc::default()
@@ -1097,7 +1060,8 @@ impl PdfDoc {
     /// numbered during writing (fonts, then per page its new images, content stream and page
     /// dictionary), with the catalog, page tree and info dictionary last.
     ///
-    /// Returns an error if the Arabic font is unusable or Arabic text exceeds a size limit.
+    /// Returns an error if the Arabic font is unusable, text exceeds a size limit, or the
+    /// shared envelope writer refuses object counts, offsets or an allocation.
     pub fn finish(mut self) -> Result<Vec<u8>, Error> {
         if let Some(error) = self.pages.iter().find_map(|page| page.error.clone()) {
             return Err(error);
@@ -1131,9 +1095,7 @@ impl PdfDoc {
         let contents: Vec<String> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.content)).collect();
         let page_links: Vec<Vec<LinkAnnotation>> = self.pages.iter_mut().map(|p| std::mem::take(&mut p.links)).collect();
         let reserve = contents.iter().fold(4096usize, |acc, c| acc.saturating_add(c.len()).saturating_add(1024));
-        let mut out: Vec<u8> = Vec::with_capacity(reserve);
-        out.extend_from_slice(b"%PDF-1.7\n%\xE2\xE3\xCF\xD3\n");
-        let mut offsets: Vec<usize> = vec![0; 4];
+        let mut out = craft_pdf::classic::Writer::with_capacity(reserve)?;
         let mut kids = Vec::new();
         let mut annotations = Vec::new();
         let page_count = self.pages.len();
@@ -1143,42 +1105,34 @@ impl PdfDoc {
                 let _ = write!(font_dict, "/F{} {} 0 R ", i + 1, id);
                 if i == CID_FONT {
                     let (cid_id, desc_id) = (id + 1, id + 2);
-                    dict_obj(
-                        &mut out,
-                        &mut offsets,
+                    out.object(
                         *id,
                         &format!(
                             "<< /Type /Font /Subtype /Type0 /BaseFont /{CID_BASE_FONT} /Encoding /UniGB-UTF16-H /DescendantFonts [{cid_id} 0 R] >>"
                         ),
-                    );
-                    dict_obj(
-                        &mut out,
-                        &mut offsets,
-                        cid_id,
+                    )?;
+                    out.object(cid_id,
                         &format!(
                             "<< /Type /Font /Subtype /CIDFontType0 /BaseFont /{CID_BASE_FONT} /CIDSystemInfo << /Registry (Adobe) /Ordering (GB1) /Supplement 4 >> /FontDescriptor {desc_id} 0 R /DW {CID_WIDTH} >>"
                         ),
-                    );
-                    dict_obj(
-                        &mut out,
-                        &mut offsets,
-                        desc_id,
+                    )?;
+                    out.object(desc_id,
                         &format!(
                             "<< /Type /FontDescriptor /FontName /{CID_BASE_FONT} /Flags 6 /FontBBox [-25 -254 1000 880] /ItalicAngle 0 /Ascent 880 /Descent -120 /CapHeight 880 /StemV 93 >>"
                         ),
-                    );
+                    )?;
                     continue;
                 }
                 let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();
                 let enc = if name.starts_with("Symbol") { "" } else { " /Encoding /WinAnsiEncoding" };
-                dict_obj(&mut out, &mut offsets, *id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"));
+                out.object(*id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"))?;
             }
         }
         // Images already written, by content hash: (page, image, object id). A hash match is
         // confirmed by comparing the pixels before an object is shared.
         let mut written: HashMap<u64, Vec<(usize, usize, u32)>> = HashMap::new();
         for (pi, ((page, content), links)) in self.pages.iter().zip(contents).zip(page_links).enumerate() {
-            let arabic_fonts = page.arabic.write_objects(&mut next, &mut out, &mut offsets);
+            let arabic_fonts = page.arabic.write_objects(&mut next, &mut out)?;
             let page_fonts = format!("{font_dict}{arabic_fonts}");
             let mut xobjects = String::new();
             for (k, img) in page.images.iter().enumerate() {
@@ -1204,13 +1158,13 @@ impl PdfDoc {
                             let _ = write!(dict, " /SMask {id} 0 R");
                         }
                         dict.push_str(" /Filter /RunLengthDecode");
-                        stream_obj(&mut out, &mut offsets, img_id, &dict, &run_length(&img.rgb));
+                        out.stream(img_id, &dict, &run_length(&img.rgb))?;
                         if let (Some(id), Some(a)) = (smask_id, &img.alpha) {
                             let dict = format!(
                                 "/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /RunLengthDecode",
                                 img.width, img.height
                             );
-                            stream_obj(&mut out, &mut offsets, id, &dict, &run_length(a));
+                            out.stream(id, &dict, &run_length(a))?;
                         }
                         written.entry(img.hash).or_default().push((pi, k, img_id));
                         img_id
@@ -1221,7 +1175,7 @@ impl PdfDoc {
             let content_id = next;
             let page_id = next + 1;
             next += 2;
-            stream_obj(&mut out, &mut offsets, content_id, "", content.as_bytes());
+            out.stream(content_id, "", content.as_bytes())?;
             drop(content);
             let xo = if xobjects.is_empty() { String::new() } else { format!(" /XObject << {xobjects}>>") };
             let mut link_refs = String::new();
@@ -1235,9 +1189,7 @@ impl PdfDoc {
                 annotations.push((id, link));
             }
             let annots = if link_refs.is_empty() { String::new() } else { format!(" /Annots [{link_refs}]") };
-            dict_obj(
-                &mut out,
-                &mut offsets,
+            out.object(
                 page_id,
                 &format!(
                     "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {} {}] /Resources << /Font << {}>>{} >> /Contents {} 0 R{} >>",
@@ -1248,7 +1200,7 @@ impl PdfDoc {
                     content_id,
                     annots
                 ),
-            );
+            )?;
             kids.push(page_id);
         }
         for (id, link) in annotations {
@@ -1261,16 +1213,11 @@ impl PdfDoc {
                     format!("/Dest [{page_id} 0 R /XYZ {} {} null]", n(x), n(height - y))
                 }
             };
-            dict_obj(
-                &mut out,
-                &mut offsets,
-                id,
-                &format!("<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] {action} >>", n(x0), n(y0), n(x1), n(y1)),
-            );
+            out.object(id, &format!("<< /Type /Annot /Subtype /Link /Rect [{} {} {} {}] /Border [0 0 0] {action} >>", n(x0), n(y0), n(x1), n(y1)))?;
         }
-        dict_obj(&mut out, &mut offsets, 1, "<< /Type /Catalog /Pages 2 0 R >>");
+        out.object(1, "<< /Type /Catalog /Pages 2 0 R >>")?;
         let kids_s: Vec<String> = kids.iter().map(|k| format!("{k} 0 R")).collect();
-        dict_obj(&mut out, &mut offsets, 2, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids_s.join(" "), kids.len()));
+        out.object(2, &format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids_s.join(" "), kids.len()))?;
         let creator = if self.info.creator.is_empty() { "GridCraft" } else { &self.info.creator };
         let mut info = format!("<< /Producer {} /Creator {}", pdf_text_string("GridCraft PDF"), pdf_text_string(creator));
         if !self.info.title.is_empty() {
@@ -1280,15 +1227,9 @@ impl PdfDoc {
             let _ = write!(info, " /Author {}", pdf_text_string(&self.info.author));
         }
         info.push_str(" >>");
-        dict_obj(&mut out, &mut offsets, 3, &info);
+        out.object(3, &info)?;
 
-        let xref = out.len();
-        let _ = write!(Utf8(&mut out), "xref\n0 {}\n0000000000 65535 f \n", next);
-        for off in offsets.iter().skip(1) {
-            let _ = writeln!(Utf8(&mut out), "{off:010} 00000 n ");
-        }
-        let _ = write!(Utf8(&mut out), "trailer\n<< /Size {} /Root 1 0 R /Info 3 0 R >>\nstartxref\n{}\n%%EOF\n", next, xref);
-        Ok(out)
+        out.finish(1, Some(3)).map_err(Error::from)
     }
 }
 
