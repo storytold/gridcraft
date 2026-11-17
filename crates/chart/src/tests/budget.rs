@@ -160,6 +160,34 @@ fn clustered_hairline_series_keep_a_visible_strip() {
 }
 
 #[test]
+fn fully_overlapped_hairline_series_share_their_strip() {
+    // At 100% overlap every series' bars sit at the same place, so merged runs must too: the last
+    // series covers the others, as its unmerged bars would.
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let horizontal = kind == ChartKind::BarClustered;
+        let mut c = chart(kind);
+        c.data_labels = false;
+        c.legend = LegendPos::None;
+        c.overlap = Some(100);
+        let mut d = data_of(2, 20_000);
+        for series in d.series.iter_mut() {
+            for v in series.values.iter_mut() {
+                *v = Some(50.0);
+            }
+        }
+        let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+        let along = |r: &(f32, f32, f32, f32)| if horizontal { (r.1, r.1 + r.3) } else { (r.0, r.0 + r.2) };
+        let strips = |s: usize| series_rects(&prims, d.series[s].color).iter().map(along).collect::<Vec<_>>();
+        let (first, last) = (strips(0), strips(1));
+        assert!(first.len() > 100, "the bars are merged into runs: {}", first.len());
+        assert_eq!(first.len(), last.len());
+        for (a, b) in first.iter().zip(&last) {
+            assert!((a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3, "{a:?} and {b:?} should coincide");
+        }
+    }
+}
+
+#[test]
 fn stacked_hairline_bars_do_not_fill_the_gap_between_disjoint_spans() {
     // Series 1 alternates +10 (stacked on the 100) and -10 (below zero): its two spans in one
     // pixel column are 100..110 and -10..0, and the 100 units between them must stay empty.
@@ -277,4 +305,34 @@ fn multi_level_categories_longer_than_the_cap_are_cut_together_with_their_levels
     assert_eq!(d.category_levels[0].len(), cap);
     assert_eq!(d.categories[cap - 1], format!("C{}", cap - 1));
     assert_eq!(d.category_levels[0][cap - 3], format!("Y{}", (cap - 3) / 3));
+}
+
+#[test]
+fn series_lines_of_a_dense_stack_stay_within_the_pixel_columns() {
+    // Four stacked series over 20,000 categories in 400 px: one path per series, a few points per
+    // pixel column, not a line per category.
+    for kind in [ChartKind::ColumnStacked, ChartKind::BarStacked] {
+        let mut c = chart(kind);
+        c.data_labels = false;
+        c.legend = LegendPos::None;
+        let mut d = data_of(4, 20_000);
+        for (s, series) in d.series.iter_mut().enumerate() {
+            for (i, v) in series.values.iter_mut().enumerate() {
+                *v = Some(10.0 + ((i * 7 + s) % 5) as f64);
+            }
+        }
+        let ink = [1, 2, 3, 255];
+        d.series_lines = Some((ink, 0.75));
+        let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
+        let lines: Vec<&Vec<[f32; 2]>> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Line { pts, color, .. } if *color == ink => Some(pts),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 4, "{kind:?}: one path per series");
+        let points: usize = lines.iter().map(|l| l.len()).sum();
+        assert!(points > 400 && points <= 4 * 4 * 400, "{kind:?}: {points} points");
+    }
 }
