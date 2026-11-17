@@ -46,6 +46,13 @@ impl eframe::App for App {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
                 self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
+            // Picks first: they format the window they were made in, before a Window-menu switch or a
+            // Finder open makes another one active.
+            if let Some(panel) = &self.4 {
+                for pick in panel.picks() {
+                    font_panel::apply(&mut self.0, &pick);
+                }
+            }
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
                 if std::mem::take(&mut m.show_fonts)
@@ -56,9 +63,6 @@ impl eframe::App for App {
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
             if let Some(panel) = &self.4 {
-                for pick in panel.picks() {
-                    font_panel::apply(&mut self.0, &pick);
-                }
                 panel.follow(&self.0);
             }
         }

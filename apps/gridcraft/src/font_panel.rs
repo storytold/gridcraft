@@ -141,10 +141,11 @@ impl FontPanel {
         let mut traits = NSFontTraitMask::empty();
         traits.set(NSFontTraitMask::BoldFontMask, face.bold);
         traits.set(NSFontTraitMask::ItalicFontMask, face.italic);
-        // A family the system doesn't have (a workbook's, a font GridCraft carries) shows the system font.
+        // A family the system doesn't have (a workbook's, a font GridCraft carries) shows the system
+        // font, bold and italic as the cell is.
         let font = manager
             .fontWithFamily_traits_weight_size(&NSString::from_str(&face.family), traits, 5, face.size)
-            .unwrap_or_else(|| NSFont::systemFontOfSize(face.size));
+            .unwrap_or_else(|| manager.convertFont_toHaveTrait(&NSFont::systemFontOfSize(face.size), traits));
         self.target.ivars().current.replace(font.clone());
         manager.setSelectedFont_isMultiple(&font, false);
         self.shown.replace(Some(face));
@@ -162,9 +163,14 @@ impl FontPanel {
         self.target.change_font(objc2::sel!(changeFont:), None);
     }
 
-    /// The picks since the last call, oldest first.
+    /// The picks since the last call, oldest first. The panel then shows the active cell's font
+    /// again at the next [`follow`](Self::follow), as a pick the app refused leaves the cell as it was.
     pub fn picks(&self) -> Vec<Pick> {
-        self.picks.try_iter().collect()
+        let picks: Vec<Pick> = self.picks.try_iter().collect();
+        if !picks.is_empty() {
+            self.shown.replace(None);
+        }
+        picks
     }
 }
 

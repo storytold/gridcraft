@@ -38,6 +38,11 @@ fn main() {
     let picks = panel.picks();
     assert_eq!(picks.len(), 1, "{picks:?}");
     assert!(picks[0].size.is_some_and(|size| size > 14.0) && picks[0].family.is_none() && picks[0].bold.is_none(), "{picks:?}");
+    // A family the system doesn't have shows the system font, still bold and italic.
+    panel.show_for_test("No Such Family", 14.0, true, true);
+    let manager = objc2_app_kit::NSFontManager::sharedFontManager(mtm);
+    let traits = manager.traitsOfFont(&manager.selectedFont().expect("a selected font"));
+    assert!(traits.contains(objc2_app_kit::NSFontTraitMask::BoldFontMask | objc2_app_kit::NSFontTraitMask::ItalicFontMask), "{traits:?}");
     drop(app);
     println!("mac_font_panel: ok");
 }
