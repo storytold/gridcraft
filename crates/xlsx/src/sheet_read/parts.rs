@@ -1,14 +1,25 @@
-use super::*;
+use super::{
+    AutoFilter, CellRef, Comment, Ctx, El, FilterCriterion, HashMap, Hyperlink, LinkBudget, MAX_COLS, MAX_HYPERLINK_BYTES, MAX_HYPERLINK_CELLS,
+    MAX_HYPERLINK_TARGET, MAX_ROWS, MAX_TOOLTIP_CHARS, NoteBox, NoteCorner, RangeRef, Rel, Sheet, Table, TableColumn, TotalsFn, XmlColumnPr,
+    from_file, truncate_chars, xml,
+};
 
-pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet) {
-    let mut cells = 0u64;
-    let mut bytes = 0u64;
+/// `budget` counts the cells and bytes this sheet's hyperlinks have copied so far, across
+/// `<hyperlinks>` blocks.
+pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet, budget: &mut LinkBudget) {
     for h in e.kids("hyperlink") {
         let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
-        let mut target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.clone()).unwrap_or_default();
+        let rel_target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.as_str()).unwrap_or("");
+        let location = h.attr("location").filter(|l| !l.is_empty());
+        // Each covered cell gets its own copy of the link: refuse oversized targets before copying.
+        if rel_target.len().saturating_add(location.map_or(0, str::len)) > MAX_HYPERLINK_TARGET {
+            cx.warn(format!("sheet \"{name}\": hyperlinks longer than {MAX_HYPERLINK_TARGET} characters were dropped"));
+            continue;
+        }
+        let mut target = rel_target.to_string();
         // A relationship is a file or web page; a bare `location` is a place in this workbook.
         let external = !target.is_empty();
-        if let Some(loc) = h.attr("location").filter(|l| !l.is_empty()) {
+        if let Some(loc) = location {
             if target.is_empty() {
                 target = loc.trim_start_matches('#').to_string();
             } else {
@@ -18,19 +29,20 @@ pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel]
         if target.is_empty() {
             continue;
         }
-        let link = Hyperlink { target: target.clone(), tooltip: h.attr("tooltip").map(str::to_string), external };
-        let link_bytes = (target.len() + link.tooltip.as_ref().map_or(0, |t| t.len())) as u64;
+        let tooltip = h.attr("tooltip").map(|t| truncate_chars(t, MAX_TOOLTIP_CHARS));
+        let link_bytes = (target.len() + tooltip.as_ref().map_or(0, String::len)) as u64;
+        let link = Hyperlink { target, tooltip, external };
         for c in range.iter() {
-            if cells >= MAX_HYPERLINK_CELLS {
+            if budget.cells >= MAX_HYPERLINK_CELLS {
                 cx.warn(format!("sheet \"{name}\": hyperlinks past the first {MAX_HYPERLINK_CELLS} cells were dropped"));
                 return;
             }
-            if bytes.saturating_add(link_bytes) > MAX_HYPERLINK_BYTES {
+            if budget.bytes.saturating_add(link_bytes) > MAX_HYPERLINK_BYTES {
                 cx.warn(format!("sheet \"{name}\": hyperlink targets past {MAX_HYPERLINK_BYTES} bytes were dropped"));
                 return;
             }
-            cells += 1;
-            bytes += link_bytes;
+            budget.cells += 1;
+            budget.bytes += link_bytes;
             sheet.hyperlinks.insert(c, link.clone());
         }
     }

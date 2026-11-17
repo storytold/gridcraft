@@ -1,5 +1,8 @@
 use super::geo::Geo;
-use super::*;
+use super::{
+    BorderLine, BorderStyle, CellRef, CfCache, CfLook, Color, Color32, FontId, HAlign, MAX_COLS, Painter, PatternType, Pos2, RangeRef, Rect, Sheet,
+    Stroke, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
+};
 
 /// Resolved look of a cell for painting.
 pub(super) struct Look {
@@ -55,6 +58,9 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
         // In a differential style General means "not set" (#1163).
         if st.num_fmt.as_str() != "General" {
             style.num_fmt = st.num_fmt.clone();
+        }
+        if st.align.reading_order.is_some() {
+            style.align.reading_order = st.align.reading_order;
         }
         for (dst, src) in [
             (&mut style.borders.left, st.borders.left),
@@ -127,11 +133,10 @@ pub(super) fn display_text(
 }
 
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let pad_v = 1.5 * z;
-    let y_top = rect.top() + pad_v;
+    let y_top = rect.top() + 1.5 * z;
     // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
     // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
-    let y_bottom = rect.bottom() - gh - pad_v;
+    let y_bottom = rect.bottom() - gh - 0.5 * z;
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
@@ -139,15 +144,29 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
     }
 }
 
+/// Bounds of the primary font's line boxes, excluding extra row height added only for fallbacks.
+/// Centered fallbacks do not identify that baseline; empty or centered-only rows use their layout bounds.
+pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
+    let row_bounds = |row: &egui::epaint::text::PlacedRow| {
+        row.glyphs
+            .iter()
+            .find(|glyph| {
+                glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline
+                    || (glyph.font_face_ascent == glyph.font_ascent && glyph.font_face_height == glyph.font_height)
+            })
+            .map_or((row.rect().top(), row.rect().bottom()), |glyph| {
+                let top = row.pos.y + glyph.pos.y - glyph.font_ascent;
+                (top, top + glyph.font_height)
+            })
+    };
+    let first = galley.rows.first().map(|row| row_bounds(row).0);
+    let last = galley.rows.last().map(|row| row_bounds(row).1);
+    first.zip(last).unwrap_or((0.0, galley.size().y))
+}
+
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let top_inset = 1.0 * z;
-    let y_top = rect.top() - top_inset;
-    let y_bottom = (rect.bottom() - gh - 0.5 * z).max(y_top);
-    match valign {
-        VAlign::Top => y_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
-        VAlign::Bottom => y_bottom,
-    }
+    let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
+    wrapped_cell_text_y(valign, rect, gh, z).max(y_top)
 }
 
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so
@@ -171,28 +190,27 @@ pub(crate) fn rotated_text_pos(rect: Rect, size: egui::Vec2, angle: f32, h: HAli
     pos2(x, y) - turned.min.to_vec2()
 }
 
+/// A merged range, where it is drawn, and the visible rows and columns.
+#[derive(Clone, Copy)]
+pub(super) struct MergedArea {
+    pub(super) m: RangeRef,
+    pub(super) rect: Rect,
+    pub(super) rows: (u32, u32),
+    pub(super) cols: (u32, u32),
+}
+
 /// The outline segments of merged area `m` drawn at `rect`: the top and left edges come from the
 /// first row's and first column's cells, the bottom and right edges from the last row's and last
 /// column's cells, one segment per visible cell (limited to the visible `rows` × `cols`).
-#[allow(clippy::too_many_arguments)]
-pub(super) fn merged_edges(
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    geo: &Geo,
-    m: RangeRef,
-    rect: Rect,
-    rows: (u32, u32),
-    cols: (u32, u32),
-    cf: &mut CfCache,
-) -> Vec<(BorderLine, [Pos2; 2])> {
+pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area: MergedArea, cf: &mut CfCache) -> Vec<(BorderLine, [Pos2; 2])> {
+    let MergedArea { m, rect, rows, cols } = area;
     let mut out = Vec::new();
     let (cs, ce) = (m.start.col.max(cols.0), m.end.col.min(cols.1));
     for col in cs..=ce {
         if sh.col_width(col) == 0.0 {
             continue;
         }
-        let (x0, x1) = (geo.x(sh, col), geo.x(sh, col.saturating_add(1)));
+        let (x0, x1) = (geo.x(sh, col), geo.x_end(sh, col));
         let top = look(wb, si, sh, CellRef::new(m.start.row, col), cf).0.style.borders.top;
         let bottom = look(wb, si, sh, CellRef::new(m.end.row, col), cf).0.style.borders.bottom;
         out.push((top, [pos2(x0, rect.top()), pos2(x1, rect.top())]));
@@ -203,7 +221,7 @@ pub(super) fn merged_edges(
         if sh.row_height(row) == 0.0 {
             continue;
         }
-        let (y0, y1) = (geo.y(sh, row), geo.y(sh, row.saturating_add(1)));
+        let (y0, y1) = (geo.y(sh, row), geo.y_end(sh, row));
         let left = look(wb, si, sh, CellRef::new(row, m.start.col), cf).0.style.borders.left;
         let right = look(wb, si, sh, CellRef::new(row, m.end.col), cf).0.style.borders.right;
         out.push((left, [pos2(rect.left(), y0), pos2(rect.left(), y1)]));

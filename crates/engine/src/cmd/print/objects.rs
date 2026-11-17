@@ -1,6 +1,6 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::*;
+use super::{Anchor, Font, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -25,10 +25,30 @@ pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32
         image.thumbnail(((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32).to_rgba8();
     let fit = (w / iw as f32).min(h / ih as f32);
     let (pw, ph) = (iw as f32 * fit, ih as f32 * fit);
-    pg.image_rgba(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph, image.as_raw(), image.width(), image.height());
+    pg.image_rgba(Rect::new(x + pad + (w - pw) / 2.0, y + pad + (h - ph) / 2.0, pw, ph), image.as_raw(), [image.width(), image.height()]);
 }
 
 /// Sheet pixel rectangle of an anchor.
+/// Most source lines printed for an equation that has no layout.
+pub(super) const MAX_FALLBACK_LINES: usize = 500;
+
+/// The lines of `text` printed in place of an equation that has no layout: those of its first
+/// `MAX_SOURCE_BYTES` (a longer source never lays out, and a file can carry megabytes) that fit a
+/// frame `h` points tall at `line_h` points per line (at least the first), and never more than
+/// [`MAX_FALLBACK_LINES`]. A single `pg.text` call would print every newline as `?`.
+pub(super) fn fallback_lines(text: &str, h: f32, line_h: f32) -> impl Iterator<Item = &str> {
+    let text = crate::cmd::equation::source_excerpt(text);
+    let fit = h / line_h;
+    let n = if fit >= MAX_FALLBACK_LINES as f32 {
+        MAX_FALLBACK_LINES
+    } else if fit >= 1.0 {
+        fit as usize
+    } else {
+        1
+    };
+    text.lines().take(n)
+}
+
 fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
     (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
 }
@@ -49,23 +69,18 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u3
 /// Draws charts, pictures, shapes and sparklines overlapping the body block of a page.
 /// `pics` memoizes decoded pictures for the whole render (one page at a time draws each
 /// picture again, but the decode happens once).
-pub(super) fn draw_objects(
-    pg: &mut Page,
-    wb: &Workbook,
-    si: usize,
-    sh: &Sheet,
-    b: &Block,
-    pics: &mut std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>>,
-) {
+pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, pics: &mut super::PicCache) {
     let block = b.range();
     let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
     let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
-    let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
+    let place = |r: (f64, f64, f64, f64)| {
+        (b.text_x(bx + ((r.0 - sx0) as f32) * b.k, r.2 as f32 * b.k), by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k)
+    };
     pg.save();
-    pg.clip_rect(bx, by, bw, bh);
+    pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     draw_sparklines(pg, wb, si, sh, b, block);
     for (imi, im) in sh.images.iter().enumerate() {
         let r = anchor_rect(sh, &im.anchor);
@@ -75,9 +90,14 @@ pub(super) fn draw_objects(
         let (x, y, w, h) = place(r);
         // About 150 dpi is plenty for print.
         let (mw, mh) = (((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32);
-        let decoded = pics.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
+        let decoded = pics.decoded.entry((si, imi)).or_insert_with(|| decode_image(&im.data, mw, mh));
         if let Some((px, pw, ph)) = decoded.as_ref() {
-            pg.image_rgba(x, y, w, h, px, *pw, *ph);
+            // Every page the picture touches embeds its own copy: past the budget it is left out.
+            let bytes = px.len();
+            if pics.image_bytes.saturating_add(bytes) <= super::MAX_EMBEDDED_IMAGE_BYTES {
+                pics.image_bytes += bytes;
+                pg.image_rgba(Rect::new(x, y, w, h), px, [*pw, *ph]);
+            }
         }
     }
     for shp in &sh.shapes {
@@ -86,17 +106,41 @@ pub(super) fn draw_objects(
             continue;
         }
         let (x, y, w, h) = place(r);
+        if shp.kind == ShapeKind::Equation {
+            let ink = rgb_of(shp.line, wb).unwrap_or([0, 0, 0]);
+            match shp.math.get(&shp.text) {
+                Some(Ok(list)) => crate::cmd::equation::draw_pdf(pg, list, (x, y, w, h), crate::cmd::equation::PADDING * b.k, ink),
+                _ => {
+                    // No layout (the source does not parse, or the file was past the layout
+                    // budget): the source, one text run per line, as many as the frame holds.
+                    let line_h = 12.0 * b.scale;
+                    // A long line stays inside the frame; this clip nests in the block's.
+                    pg.save();
+                    pg.clip_rect(x, y, w, h);
+                    for (i, line) in fallback_lines(&shp.text, h, line_h).enumerate() {
+                        pg.text(x + 2.0 * b.k, y + line_h * (i + 1) as f32, 10.0 * b.scale, Font::Courier, ink, line);
+                    }
+                    pg.restore();
+                }
+            }
+            continue;
+        }
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
-    for ch in &sh.charts {
+    for (chi, ch) in sh.charts.iter().enumerate() {
         let r = anchor_rect(sh, &ch.anchor);
         if !visible(r) {
             continue;
         }
         let (x, y, _, _) = place(r);
-        let data = gridcraft_chart::resolve(wb, si, ch);
-        let prims = gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure);
-        draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
+        // As for pictures, each page gets its own copy of the drawing commands.
+        let prims = pics.chart((si, chi), || {
+            let data = gridcraft_chart::resolve(wb, si, ch);
+            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+        });
+        if let Some(prims) = prims {
+            draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });
+        }
     }
     pg.restore();
 }
@@ -111,9 +155,19 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
             v => vec![v.as_f64()],
         };
         let color = rgb_of(sp.color, wb).unwrap_or([0x15, 0x60, 0x82]);
-        let (x, y, w, h) = b.rect(RangeRef::cell(sp.cell));
+        let (x, y, w, h) = b.drawn_rect(RangeRef::cell(sp.cell));
         let (wpx, hpx) = (w / b.k, h / b.k);
-        let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        let mut prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        if sh.right_to_left {
+            for prim in &mut prims {
+                match prim {
+                    gridcraft_chart::Prim::Rect { x, w, .. } => *x = wpx - *x - *w,
+                    gridcraft_chart::Prim::Line { pts, .. } => pts.iter_mut().for_each(|p| p[0] = wpx - p[0]),
+                    gridcraft_chart::Prim::Circle { cx, .. } => *cx = wpx - *cx,
+                    _ => {}
+                }
+            }
+        }
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
 }
@@ -157,7 +211,7 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
+    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size), TextDirection::Auto);
     let block_h = lines.len().min(500) as f32 * size * 1.2;
     let mut yy = match anchor {
         ShapeTextAnchor::Top => y + 2.0 * b.k,
@@ -165,13 +219,28 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
     } + size * 0.8;
     for l in lines.iter().take(500) {
-        let lw = gridcraft_pdf::text_width(font, size, l);
+        let lw = gridcraft_pdf::text_width_with_direction(font, size, &l.text, l.direction);
         let lx = match align {
             ShapeTextAlign::Left => x + 2.0 * b.k,
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
             ShapeTextAlign::Right => x + w - 2.0 * b.k - lw,
         };
-        pg.text(lx, yy, size, font, color, l);
+        // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
+        if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
+            let off = (size * 0.06).max(0.5);
+            pg.text_with_direction(Point::new(lx + off, yy + off), size, font, sc, &l.text, l.direction);
+        }
+        // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
+        // directions by half the outline width, under the filled text.
+        if let Some((c, ow)) = fm.text_outline
+            && let Some(oc) = rgb_of(c, wb)
+        {
+            let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
+            for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+                pg.text_with_direction(Point::new(lx + dx * d, yy + dy * d), size, font, oc, &l.text, l.direction);
+            }
+        }
+        pg.text_with_direction(Point::new(lx, yy), size, font, color, &l.text, l.direction);
         yy += size * 1.2;
     }
 }

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CfOperator, CfRule, CfValueKind, CondFormat, Ctx, El, ErrorStyle, MAX_COND_CELLS, RangeRef, Sheet, Validation, ValidationKind, from_file,
+    parse_sqref, read_color,
+};
 
 fn cf_op(s: Option<&str>) -> CfOperator {
     match s.unwrap_or("between") {
@@ -42,11 +45,15 @@ fn cfvos(e: &El) -> Vec<CfValueKind> {
         .collect()
 }
 
-pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
+/// One `conditionalFormatting` block. Every rule keeps its own copy of the block's ranges, so
+/// `kept_cells` counts the range cells the sheet's retained rules hold so far, across blocks; a
+/// rule that would take it past [`MAX_COND_CELLS`] is dropped. Unsupported rules cost nothing.
+pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, kept_cells: &mut u64) {
     let ranges = parse_sqref(e.attr("sqref"));
     if ranges.is_empty() {
         return;
     }
+    let block_cells = ranges.iter().map(RangeRef::count).fold(0u64, u64::saturating_add);
     for r in e.kids("cfRule") {
         let style = Box::new(r.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)).cloned().unwrap_or_default());
         let formulas: Vec<String> = r.kids("formula").map(|f| from_file(f.text.trim())).collect();
@@ -108,14 +115,14 @@ pub(super) fn read_cf(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                 continue;
             }
         };
-        if let Some(id) = ext_id {
-            cx.cf_ext_ids.push((id, sheet.cond_formats.len()));
-        }
-        let rules = sheet.cond_formats.len();
-        let area = ranges.iter().map(RangeRef::count).sum::<u64>().saturating_mul(1 + rules as u64);
-        if area > MAX_COND_CELLS {
+        let total = kept_cells.saturating_add(block_cells);
+        if total > MAX_COND_CELLS {
             cx.warn(format!("conditional formats past {MAX_COND_CELLS} kept range cells were dropped"));
             break;
+        }
+        *kept_cells = total;
+        if let Some(id) = ext_id {
+            cx.cf_ext_ids.push((id, sheet.cond_formats.len()));
         }
         sheet.cond_formats.push(CondFormat {
             ranges: ranges.clone(),
