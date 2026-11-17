@@ -25,6 +25,7 @@ pub const REQUIRED_FACES: &[(&str, &str, &[&str])] = &[
     ("Noto Sans Symbols", "Regular", &["Zsym"]),
     ("Noto Sans Symbols 2", "Regular", &["Zsym"]),
     ("Noto Sans Arabic", "Regular", &["Arab"]),
+    ("Noto Sans Georgian", "Regular", &["Geor"]),
 ];
 
 /// The native-only Simplified Chinese face from craft-fonts' separate
@@ -43,6 +44,7 @@ pub const WEB_ALLOWED: &[(&str, &str)] = &[
     ("Noto Sans Symbols", "Regular"),
     ("Noto Sans Symbols 2", "Regular"),
     ("Noto Sans Arabic", "Regular"),
+    ("Noto Sans Georgian", "Regular"),
 ];
 
 /// One validated `fonts/manifest.txt` row. Only the fields GridCraft consumes are kept.
@@ -175,6 +177,7 @@ mod tests {
                 ("Noto Sans Symbols", "Regular"),
                 ("Noto Sans Symbols 2", "Regular"),
                 ("Noto Sans Arabic", "Regular"),
+                ("Noto Sans Georgian", "Regular"),
             ]
         );
         for (family, _) in WEB_ALLOWED {

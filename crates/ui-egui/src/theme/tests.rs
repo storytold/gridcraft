@@ -77,6 +77,7 @@ fn the_required_craft_faces_keep_their_exact_scripts() {
         ("Noto Sans Symbols", "Regular", ["Zsym"].as_slice()),
         ("Noto Sans Symbols 2", "Regular", ["Zsym"].as_slice()),
         ("Noto Sans Arabic", "Regular", ["Arab"].as_slice()),
+        ("Noto Sans Georgian", "Regular", ["Geor"].as_slice()),
     ] {
         assert!(
             faces.iter().any(|(f, s, declared)| *f == family && *s == style && *declared == scripts),
@@ -326,6 +327,7 @@ fn installed_latin_fonts_keep_system_script_fallbacks() {
 /// The craft Arabic face reaches workbook fonts and the pinned web set, without help from system faces.
 fn the_craft_arabic_face_reaches_every_chain() {
     assert!(crate::craft_fonts_policy::web_allowed("Noto Sans Arabic", "Regular"));
+    assert!(crate::craft_fonts_policy::web_allowed("Noto Sans Georgian", "Regular"));
     if !craft_fonts_cover("العربية١٢٣") {
         assert!(!craft_fonts_required(), "CRAFT_FONTS_REQUIRED=1 but no craft-fonts face covers Arabic");
         return;
