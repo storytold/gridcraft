@@ -119,7 +119,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | F2, F9, F10 (key tips), F4 / Alt+Enter / Ctrl+Enter / Ctrl+Shift+Enter while editing | same | edit, calculate, references, new line, fill, array | present |
 | Ctrl+Shift+~ ! @ # $ % ^ | Control+Shift | General, Number, Time, Date, Currency, Percent, Scientific | **added** |
 | Ctrl+Shift+& / Ctrl+Shift+_ | Cmd+Option+0 / Cmd+Option+- (and Cmd+Option+arrows for one side) | outline border / remove borders | **added** |
-| Ctrl+2 / 3 / 4 / 5 | Cmd+Shift+X (strikethrough only) | bold / italic / underline / strikethrough; Strikethrough's tooltip shows Ctrl+5, or Cmd+Shift+X on a Mac (#4401) | **added** |
+| Ctrl+2 / 3 / 4 / 5 | Cmd+Shift+X (strikethrough only) | bold / italic / underline / strikethrough; the Strikethrough ribbon tooltip and command search show Ctrl+5, or ⌘⇧X / Cmd+Shift+X on a Mac (#4401) | **added** |
 | Ctrl+6 | Control+6 | hide / show objects (charts, pictures, shapes, slicers), saved as `workbookPr showObjects` | **added** |
 | Ctrl+Shift+: | Cmd+; | current time | **added** |
 | Ctrl+' / Ctrl+Shift+" | Control | formula / value from the cell above | **added** |

@@ -103,6 +103,7 @@ fn command_search_shows_engine_shortcuts() {
             ("edit.paste", if os == OperatingSystem::Mac { "Paste  (Cmd+V)" } else { "Paste  (Ctrl+V)" }),
             ("home.italic", if os == OperatingSystem::Mac { "Italic  (Cmd+I)" } else { "Italic  (Ctrl+I)" }),
             ("home.underline", if os == OperatingSystem::Mac { "Underline  (Cmd+U)" } else { "Underline  (Ctrl+U)" }),
+            ("home.strikethrough", if os == OperatingSystem::Mac { "Strikethrough  (Cmd+Shift+X)" } else { "Strikethrough  (Ctrl+5)" }),
             ("edit.fillDown", if os == OperatingSystem::Mac { "Fill Down  (Cmd+D)" } else { "Fill Down  (Ctrl+D)" }),
             ("edit.flashFill", "Flash Fill  (Ctrl+E)"),
             ("home.alignLeft", if os == OperatingSystem::Mac { "Align Left  (Cmd+L)" } else { "Align Left    Home" }),
