@@ -576,8 +576,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
         "Numerical Count" => "숫자 셀 수",
-        "Minimum" => "최소값",
-        "Maximum" => "최대값",
         "Circular References: {cell}" => "순환 참조: {cell}",
         "Width: {chars} ({pixels} pixels)" => "너비: {chars} ({pixels} 픽셀)",
         "Height: {points} ({pixels} pixels)" => "높이: {points} ({pixels} 픽셀)",

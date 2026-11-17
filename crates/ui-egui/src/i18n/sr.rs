@@ -567,8 +567,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "Skupi dijalog",
         "Expand dialog" => "Proširi dijalog",
         "Numerical Count" => "Broj numeričkih vrednosti",
-        "Minimum" => "Minimum",
-        "Maximum" => "Maksimum",
         "Circular References: {cell}" => "Kružne reference: {cell}",
         "Width: {chars} ({pixels} pixels)" => "Širina: {chars} (piksela: {pixels})",
         "Height: {points} ({pixels} pixels)" => "Visina: {points} (piksela: {pixels})",

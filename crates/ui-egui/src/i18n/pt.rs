@@ -1088,8 +1088,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
         "Numerical Count" => "Contagem Numérica",
-        "Minimum" => "Mínimo",
-        "Maximum" => "Máximo",
         "Circular References: {cell}" => "Referências Circulares: {cell}",
         "Width: {chars} ({pixels} pixels)" => "Largura: {chars} ({pixels} pixels)",
         "Height: {points} ({pixels} pixels)" => "Altura: {points} ({pixels} pixels)",
