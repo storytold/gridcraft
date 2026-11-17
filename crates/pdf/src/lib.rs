@@ -979,39 +979,7 @@ pub struct PdfDoc {
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
 fn run_length(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() / 2 + 16);
-    let mut i = 0;
-    while i < data.len() {
-        let b = data[i];
-        let mut run = 1;
-        while i + run < data.len() && run < 128 && data[i + run] == b {
-            run += 1;
-        }
-        if run >= 2 {
-            out.push((257 - run) as u8);
-            out.push(b);
-            i += run;
-            continue;
-        }
-        // Literal run until the next repeat of 3+ or 128 bytes.
-        let start = i;
-        let mut len = 0;
-        while i < data.len() && len < 128 {
-            if i + 2 < data.len() && data[i] == data[i + 1] && data[i] == data[i + 2] {
-                break;
-            }
-            i += 1;
-            len += 1;
-        }
-        if len == 0 {
-            // Next is a repeat; loop will handle it.
-            continue;
-        }
-        out.push((len - 1) as u8);
-        out.extend_from_slice(&data[start..start + len]);
-    }
-    out.push(128);
-    out
+    craft_stream_codecs::runlength::encode(data)
 }
 
 /// Longest Info string written, in characters; longer values are cut on a character boundary.
