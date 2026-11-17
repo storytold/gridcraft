@@ -10,7 +10,8 @@ mod pivot;
 mod print;
 
 pub use pivot::{
-    PivotCacheId, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue,
+    PIVOT_INDEXER, PivotCacheId, PivotCalcField, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotIndexer, PivotItemRef,
+    PivotLayout, PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, pivot_key,
 };
 pub use print::{EditRange, HfPage, LineInfo, Orientation, PageOrder, PrintSettings, SheetProtection, password_hash};
 
