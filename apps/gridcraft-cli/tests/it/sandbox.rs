@@ -78,6 +78,8 @@ fn the_self_test_finds_every_denial() {
     ] {
         assert!(out.contains(line), "missing `{line}` in:\n{out}");
     }
+    #[cfg(target_os = "linux")]
+    assert!(out.contains("denied: switch a descriptor's notifications on"), "missing the notification switch in:\n{out}");
     std::fs::remove_dir_all(home).unwrap();
 }
 
@@ -182,7 +184,9 @@ fn system_python() -> Option<(String, String)> {
 /// Confined, a program can't signal another process (this test, signal 0 delivering nothing), but can
 /// still signal itself and its own threads. On Linux, where the filter names them, it also can't
 /// change another process's limits or priority, or type into a terminal: no call here reaches a real
-/// terminal, since its standard input isn't one.
+/// terminal, since its standard input isn't one. Linux also refuses the `fcntl` commands that would
+/// have the kernel signal a process for it: naming the owner, choosing the signal, or switching the
+/// notification on.
 #[test]
 fn a_confined_program_leaves_other_processes_alone() {
     if !confines() {
@@ -227,6 +231,13 @@ if sys.platform == "linux":
     assert refused(os.setpriority, os.PRIO_USER, 0, 0), "every process's priority"
     assert refused(os.sched_setaffinity, other, {0}), "another process's processors"
     assert refused(os.pidfd_open, other), "a handle on another process"
+    read, write = os.pipe()
+    assert refused(fcntl.fcntl, write, fcntl.F_SETOWN, other), "giving a descriptor's notifications to another process"
+    # 15 is F_SETOWN_EX and 10 is F_SETSIG, which Python's fcntl doesn't name; the filter refuses
+    # them whatever owner or signal they name, so the argument doesn't matter.
+    assert refused(fcntl.fcntl, write, 15), "naming a descriptor's owner the extended way"
+    assert refused(fcntl.fcntl, write, 10), "choosing a descriptor's notification signal"
+    assert refused(fcntl.fcntl, write, fcntl.F_SETFL, fcntl.fcntl(write, fcntl.F_GETFL) | os.O_ASYNC), "switching a descriptor's notifications on"
     resource.prlimit(0, resource.RLIMIT_NOFILE)
     resource.prlimit(os.getpid(), resource.RLIMIT_NOFILE)
     os.setpriority(os.PRIO_PROCESS, 0, os.getpriority(os.PRIO_PROCESS, 0))
@@ -239,6 +250,101 @@ print("left alone")
     let o = cli(&["sandbox-check", "--read", &prefix, "--", &python, "-I", "-c", code, &me]);
     assert!(o.status.success(), "{}", text(&o));
     assert!(String::from_utf8_lossy(&o.stdout).contains("left alone"), "{}", text(&o));
+}
+
+/// A socket the parent made, which the program inherited as a standard stream, can't be pointed at
+/// another process through the ioctls that do what `fcntl`'s notification commands do: `FIOSETOWN`
+/// (0x8901) and `FIOASYNC` (0x5452), which Python's `fcntl` passes straight through. Linux only:
+/// macOS's profile has no rule for them, and its standard streams here are pipes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_program_cant_point_an_inherited_socket_at_another_process() {
+    if !confines() {
+        return;
+    }
+    let Some((python, prefix)) = system_python() else {
+        return;
+    };
+    let code = r#"
+import fcntl, sys
+other = int(sys.argv[1])
+def refused(call, *args):
+    try:
+        call(*args)
+    except PermissionError:
+        return True
+    except OSError as e:
+        print("other error", e)
+    return False
+assert refused(fcntl.ioctl, 0, 0x8901, other), "giving a socket's notifications to another process"
+assert refused(fcntl.ioctl, 0, 0x5452, 1), "switching a socket's notifications on"
+print("socket quiet")
+"#;
+    let (mine, _) = std::os::unix::net::UnixStream::pair().unwrap();
+    let socket: std::os::fd::OwnedFd = mine.into();
+    let me = std::process::id().to_string();
+    let o = Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+        .args(["sandbox-check", "--read", &prefix, "--", &python, "-I", "-c", code, &me])
+        .stdin(std::process::Stdio::from(socket))
+        .output()
+        .unwrap();
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(String::from_utf8_lossy(&o.stdout).contains("socket quiet"), "{out}");
+}
+
+/// The same inherited socket, by both ioctls that name the process to notify, `FIOSETOWN` (0x8901)
+/// and `SIOCSPGRP` (0x8902), with the argument a real pointer. Named by value the kernel reads the
+/// number as an address and fails with `EFAULT` whether or not the filter refuses it, so that form
+/// shows only that a rule matched a request number; by pointer each call succeeds unconfined and is
+/// `EPERM` confined, which is the transition the page claims. Kept apart from the test above so a
+/// rule dropped for one request number fails for that request, not behind another. Linux only, as
+/// those rules are: macOS's profile has none, and its standard streams here are pipes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_program_cant_point_an_inherited_socket_at_another_process_by_pointer() {
+    if !confines() {
+        return;
+    }
+    let Some((python, prefix)) = system_python() else {
+        return;
+    };
+    let code = r#"
+import fcntl, socket, struct, sys
+other = int(sys.argv[1])
+def refused(call, *args):
+    try:
+        call(*args)
+    except PermissionError:
+        return True
+    except OSError as e:
+        print("other error", e)
+    return False
+# Read first, so a standard stream that is not a socket can't pass for one: a pipe has no socket name.
+# Detached, not dropped: a socket object closes the descriptor it wrapped when it is collected, and then
+# the refusals below would be read off an invalid descriptor.
+wrapped = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, fileno=0)
+name = wrapped.getsockname()
+wrapped.detach()
+assert name == ""
+# The process group is a pointer, as a C caller passes it; naming it by value has the kernel read the
+# number as an address and fail with EFAULT, which would leave the refusal unexplained by the filter.
+group = bytearray(struct.pack("i", other))
+assert refused(fcntl.ioctl, 0, 0x8901, group), "giving a socket's notifications to another process"
+assert refused(fcntl.ioctl, 0, 0x8902, group), "giving a socket's notifications to another process's group"
+print("socket owner quiet")
+"#;
+    let (mine, _) = std::os::unix::net::UnixStream::pair().unwrap();
+    let socket: std::os::fd::OwnedFd = mine.into();
+    let me = std::process::id().to_string();
+    let o = Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+        .args(["sandbox-check", "--read", &prefix, "--", &python, "-I", "-c", code, &me])
+        .stdin(std::process::Stdio::from(socket))
+        .output()
+        .unwrap();
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(String::from_utf8_lossy(&o.stdout).contains("socket owner quiet"), "{out}");
 }
 
 /// Confined, a program changes no file, whether the policy lets it read that file or not, by path or

@@ -420,8 +420,8 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                         ui.add_space(12.0);
                         // Only a loop on the active sheet is named, so the address needs no sheet.
                         let label = match d.calc.circular.iter().find(|(si, _)| *si == d.wb.active_sheet()) {
-                            Some((_, c)) => format!("Circular References: {}", c.a1()),
-                            None => "Circular References".to_owned(),
+                            Some((_, c)) => app.ui.language.tr_fill("Circular References: {cell}", &[("cell", &c.a1())]),
+                            None => app.ui.language.tr("Circular References").to_owned(),
                         };
                         text(ui, egui::RichText::new(label).font(theme::ui_font(12.5)).color(t.danger));
                     }
@@ -524,8 +524,10 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
             .trim_end_matches(region.decimal)
             .to_string()
     };
-    let mut parts = Vec::new();
+    // The label the right-click menu shows, then the value: clicking a statistic copies the part
+    // after `": "`.
     let lang = app.ui.language;
+    let mut parts = Vec::new();
     if on.average
         && let Some(a) = st.average
     {
@@ -595,6 +597,26 @@ mod tests {
 
     fn names(app: &SheetApp) -> Vec<String> {
         app.session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect()
+    }
+
+    #[test]
+    fn status_bar_statistics_follow_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        for (cell, input) in [("A1", "1"), ("A2", "2"), ("A3", "3")] {
+            app.run("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        app.run("selection.set", json!({"range": "A1:A3"})).unwrap();
+        app.run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
+        let parts = [("Average", "2"), ("Count", "3"), ("Numerical Count", "3"), ("Minimum", "1"), ("Maximum", "3"), ("Sum", "6")];
+        let english: Vec<String> = parts.iter().map(|(label, value)| format!("{label}: {value}")).collect();
+        assert_eq!(super::selection_statistics(&app), english);
+        app.ui.language = Language::It;
+        let italian: Vec<String> = parts.iter().map(|(label, value)| format!("{}: {value}", Language::It.tr(label))).collect();
+        assert_eq!(super::selection_statistics(&app), italian, "each label as the right-click menu shows it");
+        assert!(italian.iter().zip(&english).all(|(it, en)| it != en), "the Italian catalog translates every label: {italian:?}");
     }
 
     #[test]

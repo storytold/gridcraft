@@ -36,15 +36,28 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let whole = clip.areas.is_empty() && (clip.selected.is_full_cols() || clip.selected.is_full_rows()) && clip.selected.contains_range(&clip.range);
     let src = if whole { clip.selected } else { clip.range };
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
-    // Tile the copy over a larger destination that is a multiple of its size.
-    let tile = sel.height() % h == 0
-        && sel.width() % w == 0
+    // Tile the copy over a larger destination that is a multiple of its size. A selection
+    // narrower than the copy but a multiple of its height takes it down every row, at the copy's
+    // width (and a shorter one a multiple of its width across), as in Excel.
+    let multiple = sel.height() % h == 0 && sel.width() % w == 0;
+    let down = sel.width() < w && sel.height() > h && sel.height() % h == 0;
+    let across = sel.height() < h && sel.width() > w && sel.width() % w == 0;
+    // The cells the tiles cover: the selection itself, or for `down`/`across` the selection at the
+    // copy's width/height, which can be much larger than what was selected.
+    let area = if down {
+        u64::from(sel.height()) * u64::from(w)
+    } else if across {
+        u64::from(h) * u64::from(sel.width())
+    } else {
+        sel.count()
+    };
+    let tile = (multiple || down || across)
         && !sel.is_single()
         && cell_param_on(s, p, "at", dest_sheet)?.is_none()
         && !sel.is_full_cols()
         && !sel.is_full_rows()
-        && sel.count() <= 4_000_000;
-    let (tiles_r, tiles_c) = if tile { (sel.height() / h, sel.width() / w) } else { (1, 1) };
+        && area <= 4_000_000;
+    let (tiles_r, tiles_c) = if tile { ((sel.height() / h).max(1), (sel.width() / w).max(1)) } else { (1, 1) };
     // A single cell or row repeated down a filtered selection skips the rows the filter hides; a
     // taller block is pasted straight down, hidden rows included, as in Excel.
     let skip_rows = match s.doc()?.wb.sheet(dest_sheet) {

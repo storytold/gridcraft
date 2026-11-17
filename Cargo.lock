@@ -933,9 +933,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-drawingml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430955825553ab7b976f4#bb57d422d0bc842cbde430955825553ab7b976f4"
+dependencies = [
+ "craft-xml",
+ "kurbo",
+ "log",
+ "serde",
+]
+
+[[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
+
+[[package]]
+name = "craft-gridcraft-format"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=9a6d894200221fcfedc274870c30394d404f859d#9a6d894200221fcfedc274870c30394d404f859d"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "craft-i18n"
@@ -1012,6 +1033,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-pdf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd#ff142b3ad58aa7306676749428f4f2f9b277b5dd"
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
@@ -1029,6 +1055,17 @@ dependencies = [
 name = "craft-sheet"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430955825553ab7b976f4#bb57d422d0bc842cbde430955825553ab7b976f4"
+
+[[package]]
+name = "craft-stream-codecs"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f7e0d7fd5577e102b4634bcbe062e649eb68165f#f7e0d7fd5577e102b4634bcbe062e649eb68165f"
+dependencies = [
+ "fax",
+ "hayro-ccitt",
+ "hayro-jbig2",
+ "thiserror 2.0.21",
+]
 
 [[package]]
 name = "craft-ui"
@@ -1126,6 +1163,18 @@ dependencies = [
  "md-5",
  "miniz_oxide 0.9.1",
  "sha1 0.10.7",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xlsx"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430955825553ab7b976f4#bb57d422d0bc842cbde430955825553ab7b976f4"
+dependencies = [
+ "craft-drawingml",
+ "craft-opc",
+ "craft-sheet",
+ "craft-xml",
  "thiserror 2.0.21",
 ]
 
@@ -2227,6 +2276,7 @@ name = "gridcraft-engine"
 version = "0.19.1"
 dependencies = [
  "craft-csv",
+ "craft-gridcraft-format",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
@@ -2242,6 +2292,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "unicode-segmentation",
  "web-time",
  "zip 3.0.0",
 ]
@@ -2305,6 +2356,14 @@ dependencies = [
 [[package]]
 name = "gridcraft-pdf"
 version = "0.19.1"
+dependencies = [
+ "craft-pdf",
+ "craft-stream-codecs",
+ "harfrust",
+ "sha2 0.11.1",
+ "skrifa",
+ "unicode-bidi",
+]
 
 [[package]]
 name = "gridcraft-sandbox"
@@ -2373,6 +2432,8 @@ dependencies = [
  "craft-offcrypto",
  "craft-opc",
  "craft-xls",
+ "craft-xlsx",
+ "craft-xml",
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-functions",
@@ -2463,6 +2524,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 dependencies = [
  "foldhash 0.2.0",
+]
+
+[[package]]
+name = "hayro-ccitt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f4d0e94ddd48749f06bbe4e5389fb9799a0c45bcaf00495042076ef05e3241a"
+
+[[package]]
+name = "hayro-jbig2"
+version = "0.3.0"
+source = "git+https://github.com/storytold/craft-libs?rev=f7e0d7fd5577e102b4634bcbe062e649eb68165f#f7e0d7fd5577e102b4634bcbe062e649eb68165f"
+dependencies = [
+ "hayro-ccitt",
 ]
 
 [[package]]
