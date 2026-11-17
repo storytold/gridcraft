@@ -135,6 +135,7 @@ fn workbook() -> Workbook {
         show_values_row: false,
         classic_layout: true,
         calculated_fields: vec![],
+        data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
     };
