@@ -55,12 +55,17 @@ fn a_sort_by_colour_icon_or_list_is_not_half_kept() {
         r#"<sortState ref="A2:B4"><sortCondition ref="A2:A4"/><sortCondition sortBy="icon" iconSet="3Arrows" ref="B2:B4"/></sortState>"#,
         r#"<sortState ref="A2:B4"><sortCondition customList="Low,High" ref="B2:B4"/></sortState>"#,
         r#"<sortState columnSort="1" ref="A2:B4"><sortCondition ref="A2:B2"/></sortState>"#,
+        r#"<sortState sortMethod="stroke" ref="A2:B4"><sortCondition ref="B2:B4"/></sortState>"#,
+        r#"<sortState sortMethod="pinYin" ref="A2:B4"><sortCondition ref="B2:B4"/></sortState>"#,
         r#"<sortState ref="A2:B4"/>"#,
     ] {
         let (first, _) = written(&format!(r#"<autoFilter ref="A1:B4">{state}</autoFilter>"#));
         assert_eq!(first, r#"<autoFilter ref="A1:B4"/>"#, "{state}");
     }
-    // A sortBy of "value" is the default, written out.
+    // `sortMethod="none"` is the default order, and so is a sortBy of "value": kept, written out.
+    let (first, _) =
+        written(r#"<autoFilter ref="A1:B4"><sortState sortMethod="none" ref="A2:B4"><sortCondition ref="B2:B4"/></sortState></autoFilter>"#);
+    assert_eq!(first, r#"<autoFilter ref="A1:B4"><sortState ref="A2:B4"><sortCondition ref="B2:B4"/></sortState></autoFilter>"#);
     let (first, _) =
         written(r#"<autoFilter ref="A1:B4"><sortState ref="A2:B4"><sortCondition sortBy="value" ref="B2:B4"/></sortState></autoFilter>"#);
     assert_eq!(first, r#"<autoFilter ref="A1:B4"><sortState ref="A2:B4"><sortCondition ref="B2:B4"/></sortState></autoFilter>"#);

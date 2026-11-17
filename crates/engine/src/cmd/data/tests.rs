@@ -582,6 +582,19 @@ fn an_autofilter_sort_moves_with_its_rows() {
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(sort(&s).unwrap().keys[0].range, r("B2:B4"));
+    // Cells inserted in the key's column alone (shifting it down) move the key out of the sort's
+    // rows: the sort is dropped, not kept with its key outside its range (CodeRabbit's review).
+    let mut t = Session::new();
+    t.new_workbook();
+    t.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Amount"], ["a", 2], ["b", 5], ["c", 3]]})).unwrap();
+    std::sync::Arc::make_mut(&mut t.doc_mut().unwrap().wb).sheet_mut(0).unwrap().autofilter = Some(AutoFilter {
+        range: r("A1:B4"),
+        criteria: vec![],
+        hidden_buttons: vec![],
+        sort: Some(SortState { range: r("A2:B4"), case_sensitive: false, keys: vec![SortKey { range: r("B2:B4"), descending: true }] }),
+    });
+    t.execute("home.insertCells", json!({"range": "B2:B3", "shift": "down"})).unwrap();
+    assert!(t.doc().unwrap().wb.sheet(0).unwrap().autofilter.as_ref().is_some_and(|af| af.sort.is_none()), "{:?}", sort(&t));
     // Deleting the sorted column drops the sort, not the filter.
     s.execute("home.deleteColumns", json!({"cols": "B:B"})).unwrap();
     let af = s.doc().unwrap().wb.sheet(0).unwrap().autofilter.clone();

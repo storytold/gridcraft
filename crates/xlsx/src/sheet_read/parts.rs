@@ -70,7 +70,8 @@ fn read_sort_state(e: &El) -> Option<gridcraft_model::SortState> {
         }
         keys.push(gridcraft_model::SortKey { range: c.attr("ref").and_then(RangeRef::parse)?, descending: c.flag("descending", false) });
     }
-    if keys.is_empty() || e.flag("columnSort", false) {
+    // A stroke-count or pinyin order (`sortMethod`) isn't kept either.
+    if keys.is_empty() || e.flag("columnSort", false) || e.attr("sortMethod").is_some_and(|m| m != "none") {
         return None;
     }
     Some(gridcraft_model::SortState { range, case_sensitive: e.flag("caseSensitive", false), keys })

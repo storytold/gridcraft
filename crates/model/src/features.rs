@@ -1143,10 +1143,16 @@ pub struct SortKey {
 }
 
 impl SortState {
-    /// The state with every range moved by `map`; None when its range or a key goes away.
+    /// The state with every range moved by `map`; None when its range or a key goes away, or a
+    /// key ends up outside the range (an insert of cells that moved the key and not the rest).
     pub fn mapped(&self, mut map: impl FnMut(RangeRef) -> Option<RangeRef>) -> Option<SortState> {
-        let keys = self.keys.iter().map(|k| Some(SortKey { range: map(k.range)?, descending: k.descending })).collect::<Option<Vec<_>>>()?;
-        Some(SortState { range: map(self.range)?, case_sensitive: self.case_sensitive, keys })
+        let range = map(self.range)?;
+        let keys = self
+            .keys
+            .iter()
+            .map(|k| Some(SortKey { range: map(k.range).filter(|r| range.contains_range(r))?, descending: k.descending }))
+            .collect::<Option<Vec<_>>>()?;
+        Some(SortState { range, case_sensitive: self.case_sensitive, keys })
     }
 }
 
