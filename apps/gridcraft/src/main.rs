@@ -90,7 +90,12 @@ impl eframe::App for App {
                     && let Some(mtm) = objc2::MainThreadMarker::new()
                 {
                     let wake = ctx.clone();
-                    let panel = self.4.get_or_insert_with(|| font_panel::FontPanel::new(mtm, move || wake.request_repaint()));
+                    let panel = self.4.get_or_insert_with(|| {
+                        let panel = font_panel::FontPanel::new(mtm, move || wake.request_repaint());
+                        // A cell's font has no shadow (nor does xlsx).
+                        panel.hide_shadow();
+                        panel
+                    });
                     panel.show(active_face(&self.0));
                 }
             }

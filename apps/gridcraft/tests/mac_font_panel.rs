@@ -66,6 +66,21 @@ fn main() {
     );
     panel.change_attributes_for_test(&changed);
     assert_eq!(panel.picks(), vec![Pick { underline: Some(Line::Double), strike: Some(Line::Single), ..Pick::default() }]);
+    // The panel asks the responder chain which controls to show; hiding the shadow keeps the rest.
+    let modes = || -> usize {
+        let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+        let fonts = objc2_app_kit::NSFontPanel::sharedFontPanel(mtm);
+        // SAFETY: `targetForAction:` only looks the selector up; `validModesForFontPanel:` takes the
+        // panel and returns its mode mask.
+        #[allow(unsafe_code)]
+        unsafe {
+            let target = app.targetForAction(objc2::sel!(validModesForFontPanel:)).expect("a target for the panel's modes");
+            objc2::msg_send![&target, validModesForFontPanel: &*fonts]
+        }
+    };
+    assert_eq!(modes(), 0xFFFF, "the standard controls");
+    panel.hide_shadow();
+    assert_eq!(modes(), 0xFFFF & !(1 << 12), "all but the shadow");
     // A family the system doesn't have shows the system font, still bold and italic.
     panel.show_for_test("No Such Family", 14.0, true, true);
     let manager = NSFontManager::sharedFontManager(mtm);
