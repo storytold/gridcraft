@@ -205,6 +205,13 @@ impl FontPanel {
     /// `wake` asks the app for a pass, in which it takes the [`picks`](Self::picks).
     pub fn new(mtm: MainThreadMarker, wake: impl Fn() + 'static) -> Self {
         let (tx, picks) = channel();
+        // macOS reopens the panels a quit left open; they open only when asked.
+        if NSFontPanel::sharedFontPanelExists(mtm) {
+            NSFontPanel::sharedFontPanel(mtm).orderOut(None);
+        }
+        if NSColorPanel::sharedColorPanelExists(mtm) {
+            NSColorPanel::sharedColorPanel(mtm).orderOut(None);
+        }
         FontPanel { target: FontTarget::new(mtm, tx, Box::new(wake)), picks, shown: RefCell::new(None) }
     }
 
@@ -328,6 +335,8 @@ fn set_targets(mtm: MainThreadMarker, target: &FontTarget) {
         colors.setAction(Some(sel!(changeColor:)));
         // A drag in a picker is one pick (one undo step), sent when it ends.
         colors.setContinuous(false);
+        colors.setRestorable(false);
+        NSFontPanel::sharedFontPanel(mtm).setRestorable(false);
         // The panel asks `validModesForFontPanel:` of the responder chain, not of the target; keep
         // whatever followed the app.
         let app = NSApplication::sharedApplication(mtm);

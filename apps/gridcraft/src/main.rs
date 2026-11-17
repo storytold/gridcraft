@@ -77,6 +77,16 @@ impl eframe::App for App {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
                 self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
+            // Made at start, so it can close the panels macOS reopens from the last quit.
+            if self.4.is_none()
+                && let Some(mtm) = objc2::MainThreadMarker::new()
+            {
+                let wake = ctx.clone();
+                let panel = font_panel::FontPanel::new(mtm, move || wake.request_repaint());
+                // A cell's font has no shadow (nor does xlsx).
+                panel.hide_shadow();
+                self.4 = Some(panel);
+            }
             // Picks first: they format the window they were made in, before a Window-menu switch or a
             // Finder open makes another one active.
             if let Some(panel) = &self.4 {
@@ -87,15 +97,8 @@ impl eframe::App for App {
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
                 if std::mem::take(&mut m.show_fonts)
-                    && let Some(mtm) = objc2::MainThreadMarker::new()
+                    && let Some(panel) = &self.4
                 {
-                    let wake = ctx.clone();
-                    let panel = self.4.get_or_insert_with(|| {
-                        let panel = font_panel::FontPanel::new(mtm, move || wake.request_repaint());
-                        // A cell's font has no shadow (nor does xlsx).
-                        panel.hide_shadow();
-                        panel
-                    });
                     panel.show(active_face(&self.0));
                 }
             }

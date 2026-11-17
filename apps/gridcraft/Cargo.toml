@@ -60,7 +60,7 @@ fmv-macos-events = "=0.1.0"
 # apple_events.rs brings the app forward for a Dock quit's question; font_panel.rs receives the
 # system font panel's and colour panel's picks. Already in Cargo.lock (muda, winit); pinned exactly to the same versions.
 objc2 = "=0.6.5"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSButton", "NSColor", "NSColorPanel", "NSColorSpace", "NSControl", "NSFont", "NSFontManager", "NSFontPanel", "NSPanel", "NSResponder", "NSView", "NSWindow"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "NSApplication", "NSButton", "NSColor", "NSColorPanel", "NSColorSpace", "NSControl", "NSFont", "NSFontManager", "NSFontPanel", "NSPanel", "NSResponder", "NSView", "NSWindow", "NSWindowRestoration"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSDictionary", "NSString", "NSValue"] }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back. Already in Cargo.lock (muda, winit);
