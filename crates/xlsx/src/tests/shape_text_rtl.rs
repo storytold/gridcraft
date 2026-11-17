@@ -167,3 +167,44 @@ fn shape_font_typeface_is_attribute_escaped() {
     assert_eq!(after.format.font.as_deref(), Some(font));
     assert_eq!(after.text, "hi");
 }
+
+#[test]
+fn shape_text_reads_east_asian_and_complex_script_typefaces() {
+    // Excel writes CJK shape fonts on `a:ea` (often with a `+mn-lt` theme placeholder on
+    // `a:latin`) and complex-script fonts on `a:cs`.
+    let ea = ARABIC_TEXT_BOX.replace(
+        r#"<a:rPr lang="ar-SA" sz="1100"/>"#,
+        r#"<a:rPr lang="ko-KR" sz="1400"><a:latin typeface="+mn-lt"/><a:ea typeface="맑은 고딕"/></a:rPr>"#,
+    );
+    let wb = read_drawing(&ea);
+    let shape = &wb.sheet(0).unwrap().shapes[0];
+    assert_eq!(shape.format.font.as_deref(), Some("맑은 고딕"));
+    let xml = written_drawing(&wb);
+    assert!(xml.contains(r#"<a:ea typeface="맑은 고딕"/>"#), "{xml}");
+    let (reopened, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(reopened.sheet(0).unwrap().shapes[0].format.font.as_deref(), Some("맑은 고딕"));
+
+    let cs = ARABIC_TEXT_BOX.replace(r#"<a:rPr lang="ar-SA" sz="1100"/>"#, r#"<a:rPr lang="ar-SA" sz="1400"><a:cs typeface="Tahoma"/></a:rPr>"#);
+    assert_eq!(read_drawing(&cs).sheet(0).unwrap().shapes[0].format.font.as_deref(), Some("Tahoma"));
+}
+
+#[test]
+fn shape_text_inherits_def_rpr_and_skips_zero_alpha_outline() {
+    // Excel often places `sz` and `solidFill` on `lstStyle/lvl1pPr/defRPr` (or `pPr/defRPr`) and a
+    // transparent (`alpha val="0"`) `a:ln` on `a:rPr`.
+    let drawing = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+<xdr:twoCellAnchor><xdr:from><xdr:col>1</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>
+<xdr:sp macro="" textlink=""><xdr:nvSpPr><xdr:cNvPr id="2" name="Rect 1"/><xdr:cNvSpPr/></xdr:nvSpPr>
+<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="F37321"/></a:solidFill></xdr:spPr>
+<xdr:txBody><a:bodyPr wrap="square" rtlCol="0" anchor="ctr"/>
+<a:lstStyle><a:lvl1pPr algn="l"><a:defRPr sz="1800" b="1"><a:solidFill><a:schemeClr val="lt1"/></a:solidFill><a:latin typeface="+mn-lt"/><a:ea typeface="+mn-ea"/></a:defRPr></a:lvl1pPr></a:lstStyle>
+<a:p><a:pPr algn="ctr"/><a:r><a:rPr lang="ko-KR" b="0"><a:ln><a:solidFill><a:srgbClr val="FFFFFF"><a:lumMod val="75000"/><a:alpha val="0"/></a:srgbClr></a:solidFill></a:ln><a:ea typeface="맑은 고딕"/></a:rPr><a:t>산출물 목록</a:t></a:r></a:p>
+</xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#;
+    let wb = read_drawing(drawing);
+    let f = &wb.sheet(0).unwrap().shapes[0].format;
+    assert_eq!(f.font_size, Some(18.0), "size inherited from lvl1pPr/defRPr");
+    assert!(!f.bold, "explicit b=\"0\" on rPr overrides defRPr b=\"1\"");
+    assert_eq!(f.text_color, Some(Color::Theme(0, 0)), "fill inherited from lvl1pPr/defRPr");
+    assert_eq!(f.font.as_deref(), Some("맑은 고딕"));
+    assert_eq!(f.text_outline, None, "alpha=0 outline is not imported as an opaque line");
+}
