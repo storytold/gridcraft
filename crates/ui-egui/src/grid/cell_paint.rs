@@ -148,20 +148,28 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
 /// Centered fallbacks do not identify that baseline; empty or centered-only rows use their layout bounds.
 pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
     let row_bounds = |row: &egui::epaint::text::PlacedRow| {
-        row.glyphs
-            .iter()
-            .find(|glyph| {
-                glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline
-                    || (glyph.font_face_ascent == glyph.font_ascent && glyph.font_face_height == glyph.font_height)
-            })
-            .map_or((row.rect().top(), row.rect().bottom()), |glyph| {
-                let top = row.pos.y + glyph.pos.y - glyph.font_ascent;
-                (top, top + glyph.font_height)
-            })
+        primary_glyph(row).map_or((row.rect().top(), row.rect().bottom()), |glyph| {
+            let top = row.pos.y + glyph.pos.y - glyph.font_ascent;
+            (top, top + glyph.font_height)
+        })
     };
     let first = galley.rows.first().map(|row| row_bounds(row).0);
     let last = galley.rows.last().map(|row| row_bounds(row).1);
     first.zip(last).unwrap_or((0.0, galley.size().y))
+}
+
+/// The row's first glyph that sits on the primary font's baseline: a centered fallback does not.
+fn primary_glyph(row: &egui::epaint::text::PlacedRow) -> Option<&egui::epaint::text::Glyph> {
+    row.glyphs.iter().find(|glyph| {
+        glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline
+            || (glyph.font_face_ascent == glyph.font_ascent && glyph.font_face_height == glyph.font_height)
+    })
+}
+
+/// The baseline of `row`, relative to its galley: where its primary-font glyphs sit (all glyphs
+/// of one format share it). `None` for a row without glyphs.
+pub(crate) fn row_baseline(row: &egui::epaint::text::PlacedRow) -> Option<f32> {
+    primary_glyph(row).or_else(|| row.glyphs.first()).map(|glyph| row.pos.y + glyph.pos.y)
 }
 
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {

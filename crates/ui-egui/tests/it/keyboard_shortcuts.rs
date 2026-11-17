@@ -110,6 +110,23 @@ fn windows_and_mac_variants() {
     assert_eq!(lookup(Key::F2, Some(Key::F2), Modifiers::NONE, false), None);
 }
 
+/// #4401: Strikethrough is Ctrl+5 in Excel for Windows and Cmd+Shift+X in Excel for Mac, and the
+/// shortcut each platform shows is the one that works there.
+#[test]
+fn strikethrough_shortcut_per_platform() {
+    let strike = Some(Shortcut::Run("home.strikethrough", json!({})));
+    // Cmd on a Mac sets both `mac_cmd` and `command`, as egui reports it there.
+    let mac_cmd_shift = Modifiers { shift: true, mac_cmd: true, command: true, ..Modifiers::NONE };
+    assert_eq!(lookup(Key::Num5, Some(Key::Num5), CTRL, false), strike);
+    assert_eq!(lookup(Key::X, Some(Key::X), mac_cmd_shift, true), strike);
+    // Ctrl+Shift+X does nothing in Excel for Windows; a macro may still take it.
+    assert_eq!(lookup(Key::X, Some(Key::X), CTRL_SHIFT, false), None);
+    let session = Session::new();
+    let spec = session.commands().into_iter().find(|c| c.id == "home.strikethrough").unwrap();
+    assert_eq!(spec.shortcut_for_platform(false).as_deref(), Some("Ctrl+5"));
+    assert_eq!(spec.shortcut_for_platform(true).as_deref(), Some("Cmd+Shift+X"));
+}
+
 #[test]
 fn space_selection_shortcuts_do_not_start_an_edit() {
     let mut h = harness(book("B2"));

@@ -172,6 +172,8 @@ fn lookup_platform_letters(ctx: LookupContext) -> Option<Shortcut> {
         L if (cmd || ctrl) && s => run("data.filter"),
         L if cmd && mac => run("home.alignLeft"),
         L if ctrl && mac => Shortcut::Dialog("defineName", json!({})),
+        // Excel for Mac's Strikethrough; Windows has Ctrl+5 and leaves Ctrl+Shift+X free.
+        X if cmd && s && mac => run("home.strikethrough"),
         // Ctrl+Shift+U (Control+Shift+U in Excel for Mac) expands or collapses the formula bar.
         U if ctrl && s => run("view.expandFormulaBar"),
         U if ctrl && mac && !s => Shortcut::Edit,
