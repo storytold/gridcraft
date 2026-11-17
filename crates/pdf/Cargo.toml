@@ -10,6 +10,7 @@ readme = "README.md"
 workspace = true
 
 [dependencies]
+craft-pdf.workspace = true
 craft-stream-codecs.workspace = true
 harfrust = "=0.12.0"
 subsetter = { version = "0.2.6", default-features = false }

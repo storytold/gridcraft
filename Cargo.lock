@@ -933,6 +933,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-drawingml"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430955825553ab7b976f4#bb57d422d0bc842cbde430955825553ab7b976f4"
+dependencies = [
+ "craft-xml",
+ "kurbo",
+ "log",
+ "serde",
+]
+
+[[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
@@ -997,6 +1008,11 @@ dependencies = [
  "log",
  "thiserror 2.0.21",
 ]
+
+[[package]]
+name = "craft-pdf"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd#ff142b3ad58aa7306676749428f4f2f9b277b5dd"
 
 [[package]]
 name = "craft-print"
@@ -1124,6 +1140,18 @@ dependencies = [
  "md-5",
  "miniz_oxide 0.9.1",
  "sha1 0.10.7",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-xlsx"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=bb57d422d0bc842cbde430955825553ab7b976f4#bb57d422d0bc842cbde430955825553ab7b976f4"
+dependencies = [
+ "craft-drawingml",
+ "craft-opc",
+ "craft-sheet",
+ "craft-xml",
  "thiserror 2.0.21",
 ]
 
@@ -2306,6 +2334,7 @@ dependencies = [
 name = "gridcraft-pdf"
 version = "0.19.1"
 dependencies = [
+ "craft-pdf",
  "craft-stream-codecs",
  "harfrust",
  "sha2 0.11.1",
@@ -2382,6 +2411,7 @@ dependencies = [
  "craft-offcrypto",
  "craft-opc",
  "craft-xls",
+ "craft-xlsx",
  "craft-xml",
  "gridcraft-core",
  "gridcraft-formula",

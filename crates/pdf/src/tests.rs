@@ -1419,11 +1419,14 @@ fn faces_that_forbid_subsetting_or_fail_to_subset_are_embedded_whole() {
     let mut broken = font.clone();
     broken.fs_type = 0;
     broken.bytes = Arc::from(vec![7u8; 64]);
-    let (mut objects, mut next) = (Vec::new(), 1);
-    let face = add_unicode_font_base(&broken, &BTreeSet::from([1, 2]), &mut objects, &mut next);
+    let mut out = craft_pdf::classic::Writer::with_capacity(0).unwrap();
+    let mut next = 1;
+    let face = add_unicode_font_base(&broken, &BTreeSet::from([1, 2]), &mut out, &mut next).unwrap();
     assert!(face.remapper.is_none() && !face.base_font.contains('+'));
     assert_eq!(face.embedded_glyph_id(2), 2);
-    assert!(objects.iter().any(|(_, body)| body.ends_with(&[[7u8; 64].as_slice(), b"\nendstream"].concat())));
+    out.object(next, "<< /Type /Catalog >>").unwrap();
+    let pdf = out.finish(next, None).unwrap();
+    assert_eq!(object_stream(&pdf, 1), &[7u8; 64]);
 }
 
 #[test]
@@ -1639,7 +1642,10 @@ fn explicit_rtl_standard_text_reorders_without_an_arabic_font() {
     let page = doc.add_page(300.0, 100.0);
     page.text_with_direction(Point::new(10.0, 30.0), 12.0, Font::Helvetica, [0, 0, 0], source, TextDirection::RightToLeft);
     assert!(page.content.contains("(! ABC) Tj"), "{}", page.content);
-    assert!(page.arabic.write_objects(&mut 4, &mut Vec::new(), &mut Vec::new()).is_empty());
+    let mut objects = craft_pdf::classic::Writer::with_capacity(0).unwrap();
+    let mut next = 4;
+    assert!(page.arabic.write_objects(&mut next, &mut objects).unwrap().is_empty());
+    assert_eq!(next, 4, "Latin-only RTL text must not allocate Arabic font objects");
     assert_eq!(text_width_with_direction(Font::Helvetica, 12.0, source, TextDirection::RightToLeft), text_width(Font::Helvetica, 12.0, source));
     let pdf = doc.finish().unwrap();
     assert_eq!(utf16_entry(&pdf, "/ActualText").unwrap(), source);
