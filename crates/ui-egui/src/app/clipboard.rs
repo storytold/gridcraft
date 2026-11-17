@@ -43,6 +43,12 @@ impl SheetApp {
         } else {
             self.cut_text = None;
         }
+        // The engine compares text exactly apart from trailing line breaks. Use its original
+        // text for an LF/CRLF match and keep the payload untouched for an external paste.
+        let text = match &self.session.clipboard {
+            Some(clipboard) if Self::same_clipboard_text(Some(&text), Some(&clipboard.text)) => clipboard.text.as_str(),
+            _ => text.as_str(),
+        };
         let html = self.services.paste_html.as_mut().and_then(|read| read());
         let params = match html {
             Some(html) => json!({"text": text, "html": html}),
@@ -99,11 +105,15 @@ impl SheetApp {
     /// Whether two clipboard texts are the same copy: trailing line breaks don't count, as in the
     /// engine's `edit.paste`, and CRLF matches LF (egui's `Event::Paste` text may keep the host's).
     fn same_clipboard_text(a: Option<&str>, b: Option<&str>) -> bool {
-        fn chars(t: &str) -> impl Iterator<Item = char> + '_ {
-            t.trim_end_matches(['\r', '\n']).chars().filter(|c| *c != '\r')
+        fn normalized_bytes(t: &str) -> impl Iterator<Item = u8> + '_ {
+            let mut bytes = t.trim_end_matches(['\r', '\n']).bytes().peekable();
+            std::iter::from_fn(move || match bytes.next()? {
+                b'\r' if bytes.peek() == Some(&b'\n') => bytes.next(),
+                byte => Some(byte),
+            })
         }
         match (a, b) {
-            (Some(a), Some(b)) => chars(a).eq(chars(b)),
+            (Some(a), Some(b)) => normalized_bytes(a).eq(normalized_bytes(b)),
             _ => false,
         }
     }

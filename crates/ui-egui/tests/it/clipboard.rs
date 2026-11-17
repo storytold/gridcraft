@@ -445,7 +445,7 @@ fn cmd_v_after_a_pasted_cut_does_not_paste_the_cut_text_again() {
     assert!(has_formula(&h, "E6"), "the cut moves the formula");
 
     // The host may hand the text back with CRLF line endings.
-    h.input_mut().events.push(Event::Paste(text.replace('\n', "\r\n")));
+    h.input_mut().events.push(Event::Paste(SheetApp::tsv_to_crlf(&text)));
     h.run_steps(2);
     assert!(has_formula(&h, "E6"), "a second Cmd/Ctrl+V leaves the moved formula alone");
     assert_eq!(value_at(&h, "E6"), Some(Value::number(84.0)));
@@ -756,10 +756,13 @@ fn plain_text_fallback_preserves_crlf_on_windows() {
 }
 
 #[test]
-fn cut_and_paste_with_crlf_text_does_not_double_paste_or_regress() {
+fn crlf_paste_moves_a_multirow_cut_with_formulas_and_formatting() {
     let mut h = harness(Services::default());
-    h.state_mut().run("cell.set", json!({"cell": "A1", "input": "line1\nline2"})).unwrap();
-    h.state_mut().run("selection.set", json!({"cell": "A1"})).unwrap();
+    let multiline = "line1\nline2\r\nline3";
+    h.state_mut().run("cell.set", json!({"cell": "A1", "input": multiline})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell": "A2", "input": "=B2*2"})).unwrap();
+    h.state_mut().run("home.bold", json!({"range": "A2", "on": true})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "A1:A2"})).unwrap();
     h.input_mut().events.push(Event::Cut);
     h.step();
     let text = h
@@ -772,16 +775,24 @@ fn cut_and_paste_with_crlf_text_does_not_double_paste_or_regress() {
             _ => None,
         })
         .expect("cut is published");
-    assert!(text.contains("line1\nline2"));
+    let text = SheetApp::tsv_to_crlf(&text);
+    assert_eq!(text, format!("\"{multiline}\"\r\n84\r\n"));
     h.run_steps(2);
     h.state_mut().run("selection.set", json!({"cell": "D4"})).unwrap();
-    // Simulate host pasting back the text (even if CRLF)
-    h.input_mut().events.push(Event::Paste(SheetApp::tsv_to_crlf(&text)));
+    h.input_mut().events.push(Event::Paste(text.clone()));
     h.run_steps(2);
-    assert_eq!(value_at(&h, "D4"), Some(Value::from("line1\nline2")));
+    assert_eq!(value_at(&h, "A1"), Some(Value::Empty));
+    assert_eq!(value_at(&h, "A2"), Some(Value::Empty));
+    assert_eq!(value_at(&h, "D4"), Some(Value::from(multiline)));
+    assert_eq!(value_at(&h, "D5"), Some(Value::number(84.0)));
+    assert!(has_formula(&h, "D5"));
+    let doc = h.state().session.active().unwrap();
+    let sheet = doc.wb.active().unwrap();
+    assert!(doc.wb.styles.get(sheet.style_id(CellRef::parse("D5").unwrap())).font.bold);
 
-    // Second paste reports nothing to paste (Excel cut rule)
-    h.input_mut().events.push(Event::Paste(SheetApp::tsv_to_crlf(&text)));
+    // The host still holds the cut text, but the block can only be moved once.
+    h.input_mut().events.push(Event::Paste(text));
     h.run_steps(2);
+    assert!(has_formula(&h, "D5"));
     assert!(h.state().toast.is_some() || h.state().message.is_some());
 }
