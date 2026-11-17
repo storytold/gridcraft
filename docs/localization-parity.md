@@ -118,7 +118,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
-| Georgian | ka | 1,022 (~46%: every key any table has) | dialogs the tables cover | Mkhedruli needs a Georgian system face behind the UI fonts (none of the default faces has it) | no | menus, File view, dialogs; English function names | 4–8 h |
+| Georgian | ka | 1,302 (~59%: every key any table has) | dialogs the tables cover | Mkhedruli needs a Georgian system face behind the UI fonts (none of the default faces has it) | no | menus, File view, dialogs; English function names | 4–8 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 
@@ -182,7 +182,7 @@ language (none so far) and of localized function names.
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | minor | Italian catalog (`i18n/it.rs`, 971 entries, ~44%): every key the Brazilian Portuguese catalog translates plus the PivotTable Fields pane strings; `it` locale tags (it-IT, it-CH…) resolve to Italian. Labels follow Excel's Italian terminology; native-speaker review still pending |
 | 2026-10-14 | minor | CJK fallback probes the read-only Flatpak host font mounts with the existing distribution layouts and TTC locale indices; no new sandbox permissions or bundled fonts |
-| 2026-10-14 | minor | Georgian (ka): `i18n/ka.rs` covers all 973 keys, native-speaker reviewed |
+| 2026-10-14 | minor | Georgian (ka): `i18n/ka.rs` covers all 973 keys then in any table (1,302 on 2026-11-17), native-speaker reviewed |
 | 2026-10-12 | minor | Turkish ribbon catalog (`i18n/tr.rs`, 382 labels); `tr` locale tags (tr-TR, tr_TR…) resolve to Turkish |
 | 2026-10-12 | minor | Format Cells looks up its tabs, labels, options and note through `Language::tr` (Fill tab keyed `Format Cells\|Fill`); dialog titles and OK/Cancel too. Labels already in a table (Number, Currency, Fill…) show translated; the rest fall back to English until the tables add them |
 | 2026-10-12 | minor | Brazilian Portuguese catalog (`i18n/pt.rs`) grows from 377 to 923 entries: every key the other catalogs translate, including the dialog strings #669 starts looking up (~42%) |

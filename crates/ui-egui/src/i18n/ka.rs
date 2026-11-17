@@ -6,6 +6,115 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
         "Diagram" => "სქემა",
         "Decorative Text" => "დეკორატიული ტექსტი",
+        "A % can't be combined with a link in an equation." => "განტოლებაში % ბმულთან ერთად ვერ გამოიყენება.",
+        "An equation can be at most 4096 bytes long." => "განტოლების სიგრძე არ უნდა აღემატებოდეს 4096 ბაიტს.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "განტოლებაში მატრიცის უჯრები არ უნდა აღემატებოდეს 2500-ს (სტრიქონების რაოდენობა გამრავლებული ყველაზე გრძელი სტრიქონის უჯრებზე)."
+        }
+        "Can't use function '{function}' in math mode" => "ფუნქცია „{function}“ მათემატიკურ რეჟიმში ვერ გამოიყენება",
+        "Can't use function '{function}' in text mode" => "ფუნქცია „{function}“ ტექსტურ რეჟიმში ვერ გამოიყენება",
+        "Cannot use both \\tag and \\nonumber in the same row" => "ერთ სტრიქონში \\tag და \\nonumber ერთად ვერ გამოიყენება",
+        "Circular References: {cell}" => "წრიული ცნობარები: {cell}",
+        "Double subscript" => "ორმაგი ქვედა ინდექსი",
+        "Double superscript" => "ორმაგი ზედა ინდექსი",
+        "Equations can nest at most 32 levels deep." => "განტოლებაში ჩადგმის სიღრმე არ უნდა აღემატებოდეს 32 დონეს.",
+        "Error at character {position}: {message}" => "შეცდომა, სიმბოლო {position}: {message}",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "მოსალოდნელია &, \\\\, \\cr ან \\end, მიღებულია „{got}“",
+        "Expected '{expected}', got '{got}'" => "მოსალოდნელია „{expected}“, მიღებულია „{got}“",
+        "Expected URL" => "მოსალოდნელია URL",
+        "Expected \\end after environment body" => "გარემოს ტანის შემდეგ მოსალოდნელია \\end",
+        "Expected \\right after \\left" => "\\left-ის შემდეგ მოსალოდნელია \\right",
+        "Expected ]" => "მოსალოდნელია ]",
+        "Expected argument for {command}" => "{command}: მოსალოდნელია არგუმენტი",
+        "Expected argument to \\begin{{name}}" => "\\begin{{name}}: მოსალოდნელია არგუმენტი",
+        "Expected color token" => "მოსალოდნელია ფერის აღნიშვნა",
+        "Expected column alignment character" => "მოსალოდნელია სვეტის სწორების სიმბოლო",
+        "Expected delimiter as argument to '{function}'" => "„{function}“: არგუმენტად მოსალოდნელია გამყოფი",
+        "Expected group after '{symbol}'" => "„{symbol}“-ის შემდეგ მოსალოდნელია ჯგუფი",
+        "Expected group as argument to '{function}'" => "„{function}“: არგუმენტად მოსალოდნელია ჯგუფი",
+        "Expected l or c or r" => "მოსალოდნელია l, c ან r",
+        "Expected raw style for \\htmlStyle" => "\\htmlStyle: მოსალოდნელია დაუმუშავებელი სტილი",
+        "Expected size for \\raisebox" => "\\raisebox: მოსალოდნელია ზომა",
+        "Expected size for \\rule height" => "\\rule: სიმაღლისთვის მოსალოდნელია ზომა",
+        "Expected size for \\rule width" => "\\rule: სიგანისთვის მოსალოდნელია ზომა",
+        "Extra }" => "ზედმეტი }",
+        "Format Control: {name}" => "მართვის ელემენტის ფორმატირება: {name}",
+        "Got function '{function}' with no arguments as \\tag" => "\\tag-ად მიღებულია ფუნქცია „{function}“ არგუმენტების გარეშე",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "„{parent}“-ის არგუმენტად მიღებულია ფუნქცია „{function}“ არგუმენტების გარეშე"
+        }
+        "Got function '{function}' with no arguments as subscript" => "ქვედა ინდექსად მიღებულია ფუნქცია „{function}“ არგუმენტების გარეშე",
+        "Got function '{function}' with no arguments as superscript" => "ზედა ინდექსად მიღებულია ფუნქცია „{function}“ არგუმენტების გარეშე",
+        "Height: {points} ({pixels} pixels)" => "სიმაღლე: {points} ({pixels} პიქსელი)",
+        "Invalid color: '{color}'" => "არასწორი ფერი: „{color}“",
+        "Invalid column alignment for array" => "array: სვეტის არასწორი სწორება",
+        "Invalid column alignment for subarray" => "subarray: სვეტის არასწორი სწორება",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "„{function}“-ის შემდეგ არასწორი გამყოფი: „{delimiter}“",
+        "Invalid delimiter type '{type}'" => "გამყოფის არასწორი ტიპი: „{type}“",
+        "Invalid delimiter type '{type}' after '{function}'" => "„{function}“-ის შემდეგ გამყოფის არასწორი ტიპი: „{type}“",
+        "Invalid environment name" => "გარემოს არასწორი სახელი",
+        "Invalid environment name character: {character}" => "გარემოს სახელში არასწორი სიმბოლო: {character}",
+        "Invalid size: '{size}'" => "არასწორი ზომა: „{size}“",
+        "Invalid unit: '{unit}'" => "არასწორი ერთეული: „{unit}“",
+        "Macro definitions are not supported in equations." => "განტოლებებში მაკროსების განსაზღვრა მხარდაჭერილი არ არის.",
+        "Macro “{name}” stopped: {message}" => "მაკროსი „{name}“ შეწყდა: {message}",
+        "Maximize" => "გაშლა",
+        "Maximum" => "მაქსიმუმი",
+        "Minimize" => "ჩაკეცვა",
+        "Minimum" => "მინიმუმი",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "შეუსაბამობა: \\begin{{begin}} იხურება \\end{{end}}-ით",
+        "Mismatched {command}" => "{command} წყვილის გარეშე",
+        "Multiple \\nonumber in a row" => "ერთ სტრიქონში რამდენიმე \\nonumber",
+        "Multiple \\tag in a row" => "ერთ სტრიქონში რამდენიმე \\tag",
+        "No such environment: {name}" => "ასეთი გარემო არ არსებობს: {name}",
+        "Numerical Count" => "რიცხვების რაოდენობა",
+        "Picture in cell" => "სურათი უჯრაში",
+        "Picture: {alt}" => "სურათი: {alt}",
+        "Ran macro “{name}” ({steps} step)" => "მაკროსი „{name}“ შესრულდა ({steps} ნაბიჯი)",
+        "Ran macro “{name}” ({steps} steps)" => "მაკროსი „{name}“ შესრულდა ({steps} ნაბიჯი)",
+        "Recording stopped" => "ჩაწერა შეწყდა",
+        "Recursion limit exceeded" => "რეკურსიის ზღვარი გადაჭარბებულია",
+        "Restore Down" => "აღდგენა",
+        "Saved macro “{name}” ({steps} step)" => "მაკროსი „{name}“ შენახულია ({steps} ნაბიჯი)",
+        "Saved macro “{name}” ({steps} steps)" => "მაკროსი „{name}“ შენახულია ({steps} ნაბიჯი)",
+        "This equation could not be laid out." => "ამ განტოლების განლაგება ვერ მოხერხდა.",
+        "This equation is too large to draw." => "ეს განტოლება დასახატად ზედმეტად დიდია.",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "მაკროსების ზედმეტად ბევრი გაშლა: უსასრულო ციკლი ან საჭიროა maxExpand პარამეტრის გაზრდა"
+        }
+        "Too many math in a row: expected {expected}, but got {got}" => {
+            "სტრიქონში ზედმეტად ბევრი მათემატიკური ელემენტია: მოსალოდნელია {expected}, მიღებულია {got}"
+        }
+        "Too many tab characters: &" => "ზედმეტად ბევრი ტაბულაციის სიმბოლო: &",
+        "Undefined control sequence: {name}" => "განუსაზღვრელი მმართველი მიმდევრობა: {name}",
+        "Unexpected end of CD row after @" => "CD სტრიქონის მოულოდნელი დასასრული @-ის შემდეგ",
+        "Unexpected end of input in a macro argument" => "შეყვანის მოულოდნელი დასასრული მაკროსის არგუმენტში",
+        "Unknown CD directive: @{directive}" => "უცნობი CD დირექტივა: @{directive}",
+        "Unknown column alignment: {alignment}" => "სვეტის უცნობი სწორება: {alignment}",
+        "Width: {chars} ({pixels} pixels)" => "სიგანე: {chars} ({pixels} პიქსელი)",
+        "\\@char has non-numeric argument {argument}" => "\\@char: არგუმენტი რიცხვი არ არის: {argument}",
+        "\\@char with invalid code point {code}" => "\\@char: არასწორი კოდური წერტილი {code}",
+        "\\middle must be within \\left and \\right" => "\\middle უნდა იყოს \\left-სა და \\right-ს შორის",
+        "\\nonumber must appear at the end of the row" => "\\nonumber სტრიქონის ბოლოს უნდა იყოს",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag სტრიქონის ბოლოს, განტოლების ტანის შემდეგ უნდა იყოს",
+        "\\tag requires an argument" => "\\tag-ს არგუმენტი სჭირდება",
+        "\\verb assertion failed" => "\\verb: შემოწმება ვერ შესრულდა",
+        "only one infix operator per group" => "ჯგუფში მხოლოდ ერთი ინფიქსური ოპერატორი შეიძლება",
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "prooftree დასრულდა დამტკიცების სტეკში {count} ელემენტით, მოსალოდნელი იყო 1"
+        }
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "prooftree-ში არის \\LeftLabel ან \\RightLabel, რომელსაც დასკვნის ბრძანება არ მოსდევს"
+        }
+        "without {key}: another macro took it while recording" => "კლავიშის {key} გარეშე: ჩაწერის დროს ის სხვა მაკროსმა დაიკავა",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "{command}: საჭიროა {count} წანამძღვარი, ხელმისაწვდომია მხოლოდ {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} დასაშვებია მხოლოდ prooftree-ში, როგორც bussproofs-ის მხარდაჭერილი ბრძანება"
+        }
+        "{command} valid only within array environment" => "{command} დასაშვებია მხოლოდ array გარემოში",
+        "{subarray} can contain only one column" => "{subarray} მხოლოდ ერთ სვეტს შეიძლება შეიცავდეს",
         "Paste" => "ჩასმა",
         "Paste Values" => "მნიშვნელობების ჩასმა",
         "Paste Formulas" => "ფორმულების ჩასმა",
