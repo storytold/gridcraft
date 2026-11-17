@@ -222,6 +222,11 @@ impl Language {
         }
     }
 
+    /// Translates `template`, then fills in its `{name}` placeholders (see [`fill`]).
+    pub fn tr_fill(self, template: &str, values: &[(&str, &str)]) -> String {
+        fill(self.tr(template), values)
+    }
+
     pub(crate) fn tr_error(self, message: &str) -> String {
         let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
 
@@ -250,6 +255,76 @@ impl Language {
             _ => None,
         }
     }
+}
+
+/// Fills in the `{name}` placeholders of a translated template in one pass, so a value that itself
+/// holds `{…}` (a macro or sheet name) is shown as it is and never filled again. A placeholder
+/// without a value stays as written.
+pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('{') {
+        out.push_str(before);
+        let value = after.split_once('}').and_then(|(name, tail)| values.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value, tail)));
+        match value {
+            Some((value, tail)) => {
+                out.push_str(value);
+                rest = tail;
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The values that [`fill`] puts into `template` to give `text`, or `None` when `text` has
+/// another shape. A `{name}` of lowercase letters and `_` is a placeholder; any other `{` is
+/// text. Each placeholder takes the text up to the first copy of the literal after it (the last
+/// one takes the rest), and a match counts only when filling the values back in gives `text`.
+pub fn unfill<'a>(template: &'a str, text: &'a str) -> Option<Vec<(&'a str, &'a str)>> {
+    enum Part<'a> {
+        Text(String),
+        Value(&'a str),
+    }
+    let mut parts = Vec::new();
+    let mut literal = String::new();
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('{') {
+        literal.push_str(before);
+        match after.split_once('}').filter(|(name, _)| !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')) {
+            Some((name, tail)) => {
+                parts.push(Part::Text(std::mem::take(&mut literal)));
+                parts.push(Part::Value(name));
+                rest = tail;
+            }
+            None => {
+                literal.push('{');
+                rest = after;
+            }
+        }
+    }
+    literal.push_str(rest);
+    parts.push(Part::Text(literal));
+
+    // `parts` alternates text and placeholder, starting and ending with (maybe empty) text.
+    let mut values = Vec::new();
+    let mut rest = text;
+    for (i, part) in parts.iter().enumerate() {
+        match part {
+            Part::Text(literal) => rest = rest.strip_prefix(literal.as_str())?,
+            Part::Value(name) => {
+                let Some(Part::Text(next)) = parts.get(i + 1) else { return None };
+                let len = if i + 2 == parts.len() { rest.strip_suffix(next.as_str())?.len() } else { rest.find(next.as_str())? };
+                values.push((*name, &rest[..len]));
+                rest = &rest[len..];
+            }
+        }
+    }
+    (rest.is_empty() && fill(template, &values) == text).then_some(values)
 }
 
 /// English text and its translation, sorted by the English.
@@ -453,6 +528,67 @@ mod tests {
                 let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
                 assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
                 assert_eq!(shown.contains("{letters}"), key.contains("{letters}"), "{code}: placeholder of {key:?}: {shown:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn fill_puts_each_value_in_once() {
+        // A value holding a placeholder (a macro named `{steps}`) is shown as it is.
+        assert_eq!(fill("Ran macro “{name}” ({steps} steps)", &[("name", "{steps}"), ("steps", "3")]), "Ran macro “{steps}” (3 steps)");
+        assert_eq!(fill("{a} and {b}, {a}", &[("a", "1")]), "1 and {b}, 1", "a placeholder without a value stays");
+        assert_eq!(fill("{ unclosed", &[("unclosed", "x")]), "{ unclosed");
+        assert_eq!(fill("50% {}", &[]), "50% {}");
+        assert_eq!(Language::En.tr_fill("Sheets: {sheets}", &[("sheets", "Sheet1, Sheet2")]), "Sheets: Sheet1, Sheet2");
+    }
+
+    #[test]
+    fn unfill_reads_back_what_fill_put_in() {
+        assert_eq!(unfill("Expected '{expected}', got '{got}'", "Expected '}', got 'EOF'"), Some(vec![("expected", "}"), ("got", "EOF")]));
+        assert_eq!(
+            unfill("Mismatch: \\begin{{begin}} matched by \\end{{end}}", "Mismatch: \\begin{a} matched by \\end{b}"),
+            Some(vec![("begin", "a"), ("end", "b")])
+        );
+        assert_eq!(unfill("{command} valid only here", "\\hline valid only here"), Some(vec![("command", "\\hline")]));
+        assert_eq!(unfill("Undefined control sequence: {name}", "Undefined control sequence: \\foo"), Some(vec![("name", "\\foo")]));
+        assert_eq!(unfill("Double superscript", "Double superscript"), Some(vec![]));
+        // The last placeholder runs to the closing literal, so a longer message is read whole.
+        assert_eq!(unfill("Invalid type '{type}'", "Invalid type 'a' after 'b'"), Some(vec![("type", "a' after 'b")]));
+        assert_eq!(unfill("Expected '{expected}', got '{got}'", "Expected } here"), None);
+        assert_eq!(unfill("Expected '{expected}'", "Expected 'x' later"), None);
+        assert_eq!(unfill("Mismatched {command}", "Mismatch: x"), None);
+    }
+
+    /// The templates the UI translates first and fills in after (status bar, toasts, dialog
+    /// notes and titles) keep their placeholders in every catalog, so no value goes missing.
+    #[test]
+    fn filled_in_templates_keep_their_placeholders() {
+        let placeholders = |s: &str| {
+            let mut names = s.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name.to_string())).collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        for template in [
+            "Circular References: {cell}",
+            "Goal Seeking found a solution: {value}",
+            "Width: {chars} ({pixels} pixels)",
+            "Height: {points} ({pixels} pixels)",
+            "Picture: {alt}",
+            "Sheets: {sheets}",
+            "Hidden: {sheets}",
+            "Format Control: {name}",
+            "Error at character {position}: {message}",
+            "Saved macro “{name}” ({steps} step)",
+            "Saved macro “{name}” ({steps} steps)",
+            "without {key}: another macro took it while recording",
+            "Macro “{name}” stopped: {message}",
+            "Ran macro “{name}” ({steps} step)",
+            "Ran macro “{name}” ({steps} steps)",
+        ] {
+            for language in Language::ALL {
+                let text = language.tr(template);
+                assert_eq!(placeholders(text), placeholders(template), "{}: {template:?} => {text:?}", language.code());
+                assert!(!text.contains('\n'), "{}: {template:?} => {text:?}", language.code());
             }
         }
     }
