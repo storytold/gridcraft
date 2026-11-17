@@ -45,7 +45,12 @@ use view::view;
 pub const TABS: &[&str] = &["Home", "Insert", "Draw", "Page Layout", "Formulas", "Data", "Review", "View", "Automate"];
 const _: () = assert!(TITLE_CONTROL_H < TITLE_BAR_H, "title-bar controls keep a margin above and below");
 
-/// Draws the ribbon tabs and the active tab's horizontally scrollable card, resetting an unavailable contextual tab to Home.
+/// Draws the ribbon tabs and active tab's controls, keeping both reachable in a narrow window.
+///
+/// The active tab scrolls into view when the tab set, language or available width changes; ordinary
+/// scrolling otherwise keeps the user's position. A More tabs menu exposes every standard and
+/// contextual tab. The active tab's card uses independent horizontal scroll state and edge arrows,
+/// while a contextual tab whose object is no longer selected returns to Home.
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let collapsed = app.ui.ribbon_collapsed;
@@ -62,53 +67,103 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
             ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+                let mut tabs: Vec<&str> = TABS.to_vec();
+                let ctx_tabs = contextual_tabs(app);
+                tabs.extend(ctx_tabs.iter());
+                let tabs_width: f32 = tabs
+                    .iter()
+                    .map(|tab| {
+                        let label = app.ui.language.tr(tab);
+                        ui.painter().layout_no_wrap(label.to_string(), theme::ui_font(13.5), t.text).size().x + 24.0
+                    })
+                    .sum();
+                let overflow = tabs_width + 64.0 > ui.available_width();
+                let reveal_id = ui.scope_id().with("ribbon_tabs_reveal");
+                let reveal_key = egui::Id::unique((app.ui.ribbon_tab.as_str(), tabs.clone(), app.ui.language.code(), ui.available_width().to_bits()));
+                let reveal_active = ui.ctx().data_mut(|data| {
+                    let changed = data.get_temp::<egui::Id>(reveal_id) != Some(reveal_key);
+                    data.insert_temp(reveal_id, reveal_key);
+                    changed
+                });
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
                     if app.chrome.file_tab {
                         file_menu(app, ui);
                     }
-                    let mut tabs: Vec<&str> = TABS.to_vec();
-                    let ctx_tabs = contextual_tabs(app);
-                    tabs.extend(ctx_tabs.iter());
-                    for tab in tabs {
-                        let active = app.ui.ribbon_tab == tab;
-                        let contextual = ctx_tabs.contains(&tab);
-                        let font = theme::ui_font(13.5);
-                        let label = app.ui.language.tr(tab);
-                        let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
-                        let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
-                        if resp.hovered() && !active {
-                            ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
-                        }
-                        let color = if contextual {
-                            t.accent
-                        } else if active {
-                            t.text
-                        } else {
-                            t.text_dim
-                        };
-                        ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
-                        if active {
-                            let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
-                            ui.painter().rect_filled(ul, 1.5, t.accent);
-                        }
-                        if resp.clicked() {
-                            if active && !collapsed {
-                                app.ui.ribbon_collapsed = true;
+                    let mut draw_tabs = |ui: &mut Ui| {
+                        for &tab in &tabs {
+                            let active = app.ui.ribbon_tab == tab;
+                            let contextual = ctx_tabs.contains(&tab);
+                            let font = theme::ui_font(13.5);
+                            let label = app.ui.language.tr(tab);
+                            let tw = ui.painter().layout_no_wrap(label.to_string(), font.clone(), t.text).size().x;
+                            let (r, resp) = ui.allocate_exact_size(vec2(tw + 22.0, 30.0), Sense::click());
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, active, label));
+                            if active && reveal_active {
+                                resp.scroll_to_me(None);
+                            }
+                            if resp.hovered() && !active {
+                                ui.painter().rect_filled(r.shrink2(vec2(2.0, 4.0)), 5.0, t.hover);
+                            }
+                            let color = if contextual {
+                                t.accent
+                            } else if active {
+                                t.text
                             } else {
-                                app.ui.ribbon_tab = tab.to_string();
-                                app.ui.ribbon_collapsed = false;
+                                t.text_dim
+                            };
+                            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, if active { theme::ui_bold(13.5) } else { font }, color);
+                            if active {
+                                let ul = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.clamp(20.0, 40.0), 3.0));
+                                ui.painter().rect_filled(ul, 1.5, t.accent);
+                            }
+                            if resp.clicked() {
+                                if active && !collapsed {
+                                    app.ui.ribbon_collapsed = true;
+                                } else {
+                                    app.ui.ribbon_tab = tab.to_string();
+                                    app.ui.ribbon_collapsed = false;
+                                }
+                            }
+                            if resp.double_clicked() {
+                                app.ui.ribbon_collapsed = !collapsed;
+                            }
+                            if app.keytips.prefix() == Some("")
+                                && let Some(sequence) = keytip_table::tab_sequence(tab)
+                            {
+                                keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
                             }
                         }
-                        if resp.double_clicked() {
-                            app.ui.ribbon_collapsed = !collapsed;
-                        }
-                        if app.keytips.prefix() == Some("")
-                            && let Some(sequence) = keytip_table::tab_sequence(tab)
-                        {
-                            keytip(app, ui, sequence, pos2(r.center().x, r.bottom() - 1.0));
-                        }
+                    };
+                    if overflow {
+                        let visible_width = (ui.available_width() - 34.0).max(40.0);
+                        egui::ScrollArea::horizontal()
+                            .id_salt("ribbon_tabs_horizontal")
+                            .max_width(visible_width)
+                            .auto_shrink([false, false])
+                            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+                            .show(ui, &mut draw_tabs);
+                        let arrow = ui.add(egui::Button::new(egui::RichText::new("▼").color(t.text)).min_size(vec2(30.0, 28.0)).fill(t.window));
+                        arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("More tabs")));
+                        arrow.clone().on_hover_text(app.ui.language.tr("More tabs"));
+                        egui::Popup::menu(&arrow).show(|ui| {
+                            // A popup's positioning alone cannot make a tall menu fit a short
+                            // viewport. Leave room for its frame and scroll the tab list.
+                            let frame = egui::Frame::popup(ui.style());
+                            let height = (ui.ctx().content_rect().height() - frame.total_margin().sum().y - 16.0).max(0.0);
+                            egui::ScrollArea::vertical().id_salt("more_tabs").min_scrolled_height(0.0).max_height(height).show(ui, |ui| {
+                                for tab in &tabs {
+                                    if ui.selectable_label(app.ui.ribbon_tab == *tab, app.ui.language.tr(tab)).clicked() {
+                                        app.ui.ribbon_tab = (*tab).to_string();
+                                        app.ui.ribbon_collapsed = false;
+                                        ui.close();
+                                    }
+                                }
+                            });
+                        });
+                    } else {
+                        draw_tabs(ui);
                     }
                 });
             });

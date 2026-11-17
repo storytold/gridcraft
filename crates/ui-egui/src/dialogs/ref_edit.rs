@@ -172,8 +172,8 @@ fn selection_ref(app: &SheetApp, home: Option<&Home>, several: bool) -> String {
 /// collapsed to. Escape or Enter expands a collapsed dialog again, rather than closing it or
 /// pressing OK, and the arrow keys select on the grid, unless another text field (the Name Box)
 /// owns the keyboard: its keys stay its own, as they were before the dialog collapsed.
-/// Collapsed, the dialog shrinks to the box where its top-left corner was, leaving the sheet
-/// free for selecting; expanded again, it comes back where it was.
+/// Collapsed, the compact box stays where it was unless it would cover the grid; in that case it
+/// moves to the right edge of the viewport. Expanded again, the dialog comes back where it was.
 pub(super) fn place_window<'a>(
     app: &mut SheetApp,
     ctx: &egui::Context,
@@ -182,6 +182,13 @@ pub(super) fn place_window<'a>(
     window_id: egui::Id,
 ) -> (egui::Window<'a>, Option<String>) {
     if let Some(key) = d.refs.collapsed.as_deref() {
+        // The compact picker uses a separate egui area so its auto-sized dimensions do not
+        // replace the user's expanded resize state. Make the now-hidden expanded area
+        // non-interactive; otherwise its stale rectangle can intercept grid clicks.
+        if let Some(mut state) = egui::AreaState::load(ctx, window_id) {
+            state.interactable = false;
+            ctx.memory_mut(|m| m.areas_mut().set_state(egui::LayerId::new(egui::Order::Middle, window_id), state));
+        }
         let other_field = d.refs.other_field || other_field_focused(ctx, key);
         // Escape and Enter are used up either way: left in the frame's input, the dialog would
         // read them as its own and close or confirm. When another field owned them, that field
@@ -204,9 +211,19 @@ pub(super) fn place_window<'a>(
         // bar, so the expanded position is written into its state.
         state.pivot = egui::Align2::CENTER_CENTER;
         state.pivot_pos = Some(rect.center());
+        state.interactable = true;
         ctx.memory_mut(|m| m.areas_mut().set_state(egui::LayerId::new(egui::Order::Middle, window_id), state));
     }
+    // Keep the compact picker at the dialog's original position when it is already outside the
+    // grid. If its short, collapsed footprint would cover cells, move it to the far edge so the
+    // user can select those cells without having to drag the picker out of the way first.
+    let compact_overlaps_grid = collapsed.is_some()
+        && d.refs.rect.is_some_and(|rect| app.grid.rect.is_some_and(|grid| rect.min.y < grid.bottom() && rect.min.y + 80.0 > grid.top()));
     let window = match (&collapsed, d.refs.rect) {
+        (Some(_), Some(rect)) if compact_overlaps_grid => {
+            let viewport = ctx.content_rect();
+            window.pivot(egui::Align2::RIGHT_TOP).fixed_pos(egui::pos2(viewport.right() - 8.0, rect.min.y))
+        }
         (Some(_), Some(rect)) => window.pivot(egui::Align2::LEFT_TOP).fixed_pos(rect.min),
         _ => window,
     };
@@ -354,6 +371,12 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
             RefLabel::By(label) => r.labelled_by(label),
             RefLabel::Named(name) => r.accessible_name(lang.tr(name)),
         };
+        // The compact picker uses a separate Window id to preserve the expanded dialog's size.
+        // Its TextEdit therefore gets a different egui widget id; give the new compact field
+        // focus on the first frame after collapsing.
+        if collapsed && !d.refs.was_collapsed {
+            r.request_focus();
+        }
         // F4 cycles the anchors of the reference in the box, as in Excel's reference boxes.
         if r.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F4)) {
             s = cycle_anchors(&s);
