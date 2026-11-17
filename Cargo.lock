@@ -1012,7 +1012,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=bc358686389892a3827e64fc26bedc278ef1e299#bc358686389892a3827e64fc26bedc278ef1e299"
+source = "git+https://github.com/storytold/craft-libs?rev=ff142b3ad58aa7306676749428f4f2f9b277b5dd#ff142b3ad58aa7306676749428f4f2f9b277b5dd"
 
 [[package]]
 name = "craft-print"
