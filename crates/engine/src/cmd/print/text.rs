@@ -5,7 +5,7 @@ use super::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-const PAD_PX: f32 = 2.0;
+pub(super) const PAD_PX: f32 = 2.0;
 
 /// Most lines [`wrap_lines`] returns (it may return one more, the rest of a paragraph).
 const MAX_WRAP_LINES: usize = 2000;
@@ -147,7 +147,7 @@ fn break_measured_word(word: &str, fits: &impl Fn(&str) -> bool, direction: Text
     }
 }
 
-fn font_for(style: &Style) -> Font {
+pub(super) fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
@@ -178,7 +178,7 @@ fn text_align(align: HAlign, value: &Value, direction: TextDirection, right_to_l
 }
 
 /// Is a cell free for text to overflow into?
-fn empty_for_overflow(sh: &Sheet, c: CellRef, merges: &[RangeRef]) -> bool {
+pub(super) fn empty_for_overflow(sh: &Sheet, c: CellRef, merges: &[RangeRef]) -> bool {
     sh.value_ref(c).is_none_or(|v| v.is_empty()) && !merges.iter().any(|m| m.contains(c))
 }
 
