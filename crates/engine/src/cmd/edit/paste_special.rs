@@ -103,6 +103,7 @@ fn copy_merges_tiled(
     tiles_c: u32,
     pitch_h: u32,
     pitch_w: u32,
+    skip_rows: &std::collections::BTreeSet<u32>,
 ) -> Result<()> {
     if !matches!(what, What::All | What::Formats) || transpose {
         return Ok(());
@@ -117,6 +118,9 @@ fn copy_merges_tiled(
             let row = i64::from(tr).saturating_mul(i64::from(pitch_h));
             let col = i64::from(tc).saturating_mul(i64::from(pitch_w));
             let Some(anchor) = at.offset(row, col) else { continue };
+            if skip_rows.contains(&anchor.row) {
+                continue;
+            }
             let row_offset = anchor.row as i64 - src.start.row as i64;
             let col_offset = anchor.col as i64 - src.start.col as i64;
             for merge in &src_merges {
@@ -550,7 +554,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         // Merged areas inside the copied block travel with it, at every tile.
-        copy_merges_tiled(cx, dest_sheet, src_sheet, src, at, what, transpose, tiles_r, tiles_c, h, w)?;
+        copy_merges_tiled(cx, dest_sheet, src_sheet, src, at, what, transpose, tiles_r, tiles_c, h, w, &skip_rows)?;
         if cut_move {
             // References elsewhere to the moved block now point to its new place.
             let e = if dest_sheet == clip.sheet {

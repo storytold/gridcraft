@@ -890,6 +890,33 @@ fn tiled_paste_replicates_merged_areas_at_every_tile() {
 }
 
 #[test]
+fn tiled_paste_over_filtered_rows_leaves_their_merges_alone() {
+    // CodeRabbit on #4425: a one-row tiled paste skips the rows a filter hides for its
+    // cells and validations, but copy_merges_tiled did not receive skip_rows, so it
+    // still created a merge on each hidden row and displaced the merges already there.
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=11 {
+        rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [["X", "W"]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    assert_eq!(s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap()["hiddenRows"], 4);
+    s.execute("home.mergeCells", json!({"range": "E1:F1"})).unwrap();
+    paste_over(&mut s, "E1:F1", "A2:B11").unwrap();
+    let merges = &s.doc().unwrap().wb.sheet(0).unwrap().merges;
+    for want in ["E1:F1", "A2:B2", "A4:B4", "A11:B11"] {
+        assert!(merges.contains(&RangeRef::parse(want).unwrap()), "merge {want} in {merges:?}");
+    }
+    for hidden in ["A3:B3", "A5:B5", "A7:B7", "A9:B9"] {
+        assert!(!merges.contains(&RangeRef::parse(hidden).unwrap()), "no merge on hidden row {hidden}: {merges:?}");
+    }
+}
+
+#[test]
 fn tiled_paste_drops_only_the_destination_merges_it_displaces() {
     // #3370 review: a later tile displaces an existing merge just as the first does.
     let mut s = Session::new();
