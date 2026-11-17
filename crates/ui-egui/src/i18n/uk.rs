@@ -190,6 +190,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Обвести неправильні дані",
         "Clear Validation" => "Очистити перевірку даних",
         "Group" => "Групувати",
+        "Auto Outline" => "Автоструктура",
         "Ungroup" => "Розгрупувати",
         "Show Detail" => "Показати деталі",
         "Hide Detail" => "Сховати деталі",

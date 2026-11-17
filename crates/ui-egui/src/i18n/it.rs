@@ -194,6 +194,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Cerchia dati non validi",
         "Clear Validation" => "Cancella convalida",
         "Group" => "Raggruppa",
+        "Auto Outline" => "Struttura automatica",
         "Ungroup" => "Separa",
         "Show Detail" => "Mostra dettagli",
         "Hide Detail" => "Nascondi dettagli",

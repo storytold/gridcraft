@@ -188,6 +188,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Zakreśl nieprawidłowe dane",
         "Clear Validation" => "Wyczyść poprawność danych",
         "Group" => "Grupuj",
+        "Auto Outline" => "Autokonspekt",
         "Ungroup" => "Rozgrupuj",
         "Show Detail" => "Pokaż szczegóły",
         "Hide Detail" => "Ukryj szczegóły",

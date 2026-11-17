@@ -26,7 +26,7 @@ mod validation;
 pub use filter::filter_values;
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
-use grouping::{detail, group, outline_settings, show_levels, subtotal};
+use grouping::{auto_outline, detail, group, outline_settings, show_levels, subtotal};
 use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
@@ -123,6 +123,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 |s, p| { group(s, p, false) }
             )
         },
+        cmd!(
+            "data.autoOutline",
+            "Auto Outline",
+            ["Data", "Outline", "Group"],
+            None,
+            "{range?, sheet?} (one cell: the whole sheet; a block: its rows and columns; whole rows: row groups only; whole columns: column groups only. Formulas that sum the lines next to them become summary lines; the outline there is replaced) → {rows, cols, summaryBelow, summaryRight} (the deepest row and column levels)",
+            has_doc,
+            auto_outline
+        ),
         cmd!(
             "data.hideDetail",
             "Hide Detail",

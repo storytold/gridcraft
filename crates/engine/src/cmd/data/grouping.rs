@@ -3,6 +3,10 @@ use super::{
     str_param, target_sheet,
 };
 
+mod auto_outline;
+
+pub(super) use auto_outline::auto_outline;
+
 // ---------------------------------------------------------------- outline
 
 fn outline_lines(s: &Session, p: &Json) -> Result<(bool, u32, u32)> {
