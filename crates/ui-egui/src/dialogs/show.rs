@@ -507,10 +507,10 @@ fn save_sheet(app: &mut SheetApp, ctx: &egui::Context, mut d: crate::dialogs::Di
     }
     if app.save_sheet.is_none() {
         let Some(ask) = &app.services.save_prompt else { return Some(d) };
-        let window = if app.native_windows {
-            app.ui_window().map(|w| crate::doc_windows::window_title(app, w)).unwrap_or_default()
-        } else {
-            app.grid.last_title.clone().unwrap_or_default()
+        let window = match app.native_windows {
+            #[cfg(not(target_arch = "wasm32"))]
+            true => app.ui_window().map(|w| crate::doc_windows::window_title(app, w)).unwrap_or_default(),
+            _ => app.grid.last_title.clone().unwrap_or_default(),
         };
         let name = d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook");
         let question = format!("Do you want to save the changes you made to {name}?");

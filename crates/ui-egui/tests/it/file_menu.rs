@@ -769,3 +769,40 @@ fn closing_the_window_asks_each_unsaved_workbook_in_a_sheet() {
     request_window_close(&mut h);
     assert!(h.query_by_label("Don't Save").is_some(), "the built-in dialog asks");
 }
+
+/// A Save Changes sheet belongs to its window: while one window's sheet is up, closing another
+/// window's workbook asks in a sheet of its own, and each answer closes only its own workbook.
+#[test]
+fn each_window_waits_on_its_own_save_sheet() {
+    type Asked = Arc<Mutex<Vec<std::sync::mpsc::Sender<String>>>>;
+    let asked: Asked = Arc::default();
+    let log = asked.clone();
+    let services = Services {
+        save_prompt: Some(Box::new(move |_, _, _| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            log.lock().unwrap().push(tx);
+            Some(rx)
+        })),
+        ..Default::default()
+    };
+    let mut h = harness(services);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "7"})).unwrap();
+    h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
+    h.run_steps(2);
+    choose(&mut h, "Close");
+    h.run_steps(2);
+    assert_eq!(asked.lock().unwrap().len(), 1);
+
+    h.state_mut().run("window.activate", serde_json::json!({"index": 1})).unwrap();
+    h.run_steps(2);
+    choose(&mut h, "Close");
+    h.run_steps(2);
+    assert_eq!(asked.lock().unwrap().len(), 2, "the second window asks in a sheet of its own");
+    asked.lock().unwrap()[1].send("dontSave".into()).unwrap();
+    h.run_steps(3);
+    let docs = h.state().session.documents();
+    assert_eq!(docs.len(), 1, "the second window's answer closes its workbook");
+    assert_eq!(docs[0].wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0), "and not the first window's");
+}
