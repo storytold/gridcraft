@@ -678,3 +678,28 @@ fn ignore_blank_lets_a_custom_rule_pass_when_its_table_cell_is_blank() {
     assert!(ok(&mut s, "A2", "5"));
     assert!(ok(&mut s, "A3", "99"));
 }
+
+#[test]
+fn ignore_blank_skips_bracketed_range_ends_and_let_names() {
+    // Review of #3797: a range end in brackets is still the end of a range, so `($D$1)` with a
+    // blank D1 does not lift a no-duplicates rule.
+    let mut s = Session::new();
+    s.new_workbook();
+    let ok =
+        |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == json!(true);
+    s.execute("cell.set", json!({"cell": "D2", "input": "x"})).unwrap();
+    s.execute("data.validation", json!({"range": "D3", "type": "custom", "formula1": "=COUNTIF(($D$1):INDEX($D:$D,ROW($D$3)),D3)=1"})).unwrap();
+    assert!(!ok(&mut s, "D3", "x"));
+    assert!(ok(&mut s, "D3", "y"));
+    // A LET or LAMBDA variable is the formula's own value, not the workbook name of the same
+    // spelling: with `Limit` naming the blank A1, `LET(Limit,10,…)` still compares with 10.
+    s.execute("formulas.defineName", json!({"name": "Limit", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    s.execute("data.validation", json!({"range": "B1", "type": "custom", "formula1": "=LET(Limit,10,B1<=Limit)"})).unwrap();
+    assert!(!ok(&mut s, "B1", "99"));
+    assert!(ok(&mut s, "B1", "5"));
+    s.execute("data.validation", json!({"range": "B2", "type": "custom", "formula1": "=LAMBDA(limit,B2<=limit)(10)"})).unwrap();
+    assert!(!ok(&mut s, "B2", "99"));
+    // The workbook name itself still counts as a blank limit.
+    s.execute("data.validation", json!({"range": "B3", "type": "custom", "formula1": "=B3<=Limit"})).unwrap();
+    assert!(ok(&mut s, "B3", "99"));
+}

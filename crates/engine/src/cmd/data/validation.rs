@@ -295,27 +295,49 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
 ///
 /// A single cell, a name or a structured reference counts when it gives a blank. Cells inside a
 /// range don't: `=COUNTIF($D$1:$D$5,D1)=1` keeps refusing a repeat in a mostly empty column, and
-/// neither does an end of a range the parser keeps as two parts (`$D$1:INDEX($D:$D,ROW())`).
+/// neither does anything inside an end of a range the parser keeps as two parts
+/// (`$D$1:INDEX($D:$D,ROW())`, `($D$1):…`). A `LET` or `LAMBDA` variable is the formula's own
+/// value, not a workbook name of the same spelling, so it isn't read on its own.
 /// `wb` holds the value being entered, so the checked cell itself is never blank here.
 fn custom_refers_to_blank(wb: &Workbook, sheet: usize, at: CellRef, f: &str) -> bool {
     use gridcraft_formula::{BinOp, Expr, RefKind};
     let Ok(e) = gridcraft_formula::parse(f.trim_start_matches('=')) else { return false };
-    // `walk` visits a parent before its children, so the ends of a range are known in time.
-    let mut range_ends: Vec<*const Expr> = Vec::new();
+    // Nodes that are not limits of their own: everything inside a range end.
+    let mut skip: std::collections::HashSet<*const Expr> = std::collections::HashSet::new();
+    // Names the formula binds itself: LET's names (every other argument but the last) and
+    // LAMBDA's parameters (all arguments but the last).
+    let mut bound: Vec<String> = Vec::new();
+    e.walk(&mut |node| match node {
+        Expr::Binary(BinOp::Range, a, b) => {
+            a.walk(&mut |n| {
+                skip.insert(n);
+            });
+            b.walk(&mut |n| {
+                skip.insert(n);
+            });
+        }
+        Expr::Call(name, args) if name == "LET" || name == "LAMBDA" => {
+            let params = args.split_last().map_or(&args[..0], |(_, p)| p);
+            let step = if name == "LET" { 2 } else { 1 };
+            bound.extend(params.iter().step_by(step).filter_map(|p| match p {
+                Expr::Name(n) => Some(n.to_uppercase()),
+                _ => None,
+            }));
+        }
+        _ => {}
+    });
     let mut blank = false;
     e.walk(&mut |node| {
-        if blank {
+        if blank || skip.contains(&(node as *const Expr)) {
             return;
-        }
-        if let Expr::Binary(BinOp::Range, a, b) = node {
-            range_ends.extend([&**a as *const Expr, &**b as *const Expr]);
         }
         let single = match node {
             Expr::Ref(r) => matches!(r.kind, RefKind::Cell(_)),
-            Expr::Name(_) | Expr::Struct(_) => true,
+            Expr::Name(n) => !bound.contains(&n.to_uppercase()),
+            Expr::Struct(_) => true,
             _ => false,
         };
-        if single && !range_ends.contains(&(node as *const Expr)) {
+        if single {
             blank = gridcraft_calc::recalc::evaluate_expr(wb, sheet, at, node).is_empty();
         }
     });
