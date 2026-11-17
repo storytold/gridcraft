@@ -258,7 +258,10 @@ impl EditState {
         }
         let u = word.to_ascii_uppercase();
         // Not after a column letter of a reference like A1 (digits follow) – fine either way.
-        self.autocomplete = names.iter().filter(|n| n.starts_with(&u)).take(12).cloned().collect();
+        // Sorted on the shown (possibly localized) name, so `SOMME` comes before `SOMME.SERIES`.
+        let mut matches: Vec<&String> = names.iter().filter(|n| n.starts_with(&u)).collect();
+        matches.sort_unstable();
+        self.autocomplete = matches.into_iter().take(12).cloned().collect();
         if self.autocomplete.len() == 1 && self.autocomplete[0] == u {
             self.autocomplete.clear();
         }
@@ -520,6 +523,15 @@ mod tests {
         assert_eq!(e.text, "=SUM(");
         let e = EditState::new(1, 0, CellRef::new(0, 0), "=IF(A1>0,SUM(B1,".into(), true, false);
         assert_eq!(e.current_function(), Some(("SUM".into(), 1)));
+    }
+
+    /// Localized names arrive in English order (DEVSQ, SERIESSUM, SUM); the list shows them in their own order.
+    #[test]
+    fn autocomplete_sorts_localized_names() {
+        let names: Vec<String> = ["SOMME.CARRES.ECARTS", "SOMME.SERIES", "SOMME"].iter().map(|s| s.to_string()).collect();
+        let mut e = EditState::new(1, 0, CellRef::new(0, 0), "=somme".into(), true, false);
+        e.update_autocomplete(&names);
+        assert_eq!(e.autocomplete, ["SOMME", "SOMME.CARRES.ECARTS", "SOMME.SERIES"]);
     }
 
     #[test]
