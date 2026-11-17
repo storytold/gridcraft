@@ -778,11 +778,11 @@ mod tests {
         let (dir, input) = warned_csv("run-cmd-open");
         let output = dir.join("dates.xlsx");
         let open_cmd = format!("file.open={}", json!({"path": input}));
-        let e = run(&vec!["--quiet".into(), "--cmd".into(), open_cmd.clone(), "--out".into(), path(&output)])
+        let e = run(&["--quiet".into(), "--cmd".into(), open_cmd.clone(), "--out".into(), path(&output)])
             .expect_err("a warned import opened by a command fails the run");
         assert!(e.contains("--allow-lossy"), "{e}");
         assert!(std::fs::read(&output).unwrap().starts_with(b"PK"));
-        run(&vec!["--quiet".into(), "--cmd".into(), open_cmd, "--out".into(), path(&output), "--allow-lossy".into()]).unwrap();
+        run(&["--quiet".into(), "--cmd".into(), open_cmd, "--out".into(), path(&output), "--allow-lossy".into()]).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -799,7 +799,7 @@ mod tests {
         assert_eq!(open(&path(&clean)).unwrap().1, 0, "the second open must be clean");
         let output = dir.join("dates.xlsx");
         let open_cmd = format!("file.open={}", json!({"path": path(&clean)}));
-        let e = run(&vec!["--in".into(), input.clone(), "--quiet".into(), "--cmd".into(), open_cmd, "--out".into(), path(&output)])
+        let e = run(&["--in".into(), input.clone(), "--quiet".into(), "--cmd".into(), open_cmd, "--out".into(), path(&output)])
             .expect_err("the lossy --in import still fails the run");
         assert!(e.contains(&input), "{e}");
         assert!(!e.contains(&path(&clean)), "{e}");
