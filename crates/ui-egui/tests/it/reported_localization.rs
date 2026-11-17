@@ -457,19 +457,21 @@ fn filter_search_keeps_hidden_members_of_a_selected_component() {
 #[test]
 fn applying_an_unchanged_partial_filter_does_not_select_a_matching_caption() {
     use egui::{Key, Modifiers, accesskit::Role};
-    let mut h = harness();
-    h.state_mut().run("range.setValues", json!({"range":"A1","values":[["Header"],[null],["(Blanks)"],["other"]],"parse":false})).unwrap();
-    h.state_mut().run("data.filter", json!({"range":"A1:A4"})).unwrap();
-    h.state_mut().run("data.filterBy", json!({"column":"A","values":[],"blanks":true})).unwrap();
-    h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
-    press(&mut h, Key::ArrowDown, Modifiers::ALT);
-    h.run_steps(4);
-    h.get_by_role_and_label(Role::Button, "Применить").click();
-    h.run_steps(3);
-    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
-    assert!(!sheet.is_row_hidden(1));
-    assert!(sheet.is_row_hidden(2));
-    assert!(sheet.is_row_hidden(3));
+    for text_caption in ["(Blanks)", Language::Ru.tr("(Blanks)")] {
+        let mut h = harness();
+        h.state_mut().run("range.setValues", json!({"range":"A1","values":[["Header"],[null],[text_caption],["other"]],"parse":false})).unwrap();
+        h.state_mut().run("data.filter", json!({"range":"A1:A4"})).unwrap();
+        h.state_mut().run("data.filterBy", json!({"column":"A","values":[],"blanks":true})).unwrap();
+        h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
+        press(&mut h, Key::ArrowDown, Modifiers::ALT);
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::Button, "Применить").click();
+        h.run_steps(3);
+        let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+        assert!(!sheet.is_row_hidden(1), "{text_caption}");
+        assert!(sheet.is_row_hidden(2), "{text_caption}");
+        assert!(sheet.is_row_hidden(3), "{text_caption}");
+    }
 }
 
 /// Caption equality and case-insensitive command equality propagate transitively.
