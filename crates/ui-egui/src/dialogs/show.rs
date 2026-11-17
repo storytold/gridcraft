@@ -92,7 +92,8 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
             }
         }
         "series" => {
-            if let Some(s) = d.values.get("stop").and_then(Json::as_str).and_then(|s| s.parse::<f64>().ok()) {
+            // Typed in the workbook's region, as a cell is: "2,5" in pt-BR.
+            if let Some(s) = d.values.get("stop").and_then(Json::as_str).and_then(|s| super::parse_in_region(s, d.region)) {
                 v["stop"] = json!(s);
             } else if let Some(m) = v.as_object_mut() {
                 m.remove("stop");
@@ -641,7 +642,7 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         let mut n = d.values.get(key).and_then(Json::as_f64).unwrap_or(0.0);
                         // Typed values count straight away: otherwise Enter or OK in the same frame
                         // confirms the old value, because a number field only commits when it loses focus.
-                        let r = ui.add(egui::DragValue::new(&mut n).speed(0.5).update_while_editing(true)).labelled_by(label.id);
+                        let r = ui.add(super::region_drag_value(&mut n, d.region).speed(0.5).update_while_editing(true)).labelled_by(label.id);
                         take_first_focus(d, &r);
                         if r.changed() {
                             d.values.insert(key.into(), json!(n));
