@@ -360,6 +360,7 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
 // ---------------------------------------------------------------- writing helpers
 
 // XML 1.0 byte escaping is shared; spreadsheet string and phonetic policy stays here.
+#[cfg(test)]
 use craft_xml::is_xml_char;
 #[cfg(test)]
 use craft_xml::push_esc;
@@ -402,70 +403,8 @@ pub fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
     push_u64(o, u64::from(c.row) + 1);
 }
 
-/// ST_Xstring encoding for cell text: characters XML can't carry and carriage returns become
-/// `_xHHHH_`, and literal `_xHHHH_` sequences are protected with `_x005F_`. The result still needs
-/// [`esc`].
-pub fn encode_xstring(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if c == '_' && looks_like_escape(&chars, i) {
-            o.push_str("_x005F_");
-        } else if !is_xml_char(c) || (c.is_control() && !matches!(c, '\t' | '\n')) {
-            o.push_str(&format!("_x{:04X}_", c as u32 & 0xFFFF));
-        } else {
-            o.push(c);
-        }
-    }
-    o
-}
-
-fn looks_like_escape(chars: &[char], i: usize) -> bool {
-    chars.get(i + 1) == Some(&'x') && chars.get(i + 6) == Some(&'_') && (i + 2..i + 6).all(|k| chars.get(k).is_some_and(char::is_ascii_hexdigit))
-}
-
-fn escape_unit(chars: &[char], i: usize) -> Option<u32> {
-    let hex: String = chars.get(i + 2..i + 6)?.iter().collect();
-    u32::from_str_radix(&hex, 16).ok()
-}
-
-/// The character for a high surrogate escape at `i` (value `high`) followed directly by a low surrogate escape.
-fn surrogate_pair(chars: &[char], i: usize, high: u32) -> Option<char> {
-    if !(0xD800..=0xDBFF).contains(&high) || chars.get(i + 7) != Some(&'_') || !looks_like_escape(chars, i + 7) {
-        return None;
-    }
-    let low = escape_unit(chars, i + 7).filter(|l| (0xDC00..=0xDFFF).contains(l))?;
-    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
-}
-
-/// Inverse of [`encode_xstring`].
-pub fn decode_xstring(s: &str) -> String {
-    if !s.contains("_x") {
-        return s.to_string();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let mut o = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '_' && looks_like_escape(&chars, i) {
-            let unit = escape_unit(&chars, i);
-            if let Some(ch) = unit.and_then(char::from_u32) {
-                o.push(ch);
-                i += 7;
-                continue;
-            }
-            // A high surrogate escape followed by a low surrogate escape is one UTF-16 pair.
-            if let Some(ch) = unit.and_then(|high| surrogate_pair(&chars, i, high)) {
-                o.push(ch);
-                i += 14;
-                continue;
-            }
-        }
-        o.push(chars[i]);
-        i += 1;
-    }
-    o
-}
+/// Shared ST_Xstring encoding/decoding; XML escaping remains a separate operation.
+pub use craft_xlsx::{decode_xstring, encode_xstring};
 
 /// `<t>` element with `xml:space="preserve"` when needed.
 pub fn t_el(s: &str) -> String {
