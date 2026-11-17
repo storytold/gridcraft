@@ -266,9 +266,11 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     // Strict files write these as percentages (`219%`).
     let percent = |v: &str| v.trim().trim_end_matches('%').trim().parse::<f64>().ok();
     let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(percent).map(|v| v.clamp(0.0, 500.0) as u16);
-    // Stacked series share a slot, so the 100 written for them means nothing to keep. Any other value
-    // is the file's own.
-    let stacked = bars.is_some_and(|g| matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")));
+    // Stacked series share a slot, so the 100 written for them means nothing to keep when every bar
+    // group is stacked; a combo with a clustered bar group draws with it. Any other value is the
+    // file's own.
+    let stacked = bars.is_some()
+        && plot.kids("barChart").chain(plot.kids("bar3DChart")).all(|g| matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")));
     let overlap =
         bars.and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16).filter(|v| !(stacked && *v == 100));
     let first_slice_angle =

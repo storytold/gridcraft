@@ -122,11 +122,12 @@ impl BarSink {
         if self.horizontal { c + self.cluster / 2.0 - self.bw - self.k * self.step } else { c - self.cluster / 2.0 + self.k * self.step }
     }
     /// This series' strip of a pixel column (offset, length) when the columns hold several
-    /// clustered series, in the direction the slots run.
+    /// clustered series, in the direction the slots run: the share of the cluster its slot covers,
+    /// so overlapping series share their strips as their bars do (all of it at full overlap).
     fn band(&self) -> Option<(f32, f32)> {
-        (self.nslots > 1.0).then(|| {
-            let idx = if self.horizontal { self.nslots - 1.0 - self.k } else { self.k };
-            (idx / self.nslots, 1.0 / self.nslots)
+        (self.nslots > 1.0 && self.cluster > 0.0).then(|| {
+            let start = if self.horizontal { self.cluster - self.bw - self.k * self.step } else { self.k * self.step };
+            (start / self.cluster, self.bw / self.cluster)
         })
     }
     /// Draws the bar at category center `c` spanning `lo..lo + len` on the value axis, or, when

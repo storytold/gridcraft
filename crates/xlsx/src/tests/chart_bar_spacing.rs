@@ -69,3 +69,24 @@ fn series_lines_come_from_the_bar_group_that_has_them() {
     assert_eq!(chart.series_lines, Some(Default::default()));
     assert_eq!(chart.gap_width, Some(80), "spacing still comes from the first group");
 }
+
+/// A combo whose first bar group is stacked and a later one clustered keeps the 100: the clustered
+/// group draws with it.
+#[test]
+fn a_combo_with_a_clustered_bar_group_keeps_its_overlap() {
+    let group = |grouping: &str, idx: u32, ax: (u32, u32)| {
+        format!(
+            "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"{grouping}\"/>\
+            <c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/><c:val><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val=\"1\"/><c:pt idx=\"0\"><c:v>12</c:v></c:pt></c:numLit></c:val></c:ser>\
+            <c:overlap val=\"100\"/><c:axId val=\"{}\"/><c:axId val=\"{}\"/></c:barChart>",
+            ax.0, ax.1
+        )
+    };
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>{}{}\
+        <c:catAx/><c:valAx/></c:plotArea></c:chart></c:chartSpace>",
+        group("stacked", 0, (1, 2)),
+        group("clustered", 1, (3, 4))
+    );
+    assert_eq!(read_chart(&parse(xml.as_bytes()).unwrap()).unwrap().overlap, Some(100));
+}
