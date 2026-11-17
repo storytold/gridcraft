@@ -575,6 +575,19 @@ fn literal_validation_rechecks_formula_destinations_and_dependents() {
 }
 
 #[test]
+fn literal_validation_rechecks_an_equal_spill_destination() {
+    let mut session = Session::default();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"A1", "input":"=IF(SEQUENCE(2),\"x\")"})).unwrap();
+    session.execute("data.validation", json!({"range":"A2", "type":"custom", "formula1":"=NOT(ISERROR(A1))"})).unwrap();
+    let wb = &session.doc().unwrap().wb;
+    let at = CellRef::parse("A2").unwrap();
+    assert_eq!(wb.active().unwrap().value(at), Value::text("x"));
+    assert!(wb.active().unwrap().spill_anchor(at).is_some());
+    assert!(super::check_literal_validation(wb, 0, at, "x").is_some());
+}
+
+#[test]
 fn literal_fill_validates_the_completed_range() {
     let mut s = Session::new();
     s.new_workbook();
