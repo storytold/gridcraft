@@ -518,6 +518,84 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Goal Seeking found a solution: {value}" => "Valeur cible a trouvé une solution : {value}",
         "Sheets: {sheets}" => "Feuilles : {sheets}",
         "Hidden: {sheets}" => "Masquées : {sheets}",
+        "Double superscript" => "Exposant double",
+        "Double subscript" => "Indice double",
+        "Extra }" => "} en trop",
+        "Unexpected end of input in a macro argument" => "Fin inattendue de l'entrée dans un argument de macro",
+        "Expected \\right after \\left" => "\\right attendu après \\left",
+        "\\middle must be within \\left and \\right" => "\\middle doit se trouver entre \\left et \\right",
+        "Invalid environment name" => "Nom d'environnement non valide",
+        "Expected \\end after environment body" => "\\end attendu après le corps de l'environnement",
+        "Expected URL" => "URL attendue",
+        "\\tag requires an argument" => "\\tag nécessite un argument",
+        "only one infix operator per group" => "Un seul opérateur infixe par groupe",
+        "Expected color token" => "Couleur attendue",
+        "Expected size for \\raisebox" => "Taille attendue pour \\raisebox",
+        "Expected size for \\rule width" => "Taille attendue pour la largeur de \\rule",
+        "Expected size for \\rule height" => "Taille attendue pour la hauteur de \\rule",
+        "Cannot use both \\tag and \\nonumber in the same row" => "\\tag et \\nonumber ne peuvent pas figurer dans la même ligne",
+        "Multiple \\tag in a row" => "Plusieurs \\tag dans une ligne",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag doit figurer à la fin de la ligne, après le corps de l'équation",
+        "Multiple \\nonumber in a row" => "Plusieurs \\nonumber dans une ligne",
+        "\\nonumber must appear at the end of the row" => "\\nonumber doit figurer à la fin de la ligne",
+        "Too many tab characters: &" => "Trop de caractères de tabulation : &",
+        "Invalid column alignment for array" => "Alignement de colonne non valide pour array",
+        "Expected column alignment character" => "Caractère d'alignement de colonne attendu",
+        "Expected l or c or r" => "l, c ou r attendu",
+        "Expected ]" => "] attendu",
+        "Unexpected end of CD row after @" => "Fin inattendue de la ligne CD après @",
+        "Invalid column alignment for subarray" => "Alignement de colonne non valide pour subarray",
+        "{subarray} can contain only one column" => "{subarray} ne peut contenir qu'une seule colonne",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "prooftree contient un \\LeftLabel ou \\RightLabel sans commande d'inférence qui le suit"
+        }
+        "Recursion limit exceeded" => "Limite de récursion dépassée",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Trop d'expansions de macros : boucle infinie ou paramètre maxExpand trop bas"
+        }
+        "Expected raw style for \\htmlStyle" => "Style brut attendu pour \\htmlStyle",
+        "\\verb assertion failed" => "Échec de la vérification de \\verb",
+        "Undefined control sequence: {name}" => "Séquence de contrôle non définie : {name}",
+        "Expected '{expected}', got '{got}'" => "'{expected}' attendu, '{got}' trouvé",
+        "Expected group after '{symbol}'" => "Groupe attendu après '{symbol}'",
+        "Expected delimiter as argument to '{function}'" => "Délimiteur attendu comme argument de '{function}'",
+        "Expected group as argument to '{function}'" => "Groupe attendu comme argument de '{function}'",
+        "Got function '{function}' with no arguments as superscript" => "Fonction '{function}' sans arguments utilisée comme exposant",
+        "Got function '{function}' with no arguments as subscript" => "Fonction '{function}' sans arguments utilisée comme indice",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Fonction '{function}' sans arguments utilisée comme argument de '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Fonction '{function}' sans arguments utilisée comme \\tag",
+        "Can't use function '{function}' in text mode" => "La fonction '{function}' n'est pas utilisable en mode texte",
+        "Can't use function '{function}' in math mode" => "La fonction '{function}' n'est pas utilisable en mode mathématique",
+        "Invalid color: '{color}'" => "Couleur non valide : '{color}'",
+        "Invalid size: '{size}'" => "Taille non valide : '{size}'",
+        "Invalid unit: '{unit}'" => "Unité non valide : '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Délimiteur '{delimiter}' non valide après '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Type de délimiteur '{type}' non valide après '{function}'",
+        "Invalid delimiter type '{type}'" => "Type de délimiteur '{type}' non valide",
+        "No such environment: {name}" => "Environnement inconnu : {name}",
+        "Expected argument to \\begin{{name}}" => "Argument attendu pour \\begin{{name}}",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Non-correspondance : \\begin{{begin}} fermé par \\end{{end}}",
+        "{command} valid only within array environment" => "{command} n'est valide que dans un environnement array",
+        "Mismatched {command}" => "{command} sans correspondance",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "&, \\\\, \\cr ou \\end attendu, '{got}' trouvé",
+        "Unknown column alignment: {alignment}" => "Alignement de colonne inconnu : {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Trop de formules dans une ligne : {expected} attendues, {got} trouvées",
+        "Unknown CD directive: @{directive}" => "Directive CD inconnue : @{directive}",
+        "Expected argument for {command}" => "Argument attendu pour {command}",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "{command} nécessite {count} prémisse(s), mais seulement {available} disponible(s)"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} n'est valide dans prooftree que comme commande bussproofs prise en charge"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "prooftree s'est terminé avec {count} élément(s) sur la pile de preuve, 1 attendu"
+        }
+        "\\@char has non-numeric argument {argument}" => "\\@char a un argument non numérique {argument}",
+        "\\@char with invalid code point {code}" => "\\@char avec un point de code non valide {code}",
+        "Invalid environment name character: {character}" => "Caractère non valide dans le nom d'environnement : {character}",
         _ => return None,
     })
 }

@@ -1039,6 +1039,84 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Macro “{name}” stopped: {message}" => "Макрос «{name}» зупинено: {message}",
         "Ran macro “{name}” ({steps} step)" => "Макрос «{name}» виконано ({steps} крок)",
         "Ran macro “{name}” ({steps} steps)" => "Макрос «{name}» виконано (кроків: {steps})",
+        "Double superscript" => "Подвійний верхній індекс",
+        "Double subscript" => "Подвійний нижній індекс",
+        "Extra }" => "Зайва }",
+        "Unexpected end of input in a macro argument" => "Неочікуваний кінець введення в аргументі макросу",
+        "Expected \\right after \\left" => "Після \\left очікується \\right",
+        "\\middle must be within \\left and \\right" => "\\middle має стояти між \\left і \\right",
+        "Invalid environment name" => "Неприпустима назва середовища",
+        "Expected \\end after environment body" => "Після вмісту середовища очікується \\end",
+        "Expected URL" => "Очікується URL-адреса",
+        "\\tag requires an argument" => "Для \\tag потрібен аргумент",
+        "only one infix operator per group" => "У групі допускається лише один інфіксний оператор",
+        "Expected color token" => "Очікується колір",
+        "Expected size for \\raisebox" => "Для \\raisebox очікується розмір",
+        "Expected size for \\rule width" => "Для ширини \\rule очікується розмір",
+        "Expected size for \\rule height" => "Для висоти \\rule очікується розмір",
+        "Cannot use both \\tag and \\nonumber in the same row" => "Не можна використовувати \\tag і \\nonumber в одному рядку",
+        "Multiple \\tag in a row" => "Кілька \\tag в одному рядку",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag має стояти в кінці рядка після формули",
+        "Multiple \\nonumber in a row" => "Кілька \\nonumber в одному рядку",
+        "\\nonumber must appear at the end of the row" => "\\nonumber має стояти в кінці рядка",
+        "Too many tab characters: &" => "Забагато символів табуляції: &",
+        "Invalid column alignment for array" => "Неприпустиме вирівнювання стовпців для array",
+        "Expected column alignment character" => "Очікується символ вирівнювання стовпця",
+        "Expected l or c or r" => "Очікується l, c або r",
+        "Expected ]" => "Очікується ]",
+        "Unexpected end of CD row after @" => "Неочікуваний кінець рядка CD після @",
+        "Invalid column alignment for subarray" => "Неприпустиме вирівнювання стовпців для subarray",
+        "{subarray} can contain only one column" => "{subarray} може містити лише один стовпець",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "У prooftree є \\LeftLabel або \\RightLabel без наступної команди виведення"
+        }
+        "Recursion limit exceeded" => "Перевищено межу рекурсії",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Забагато розгортань макросів: нескінченний цикл або замале значення maxExpand"
+        }
+        "Expected raw style for \\htmlStyle" => "Для \\htmlStyle очікується необроблений стиль",
+        "\\verb assertion failed" => "Перевірку \\verb не пройдено",
+        "Undefined control sequence: {name}" => "Невизначена керівна послідовність: {name}",
+        "Expected '{expected}', got '{got}'" => "Очікується '{expected}', отримано '{got}'",
+        "Expected group after '{symbol}'" => "Після '{symbol}' очікується група",
+        "Expected delimiter as argument to '{function}'" => "Як аргумент '{function}' очікується роздільник",
+        "Expected group as argument to '{function}'" => "Як аргумент '{function}' очікується група",
+        "Got function '{function}' with no arguments as superscript" => "Функцію '{function}' без аргументів використано як верхній індекс",
+        "Got function '{function}' with no arguments as subscript" => "Функцію '{function}' без аргументів використано як нижній індекс",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Функцію '{function}' без аргументів використано як аргумент '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Функцію '{function}' без аргументів використано як \\tag",
+        "Can't use function '{function}' in text mode" => "Функцію '{function}' не можна використовувати в текстовому режимі",
+        "Can't use function '{function}' in math mode" => "Функцію '{function}' не можна використовувати в математичному режимі",
+        "Invalid color: '{color}'" => "Неприпустимий колір: '{color}'",
+        "Invalid size: '{size}'" => "Неприпустимий розмір: '{size}'",
+        "Invalid unit: '{unit}'" => "Неприпустима одиниця: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Неприпустимий роздільник '{delimiter}' після '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Неприпустимий тип роздільника '{type}' після '{function}'",
+        "Invalid delimiter type '{type}'" => "Неприпустимий тип роздільника '{type}'",
+        "No such environment: {name}" => "Невідоме середовище: {name}",
+        "Expected argument to \\begin{{name}}" => "Для \\begin{{name}} очікується аргумент",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Невідповідність: \\begin{{begin}} закрито \\end{{end}}",
+        "{command} valid only within array environment" => "{command} допускається лише в середовищі array",
+        "Mismatched {command}" => "{command} без пари",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "Очікується &, \\\\, \\cr або \\end, отримано '{got}'",
+        "Unknown column alignment: {alignment}" => "Невідоме вирівнювання стовпця: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Забагато формул у рядку: очікувалося {expected}, отримано {got}",
+        "Unknown CD directive: @{directive}" => "Невідома директива CD: @{directive}",
+        "Expected argument for {command}" => "Для {command} очікується аргумент",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "Для {command} потрібно засновків: {count}, але доступно лише {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} допускається в prooftree лише як підтримувана команда bussproofs"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "prooftree завершився з елементами в стеку доведення: {count}, очікувався 1"
+        }
+        "\\@char has non-numeric argument {argument}" => "\\@char має нечисловий аргумент {argument}",
+        "\\@char with invalid code point {code}" => "\\@char з неприпустимою кодовою точкою {code}",
+        "Invalid environment name character: {character}" => "Неприпустимий символ у назві середовища: {character}",
         _ => return None,
     })
 }
