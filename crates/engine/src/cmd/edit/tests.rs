@@ -1006,16 +1006,94 @@ fn repeating_a_wide_tiled_merge_paste_over_itself_keeps_one_merge_per_tile() {
 }
 
 #[test]
-fn tiled_cut_moves_each_cell_into_every_tile() {
-    // A cut pasted over a multiple of its size tiles; the cut path reads the taken cells by position.
+fn a_cut_is_not_repeated_over_a_larger_selection() {
+    // #4425 review: a cut moves its block once. Tiled, every tile kept the block's formulas
+    // unshifted and the one move that follows pointed them all at the first tile (G1 read
+    // =D1*10 where a copy gives =F1*10). The paste is refused before anything moves.
     let mut s = Session::new();
     s.new_workbook();
-    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=A1*10"})).unwrap();
     s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    let undo = s.doc().unwrap().undo.len();
     s.execute("selection.set", json!({"range": "D1:G2"})).unwrap();
-    s.execute("edit.paste", json!({})).unwrap();
-    for (a, n) in [("D1", 1.0), ("E1", 2.0), ("F1", 1.0), ("G1", 2.0), ("D2", 1.0), ("G2", 2.0)] {
-        assert_eq!(value_at(&s, a), Value::Number(n), "{a}");
+    let err = s.execute("edit.paste", json!({})).unwrap_err();
+    assert!(err.to_string().contains("cut"), "{err}");
+    assert_eq!((value_at(&s, "A1"), value_at(&s, "B1")), (Value::Number(1.0), Value::Number(10.0)), "the cut block stays put");
+    for a in ["D1", "E1", "F1", "G1", "D2"] {
+        assert_eq!(value_at(&s, a), Value::Empty, "{a}");
     }
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "the refused paste left no undo step");
+    // The cut is still on the clipboard and moves once onto a selection of its own size.
+    s.execute("selection.set", json!({"range": "D1:E1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    let formula = s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("E1").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(formula.text.trim_start_matches('='), "D1*10");
+    assert_eq!((value_at(&s, "D1"), value_at(&s, "E1")), (Value::Number(1.0), Value::Number(10.0)));
     assert_eq!((value_at(&s, "A1"), value_at(&s, "B1")), (Value::Empty, Value::Empty), "the source was emptied");
+}
+
+#[test]
+fn a_tall_merge_does_not_make_merge_lookups_walk_every_earlier_row() {
+    // #4425 review: the lookup used one row window for every query, as tall as the tallest
+    // range, so a single merge 20,000 rows tall made each query visit every earlier start
+    // row. A repeat paste of A1:E20000 holding that merge took about 29 s (14 ms without it).
+    let mut ranges = vec![RangeRef::parse("A1:A20000").unwrap()];
+    ranges.extend((1..=20_000).map(|r| RangeRef::parse(&format!("C{r}:D{r}")).unwrap()));
+    let index = super::paste_special::RangeIndex::new(ranges);
+    let (hit, visited) = index.search(&RangeRef::parse("H19991:I19991").unwrap());
+    assert!(!hit);
+    assert!(visited <= 4, "visited {visited} start rows for one query");
+    assert!(index.search(&RangeRef::parse("D19991:E19991").unwrap()).0, "the row's own merge is found");
+    assert!(index.search(&RangeRef::parse("A19991").unwrap()).0, "the tall merge is found far below its start");
+}
+
+#[test]
+fn range_index_agrees_with_checking_every_range() {
+    // A small deterministic generator: mixed short, wide and tall ranges against many queries.
+    let mut seed: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = |bound: u32| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % u64::from(bound)) as u32
+    };
+    let mut ranges = Vec::new();
+    for _ in 0..400 {
+        let (r, c) = (next(200), next(60));
+        let (h, w) = match next(10) {
+            0 => (next(150), 0),
+            1 => (0, next(40)),
+            _ => (next(3), next(3)),
+        };
+        ranges.push(RangeRef::new(CellRef::new(r, c), CellRef::new(r + h, c + w)));
+    }
+    let index = super::paste_special::RangeIndex::new(ranges.clone());
+    for _ in 0..4000 {
+        let (r, c, h, w) = (next(260), next(80), next(6), next(6));
+        let q = RangeRef::new(CellRef::new(r, c), CellRef::new(r + h, c + w));
+        assert_eq!(index.search(&q).0, ranges.iter().any(|x| x.intersects(&q)), "{q:?}");
+    }
+}
+
+#[test]
+fn a_tiled_whole_column_paste_counts_the_cells_it_clears() {
+    // #4425 review: whole columns paste whole, so every cell the destination columns hold is
+    // cleared or rewritten, but the bound counted only the copy's used cells. Five columns
+    // holding a million values each, under a one-cell copy of column A, would have been five
+    // million cells changed with nothing refused.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    paste_over(&mut s, "A1", "B1:F1000000").unwrap();
+    // B1:F1 lie under the copy's used cell A1 in each tile and count once; the other 4,999,995
+    // held cells, one more below them, and the 5 written cells make the bound plus one.
+    s.execute("cell.set", json!({"cell": "B1000001", "input": "7"})).unwrap();
+    let undo = s.doc().unwrap().undo.len();
+    let err = paste_over(&mut s, "A:A", "B:F").unwrap_err();
+    assert!(err.to_string().contains("too large"), "{err}");
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "the refused paste left no undo step");
+    for a in ["B2", "F1000000"] {
+        assert_eq!(value_at(&s, a), Value::Number(7.0), "{a} keeps its value");
+    }
 }

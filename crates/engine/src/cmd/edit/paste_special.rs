@@ -13,14 +13,19 @@ fn repeats(span: u32, len: u32) -> Option<u32> {
     (span.checked_rem(len)? == 0).then(|| span.checked_div(len)).flatten()
 }
 
-/// Refuses a tiled paste that would write more than [`MAX_TILED_PASTE_CELLS`] cells. A paste that
-/// takes the block once is the copy's own size and is not limited here.
-fn check_tiled_size(tiles_r: u32, tiles_c: u32, h: u32, w: u32) -> Result<()> {
+/// Refuses a tiled paste that would change more than [`MAX_TILED_PASTE_CELLS`] cells: the block
+/// written at every tile, plus the `cleared` cells the destination already holds, which a blank
+/// source cell clears or reformats. A paste that takes the block once is the copy's own size and
+/// is not limited here.
+fn check_tiled_size(tiles_r: u32, tiles_c: u32, h: u32, w: u32, cleared: u64) -> Result<()> {
     if u64::from(tiles_r).saturating_mul(u64::from(tiles_c)) <= 1 {
         return Ok(());
     }
-    let written =
-        u64::from(tiles_r).checked_mul(u64::from(tiles_c)).and_then(|n| n.checked_mul(u64::from(h))).and_then(|n| n.checked_mul(u64::from(w)));
+    let written = u64::from(tiles_r)
+        .checked_mul(u64::from(tiles_c))
+        .and_then(|n| n.checked_mul(u64::from(h)))
+        .and_then(|n| n.checked_mul(u64::from(w)))
+        .and_then(|n| n.checked_add(cleared));
     match written {
         Some(n) if n <= MAX_TILED_PASTE_CELLS => Ok(()),
         _ => Err(EngineError::Other(format!(
@@ -30,58 +35,111 @@ fn check_tiled_size(tiles_r: u32, tiles_c: u32, h: u32, w: u32) -> Result<()> {
 }
 
 /// Ranges sorted by start row, then start column, answering "does any range
-/// here intersect this one?" without scanning every candidate. The row window
-/// alone is not enough: a wide tiled paste puts thousands of ranges on a single
-/// row, and a row-only window hands all of them to every query on that row.
-/// Within a start-row group, candidates are narrowed by column — a binary
-/// search drops the ones starting past the query's last column, and the
-/// group's running maximum end column stops the backward scan once no earlier
-/// candidate can reach the query's first column.
-struct RangeIndex {
+/// here intersect this one?" without scanning every candidate.
+///
+/// Rows first: the ranges are grouped by start row, and a tree holding each
+/// group's largest end row finds the groups that start at or above the query's
+/// last row and reach down to its first, skipping every other group. One tall
+/// range therefore costs its own group only; a single window as tall as the
+/// tallest range made every query walk every earlier start row.
+///
+/// Then columns: a wide tiled paste puts thousands of ranges on a single row.
+/// Within a start-row group a binary search drops the ones starting past the
+/// query's last column, and the group's running maximum end column stops the
+/// backward scan once no earlier candidate can reach the query's first column.
+pub(super) struct RangeIndex {
     sorted: Vec<RangeRef>,
     /// Per entry, the largest end column among its start-row group up to and
     /// including it.
     end_col_prefix_max: Vec<u32>,
-    /// The largest row span of any range in the index.
-    max_span: u32,
+    /// The start-row groups in order: the start row and the entries
+    /// `sorted[first..end]`.
+    groups: Vec<(u32, usize, usize)>,
+    /// The largest end row of each group, as a binary max-tree whose leaves
+    /// start at `leaves` (node `n` covers nodes `2n` and `2n + 1`; unused leaves
+    /// hold 0 and lie past every group, so the search never reaches them).
+    end_row_tree: Vec<u32>,
+    leaves: usize,
 }
 
 impl RangeIndex {
-    fn new(mut ranges: Vec<RangeRef>) -> Self {
+    pub(super) fn new(mut ranges: Vec<RangeRef>) -> Self {
         ranges.sort_by_key(|r| (r.start.row, r.start.col));
-        let mut end_col_prefix_max = Vec::with_capacity(ranges.len());
+        let mut end_col_prefix_max: Vec<u32> = Vec::with_capacity(ranges.len());
+        let mut groups: Vec<(u32, usize, usize)> = Vec::new();
+        let mut group_end_rows: Vec<u32> = Vec::new();
         for (i, r) in ranges.iter().enumerate() {
-            let prev = if i > 0 && ranges[i - 1].start.row == r.start.row { end_col_prefix_max[i - 1] } else { 0 };
-            end_col_prefix_max.push(prev.max(r.end.col));
+            match (groups.last_mut(), group_end_rows.last_mut(), end_col_prefix_max.last().copied()) {
+                (Some(group), Some(end_row), Some(prev)) if group.0 == r.start.row => {
+                    group.2 = i + 1;
+                    *end_row = (*end_row).max(r.end.row);
+                    end_col_prefix_max.push(prev.max(r.end.col));
+                }
+                _ => {
+                    groups.push((r.start.row, i, i + 1));
+                    group_end_rows.push(r.end.row);
+                    end_col_prefix_max.push(r.end.col);
+                }
+            }
         }
-        let max_span = ranges.iter().map(|r| r.end.row - r.start.row).max().unwrap_or(0);
-        RangeIndex { sorted: ranges, end_col_prefix_max, max_span }
+        let leaves = groups.len().next_power_of_two();
+        let mut end_row_tree = vec![0; leaves.saturating_mul(2)];
+        for (slot, end_row) in end_row_tree.iter_mut().skip(leaves).zip(&group_end_rows) {
+            *slot = *end_row;
+        }
+        for node in (1..leaves).rev() {
+            let reach = end_row_tree.get(2 * node).copied().unwrap_or(0).max(end_row_tree.get(2 * node + 1).copied().unwrap_or(0));
+            if let Some(slot) = end_row_tree.get_mut(node) {
+                *slot = reach;
+            }
+        }
+        RangeIndex { sorted: ranges, end_col_prefix_max, groups, end_row_tree, leaves }
     }
 
     fn any_intersects(&self, q: &RangeRef) -> bool {
-        // The row window: entries starting after the query's last row, or ending
-        // before its first row (start row above it by more than the largest
-        // span), cannot intersect it.
-        let hi = self.sorted.partition_point(|m| m.start.row <= q.end.row);
-        let lo = self.sorted.partition_point(|m| m.start.row < q.start.row.saturating_sub(self.max_span));
-        let mut group_start = lo;
-        while group_start < hi {
-            let row = self.sorted[group_start].start.row;
-            let group_end = group_start + self.sorted[group_start..hi].partition_point(|m| m.start.row == row);
-            let col_hi = group_start + self.sorted[group_start..group_end].partition_point(|m| m.start.col <= q.end.col);
+        self.search(q).0
+    }
+
+    /// Whether any range intersects `q`, and how many start-row groups the
+    /// search examined (the work the row tree is there to keep small).
+    pub(super) fn search(&self, q: &RangeRef) -> (bool, usize) {
+        let mut visited = 0;
+        // Groups starting below the query's last row cannot reach it.
+        let hi = self.groups.partition_point(|g| g.0 <= q.end.row);
+        if hi == 0 {
+            return (false, visited);
+        }
+        // Walk the tree, leftmost first, into the subtrees holding a group that
+        // reaches the query's first row. The stack holds at most one pending
+        // right sibling per level of the tree.
+        let mut stack: Vec<(usize, usize, usize)> = Vec::with_capacity(usize::BITS as usize + 1);
+        stack.push((1, 0, self.leaves));
+        while let Some((node, first, end)) = stack.pop() {
+            if first >= hi || self.end_row_tree.get(node).is_none_or(|&reach| reach < q.start.row) {
+                continue;
+            }
+            if end - first > 1 {
+                let mid = first + (end - first) / 2;
+                stack.push((2 * node + 1, mid, end));
+                stack.push((2 * node, first, mid));
+                continue;
+            }
+            let Some(&(_, group_start, group_end)) = self.groups.get(first) else { continue };
+            visited += 1;
+            let Some(group) = self.sorted.get(group_start..group_end) else { continue };
+            let col_hi = group_start + group.partition_point(|m| m.start.col <= q.end.col);
             let mut i = col_hi;
             while i > group_start {
                 i -= 1;
-                if self.end_col_prefix_max[i] < q.start.col {
+                if self.end_col_prefix_max.get(i).is_none_or(|&reach| reach < q.start.col) {
                     break;
                 }
-                if self.sorted[i].intersects(q) {
-                    return true;
+                if self.sorted.get(i).is_some_and(|m| m.intersects(q)) {
+                    return (true, visited);
                 }
             }
-            group_start = group_end;
         }
-        false
+        (false, visited)
     }
 }
 
@@ -237,12 +295,36 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         (1, 1, false)
     };
-    // Refused before anything is written when the tiles would be too many cells. The bound counts
-    // the copy's used part (`clip.range`): the rest of whole copied columns or rows is blank, and
-    // the cells are visited sparsely below.
-    if bounded {
+    // Refused before anything is written when the tiles would change too many cells. The bound
+    // counts the copy's used part (`clip.range`) at every tile: the rest of whole copied columns or
+    // rows is blank, and the cells are visited sparsely below. A blank source cell still clears what
+    // the destination holds under it, so the cells held in the pasted area outside the used part of
+    // every tile count too (only as far as the bound, so the count costs no more than the paste it
+    // allows). A mid-grid tile is all used part, so this adds only for whole columns and rows.
+    if bounded && u64::from(tiles_r).saturating_mul(u64::from(tiles_c)) > 1 {
         let (used_h, used_w) = if transpose { (clip.range.width(), clip.range.height()) } else { (clip.range.height(), clip.range.width()) };
-        check_tiled_size(tiles_r, tiles_c, used_h, used_w)?;
+        let visits_destination = !link && !matches!(what, What::Validation | What::ColumnWidths);
+        let cleared = match s.doc()?.wb.sheet(dest_sheet) {
+            Some(sh) if visits_destination => {
+                let pasted = RangeRef::new(
+                    at,
+                    at.offset_clamped(i64::from(tiles_r).saturating_mul(i64::from(h)) - 1, i64::from(tiles_c).saturating_mul(i64::from(w)) - 1),
+                );
+                // Whether a destination cell lies under the copy's used part in its tile, where the
+                // block's own count already covers it.
+                let under_used = |d: CellRef| {
+                    let lr = d.row.saturating_sub(at.row).checked_rem(h).unwrap_or(0);
+                    let lc = d.col.saturating_sub(at.col).checked_rem(w).unwrap_or(0);
+                    let (sr, sc) = if transpose { (lc, lr) } else { (lr, lc) };
+                    clip.range.contains(CellRef::new(src.start.row.saturating_add(sr), src.start.col.saturating_add(sc)))
+                };
+                let limit = usize::try_from(MAX_TILED_PASTE_CELLS).unwrap_or(usize::MAX).saturating_add(1);
+                let held = sh.cells.iter_range(pasted).map(|(c, _)| c).chain(sh.cell_pictures.keys().copied().filter(|c| pasted.contains(*c)));
+                held.filter(|d| !under_used(*d)).take(limit).count() as u64
+            }
+            _ => 0,
+        };
+        check_tiled_size(tiles_r, tiles_c, used_h, used_w, cleared)?;
     }
     let tiled = u64::from(tiles_r).saturating_mul(u64::from(tiles_c)) > 1;
     // A single cell or row repeated down a filtered selection skips the rows the filter hides; a
@@ -265,6 +347,15 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let same_doc = s.doc()?.uid == clip.doc_uid;
     let cut_move = clip.cut && same_doc && what == What::All;
+    // A cut moves its block once, and the references to it follow it to that one place. Repeated
+    // over a larger selection, every tile would keep the block's formulas as they were and point
+    // them all at the first tile, so the paste is refused before anything moves; pasted onto a
+    // selection of its own size, or a single cell, the cut still moves.
+    if cut_move && tiled {
+        return Err(EngineError::Other(
+            "A cut can't be repeated over a larger selection: select a single cell or an area the size of the cut, and paste again.".into(),
+        ));
+    }
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
