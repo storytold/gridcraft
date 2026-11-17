@@ -4,6 +4,169 @@ use super::{
     target_sheet,
 };
 
+/// The most cells one tiled paste may write (tiles × block): the bound the fill commands put on
+/// their writes, which repeat a block the same way.
+pub(crate) const MAX_TILED_PASTE_CELLS: u64 = crate::fill::MAX_FILL_CELLS;
+
+/// How many times a block `len` long fits exactly into `span`; `None` when it doesn't.
+fn repeats(span: u32, len: u32) -> Option<u32> {
+    (span.checked_rem(len)? == 0).then(|| span.checked_div(len)).flatten()
+}
+
+/// Refuses a tiled paste that would write more than [`MAX_TILED_PASTE_CELLS`] cells. A paste that
+/// takes the block once is the copy's own size and is not limited here.
+fn check_tiled_size(tiles_r: u32, tiles_c: u32, h: u32, w: u32) -> Result<()> {
+    if u64::from(tiles_r).saturating_mul(u64::from(tiles_c)) <= 1 {
+        return Ok(());
+    }
+    let written =
+        u64::from(tiles_r).checked_mul(u64::from(tiles_c)).and_then(|n| n.checked_mul(u64::from(h))).and_then(|n| n.checked_mul(u64::from(w)));
+    match written {
+        Some(n) if n <= MAX_TILED_PASTE_CELLS => Ok(()),
+        _ => Err(EngineError::Other(format!(
+            "The paste is too large: repeating the copied cells over this selection would write more than {MAX_TILED_PASTE_CELLS} cells, so nothing was pasted. Select a smaller area."
+        ))),
+    }
+}
+
+/// Ranges sorted by start row, then start column, answering "does any range
+/// here intersect this one?" without scanning every candidate. The row window
+/// alone is not enough: a wide tiled paste puts thousands of ranges on a single
+/// row, and a row-only window hands all of them to every query on that row.
+/// Within a start-row group, candidates are narrowed by column — a binary
+/// search drops the ones starting past the query's last column, and the
+/// group's running maximum end column stops the backward scan once no earlier
+/// candidate can reach the query's first column.
+struct RangeIndex {
+    sorted: Vec<RangeRef>,
+    /// Per entry, the largest end column among its start-row group up to and
+    /// including it.
+    end_col_prefix_max: Vec<u32>,
+    /// The largest row span of any range in the index.
+    max_span: u32,
+}
+
+impl RangeIndex {
+    fn new(mut ranges: Vec<RangeRef>) -> Self {
+        ranges.sort_by_key(|r| (r.start.row, r.start.col));
+        let mut end_col_prefix_max = Vec::with_capacity(ranges.len());
+        for (i, r) in ranges.iter().enumerate() {
+            let prev = if i > 0 && ranges[i - 1].start.row == r.start.row { end_col_prefix_max[i - 1] } else { 0 };
+            end_col_prefix_max.push(prev.max(r.end.col));
+        }
+        let max_span = ranges.iter().map(|r| r.end.row - r.start.row).max().unwrap_or(0);
+        RangeIndex { sorted: ranges, end_col_prefix_max, max_span }
+    }
+
+    fn any_intersects(&self, q: &RangeRef) -> bool {
+        // The row window: entries starting after the query's last row, or ending
+        // before its first row (start row above it by more than the largest
+        // span), cannot intersect it.
+        let hi = self.sorted.partition_point(|m| m.start.row <= q.end.row);
+        let lo = self.sorted.partition_point(|m| m.start.row < q.start.row.saturating_sub(self.max_span));
+        let mut group_start = lo;
+        while group_start < hi {
+            let row = self.sorted[group_start].start.row;
+            let group_end = group_start + self.sorted[group_start..hi].partition_point(|m| m.start.row == row);
+            let col_hi = group_start + self.sorted[group_start..group_end].partition_point(|m| m.start.col <= q.end.col);
+            let mut i = col_hi;
+            while i > group_start {
+                i -= 1;
+                if self.end_col_prefix_max[i] < q.start.col {
+                    break;
+                }
+                if self.sorted[i].intersects(q) {
+                    return true;
+                }
+            }
+            group_start = group_end;
+        }
+        false
+    }
+}
+
+/// Copy the block's merged areas to every tile of a tiled paste, at the same pitch as
+/// the cell writes. A paste that takes the block once is a single tile at the anchor
+/// itself. The source merges are collected once and the destination merges they
+/// displace are dropped in one pass: rescanning the destination list for every tile
+/// made a tall tiled paste unresponsive.
+#[allow(clippy::too_many_arguments)]
+fn copy_merges_tiled(
+    cx: &mut crate::cmd::Ctx,
+    dest_sheet: usize,
+    src_sheet: &gridcraft_model::Sheet,
+    src: RangeRef,
+    at: CellRef,
+    what: What,
+    transpose: bool,
+    tiles_r: u32,
+    tiles_c: u32,
+    pitch_h: u32,
+    pitch_w: u32,
+) -> Result<()> {
+    if !matches!(what, What::All | What::Formats) || transpose {
+        return Ok(());
+    }
+    let src_merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|merge| src.contains_range(merge)).copied().collect();
+    if src_merges.is_empty() {
+        return Ok(());
+    }
+    let mut moved: Vec<RangeRef> = Vec::new();
+    for tr in 0..tiles_r {
+        for tc in 0..tiles_c {
+            let row = i64::from(tr).saturating_mul(i64::from(pitch_h));
+            let col = i64::from(tc).saturating_mul(i64::from(pitch_w));
+            let Some(anchor) = at.offset(row, col) else { continue };
+            let row_offset = anchor.row as i64 - src.start.row as i64;
+            let col_offset = anchor.col as i64 - src.start.col as i64;
+            for merge in &src_merges {
+                if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
+                    moved.push(RangeRef::new(start, end));
+                }
+            }
+        }
+    }
+    if moved.is_empty() {
+        return Ok(());
+    }
+    // Tile merges never overlap and each spans at most the block's height, so an
+    // index by start row and column lets a destination merge check only the tiles
+    // that can reach it — a repeat paste over an area already holding a tile's
+    // worth of merges stays near-linear instead of existing × moved, on tall and
+    // wide pastes alike.
+    let moved_index = RangeIndex::new(moved.clone());
+    let sheet = cx.sheet_mut(dest_sheet)?;
+    let mut removed: Vec<RangeRef> = Vec::new();
+    sheet.merges.retain(|existing| {
+        let displaced = moved_index.any_intersects(existing);
+        if displaced {
+            removed.push(*existing);
+        }
+        !displaced
+    });
+    sheet.merges.extend(moved.iter().copied());
+    // A merged cell blocks a dynamic array's spill: spills over the areas whose merging
+    // changed, and blocked ones that could reach them, are evaluated again, as in
+    // format::merge. A displaced merge can cover cells the paste never wrote.
+    let areas: Vec<RangeRef> = removed.iter().copied().chain(moved.iter().copied()).collect();
+    let areas_index = RangeIndex::new(areas.clone());
+    let mut touched: Vec<(usize, CellRef)> =
+        sheet.spill_ranges.iter().filter(|(_, r)| areas_index.any_intersects(r)).map(|(anchor, _)| (dest_sheet, *anchor)).collect();
+    if let Some(reach_end) = areas.iter().map(|a| a.end).reduce(|acc, e| CellRef::new(acc.row.max(e.row), acc.col.max(e.col))) {
+        let reach = RangeRef::new(CellRef::new(0, 0), reach_end);
+        touched.extend(
+            sheet
+                .cells
+                .iter_range(reach)
+                // A Python cell's result is blocked and unblocked like a formula's.
+                .filter(|(_, x)| (x.formula.is_some() || x.py.is_some()) && x.value == gridcraft_core::Value::Error(gridcraft_core::CellError::Spill))
+                .map(|(c, _)| (dest_sheet, c)),
+        );
+    }
+    cx.changed.extend(touched);
+    Ok(())
+}
+
 #[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
@@ -51,22 +214,43 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         sel.count()
     };
-    let tile = (multiple || down || across)
-        && !sel.is_single()
-        && cell_param_on(s, p, "at", dest_sheet)?.is_none()
-        && !sel.is_full_cols()
-        && !sel.is_full_rows()
-        && area <= 4_000_000;
-    let (tiles_r, tiles_c) = if tile { ((sel.height() / h).max(1), (sel.width() / w).max(1)) } else { (1, 1) };
+    // An explicit `at` and a single cell take the copy once. Whole columns repeat it across only
+    // (each column gets it once, at the top, and stays blank below), whole rows down only; the
+    // block repeats at the size it was copied, which `src` already is (`A:D` with data only in
+    // A:B still repeats every 4 columns, and a copy of the whole sheet pasted over the whole
+    // sheet lands once). `bounded` marks the modes whose size is refused past the write bound
+    // below; `down`/`across` keep their covered-area gate and fall back to pasting once.
+    let (tiles_r, tiles_c, bounded) = if cell_param_on(s, p, "at", dest_sheet)?.is_some() || sel.is_single() {
+        (1, 1, false)
+    } else if sel.is_full_cols() {
+        repeats(sel.width(), w).map_or((1, 1, false), |tc| (1, tc, true))
+    } else if sel.is_full_rows() {
+        repeats(sel.height(), h).map_or((1, 1, false), |tr| (tr, 1, true))
+    } else if multiple {
+        (sel.height() / h, sel.width() / w, true)
+    } else if (down || across) && area <= 4_000_000 {
+        ((sel.height() / h).max(1), (sel.width() / w).max(1), false)
+    } else {
+        (1, 1, false)
+    };
+    // Refused before anything is written when the tiles would be too many cells. The bound counts
+    // the copy's used part (`clip.range`): the rest of whole copied columns or rows is blank, and
+    // the cells are visited sparsely below.
+    if bounded {
+        let (used_h, used_w) = if transpose { (clip.range.width(), clip.range.height()) } else { (clip.range.height(), clip.range.width()) };
+        check_tiled_size(tiles_r, tiles_c, used_h, used_w)?;
+    }
+    let tiled = u64::from(tiles_r).saturating_mul(u64::from(tiles_c)) > 1;
     // A single cell or row repeated down a filtered selection skips the rows the filter hides; a
     // taller block is pasted straight down, hidden rows included, as in Excel.
     let skip_rows = match s.doc()?.wb.sheet(dest_sheet) {
-        Some(sh) if tile && h == 1 => super::filtered_rows(sh, sel),
+        Some(sh) if tiled && h == 1 => super::filtered_rows(sh, sel),
         _ => Default::default(),
     };
     // Excel refuses a paste that would run off the sheet (whole columns pasted below row 1, whole
-    // rows right of column A, a whole column transposed) instead of pasting part of it.
-    if at.offset(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1).is_none() {
+    // rows right of column A, a whole column transposed) instead of pasting part of it. Checked
+    // before anything is written, so a cut that overflows the grid loses nothing.
+    if at.offset(i64::from(tiles_r) * i64::from(h) - 1, i64::from(tiles_c) * i64::from(w) - 1).is_none() {
         return Err(EngineError::Other("The copied cells don't fit here: paste them where the whole copied area fits on the sheet.".into()));
     }
     // Paste Link writes a formula into every cell, blank ones included, so it is the one paste
@@ -365,20 +549,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
-        // Merged areas inside the copied block travel with it.
-        if matches!(what, What::All | What::Formats) && !transpose {
-            let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|m| src.contains_range(m)).copied().collect();
-            for m in merges {
-                let dr = at.row as i64 - src.start.row as i64;
-                let dc = at.col as i64 - src.start.col as i64;
-                if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
-                    let nm = RangeRef::new(a, b);
-                    let sh = cx.sheet_mut(dest_sheet)?;
-                    sh.merges.retain(|x| !x.intersects(&nm));
-                    sh.merges.push(nm);
-                }
-            }
-        }
+        // Merged areas inside the copied block travel with it, at every tile.
+        copy_merges_tiled(cx, dest_sheet, src_sheet, src, at, what, transpose, tiles_r, tiles_c, h, w)?;
         if cut_move {
             // References elsewhere to the moved block now point to its new place.
             let e = if dest_sheet == clip.sheet {
@@ -389,8 +561,11 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             rewrite_all_formulas(&mut cx.wb, &src_sheet_name, &e)?;
             cx.structural = true;
         }
-        let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);
-        *cx.sel = crate::Selection { active: at, anchor: at, ranges: vec![RangeRef::new(at, end)] };
+        // A tiled paste keeps the selection it filled (whole columns stay whole columns); one
+        // pasted block is selected on its own. A `down`/`across` paste fills the area at the
+        // copy's width/height, which is not the selection, so that area is what stays selected.
+        let selected = if tiled && !(down || across) { sel } else { pasted };
+        *cx.sel = crate::Selection { active: at, anchor: at, ranges: vec![selected] };
         Ok(())
     })?;
     // Formulas and validation from an untrusted file leave the destination untrusted; plain values,
