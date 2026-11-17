@@ -587,3 +587,31 @@ fn an_autofilter_sort_moves_with_its_rows() {
     let af = s.doc().unwrap().wb.sheet(0).unwrap().autofilter.clone();
     assert!(af.is_some_and(|af| af.sort.is_none()));
 }
+
+/// An AutoFilter's criteria and hidden arrows stay on their columns when columns are inserted or
+/// deleted in its range (after CodeRabbit's review of #4412): they are offsets in the range.
+#[test]
+fn autofilter_criteria_and_hidden_arrows_follow_their_columns() {
+    use gridcraft_model::{AutoFilter, FilterCriterion};
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["A", "B", "C"], [1, 2, 3], [4, 5, 6]]})).unwrap();
+    let crit = FilterCriterion::Values { values: vec!["3".into()], blanks: false };
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().autofilter =
+        Some(AutoFilter { range: r("A1:C3"), criteria: vec![(2, crit.clone())], hidden_buttons: vec![0, 2], sort: None });
+    let af = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().autofilter.clone().unwrap();
+    // A column inserted at B: C's criterion and arrow move to D, A's arrow stays.
+    s.execute("home.insertColumns", json!({"cols": "B:B"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:D3"), vec![(3, crit.clone())], vec![0, 3]));
+    // Deleting that column (D, once C) takes its criterion and arrow with it.
+    s.execute("home.deleteColumns", json!({"cols": "D:D"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.is_empty(), a.hidden_buttons.clone()), (r("A1:C3"), true, vec![0]));
+    // Deleting a column before them moves them back.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("home.deleteColumns", json!({"cols": "B:B"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:C3"), vec![(2, crit)], vec![0, 2]));
+}

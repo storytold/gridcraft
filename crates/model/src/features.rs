@@ -1105,6 +1105,25 @@ pub struct AutoFilter {
     pub sort: Option<SortState>,
 }
 
+impl AutoFilter {
+    /// Moves the criteria and hidden arrows, which are column offsets in the range, with an edit
+    /// that moved the range from `old` to `self.range`: `map` gives a cell's place after the edit
+    /// (None when it was deleted). A column that was deleted, or that the edit moved out of the
+    /// header row, loses its criterion and its hidden arrow.
+    pub fn remap_columns(&mut self, old: RangeRef, mut map: impl FnMut(CellRef) -> Option<CellRef>) {
+        let new = self.range;
+        let mut offset = |o: u32| {
+            map(CellRef::new(old.start.row, old.start.col.checked_add(o)?))
+                .filter(|c| c.row == new.start.row && (new.start.col..=new.end.col).contains(&c.col))
+                .map(|c| c.col - new.start.col)
+        };
+        self.criteria = std::mem::take(&mut self.criteria).into_iter().filter_map(|(o, c)| Some((offset(o)?, c))).collect();
+        self.hidden_buttons = std::mem::take(&mut self.hidden_buttons).into_iter().filter_map(&mut offset).collect();
+        self.hidden_buttons.sort_unstable();
+        self.hidden_buttons.dedup();
+    }
+}
+
 /// A saved sort: the rows it sorts and its keys, first key first (`sortState`). Only sorts by
 /// value are kept; a state with a colour or icon key isn't read.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

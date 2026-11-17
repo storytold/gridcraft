@@ -179,7 +179,9 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     if let Some(af) = sh.autofilter.as_mut() {
         match map_range(af.range) {
             Some(r) => {
-                af.range = r;
+                let old = std::mem::replace(&mut af.range, r);
+                // Criteria and hidden arrows stay on the columns they were on.
+                af.remap_columns(old, map_cell);
                 // The saved sort moves with its rows; one whose rows go away is dropped.
                 af.sort = af.sort.as_ref().and_then(|st| st.mapped(&map_range));
             }
@@ -784,7 +786,8 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     if let Some(af) = sh.autofilter.as_mut() {
         match map_range(af.range, e) {
             Some(r) => {
-                af.range = r;
+                let old = std::mem::replace(&mut af.range, r);
+                af.remap_columns(old, map_cell);
                 af.sort = af.sort.as_ref().and_then(|st| st.mapped(|x| map_range(x, e)));
             }
             None => sh.autofilter = None,
