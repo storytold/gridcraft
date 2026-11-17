@@ -125,6 +125,7 @@ fn save_task3_snapshot(h: &mut Harness, filename: &str) {
 }
 
 /// Checks word boundaries in a narrow Thai filter header against an unwrapped cell holding the same text.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_thai_cell_wrapping_in_grid_renderer() {
     let mut s = Session::new();
@@ -158,6 +159,7 @@ fn test_thai_cell_wrapping_in_grid_renderer() {
 }
 
 /// Checks that each line of a mixed Thai and Arabic cell retains the explicit right-to-left direction.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn thai_wrapped_grid_lines_preserve_explicit_rtl_direction() {
     let mut session = Session::new();
@@ -199,6 +201,7 @@ fn thai_wrapped_grid_lines_preserve_explicit_rtl_direction() {
     );
 }
 
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_thai_mixed_latin_numbers_currency() {
     let mut s = Session::new();
@@ -217,6 +220,7 @@ fn test_thai_mixed_latin_numbers_currency() {
 }
 
 /// Checks visible lines and verifies that painting preserves the stored blank lines and original line-ending bytes.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_thai_cell_hard_breaks_and_blank_lines() {
     let mut s = Session::new();
@@ -237,6 +241,7 @@ fn test_thai_cell_hard_breaks_and_blank_lines() {
     assert!(texts.iter().any(|t| t.contains("ข้อความสี่") || (t.contains("ข้อความ") && texts.iter().any(|x| x.contains("สี่")))));
 }
 
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_thai_cell_narrow_oversized_clips_safely() {
     let mut s = Session::new();
@@ -253,6 +258,7 @@ fn test_thai_cell_narrow_oversized_clips_safely() {
 }
 
 /// Checks that wrapping uses the full merged rectangle while painting clips at the frozen pane boundaries.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_thai_cell_merged_and_frozen_panes() {
     let mut s = Session::new();
@@ -325,6 +331,7 @@ fn test_thai_cell_merged_and_frozen_panes() {
 }
 
 /// Checks that evaluated Thai text wraps while Show Formulas paints the unchanged source without Thai measurement.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn formula_text_results_wrap_but_show_formulas_keeps_formula_source_on_legacy_path() {
     let mut session = Session::new();
@@ -365,6 +372,7 @@ fn formula_text_results_wrap_but_show_formulas_keeps_formula_source_on_legacy_pa
 }
 
 /// Checks that Page Layout uses the Thai wrapper and confines each line's clip to the page workspace.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn thai_adapter_geometry_is_active_in_ui_page_layout() {
     let mut session = Session::new();
@@ -399,6 +407,7 @@ fn thai_adapter_geometry_is_active_in_ui_page_layout() {
     save_task3_snapshot(&mut h, "thai_rendering_task3_page_layout.png");
 }
 
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_thai_xlsx_roundtrip_undo_redo_copy_paste() {
     let mut s = Session::new();
@@ -465,6 +474,7 @@ fn test_thai_xlsx_roundtrip_undo_redo_copy_paste() {
     assert_eq!(reopened_sheet.cell(cell_b2).unwrap().input_text(), formula);
 }
 
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_non_thai_and_unwrapped_regression() {
     let mut s = Session::new();
@@ -490,6 +500,7 @@ fn test_non_thai_and_unwrapped_regression() {
 }
 
 /// Checks that unsupported alignments and stacked text remain visible without consuming Thai layout budget.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn thai_out_of_scope_alignments_and_rotation_255_stay_on_legacy_renderer() {
     let mut session = Session::new();
@@ -519,6 +530,7 @@ fn thai_out_of_scope_alignments_and_rotation_255_stay_on_legacy_renderer() {
     assert!(painted_texts(&h).iter().any(|text| text.contains("ข้อความไทย")), "legacy-rendered Thai text remains visible");
 }
 
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn test_thai_alignments_and_indent() {
     let mut s = Session::new();
@@ -544,6 +556,7 @@ fn test_thai_alignments_and_indent() {
 }
 
 /// Checks alignment and clipping at several zoom and DPI settings, including filter and conditional icon reservations.
+#[cfg_attr(not(pinned_thai_test_font_available), ignore = "requires the optional pinned craft-fonts fixture")]
 #[test]
 fn thai_grid_geometry_tracks_alignment_indent_decorations_zoom_and_dpi() {
     let horizontal = ["General", "Left", "Center", "Right"];

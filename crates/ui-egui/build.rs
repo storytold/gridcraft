@@ -31,6 +31,33 @@ fn main() {
         println!("cargo::warning=writing {}: {e}", out.display());
     }
     emit_craft_fonts();
+    emit_thai_test_font_cfg();
+}
+
+/// Enables strict Thai rendering tests only when their optional pinned font input is selected or present.
+fn emit_thai_test_font_cfg() {
+    println!("cargo::rustc-check-cfg=cfg(pinned_thai_test_font_available)");
+    println!("cargo::rerun-if-env-changed=CRAFT_FONTS_DIR");
+    let configured_root = std::env::var_os("CRAFT_FONTS_DIR").map(std::path::PathBuf::from);
+    let explicitly_configured = configured_root.is_some();
+    let fonts_root = configured_root
+        .unwrap_or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(std::path::PathBuf::from).unwrap_or_default().join("../../../craft-fonts"));
+    let thai_font = fonts_root.join("fonts/noto-sans-thai/NotoSansThai.ttf");
+    let rerun_path: &std::path::Path = if thai_font.is_file() {
+        thai_font.as_path()
+    } else if let Some(directory) = thai_font.parent().filter(|path| path.is_dir()) {
+        directory
+    } else if fonts_root.is_dir() {
+        fonts_root.as_path()
+    } else if let Some(parent) = fonts_root.parent() {
+        parent
+    } else {
+        fonts_root.as_path()
+    };
+    println!("cargo::rerun-if-changed={}", rerun_path.display());
+    if explicitly_configured || thai_font.is_file() {
+        println!("cargo::rustc-cfg=pinned_thai_test_font_available");
+    }
 }
 
 /// The optional craft-fonts build input (<https://github.com/storytold/craft-fonts>, recipe from
