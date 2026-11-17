@@ -1071,6 +1071,32 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        "Numerical Count" => "Numărare numerică",
+        "Minimum" => "Minim",
+        "Maximum" => "Maxim",
+        "Circular References: {cell}" => "Referințe circulare: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Lățime: {chars} ({pixels} pixeli)",
+        "Height: {points} ({pixels} pixels)" => "Înălțime: {points} ({pixels} pixeli)",
+        "Picture in cell" => "Imagine în celulă",
+        "Picture: {alt}" => "Imagine: {alt}",
+        "Format Control: {name}" => "Formatare control: {name}",
+        "Error at character {position}: {message}" => "Eroare la caracterul {position}: {message}",
+        "Macro definitions are not supported in equations." => "Definițiile de macrocomenzi nu sunt acceptate în ecuații.",
+        "A % can't be combined with a link in an equation." => "Un % nu poate fi combinat cu un link într-o ecuație.",
+        "Equations can nest at most 32 levels deep." => "Ecuațiile pot fi imbricate pe cel mult 32 de niveluri.",
+        "An equation can be at most 4096 bytes long." => "O ecuație poate avea cel mult 4096 de octeți.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "O ecuație poate avea cel mult 2500 de celule de matrice (rânduri înmulțite cu cel mai lat rând)."
+        }
+        "This equation is too large to draw." => "Această ecuație este prea mare pentru a fi desenată.",
+        "This equation could not be laid out." => "Această ecuație nu a putut fi așezată în pagină.",
+        "Saved macro “{name}” ({steps} step)" => "Macrocomanda „{name}” a fost salvată ({steps} pas)",
+        "Saved macro “{name}” ({steps} steps)" => "Macrocomanda „{name}” a fost salvată (pași: {steps})",
+        "without {key}: another macro took it while recording" => "fără {key}: altă macrocomandă l-a preluat în timpul înregistrării",
+        "Recording stopped" => "Înregistrare oprită",
+        "Macro “{name}” stopped: {message}" => "Macrocomanda „{name}” s-a oprit: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Macrocomanda „{name}” a rulat ({steps} pas)",
+        "Ran macro “{name}” ({steps} steps)" => "Macrocomanda „{name}” a rulat (pași: {steps})",
         _ => return None,
     })
 }

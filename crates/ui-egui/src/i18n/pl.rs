@@ -1009,6 +1009,32 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Pokaż",
         "Collapse dialog" => "Zwiń okno dialogowe",
         "Expand dialog" => "Rozwiń okno dialogowe",
+        "Numerical Count" => "Liczba wartości liczbowych",
+        "Minimum" => "Minimum",
+        "Maximum" => "Maksimum",
+        "Circular References: {cell}" => "Odwołania cykliczne: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Szerokość: {chars} (pikseli: {pixels})",
+        "Height: {points} ({pixels} pixels)" => "Wysokość: {points} (pikseli: {pixels})",
+        "Picture in cell" => "Obraz w komórce",
+        "Picture: {alt}" => "Obraz: {alt}",
+        "Format Control: {name}" => "Formatuj formant: {name}",
+        "Error at character {position}: {message}" => "Błąd przy znaku {position}: {message}",
+        "Macro definitions are not supported in equations." => "Definicje makr nie są obsługiwane w równaniach.",
+        "A % can't be combined with a link in an equation." => "Znaku % nie można łączyć z linkiem w równaniu.",
+        "Equations can nest at most 32 levels deep." => "Równania mogą być zagnieżdżone na co najwyżej 32 poziomach.",
+        "An equation can be at most 4096 bytes long." => "Równanie może mieć co najwyżej 4096 bajtów.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Równanie może mieć co najwyżej 2500 komórek macierzy (wiersze razy najszerszy wiersz)."
+        }
+        "This equation is too large to draw." => "To równanie jest za duże, aby je narysować.",
+        "This equation could not be laid out." => "Nie można złożyć tego równania.",
+        "Saved macro “{name}” ({steps} step)" => "Zapisano makro „{name}” ({steps} krok)",
+        "Saved macro “{name}” ({steps} steps)" => "Zapisano makro „{name}” (liczba kroków: {steps})",
+        "without {key}: another macro took it while recording" => "bez {key}: inne makro zajęło go podczas nagrywania",
+        "Recording stopped" => "Nagrywanie zatrzymane",
+        "Macro “{name}” stopped: {message}" => "Makro „{name}” zatrzymane: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Uruchomiono makro „{name}” ({steps} krok)",
+        "Ran macro “{name}” ({steps} steps)" => "Uruchomiono makro „{name}” (liczba kroków: {steps})",
         _ => return None,
     })
 }

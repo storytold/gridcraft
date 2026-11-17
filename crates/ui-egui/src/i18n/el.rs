@@ -1015,6 +1015,32 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+        "Numerical Count" => "Αριθμητικό πλήθος",
+        "Minimum" => "Ελάχιστο",
+        "Maximum" => "Μέγιστο",
+        "Circular References: {cell}" => "Κυκλικές αναφορές: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Πλάτος: {chars} ({pixels} pixel)",
+        "Height: {points} ({pixels} pixels)" => "Ύψος: {points} ({pixels} pixel)",
+        "Picture in cell" => "Εικόνα σε κελί",
+        "Picture: {alt}" => "Εικόνα: {alt}",
+        "Format Control: {name}" => "Μορφοποίηση στοιχείου ελέγχου: {name}",
+        "Error at character {position}: {message}" => "Σφάλμα στον χαρακτήρα {position}: {message}",
+        "Macro definitions are not supported in equations." => "Οι ορισμοί μακροεντολών δεν υποστηρίζονται στις εξισώσεις.",
+        "A % can't be combined with a link in an equation." => "Ένα % δεν μπορεί να συνδυαστεί με σύνδεσμο σε μια εξίσωση.",
+        "Equations can nest at most 32 levels deep." => "Οι εξισώσεις μπορούν να έχουν έως 32 επίπεδα ένθεσης.",
+        "An equation can be at most 4096 bytes long." => "Μια εξίσωση μπορεί να έχει έως 4096 byte.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Μια εξίσωση μπορεί να έχει έως 2500 κελιά πίνακα (γραμμές επί τη φαρδύτερη γραμμή)."
+        }
+        "This equation is too large to draw." => "Αυτή η εξίσωση είναι πολύ μεγάλη για να σχεδιαστεί.",
+        "This equation could not be laid out." => "Δεν ήταν δυνατή η στοιχειοθέτηση αυτής της εξίσωσης.",
+        "Saved macro “{name}” ({steps} step)" => "Η μακροεντολή «{name}» αποθηκεύτηκε ({steps} βήμα)",
+        "Saved macro “{name}” ({steps} steps)" => "Η μακροεντολή «{name}» αποθηκεύτηκε ({steps} βήματα)",
+        "without {key}: another macro took it while recording" => "χωρίς {key}: το πήρε άλλη μακροεντολή κατά την καταγραφή",
+        "Recording stopped" => "Η καταγραφή σταμάτησε",
+        "Macro “{name}” stopped: {message}" => "Η μακροεντολή «{name}» σταμάτησε: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Η μακροεντολή «{name}» εκτελέστηκε ({steps} βήμα)",
+        "Ran macro “{name}” ({steps} steps)" => "Η μακροεντολή «{name}» εκτελέστηκε ({steps} βήματα)",
         _ => return None,
     })
 }
