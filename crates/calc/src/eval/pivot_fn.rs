@@ -111,7 +111,7 @@ fn is_any_subtotal_or_grand(v: &Value, custom_grand: Option<&str>) -> bool {
 }
 
 impl<'h> Evaluator<'h> {
-    pub(super) fn getpivotdata(&mut self, args: &[Expr]) -> Ev {
+    pub(crate) fn getpivotdata_fallback(&mut self, args: &[Expr]) -> Ev {
         if args.len() < 2 || !args.len().is_multiple_of(2) {
             return err(CellError::Value);
         }
