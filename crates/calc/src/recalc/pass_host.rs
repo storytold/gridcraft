@@ -40,6 +40,8 @@ pub(super) struct PassHost<'a> {
     range_cache_cells: usize,
     range_cache_spills: usize,
     rng: &'a mut u64,
+    /// Who held a spill before the calculation; unset: every formula did (reading order decides).
+    pub(super) standing: Option<&'a super::Standing>,
     now: f64,
     cycle: bool,
     pub(super) cycles: Vec<Key>,
@@ -111,6 +113,7 @@ impl<'a> PassHost<'a> {
             range_cache_cells: 0,
             range_cache_spills: 0,
             rng,
+            standing: None,
             now,
             cycle: false,
             cycles: vec![],
@@ -172,19 +175,26 @@ fn spill_hits_overlap(index: &SpillIndex, sheet: usize, hits: &[CellRef], range:
 }
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
-/// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
-/// recalculated in this pass, and so may spill elsewhere now).
+/// overlaps merged cells, holds other cells, or the spill of another formula that outranks it
+/// (see `Standing`; unless that formula is recalculated in this pass, and so may spill elsewhere
+/// now). A spill it outranks gives way to it when written back.
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let end =
         CellRef::new(anchor.row.saturating_add((a.rows as u32).saturating_sub(1)), anchor.col.saturating_add((a.cols as u32).saturating_sub(1)));
     let range = RangeRef::new(anchor, end);
     let own = sh.spill_ranges.get(&anchor);
+    let default = super::Standing::default();
+    let standing = host.standing.unwrap_or(&default);
     let spilled_over = |c: CellRef| {
         !own.is_some_and(|o| o.contains(c))
             && sh.spill_ranges.iter().any(|(o, r)| {
                 // A formula or Python cell recalculated in this pass lays its array out again.
-                *o != anchor && r.contains(c) && !host.exprs.contains_key(&(sheet, *o)) && !host.python.contains_key(&(sheet, *o))
+                *o != anchor
+                    && r.contains(c)
+                    && !host.exprs.contains_key(&(sheet, *o))
+                    && !host.python.contains_key(&(sheet, *o))
+                    && standing.outranks((sheet, *o), (sheet, anchor))
             })
     };
     end.row >= gridcraft_core::MAX_ROWS
