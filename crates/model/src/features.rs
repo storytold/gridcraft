@@ -1107,15 +1107,17 @@ pub struct AutoFilter {
 
 impl AutoFilter {
     /// Moves the criteria and hidden arrows, which are column offsets in the range, with an edit
-    /// that moved the range from `old` to `self.range`: `map` gives a cell's place after the edit
-    /// (None when it was deleted). A column that was deleted, or that the edit moved out of the
-    /// header row, loses its criterion and its hidden arrow.
-    pub fn remap_columns(&mut self, old: RangeRef, mut map: impl FnMut(CellRef) -> Option<CellRef>) {
+    /// that moved the range from `old` to `self.range`: `map` gives a range's place after the edit
+    /// (None when it was deleted). Each column is followed through its strip of the range, so
+    /// deleting the header row keeps it; a column that was deleted, or that the edit split or
+    /// moved out of the range, loses its criterion and its hidden arrow.
+    pub fn remap_columns(&mut self, old: RangeRef, mut map: impl FnMut(RangeRef) -> Option<RangeRef>) {
         let new = self.range;
         let mut offset = |o: u32| {
-            map(CellRef::new(old.start.row, old.start.col.checked_add(o)?))
-                .filter(|c| c.row == new.start.row && (new.start.col..=new.end.col).contains(&c.col))
-                .map(|c| c.col - new.start.col)
+            let col = old.start.col.checked_add(o)?;
+            map(RangeRef::new(CellRef::new(old.start.row, col), CellRef::new(old.end.row, col)))
+                .filter(|r| r.start.col == r.end.col && (new.start.col..=new.end.col).contains(&r.start.col))
+                .map(|r| r.start.col - new.start.col)
         };
         self.criteria = std::mem::take(&mut self.criteria).into_iter().filter_map(|(o, c)| Some((offset(o)?, c))).collect();
         self.hidden_buttons = std::mem::take(&mut self.hidden_buttons).into_iter().filter_map(&mut offset).collect();
