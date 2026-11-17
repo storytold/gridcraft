@@ -365,7 +365,7 @@ fn check_entry(
             return gridcraft_calc::evaluate(completed, sheet, at, &formula);
         }
         let replaces_code = sh.cell(at).is_some_and(|cell| cell.formula.is_some() || cell.py.is_some());
-        if sh.value(at) == v && !replaces_code {
+        if sh.value(at) == v && !replaces_code && sh.spill_anchor(at).is_none() {
             return gridcraft_calc::evaluate(wb, sheet, at, &formula);
         }
         let (entered, calc) = scratch.get_or_insert_with(|| {
