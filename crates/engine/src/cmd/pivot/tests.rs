@@ -1461,7 +1461,7 @@ fn sort_by_value_in_a_column_keeps_its_scope() {
 }
 
 /// Saves and reopens a workbook.
-fn reopen(wb: &gridcraft_model::Workbook) -> gridcraft_model::Workbook {
+fn reopen_wb(wb: &gridcraft_model::Workbook) -> gridcraft_model::Workbook {
     let bytes = crate::io::save_bytes(wb, "t.xlsx").unwrap();
     crate::io::open_bytes("t.xlsx", &bytes).unwrap().0
 }
@@ -1502,7 +1502,7 @@ fn sort_scope_tells_date_levels_of_one_column_apart() {
     let regions = ["East", "West", "North"];
     assert_eq!(first_col(&wb, &regions), ["West", "East", "North"]);
     // Saving writes both references back.
-    let back = reopen(&wb);
+    let back = reopen_wb(&wb);
     let scope = |wb: &gridcraft_model::Workbook| wb.sheet(wb.active_sheet()).unwrap().pivots.last().unwrap().rows[0].sort_scope.clone();
     assert_eq!(scope(&back).len(), 2);
     assert_eq!(scope(&back), scope(&wb));
@@ -1527,7 +1527,7 @@ fn custom_subtotal_functions_keep_the_subtotal_rows() {
     let p = wb.sheet(wb.active_sheet()).unwrap().pivots.last().unwrap();
     assert_ne!(p.rows[1].subtotal, Some(false));
     // Shown with the automatic subtotal, with a warning.
-    let plain = reopen(&s.doc().unwrap().wb);
+    let plain = reopen_wb(&s.doc().unwrap().wb);
     let all = |wb: &gridcraft_model::Workbook| {
         let si = wb.active_sheet();
         let out = crate::pivot::compute(wb, wb.sheet(si).unwrap().pivots.last().unwrap(), si).unwrap();
@@ -1581,7 +1581,7 @@ fn sort_scope_on_a_vanished_item_sorts_as_after_saving() {
     let regions = ["East", "West", "North", "South"];
     let total_order = ["East", "West", "North", "South"];
     assert_eq!(first_col(&wb, &regions), total_order);
-    assert_eq!(first_col(&reopen(&wb), &regions), total_order);
+    assert_eq!(first_col(&reopen_wb(&wb), &regions), total_order);
 }
 
 #[test]
@@ -1594,14 +1594,14 @@ fn date_groups_not_sorted_are_in_date_order() {
     s.execute("pivot.sort", json!({"field": "Date", "order": "none"})).unwrap();
     let quarters = ["Qtr1", "Qtr2", "Qtr3", "Qtr4"];
     assert_eq!(first_col(&s.doc().unwrap().wb, &quarters), quarters);
-    let back = reopen(&s.doc().unwrap().wb);
+    let back = reopen_wb(&s.doc().unwrap().wb);
     assert_eq!(first_col(&back, &quarters), quarters);
     // A reordered list still wins; items it doesn't name follow in date order.
     let mut wb = back;
     let si = wb.active_sheet();
     wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap().rows[0].item_order = vec!["Qtr3".into()];
     assert_eq!(first_col(&wb, &quarters), ["Qtr3", "Qtr1", "Qtr2", "Qtr4"]);
-    assert_eq!(first_col(&reopen(&wb), &quarters), ["Qtr3", "Qtr1", "Qtr2", "Qtr4"]);
+    assert_eq!(first_col(&reopen_wb(&wb), &quarters), ["Qtr3", "Qtr1", "Qtr2", "Qtr4"]);
 }
 
 #[test]
@@ -1639,7 +1639,7 @@ fn manual_order_of_time_items_from_an_excel_cache() {
     });
     assert_eq!(shifts(&back), order);
     // Saving writes that order back.
-    assert_eq!(shifts(&reopen(&back)), order);
+    assert_eq!(shifts(&reopen_wb(&back)), order);
 }
 
 #[test]

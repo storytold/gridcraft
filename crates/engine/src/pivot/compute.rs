@@ -832,15 +832,6 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     } else {
         Some(row_levels.saturating_sub(1) as u32)
     };
-    let item_refs = |fields: &[&PivotField], items: &[FieldItems], path: &[u32]| -> Vec<PivotItemRef> {
-        path.iter()
-            .enumerate()
-            .filter_map(|(d, it)| {
-                let (f, item) = (fields.get(d)?, items.get(d)?.get(*it)?);
-                Some(PivotItemRef { field: f.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
-            })
-            .collect()
-    };
     let mut data: Vec<PivotDataCell> = Vec::new();
     for line in &lines {
         let rk = match line.kind {
@@ -863,7 +854,27 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         if !line.values {
             continue;
         }
-        fill_line_values(&mut g, r, line, &data_cols, &specs, &vals, &data_fmt, l, ck.1, pt, &ctx, &col_fields, &col_items, &lookup, &level0, &siblings, &show_cache, &mut probe, &mut data)?;
+        fill_line_values(
+            &mut g,
+            r,
+            line,
+            &data_cols,
+            &specs,
+            &vals,
+            &data_fmt,
+            l,
+            ck.1,
+            pt,
+            &ctx,
+            &col_fields,
+            &col_items,
+            &lookup,
+            &level0,
+            &siblings,
+            &show_cache,
+            &mut probe,
+            &mut data,
+        )?;
     }
     Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
 }
@@ -880,9 +891,9 @@ fn fill_line_values(
     l: usize,
     ck: CellKind,
     pt: &PivotTable,
-    ctx: &RowBuild<'_>,
-    col_fields: &[usize],
-    col_items: &[Vec<ItemVal>],
+    ctx: &Ctx<'_>,
+    col_fields: &[&PivotField],
+    col_items: &[FieldItems],
     lookup: &ValueLookup<'_>,
     level0: &[u32],
     siblings: &HashMap<Vec<u32>, Vec<u32>>,
@@ -931,4 +942,14 @@ fn fill_line_values(
         g.set(r, l + j, shown, ck, 0, data_fmt.get(*vi).cloned().flatten());
     }
     Ok(())
+}
+
+fn item_refs(fields: &[&PivotField], items: &[FieldItems], path: &[u32]) -> Vec<PivotItemRef> {
+    path.iter()
+        .enumerate()
+        .filter_map(|(d, it)| {
+            let (f, item) = (fields.get(d)?, items.get(d)?.get(*it)?);
+            Some(PivotItemRef { field: f.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
+        })
+        .collect()
 }
