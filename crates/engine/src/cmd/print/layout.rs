@@ -163,7 +163,8 @@ fn grow_for_overflow(wb: &Workbook, si: usize, sh: &Sheet, r: RangeRef) -> Range
     let mut extra = 0.0f32;
     for (c, _) in sh.cells.iter_range(r) {
         let v = sh.value(c);
-        if v.is_empty() || matches!(v, Value::Number(_)) {
+        // draw_block skips text whose cell has no width or height, so hidden rows and columns cannot widen the range.
+        if v.is_empty() || matches!(v, Value::Number(_)) || sh.row_height(c.row) <= 0.0 || sh.col_width(c.col) <= 0.0 {
             continue;
         }
         // The look the cell is drawn with: table style and conditional formats can change the font.

@@ -82,6 +82,27 @@ fn print_range_covers_text_overflowing_the_last_column() {
 }
 
 #[test]
+fn print_range_ignores_overflowing_text_in_hidden_rows_and_columns() {
+    let long = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+    let mut rows = s();
+    rows.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    rows.execute("cell.set", json!({"cell": "A2", "input": long})).unwrap();
+    rows.execute("home.hideRows", json!({"rows": "2:2"})).unwrap();
+    let pv = rows.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pageList"][0]["range"], "A1:A2");
+    rows.execute("home.unhideRows", json!({"rows": "2:2"})).unwrap();
+    let pv = rows.execute("file.printPreview", json!({})).unwrap();
+    assert_ne!(pv["pageList"][0]["range"], "A1:A2", "visible long text still widens the range");
+
+    let mut cols = s();
+    cols.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    cols.execute("cell.set", json!({"cell": "C1", "input": long})).unwrap();
+    cols.execute("home.hideColumns", json!({"cols": "C:C"})).unwrap();
+    let pv = cols.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pageList"][0]["range"], "A1:C1");
+}
+
+#[test]
 fn pdf_export_keeps_safe_links_on_their_printed_pages() {
     let mut s = s();
     s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org/report"})).unwrap();
