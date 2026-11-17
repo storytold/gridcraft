@@ -52,14 +52,18 @@ fn a_break_limited_to_the_print_area_stays_limited() {
 
 #[test]
 fn a_break_across_the_whole_sheet_stays_whole() {
-    // Written across the sheet, without `max`, past the sheet, and backwards.
-    for brk in [r#"max="16383""#, "", r#"max="99999""#, r#"min="5" max="2""#] {
+    // Written across the sheet, without `max` (with or without `min`, after CodeRabbit's review),
+    // past the sheet, and backwards.
+    for brk in [r#"max="16383""#, "", r#"min="5""#, r#"max="99999""#, r#"min="5" max="2""#] {
         let (rows, _, back) = round_trip(&format!(r#"<rowBreaks count="1" manualBreakCount="1"><brk id="14" {brk} man="1"/></rowBreaks>"#));
         assert_eq!(rows.as_deref(), Some(r#"<rowBreaks count="1" manualBreakCount="1"><brk id="14" max="16383" man="1"/></rowBreaks>"#), "{brk}");
         assert!(back.sheet(0).unwrap().print.row_break_extents.is_empty(), "{brk}");
     }
-    let (_, cols, _) = round_trip(r#"<colBreaks count="1" manualBreakCount="1"><brk id="4" max="1048575" man="1"/></colBreaks>"#);
-    assert_eq!(cols.as_deref(), Some(r#"<colBreaks count="1" manualBreakCount="1"><brk id="4" max="1048575" man="1"/></colBreaks>"#));
+    for brk in [r#"max="1048575""#, r#"min="3""#] {
+        let (_, cols, back) = round_trip(&format!(r#"<colBreaks count="1" manualBreakCount="1"><brk id="4" {brk} man="1"/></colBreaks>"#));
+        assert_eq!(cols.as_deref(), Some(r#"<colBreaks count="1" manualBreakCount="1"><brk id="4" max="1048575" man="1"/></colBreaks>"#), "{brk}");
+        assert!(back.sheet(0).unwrap().print.col_break_extents.is_empty(), "{brk}");
+    }
 }
 
 /// A print area one column (or row) wide limits a break to that column: `max="0"` is kept, not

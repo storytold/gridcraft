@@ -176,8 +176,9 @@ fn read_breaks(e: &El, lines: u32, across: u32) -> (Vec<u32>, BTreeMap<u32, (u32
     for b in e.kids("brk") {
         let Some(id) = b.attr_u32("id").filter(|&i| i > 0 && i < lines) else { continue };
         ids.push(id);
+        // Without `max` the break spans the whole sheet, whatever its `min` says.
+        let Some(max) = b.attr_u32("max").map(|m| m.min(across - 1)) else { continue };
         let min = b.attr_u32("min").unwrap_or(0);
-        let max = b.attr_u32("max").map_or(across - 1, |m| m.min(across - 1));
         if min <= max && (min, max) != (0, across - 1) {
             extents.insert(id, (min, max));
         }
