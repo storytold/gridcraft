@@ -417,6 +417,9 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     if p.scale != 100 && (10..=400).contains(&p.scale) {
         let _ = write!(s, " scale=\"{}\"", p.scale);
     }
+    if let Some(n) = p.first_page_number {
+        let _ = write!(s, " firstPageNumber=\"{n}\"");
+    }
     if let Some((w, h)) = p.fit_to {
         let _ = write!(s, " fitToWidth=\"{w}\" fitToHeight=\"{h}\"");
     }
@@ -425,6 +428,10 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
         let _ = write!(s, " pageOrder=\"{}\"", p.page_order.id());
     }
     let _ = write!(s, " orientation=\"{}\"", if p.orientation == Orientation::Landscape { "landscape" } else { "portrait" });
+    // In the schema's attribute order, as Excel writes it: after the orientation.
+    if p.first_page_number.is_some() {
+        s.push_str(" useFirstPageNumber=\"1\"");
+    }
     if let Some(id) = kept.page_setup_id() {
         let _ = write!(s, " r:id=\"{id}\"");
     }
