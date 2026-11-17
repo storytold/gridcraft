@@ -1347,7 +1347,7 @@ fn save(s: &Session) -> Vec<u8> {
     gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()
 }
 /// Opens `bytes` on the PivotTable's sheet and refreshes.
-fn reopen(s: &mut Session, bytes: &[u8]) {
+fn reopen_bytes(s: &mut Session, bytes: &[u8]) {
     s.execute("file.open", json!({"name": "x.xlsx", "base64": crate::io::base64_encode(bytes)})).unwrap();
     s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
     s.execute("data.refreshAll", json!({})).unwrap();
@@ -1385,7 +1385,7 @@ fn pivot_slicer_on_grouped_date_in_no_area_keeps_the_grouping() {
         let (a, b) = (x.find("<colFields").unwrap(), x.find("</colFields>").unwrap() + "</colFields>".len());
         format!("{}{}", &x[..a], &x[b..]).replace(" axis=\"axisCol\"", "")
     });
-    reopen(&mut s, &bytes);
+    reopen_bytes(&mut s, &bytes);
     assert!(pt(&s).columns.is_empty());
     assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&["Jan", "Feb"]));
     assert_eq!(sum_of(&s, "East"), Some(Value::Number(100.0)));
@@ -1397,7 +1397,7 @@ fn pivot_slicer_on_grouped_date_in_no_area_keeps_the_grouping() {
     s.execute("slicer.toggle", json!({"slicer": first_slicer(&s), "value": "Mar", "multi": true})).unwrap();
     assert_eq!(sum_of(&s, "East"), Some(Value::Number(220.0)));
     let bytes = save(&s);
-    reopen(&mut s, &bytes);
+    reopen_bytes(&mut s, &bytes);
     assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&["Jan", "Feb", "Mar"]));
     assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(270.0)));
     // Selecting everything keeps the months.
@@ -1405,7 +1405,7 @@ fn pivot_slicer_on_grouped_date_in_no_area_keeps_the_grouping() {
     assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&MONTHS));
     assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(TOTAL)));
     let bytes = save(&s);
-    reopen(&mut s, &bytes);
+    reopen_bytes(&mut s, &bytes);
     assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&MONTHS));
 }
 
@@ -1445,7 +1445,7 @@ fn pivot_slicer_on_multi_level_dates_lists_the_base_level() {
     let mut cache = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("xl/slicerCaches/slicerCache1.xml").unwrap(), &mut cache).unwrap();
     assert!(cache.contains("<i x=\"3\" s=\"1\"/>") && cache.matches("s=\"1\"").count() == 1, "{cache}");
-    reopen(&mut s, &bytes);
+    reopen_bytes(&mut s, &bytes);
     assert_eq!(slicer_tiles(&s, first_slicer(&s)), months_on(&["Mar"]));
     assert_eq!(sum_of(&s, "Grand Total"), Some(Value::Number(120.0)));
 }
