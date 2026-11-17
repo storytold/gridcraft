@@ -2,12 +2,13 @@
 //! sniffing, the record parser and field quoting are `craft-csv`'s; this module turns records into
 //! typed cells (with each column's date order) and writes a sheet.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use gridcraft_core::date::{days_in_month_in, serial_from_ymd};
 use gridcraft_core::parse::{Parsed, parse_input};
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Value, col_to_letters};
-use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
+use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, StyleTable, Workbook};
 
 use crate::{CsvOptions, IoError, ReadReport};
 
@@ -61,6 +62,32 @@ struct DateEvidence {
     day_first_example: Option<String>,
     month_first_example: Option<String>,
     ambiguous_example: Option<String>,
+}
+
+impl DateEvidence {
+    /// Counts one numeric date `field` toward the order it can be read in.
+    fn note(&mut self, field: &str, date: &NumericDate) {
+        let example = || field.trim().chars().take(40).collect::<String>();
+        match (date.day_first.is_some(), date.month_first.is_some()) {
+            (true, true) => {
+                self.ambiguous = self.ambiguous.saturating_add(1);
+                self.ambiguous_example.get_or_insert_with(example);
+            }
+            (true, false) => {
+                self.day_first = self.day_first.saturating_add(1);
+                self.day_first_example.get_or_insert_with(example);
+            }
+            (false, true) => {
+                self.month_first = self.month_first.saturating_add(1);
+                self.month_first_example.get_or_insert_with(example);
+            }
+            (false, false) => {}
+        }
+    }
+
+    fn rule(&self) -> DateRule {
+        DateRule::of(self.day_first, self.month_first, self.ambiguous)
+    }
 }
 
 /// A numeric `d/m/y` or `d-m-y` field, with the serial it has read each way and its time of day.
@@ -195,31 +222,16 @@ fn infer_date_rules(rows: &[Vec<String>], sys: DateSystem) -> Vec<(DateRule, Dat
         for (col, field) in row.iter().enumerate() {
             let Some(column) = columns.get_mut(col) else { continue };
             let Some(date) = numeric_date(field, sys) else { continue };
-            let example = || field.trim().chars().take(40).collect::<String>();
-            match (date.day_first.is_some(), date.month_first.is_some()) {
-                (true, true) => {
-                    column.ambiguous += 1;
-                    column.ambiguous_example.get_or_insert_with(example);
-                }
-                (true, false) => {
-                    column.day_first += 1;
-                    column.day_first_example.get_or_insert_with(example);
-                }
-                (false, true) => {
-                    column.month_first += 1;
-                    column.month_first_example.get_or_insert_with(example);
-                }
-                (false, false) => {}
-            }
+            column.note(field, &date);
         }
     }
-    columns.into_iter().map(|c| (DateRule::of(c.day_first, c.month_first, c.ambiguous), c)).collect()
+    columns.into_iter().map(|c| (c.rule(), c)).collect()
 }
 
 /// Warns when the sample could not choose a date order: an all-ambiguous column keeps the
 /// month-first reading, and a column with both kinds keeps its dates as text.
-fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) {
-    for (col, (rule, evidence)) in columns.iter().enumerate() {
+fn date_warnings<'a>(columns: impl IntoIterator<Item = (usize, &'a DateRule, &'a DateEvidence)>, report: &mut ReadReport) {
+    for (col, rule, evidence) in columns {
         match rule {
             DateRule::Ambiguous => report.warn(format!(
                 "column {}: every date is ambiguous, so it was read month first ({})",
@@ -245,6 +257,54 @@ fn read_field(field: &str, sys: DateSystem, rule: DateRule) -> Parsed {
     }
 }
 
+/// A field read with its column's date rule, its number format shared through `fmt_cache`.
+fn typed_cell(field: &str, sys: DateSystem, rule: DateRule, styles: &mut StyleTable, fmt_cache: &mut Vec<(&'static str, StyleId)>) -> Cell {
+    let p = read_field(field, sys, rule);
+    let style = match p.format {
+        Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
+            Some((_, id)) => *id,
+            None => {
+                let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
+                fmt_cache.push((code, id));
+                id
+            }
+        },
+        None => StyleId::DEFAULT,
+    };
+    Cell { value: p.value, formula: None, style, py: None }
+}
+
+/// Reads again, with the order their own dates chose, the numeric dates of the columns whose first
+/// dates came after the sample. Only those cells change, in the `rows` the first pass stored.
+#[allow(clippy::too_many_arguments)]
+fn reread_late_dates(
+    text: &str,
+    delim: char,
+    quote: char,
+    rows: u32,
+    rules: &BTreeMap<usize, DateRule>,
+    sys: DateSystem,
+    sheet: &mut Sheet,
+    styles: &mut StyleTable,
+    fmt_cache: &mut Vec<(&'static str, StyleId)>,
+) {
+    let mut row: u32 = 0;
+    parse_records(text, delim, quote, |rec| {
+        if row >= rows {
+            return false;
+        }
+        for (col, rule) in rules {
+            let Some(f) = rec.get(*col) else { continue };
+            if *col as u32 >= MAX_COLS || numeric_date(f, sys).is_none() {
+                continue;
+            }
+            sheet.cells.set(CellRef::new(row, *col as u32), typed_cell(f, sys, *rule, styles, fmt_cache));
+        }
+        row += 1;
+        true
+    });
+}
+
 pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
     read_csv_with_report(bytes, opts).map(|(wb, _)| wb)
 }
@@ -258,15 +318,19 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     if delim == quote {
         return Err(IoError::Format("the delimiter and quote character must differ".into()));
     }
-    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
+    let sys = opts.date_system;
+    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), sys) } else { vec![] };
     let mut report = ReadReport::default();
-    date_warnings(&date_columns, &mut report);
+    date_warnings(date_columns.iter().enumerate().map(|(col, (rule, evidence))| (col, rule, evidence)), &mut report);
     let mut wb = Workbook::new();
-    wb.date_system = opts.date_system;
+    wb.date_system = sys;
     wb.csv_delimiter = u8::try_from(delim).ok();
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
+    // Columns whose sample held no numeric date, but whose later rows do (#4353): the evidence
+    // those dates give, so they can be read in the order they choose, as early dates are.
+    let mut late: BTreeMap<usize, DateEvidence> = BTreeMap::new();
     let mut row: u32 = 0;
     // The bounding box of the non-empty cells, which is the sheet's used range.
     let mut used: Option<(u32, u32, u32, u32)> = None;
@@ -288,19 +352,12 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
-                let p = read_field(&f, opts.date_system, rule);
-                let style = match p.format {
-                    Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
-                        Some((_, id)) => *id,
-                        None => {
-                            let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
-                            fmt_cache.push((code, id));
-                            id
-                        }
-                    },
-                    None => StyleId::DEFAULT,
-                };
-                Cell { value: p.value, formula: None, style, py: None }
+                if rule == DateRule::NoDates
+                    && let Some(date) = numeric_date(&f, sys)
+                {
+                    late.entry(col).or_default().note(&f, &date);
+                }
+                typed_cell(&f, sys, rule, &mut styles, &mut fmt_cache)
             } else {
                 Cell::value(Value::Text(Arc::from(f)))
             };
@@ -318,6 +375,11 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     });
     if too_many {
         return Err(IoError::TooLarge(format!("the CSV's used range is over the limit of {} cells", opts.max_used_cells.unwrap_or(0))));
+    }
+    if !late.is_empty() {
+        let rules: BTreeMap<usize, DateRule> = late.iter().map(|(col, evidence)| (*col, evidence.rule())).collect();
+        date_warnings(late.iter().filter_map(|(col, evidence)| Some((*col, rules.get(col)?, evidence))), &mut report);
+        reread_late_dates(&text, delim, quote, row, &rules, sys, &mut sheet, &mut styles, &mut fmt_cache);
     }
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];

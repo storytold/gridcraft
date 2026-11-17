@@ -96,6 +96,45 @@ fn a_day_first_date_and_time_is_read_day_first() {
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
 }
 
+/// 200 rows without a date, so a column's first dates come after the rows sampled for its order.
+fn after_a_date_free_sample(dates: &str, delim: char) -> String {
+    format!("padding{delim}17.5\n").repeat(200) + dates
+}
+
+#[test]
+fn dates_first_seen_after_the_sample_get_the_same_order_and_warnings_as_early_ones() {
+    // #4353: these read month first without a word, and 13/04 stayed text beside a date.
+    for delim in [',', '\t'] {
+        // A .tsv opens with Tab as its delimiter.
+        let opts = CsvOptions { delimiter: delim as u8, ..Default::default() };
+        let late =
+            |dates: &str| read_csv_with_report(after_a_date_free_sample(&dates.replace(',', &delim.to_string()), delim).as_bytes(), &opts).unwrap();
+        // All ambiguous: month first, with the notice an early column gets.
+        let (wb, report) = late("03/04/2026,17.5\n04/05/2026,17.5\n");
+        assert_eq!((v(&wb, 200, 0), v(&wb, 201, 0)), (date(2026, 3, 4), date(2026, 4, 5)));
+        assert!(report.warnings.iter().any(|w| w.contains("column A") && w.contains("ambiguous")), "{:?}", report.warnings);
+        // A day-first-only date makes the column day first, as it does in the first rows.
+        let (wb, report) = late("03/04/2026,17.5\n13/04/2026,17.5\n");
+        assert_eq!((v(&wb, 200, 0), v(&wb, 201, 0)), (date(2026, 4, 3), date(2026, 4, 13)));
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+        // Both orders: the dates stay text, with the notice.
+        let (wb, report) = late("31/05/2026,17.5\n12/31/2026,17.5\n");
+        assert_eq!((v(&wb, 200, 0), v(&wb, 201, 0)), (Value::text("31/05/2026"), Value::text("12/31/2026")));
+        assert!(report.warnings.iter().any(|w| w.contains("column A") && w.contains("both day-first and month-first")), "{:?}", report.warnings);
+        // Month first only: no notice, and the rows around them are untouched.
+        let (wb, report) = late("12/31/2026,17.5\n01/02/2027,17.5\n");
+        assert_eq!((v(&wb, 200, 0), v(&wb, 201, 0)), (date(2026, 12, 31), date(2027, 1, 2)));
+        assert_eq!((v(&wb, 199, 0), v(&wb, 201, 1)), (Value::text("padding"), Value::Number(17.5)));
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    }
+    // Text mode reads no dates, early or late.
+    let (wb, report) =
+        read_csv_with_report(after_a_date_free_sample("03/04/2026,1\n", ',').as_bytes(), &CsvOptions { parse_values: false, ..Default::default() })
+            .unwrap();
+    assert_eq!(v(&wb, 200, 0), Value::text("03/04/2026"));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
 #[test]
 fn iso_dates_are_not_reordered_by_their_column() {
     let wb = read_csv(b"When\n31/05/2026\n2026-03-04\n", &CsvOptions::default()).unwrap();
