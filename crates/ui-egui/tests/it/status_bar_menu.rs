@@ -99,8 +99,7 @@ fn all_six_statistics_clear_the_mode_text_at_boundary_widths() {
             session.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
         }
         session.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
-        session.prefs.status_bar =
-            StatusBarStats { average: true, count: true, numerical_count: true, minimum: true, maximum: true, sum: true };
+        session.prefs.status_bar = StatusBarStats { average: true, count: true, numerical_count: true, minimum: true, maximum: true, sum: true };
         let mut h = crate::common::builder().with_size(vec2(width as f32, 640.0)).build_ui_state(
             |ui, app: &mut SheetApp| {
                 app.logic(ui.ctx());
