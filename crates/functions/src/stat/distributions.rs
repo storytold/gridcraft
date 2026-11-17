@@ -1,7 +1,7 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
 use super::{
     Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
-    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+    reg_gamma_p, reg_gamma_q, reg_gamma_q_front, reg_inc_beta, reg_inc_beta_front,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -93,6 +93,97 @@ fn f_pdf(x: f64, d1: f64, d2: f64) -> f64 {
 
 const MAX_BINOM_TRIALS: f64 = 2_147_483_646.0;
 
+/// Stirling-series error `ln n! - ((n + 1/2) ln n - n + ln(2π)/2)` for integer `n >= 1`: exact
+/// table (computed with 60-digit Decimal arithmetic) up to 30, then the series, whose first
+/// omitted term is below 1e-19 there.
+fn stirlerr(n: f64) -> f64 {
+    const TABLE: [f64; 31] = [
+        0.0,
+        0.08106146679532726,
+        0.0413406959554093,
+        0.02767792568499834,
+        0.020790672103765093,
+        0.016644691189821193,
+        0.013876128823070748,
+        0.01189670994589177,
+        0.010411265261972096,
+        0.009255462182712733,
+        0.00833056343336287,
+        0.007573675487951841,
+        0.00694284010720953,
+        0.006408994188004207,
+        0.0059513701127588475,
+        0.005554733551962801,
+        0.0052076559196096404,
+        0.004901395948434738,
+        0.004629153749334028,
+        0.004385560249232324,
+        0.004166319691996922,
+        0.00396795421864086,
+        0.0037876180684444346,
+        0.0036229602246830948,
+        0.003472021382978767,
+        0.003333155636728093,
+        0.003204970228055038,
+        0.0030862786826087773,
+        0.002976063983550409,
+        0.0028734493623524663,
+        0.0027776749297526936,
+    ];
+    if n <= 30.0 {
+        return TABLE.get(n as usize).copied().unwrap_or(0.0);
+    }
+    let r = 1.0 / n;
+    let r2 = r * r;
+    r * (1.0 / 12.0 - r2 * (1.0 / 360.0 - r2 * (1.0 / 1260.0 - r2 * (1.0 / 1680.0 - r2 * (1.0 / 1188.0)))))
+}
+
+/// `x ln(x/np) + np - x` without the cancellation of the direct formula when `x` is near `np`
+/// (Loader, 2000).
+fn bd0(x: f64, np: f64) -> f64 {
+    if (x - np).abs() < 0.1 * (x + np) {
+        let v = (x - np) / (x + np);
+        let mut s = (x - np) * v;
+        if s.abs() < f64::MIN_POSITIVE {
+            return s;
+        }
+        let mut ej = 2.0 * x * v;
+        let v2 = v * v;
+        for j in 1..1000 {
+            ej *= v2;
+            let s1 = s + ej / f64::from(2 * j + 1);
+            if s1 == s {
+                return s1;
+            }
+            s = s1;
+        }
+    }
+    x * (x / np).ln() + np - x
+}
+
+/// `(1 - p)^e` with the rounding error of `1 - p` (it is not exact for `p < 1/2`) folded back in,
+/// which `e` would otherwise multiply.
+fn pow_one_minus(p: f64, e: f64) -> f64 {
+    let hi = 1.0 - p;
+    let lo = (1.0 - hi) - p;
+    let r = hi.powf(e) * (e * (lo / hi).ln_1p()).exp();
+    // An exponent so large that the two factors under- and overflow: the plain form is enough.
+    if r.is_nan() { (e * (-p).ln_1p()).exp() } else { r }
+}
+
+/// `C(n, k)` for a small `k` as a product of `k` ratios.
+fn choose_small(n: f64, k: f64) -> f64 {
+    let mut c = 1.0;
+    let mut j = 0.0;
+    while j < k {
+        c *= (n - j) / (j + 1.0);
+        j += 1.0;
+    }
+    c
+}
+
+/// Binomial mass at integer `k`, `0 <= k <= n`, by Loader's saddle-point formula: no log-gamma
+/// of large numbers, so the relative error stays near 1e-15 for any `n`.
 fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
     if k < 0.0 || k > n {
         return 0.0;
@@ -103,7 +194,67 @@ fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
     if p == 1.0 {
         return if k == n { 1.0 } else { 0.0 };
     }
-    (ln_comb(n, k) + k * p.ln() + (n - k) * (1.0 - p).ln()).exp()
+    if k == 0.0 {
+        return if n == 0.0 { 1.0 } else { pow_one_minus(p, n) };
+    }
+    if k == n {
+        return p.powf(n);
+    }
+    // A few successes or a few failures: the product form has no large cancelling terms.
+    // (Not for astronomically large n, or when either power underflows: the
+    // saddle-point form below handles those through logs.)
+    if n < 1e30 && p.powf(k) > 1e-280 {
+        if k < 16.0 {
+            let rest = pow_one_minus(p, n - k);
+            if rest >= f64::MIN_POSITIVE {
+                return choose_small(n, k) * p.powi(k as i32) * rest;
+            }
+        }
+        if n - k < 16.0 {
+            return choose_small(n, n - k) * p.powf(k) * pow_one_minus(p, n - k);
+        }
+    }
+    let q = 1.0 - p;
+    let lc = stirlerr(n) - stirlerr(k) - stirlerr(n - k) - bd0(k, n * p) - bd0(n - k, n * q);
+    let lf = std::f64::consts::TAU.ln() + k.ln() + (-k / n).ln_1p();
+    (lc - 0.5 * lf).exp()
+}
+
+/// Sum of the binomial masses 0..=k for `n <= 10_000`: starts at the term nearest the mode
+/// (accurate by the formula above) and walks away from it by the ratio of neighbouring masses,
+/// one multiply per term, stopping once the terms no longer matter. Above the mode it sums the
+/// upper tail instead and subtracts it from 1.
+fn binom_cdf_sum(k: f64, n: f64, p: f64) -> f64 {
+    let q = 1.0 - p;
+    if p == 0.0 {
+        return 1.0;
+    }
+    if p == 1.0 {
+        return 0.0;
+    }
+    if k <= n * p {
+        // mass(i - 1) = mass(i) * i / (n - i + 1) * q / p
+        let mut t = binom_pmf(k, n, p);
+        let mut s = t;
+        let mut i = k;
+        while i >= 1.0 && t > s * 1e-18 {
+            t *= i / (n - i + 1.0) * (q / p);
+            s += t;
+            i -= 1.0;
+        }
+        s.min(1.0)
+    } else {
+        // mass(i + 1) = mass(i) * (n - i) / (i + 1) * p / q
+        let mut t = binom_pmf(k + 1.0, n, p);
+        let mut s = t;
+        let mut i = k + 1.0;
+        while i < n && t > s * 1e-18 {
+            t *= (n - i) / (i + 1.0) * (p / q);
+            s += t;
+            i += 1.0;
+        }
+        (1.0 - s).max(0.0)
+    }
 }
 
 fn binom_cdf(k: f64, n: f64, p: f64) -> f64 {
@@ -114,13 +265,7 @@ fn binom_cdf(k: f64, n: f64, p: f64) -> f64 {
         return 1.0;
     }
     if n <= 10_000.0 {
-        let mut s = 0.0;
-        let mut i = 0.0;
-        while i <= k {
-            s += binom_pmf(i, n, p);
-            i += 1.0;
-        }
-        return s.min(1.0);
+        return binom_cdf_sum(k, n, p);
     }
     if p == 0.0 {
         return 1.0;
@@ -128,14 +273,19 @@ fn binom_cdf(k: f64, n: f64, p: f64) -> f64 {
     if p == 1.0 {
         return 0.0;
     }
-    reg_inc_beta(1.0 - p, n - k, k + 1.0)
+    // I_(1-p)(n-k, k+1) has prefactor (n-k) p mass(k).
+    reg_inc_beta_front(1.0 - p, n - k, k + 1.0, (n - k) * p * binom_pmf(k, n, p))
 }
 
+/// Poisson mass at integer `x >= 0` by Loader's formula.
 fn poisson_pmf(x: f64, m: f64) -> f64 {
     if m == 0.0 {
         return if x == 0.0 { 1.0 } else { 0.0 };
     }
-    (-m + x * m.ln() - ln_gamma(x + 1.0)).exp()
+    if x == 0.0 {
+        return (-m).exp();
+    }
+    (-stirlerr(x) - bd0(x, m)).exp() / (std::f64::consts::TAU * x).sqrt()
 }
 
 fn poisson_cdf(x: f64, m: f64) -> f64 {
@@ -143,15 +293,31 @@ fn poisson_cdf(x: f64, m: f64) -> f64 {
         return 1.0;
     }
     if x <= 1000.0 {
-        let mut s = 0.0;
-        let mut i = 0.0;
-        while i <= x {
-            s += poisson_pmf(i, m);
+        if x <= m {
+            // mass(i - 1) = mass(i) * i / m, downwards from x while the terms matter
+            let mut t = poisson_pmf(x, m);
+            let mut s = t;
+            let mut i = x;
+            while i >= 1.0 && t > s * 1e-18 {
+                t *= i / m;
+                s += t;
+                i -= 1.0;
+            }
+            return s.min(1.0);
+        }
+        // Above the mean: 1 minus the upper tail, mass(i + 1) = mass(i) * m / (i + 1).
+        let mut t = poisson_pmf(x + 1.0, m);
+        let mut s = t;
+        let mut i = x + 1.0;
+        while t > s * 1e-18 {
+            t *= m / (i + 1.0);
+            s += t;
             i += 1.0;
         }
-        return s.min(1.0);
+        return (1.0 - s).max(0.0);
     }
-    reg_gamma_q(x + 1.0, m)
+    // Q(x+1, m) has prefactor m mass(x).
+    reg_gamma_q_front(x + 1.0, m, m * poisson_pmf(x, m))
 }
 
 pub(super) fn norm_dist(a: &[Arg], _: C) -> R<Value> {
