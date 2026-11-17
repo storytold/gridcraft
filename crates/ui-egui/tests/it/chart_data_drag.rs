@@ -49,6 +49,11 @@ fn button(h: &mut Harness, at: Pos2, pressed: bool) {
 fn press_and_move(h: &mut Harness, from: Pos2, to: Pos2) {
     hover(h, from);
     button(h, from, true);
+    press_and_move_on(h, from, to);
+}
+
+/// With the button already down, moves from `from` to `to` in small steps.
+fn press_and_move_on(h: &mut Harness, from: Pos2, to: Pos2) {
     for i in 1..=8 {
         h.input_mut().events.push(Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
         h.run_steps(1);
@@ -62,7 +67,8 @@ fn dragging_the_values_corner_extends_the_chart_data() {
     let corner = rect(&h, "A1:A5").right_bottom();
     hover(&mut h, corner);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe, "the corner shows a resize cursor, not the fill cross");
-    let target = rect(&h, "A8").center();
+    // Three rows down from the corner, as the hand moves it.
+    let target = rect(&h, "A8").right_bottom();
     press_and_move(&mut h, corner, target);
     // The outline previews the new block while the button is held; the chart is unchanged.
     let blue = Tokens::get(&h.ctx).ref_color(0, true);
@@ -83,17 +89,37 @@ fn dragging_the_values_corner_extends_the_chart_data() {
 fn dragging_the_top_corner_down_shrinks_the_chart_data() {
     let (mut h, _) = fixture();
     let corner = rect(&h, "A1:A5").left_top() + vec2(1.0, 1.0);
-    let target = rect(&h, "A3").center();
+    let target = rect(&h, "A3").left_top() + vec2(1.0, 1.0);
     press_and_move(&mut h, corner, target);
     button(&mut h, target, false);
     assert_eq!(values(&h), "Sheet1!$A$3:$A$5");
+}
+
+/// #4391 review: a corner lies on the boundary of the next row and column, so reading the pointer
+/// as is put a press on the bottom-right corner of A1:A5 in B6.
+#[test]
+fn a_drag_back_to_the_grabbed_corner_or_along_its_edge_keeps_the_other_axis() {
+    // Away and back to the very point pressed: nothing changes.
+    let (mut h, _) = fixture();
+    let corner = rect(&h, "A1:A5").right_bottom();
+    press_and_move(&mut h, corner, corner + vec2(40.0, 30.0));
+    press_and_move_on(&mut h, corner + vec2(40.0, 30.0), corner);
+    button(&mut h, corner, false);
+    assert_eq!(values(&h), "Sheet1!$A$1:$A$5", "a release where the press was leaves the data alone");
+    // Straight down the right edge of column A: rows only, no column B.
+    let (mut h, _) = fixture();
+    let corner = rect(&h, "A1:A5").right_bottom();
+    let target = rect(&h, "A6").right_bottom();
+    press_and_move(&mut h, corner, target);
+    button(&mut h, target, false);
+    assert_eq!(values(&h), "Sheet1!$A$1:$A$6");
 }
 
 #[test]
 fn escape_cancels_a_values_drag() {
     let (mut h, _) = fixture();
     let corner = rect(&h, "A1:A5").right_bottom();
-    let target = rect(&h, "A8").center();
+    let target = rect(&h, "A8").right_bottom();
     press_and_move(&mut h, corner, target);
     h.key_press(Key::Escape);
     h.run_steps(2);
@@ -111,7 +137,7 @@ fn values_outline_at(h: &Harness, range: &str) -> bool {
 #[test]
 fn a_release_in_the_same_frame_as_the_last_move_takes_the_release_position() {
     let (mut h, _) = fixture();
-    let (corner, a6, end) = (rect(&h, "A1:A5").right_bottom(), rect(&h, "A6").center(), rect(&h, "A8").center());
+    let (corner, a6, end) = (rect(&h, "A1:A5").right_bottom(), rect(&h, "A6").right_bottom(), rect(&h, "A8").right_bottom());
     press_and_move(&mut h, corner, a6);
     // The pointer reaches A8 and the button goes up within one frame.
     h.input_mut().events.push(Event::PointerMoved(end));
@@ -123,7 +149,7 @@ fn a_release_in_the_same_frame_as_the_last_move_takes_the_release_position() {
 #[test]
 fn escape_with_ctrl_held_still_cancels_a_values_drag() {
     let (mut h, _) = fixture();
-    let (corner, target) = (rect(&h, "A1:A5").right_bottom(), rect(&h, "A8").center());
+    let (corner, target) = (rect(&h, "A1:A5").right_bottom(), rect(&h, "A8").right_bottom());
     press_and_move(&mut h, corner, target);
     h.input_mut().events.push(Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::CTRL });
     h.run_steps(2);
@@ -137,7 +163,7 @@ fn the_preview_stays_while_the_drag_scrolls_the_chart_away() {
     // Column A stays in a frozen pane while the chart in D:H scrolls off to the left.
     h.state_mut().run("view.freezePanes", json!({"cell": "B1"})).unwrap();
     h.run_steps(2);
-    let (corner, target) = (rect(&h, "A1:A5").right_bottom(), rect(&h, "A8").center());
+    let (corner, target) = (rect(&h, "A1:A5").right_bottom(), rect(&h, "A8").right_bottom());
     press_and_move(&mut h, corner, target);
     assert!(values_outline_at(&h, "A1:A8"));
     h.state_mut().view_mut().unwrap().scroll.x = 3000.0;

@@ -164,7 +164,10 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
             && let Some((chart, orig, corner)) = crate::chartview::chart_data_handle(app, geo, sh, p)
         {
             if primary_drag {
-                app.grid.drag = Drag::ChartData { chart, orig, corner, to: None };
+                let (sx, sy) = corner.sides();
+                let cell = CellRef::new(if sy < 0 { orig.start.row } else { orig.end.row }, if sx < 0 { orig.start.col } else { orig.end.col });
+                let grab = geo.range_rect(sh, RangeRef::cell(cell)).center() - p;
+                app.grid.drag = Drag::ChartData { chart, orig, corner, grab, to: None };
                 if let Some(now) = pos {
                     drag_chart_data(app, geo, sh, now);
                 }
@@ -851,11 +854,11 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             // The release may be the first frame to report the pointer's last position, so the
             // block is taken from there. (Esc already dropped a cancelled drag.)
-            Drag::ChartData { chart, orig, corner, to } => {
+            Drag::ChartData { chart, orig, corner, grab, to } => {
                 let to = if resp.drag_stopped()
                     && let Some(p) = pos
                 {
-                    Some(chart_data_target(geo, sh, orig, corner, p))
+                    Some(chart_data_target(geo, sh, orig, corner, p + grab))
                 } else {
                     to
                 };
@@ -1232,11 +1235,12 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
 /// (logical coordinates); the opposite corner stays, and the block may flip past it as a
 /// selection does. The release gives the chart the block (`chart.setValuesRange`).
 fn drag_chart_data(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
-    let Drag::ChartData { chart, orig, corner, .. } = app.grid.drag else { return };
-    app.grid.drag = Drag::ChartData { chart, orig, corner, to: Some(chart_data_target(geo, sh, orig, corner, p)) };
+    let Drag::ChartData { chart, orig, corner, grab, .. } = app.grid.drag else { return };
+    app.grid.drag = Drag::ChartData { chart, orig, corner, grab, to: Some(chart_data_target(geo, sh, orig, corner, p + grab)) };
 }
 
-/// The values block `orig` with its `corner` dragged to the cell under `p`.
+/// The values block `orig` with its `corner` dragged to the cell under `p` (the pointer moved
+/// by the drag's `grab` offset into the cell the corner started in).
 fn chart_data_target(geo: &Geo, sh: &Sheet, orig: RangeRef, corner: crate::objects::Handle, p: Pos2) -> RangeRef {
     let (sx, sy) = corner.sides();
     let fixed = CellRef::new(if sy < 0 { orig.end.row } else { orig.start.row }, if sx < 0 { orig.end.col } else { orig.start.col });
