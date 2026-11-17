@@ -800,6 +800,26 @@ fn print_decodes_pictures_within_byte_limits() {
     assert!(!contains(&pdf, "/Subtype /Image"));
 }
 
+/// A PNG whose IHDR is over the side or pixel caps (or empty) is refused from IHDR, before the
+/// decoder's header probe reads the chunks after it.
+#[test]
+fn print_refuses_oversized_png_before_the_header_probe() {
+    use super::objects::{DecodeCaps, PROBES, decode_limited};
+    let probes = || PROBES.with(std::cell::Cell::get);
+    let png = png_of(image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8)));
+    let caps = DecodeCaps { max_side: 1024, max_pixels: 10_000, max_alloc: 1024 * 1024 };
+    let before = probes();
+    assert!(decode_limited(&png, caps).is_some());
+    assert_eq!(probes(), before + 1);
+    // 1000×1000 is within the side cap (which the probe checks itself) but over the pixel cap.
+    for (w, h) in [(1000, 1000), (0, 8), (8, 0), (2000, 1)] {
+        let mut forged = png.clone();
+        forge_png_size(&mut forged, w, h);
+        assert!(decode_limited(&forged, caps).is_none(), "{w}×{h}");
+        assert_eq!(probes(), before + 1, "{w}×{h} reached the header probe");
+    }
+}
+
 #[test]
 fn checkbox_cells_print_as_boxes_not_true_false() {
     // #2972: a checkbox cell printed its value as TRUE or FALSE.

@@ -53,15 +53,29 @@ pub(super) struct DecodeCaps {
     pub(super) max_alloc: u64,
 }
 
+impl DecodeCaps {
+    /// Whether a `w`×`h` picture is within the side and pixel limits.
+    fn fits(self, (w, h): (u32, u32)) -> bool {
+        w > 0 && h > 0 && w <= self.max_side && h <= self.max_side && u64::from(w) * u64::from(h) <= self.max_pixels
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many header probes `decode_limited` has started on this thread.
+    pub(super) static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// In-cell pictures: the same limits `insert.picture` accepts.
 const CELL_PICTURE_CAPS: DecodeCaps = DecodeCaps { max_side: 8192, max_pixels: 16_000_000, max_alloc: 64 * 1024 * 1024 };
 /// Floating pictures come from any opened file. 256 MiB holds a 60-megapixel 8-bit RGBA
 /// picture, but not a header declaring as many 16-bit pixels (twice that, before conversion).
 pub(super) const FLOATING_PICTURE_CAPS: DecodeCaps = DecodeCaps { max_side: 16_384, max_pixels: 60_000_000, max_alloc: 256 * 1024 * 1024 };
 
-/// Decodes a picture within `caps`. The size comes from the decoder's own header reader (not a
-/// separate sniffer that a crafted file can disagree with), and the decoder is given the same
-/// limits, so a picture over them is refused before its pixels are allocated.
+/// Decodes a picture within `caps`. The size that admits a picture comes from the decoder's own
+/// header reader (a separate sniffer only refuses early, so a crafted file that fools it gains
+/// nothing), and the decoder is given the same limits, so a picture over them is refused before
+/// its pixels are allocated.
 pub(super) fn decode_limited(data: &[u8], caps: DecodeCaps) -> Option<image::DynamicImage> {
     let format = image::guess_format(data).ok()?;
     let limits = || {
@@ -71,11 +85,18 @@ pub(super) fn decode_limited(data: &[u8], caps: DecodeCaps) -> Option<image::Dyn
         limits.max_alloc = Some(caps.max_alloc);
         limits
     };
+    // The PNG probe checks only the side limit from IHDR, then reads every chunk before the
+    // pixels (spending CPU and the byte budget) before it reports the size. IHDR must come first,
+    // so a PNG whose IHDR is over the caps is refused here; one that passes still goes to the probe.
+    if format == image::ImageFormat::Png && !crate::io::image_size(data).is_some_and(|size| caps.fits(size)) {
+        return None;
+    }
+    #[cfg(test)]
+    PROBES.with(|n| n.set(n.get() + 1));
     // Both readers carry the limits, so even the header probe refuses an oversized picture.
     let mut probe = image::ImageReader::with_format(std::io::Cursor::new(data), format);
     probe.limits(limits());
-    let (w, h) = probe.into_dimensions().ok()?;
-    if w == 0 || h == 0 || w > caps.max_side || h > caps.max_side || u64::from(w) * u64::from(h) > caps.max_pixels {
+    if !caps.fits(probe.into_dimensions().ok()?) {
         return None;
     }
     let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
