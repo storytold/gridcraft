@@ -890,12 +890,13 @@ fn follow_place(before: &Workbook, after: &Workbook, pairs: &[(usize, Option<usi
     let mut name = after.sheet(sheet)?.name.clone();
     let old_name = before.sheet(p.sheet).map(|s| s.name.as_str()).unwrap_or_default();
     let mut text = format!("{}!{}", resolve::quote_sheet(&name), p.range.a1());
+    let order: Vec<String> = (0..).map_while(|i| before.sheet(i)).map(|sheet| sheet.name.clone()).collect();
     for (target, e) in edits {
         if target != &name && target != old_name {
             continue;
         }
         let expr = gridcraft_formula::parse(&text).ok()?;
-        text = gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, target, target, e));
+        text = gridcraft_formula::print(&gridcraft_formula::adjust::adjust_in(expr, target, target, e, &order));
         if text.contains("#REF!") {
             return None;
         }

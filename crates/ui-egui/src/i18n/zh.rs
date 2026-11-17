@@ -565,7 +565,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Orange" => "橙色",
         "Orientation (degrees)" => "方向（度）",
         "Other:" => "其他：",
-        "Outline" => "分级显示",
+        "Outline" => "外边框",
         "Data Table|Outline" => "外框线",
         "Output" => "输出",
         "Output Range:" => "输出区域：",

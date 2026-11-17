@@ -359,7 +359,10 @@ fn normalize(
         }
         Expr::Name(name) if !bound(name, bindings) => {
             if display {
-                *name = locale.unshadowed_function_name(name, |alias| bound(alias, bindings)).into_owned();
+                let alias = locale.unshadowed_function_name(name, |alias| bound(alias, bindings));
+                if !matches!(parser::parse(&alias), Ok(Expr::Ref(_))) {
+                    *name = alias.into_owned();
+                }
             } else if let Some(canonical) = name.strip_prefix("_xlfn.") {
                 *name = canonical.to_owned();
             } else if let Some(value) = boolean_alias(name, locale) {
@@ -443,7 +446,19 @@ fn normalize(
 
 #[cfg(test)]
 mod case_rule_tests {
-    use super::normalize_function_case;
+    use super::{FormulaLocale, normalize_function_case, parse_input, print_input};
+
+    #[test]
+    fn bare_function_names_do_not_become_cell_references() {
+        for name in ["FVSCHEDULE", "DB"] {
+            let formula = format!("MAP(A1:A2,B1:B2,{name})");
+            let canonical = crate::parse(&formula).unwrap();
+            let displayed = print_input(&canonical, FormulaLocale::De, |_| false).unwrap();
+            assert!(displayed.contains(name), "{displayed}");
+            let round_trip = parse_input(&displayed, FormulaLocale::De, |_| false).unwrap();
+            assert_eq!(round_trip, canonical);
+        }
+    }
 
     /// Verifies token normalization preserves distinctions required by a locale-specific case fold.
     #[test]

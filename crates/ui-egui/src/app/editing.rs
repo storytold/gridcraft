@@ -198,13 +198,15 @@ impl SheetApp {
                 if fill_selection {
                     validate_literal_fill(d, ed.sheet, &text)
                 } else {
-                    let selected = d.selection.current();
+                    let selected = if ed.sheet == d.wb.active_sheet() {
+                        d.selection.current()
+                    } else {
+                        d.sheet_selections
+                            .get(ed.sheet)
+                            .map_or_else(|| gridcraft_engine::Selection::default().current(), gridcraft_engine::Selection::current)
+                    };
                     if array {
-                        let range = if ed.sheet == d.wb.active_sheet() && selected.contains(ed.cell) {
-                            selected
-                        } else {
-                            gridcraft_engine::core::RangeRef::cell(ed.cell)
-                        };
+                        let range = if selected.contains(ed.cell) { selected } else { gridcraft_engine::core::RangeRef::cell(ed.cell) };
                         gridcraft_engine::cmd::data::check_literal_array_validation(&d.wb, ed.sheet, range, &text)
                     } else {
                         gridcraft_engine::cmd::data::check_literal_validation(&d.wb, ed.sheet, ed.cell, &text)

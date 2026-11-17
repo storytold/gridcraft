@@ -140,7 +140,9 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                 d.insert_temp(key, checks.clone());
                 d.insert_temp(search_key, search.clone());
             });
-            let selected = |entry: &FilterValue| entry.selected && matches(entry);
+            let selected_components: std::collections::HashSet<usize> =
+                checks.iter().enumerate().filter(|(_, entry)| entry.selected && matches(entry)).map(|(index, _)| components[index]).collect();
+            let selected = |index: usize| selected_components.contains(&components[index]);
             ui.separator();
             ui.horizontal(|ui| {
                 let clear = ui.button(lang.tr("Clear Filter"));
@@ -149,17 +151,19 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
-                let any = checks.iter().any(selected);
+                let any = !selected_components.is_empty();
                 let apply = ui.button(lang.tr("Apply"));
                 ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
                 if apply.clicked() || (enter && any) {
-                    let blanks = checks.iter().any(|entry| entry.value == gridcraft_engine::core::Value::Empty && selected(entry));
+                    let blanks =
+                        checks.iter().enumerate().any(|(index, entry)| entry.value == gridcraft_engine::core::Value::Empty && selected(index));
                     let vals: Vec<String> = checks
                         .iter()
-                        .filter(|entry| selected(entry) && entry.value != gridcraft_engine::core::Value::Empty)
-                        .map(|entry| entry.label.clone())
+                        .enumerate()
+                        .filter(|(index, entry)| selected(*index) && entry.value != gridcraft_engine::core::Value::Empty)
+                        .map(|(_, entry)| entry.label.clone())
                         .collect();
-                    let p = if checks.iter().all(selected) {
+                    let p = if checks.iter().enumerate().all(|(index, _)| selected(index)) {
                         json!({"column": col_to_letters(col), "clear": true})
                     } else {
                         json!({"column": col_to_letters(col), "values": vals, "blanks": blanks})

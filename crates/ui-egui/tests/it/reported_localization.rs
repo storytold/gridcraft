@@ -434,6 +434,26 @@ fn matching_localized_filter_captions_share_one_selection() {
     assert!(!sheet.is_row_hidden(3));
 }
 
+#[test]
+fn filter_search_keeps_hidden_members_of_a_selected_component() {
+    use egui::{Event, Key, Modifiers};
+    let mut h = harness();
+    use_german_region(&mut h);
+    h.state_mut().run("range.setValues", json!({"range":"A1","values":[["Header"],[1.5],["1.5"],["other"]],"parse":false})).unwrap();
+    h.state_mut().run("data.filter", json!({"range":"A1:A4"})).unwrap();
+    h.state_mut().run("selection.set", json!({"cell":"A1"})).unwrap();
+    press(&mut h, Key::ArrowDown, Modifiers::ALT);
+    h.run_steps(4);
+    h.input_mut().events.push(Event::Text("1,5".into()));
+    h.run_steps(3);
+    press(&mut h, Key::Enter, Modifiers::NONE);
+    h.run_steps(3);
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    assert!(!sheet.is_row_hidden(1));
+    assert!(!sheet.is_row_hidden(2));
+    assert!(sheet.is_row_hidden(3));
+}
+
 /// Caption equality and case-insensitive command equality propagate transitively.
 #[test]
 fn connected_localized_filter_captions_stay_synchronized() {
