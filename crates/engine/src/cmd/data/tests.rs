@@ -583,5 +583,10 @@ fn autofilter_criteria_and_hidden_arrows_follow_their_columns() {
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("home.deleteColumns", json!({"cols": "B:B"})).unwrap();
     let a = af(&s);
-    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:C3"), vec![(2, crit)], vec![0, 2]));
+    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:C3"), vec![(2, crit.clone())], vec![0, 2]));
+    // Deleting the header row keeps each column's criterion and arrow (CodeRabbit's review): the
+    // columns are followed through the rows left, not the header cells deleted.
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:C2"), vec![(2, crit)], vec![0, 2]));
 }
