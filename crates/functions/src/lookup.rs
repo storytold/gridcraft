@@ -54,8 +54,9 @@ fn find_exact(x: &Value, hay: &[Value], wild: bool, reverse: bool) -> Option<usi
 ///   needle (text vs number vs logical, blanks, errors) is replaced by the nearest entry of the
 ///   needle's type below it in the window; when there is none the window moves up past it, so
 ///   entries of other types are skipped (`LOOKUP(9.9E+307, range)` finds the last number);
-/// - a probe equal to the needle ends the search at once (the run of equal entries that follows
-///   it is taken, so sorted duplicates give the last one).
+/// - a probe equal to the needle ends the search at once: in ascending data the run of equal
+///   entries that follows it is taken, so sorted duplicates give the last one; in descending data
+///   (MATCH -1) the run before it is taken, so they give the first one, as Excel does (#4017).
 ///
 /// Observed in Excel: `VLOOKUP(534, {"INTEGRAL";0;1;2;534;9999999999;-9999999999}, …)` finds 534,
 /// `HLOOKUP("STRING", {"INTEGRAL","DOUBLE","BLANK","STRING","REF","AREA (rows)",<blank>}, …)`
@@ -74,9 +75,17 @@ fn bsearch_last(x: &Value, hay: &[Value], desc: bool) -> Option<usize> {
         let v = hay.get(j)?;
         let o = lookup_order(v, x);
         if o == Ordering::Equal {
+            let equal = |w: &Value| same_type(x, w) && lookup_order(w, x) == Ordering::Equal;
             let mut k = j;
-            while hay.get(k + 1).is_some_and(|w| same_type(x, w) && lookup_order(w, x) == Ordering::Equal) {
-                k += 1;
+            if desc {
+                // Descending data (MATCH -1) takes the first of the equal run, as Excel does (#4017).
+                while k > 0 && hay.get(k - 1).is_some_and(equal) {
+                    k -= 1;
+                }
+            } else {
+                while hay.get(k + 1).is_some_and(equal) {
+                    k += 1;
+                }
             }
             return Some(k);
         }
@@ -656,9 +665,9 @@ mod tests {
         let words = ["STRING", "", "nospaces", "sp ace s", "endsWithSpace ", " beginsWithSpace", "non-numeric", "0", "0.000001", "1"];
         let e_col = arr(words.iter().map(|w| vec![tv(w)]).collect());
         is_text(ev("LOOKUP", vec![n(534.0), rf(arr(keys.into_iter().map(|k| vec![k]).collect())), rf(e_col)]), "endsWithSpace ");
-        // Sorted duplicates give the last one; descending data with MATCH -1 too.
+        // Sorted duplicates give the last one; descending data with MATCH -1 gives the first (#4017).
         close(ev("MATCH", vec![n(2.0), av(row(&[1.0, 2.0, 2.0, 2.0, 3.0])), n(1.0)]), 4.0);
-        close(ev("MATCH", vec![n(20.0), av(row(&[40.0, 20.0, 20.0, 10.0])), n(-1.0)]), 3.0);
+        close(ev("MATCH", vec![n(20.0), av(row(&[40.0, 20.0, 20.0, 10.0])), n(-1.0)]), 2.0);
         // Only text and blanks: no number to find.
         is_err(ev("MATCH", vec![n(5.0), av(arr(vec![vec![tv("a"), Value::Empty, tv("b")]]))]), CellError::NA);
         // A long run of trailing blanks (whole-column lookups) still finds the last number.
@@ -680,6 +689,15 @@ mod tests {
         close(ev("MATCH", vec![n(25.0), rf(d.clone()), n(-1.0)]), 2.0);
         close(ev("MATCH", vec![n(40.0), rf(d.clone()), n(-1.0)]), 1.0);
         is_err(ev("MATCH", vec![n(50.0), rf(d), n(-1.0)]), CellError::NA);
+        // #4017, as Excel 16 answers: descending duplicates give the first equal entry.
+        close(ev("MATCH", vec![n(1.0), av(row(&[2.0, 1.0, 1.0])), n(-1.0)]), 2.0);
+        close(ev("MATCH", vec![n(2.0), av(row(&[3.0, 2.0, 2.0, 1.0])), n(-1.0)]), 2.0);
+        // Controls from the report: no duplicate, ascending duplicates, exact match.
+        close(ev("MATCH", vec![n(1.0), av(row(&[2.0, 1.0])), n(-1.0)]), 2.0);
+        close(ev("MATCH", vec![n(1.0), av(row(&[1.0, 1.0, 2.0])), n(1.0)]), 2.0);
+        close(ev("MATCH", vec![n(1.0), av(row(&[2.0, 1.0, 1.0])), n(0.0)]), 2.0);
+        // A run the bisection lands inside goes back to its start; a smaller value after it stays out.
+        close(ev("MATCH", vec![n(5.0), av(row(&[9.0, 5.0, 5.0, 5.0, 5.0, 1.0])), n(-1.0)]), 2.0);
         let s = arr(vec![vec![tv("apple"), tv("banana"), tv("cherry")]]);
         close(ev("MATCH", vec![t("B*"), av(s.clone()), n(0.0)]), 2.0);
         close(ev("MATCH", vec![t("CHERRY"), av(s.clone()), n(0.0)]), 3.0);
