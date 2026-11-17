@@ -1227,16 +1227,13 @@ fn diff(before: &Workbook, after: &Workbook, inputs: &[Bound], touched: &[(Strin
 }
 
 /// Each sheet of `before` with its index in `after` (`None` when deleted), and the sheets of
-/// `after` that are new. Sheets are matched by name; what's left is matched in order (a renamed
-/// sheet).
+/// `after` that are new. The runtime UID follows a sheet through renames and moves.
 pub(crate) fn pair_sheets(before: &Workbook, after: &Workbook) -> (Vec<(usize, Option<usize>)>, Vec<usize>) {
-    let mut pairs: Vec<(usize, Option<usize>)> = before.sheets.iter().enumerate().map(|(bi, sh)| (bi, after.sheet_index(&sh.name))).collect();
-    let matched: BTreeSet<usize> = pairs.iter().filter_map(|(_, a)| *a).collect();
-    let mut spare = (0..after.sheets.len()).filter(|a| !matched.contains(a));
-    for (_, a) in pairs.iter_mut().filter(|(_, a)| a.is_none()) {
-        *a = spare.next();
-    }
-    (pairs, spare.collect())
+    let after_by_uid: HashMap<u64, usize> = after.sheets.iter().enumerate().map(|(ai, sh)| (sh.uid.get(), ai)).collect();
+    let pairs: Vec<_> = before.sheets.iter().enumerate().map(|(bi, sh)| (bi, after_by_uid.get(&sh.uid.get()).copied())).collect();
+    let matched: BTreeSet<usize> = pairs.iter().filter_map(|(_, ai)| *ai).collect();
+    let added = (0..after.sheets.len()).filter(|ai| !matched.contains(ai)).collect();
+    (pairs, added)
 }
 
 /// Only a formula's (or a Python cell's) cached value changed (a recalculation, not a write): a

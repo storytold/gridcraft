@@ -142,7 +142,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             });
             let selected_components: std::collections::HashSet<usize> =
                 checks.iter().enumerate().filter(|(_, entry)| entry.selected && matches(entry)).map(|(index, _)| components[index]).collect();
-            let selected = |index: usize| selected_components.contains(&components[index]);
+            let selected = |index: usize| checks[index].selected && selected_components.contains(&components[index]);
             ui.separator();
             ui.horizontal(|ui| {
                 let clear = ui.button(lang.tr("Clear Filter"));

@@ -168,6 +168,9 @@ mod contract_tests {
             let error = gridcraft_engine::formula::parse(input).unwrap_err().to_string();
             let translated = crate::i18n::Language::Ru.tr_error(&error);
             assert_ne!(translated, error, "{input}: {error}");
+            if input == "=1+" {
+                assert_eq!(translated, "Неожиданный конец формулы");
+            }
         }
     }
 }

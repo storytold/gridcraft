@@ -615,7 +615,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Action" => "操作",
         "Action Journal" => "操作日誌",
         "Add Chart Element" => "新增圖表元素",
-        "Add subtotal to (columns, e.g. C,D):" => "新增小計到（列，如 C,D）：",
+        "Add subtotal to (columns, e.g. C,D):" => "新增小計到（欄，如 C,D）：",
         "Add-in and Automation" => "載入項和自動化",
         "Agent Control" => "代理程式控制",
         "Aggregate duplicates using" => "重複項彙總方式",
@@ -636,7 +636,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sort Ascending" => "遞增",
         "Sort Descending" => "遞減",
         "Sort On" => "排序依據",
-        "At each change in (column letter):" => "每組小計位置（列字母）：",
+        "At each change in (column letter):" => "每組小計位置（欄字母）：",
         "Background Color:" => "背景色彩：",
         "Before sheet (position, 0 = first):" => "移至工作表之前（位置，0 表示最前）：",
         "Bin Range (blank for automatic bins):" => "接收區域（留空則自動分段）：",
@@ -672,7 +672,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Column width (characters):" => "欄寬（字元數）：",
         "Column widths" => "欄寬",
         "Columns" => "欄",
-        "Columns (blank = all, e.g. A,C):" => "列（留空表示全部，如 A,C）：",
+        "Columns (blank = all, e.g. A,C):" => "欄（留空表示全部，如 A,C）：",
         "Combo" => "組合圖",
         "Comma" => "逗號",
         "Text to Columns|Comma" => "逗號",
@@ -1078,7 +1078,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This week" => "本週",
         "This workbook" => "此活頁簿",
         "This workbook has no scripts or macros." => "此活頁簿沒有指令碼或巨集。",
-        "Timeline range (blank: first column of the selection):" => "時間線區域（留空表示所選區域的第一列）：",
+        "Timeline range (blank: first column of the selection):" => "時間線區域（留空表示所選區域的第一欄）：",
         "Title:" => "標題：",
         "Today" => "今天",
         "Tomorrow" => "明天",
@@ -1108,7 +1108,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Values" => "值",
         "Values (V)" => "數值（V）",
         "Values and number formats" => "值和數字格式",
-        "Values range (blank: second column of the selection):" => "值區域（留空表示所選區域的第二列）：",
+        "Values range (blank: second column of the selection):" => "值區域（留空表示所選區域的第二欄）：",
         "Variable 1 Range:" => "變數 1 的區域：",
         "Variable 2 Range:" => "變數 2 的區域：",
         "Version {version}" => "版本 {version}",
@@ -1507,10 +1507,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "僅支援匯入 Excel 97-2003 (.xls)。請另存新檔 .xlsx 或其他支援的匯出格式。"
         }
         "Input Y range and input X range must have the same number of rows." => "輸入 Y 區域與輸入 X 區域的列數必須相同。",
-        "Input Y range must be a single column." => "輸入 Y 區域必須是單列。",
+        "Input Y range must be a single column." => "輸入 Y 區域必須是單欄。",
         "Input cell reference is not valid." => "輸入的儲存格引用無效。",
         "Input range contains non-numeric data." => "輸入區域包含非數值資料。",
-        "Input range must be a single row or column." => "輸入區域必須是單行或單列。",
+        "Input range must be a single row or column." => "輸入區域必須是單列或單欄。",
         "Input ranges must have the same number of values." => "各輸入區域的數值個數必須相同。",
         "Insert Cut Cells works on whole rows or columns; cut whole rows or columns, or use Paste." => {
             "「插入剪下儲存格」只適用於整列或整欄；請剪下整列或整欄，或改用「貼上」。"
@@ -1529,7 +1529,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Row height must be between 0 and 409.5 points." => "列高必須在 0 到 409.5 磅之間。",
         "Row height must be between 0 and 546 pixels (409.5 points)." => "列高必須在 0 到 546 畫素（409.5 磅）之間。",
         "Select a cell inside a table first, or pass `table`." => "請先選擇表格內的儲存格，或傳入 `table`。",
-        "Select a timeline column and a values column for the forecast." => "請為預測選擇時間線列和數值列。",
+        "Select a timeline column and a values column for the forecast." => "請為預測選擇時間線欄和數值欄。",
         "The Evolutionary method needs a lower and an upper bound on every variable cell (constraints such as \"A1:A3 <= 10\"), or requireBounds: false." => {
             "演化演算法要求每個可變儲存格都有上下界（例如約束 \"A1:A3 <= 10\"），或傳入 requireBounds: false。"
         }
@@ -1591,7 +1591,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
             "為避免資料丟失，不能將非空白儲存格移出工作表。"
         }
         "To prevent possible loss of data, cells can't be pushed off the end of the worksheet." => "為避免資料丟失，不能將儲存格推出工作表的末端。",
-        "To prevent possible loss of data, columns cannot be shifted off of the worksheet." => "為避免資料丟失，不能將列移出工作表。",
+        "To prevent possible loss of data, columns cannot be shifted off of the worksheet." => "為避免資料丟失，不能將欄移出工作表。",
         "Too few observations for this many X variables." => "相對於這麼多 X 變數，觀測值太少。",
         "Too many report sheets." => "報告工作表過多。",
         "Unprotect the sheet to change its edit ranges." => "請取消保護工作表後再更改可編輯區域。",
@@ -1723,7 +1723,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "There's no room to the right of the selection for the total." => "選區右側沒有空間放置總計。",
         "This workbook has no names to paste." => "此活頁簿沒有可貼上的名稱。",
         "`categories` is not a range" => "`categories` 不是區域",
-        "`columns` must name at least one column of the range" => "`columns` 必須指定該區域的至少一列",
+        "`columns` must name at least one column of the range" => "`columns` 必須指定該區域的至少一欄",
         "`commands` must be an array" => "`commands` 必須是陣列",
         "`confidence` is between 0 and 1 (or 0 and 100%)" => "`confidence` 應在 0 到 1 之間（或 0 到 100%）",
         "`constraints` must be an array" => "`constraints` 必須是陣列",
@@ -1759,8 +1759,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "choose at least one of summary, confidence, kthLargest or kthSmallest" => {
             "請至少選擇 summary、confidence、kthLargest 或 kthSmallest 中的一項"
         }
-        "column outside the filter range" => "列在篩選範圍之外",
-        "destination columns are outside the worksheet" => "目標列在工作表之外",
+        "column outside the filter range" => "欄在篩選範圍之外",
+        "destination columns are outside the worksheet" => "目標欄在工作表之外",
         "empty input Y range" => "輸入 Y 區域為空",
         "empty input range" => "輸入區域為空",
         "expected exclusive or inclusive" => "應為 exclusive 或 inclusive",
@@ -1815,7 +1815,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "multi-area charts require a text category column followed by equal-height series columns" => {
             "多區域圖表要求一個文字分類列，後跟等高的系列列"
         }
-        "multi-area series columns require headers" => "多區域的系列列需要有標題",
+        "multi-area series columns require headers" => "多區域的系列欄需要有標題",
         "no changing cells" => "沒有可變儲存格",
         "no chart on this sheet" => "此工作表上沒有圖表",
         "no ink stroke to convert" => "沒有可轉換的墨跡筆畫",
@@ -1850,7 +1850,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "selection too large" => "選區過大",
         "selection too large to format cell by cell" => "選區過大，無法逐儲存格設定格式",
         "sort key row must be 1 or greater" => "排序鍵的列號必須不小於 1",
-        "source columns are outside the worksheet" => "源列在工作表之外",
+        "source columns are outside the worksheet" => "源欄在工作表之外",
         "style name too long" => "樣式名過長",
         "the confidence level must be between 0 and 100" => "置信水平必須在 0 到 100 之間",
         "the constraint's right side must be a number" => "約束的右側必須是數字",
@@ -1865,8 +1865,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "the shape is not a text box" => "該形狀不是文字方塊",
         "the sources are too large" => "源資料過大",
         "the symbol can't contain a quote, a backslash or a control character" => "符號不能包含引號、反斜槓或控制字元",
-        "the table has no columns" => "該表格沒有列",
-        "the table needs at least two rows and two columns" => "該表格至少需要兩行兩列",
+        "the table has no columns" => "該表格沒有欄",
+        "the table needs at least two rows and two columns" => "該表格至少需要兩列兩欄",
         "the target must contain the source in one of its corners" => "目標區域必須在其某個角落包含源區域",
         "the timeline and the values are each one row or one column" => "時間線和數值各自應為一列或一欄",
         "the timeline and the values must be on one sheet" => "時間線和數值必須位於同一工作表",
@@ -1955,7 +1955,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Shape:" => "形狀：",
         "Data rows:" => "資料列：",
         "Columns:" => "欄：",
-        "Each column must hold:" => "每列必須為：",
+        "Each column must hold:" => "每欄必須為：",
         "Example (what Check, Run and Debug use here):" => "示例（檢查、執行和除錯在此使用）：",
         "Use current selection as example" => "用當前選定區域作為示例",
         "Output anchor (what the Output token stands for):" => "輸出錨點（Output 標記代表的位置）：",
@@ -2185,13 +2185,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Multiple \\nonumber in a row" => "一行中有多個 \\nonumber",
         "\\nonumber must appear at the end of the row" => "\\nonumber 必須位於行尾",
         "Too many tab characters: &" => "製表符過多: &",
-        "Invalid column alignment for array" => "array 的列對齊方式無效",
-        "Expected column alignment character" => "應為列對齊字元",
+        "Invalid column alignment for array" => "array 的欄對齊方式無效",
+        "Expected column alignment character" => "應為欄對齊字元",
         "Expected l or c or r" => "應為 l、c 或 r",
         "Expected ]" => "應為 ]",
         "Unexpected end of CD row after @" => "CD 行在 @ 之後意外結束",
-        "Invalid column alignment for subarray" => "subarray 的列對齊方式無效",
-        "{subarray} can contain only one column" => "{subarray} 只能包含一列",
+        "Invalid column alignment for subarray" => "subarray 的欄對齊方式無效",
+        "{subarray} can contain only one column" => "{subarray} 只能包含一欄",
         "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
             "prooftree 中的 \\LeftLabel 或 \\RightLabel 之後沒有推理命令"
         }
@@ -2222,7 +2222,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{command} valid only within array environment" => "{command} 僅在 array 環境中有效",
         "Mismatched {command}" => "{command} 沒有配對",
         "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "應為 &、\\\\、\\cr 或 \\end，實際為 '{got}'",
-        "Unknown column alignment: {alignment}" => "未知的列對齊方式: {alignment}",
+        "Unknown column alignment: {alignment}" => "未知的欄對齊方式: {alignment}",
         "Too many math in a row: expected {expected}, but got {got}" => "一行中的公式過多: 應為 {expected} 個，實際為 {got} 個",
         "Unknown CD directive: @{directive}" => "未知的 CD 指令: @{directive}",
         "Expected argument for {command}" => "{command} 需要引數",

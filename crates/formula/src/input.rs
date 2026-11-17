@@ -118,7 +118,7 @@ impl FormulaLocale {
         if !bound(alias) {
             return alias.into();
         }
-        if self.canonical_name(name) != name { format!("_xlfn.{name}").into() } else { name.into() }
+        if self.canonical_name(name) != name || bound(name) { format!("_xlfn.{name}").into() } else { name.into() }
     }
 
     /// Resolves a local alias; unmapped names remain unchanged.
@@ -447,6 +447,12 @@ fn normalize(
 #[cfg(test)]
 mod case_rule_tests {
     use super::{FormulaLocale, normalize_function_case, parse_input, print_input};
+
+    #[test]
+    fn canonical_function_remains_unshadowed_when_both_spellings_are_names() {
+        let name = FormulaLocale::De.unshadowed_function_name("SUM", |name| name == "SUMME" || name == "SUM");
+        assert_eq!(name, "_xlfn.SUM");
+    }
 
     #[test]
     fn bare_function_names_do_not_become_cell_references() {

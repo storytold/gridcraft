@@ -831,7 +831,7 @@ pub(super) const ARGUMENTS: &[(&str, &str)] = &[
     ("lookup_vector", "wektor_wyszukiwania"),
     ("lower_limit", "dolny_limit"),
     ("m", "m"),
-    ("match_end", "dopasowuje_ogranicznik_od_końca"),
+    ("match_end", "traktuj_koniec_tekstu_jako_ogranicznik"),
     ("match_mode", "tryb_dopasowania"),
     ("match_type", "metoda_dopasowywania"),
     ("maturity", "data_zapadalności"),
