@@ -69,7 +69,7 @@ Read [`ROADMAP.md`](ROADMAP.md) and [`docs/gaps.md`](docs/gaps.md). `plan/` is a
 
 ## Never crash
 People trust GridCraft with their numbers; a crash loses their work. **This outranks feature work.**
-- **No panics in non-test code:** no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`, `unimplemented!`; no `unsafe` (`unsafe_code = "deny"`). The one exception: the macOS-only `apps/gridcraft/src/font_panel.rs`, which receives the system font panel's picks; each `unsafe` there has a `SAFETY:` comment and a local `#[allow(unsafe_code)]`.
+- **No panics in non-test code:** no `unwrap()`, `expect()`, `panic!`, `unreachable!`, `todo!`, `unimplemented!`; no `unsafe` (`unsafe_code = "deny"`). The one exception: the macOS-only `apps/gridcraft/src/font_panel.rs`, which receives the system font panel's and colour panel's picks; each `unsafe` there has a `SAFETY:` comment and a local `#[allow(unsafe_code)]`.
 - **Errors are `Result<T, E>`** through the crate's error type and `?`.
 - **Input-derived numbers are hostile** (files, formulas, commands, MCP/control params): validate indexes and ranges before access, use checked access when validity is not established, use checked/saturating arithmetic, and cap input-sized allocations (huge ranges, `REPT`, `SEQUENCE`, whole-column references).
 - **Bound recursion** (formula nesting, dependency chains, names referring to names).

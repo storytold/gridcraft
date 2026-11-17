@@ -1,23 +1,46 @@
-//! Format › Font… on macOS: the system font panel, as WordCraft has (storytold/wordcraft#6865).
-//! It has no shortcut: ⌘D is Fill Down and ⌘T Insert Table, as in Excel. The panel sends `changeFont:` to the font manager's target, an object
-//! of ours here, which converts the selection's font the way the panel says and hands what changed
-//! (family, size, bold, italic) to the app, which formats the selected cells with it.
+//! The macOS system font panel (Format › Font…), with its text colour, underline and strikethrough,
+//! and the system colour picker. The same file serves DeckCraft, GridCraft and WordCraft: the app shows it on a
+//! [`Face`] and formats the selection with each [`Pick`].
 //!
-//! An exception to the workspace's no-`unsafe` rule (AGENTS.md): receiving `changeFont:` needs an
-//! Objective-C class (`define_class!`), and setting the manager's target is marked unsafe.
+//! The panel sends `changeFont:` (family, size, bold, italic) and `changeAttributes:` (text colour,
+//! underline, strikethrough) to the font manager's target, an object of ours. The colour panel, opened
+//! from the font panel's Text Color or with its own pickers (colour wheel, sliders, palettes, crayons,
+//! image, third-party pickers), sends `changeColor:` to the same object. Colours come in each picker's
+//! colour space (grey, CMYK, catalogue lists) and are converted to sRGB.
+//!
+//! An exception to the workspace's no-`unsafe` rule (AGENTS.md): receiving those messages needs an
+//! Objective-C class (`define_class!`), and setting the panels' targets is marked unsafe.
 
 use std::cell::RefCell;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject};
-use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSFont, NSFontManager, NSFontPanel, NSFontTraitMask};
-use objc2_foundation::NSString;
+use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
+use objc2_app_kit::{NSColor, NSColorPanel, NSColorSpace, NSFont, NSFontManager, NSFontPanel, NSFontTraitMask};
+use objc2_foundation::{NSDictionary, NSNumber, NSString, ns_string};
 
-use gridcraft_ui_egui::SheetApp;
+/// An underline or strikethrough, as the panel sets it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Line {
+    None,
+    Single,
+    Double,
+}
 
-/// What the user changed in the panel. Only that is applied, so a new size keeps each cell's own
+impl Line {
+    /// From an `NSUnderlineStyle`: its low byte is the line (0 none, 9 double, others single or thick);
+    /// the rest is the pattern (dotted, dashed), which this ignores.
+    fn from_style(style: isize) -> Self {
+        match style & 0xFF {
+            0 => Line::None,
+            9 => Line::Double,
+            _ => Line::Single,
+        }
+    }
+}
+
+/// What the user changed in the panel. Only that is applied, so a new size keeps each run's own
 /// family, bold and italic in a mixed selection.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Pick {
@@ -25,15 +48,19 @@ pub struct Pick {
     pub size: Option<f64>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
+    /// sRGB.
+    pub color: Option<[u8; 3]>,
+    pub underline: Option<Line>,
+    pub strike: Option<Line>,
 }
 
-/// A font as the app formats cells with it.
+/// The selection's font, as the panel shows it.
 #[derive(Debug, Clone, PartialEq)]
-struct Face {
-    family: String,
-    size: f64,
-    bold: bool,
-    italic: bool,
+pub struct Face {
+    pub family: String,
+    pub size: f64,
+    pub bold: bool,
+    pub italic: bool,
 }
 
 impl Pick {
@@ -43,13 +70,34 @@ impl Pick {
             size: (after.size != before.size).then_some(after.size),
             bold: (after.bold != before.bold).then_some(after.bold),
             italic: (after.italic != before.italic).then_some(after.italic),
+            ..Pick::default()
+        }
+    }
+
+    /// The panel's `changeAttributes:` answer, converted from no attributes: only what was set.
+    fn from_attributes(changed: &NSDictionary<NSString, AnyObject>) -> Self {
+        let line = |key: &NSString| changed.objectForKey(key)?.downcast::<NSNumber>().ok().map(|n| Line::from_style(n.as_isize()));
+        Pick {
+            color: changed.objectForKey(ns_string!("NSColor")).and_then(|c| c.downcast::<NSColor>().ok()).and_then(|c| srgb(&c)),
+            underline: line(ns_string!("NSUnderline")),
+            strike: line(ns_string!("NSStrikethrough")),
+            ..Pick::default()
         }
     }
 }
 
+/// A colour in sRGB. `None` for one that has no single colour (a pattern image).
+fn srgb(color: &NSColor) -> Option<[u8; 3]> {
+    let c = color.colorUsingColorSpace(&NSColorSpace::sRGBColorSpace())?;
+    let byte = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Some([byte(c.redComponent()), byte(c.greenComponent()), byte(c.blueComponent())])
+}
+
 struct Ivars {
     picks: Sender<Pick>,
-    /// The font the panel converts: the active cell's, then each pick.
+    /// Wakes the app: a pick arrives through the panel's window, which isn't one the app watches.
+    wake: Box<dyn Fn()>,
+    /// The font the panel converts: the selection's, then each pick.
     current: RefCell<Retained<NSFont>>,
 }
 
@@ -57,7 +105,7 @@ define_class!(
     // SAFETY: NSObject has no subclassing requirements, and `FontTarget` doesn't implement Drop.
     #[unsafe(super(NSObject))]
     #[thread_kind = MainThreadOnly]
-    #[name = "GridCraftFontTarget"]
+    #[name = "CraftFontTarget"]
     #[ivars = Ivars]
     struct FontTarget;
 
@@ -68,22 +116,55 @@ define_class!(
             let manager = NSFontManager::sharedFontManager(self.mtm());
             let before = self.ivars().current.borrow().clone();
             let font = manager.convertFont(&before);
-            let pick = Pick::between(&face(&manager, &before), &face(&manager, &font));
-            if pick != Pick::default() {
-                let _ = self.ivars().picks.send(pick);
-            }
+            self.send(Pick::between(&face(&manager, &before), &face(&manager, &font)));
             self.ivars().current.replace(font);
+        }
+
+        // SAFETY: `changeAttributes:` takes the sender (the panel's effects) and returns nothing.
+        #[unsafe(method(changeAttributes:))]
+        fn change_attributes(&self, sender: Option<&AnyObject>) {
+            if let Some(changed) = sender.and_then(convert_attributes) {
+                self.send(Pick::from_attributes(&changed));
+            }
+        }
+
+        // SAFETY: `changeColor:` takes the sender (the colour panel) and returns nothing.
+        #[unsafe(method(changeColor:))]
+        fn change_color(&self, _sender: Option<&AnyObject>) {
+            let color = NSColorPanel::sharedColorPanel(self.mtm()).color();
+            self.send(Pick { color: srgb(&color), ..Pick::default() });
         }
     }
 );
 
 #[allow(unsafe_code)]
 impl FontTarget {
-    fn new(mtm: MainThreadMarker, picks: Sender<Pick>) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(Ivars { picks, current: RefCell::new(NSFont::systemFontOfSize(12.0)) });
+    fn new(mtm: MainThreadMarker, picks: Sender<Pick>, wake: Box<dyn Fn()>) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(Ivars { picks, wake, current: RefCell::new(NSFont::systemFontOfSize(12.0)) });
         // SAFETY: NSObject's designated initializer, on a freshly allocated object.
         unsafe { msg_send![super(this), init] }
     }
+
+    fn send(&self, pick: Pick) {
+        if pick != Pick::default() {
+            let _ = self.ivars().picks.send(pick);
+            (self.ivars().wake)();
+        }
+    }
+}
+
+/// What the sender of `changeAttributes:` changes, asked as `convertAttributes:` of no attributes.
+#[allow(unsafe_code)]
+fn convert_attributes(sender: &AnyObject) -> Option<Retained<NSDictionary<NSString, AnyObject>>> {
+    // SAFETY: `respondsToSelector:` is NSObject's, which every sender of an action message is.
+    let answers: bool = unsafe { msg_send![sender, respondsToSelector: sel!(convertAttributes:)] };
+    if !answers {
+        return None;
+    }
+    let none = NSDictionary::<NSString, AnyObject>::new();
+    // SAFETY: `convertAttributes:` takes and returns an attribute dictionary (NSFontManager's and the
+    // panel's effects both declare it so), and the sender answers it.
+    unsafe { msg_send![sender, convertAttributes: &*none] }
 }
 
 fn face(manager: &NSFontManager, font: &NSFont) -> Face {
@@ -96,8 +177,8 @@ fn face(manager: &NSFontManager, font: &NSFont) -> Face {
     }
 }
 
-/// Where Format › Font… opens the panel and the picks arrive. Lives as long as the app: the font
-/// manager doesn't keep its target alive.
+/// Where Format › Font… opens the panel and the picks arrive. Lives as long as the app: the panels
+/// don't keep their target alive.
 pub struct FontPanel {
     target: Retained<FontTarget>,
     picks: Receiver<Pick>,
@@ -106,31 +187,29 @@ pub struct FontPanel {
 }
 
 impl FontPanel {
-    pub fn new(mtm: MainThreadMarker) -> Self {
+    /// `wake` asks the app for a pass, in which it takes the [`picks`](Self::picks).
+    pub fn new(mtm: MainThreadMarker, wake: impl Fn() + 'static) -> Self {
         let (tx, picks) = channel();
-        FontPanel { target: FontTarget::new(mtm, tx), picks, shown: RefCell::new(None) }
+        FontPanel { target: FontTarget::new(mtm, tx, Box::new(wake)), picks, shown: RefCell::new(None) }
     }
 
-    /// Shows the panel on the active cell's font.
-    pub fn show(&self, app: &SheetApp) {
-        self.show_face(active_face(app));
-    }
-
-    fn show_face(&self, face: Face) {
+    /// Shows the panel on the selection's font.
+    pub fn show(&self, face: Face) {
         let mtm = self.target.mtm();
         self.select(face);
-        set_target(&NSFontManager::sharedFontManager(mtm), &self.target);
+        set_targets(mtm, &self.target);
         NSFontPanel::sharedFontPanel(mtm).orderFront(None);
     }
 
-    /// While the panel is open, it shows the active cell's font as that changes (another cell, or
-    /// formatting from the ribbon), so a pick converts the cell's own font.
-    pub fn follow(&self, app: &SheetApp) {
+    /// While the panel is open, it shows the selection's font as that changes (another selection, or
+    /// formatting from the ribbon), so a pick converts the selection's own font. `face` is asked only
+    /// then.
+    pub fn follow(&self, face: impl FnOnce() -> Face) {
         let mtm = self.target.mtm();
         if !NSFontPanel::sharedFontPanelExists(mtm) || !NSFontPanel::sharedFontPanel(mtm).isVisible() {
             return;
         }
-        let face = active_face(app);
+        let face = face();
         if self.shown.borrow().as_ref() != Some(&face) {
             self.select(face);
         }
@@ -141,8 +220,8 @@ impl FontPanel {
         let mut traits = NSFontTraitMask::empty();
         traits.set(NSFontTraitMask::BoldFontMask, face.bold);
         traits.set(NSFontTraitMask::ItalicFontMask, face.italic);
-        // A family the system doesn't have (a workbook's, a font GridCraft carries) shows the system
-        // font, bold and italic as the cell is.
+        // A family the system doesn't have (a document's, a font the app carries) shows the system
+        // font, bold and italic as the selection is.
         let font = manager
             .fontWithFamily_traits_weight_size(&NSString::from_str(&face.family), traits, 5, face.size)
             .unwrap_or_else(|| manager.convertFont_toHaveTrait(&NSFont::systemFontOfSize(face.size), traits));
@@ -151,54 +230,56 @@ impl FontPanel {
         self.shown.replace(Some(face));
     }
 
-    /// Shows the panel on a given font, for `tests/mac_font_panel.rs`.
-    #[allow(dead_code)]
-    pub fn show_for_test(&self, family: &str, size: f64, bold: bool, italic: bool) {
-        self.show_face(Face { family: family.into(), size, bold, italic });
-    }
-
-    /// What the panel does when the user picks a font, for `tests/mac_font_panel.rs`.
-    #[allow(dead_code)]
-    pub fn change_font_for_test(&self) {
-        self.target.change_font(objc2::sel!(changeFont:), None);
-    }
-
-    /// The picks since the last call, oldest first. The panel then shows the active cell's font
-    /// again at the next [`follow`](Self::follow), as a pick the app refused leaves the cell as it was.
+    /// The picks since the last call, oldest first. A colour can arrive twice for one change (from the
+    /// font panel's colour well and from the colour panel); a repeat is dropped. The panel then shows
+    /// the selection's font again at the next [`follow`](Self::follow), as a pick the app refused
+    /// leaves the selection as it was.
     pub fn picks(&self) -> Vec<Pick> {
-        let picks: Vec<Pick> = self.picks.try_iter().collect();
+        let mut picks: Vec<Pick> = self.picks.try_iter().collect();
+        picks.dedup();
         if !picks.is_empty() {
             self.shown.replace(None);
         }
         picks
     }
-}
 
-/// The active cell's font, as the ribbon's Font group shows it.
-fn active_face(app: &SheetApp) -> Face {
-    let font = app.session.active().and_then(|d| Some(d.wb.styles.get(d.wb.active()?.style_id(d.selection.active)).font.clone())).unwrap_or_default();
-    Face { family: font.name, size: f64::from(font.size), bold: font.bold, italic: font.italic }
-}
+    /// Shows the panel on a given font, for `tests/mac_font_panel.rs`.
+    #[allow(dead_code)]
+    pub fn show_for_test(&self, family: &str, size: f64, bold: bool, italic: bool) {
+        self.show(Face { family: family.into(), size, bold, italic });
+    }
 
-/// Formats the selected cells with what the user changed, as the ribbon's Font, Size, Bold and
-/// Italic do.
-pub fn apply(app: &mut SheetApp, pick: &Pick) {
-    let runs = [
-        pick.family.as_ref().map(|name| ("home.fontName", serde_json::json!({"name": name}))),
-        pick.size.map(|size| ("home.fontSize", serde_json::json!({"size": size}))),
-        pick.bold.map(|on| ("home.bold", serde_json::json!({"on": on}))),
-        pick.italic.map(|on| ("home.italic", serde_json::json!({"on": on}))),
-    ];
-    for (id, params) in runs.into_iter().flatten() {
-        app.run_or_alert(id, params);
+    /// What the panel does when the user picks a font, for `tests/mac_font_panel.rs`.
+    #[allow(dead_code)]
+    pub fn change_font_for_test(&self) {
+        self.target.change_font(sel!(changeFont:), None);
+    }
+
+    /// What the colour panel does when the user picks a colour, for `tests/mac_font_panel.rs`.
+    #[allow(dead_code)]
+    pub fn change_color_for_test(&self, color: &NSColor) {
+        NSColorPanel::sharedColorPanel(self.target.mtm()).setColor(color);
+        self.target.change_color(sel!(changeColor:), None);
+    }
+
+    /// What the panel's effects do when the user changes them, for `tests/mac_font_panel.rs`.
+    #[allow(dead_code)]
+    pub fn change_attributes_for_test(&self, changed: &NSDictionary<NSString, AnyObject>) {
+        self.target.send(Pick::from_attributes(changed));
     }
 }
 
 #[allow(unsafe_code)]
-fn set_target(manager: &NSFontManager, target: &FontTarget) {
-    // SAFETY: the target responds to the manager's action (`changeFont:`), and `FontPanel` keeps it
-    // alive for as long as the app runs, so the manager's unretained reference stays valid.
-    unsafe { manager.setTarget(Some(target)) };
+fn set_targets(mtm: MainThreadMarker, target: &FontTarget) {
+    // SAFETY: the target answers the font manager's actions (`changeFont:`, `changeAttributes:`) and
+    // the colour panel's (`changeColor:`), and `FontPanel` keeps it alive for as long as the app runs,
+    // so the panels' unretained references stay valid.
+    unsafe {
+        NSFontManager::sharedFontManager(mtm).setTarget(Some(target));
+        let colors = NSColorPanel::sharedColorPanel(mtm);
+        colors.setTarget(Some(target));
+        colors.setAction(Some(sel!(changeColor:)));
+    }
 }
 
 #[cfg(test)]
@@ -213,5 +294,14 @@ mod tests {
         let plain = Face { bold: false, ..before.clone() };
         assert_eq!(Pick::between(&before, &plain), Pick { bold: Some(false), ..Pick::default() });
         assert_eq!(Pick::between(&before, &before), Pick::default());
+    }
+
+    #[test]
+    fn underline_styles_are_lines() {
+        assert_eq!(Line::from_style(0), Line::None);
+        assert_eq!(Line::from_style(1), Line::Single);
+        assert_eq!(Line::from_style(2), Line::Single, "thick");
+        assert_eq!(Line::from_style(9), Line::Double);
+        assert_eq!(Line::from_style(0x0201), Line::Single, "dotted single");
     }
 }
