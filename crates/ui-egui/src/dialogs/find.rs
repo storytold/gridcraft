@@ -3,6 +3,14 @@ use super::{Dialog, Json, Key, SheetApp, json};
 
 /// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    // Ctrl+F (⌘F) or Ctrl+H (⌘H) while the dialog is up goes back to "Find what" on that tab,
+    // with its text selected, as in Excel (#4421): the grid takes no keys while a dialog is open,
+    // so the shortcut has to be read here.
+    if let Some(tab) = refocus_shortcut(ui) {
+        d.tab = tab.into();
+        d.values.remove("focused");
+        d.values.insert("selectAll".into(), json!(true));
+    }
     ui.horizontal(|ui| {
         for tab in ["Find", "Replace"] {
             if ui.selectable_label(d.tab == tab, tab).clicked() {
@@ -14,11 +22,18 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let mut with = d.values.get("with").and_then(Json::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
         let label = ui.label("Find what:");
-        let r = ui.add(egui::TextEdit::singleline(&mut what).desired_width(260.0)).labelled_by(label.id);
+        let r = ui.add(egui::TextEdit::singleline(&mut what).id(find_what_id()).desired_width(260.0)).labelled_by(label.id);
         // Like Excel, the cursor starts in "Find what" - asked for once, so clicking another field still works.
         if !d.values.contains_key("focused") {
             r.request_focus();
             d.values.insert("focused".into(), json!(true));
+        }
+        // Back from the shortcut: the whole text selected, so typing replaces it.
+        if d.values.remove("selectAll").is_some() {
+            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), r.id).unwrap_or_default();
+            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(what.chars().count()));
+            state.cursor.set_char_range(Some(all));
+            state.store(ui.ctx(), r.id);
         }
     });
     if d.tab == "Replace" {
@@ -162,4 +177,21 @@ pub(super) fn go_to(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confi
     if !open {
         *confirm = true;
     }
+}
+
+/// The "Find what" field's id, so a shortcut can put the focus back on it.
+pub(super) fn find_what_id() -> egui::Id {
+    egui::Id::unique("gridcraft.find.what")
+}
+
+/// The tab Ctrl+F (⌘F) or Ctrl+H (⌘H, with or without Shift) pressed this frame asks for; None
+/// without one. Ctrl+Shift+F is the grid's filter, not Find.
+fn refocus_shortcut(ui: &egui::Ui) -> Option<&'static str> {
+    ui.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key: Key::F, pressed: true, modifiers: m, .. } if m.command && !m.shift && !m.alt => Some("Find"),
+            egui::Event::Key { key: Key::H, pressed: true, modifiers: m, .. } if m.command && !m.alt => Some("Replace"),
+            _ => None,
+        })
+    })
 }

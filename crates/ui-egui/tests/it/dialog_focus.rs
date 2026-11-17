@@ -247,3 +247,50 @@ fn command_search_hides_disabled_and_handles_missing_shortcuts() {
         h.get_by_label_contains("Align Right    Home");
     }
 }
+
+/// Ctrl+F (⌘F) or Ctrl+H, as a press of the platform's command key with `key`.
+fn command_key(h: &mut egui_kittest::Harness<'static, SheetApp>, key: Key) {
+    let modifiers = egui::Modifiers { command: true, ctrl: !cfg!(target_os = "macos"), mac_cmd: cfg!(target_os = "macos"), ..Default::default() };
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+    h.run_steps(4);
+}
+
+/// #4421: with Find and Replace open and its field no longer focused (the user clicked the sheet
+/// to look at a result), Ctrl+F (⌘F) puts the cursor back in "Find what", its text selected, so
+/// what is typed next replaces the search; Ctrl+H does the same on the Replace tab. The grid takes
+/// no keys while a dialog is open, so the shortcut used to do nothing.
+#[test]
+fn the_find_shortcut_puts_the_cursor_back_in_an_open_find_box() {
+    let mut h = harness();
+    command_key(&mut h, Key::F);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("find"), "Ctrl+F opens Find");
+    assert!(h.ctx.text_edit_focused(), "the field has the cursor");
+    for c in "total".chars() {
+        h.input_mut().events.push(Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+    let what = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().dialog.as_ref().and_then(|d| d.values.get("what")).cloned();
+    assert_eq!(what(&h), Some(json!("total")));
+    // The field loses the cursor, the box stays open.
+    let field = h.ctx.memory(|m| m.focused()).unwrap();
+    h.ctx.memory_mut(|m| m.surrender_focus(field));
+    h.run_steps(2);
+    assert!(!h.ctx.text_edit_focused());
+    command_key(&mut h, Key::F);
+    assert!(h.ctx.text_edit_focused(), "Ctrl+F put the cursor back");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(field), "in Find what");
+    // Its text is selected: typing replaces it.
+    for c in "sum".chars() {
+        h.input_mut().events.push(Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+    assert_eq!(what(&h), Some(json!("sum")));
+    // Ctrl+H: the Replace tab, the cursor in Find what again.
+    h.ctx.memory_mut(|m| m.surrender_focus(field));
+    h.run_steps(2);
+    command_key(&mut h, Key::H);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.tab.as_str()), Some("Replace"));
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(field));
+}
