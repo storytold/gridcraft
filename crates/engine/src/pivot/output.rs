@@ -1,7 +1,7 @@
 use super::items::{Acc, FieldItems, Node, is_collapsed};
 use super::{
-    BorderLine, BorderStyle, Color, Fill, HAlign, HashMap, MAX_COLS, MAX_OUTPUT_CELLS, MAX_ROWS, NumFmt, PivotField, PivotLayout, PivotTable, Style,
-    Value,
+    BorderLine, BorderStyle, Color, Fill, HAlign, HashMap, MAX_COLS, MAX_OUTPUT_CELLS, MAX_ROWS, NumFmt, PivotDataCell, PivotField, PivotLayout,
+    PivotTable, Style, Value,
 };
 
 // ---------------------------------------------------------------- output
@@ -61,6 +61,8 @@ pub struct Output {
     pub chart_cols: Vec<(u32, String)>,
     /// Grid column holding the innermost row labels (`None` without row fields).
     pub label_col: Option<u32>,
+    /// Every value cell with the items that locate it (for GETPIVOTDATA).
+    pub data: Vec<PivotDataCell>,
 }
 
 impl Output {

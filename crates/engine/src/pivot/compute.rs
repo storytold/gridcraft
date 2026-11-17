@@ -3,8 +3,8 @@ use super::output::{
     AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, caption, data_cols_exceed_sheet, flatten_cols,
 };
 use super::{
-    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
-    PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
+    CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_INDEXED_CELLS, MAX_VALUE_FIELDS, PivotDataCell, PivotDateGroup,
+    PivotField, PivotFilter, PivotFunc, PivotItemRef, PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -750,6 +750,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             chart_rows: vec![],
             chart_cols: vec![],
             label_col: None,
+            data: vec![],
         });
     }
 
@@ -831,6 +832,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     } else {
         Some(row_levels.saturating_sub(1) as u32)
     };
+    let mut data: Vec<PivotDataCell> = Vec::new();
     for line in &lines {
         let rk = match line.kind {
             LineKind::Item(b) => RowKind::Item(b),
@@ -852,9 +854,38 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         if !line.values {
             continue;
         }
-        fill_line_values(&mut g, r, line, &data_cols, &specs, &vals, &data_fmt, l, ck.1, pt, &lookup, &level0, &siblings, &show_cache, &mut probe);
+        fill_line_values(
+            &mut g,
+            r,
+            line,
+            &data_cols,
+            &specs,
+            &vals,
+            &data_fmt,
+            l,
+            ck.1,
+            &ctx,
+            &col_fields,
+            &col_items,
+            &lookup,
+            &level0,
+            &siblings,
+            &show_cache,
+            &mut probe,
+            &mut data,
+        )?;
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
+}
+
+fn item_refs(fields: &[&PivotField], items: &[FieldItems], path: &[u32]) -> Vec<PivotItemRef> {
+    path.iter()
+        .enumerate()
+        .filter_map(|(depth, index)| {
+            let (field, item) = (fields.get(depth)?, items.get(depth)?.get(*index)?);
+            Some(PivotItemRef { field: field.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -868,13 +899,16 @@ fn fill_line_values(
     data_fmt: &[Option<String>],
     l: usize,
     ck: CellKind,
-    pt: &PivotTable,
+    ctx: &Ctx<'_>,
+    col_fields: &[&PivotField],
+    col_items: &[FieldItems],
     lookup: &ValueLookup<'_>,
     level0: &[u32],
     siblings: &HashMap<Vec<u32>, Vec<u32>>,
     show_cache: &ShowCache,
     probe: &mut Option<&mut Probe>,
-) {
+    data: &mut Vec<PivotDataCell>,
+) -> Result<(), String> {
     let rp = line.path.as_slice();
     for (j, (si, col_vi)) in data_cols.iter().enumerate() {
         let line_vi = col_vi.or(line.vi);
@@ -884,7 +918,7 @@ fn fill_line_values(
         let Some(raw) = lookup.get(rp, cp, *vi) else {
             // No records: blank, or the "For empty cells show" caption (a number when it
             // reads as one, as Excel stores `missingCaption="0"`).
-            if let Some(c) = &pt.empty_caption {
+            if let Some(c) = &ctx.pt.empty_caption {
                 let v = c.trim().parse::<f64>().ok().filter(|x| x.is_finite()).map(Value::number).unwrap_or_else(|| Value::text(c.as_str()));
                 let fmt = if matches!(v, Value::Number(_)) { data_fmt.get(*vi).cloned().flatten() } else { None };
                 g.set(r, l + j, v, ck, 0, fmt);
@@ -893,6 +927,18 @@ fn fill_line_values(
         };
         let context = ShowContext { row_path: rp, col_path: cp, value_index: *vi, level0, siblings, cache: show_cache };
         let shown = show_value(vdef, raw, lookup, &context);
+        if data.len() >= MAX_INDEXED_CELLS {
+            return Err(format!("A PivotTable report can have at most {MAX_INDEXED_CELLS} value cells."));
+        }
+        let mut items = item_refs(&ctx.rows, &ctx.row_items, rp);
+        items.extend(item_refs(col_fields, col_items, cp));
+        data.push(PivotDataCell {
+            data_field: vdef.name.clone(),
+            source_col: vdef.source_col.clone(),
+            items,
+            row: u32::try_from(r).unwrap_or(u32::MAX),
+            col: u32::try_from(l + j).unwrap_or(u32::MAX),
+        });
         if let Some(pr) = probe.as_deref_mut() {
             if pr.at == Some((r, l + j)) {
                 pr.hit = Some((rp.to_vec(), cp.to_vec()));
@@ -903,4 +949,5 @@ fn fill_line_values(
         }
         g.set(r, l + j, shown, ck, 0, data_fmt.get(*vi).cloned().flatten());
     }
+    Ok(())
 }
