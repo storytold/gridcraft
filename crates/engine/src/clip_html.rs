@@ -104,6 +104,9 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
             }
             ("td" | "th", false) if in_table => {
                 grid.finish(&mut cell);
+                // A cell outside any row is in an implicit row and `tbody`, as the HTML parser
+                // reads it (after CodeRabbit's review).
+                group.get_or_insert_with(|| "tbody".to_string());
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 // `rowspan="0"` spans the rest of the row group, which a group's end cuts short.
@@ -513,6 +516,9 @@ mod tests {
         ] {
             assert_eq!(texts(&table_cells(html, 2, 2)), [vec!["A", "1"], vec!["", "2"]], "{html}");
         }
+        // A table that starts with a cell, no `tr`: the implicit `tbody` it opens ends at `</tbody>`.
+        let html = "<table><td rowspan=0>A</td><td>1</td></tbody><tr><td>2</td><td>3</td></tr></table>";
+        assert_eq!(texts(&table_cells(html, 2, 2)), [vec!["A", "1"], vec!["2", "3"]], "{html}");
     }
 
     #[test]
