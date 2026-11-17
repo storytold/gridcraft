@@ -1,3 +1,5 @@
+use gridcraft_engine::model::ObjKind;
+
 use super::geo::Geo;
 use super::interact::{col_edge, freeze_handles, hidden_col_edge, hidden_row_edge, on_border, row_edge};
 use super::{CellRef, Color32, CursorIcon, Drag, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, pos2, vec2};
@@ -21,8 +23,9 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
     {
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
-    // Draw tools own the cursor over cells, including while recording a stroke.
-    if !app.session.draw_tool.is_empty() && in_cells {
+    // Draw tools and Insert › Controls placement own the cursor over cells, including while
+    // recording a stroke or drawing the control.
+    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }
@@ -79,9 +82,15 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     // The selected object's handles resize it; any object's body moves it.
     let idle = app.grid.drag == Drag::None && app.editor.is_none();
     let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p).map(|(.., h)| h) } else { None };
-    let on_object = idle && crate::chartview::hit(app, geo, sh, p).is_some();
+    let hit = if idle { crate::chartview::hit(app, geo, sh, p) } else { None };
+    // A form control works on click unless it is selected (or Ctrl or Cmd is held).
+    let mods = ctx.input(|i| i.modifiers);
+    let works = hit.is_some_and(|(o, _)| o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl);
+    let on_object = hit.is_some();
     if let Some(h) = object_handle {
         ctx.set_cursor_icon(h.cursor(geo.rtl));
+    } else if works {
+        ctx.set_cursor_icon(CursorIcon::PointingHand);
     } else if on_object {
         ctx.set_cursor_icon(CursorIcon::Move);
     } else if near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
