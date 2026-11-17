@@ -77,7 +77,7 @@ impl eframe::App for App {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
                 self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
-            // Made at start, so it can close the panels macOS reopens from the last quit.
+            // Made at start, so `follow` can close the panels macOS reopens from the last quit.
             if self.4.is_none()
                 && let Some(mtm) = objc2::MainThreadMarker::new()
             {

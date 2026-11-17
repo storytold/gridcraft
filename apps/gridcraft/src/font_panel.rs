@@ -205,13 +205,6 @@ impl FontPanel {
     /// `wake` asks the app for a pass, in which it takes the [`picks`](Self::picks).
     pub fn new(mtm: MainThreadMarker, wake: impl Fn() + 'static) -> Self {
         let (tx, picks) = channel();
-        // macOS reopens the panels a quit left open; they open only when asked.
-        if NSFontPanel::sharedFontPanelExists(mtm) {
-            NSFontPanel::sharedFontPanel(mtm).orderOut(None);
-        }
-        if NSColorPanel::sharedColorPanelExists(mtm) {
-            NSColorPanel::sharedColorPanel(mtm).orderOut(None);
-        }
         FontPanel { target: FontTarget::new(mtm, tx, Box::new(wake)), picks, shown: RefCell::new(None) }
     }
 
@@ -236,6 +229,15 @@ impl FontPanel {
     pub fn follow(&self, face: impl FnOnce() -> Face) {
         let mtm = self.target.mtm();
         if !NSFontPanel::sharedFontPanelExists(mtm) || !NSFontPanel::sharedFontPanel(mtm).isVisible() {
+            return;
+        }
+        // Open but never shown: macOS reopened the panels a quit left open (window restoration,
+        // which may come after the first frames). They open only when asked.
+        if self.shown.borrow().is_none() {
+            NSFontPanel::sharedFontPanel(mtm).orderOut(None);
+            if NSColorPanel::sharedColorPanelExists(mtm) {
+                NSColorPanel::sharedColorPanel(mtm).orderOut(None);
+            }
             return;
         }
         let face = face();
