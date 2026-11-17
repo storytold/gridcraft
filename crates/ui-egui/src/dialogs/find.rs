@@ -5,11 +5,22 @@ use super::{Dialog, Json, Key, SheetApp, json};
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     // Ctrl+F (⌘F) or Ctrl+H (⌘H) while the dialog is up goes back to "Find what" on that tab,
     // with its text selected, as in Excel (#4421): the grid takes no keys while a dialog is open,
-    // so the shortcut has to be read here.
-    if let Some(tab) = refocus_shortcut(ui) {
+    // so the shortcut has to be read here. It is taken out of the input before the fields are
+    // drawn (a focused field would read Ctrl+H as Backspace), and the focus and the selection are
+    // set first, so text typed in the same frame replaces the search rather than extending it.
+    // The press that opened the dialog is in this frame's input too: until the dialog has been
+    // drawn once (and focused its field), the shortcut is the opening, not a return to it.
+    if d.values.contains_key("focused")
+        && let Some(tab) = take_refocus_shortcut(ui)
+    {
         d.tab = tab.into();
-        d.values.remove("focused");
-        d.values.insert("selectAll".into(), json!(true));
+        d.values.insert("focused".into(), json!(true));
+        let id = find_what_id();
+        ui.memory_mut(|m| m.request_focus(id));
+        let chars = d.values.get("what").and_then(Json::as_str).map_or(0, |w| w.chars().count());
+        let mut state = egui::text_edit::TextEditState::load(ui.ctx(), id).unwrap_or_default();
+        state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(chars))));
+        state.store(ui.ctx(), id);
     }
     ui.horizontal(|ui| {
         for tab in ["Find", "Replace"] {
@@ -27,13 +38,6 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
         if !d.values.contains_key("focused") {
             r.request_focus();
             d.values.insert("focused".into(), json!(true));
-        }
-        // Back from the shortcut: the whole text selected, so typing replaces it.
-        if d.values.remove("selectAll").is_some() {
-            let mut state = egui::text_edit::TextEditState::load(ui.ctx(), r.id).unwrap_or_default();
-            let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(what.chars().count()));
-            state.cursor.set_char_range(Some(all));
-            state.store(ui.ctx(), r.id);
         }
     });
     if d.tab == "Replace" {
@@ -184,14 +188,18 @@ pub(super) fn find_what_id() -> egui::Id {
     egui::Id::unique("gridcraft.find.what")
 }
 
-/// The tab Ctrl+F (⌘F) or Ctrl+H (⌘H, with or without Shift) pressed this frame asks for; None
-/// without one. Ctrl+Shift+F is the grid's filter, not Find.
-fn refocus_shortcut(ui: &egui::Ui) -> Option<&'static str> {
-    ui.input(|i| {
-        i.events.iter().find_map(|e| match e {
-            egui::Event::Key { key: Key::F, pressed: true, modifiers: m, .. } if m.command && !m.shift && !m.alt => Some("Find"),
-            egui::Event::Key { key: Key::H, pressed: true, modifiers: m, .. } if m.command && !m.alt => Some("Replace"),
-            _ => None,
-        })
+/// The tab Ctrl+F (⌘F) or Ctrl+H (⌘H, with or without Shift) pressed this frame asks for, with
+/// those key events taken out of the input; None without one. Ctrl+Shift+F is the grid's filter,
+/// not Find, and stays.
+fn take_refocus_shortcut(ui: &egui::Ui) -> Option<&'static str> {
+    let tab_of = |e: &egui::Event| match e {
+        egui::Event::Key { key: Key::F, modifiers: m, .. } if m.command && !m.shift && !m.alt => Some("Find"),
+        egui::Event::Key { key: Key::H, modifiers: m, .. } if m.command && !m.alt => Some("Replace"),
+        _ => None,
+    };
+    ui.input_mut(|i| {
+        let tab = i.events.iter().find_map(|e| if matches!(e, egui::Event::Key { pressed: true, .. }) { tab_of(e) } else { None });
+        i.events.retain(|e| tab_of(e).is_none());
+        tab
     })
 }

@@ -1241,6 +1241,34 @@ mod tests {
         frame(&mut app, &mut d, egui::RawInput::default());
         assert!(focused(&ctx));
         assert_eq!(d.tab, "Replace");
+
+        // After CodeRabbit's review: the shortcut and what is typed next can come in one frame,
+        // and the text replaces the search; and Ctrl+H, which a focused field reads as Backspace
+        // on Windows and Linux, deletes nothing.
+        let mut d = Dialog::open(&mut app, "find", json!({})).unwrap();
+        d.values.insert("what".into(), json!("total"));
+        frame(&mut app, &mut d, egui::RawInput::default());
+        ctx.memory_mut(|m| m.surrender_focus(field));
+        let mut input = key(Key::F, false);
+        input.events.push(egui::Event::Text("s".into()));
+        frame(&mut app, &mut d, input);
+        assert_eq!(d.values["what"], json!("s"), "the shortcut and a letter in one frame");
+        d.values.insert("what".into(), json!("total"));
+        frame(&mut app, &mut d, egui::RawInput::default());
+        // The field focused, the caret at the end, then Ctrl+H as Windows and Linux send it.
+        let at_end = egui::text::CCursorRange::one(egui::text::CCursor::new(5));
+        let mut state = egui::text_edit::TextEditState::load(&ctx, field).unwrap_or_default();
+        state.cursor.set_char_range(Some(at_end));
+        state.store(&ctx, field);
+        assert!(focused(&ctx));
+        let ctrl_h = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key { key: Key::H, physical_key: None, pressed: true, repeat: false, modifiers: ctrl_h }],
+            ..Default::default()
+        };
+        frame(&mut app, &mut d, input);
+        assert_eq!(d.values["what"], json!("total"), "Ctrl+H deleted nothing");
+        assert_eq!(d.tab, "Replace");
     }
 
     #[test]
