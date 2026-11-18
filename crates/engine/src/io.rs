@@ -1082,12 +1082,32 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     let prior = std::fs::metadata(path).ok();
     let destination = std::path::Path::new(path);
     let mut temp = create_save_temp(destination, prior.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
-    temp.write_all(bytes).and_then(|()| temp.as_file().sync_all()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    temp.write_all(bytes)
+        .and_then(|()| temp.as_file().sync_all().or_else(|e| if full_sync_unsupported(&e) { Ok(()) } else { Err(e) }))
+        .map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     temp.persist(destination).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))?;
     // Some filesystems don't support directory sync. The replacement has already succeeded.
     #[cfg(unix)]
     let _ = std::fs::File::open(save_parent(destination)).and_then(|directory| directory.sync_all());
     Ok(())
+}
+
+/// True when a flush failed only because the file system cannot do it: on Unix ENOTTY (25, what
+/// `fcntl(F_FULLFSYNC)` returns on such volumes; on Windows 25 is ERROR_SEEK, a real failure), on
+/// Apple targets ENOTSUP (45, which std leaves uncategorized there), or an unsupported-operation
+/// error (EOPNOTSUPP/ENOSYS, and ENOTSUP where it equals EOPNOTSUPP). Any other error is a real
+/// failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn full_sync_unsupported(e: &std::io::Error) -> bool {
+    flush_unsupported_on(e, cfg!(unix), cfg!(target_vendor = "apple"))
+}
+
+/// [`full_sync_unsupported`] for a given platform, so each platform's raw codes can be tested
+/// on any host.
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_unsupported_on(e: &std::io::Error, unix: bool, apple: bool) -> bool {
+    let raw = e.raw_os_error();
+    (unix && raw == Some(25)) || (apple && raw == Some(45)) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
 /// The mode a saved file gets from the file it replaces (`old`): all of it when its group was

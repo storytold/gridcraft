@@ -767,7 +767,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Culoare celulă",
         "A to Z" => "De la A la Z",
         "Z to A" => "De la Z la A",
-        "+ Add Level" => "+ Adăugare nivel",
+        "Add Level" => "Adăugare nivel",
+        "Delete Level" => "Ștergere nivel",
+        "Copy Level" => "Copiere nivel",
+        "Move Up" => "Mutare în sus",
+        "Move Down" => "Mutare în jos",
+        "Order" => "Ordine",
+        "Sort On" => "Sortare pe baza",
+        "Sort|Column" => "Coloană",
+        "Column {letters}" => "Coloană {letters}",
+        "Smallest to Largest" => "De la cel mai mic la cel mai mare",
+        "Largest to Smallest" => "De la cel mai mare la cel mai mic",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Închideți caseta de dialog Sortare înainte de a comuta sau a modifica foile de lucru."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Reveniți la foaia de lucru inițială pentru a sorta sau anulați.",
         "New…" => "Nou…",
         "Edit…" => "Editare…",
         "Name" => "Nume",
