@@ -440,7 +440,7 @@ fn over_limit_errors_name_their_limit() {
     let many = format!("SUM({})", vec!["1"; 256].join(","));
     assert_eq!(parse(&many).err().and_then(|e| e.over_limit()), Some(crate::OverLimit::Arguments));
     // A formula refused for its syntax reports no limit.
-    assert_eq!(parse("1+").err().and_then(|e| e.over_limit()), None);
+    assert_eq!(parse("1+").expect_err("incomplete syntax").over_limit(), None);
 }
 
 #[test]

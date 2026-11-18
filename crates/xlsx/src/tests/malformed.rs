@@ -571,17 +571,46 @@ fn over_limit_formulas_are_kept_but_reported() {
     let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
     let s = wb.sheet(0).unwrap();
     // Every formula is kept, with the value the file saved.
-    for (a, n) in [("A1", 7.0), ("B1", 8.0), ("C1", 9.0), ("D1", 10.0)] {
+    for (a, text, n) in [("A1", long.as_str(), 7.0), ("B1", many.as_str(), 8.0), ("C1", long2.as_str(), 9.0), ("D1", "SUM(", 10.0)] {
         let at = CellRef::parse(a).unwrap();
-        assert!(s.cell(at).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.expr.is_none()), "{a}");
+        let f = s.cell(at).and_then(|c| c.formula.as_ref()).unwrap_or_else(|| panic!("missing formula in {a}"));
+        assert!(f.expr.is_none(), "{a}");
+        assert_eq!(f.text, text, "{a}");
         assert_eq!(s.value(at), Value::Number(n), "{a}");
     }
     assert!(s.cell(CellRef::parse("E1").unwrap()).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.expr.is_some()));
     // The over-limit cells are named, and the rest of their kind counted.
-    let length = rep.warnings.iter().find(|w| w.contains("8192")).unwrap_or_else(|| panic!("no length warning: {:?}", rep.warnings));
+    let length_warnings: Vec<_> = rep.warnings.iter().filter(|w| w.contains("8192")).collect();
+    assert_eq!(length_warnings.len(), 1, "{:?}", rep.warnings);
+    let length = length_warnings[0];
     assert!(length.contains("sheet \"Data\"") && length.contains("in A1") && length.contains("and 1 more"), "{length}");
-    let args = rep.warnings.iter().find(|w| w.contains("255 arguments")).unwrap_or_else(|| panic!("no argument warning: {:?}", rep.warnings));
+    let arg_warnings: Vec<_> = rep.warnings.iter().filter(|w| w.contains("255 arguments")).collect();
+    assert_eq!(arg_warnings.len(), 1, "{:?}", rep.warnings);
+    let args = arg_warnings[0];
     assert!(args.contains("sheet \"Data\"") && args.contains("in B1") && !args.contains("(and "), "{args}");
     // D1 doesn't parse either, but not because of a limit: it stays quiet.
     assert!(!rep.warnings.iter().any(|w| w.contains("in D1")), "{:?}", rep.warnings);
+}
+
+/// An array anchor whose formula fails to parse cannot refill its range, so other cells in the
+/// range keep their cached values.
+#[test]
+fn refused_array_anchors_keep_cached_values_in_range() {
+    use gridcraft_core::{CellRef, Value};
+    let long = format!("1{}", "+1".repeat(gridcraft_formula::MAX_FORMULA_LEN.div_ceil(2)));
+    let body = format!(
+        r#"<sheetData><row r="1"><c r="A1"><f t="array" ref="A1:A2">{long}</f><v>11</v></c><c r="B1"><f t="array" ref="B1:B2">SUM(</f><v>21</v></c></row><row r="2"><c r="A2"><v>12</v></c><c r="B2"><v>22</v></c></row></sheetData>"#
+    );
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    for (a, text, n) in [("A1", long.as_str(), 11.0), ("B1", "SUM(", 21.0)] {
+        let at = CellRef::parse(a).unwrap();
+        let f = s.cell(at).and_then(|c| c.formula.as_ref()).unwrap_or_else(|| panic!("missing formula in {a}"));
+        assert!(f.expr.is_none(), "{a}");
+        assert_eq!(f.text, text, "{a}");
+        assert_eq!(s.value(at), Value::Number(n), "{a}");
+    }
+    assert_eq!(s.value(CellRef::parse("A2").unwrap()), Value::Number(12.0));
+    assert_eq!(s.value(CellRef::parse("B2").unwrap()), Value::Number(22.0));
+    assert_eq!(rep.warnings.iter().filter(|w| w.contains("8192")).count(), 1, "{:?}", rep.warnings);
 }

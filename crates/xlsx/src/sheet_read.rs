@@ -786,7 +786,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             }
             let mut fm = formula_from_text(st, pos, text);
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
-            if !range.is_single() {
+            if fm.expr.is_some() && !range.is_single() {
                 push_dynamic(st, range);
             }
             if !dynamic {
