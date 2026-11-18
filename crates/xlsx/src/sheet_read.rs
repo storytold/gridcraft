@@ -8,7 +8,7 @@ use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRe
 use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
-    NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn,
+    NoteBox, NoteCorner, Orientation, PageOrder, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Style, Table, TableColumn, TotalsFn,
     Validation, ValidationKind, XmlColumnPr,
 };
 
@@ -25,7 +25,7 @@ mod rules;
 
 pub use parts::{read_autofilter, read_table};
 use parts::{read_comments, read_hyperlinks, read_note_shapes, read_threaded};
-use rules::{read_cf, read_validation};
+use rules::{read_cf, read_validation, read_x14_cf};
 
 struct Shared {
     anchor: CellRef,
@@ -134,6 +134,9 @@ fn settle_python_spills_past_budget(st: &RowState, sheet: &mut Sheet) {
     }
 }
 
+/// The most cell elements read from one workbook, across its sheets: the reader's own cap.
+/// (`calc::eval::MAX_CELLS` has the same value but limits one array result, not a workbook.)
+pub(crate) const MAX_CELLS: u64 = 16_000_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
 const MAX_HYPERLINK_BYTES: u64 = 8 * 1024 * 1024;
@@ -194,12 +197,10 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     let rels = cx.pkg.rels(part)?;
     let mut sheet = Sheet::new(name);
     let mut st = RowState::default();
-    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| {
-        read_row(cx, &mut sheet, &mut st, &row);
-        Ok(())
-    });
+    let res = xml::parse_streaming(&bytes, &["row"], &mut |row| read_row(cx, &mut sheet, &mut st, &row));
     let root = match res {
         Ok(r) => r,
+        Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
         Err(e) => {
             cx.warn(format!("sheet \"{name}\" is damaged ({e}); kept {} rows", st.rows));
             El::default()
@@ -211,6 +212,12 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     settle_python_spills_past_budget(&st, &mut sheet);
     drop(bytes);
 
+    // Relationships by id: hyperlinks, drawings and tables each look one up.
+    let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(rels.len());
+    for r in &rels {
+        // The first of duplicate ids wins, as a linear search would find it.
+        rel_by_id.entry(r.id.as_str()).or_insert(r);
+    }
     let mut fit_to_page = false;
     let mut link_budget = LinkBudget::default();
     let mut cf_kept_ranges = 0u64;
@@ -248,7 +255,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     }
                 }
             }
-            "hyperlinks" => read_hyperlinks(cx, name, e, &rels, &mut sheet, &mut link_budget),
+            "hyperlinks" => read_hyperlinks(cx, name, e, &rel_by_id, &mut sheet, &mut link_budget),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, e),
             "printOptions" => {
                 sheet.print.gridlines = e.flag("gridLines", false);
@@ -270,6 +277,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                 }
                 // `downThenOver` when absent (ECMA-376's default); an unknown value reads as that too.
                 sheet.print.page_order = e.attr("pageOrder").and_then(PageOrder::parse).unwrap_or_default();
+                // The number counts only when `useFirstPageNumber` says so; otherwise it's Automatic.
+                sheet.print.first_page_number = e.flag("useFirstPageNumber", false).then(|| e.attr_u32("firstPageNumber")).flatten();
                 if let Some(p) = e.attr_u32("paperSize").and_then(paper_name) {
                     sheet.print.paper = p.to_string();
                 }
@@ -320,14 +329,14 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                 });
             }
             "drawing" => {
-                if let Some(rel) = e.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
+                if let Some(rel) = e.attr("id").and_then(|id| rel_by_id.get(id).copied()) {
                     let target = rel.target.clone();
                     crate::drawing::read_drawing(cx, &target, &mut sheet)?;
                 }
             }
             "tableParts" => {
                 for tp in e.kids("tablePart") {
-                    if let Some(rel) = tp.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)) {
+                    if let Some(rel) = tp.attr("id").and_then(|id| rel_by_id.get(id).copied()) {
                         let target = rel.target.clone();
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
@@ -338,7 +347,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     }
                 }
             }
-            "extLst" => read_ext(cx, e, &mut sheet),
+            "extLst" => read_ext(cx, e, &mut sheet, &mut cf_kept_ranges),
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
             _ => {}
         }
@@ -497,19 +506,30 @@ fn read_cols(cx: &Ctx<'_>, e: &El, sheet: &mut Sheet, remaining: &mut u64) -> Re
     Ok(())
 }
 
-fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
+/// Charges `n` cell elements against the workbook's [`MAX_CELLS`].
+fn charge_cells(cx: &mut Ctx<'_>, n: u64) -> Result<(), IoError> {
+    cx.cells = cx.cells.saturating_add(n);
+    if cx.cells > MAX_CELLS {
+        return Err(IoError::TooLarge(format!("the workbook has more than {MAX_CELLS} cells")));
+    }
+    Ok(())
+}
+
+/// One `<row>`. Every `<c>` in it counts against [`MAX_CELLS`], also in a row that is dropped
+/// for a bad row number: one worksheet part read for many sheets can't parse cells uncounted.
+fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) -> Result<(), IoError> {
     st.rows += 1;
     let r = match row.attr_u32("r") {
         Some(r) if r >= 1 => r - 1,
         Some(_) => {
             st.dropped += 1;
-            return;
+            return charge_cells(cx, row.kids("c").count() as u64);
         }
         None => st.next_row,
     };
     if r >= MAX_ROWS {
         st.dropped += 1;
-        return;
+        return charge_cells(cx, row.kids("c").count() as u64);
     }
     st.next_row = r + 1;
     let mut info = LineInfo::default();
@@ -533,6 +553,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
     }
     let mut next_col = 0u32;
     for c in row.kids("c") {
+        charge_cells(cx, 1)?;
         let pos = match c.attr("r") {
             Some(a) => match CellRef::parse(a.trim()) {
                 Some(p) => p,
@@ -550,6 +571,7 @@ fn read_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &El) {
         next_col = pos.col + 1;
         read_cell(cx, sheet, st, c, pos);
     }
+    Ok(())
 }
 
 fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos: CellRef) {
@@ -658,6 +680,14 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         Some(_) => Value::Empty,
         None => value,
     };
+    // A dynamic array keeps the area it was saved spilling over (`ref`): when two arrays want the
+    // same cells, recalculating gives them to this one again, as before saving.
+    if dynamic
+        && formula.as_ref().is_some_and(|f| f.array.is_none())
+        && let Some(r) = st.dynamic.last().filter(|r| r.start == pos)
+    {
+        sheet.spill_ranges.insert(pos, *r);
+    }
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style, py });
 }
 
@@ -823,7 +853,7 @@ pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
 }
 
 /// Worksheet extensions: x14 data validations and sparklines.
-fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
+fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, cf_kept_ranges: &mut u64) {
     for ext in e.kids("ext") {
         for c in &ext.children {
             match c.name.as_str() {
@@ -851,23 +881,7 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet) {
                         }
                     }
                 }
-                "conditionalFormattings" => {
-                    let mut skipped = false;
-                    for r in c.kids("conditionalFormatting").flat_map(|f| f.kids("cfRule")) {
-                        let idx = r.attr("id").and_then(|id| cx.cf_ext_ids.iter().find(|(i, _)| i == id)).map(|(_, n)| *n);
-                        match (idx.and_then(|n| sheet.cond_formats.get_mut(n)), r.child("dataBar")) {
-                            (Some(CondFormat { rule: CfRule::DataBar { gradient, .. }, .. }), Some(db)) => {
-                                *gradient = db.flag("gradient", true);
-                                // Only the fill style is modelled; borders, lengths, axis or negative colours are lost.
-                                skipped |= db.attrs.iter().any(|(k, _)| k != "gradient") || db.children.iter().any(|k| k.name != "cfvo");
-                            }
-                            _ => skipped = true,
-                        }
-                    }
-                    if skipped {
-                        cx.warn("some Excel 2010 conditional format extensions were skipped");
-                    }
-                }
+                "conditionalFormattings" => read_x14_cf(cx, c, sheet, cf_kept_ranges),
                 _ => {}
             }
         }
@@ -920,6 +934,57 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+    }
+
+    fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
+        Ctx {
+            pkg,
+            report: Default::default(),
+            sst: vec![],
+            phonetics: vec![],
+            xf_map: vec![],
+            dxfs: vec![],
+            palette: vec![],
+            date_system: DateSystem::D1900,
+            styles: Default::default(),
+            persons: Default::default(),
+            next_id: 1,
+            num_fmts: Default::default(),
+            cell_pictures: vec![],
+            cf_ext_ids: vec![],
+            known_function: None,
+            python: Default::default(),
+            cells: 0,
+            shared_formula_bytes: 0,
+            legacy_formulas: vec![],
+        }
+    }
+
+    /// #2159: the workbook-wide cell cap refuses the open once passed, across sheets.
+    #[test]
+    fn cells_past_the_workbook_cap_are_refused() {
+        let bytes = crate::tests::minimal(r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row></sheetData>"#, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        cx.cells = MAX_CELLS - 2;
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert_eq!(sheet.cells.len(), 2);
+        assert!(matches!(read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data"), Err(IoError::TooLarge(_))));
+    }
+
+    /// #2159: the cells of a row dropped for its row number still count against the cap, so a
+    /// part read for many sheets can't parse cells uncounted.
+    #[test]
+    fn cells_of_dropped_rows_count_against_the_cap() {
+        let rows = r#"<sheetData><row r="0"><c><v>1</v></c><c><v>2</v></c></row><row r="2000000"><c><v>3</v></c></row></sheetData>"#;
+        let bytes = crate::tests::minimal(rows, &[], "", "");
+        let pkg = crate::package::Package::open(&bytes).unwrap();
+        let mut cx = ctx(pkg);
+        let (sheet, _) = read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data").unwrap();
+        assert!(sheet.cells.is_empty(), "both rows are dropped");
+        assert_eq!(cx.cells, 3);
+        cx.cells = MAX_CELLS - 2;
+        assert!(matches!(read_sheet(&mut cx, "xl/worksheets/sheet1.xml", "Data"), Err(IoError::TooLarge(_))));
     }
 
     #[test]
