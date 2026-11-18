@@ -75,6 +75,44 @@ fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) {
     });
 }
 
+/// Moves the changing cells of the scenarios on sheet `target` with a structural edit there, as
+/// formula references move (#3853): a scenario shown after rows above its inputs were inserted
+/// wrote to their old addresses. A changing cell the edit deletes goes with its value, and a
+/// scenario left with none goes too. A cut-paste to another sheet leaves them where they are.
+pub(crate) fn shift_scenarios(wb: &mut Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) {
+    if matches!(e, gridcraft_formula::adjust::Edit::MoveToSheet { .. }) {
+        return;
+    }
+    let before = load_scenarios(wb);
+    if !before.iter().any(|sc| sc.sheet.eq_ignore_ascii_case(target)) {
+        return;
+    }
+    let mut list = before.clone();
+    list.retain_mut(|sc| {
+        if !sc.sheet.eq_ignore_ascii_case(target) {
+            return true;
+        }
+        let (mut cells, mut values) = (Vec::new(), Vec::new());
+        for (part, v) in sc.changing.split(',').map(str::trim).filter(|x| !x.is_empty()).zip(sc.values.iter()) {
+            // An address this can't read is kept as it was.
+            let moved = match CellRef::parse(part) {
+                Some(c) => crate::cmd::sheet::map_range(gridcraft_core::RangeRef::cell(c), e).map(|r| r.start.a1()),
+                None => Some(part.to_string()),
+            };
+            if let Some(a) = moved {
+                cells.push(a);
+                values.push(v.clone());
+            }
+        }
+        sc.changing = cells.join(",");
+        sc.values = values;
+        !cells.is_empty()
+    });
+    if list != before {
+        store_scenarios(wb, &list);
+    }
+}
+
 fn scenario_json(sc: &Scenario) -> Json {
     json!({"name": sc.name, "sheet": sc.sheet, "changing": sc.changing, "values": sc.values, "comment": sc.comment})
 }

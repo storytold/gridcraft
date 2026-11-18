@@ -24,6 +24,7 @@ use advanced_filter::advanced_filter;
 #[cfg(test)]
 pub(crate) use advanced_filter::criterion_matches;
 use consolidate::consolidate;
+pub(crate) use scenarios::shift_scenarios;
 #[cfg(test)]
 pub(crate) use scenarios::{SCENARIO_NAME, load_scenarios};
 use scenarios::{scenario_add, scenario_delete, scenario_list, scenario_show, scenario_summary};
