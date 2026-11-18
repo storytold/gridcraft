@@ -138,7 +138,7 @@ pub(super) fn run_script(s: &mut Session, p: &Json) -> Result<Json> {
             let opened_dialog = s.ui_requests.get(before..).is_some_and(|new| new.iter().any(|r| matches!(r, crate::UiRequest::Dialog(..))));
             let changed = wb_before.as_ref().is_some_and(|(uid, wb)| s.docs.iter().any(|d| d.uid == *uid && !std::sync::Arc::ptr_eq(&d.wb, wb)));
             if !opened_dialog || changed {
-                ran_steps.push((id.to_string(), crate::record::with_toggle_state(st["params"].clone(), &result)));
+                ran_steps.push((id.to_string(), crate::record::with_toggle_state(id, st["params"].clone(), &result)));
             }
         }
     }

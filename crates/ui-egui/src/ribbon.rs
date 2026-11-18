@@ -8,7 +8,9 @@ use crate::SheetApp;
 use crate::icons::{self, Icon};
 use crate::keytips::keytip_table;
 use crate::theme::{self, Cat, Tokens};
-use crate::widgets::{big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, split_button, toggle_button};
+use crate::widgets::{
+    big_button, big_split_button, color_palette, icon_button, small_button, small_split_button, small_toggle_button, split_button, toggle_button,
+};
 
 mod automate;
 mod contextual;
@@ -36,7 +38,7 @@ use insert::{draw, insert};
 use page_layout::page_layout;
 use review::review;
 pub use shortcuts::shortcut;
-pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar};
+pub use title_bar::{MAC_CONTENT_LEFT, MAC_TITLE_BAR, TITLE_LEFT_PAD, title_bar, window_frame};
 use title_bar::{TITLE_BAR_H, TITLE_CONTROL_H};
 use view::view;
 
@@ -282,7 +284,7 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
+        if app.selected_chart().is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
         }
         if app.grid.hf_edit.is_some() {

@@ -1,7 +1,7 @@
 //! UI interaction tests: real egui input through the whole app (no GPU needed).
 
 use egui::{Event, Key, Modifiers, PointerButton};
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_ui_egui::i18n::Language;
@@ -17,6 +17,30 @@ fn blank() -> Session {
     let mut s = Session::new();
     s.new_workbook();
     s
+}
+
+#[test]
+fn the_formulas_ribbon_keeps_watch_window_inside_the_ribbon() {
+    // Regression test for #360 (#342): Watch Window was a fourth small button in a column of
+    // three, so it hung below the ribbon and was cut off.
+    fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| texts(s, out)),
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+            _ => {}
+        }
+    }
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Formulas".into();
+    h.run_steps(3);
+    // Ribbon button labels are painted text: find them among the frame's shapes.
+    let mut painted = Vec::new();
+    h.output().shapes.iter().for_each(|c| texts(&c.shape, &mut painted));
+    let bottom_of = |word: &str| painted.iter().filter(|(s, _)| s.contains(word)).map(|(_, r)| r.bottom()).fold(f32::NEG_INFINITY, f32::max);
+    // "Calculation Options" is a big button whose second line sits at the foot of the ribbon.
+    let (watch, foot) = (bottom_of("Window"), bottom_of("Options"));
+    assert!(watch.is_finite() && foot.is_finite(), "the Formulas ribbon paints Watch Window and Calculation Options");
+    assert!(watch <= foot + 0.5, "Watch Window's label ends at y={watch}, below the ribbon's last label row (y={foot})");
 }
 
 #[test]
@@ -392,12 +416,12 @@ fn delete_key_removes_the_selected_chart() {
 
     click_cell(&mut h, "C10");
     click_chart(&mut h, id);
-    assert_eq!(h.state().selected_chart, Some(id));
+    assert_eq!(h.state().selected_chart(), Some(id));
 
     key(&mut h, Key::Delete, Modifiers::NONE);
 
     assert!(h.state().session.active().unwrap().wb.active().unwrap().charts.is_empty());
-    assert_eq!(h.state().selected_chart, None);
+    assert_eq!(h.state().selected_chart(), None);
     assert_eq!(value(&h, "A1"), Value::Number(1.0));
 }
 
@@ -412,7 +436,7 @@ fn inserted_chart_is_selected_so_delete_removes_it() {
 
     let id = h.state_mut().run("insert.chart", json!({"type": "column"})).unwrap()["chart"].as_u64().unwrap() as u32;
     h.run_steps(2);
-    assert_eq!(h.state().selected_chart, Some(id), "the new chart is selected");
+    assert_eq!(h.state().selected_chart(), Some(id), "the new chart is selected");
 
     key(&mut h, Key::Delete, Modifiers::NONE);
 
@@ -621,7 +645,7 @@ fn recommended_charts_dialog_inserts_the_chosen_chart() {
     assert!(h.state().dialog.is_none());
     let kinds: Vec<_> = h.state().session.active().unwrap().wb.active().unwrap().charts.iter().map(|c| c.kind).collect();
     assert_eq!(kinds, [gridcraft_engine::model::ChartKind::Pie]);
-    assert!(h.state().selected_chart.is_some(), "the new chart is selected");
+    assert!(h.state().selected_chart().is_some(), "the new chart is selected");
 
     // Without numbers there is nothing to recommend: a message, no dialog.
     h.state_mut().session.run("selection.set", json!({"range": "A1:A4"})).unwrap();
@@ -680,7 +704,7 @@ fn select_data_dialog_sets_the_category_axis_labels() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["Year", "Sales"], [2020, 5], [2021, 7], [2022, 9]]})).unwrap();
     let id = s.execute("insert.chart", json!({"range": "A1:B4", "type": "line"})).unwrap()["chart"].as_u64().unwrap();
     let mut h = harness(s);
-    h.state_mut().selected_chart = Some(id as u32);
+    h.state_mut().select_object_id(Some(id as u32));
     h.state_mut().open_dialog("selectData", json!({"chart": id}));
     h.run_steps(2);
     let d = h.state_mut().dialog.as_mut().unwrap();
@@ -903,6 +927,63 @@ fn solver_dialog_loads_the_saved_model_and_results_can_restore() {
     assert!(h.state().dialog.is_none());
     assert_eq!(value(&h, "A1"), Value::Number(0.0));
     assert_eq!(value(&h, "B1"), Value::Number(0.0));
+}
+
+#[test]
+fn solver_results_skip_the_sensitivity_report_for_integer_models() {
+    let mut s = blank();
+    for (c, v) in [("A1", "0"), ("B1", "=3*A1")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let r =
+        s.execute("data.solver", json!({"objective": "B1", "variables": "A1", "constraints": ["A1 <= 4.5", "A1 int"], "method": "simplex"})).unwrap();
+    let mut h = harness(s);
+    // Sensitivity stays off for an integer model, so the Answer report is still written.
+    h.state_mut().open_dialog("solverResults", r);
+    for key in ["answerReport", "sensitivityReport"] {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, ["Answer Report 1", "Sheet1"]);
+}
+
+#[test]
+fn solver_results_offer_sensitivity_only_after_an_optimum() {
+    // Rosenbrock's function with 60 evaluations stops at the limit with a solution that is not
+    // an optimum: Sensitivity is disabled, and Answer with Sensitivity ticked writes the Answer
+    // report.
+    let mut s = blank();
+    for (c, v) in [("A1", "-1.2"), ("A2", "1"), ("B1", "=(1-A1)^2+100*(A2-A1^2)^2")] {
+        s.execute("cell.set", json!({"cell": c, "input": v})).unwrap();
+    }
+    let r = s
+        .execute("data.solver", json!({"objective": "B1", "goal": "min", "variables": "A1:A2", "nonNegative": false, "maxEvaluations": 60}))
+        .unwrap();
+    assert_eq!(r["status"], "iterationLimit", "{r}");
+    let mut h = harness(s);
+    h.state_mut().open_dialog("solverResults", r.clone());
+    h.run_steps(2);
+    assert!(h.get_by_label("Sensitivity").accesskit_node().is_disabled());
+    assert!(!h.get_by_label("Answer").accesskit_node().is_disabled());
+    for key in ["answerReport", "sensitivityReport"] {
+        h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
+    }
+    h.run_steps(2);
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
+    assert_eq!(names, ["Answer Report 1", "Sheet1"]);
+    // The same model after an optimum offers it.
+    let mut ok = r;
+    ok["status"] = json!("converged");
+    h.state_mut().open_dialog("solverResults", ok);
+    h.run_steps(2);
+    assert!(!h.get_by_label("Sensitivity").accesskit_node().is_disabled());
 }
 
 #[test]
@@ -1201,9 +1282,9 @@ fn solver_results_write_the_chosen_reports() {
         )
         .unwrap();
     let mut h = harness(s);
-    // Restore Original Values with the Answer and Limits reports: the cells go back, the reports stay.
+    // Restore Original Values with the three reports: the cells go back, the reports stay.
     h.state_mut().open_dialog("solverResults", r);
-    for key in ["restore", "answerReport", "limitsReport"] {
+    for key in ["restore", "answerReport", "sensitivityReport", "limitsReport"] {
         h.state_mut().dialog.as_mut().unwrap().values.insert(key.into(), json!(true));
     }
     h.run_steps(2);
@@ -1211,7 +1292,7 @@ fn solver_results_write_the_chosen_reports() {
     assert!(h.state().dialog.is_none());
     assert!(h.state().message.is_none(), "{:?}", h.state().message);
     let names: Vec<String> = h.state().session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect();
-    assert_eq!(names, ["Answer Report 1", "Limits Report 1", "Sheet1"]);
+    assert_eq!(names, ["Answer Report 1", "Sensitivity Report 1", "Limits Report 1", "Sheet1"]);
     assert_eq!(value(&h, "B1"), Value::Number(0.0));
 }
 
@@ -1337,6 +1418,28 @@ fn macro_workbook_bytes() -> Vec<u8> {
     let mut wb = gridcraft_engine::model::Workbook::new();
     wb.vba_project = Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec().into());
     gridcraft_engine::io::save_bytes(&wb, "macros.xlsm").unwrap()
+}
+
+#[test]
+fn circle_invalid_data_warns_when_its_scan_was_cut_short() {
+    let mut h = harness(blank());
+    h.state_mut().run("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
+    h.state_mut().run("range.setValues", json!({"range": "A200000", "values": [[-1]]})).unwrap();
+    h.state_mut().run("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().expect("a notice was shown");
+    assert!(n.text.contains("100,000 cell visits"), "{}", n.text);
+    // An open-time warning keeps its action when the scan note joins it.
+    h.state_mut().notice = Some(gridcraft_ui_egui::Notice {
+        text: "Macros.".into(),
+        kind: gridcraft_ui_egui::NoticeKind::Info,
+        action: Some(("More".into(), "macros".into())),
+    });
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().unwrap();
+    assert!(n.text.starts_with("Macros. ") && n.text.contains("cell visits"), "{}", n.text);
+    assert_eq!(n.action.as_ref().map(|a| a.1.as_str()), Some("macros"));
+    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
 }
 
 #[test]
