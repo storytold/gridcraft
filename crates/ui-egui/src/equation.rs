@@ -129,6 +129,70 @@ fn insert_snippet(ctx: &egui::Context, id: egui::Id, text: &mut String, snippet:
     ctx.data_mut(|m| m.insert_temp(id.with("refocus"), true));
 }
 
+/// The RaTeX parser messages that carry a piece of the source (a command, a token, a count).
+/// RaTeX reports an error only as finished English text, so a message is matched against these
+/// shapes (from `ratex-parser` 0.1.14) and the catalog's template is filled with the same pieces;
+/// RaTeX's fixed messages are plain catalog keys. A shape comes before a shorter one that also
+/// matches its messages, and a message of any other shape stays as RaTeX wrote it.
+const RATEX_TEMPLATES: &[&str] = &[
+    "Undefined control sequence: {name}",
+    "Expected '{expected}', got '{got}'",
+    "Expected group after '{symbol}'",
+    "Expected delimiter as argument to '{function}'",
+    "Expected group as argument to '{function}'",
+    "Got function '{function}' with no arguments as superscript",
+    "Got function '{function}' with no arguments as subscript",
+    "Got function '{function}' with no arguments as argument to '{parent}'",
+    "Got function '{function}' with no arguments as \\tag",
+    "Can't use function '{function}' in text mode",
+    "Can't use function '{function}' in math mode",
+    "Invalid color: '{color}'",
+    "Invalid size: '{size}'",
+    "Invalid unit: '{unit}'",
+    "Invalid delimiter '{delimiter}' after '{function}'",
+    "Invalid delimiter type '{type}' after '{function}'",
+    "Invalid delimiter type '{type}'",
+    "No such environment: {name}",
+    "Expected argument to \\begin{{name}}",
+    "Mismatch: \\begin{{begin}} matched by \\end{{end}}",
+    "{command} valid only within array environment",
+    "Mismatched {command}",
+    "Expected & or \\\\ or \\cr or \\end, got '{got}'",
+    "Unknown column alignment: {alignment}",
+    "Too many math in a row: expected {expected}, but got {got}",
+    "Unknown CD directive: @{directive}",
+    "Expected argument for {command}",
+    "{command} needs {count} premise(s), but only {available} available",
+    "{command} valid only as a supported bussproofs command within prooftree",
+    "prooftree ended with {count} proof stack item(s), expected 1",
+    "\\@char has non-numeric argument {argument}",
+    "\\@char with invalid code point {code}",
+    "Invalid environment name character: {character}",
+];
+
+/// A parse error message in the interface language: GridCraft's own checks and RaTeX's fixed
+/// messages by their catalog key, RaTeX's messages with a piece of the source by their template.
+fn parse_error_message(lang: crate::i18n::Language, message: &str) -> String {
+    let translated = lang.tr_error(message);
+    if translated != message {
+        return translated;
+    }
+    RATEX_TEMPLATES
+        .iter()
+        .find_map(|template| crate::i18n::unfill(template, message).map(|values| lang.tr_fill(template, &values)))
+        .unwrap_or(translated)
+}
+
+/// The line under the equation source for a parse error: where it is (the 1-based character),
+/// then the message, both in the interface language.
+fn parse_error_text(lang: crate::i18n::Language, position: Option<usize>, message: &str) -> String {
+    let message = parse_error_message(lang, message);
+    match position {
+        Some(p) => lang.tr_fill("Error at character {position}: {message}", &[("position", &p.to_string()), ("message", &message)]),
+        None => message,
+    }
+}
+
 /// The editor's body: quick-insert buttons, the LaTeX source with its error underlined, a live
 /// preview on a sheet-coloured card, and OK/Cancel.
 pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
@@ -164,10 +228,7 @@ pub fn editor(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     ui.add_space(4.0);
     match &pv.result {
         Err(e) if !text.trim().is_empty() => {
-            let msg = match e.char_pos(&text) {
-                Some(p) => format!("Error at character {p}: {}", e.message),
-                None => e.message.clone(),
-            };
+            let msg = parse_error_text(app.ui.language, e.char_pos(&text), &e.message);
             ui.colored_label(t.danger, msg);
         }
         _ => {
@@ -499,6 +560,202 @@ fn triangulate(pts: &[Pos2]) -> Vec<[usize; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_errors_follow_the_interface_language() {
+        use crate::i18n::Language;
+        assert_eq!(parse_error_text(Language::En, Some(3), "Missing }"), "Error at character 3: Missing }");
+        assert_eq!(parse_error_text(Language::En, None, "Empty {group}"), "Empty {group}");
+        let it = Language::It;
+        // The message is filled in once: its own `{message}` stays as it is.
+        let want = it.tr("Error at character {position}: {message}").replace("{position}", "3").replace("{message}", "Bad {message}");
+        assert_eq!(parse_error_text(it, Some(3), "Bad {message}"), want);
+        assert!(!want.starts_with("Error at character"));
+    }
+
+    /// RaTeX's fixed parser messages that an equation can reach; each is a catalog key.
+    const RATEX_MESSAGES: &[&str] = &[
+        "Double superscript",
+        "Double subscript",
+        "Extra }",
+        "Unexpected end of input in a macro argument",
+        "Expected \\right after \\left",
+        "\\middle must be within \\left and \\right",
+        "Invalid environment name",
+        "Expected \\end after environment body",
+        "Expected URL",
+        "\\tag requires an argument",
+        "only one infix operator per group",
+        "Expected color token",
+        "Expected size for \\raisebox",
+        "Expected size for \\rule width",
+        "Expected size for \\rule height",
+        "Cannot use both \\tag and \\nonumber in the same row",
+        "Multiple \\tag in a row",
+        "\\tag must appear at the end of the row after the equation body",
+        "Multiple \\nonumber in a row",
+        "\\nonumber must appear at the end of the row",
+        "Too many tab characters: &",
+        "Invalid column alignment for array",
+        "Expected column alignment character",
+        "Expected l or c or r",
+        "Expected ]",
+        "Unexpected end of CD row after @",
+        "Invalid column alignment for subarray",
+        "{subarray} can contain only one column",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command",
+        "Recursion limit exceeded",
+        "Too many expansions: infinite loop or need to increase maxExpand setting",
+        "Expected raw style for \\htmlStyle",
+        "\\verb assertion failed",
+    ];
+
+    /// RaTeX's messages, as `layout` reports them for real sources, follow the interface language:
+    /// a fixed message by its catalog key, a message with a piece of the source by its template
+    /// with the same pieces filled in. The English is checked first, so a reworded RaTeX message
+    /// fails here instead of silently staying English.
+    #[test]
+    fn ratex_parse_errors_follow_the_interface_language() {
+        use crate::i18n::Language;
+        use gridcraft_engine::math::layout;
+        /// Source, RaTeX's English message, its catalog key or template, and the template's pieces.
+        type Case = (&'static str, &'static str, &'static str, &'static [(&'static str, &'static str)]);
+        #[rustfmt::skip]
+        let cases: &[Case] = &[
+            ("x^1^2", "Double superscript", "Double superscript", &[]),
+            ("x_1_2", "Double subscript", "Double subscript", &[]),
+            ("x^\\frac", "Unexpected end of input in a macro argument", "Unexpected end of input in a macro argument", &[]),
+            ("\\middle|", "\\middle must be within \\left and \\right", "\\middle must be within \\left and \\right", &[]),
+            ("a \\over b \\over c", "only one infix operator per group", "only one infix operator per group", &[]),
+            ("\\begin{array}{l}a&b\\end{array}", "Too many tab characters: &", "Too many tab characters: &", &[]),
+            ("\\begin{subarray}{lc}x\\end{subarray}", "{subarray} can contain only one column", "{subarray} can contain only one column", &[]),
+            ("\\begin{aligned}a\\tag1\\tag2\\end{aligned}", "Multiple \\tag in a row", "Multiple \\tag in a row", &[]),
+            ("\\begin{CD}A @", "Unexpected end of CD row after @", "Unexpected end of CD row after @", &[]),
+            ("\\verb", "\\verb assertion failed", "\\verb assertion failed", &[]),
+            ("\\foo", "Undefined control sequence: \\foo", "Undefined control sequence: {name}", &[("name", "\\foo")]),
+            ("x^{2", "Expected '}', got 'EOF'", "Expected '{expected}', got '{got}'", &[("expected", "}"), ("got", "EOF")]),
+            ("x^", "Expected group after '^'", "Expected group after '{symbol}'", &[("symbol", "^")]),
+            ("\\left\\frac x\\right)", "Expected delimiter as argument to '\\left'", "Expected delimiter as argument to '{function}'", &[("function", "\\left")]),
+            ("\\text{\\frac12}", "Can't use function '\\frac' in text mode", "Can't use function '{function}' in text mode", &[("function", "\\frac")]),
+            ("\\)", "Can't use function '\\)' in math mode", "Can't use function '{function}' in math mode", &[("function", "\\)")]),
+            ("\\color{zz!}{x}", "Invalid color: 'zz!'", "Invalid color: '{color}'", &[("color", "zz!")]),
+            ("\\rule{abc}{1em}", "Invalid size: 'abc'", "Invalid size: '{size}'", &[("size", "abc")]),
+            ("\\rule{1xx}{1em}", "Invalid unit: 'xx'", "Invalid unit: '{unit}'", &[("unit", "xx")]),
+            ("\\bigl x", "Invalid delimiter 'x' after '\\bigl'", "Invalid delimiter '{delimiter}' after '{function}'", &[("delimiter", "x"), ("function", "\\bigl")]),
+            ("\\bigl{x}", "Invalid delimiter type 'ordgroup' after '\\bigl'", "Invalid delimiter type '{type}' after '{function}'", &[("type", "ordgroup"), ("function", "\\bigl")]),
+            ("\\begin{foo}x\\end{foo}", "No such environment: foo", "No such environment: {name}", &[("name", "foo")]),
+            ("\\begin{matrix}x\\end{pmatrix}", "Mismatch: \\begin{matrix} matched by \\end{pmatrix}", "Mismatch: \\begin{{begin}} matched by \\end{{end}}", &[("begin", "matrix"), ("end", "pmatrix")]),
+            ("\\hline", "\\hline valid only within array environment", "{command} valid only within array environment", &[("command", "\\hline")]),
+            ("\\begin{matrix}a", "Expected & or \\\\ or \\cr or \\end, got 'EOF'", "Expected & or \\\\ or \\cr or \\end, got '{got}'", &[("got", "EOF")]),
+            ("\\begin{array}{q}x\\end{array}", "Unknown column alignment: q", "Unknown column alignment: {alignment}", &[("alignment", "q")]),
+            ("\\begin{alignedat}{1}a&b&c&d\\end{alignedat}", "Too many math in a row: expected 1, but got 2", "Too many math in a row: expected {expected}, but got {got}", &[("expected", "1"), ("got", "2")]),
+            ("\\begin{CD}A @Q B\\end{CD}", "Unknown CD directive: @Q", "Unknown CD directive: @{directive}", &[("directive", "Q")]),
+            ("\\begin{prooftree}\\BinaryInfC{x}\\end{prooftree}", "\\BinaryInfC needs 2 premise(s), but only 0 available", "{command} needs {count} premise(s), but only {available} available", &[("command", "\\BinaryInfC"), ("count", "2"), ("available", "0")]),
+            ("\\begin{prooftree}\\frac\\end{prooftree}", "\\frac valid only as a supported bussproofs command within prooftree", "{command} valid only as a supported bussproofs command within prooftree", &[("command", "\\frac")]),
+            ("\\begin{prooftree}\\AxiomC{x}\\AxiomC{y}\\end{prooftree}", "prooftree ended with 2 proof stack item(s), expected 1", "prooftree ended with {count} proof stack item(s), expected 1", &[("count", "2")]),
+            ("\\char\"FFFFFFF", "\\@char with invalid code point 268435455", "\\@char with invalid code point {code}", &[("code", "268435455")]),
+        ];
+        let it = Language::It;
+        for (src, english, template, values) in cases {
+            let message = layout(src).err().unwrap_or_else(|| panic!("{src:?} lays out")).message;
+            assert_eq!(&message, english, "{src:?}");
+            assert_eq!(parse_error_message(Language::En, &message), message, "English stays as RaTeX wrote it");
+            let want = values.iter().fold(it.tr(template).to_string(), |text, (name, value)| text.replace(&format!("{{{name}}}"), value));
+            assert_eq!(parse_error_message(it, &message), want, "{src:?}");
+            assert_ne!(want, message, "{src:?} stays English in Italian");
+        }
+        let want = it.tr("Error at character {position}: {message}").replace("{position}", "2").replace("{message}", it.tr("Double superscript"));
+        assert_eq!(parse_error_text(it, Some(2), "Double superscript"), want);
+    }
+
+    /// Every RaTeX shape is read by its own template (not by a shorter one listed earlier), and
+    /// every catalog translates it with the same placeholders; every fixed message is translated in
+    /// every catalog.
+    #[test]
+    fn ratex_messages_are_translated_in_every_catalog() {
+        use crate::i18n::{Language, fill, unfill};
+        let placeholders = |s: &str| {
+            let mut names = s.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name.to_string())).collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        for template in RATEX_TEMPLATES {
+            // A sample piece per placeholder: `\a1`, `\a2`, …
+            let names = unfill(template, template).unwrap_or_else(|| panic!("{template:?} does not read itself"));
+            let samples = (1..=names.len()).map(|i| format!("\\a{i}")).collect::<Vec<_>>();
+            let values = names.iter().zip(&samples).map(|((name, _), sample)| (*name, sample.as_str())).collect::<Vec<_>>();
+            let message = fill(template, &values);
+            let first = RATEX_TEMPLATES.iter().find(|t| unfill(t, &message).is_some());
+            assert_eq!(first, Some(template), "{message:?}");
+            assert_eq!(parse_error_message(Language::En, &message), message);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let text = language.tr(template);
+                assert_eq!(placeholders(text), placeholders(template), "{}: {template:?} => {text:?}", language.code());
+                assert!(!text.contains('\n'), "{}: {template:?} => {text:?}", language.code());
+                assert_eq!(parse_error_message(language, &message), fill(text, &values), "{}", language.code());
+                assert_ne!(parse_error_message(language, &message), message, "{} leaves {template:?} in English", language.code());
+            }
+        }
+        for message in RATEX_MESSAGES {
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let shown = parse_error_message(language, message);
+                assert_ne!(&shown, message, "{} leaves {message:?} in English", language.code());
+                assert_eq!(placeholders(&shown), placeholders(message), "{}: {message:?} => {shown:?}", language.code());
+            }
+        }
+    }
+
+    /// A message of no known shape, such as RaTeX's internal ones or the chemistry parser's, stays
+    /// as RaTeX wrote it in every language.
+    #[test]
+    fn unknown_parser_messages_stay_as_ratex_wrote_them() {
+        use crate::i18n::Language;
+        for message in ["Null argument, please report this as a bug", "\\ce: unexpected token", "Expected group as atom", ""] {
+            for language in Language::ALL {
+                assert_eq!(parse_error_message(language, message), message, "{}", language.code());
+            }
+        }
+    }
+
+    /// The equation checks' own messages are translated in every catalog. Each comes from the real check, and the expected English is
+    /// built from the limits, so a changed limit fails here instead of silently falling back to
+    /// English (the catalogs key the message with the number in it).
+    #[test]
+    fn equation_check_messages_are_translated_in_every_catalog() {
+        use crate::i18n::Language;
+        use gridcraft_engine::math::{MAX_CELLS, MAX_DEPTH, MAX_SOURCE_BYTES, layout};
+        let cases = [
+            ("\\def\\x{1} x".to_string(), "Macro definitions are not supported in equations.".to_string()),
+            ("50% \\href{https://example.com}{x}".to_string(), "A % can't be combined with a link in an equation.".to_string()),
+            (format!("{}x{}", "{".repeat(MAX_DEPTH + 1), "}".repeat(MAX_DEPTH + 1)), format!("Equations can nest at most {MAX_DEPTH} levels deep.")),
+            ("x".repeat(MAX_SOURCE_BYTES + 1), format!("An equation can be at most {MAX_SOURCE_BYTES} bytes long.")),
+            (
+                "\\begin{alignedat}{99999999}a\\end{alignedat}".to_string(),
+                format!("An equation can have at most {MAX_CELLS} matrix cells (rows times the widest row)."),
+            ),
+            ("\\rule{99999999em}{1em}".to_string(), "This equation is too large to draw.".to_string()),
+        ];
+        let mut messages = Vec::new();
+        for (src, want) in cases {
+            let got = layout(&src).err().unwrap_or_else(|| panic!("{src:?} lays out")).message;
+            assert_eq!(got, want, "{src:?} hits another check");
+            messages.push(got);
+        }
+        // Only a panic inside the layout reaches this one.
+        messages.push("This equation could not be laid out.".to_string());
+        for message in &messages {
+            for language in Language::ALL {
+                let shown = parse_error_text(language, None, message);
+                assert!(!shown.contains('\n'), "{}: {message:?} => {shown:?}", language.code());
+                if language != Language::En {
+                    assert_ne!(&shown, message, "{} leaves {message:?} in English", language.code());
+                }
+            }
+        }
+        let it = Language::It;
+        let want = it.tr("Error at character {position}: {message}").replace("{position}", "1").replace("{message}", it.tr(&messages[0]));
+        assert_eq!(parse_error_text(it, Some(1), &messages[0]), want);
+    }
 
     #[test]
     fn ear_clipping_covers_a_concave_polygon() {

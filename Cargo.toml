@@ -32,6 +32,7 @@ gridcraft-math = { path = "crates/math" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "=0.1.0", features = ["egui"] }
 # PDF RunLength encoding; this revision also fixes the vendored JBIG2 dependency for Git consumers.
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "ff142b3ad58aa7306676749428f4f2f9b277b5dd", version = "0.1.0", default-features = false }
 craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "f7e0d7fd5577e102b4634bcbe062e649eb68165f", version = "0.1.0" }
 # Compound files ([MS-CFB]) and password-encrypted OOXML packages ([MS-OFFCRYPTO]).
 craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
@@ -44,6 +45,8 @@ craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0
 # The native JSON workbook (`.json`, `.scjson`): read, written, and kept newer macros written back.
 craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "9a6d894200221fcfedc274870c30394d404f859d", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
+# SpreadsheetML string encoding/decoding; workbook model mapping stays in gridcraft-xlsx.
+craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
 
