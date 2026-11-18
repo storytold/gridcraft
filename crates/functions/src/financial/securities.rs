@@ -71,7 +71,8 @@ pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (issue, settle, rate) = (date(a, 0)?, date(a, 1)?, num(a, 2)?);
     let par = if has(a, 3) { num(a, 3)? } else { 1000.0 };
     let basis = basis_arg(a, 4)?;
-    if issue >= settle || rate <= 0.0 || par <= 0.0 {
+    // Excel accepts equal (whole-day) dates and accrues nothing; only issue after settlement is #NUM!.
+    if issue > settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(par * rate * year_frac(c.date_system(), issue, settle, basis)?)
