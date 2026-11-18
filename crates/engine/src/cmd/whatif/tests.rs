@@ -3,6 +3,8 @@ use serde_json::json;
 
 use crate::Session;
 
+mod value_semantics;
+
 fn s() -> Session {
     let mut s = Session::new();
     s.new_workbook();

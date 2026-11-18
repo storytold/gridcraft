@@ -1,3 +1,4 @@
+use super::group_key::GroupKey;
 use super::{
     Cell, CellRef, EngineError, HashMap, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, edit, json, parse_range, str_param,
 };
@@ -56,7 +57,20 @@ impl Agg {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Key {
     Pos(u32),
-    Label(String),
+    Label(GroupKey),
+}
+
+fn label_value(value: Value) -> Option<Value> {
+    match value.scalar() {
+        Value::Empty | Value::Array(_) => None,
+        // Keep Consolidate's existing trimming rule for text categories. An empty
+        // string returned by a formula is a value, while an unset cell has no label.
+        Value::Text(text) if !text.is_empty() => {
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| Value::text(trimmed))
+        }
+        value => Some(value),
+    }
 }
 
 const MAX_CONSOLIDATE_CELLS: u64 = 5_000_000;
@@ -112,8 +126,8 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
     let mut col_keys: Vec<Key> = Vec::new();
     let mut row_index: HashMap<Key, usize> = HashMap::new();
     let mut col_index: HashMap<Key, usize> = HashMap::new();
-    let mut row_label: HashMap<Key, String> = HashMap::new();
-    let mut col_label: HashMap<Key, String> = HashMap::new();
+    let mut row_labels: HashMap<usize, Value> = HashMap::new();
+    let mut col_labels: HashMap<usize, Value> = HashMap::new();
     let mut aggs: HashMap<(usize, usize), Agg> = HashMap::new();
     let mut total: u64 = 0;
     let index_of = |keys: &mut Vec<Key>, index: &mut HashMap<Key, usize>, k: Key| -> usize {
@@ -134,36 +148,32 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         if r0 > r.end.row || c0 > r.end.col {
             continue;
         }
-        let label = |c: CellRef| crate::display::cell_text(&d.wb, sh, c).trim().to_string();
         // Column keys of this source.
         let mut cols: Vec<(u32, usize)> = Vec::new();
         for col in c0..=r.end.col {
-            let k = if top {
-                let l = label(CellRef::new(r.start.row, col));
-                if l.is_empty() {
+            let ci = if top {
+                let Some(label) = label_value(sh.value(CellRef::new(r.start.row, col))) else {
                     continue;
-                }
-                let k = Key::Label(l.to_lowercase());
-                col_label.entry(k.clone()).or_insert(l);
-                k
+                };
+                let ci = index_of(&mut col_keys, &mut col_index, Key::Label(GroupKey::from_value(&label)));
+                col_labels.entry(ci).or_insert(label);
+                ci
             } else {
-                Key::Pos(col - c0)
+                index_of(&mut col_keys, &mut col_index, Key::Pos(col - c0))
             };
-            cols.push((col, index_of(&mut col_keys, &mut col_index, k)));
+            cols.push((col, ci));
         }
         for row in r0..=r.end.row {
-            let k = if left {
-                let l = label(CellRef::new(row, r.start.col));
-                if l.is_empty() {
+            let ri = if left {
+                let Some(label) = label_value(sh.value(CellRef::new(row, r.start.col))) else {
                     continue;
-                }
-                let k = Key::Label(l.to_lowercase());
-                row_label.entry(k.clone()).or_insert(l);
-                k
+                };
+                let ri = index_of(&mut row_keys, &mut row_index, Key::Label(GroupKey::from_value(&label)));
+                row_labels.entry(ri).or_insert(label);
+                ri
             } else {
-                Key::Pos(row - r0)
+                index_of(&mut row_keys, &mut row_index, Key::Pos(row - r0))
             };
-            let ri = index_of(&mut row_keys, &mut row_index, k);
             for (col, ci) in &cols {
                 aggs.entry((ri, *ci)).or_default().add(&sh.value(CellRef::new(row, *col)));
             }
@@ -180,13 +190,13 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let mut cells: Vec<(CellRef, Value)> = Vec::new();
     if top {
-        for (ci, k) in col_keys.iter().enumerate() {
-            cells.push((CellRef::new(dest.row, out_c0 + ci as u32), Value::text(col_label.get(k).cloned().unwrap_or_default())));
+        for ci in 0..col_keys.len() {
+            cells.push((CellRef::new(dest.row, out_c0 + ci as u32), col_labels.remove(&ci).unwrap_or_default()));
         }
     }
     if left {
-        for (ri, k) in row_keys.iter().enumerate() {
-            cells.push((CellRef::new(out_r0 + ri as u32, dest.col), Value::text(row_label.get(k).cloned().unwrap_or_default())));
+        for ri in 0..row_keys.len() {
+            cells.push((CellRef::new(out_r0 + ri as u32, dest.col), row_labels.remove(&ri).unwrap_or_default()));
         }
     }
     for ri in 0..row_keys.len() {
