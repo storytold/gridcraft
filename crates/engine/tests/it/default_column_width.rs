@@ -79,3 +79,25 @@ fn command_updates_new_workbook_column_width() {
 
     assert_eq!(restored.documents()[next].wb.sheets[0].default_col_width, 112.5);
 }
+
+/// Hand-edited invalid `defaultColumnWidth` falls back to 64 without discarding other preferences,
+/// and a configured width of `0` survives an XLSX save and reopen.
+#[test]
+fn invalid_pref_keeps_sibling_settings_and_zero_width_roundtrips_xlsx() {
+    let prefs: gridcraft_engine::Prefs = serde_json::from_value(json!({
+        "enterDirection": "right",
+        "defaultColumnWidth": "wide"
+    }))
+    .unwrap();
+    assert_eq!(prefs.enter_direction, "right");
+    assert_eq!(prefs.default_column_width, 64.0);
+
+    let mut session = Session::new();
+    session.execute("options.newWorkbookColumnWidth", json!({"width": 0.0})).unwrap();
+    let idx = session.new_workbook();
+    assert_eq!(session.documents()[idx].wb.sheets[0].default_col_width, 0.0);
+
+    let bytes = gridcraft_xlsx::write_xlsx(&session.documents()[idx].wb).unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("zero.xlsx", &bytes).unwrap();
+    assert_eq!(reopened.sheets[0].default_col_width, 0.0, "explicit zero default column width must survive XLSX round-trip");
+}

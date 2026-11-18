@@ -417,6 +417,7 @@ pub struct Prefs {
     pub user_name: String,
     pub default_font: String,
     pub default_font_size: f32,
+    #[serde(deserialize_with = "deserialize_default_col_width")]
     pub default_column_width: f32,
     pub sheets_in_new_workbook: usize,
     pub r1c1: bool,
@@ -477,6 +478,18 @@ impl Prefs {
         let width = self.default_column_width;
         if width.is_finite() && (0.0..=1800.0).contains(&width) { width } else { gridcraft_model::DEFAULT_COL_WIDTH }
     }
+}
+
+/// Deserializes `defaultColumnWidth` leniently so an invalid hand-edited preference falls back to
+/// [`gridcraft_model::DEFAULT_COL_WIDTH`] without discarding sibling settings.
+fn deserialize_default_col_width<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<f32, D::Error> {
+    use serde::Deserialize;
+    Ok(serde_json::Value::deserialize(d)
+        .ok()
+        .and_then(|v| v.as_f64())
+        .map(|n| n as f32)
+        .filter(|w| w.is_finite() && (0.0..=1800.0).contains(w))
+        .unwrap_or(gridcraft_model::DEFAULT_COL_WIDTH))
 }
 /// Requests from commands to the UI (open a dialog, show a message…).
 #[derive(Clone, Debug, PartialEq, Serialize)]

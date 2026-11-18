@@ -63,13 +63,41 @@ fn new_workbook_width_option(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     ui.horizontal(|ui| {
         let label = ui.label(lang.tr("Default column width for new workbooks (pixels)"));
         let id = ui.make_persistent_id("backstage_new_workbook_default_width");
+        let initial_id = id.with("initial");
+        let edited_id = id.with("edited");
         let committed = crate::widgets::committed_text(ui, id, &display_width, Some(80.0));
+        let mut changed = false;
+        let mut focused = false;
         if let Some(response) = ui.ctx().read_response(id) {
+            changed = response.changed();
+            focused = response.has_focus();
             response.labelled_by(label.id);
         }
+        if focused {
+            ui.data_mut(|d| {
+                d.get_temp_mut_or_insert_with(initial_id, || display_width.clone());
+                if changed {
+                    d.insert_temp(edited_id, true);
+                }
+            });
+        }
         if let Some(text) = committed {
-            let normalized = text.trim().replace(separator, ".");
-            let parsed = normalized.parse::<f32>().ok().filter(|w| w.is_finite() && (0.0..=1800.0).contains(w));
+            let (initial, edited) = ui.data_mut(|d| {
+                let init = d.get_temp::<String>(initial_id);
+                let ed = d.get_temp::<bool>(edited_id).unwrap_or(false);
+                d.remove::<String>(initial_id);
+                d.remove::<bool>(edited_id);
+                (init, ed)
+            });
+            if !edited && initial.as_deref() == Some(text.as_str()) {
+                return;
+            }
+            let trimmed = text.trim();
+            let parsed = if separator == ',' && trimmed.contains('.') {
+                None
+            } else {
+                trimmed.replace(separator, ".").parse::<f32>().ok().filter(|w| w.is_finite() && (0.0..=1800.0).contains(w))
+            };
             match parsed {
                 Some(w) if w != width => {
                     app.run_or_alert("options.newWorkbookColumnWidth", json!({"width": w}));
@@ -77,6 +105,11 @@ fn new_workbook_width_option(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
                 Some(_) => {}
                 None => refuse(app, ui, "Default column width must be a number from 0 to 1800 pixels."),
             }
+        } else if !focused {
+            ui.data_mut(|d| {
+                d.remove::<String>(initial_id);
+                d.remove::<bool>(edited_id);
+            });
         }
     });
 }

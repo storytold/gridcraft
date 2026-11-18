@@ -166,6 +166,7 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
 
+/// Reads `<sheetFormatPr>` default row height and column width into `sheet`.
 fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
         let px = pt_to_px(h);
@@ -175,7 +176,7 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
     if let Some(w) = e.attr_f64("defaultColWidth") {
         let px = col_width_to_px(w);
-        if px > 0.0 {
+        if w.is_finite() && (px > 0.0 || w == 0.0) {
             sheet.default_col_width = px;
         }
     } else if let Some(b) = e.attr_f64("baseColWidth") {
