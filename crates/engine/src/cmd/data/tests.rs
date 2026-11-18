@@ -40,8 +40,8 @@ fn subtotal_puts_summary_rows_below_their_detail() {
     s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["B"]})).unwrap();
     let sh = s.doc().unwrap().wb.active().unwrap().clone();
     assert!(sh.summary_below, "the totals sit below their groups");
-    // East's detail is rows 2–3 and its total row 4: collapsing level 1 keeps the total showing.
-    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    // East's detail is rows 2–3 and its total row 4: showing level 2 keeps the total showing.
+    s.execute("data.showLevels", json!({"rows": 2})).unwrap();
     let hidden = |s: &Session, row: u32| s.doc().unwrap().wb.active().unwrap().is_row_hidden(row);
     assert!(hidden(&s, 1) && hidden(&s, 2), "East's detail rows are hidden");
     assert!(!hidden(&s, 3), "East Total stays visible");
@@ -51,6 +51,17 @@ fn subtotal_puts_summary_rows_below_their_detail() {
     let sh = s.doc().unwrap().wb.active().unwrap();
     assert!(!sh.summary_below);
     assert_eq!(sh.value(CellRef::new(3, 0)).display(), "West");
+}
+
+#[test]
+fn filter_list_orders_arabic_like_sort() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["بج"], ["بُت"], ["\u{200F}بب"]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+    let doc = s.doc().unwrap();
+    let list: Vec<String> = filter_values(&doc.wb, 0, 0).into_iter().map(|(t, _)| t).collect();
+    assert_eq!(list, ["\u{200F}بب", "بُت", "بج"]);
 }
 
 #[test]
