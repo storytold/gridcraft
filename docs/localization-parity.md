@@ -118,7 +118,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
-| Georgian | ka | 1,302 (~59%: every key any table has) | dialogs the tables cover | Mkhedruli needs a Georgian system face behind the UI fonts (none of the default faces has it) | no | menus, File view, dialogs; English function names | 4–8 h |
+| Georgian | ka | 1,315 (~59%: every key any table has) | dialogs the tables cover | Mkhedruli needs a Georgian system face behind the UI fonts (none of the default faces has it) | no | menus, File view, dialogs; English function names | 4–8 h |
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 
