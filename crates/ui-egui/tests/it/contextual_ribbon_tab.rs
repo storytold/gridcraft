@@ -121,21 +121,26 @@ fn a_second_window_does_not_reset_the_first_windows_table_design_tab() {
     assert!(d.wb.active().unwrap().table_at(d.selection.active).is_some(), "the table is still there");
 }
 
-/// Each window hides and shows its own ribbon: hiding it in one leaves the other's up, through
-/// both windows' frames.
+/// Each window hides and shows its own ribbon. A new window starts as the window it came from
+/// was; after that, hiding or showing it in one leaves the other as it was, through both windows'
+/// frames.
 #[test]
 fn each_window_hides_its_own_ribbon() {
     let mut h = harness(session_with_table());
     let first = h.state().session.active_window().unwrap();
-    h.state_mut().run("view.newWindow", json!({})).unwrap();
-    let second = h.state().session.active_window().unwrap();
     h.state_mut().run("view.collapseRibbon", json!({})).unwrap();
     h.run_steps(2);
-    assert!(h.state().ui.ribbon_collapsed, "the second window's ribbon is hidden");
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    let second = h.state().session.active_window().unwrap();
+    h.run_steps(2);
+    assert!(h.state().ui.ribbon_collapsed, "the new window starts with the ribbon hidden, as the first had it");
+    h.state_mut().run("view.collapseRibbon", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(!h.state().ui.ribbon_collapsed, "the second window shows its ribbon");
     h.state_mut().run("window.activate", json!({"window": first})).unwrap();
     h.run_steps(2);
-    assert!(!h.state().ui.ribbon_collapsed, "the first window's ribbon stays up");
+    assert!(h.state().ui.ribbon_collapsed, "the first window's ribbon stays hidden");
     h.state_mut().run("window.activate", json!({"window": second})).unwrap();
     h.run_steps(2);
-    assert!(h.state().ui.ribbon_collapsed, "and the second's stays hidden");
+    assert!(!h.state().ui.ribbon_collapsed, "and the second's stays shown");
 }
