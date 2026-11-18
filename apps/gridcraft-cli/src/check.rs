@@ -378,6 +378,8 @@ pub fn check_bytes(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
 
 /// Open and recalculate a workbook in the selected region before comparing caches and round trips.
 fn check_inner(path: &str, bytes: &[u8], opts: &Options) -> FileReport {
+    // GETPIVOTDATA needs the engine's pivot indexer; without it every such cell reads #REF!.
+    let _ = gridcraft_engine::model::PIVOT_INDEXER.set(gridcraft_engine::pivot::index_cells);
     let mut report = FileReport { path: path.to_string(), ..Default::default() };
     let (mut cached, warnings) = match gridcraft_engine::io::open_bytes(path, bytes) {
         Ok(x) => x,
