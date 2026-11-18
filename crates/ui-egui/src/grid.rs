@@ -248,6 +248,9 @@ pub struct GridState {
     /// active sheet's rules, kept the same way: they are read from that sheet's cells alone.
     pub(crate) cf: Option<(std::sync::Weak<Sheet>, CfCache)>,
     pub drag: Drag,
+    /// The next primary-fill scroll step, keyed to its document and sheet. Only another held
+    /// drag frame applies it, so release uses the geometry of the last displayed preview.
+    pub fill_auto_scroll: Option<((u64, usize), egui::Vec2)>,
     /// A header-boundary resize drag: the workbook as it was when the drag began. The drag's own
     /// undo entries are the ones from the first entry that snapshots it; earlier edits with the
     /// same label are not the drag's to merge or cancel.
