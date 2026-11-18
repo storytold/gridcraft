@@ -29,6 +29,8 @@ pub struct WindowUi {
     /// The ribbon tab this window shows. A contextual tab depends on this window's selection, so
     /// another window's frame must not reset it.
     ribbon_tab: String,
+    /// Whether this window's ribbon is hidden: each window hides its own.
+    ribbon_collapsed: bool,
     /// The status bar's Ready/Enter/Edit, which follows the window's cell draft.
     mode: gridcraft_engine::Mode,
     /// A key tip's control request waiting for the frame that draws this window's ribbon.
@@ -37,10 +39,12 @@ pub struct WindowUi {
 
 impl WindowUi {
     /// A new window's state. The last border, fill and font colour picked carry over, as they are
-    /// the user's recent choices rather than the window's; so does the ribbon tab.
-    fn fresh(like: &grid::GridState, ribbon_tab: &str) -> WindowUi {
+    /// the user's recent choices rather than the window's; so do the ribbon tab and whether the
+    /// ribbon is hidden, which the new window then changes on its own.
+    fn fresh(like: &grid::GridState, ribbon_tab: &str, ribbon_collapsed: bool) -> WindowUi {
         WindowUi {
             ribbon_tab: ribbon_tab.to_string(),
+            ribbon_collapsed,
             grid: grid::GridState {
                 last_border: like.last_border.clone(),
                 last_fill: like.last_fill.clone(),
@@ -71,6 +75,7 @@ impl SheetApp {
             tab_run,
             open_switch_windows,
             ribbon_tab,
+            ribbon_collapsed,
             mode,
             keytip_invoke_next,
         } = w;
@@ -88,6 +93,7 @@ impl SheetApp {
         std::mem::swap(&mut self.tab_run, tab_run);
         std::mem::swap(&mut self.open_switch_windows, open_switch_windows);
         std::mem::swap(&mut self.ui.ribbon_tab, ribbon_tab);
+        std::mem::swap(&mut self.ui.ribbon_collapsed, ribbon_collapsed);
         std::mem::swap(&mut self.session.mode, mode);
         std::mem::swap(&mut self.ui.keytip_invoke_next, keytip_invoke_next);
     }
@@ -118,7 +124,7 @@ impl SheetApp {
             self.ui_window = active;
             return;
         };
-        let mut outgoing = WindowUi::fresh(&self.grid, &self.ui.ribbon_tab);
+        let mut outgoing = WindowUi::fresh(&self.grid, &self.ui.ribbon_tab, self.ui.ribbon_collapsed);
         self.swap_window_ui(&mut outgoing);
         if let Some(window) = self.session.window(previous) {
             // A hidden window isn't drawn: a key tip request waiting for its next frame would
