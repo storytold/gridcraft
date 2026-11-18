@@ -62,20 +62,32 @@ fn fills_vertically(src: RangeRef, target: RangeRef) -> bool {
 /// cell is empty or holds text, a logical value, an error, a formula or Python code.
 fn numeric_lanes(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -> Option<Vec<Vec<f64>>> {
     let sh = wb.sheet(sheet)?;
+    lane_cells(src, target).map(|lane| lane.map(|c| trend_number(sh, c)).collect()).collect()
+}
+
+/// The cells of each lane of `src` that a fill to `target` continues: each column when the fill
+/// runs down or up the sheet, each row when it runs across.
+fn lane_cells(src: RangeRef, target: RangeRef) -> impl Iterator<Item = impl Iterator<Item = CellRef>> {
     let vertical = fills_vertically(src, target);
-    let lanes: Vec<u32> = if vertical { (src.start.col..=src.end.col).collect() } else { (src.start.row..=src.end.row).collect() };
-    let len = if vertical { src.height() } else { src.width() };
-    lanes
-        .into_iter()
-        .map(|lane| {
-            (0..len)
-                .map(|i| {
-                    let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
-                    trend_number(sh, c)
-                })
-                .collect()
-        })
-        .collect()
+    let (lanes, len) = if vertical { (src.start.col..=src.end.col, src.height()) } else { (src.start.row..=src.end.row, src.width()) };
+    lanes.map(move |lane| (0..len).map(move |i| if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) }))
+}
+
+/// The sign Growth Trend fits a lane's numbers by: 1 when they are all above zero, -1 when they
+/// are all below zero, and `None` otherwise.
+fn growth_sign(nums: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let (mut above, mut below) = (true, true);
+    for y in nums {
+        above &= y > 0.0;
+        below &= y < 0.0;
+    }
+    if above {
+        Some(1.0)
+    } else if below {
+        Some(-1.0)
+    } else {
+        None
+    }
 }
 
 /// The number a trend fill reads from source cell `c`, or `None` when it is empty or holds text, a
@@ -105,19 +117,19 @@ pub fn trends_that_apply(wb: &Workbook, sheet: usize, src: RangeRef, target: Ran
         return (false, false);
     }
     let Some(sh) = wb.sheet(sheet) else { return (false, false) };
-    let vertical = fills_vertically(src, target);
-    let (lanes, len) = if vertical { (src.start.col..=src.end.col, src.height()) } else { (src.start.row..=src.end.row, src.width()) };
     let mut growth = true;
-    for lane in lanes {
-        // Growth Trend needs the lane all above zero or all below zero, as `Pattern::growth` does.
-        let (mut above, mut below) = (true, true);
-        for i in 0..len {
-            let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
-            let Some(y) = trend_number(sh, c) else { return (false, false) };
-            above &= y > 0.0;
-            below &= y < 0.0;
+    // The lanes and the sign rule are the ones the fill uses (`numeric_lanes`, `Pattern::growth`).
+    for lane in lane_cells(src, target) {
+        let mut missing = false;
+        let sign = growth_sign(lane.map_while(|c| {
+            let y = trend_number(sh, c);
+            missing |= y.is_none();
+            y
+        }));
+        if missing {
+            return (false, false);
         }
-        growth &= above || below;
+        growth &= sign.is_some();
     }
     (true, growth)
 }
@@ -384,13 +396,7 @@ impl Pattern {
     /// by their magnitudes and keep their sign. `None` when the numbers are not all above zero or
     /// all below zero. A lone number, or the same number repeated, is copied unchanged.
     fn growth(nums: &[f64]) -> Option<Pattern> {
-        let sign = if nums.iter().all(|y| *y > 0.0) {
-            1.0
-        } else if nums.iter().all(|y| *y < 0.0) {
-            -1.0
-        } else {
-            return None;
-        };
+        let sign = growth_sign(nums.iter().copied())?;
         if nums.windows(2).all(|w| w.first() == w.last()) {
             return Some(Pattern::Copy);
         }
