@@ -405,3 +405,54 @@ fn ctrl_escape_does_not_close_dialog_behind_error_message() {
     assert!(h.state().message.is_none());
     assert!(h.state().dialog.is_some());
 }
+
+/// #2189: Holding Enter (OS key-repeat) after a failed rename keeps the error visible until a fresh press.
+#[test]
+fn held_enter_key_repeat_does_not_dismiss_error_message() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    // Press and hold Enter (no release event yet) so egui tracks Key::Enter in `keys_down`.
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "initial held Enter shows error");
+    assert!(h.state().dialog.is_some());
+
+    // Subsequent OS key-repeat events while Enter remains held must not dismiss the alert.
+    for _ in 0..2 {
+        h.input_mut().events.push(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+        assert!(h.state().message.is_some(), "key-repeat Enter must not dismiss the error alert");
+        assert!(h.state().dialog.is_some(), "key-repeat Enter must not close the dialog");
+    }
+
+    // Release the held Enter key, then press Enter fresh: dismisses the alert while keeping the dialog open.
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    assert!(h.state().dialog.is_some());
+}
