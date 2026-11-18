@@ -411,6 +411,9 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     if p.scale != 100 && (10..=400).contains(&p.scale) {
         let _ = write!(s, " scale=\"{}\"", p.scale);
     }
+    if let Some(n) = p.first_page_number {
+        let _ = write!(s, " firstPageNumber=\"{n}\"");
+    }
     if let Some((w, h)) = p.fit_to {
         let _ = write!(s, " fitToWidth=\"{w}\" fitToHeight=\"{h}\"");
     }
@@ -419,6 +422,10 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
         let _ = write!(s, " pageOrder=\"{}\"", p.page_order.id());
     }
     let _ = write!(s, " orientation=\"{}\"", if p.orientation == Orientation::Landscape { "landscape" } else { "portrait" });
+    // In the schema's attribute order, as Excel writes it: after the orientation.
+    if p.first_page_number.is_some() {
+        s.push_str(" useFirstPageNumber=\"1\"");
+    }
     if let Some(id) = kept.page_setup_id() {
         let _ = write!(s, " r:id=\"{id}\"");
     }
@@ -848,6 +855,11 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         Value::Empty | Value::Array(_) => s.push_str("/>"),
         Value::Number(n) => {
             let _ = write!(s, "><v>{}</v></c>", num(*n));
+        }
+        // Text inside a spill or array range is a cached formula result: Excel writes it as `t="str"`
+        // and shows #VALUE! for a shared string there when it trusts the saved values.
+        Value::Text(t) if extra.is_some() => {
+            let _ = write!(s, " t=\"str\"><v>{}</v></c>", esc(&encode_xstring(t)));
         }
         Value::Text(t) => {
             let i = out.sst.index(t);
