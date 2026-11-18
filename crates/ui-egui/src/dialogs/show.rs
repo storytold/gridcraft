@@ -530,8 +530,7 @@ fn save_sheet(app: &mut SheetApp, ctx: &egui::Context, mut d: crate::dialogs::Di
             // The host gave up without an answer: the built-in dialog asks instead.
             app.save_sheet = None;
             d.values.insert("builtin".into(), json!(true));
-            app.dialog = Some(d);
-            return None;
+            return Some(d);
         }
     };
     app.save_sheet = None;

@@ -8,7 +8,13 @@ use objc2::MainThreadMarker;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSAlertThirdButtonReturn, NSApplication, NSModalResponse, NSWindow};
 use objc2_foundation::NSString;
+use std::cell::RefCell;
 use std::sync::mpsc::channel;
+
+thread_local! {
+    /// The Save Changes sheets up now: a new question on their window replaces them.
+    static ASKING: RefCell<Vec<Retained<NSWindow>>> = const { RefCell::new(Vec::new()) };
+}
 
 pub fn hook(ctx: &egui::Context) -> SavePrompt {
     let ctx = ctx.clone();
@@ -28,11 +34,19 @@ pub fn hook(ctx: &egui::Context) -> SavePrompt {
         alert.addButtonWithTitle(&NSString::from_str("Save"));
         alert.addButtonWithTitle(&NSString::from_str("Cancel")).setKeyEquivalent(&NSString::from_str("\u{1b}"));
         alert.addButtonWithTitle(&NSString::from_str("Don't Save"));
+        // A question the app took back (`ui.dialog.cancel`) may still be up; nobody listens to its
+        // answer any more, so it goes and the new one asks in its place.
+        if let Some(old) = window.attachedSheet().filter(|s| ASKING.with_borrow(|a| a.contains(s))) {
+            window.endSheet(&old);
+        }
         let (answer, rx) = channel();
         let ctx = ctx.clone();
         let keep = alert.clone();
+        let sheet = alert.window();
+        ASKING.with_borrow_mut(|a| a.push(sheet.clone()));
         let done = RcBlock::new(move |response: NSModalResponse| {
             let _ = &keep; // the alert lives until it has answered
+            ASKING.with_borrow_mut(|a| a.retain(|s| *s != sheet));
             let reply = match response {
                 r if r == NSAlertFirstButtonReturn => "save",
                 r if r == NSAlertThirdButtonReturn => "dontSave",
