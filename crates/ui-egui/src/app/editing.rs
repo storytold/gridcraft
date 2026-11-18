@@ -1,4 +1,5 @@
 use super::{SheetApp, clean_error, editor, formula_bar, formula_locale, json, now_ms};
+use gridcraft_engine::cmd::edit;
 
 /// Why a draft whose sheet was deleted while it was open is dropped.
 pub(crate) const DRAFT_SHEET_GONE: &str = "The sheet of the cell being edited was deleted, so the entry was discarded.";
@@ -166,6 +167,13 @@ impl SheetApp {
             }
             None => text,
         };
+        // Automatically insert a decimal point (File › Options › Editing): a whole number typed
+        // here gets its decimal point, before validation sees the value. Ctrl+Enter fills the
+        // selection with the entry as typed and lets each cell take the decimal point as its own
+        // format allows, so a cell formatted as Text keeps the digits.
+        let fixed = self.session.active().and_then(|d| edit::fixed_decimal_entry(&self.session.prefs, &d.wb, ed.sheet, ed.cell, &text));
+        let typed = fill_selection.then(|| text.clone());
+        let text = fixed.unwrap_or(text);
         // Data validation.
         if let Some(d) = self.session.active()
             && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
@@ -198,8 +206,11 @@ impl SheetApp {
             });
         let r = if unchanged {
             Ok(json!({}))
-        } else if fill_selection {
-            self.session.run("range.fill", json!({"input": text}))
+        } else if let Some(typed) = typed {
+            let prefs = &self.session.prefs;
+            let params =
+                if prefs.fixed_decimal { json!({"input": typed, "fixedDecimal": prefs.fixed_decimal_places}) } else { json!({"input": typed}) };
+            self.session.run("range.fill", params)
         } else {
             self.session.run("cell.set", json!({"cell": ed.cell.a1(), "input": text, "array": array}))
         };
