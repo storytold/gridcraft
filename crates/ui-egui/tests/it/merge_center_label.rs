@@ -19,7 +19,8 @@ fn click_label(language: Language) {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
-    let mut h = crate::common::builder().with_size(vec2(1400.0, 800.0)).build_ui_state(
+    // Wide enough that Home is still on full labels, in English and in German.
+    let mut h = crate::common::builder().with_size(vec2(2200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
