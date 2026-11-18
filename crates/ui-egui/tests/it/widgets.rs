@@ -62,7 +62,7 @@ fn big_button_without_dropdown_keeps_centered_labels_and_width() {
 }
 
 #[test]
-fn icon_toggle_exposes_localized_name_and_checked_state() {
+fn icon_toggle_exposes_localized_name_and_pressed_state() {
     use egui::accesskit::{Role, Toggled};
     use egui_kittest::kittest::{NodeT as _, Queryable as _};
     use gridcraft_ui_egui::i18n::{self, Language};
@@ -76,7 +76,7 @@ fn icon_toggle_exposes_localized_name_and_checked_state() {
                 });
             });
             h.run_steps(2);
-            let toggle = h.get_by_role_and_label(Role::CheckBox, "Fett");
+            let toggle = h.get_by_role_and_label(Role::Button, "Fett");
             let node = toggle.accesskit_node();
             assert_eq!(node.is_disabled(), !enabled);
             assert_eq!(node.toggled(), Some(if on { Toggled::True } else { Toggled::False }));
