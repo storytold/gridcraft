@@ -204,6 +204,10 @@ fn dialog_cancel(app: &mut SheetApp) -> Outcome {
             app.dialog = Some(d);
             return err(e);
         }
+        if d.name == "saveChanges" {
+            // The host's sheet may still be up; its answer is for the question just cancelled.
+            app.save_sheet = None;
+        }
     }
     ok(if deleted { json!({"sheetDeleted": true}) } else { Json::Null })
 }

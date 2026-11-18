@@ -526,7 +526,13 @@ fn save_sheet(app: &mut SheetApp, ctx: &egui::Context, mut d: crate::dialogs::Di
             return None;
         }
         Some(Ok(reply)) => reply,
-        _ => String::new(),
+        _ => {
+            // The host gave up without an answer: the built-in dialog asks instead.
+            app.save_sheet = None;
+            d.values.insert("builtin".into(), json!(true));
+            app.dialog = Some(d);
+            return None;
+        }
     };
     app.save_sheet = None;
     let answer = match reply.as_str() {
