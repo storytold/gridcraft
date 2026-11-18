@@ -12,14 +12,14 @@ use std::cell::RefCell;
 use std::sync::mpsc::channel;
 
 thread_local! {
-    /// The Save Changes sheets up now, with the title they were asked for and their windows.
-    static ASKING: RefCell<Vec<(String, Retained<NSWindow>, Retained<NSWindow>)>> = const { RefCell::new(Vec::new()) };
+    /// The Save Changes sheets up now, with the id they were asked with and their windows.
+    static ASKING: RefCell<Vec<(u64, Retained<NSWindow>, Retained<NSWindow>)>> = const { RefCell::new(Vec::new()) };
 }
 
-/// The hook for `Services::end_save_prompt`: the sheet asked for `title` goes, answering Cancel
-/// to nobody; other windows' sheets stay.
-pub fn end(title: &str) {
-    let gone: Vec<_> = ASKING.with_borrow(|a| a.iter().filter(|(t, ..)| t == title).map(|(_, w, s)| (w.clone(), s.clone())).collect());
+/// The hook for `Services::end_save_prompt`: the sheet asked with `id` goes, answering Cancel
+/// to nobody; other sheets stay, even on a window with the same title.
+pub fn end(id: u64) {
+    let gone: Vec<_> = ASKING.with_borrow(|a| a.iter().filter(|(i, ..)| *i == id).map(|(_, w, s)| (w.clone(), s.clone())).collect());
     // Outside the borrow: ending runs the completion handler, which takes the sheet off ASKING.
     for (window, sheet) in gone {
         window.endSheet(&sheet);
@@ -28,7 +28,7 @@ pub fn end(title: &str) {
 
 pub fn hook(ctx: &egui::Context) -> SavePrompt {
     let ctx = ctx.clone();
-    Box::new(move |title, question, detail| {
+    Box::new(move |id, title, question, detail| {
         let mtm = MainThreadMarker::new()?;
         // No window that is surely the workbook's: the app asks in its own dialog instead.
         let window = window_titled(mtm, title)?;
@@ -48,7 +48,7 @@ pub fn hook(ctx: &egui::Context) -> SavePrompt {
         let ctx = ctx.clone();
         let keep = alert.clone();
         let sheet = alert.window();
-        ASKING.with_borrow_mut(|a| a.push((title.to_string(), window.clone(), sheet.clone())));
+        ASKING.with_borrow_mut(|a| a.push((id, window.clone(), sheet.clone())));
         let done = RcBlock::new(move |response: NSModalResponse| {
             let _ = &keep; // the alert lives until it has answered
             ASKING.with_borrow_mut(|a| a.retain(|(.., s)| *s != sheet));
@@ -82,6 +82,6 @@ mod tests {
     fn without_the_workbooks_window_the_app_asks_itself() {
         let hook = super::hook(&egui::Context::default());
         // Off the main thread, as here, or with no such window, no sheet can be placed.
-        assert!(hook("Book1 — Edited", "Do you want to save the changes you made to Book1?", "").is_none());
+        assert!(hook(1, "Book1 — Edited", "Do you want to save the changes you made to Book1?", "").is_none());
     }
 }

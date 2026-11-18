@@ -252,8 +252,8 @@ pub struct SheetApp {
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
-    /// The window title the host's Save Changes sheet is on, and its answer (`Services::save_prompt`).
-    save_sheet: Option<(String, std::sync::mpsc::Receiver<String>)>,
+    /// The id the host's Save Changes sheet was asked with, and its answer (`Services::save_prompt`).
+    save_sheet: Option<(u64, std::sync::mpsc::Receiver<String>)>,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).

@@ -774,7 +774,7 @@ fn closing_the_window_asks_each_unsaved_workbook_in_a_sheet() {
     let asked: Asked = Arc::default();
     let log = asked.clone();
     let services = Services {
-        save_prompt: Some(Box::new(move |_window, question, _detail| {
+        save_prompt: Some(Box::new(move |_id, _window, question, _detail| {
             let (tx, rx) = std::sync::mpsc::channel();
             log.lock().unwrap().push((question.to_string(), tx));
             Some(rx)
@@ -811,7 +811,7 @@ fn closing_the_window_asks_each_unsaved_workbook_in_a_sheet() {
     assert!(sent.contains(&egui::ViewportCommand::Close), "once every workbook is answered the window closes: {sent:?}");
 
     // No sheet for the window: the built-in dialog asks.
-    let mut h = harness(Services { save_prompt: Some(Box::new(|_, _, _| None)), ..Default::default() });
+    let mut h = harness(Services { save_prompt: Some(Box::new(|_, _, _, _| None)), ..Default::default() });
     h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
     h.run_steps(2);
     request_window_close(&mut h);
@@ -826,7 +826,7 @@ fn each_window_waits_on_its_own_save_sheet() {
     let asked: Asked = Arc::default();
     let log = asked.clone();
     let services = Services {
-        save_prompt: Some(Box::new(move |_, _, _| {
+        save_prompt: Some(Box::new(move |_, _, _, _| {
             let (tx, rx) = std::sync::mpsc::channel();
             log.lock().unwrap().push(tx);
             Some(rx)
@@ -859,18 +859,18 @@ fn each_window_waits_on_its_own_save_sheet() {
 /// that window's sheet; the other still waits for its answer.
 #[test]
 fn cancelling_one_windows_question_takes_down_only_its_sheet() {
-    type Asked = Arc<Mutex<Vec<(String, std::sync::mpsc::Sender<String>)>>>;
+    type Asked = Arc<Mutex<Vec<(u64, std::sync::mpsc::Sender<String>)>>>;
     let asked: Asked = Arc::default();
     let log = asked.clone();
-    let ends: Arc<Mutex<Vec<String>>> = Arc::default();
+    let ends: Arc<Mutex<Vec<u64>>> = Arc::default();
     let ended = ends.clone();
     let services = Services {
-        save_prompt: Some(Box::new(move |window, _, _| {
+        save_prompt: Some(Box::new(move |id, _, _, _| {
             let (tx, rx) = std::sync::mpsc::channel();
-            log.lock().unwrap().push((window.to_string(), tx));
+            log.lock().unwrap().push((id, tx));
             Some(rx)
         })),
-        end_save_prompt: Some(Box::new(move |window| ended.lock().unwrap().push(window.to_string()))),
+        end_save_prompt: Some(Box::new(move |id| ended.lock().unwrap().push(id))),
         ..Default::default()
     };
     let mut h = harness(services);
@@ -883,12 +883,12 @@ fn cancelling_one_windows_question_takes_down_only_its_sheet() {
         choose(&mut h, "Close");
         h.run_steps(2);
     }
-    let titles: Vec<String> = asked.lock().unwrap().iter().map(|(w, _)| w.clone()).collect();
-    assert_eq!(titles.len(), 2, "each window asks in a sheet of its own");
-    assert_ne!(titles[0], titles[1], "on its own window");
+    let ids: Vec<u64> = asked.lock().unwrap().iter().map(|(id, _)| *id).collect();
+    assert_eq!(ids.len(), 2, "each window asks in a sheet of its own");
+    assert_ne!(ids[0], ids[1], "with its own id, whatever the windows are titled");
     let ctx = h.ctx.clone();
     gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.dialog.cancel", &serde_json::json!({}));
-    assert_eq!(*ends.lock().unwrap(), vec![titles[1].clone()], "only the second window's sheet is taken down");
+    assert_eq!(*ends.lock().unwrap(), vec![ids[1]], "only the second window's sheet is taken down");
     // The first window's sheet still answers its own question.
     asked.lock().unwrap()[0].1.send("dontSave".into()).unwrap();
     h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
@@ -909,7 +909,7 @@ fn a_cancelled_or_abandoned_save_sheet_closes_nothing() {
     let ends: Arc<Mutex<usize>> = Arc::default();
     let ended = ends.clone();
     let services = Services {
-        save_prompt: Some(Box::new(move |_, _, _| {
+        save_prompt: Some(Box::new(move |_, _, _, _| {
             let (tx, rx) = std::sync::mpsc::channel();
             log.lock().unwrap().push(tx);
             Some(rx)

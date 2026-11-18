@@ -206,10 +206,10 @@ fn dialog_cancel(app: &mut SheetApp) -> Outcome {
         }
         if d.name == "saveChanges" {
             // The host's sheet may still be up: nobody listens to its answer any more, and it goes.
-            if let Some((window, _)) = app.save_sheet.take()
+            if let Some((id, _)) = app.save_sheet.take()
                 && let Some(end) = &app.services.end_save_prompt
             {
-                end(&window);
+                end(id);
             }
         }
     }

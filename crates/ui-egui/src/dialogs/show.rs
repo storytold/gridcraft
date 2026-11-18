@@ -517,8 +517,11 @@ fn save_sheet(app: &mut SheetApp, ctx: &egui::Context, mut d: crate::dialogs::Di
         let question = format!("Do you want to save the changes you made to {name}?");
         let detail = "Your changes will be lost if you don't save them.";
         // No window that is surely the workbook's: the built-in dialog asks.
-        let Some(rx) = ask(&window, &question, detail) else { return Some(d) };
-        app.save_sheet = Some((window, rx));
+        // Each question its own id: two windows can carry the same title.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(rx) = ask(id, &window, &question, detail) else { return Some(d) };
+        app.save_sheet = Some((id, rx));
     }
     let reply = match app.save_sheet.as_ref().map(|(_, rx)| rx.try_recv()) {
         Some(Err(TryRecvError::Empty)) => {
