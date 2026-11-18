@@ -871,7 +871,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Moving Average" => "Moyenne mobile",
         "Multiply" => "Multiplication",
         "My data has headers" => "Mes données ont des en-têtes",
-        "My list has headers" => "Ma liste contient des en-têtes",
         "Name" => "Nom",
         "Name Manager" => "Gestionnaire de noms",
         "Name:" => "Nom :",
@@ -2309,6 +2308,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Formatting columns isn't allowed on this protected sheet (Review › Unprotect Sheet)." => {
             "La mise en forme des colonnes n'est pas autorisée sur cette feuille protégée (Révision › Ôter la protection de la feuille)."
         }
+        "My list has headers" => "Mes données ont des en-têtes",
+        "Add Level" => "Ajouter un niveau",
+        "Delete Level" => "Supprimer le niveau",
+        "Copy Level" => "Copier le niveau",
+        "Move Up" => "Monter",
+        "Move Down" => "Descendre",
+        "Order" => "Ordre",
+        "Sort|Column" => "Colonne",
+        "Column {letters}" => "Colonne {letters}",
+        "Smallest to Largest" => "Du plus petit au plus grand",
+        "Largest to Smallest" => "Du plus grand au plus petit",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Fermez la boîte de dialogue Trier avant de changer de feuille ou de modifier les feuilles."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Revenez à la feuille d’origine pour trier, ou annulez.",
         "Width: {chars} ({pixels} pixels)" => "Largeur : {chars} ({pixels} pixels)",
         "Height: {points} ({pixels} pixels)" => "Hauteur : {points} ({pixels} pixels)",
         "Format Control: {name}" => "Format de contrôle : {name}",
