@@ -2,8 +2,10 @@ use super::geo::Geo;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
-/// Grid keyboard handling when no text field has focus.
-pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+/// Whether something other than the grid owns the keyboard this frame: an editor, a dialog, a
+/// message, a menu or another focused widget. Kept out of [`keyboard`] to hold its complexity
+/// within the workspace limit.
+fn keyboard_elsewhere(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response) -> bool {
     // Focus left on an editor that no longer exists goes back to the grid.
     let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
     let editing = app.editor.is_some() || app.text_box_editor.is_some();
@@ -14,7 +16,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
     // arrow key would move the selection the menu fills from), and a macro's question.
-    if editing
+    editing
         || app.dialog.is_some()
         || other_focus
         || app.message.is_some()
@@ -22,7 +24,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
         || app.macros.question.is_some()
-    {
+}
+
+/// Grid keyboard handling when no text field has focus.
+pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
+    if keyboard_elsewhere(app, ctx, resp) {
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
