@@ -344,6 +344,65 @@ fn failed_save_leaves_no_temporary_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A save replaces an existing workbook with exactly the new bytes, and a save into a folder
+/// that doesn't exist fails without creating anything. The flush to disk before the rename is
+/// not covered: a power loss can't be simulated in a unit test.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_writes_exact_bytes_and_fails_cleanly_without_a_folder() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-write-exact-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dest = dir.join("Book.xlsx");
+    std::fs::write(&dest, b"old workbook that is longer than the new one").unwrap();
+    let bytes: Vec<u8> = (0..=255u8).cycle().take(100_000).collect();
+    write_file(dest.to_str().unwrap(), &bytes).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    assert!(!dir.join("Book.xlsx.sctmp").exists());
+    let missing = dir.join("no-such-folder").join("Book.xlsx");
+    assert!(write_file(missing.to_str().unwrap(), b"x").is_err());
+    assert!(!dir.join("no-such-folder").exists());
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes, "the existing workbook is untouched");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only "this file system cannot flush" errors are tolerated when syncing a saved file.
+/// The fallback on a real network mount is not tested.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_only_unsupported_errors() {
+    use std::io::{Error, ErrorKind};
+    assert_eq!(full_sync_unsupported(&Error::from_raw_os_error(25)), cfg!(unix));
+    assert!(full_sync_unsupported(&Error::from(ErrorKind::Unsupported)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::PermissionDenied)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::StorageFull)));
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(28)), "ENOSPC on Linux");
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
+}
+
+/// Apple's ENOTSUP is 45 (EOPNOTSUPP is 102), and std maps only the latter to
+/// `ErrorKind::Unsupported`: F_FULLFSYNC refused with ENOTSUP must still save. Elsewhere 45 is
+/// another error (EL2NSYNC on Linux) and stays a failed save.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_apple_enotsup() {
+    use std::io::Error;
+    let enotsup = Error::from_raw_os_error(45);
+    assert!(flush_unsupported_on(&enotsup, true, true), "ENOTSUP on Apple");
+    assert!(!flush_unsupported_on(&enotsup, true, false), "45 on other Unix");
+    assert!(!flush_unsupported_on(&enotsup, false, false), "45 on Windows");
+    assert!(flush_unsupported_on(&Error::from_raw_os_error(25), true, true), "ENOTTY on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(5), true, true), "EIO on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(28), true, true), "ENOSPC on Apple");
+}
+
+/// The real helper on an Apple host: a raw ENOTSUP from F_FULLFSYNC is tolerated.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn full_sync_tolerates_raw_enotsup_on_apple() {
+    assert!(full_sync_unsupported(&std::io::Error::from_raw_os_error(45)));
+}
+
 /// While a script runs (#2178), file reads and writes are refused whatever command or
 /// parameter asked for them; nesting and dropping the sandbox restore access.
 #[cfg(not(target_arch = "wasm32"))]
