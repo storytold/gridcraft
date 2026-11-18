@@ -554,3 +554,34 @@ fn refused_shared_copies_keep_their_values_inside_array_ranges() {
     assert_eq!(s.value(c2), gridcraft_core::Value::Number(7.0));
     assert!(rep.warnings.iter().any(|w| w.contains("longer than")), "{:?}", rep.warnings);
 }
+
+/// #4437: a formula the parser refuses for being over Excel's limits is kept as text, so a save
+/// loses nothing, but its cell keeps the file's value and the formula is never calculated. The
+/// open says so, naming the cell; a formula kept for another reason stays quiet.
+#[test]
+fn over_limit_formulas_are_kept_but_reported() {
+    use gridcraft_core::{CellRef, Value};
+    let long = format!("1{}", "+1".repeat(gridcraft_formula::MAX_FORMULA_LEN.div_ceil(2)));
+    let long2 = format!("2{}", "+1".repeat(gridcraft_formula::MAX_FORMULA_LEN.div_ceil(2)));
+    assert!(long.chars().count() > gridcraft_formula::MAX_FORMULA_LEN);
+    let many = format!("SUM({})", vec!["1"; 256].join(","));
+    let body = format!(
+        r#"<sheetData><row r="1"><c r="A1"><f>{long}</f><v>7</v></c><c r="B1"><f>{many}</f><v>8</v></c><c r="C1"><f>{long2}</f><v>9</v></c><c r="D1"><f>SUM(</f><v>10</v></c><c r="E1"><f>1+1</f><v>2</v></c></row></sheetData>"#
+    );
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    // Every formula is kept, with the value the file saved.
+    for (a, n) in [("A1", 7.0), ("B1", 8.0), ("C1", 9.0), ("D1", 10.0)] {
+        let at = CellRef::parse(a).unwrap();
+        assert!(s.cell(at).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.expr.is_none()), "{a}");
+        assert_eq!(s.value(at), Value::Number(n), "{a}");
+    }
+    assert!(s.cell(CellRef::parse("E1").unwrap()).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.expr.is_some()));
+    // The over-limit cells are named, and the rest of their kind counted.
+    let length = rep.warnings.iter().find(|w| w.contains("8192")).unwrap_or_else(|| panic!("no length warning: {:?}", rep.warnings));
+    assert!(length.contains("sheet \"Data\"") && length.contains("in A1") && length.contains("and 1 more"), "{length}");
+    let args = rep.warnings.iter().find(|w| w.contains("255 arguments")).unwrap_or_else(|| panic!("no argument warning: {:?}", rep.warnings));
+    assert!(args.contains("sheet \"Data\"") && args.contains("in B1") && !args.contains("(and "), "{args}");
+    // D1 doesn't parse either, but not because of a limit: it stays quiet.
+    assert!(!rep.warnings.iter().any(|w| w.contains("in D1")), "{:?}", rep.warnings);
+}
