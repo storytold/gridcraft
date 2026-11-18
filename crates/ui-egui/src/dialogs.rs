@@ -26,6 +26,7 @@ mod names;
 mod paste;
 mod ref_edit;
 mod show;
+mod sort_dialog;
 mod spelling;
 mod zoom;
 
@@ -38,6 +39,7 @@ use names::pasteable_names;
 pub(crate) use ref_edit::SHEET_DELETED;
 pub(crate) use show::build_params;
 pub use show::show;
+pub(crate) use sort_dialog::{grid_sense, refuse_sheet_change};
 use zoom::zoom_preset;
 
 /// A form field. `Ref` is a range reference that can also be picked by selecting on the grid
@@ -64,6 +66,8 @@ pub struct Dialog {
     pub tab: String,
     pub search: String,
     pub list_index: usize,
+    /// Custom Sort's own state: the selection to restore and the column choices.
+    sort: sort_dialog::State,
     pub result: Option<Json>,
     /// "Show password" is ticked: password fields show their text.
     pub show_password: bool,
@@ -233,6 +237,7 @@ impl Dialog {
             tab: String::new(),
             search: String::new(),
             list_index: 0,
+            sort: Default::default(),
             result: None,
             show_password: false,
             focus_first_field: true,
@@ -258,6 +263,7 @@ impl Dialog {
             tab: String::new(),
             search: String::new(),
             list_index: 0,
+            sort: Default::default(),
             result: None,
             show_password: false,
             focus_first_field: false,
@@ -359,7 +365,7 @@ impl Dialog {
                     vec![
                         Number { key: "to", label: "Before sheet (position, 0 = first):" },
                         Check { key: "copy", label: "Create a copy" },
-                        Note(format!("Sheets: {}", sheets.join(", "))),
+                        Note(app.ui.language.tr_fill("Sheets: {sheets}", &[("sheets", &sheets.join(", "))])),
                     ],
                     json!({"to": 0, "copy": false}),
                 );
@@ -476,7 +482,10 @@ impl Dialog {
                     "unhideSheet",
                     "Unhide",
                     "sheet.unhide",
-                    vec![Text { key: "sheet", label: "Unhide sheet:" }, Note(format!("Hidden: {}", opts.join(", ")))],
+                    vec![
+                        Text { key: "sheet", label: "Unhide sheet:" },
+                        Note(app.ui.language.tr_fill("Hidden: {sheets}", &[("sheets", &opts.join(", "))])),
+                    ],
                     json!({"sheet": first}),
                 );
                 d.values.insert("sheet".into(), json!(first));
@@ -986,11 +995,7 @@ impl Dialog {
                 }],
                 json!({"kind": "blanks"}),
             ),
-            "sort" => {
-                // Seed "Sort by" from the column the user is actually in (#1906).
-                let col = app.session.active().map(|d| gridcraft_engine::core::col_to_letters(d.selection.active.col)).unwrap_or_else(|| "A".into());
-                Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
-            }
+            "sort" => sort_dialog::open(app, &params)?,
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
             "pasteName" => {
                 // F3 opens it only when the workbook has names to paste, as in Excel.
@@ -1144,6 +1149,51 @@ impl Dialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The text of the dialog's note.
+    fn note(d: &Dialog) -> String {
+        d.fields.iter().find_map(|f| if let Field::Note(text) = f { Some(text.clone()) } else { None }).unwrap_or_default()
+    }
+
+    #[test]
+    fn sheet_notes_follow_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("home.insertSheet", json!({})).unwrap();
+        let unhide = json!({"sheets": ["Sheet2"]});
+        assert_eq!(note(&Dialog::open(&mut app, "moveSheet", json!({})).unwrap()), "Sheets: Sheet1, Sheet2");
+        assert_eq!(note(&Dialog::open(&mut app, "unhideSheet", unhide.clone()).unwrap()), "Hidden: Sheet2");
+        let it = Language::It;
+        app.ui.language = it;
+        let moved = note(&Dialog::open(&mut app, "moveSheet", json!({})).unwrap());
+        assert_eq!(moved, it.tr("Sheets: {sheets}").replace("{sheets}", "Sheet1, Sheet2"));
+        assert!(!moved.starts_with("Sheets"));
+        let hidden = note(&Dialog::open(&mut app, "unhideSheet", unhide).unwrap());
+        assert_eq!(hidden, it.tr("Hidden: {sheets}").replace("{sheets}", "Sheet2"));
+        assert!(!hidden.starts_with("Hidden"));
+    }
+
+    #[test]
+    fn goal_seek_success_toast_follows_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("cell.set", json!({"cell": "B1", "input": "=A1*2"})).unwrap();
+        let it = Language::It;
+        app.ui.language = it;
+        let mut d = Dialog::custom("goalSeek", "Goal Seek", json!({"set": "B1", "to": "10", "changing": "A1"}));
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| analysis::goal_seek(&mut app, ui, &mut d, &mut true, &mut true));
+        out.textures_delta.clear();
+        assert_eq!(app.message, None);
+        // The value is shown as before (the JSON number the command returns).
+        let want = it.tr("Goal Seeking found a solution: {value}").replace("{value}", "5.0");
+        assert_eq!(app.toast.map(|t| t.0), Some(want.clone()));
+        assert!(!want.starts_with("Goal Seeking"));
+    }
 
     #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {
