@@ -232,10 +232,10 @@ fn word(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, array_
     } else if ch(j) == Some('(') {
         emit(src, chars, out, Tok::Func(value), start, j + 1);
         j + 1
-    } else if value.eq_ignore_ascii_case("TRUE") && ch(j) != Some('[') {
+    } else if (value.eq_ignore_ascii_case("TRUE") || crate::input::boolean_alias(&value, locale) == Some(true)) && ch(j) != Some('[') {
         emit(src, chars, out, Tok::Bool(true), start, j);
         j
-    } else if value.eq_ignore_ascii_case("FALSE") && ch(j) != Some('[') {
+    } else if (value.eq_ignore_ascii_case("FALSE") || crate::input::boolean_alias(&value, locale) == Some(false)) && ch(j) != Some('[') {
         emit(src, chars, out, Tok::Bool(false), start, j);
         j
     } else if value.len() > 1 && value.ends_with('.') && ch(j) == Some(':') && is_range_end(value.get(..value.len() - 1).unwrap_or("")) {

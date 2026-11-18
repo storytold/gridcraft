@@ -240,3 +240,22 @@ fn turkish_interface_retains_its_canonical_formula_fallback() {
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
+
+#[test]
+fn russian_language_controls_entry_display_and_roundtrip() {
+    let mut app = app();
+    app.run("app.language.set", json!({"language":"ru"})).unwrap();
+    assert!(enter(&mut app, "=ЕСЛИ(ИСТИНА;СУММ(1,5;2,25);0)"));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    let saved = app.run("file.save", json!({"format":"xlsx"})).unwrap();
+    app.run("file.open", json!({"name":"locale_ru.xlsx", "base64":saved["base64"]})).unwrap();
+    app.begin_edit(None, true);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=ЕСЛИ(ИСТИНА;СУММ(1,5;2,25);0)");
+    assert!(app.commit_edit(0, 0, false, false));
+    assert_eq!(formula(&app), "IF(TRUE,SUM(1.5,2.25),0)");
+    let state: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
+    assert_eq!(state.language, Language::Ru);
+    app.run("app.language.set", json!({"language":"en"})).unwrap();
+    app.begin_edit(None, false);
+    assert_eq!(app.editor.as_ref().unwrap().text, "=IF(TRUE,SUM(1.5,2.25),0)");
+}
