@@ -57,7 +57,10 @@ fn is_local_drive_path(d: &str) -> bool {
 
 /// Percent-encodes the characters Explorer's command-line parser (comma-separated switches such
 /// as `/select,`), the C runtime's quoting rules and `cmd` treat specially: space, `"`, `,` and
-/// `^`. None of them may appear unencoded in a URL, so the address is unchanged in meaning.
+/// `^`. Space, `"` and `^` may not appear unencoded in a URL, so encoding them leaves the address
+/// unchanged. A comma may, and RFC 3986 does not treat `%2C` as equivalent to it (a `mailto:`
+/// recipient list is comma-separated); it is encoded anyway because Explorer's parser separates
+/// switches at commas, and a handler that percent-decodes the address sees the comma again.
 pub fn escape_for_explorer(target: &str) -> String {
     let mut out = String::with_capacity(target.len());
     for c in target.chars() {
