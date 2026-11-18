@@ -699,16 +699,71 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
         // An array's formula is in its top-left cell, so only cells above and left of an edit
         // can hold one that covers it.
         let reach = RangeRef::new(CellRef::new(0, 0), CellRef::new(last_row, last_col));
-        let arrays: Vec<(CellRef, RangeRef)> = after
-            .cells
-            .iter_range(reach)
-            .filter_map(|(anchor, x)| x.formula.as_ref().and_then(|f| f.array).filter(|a| a.start == anchor && !a.is_single()).map(|a| (anchor, a)))
-            .collect();
-        if unspilled.iter().any(|&c| arrays.iter().any(|&(anchor, a)| anchor != c && a.contains(c))) {
+        // The store keeps each band's array formulas, so this does not walk the sheet's cells.
+        let arrays: Vec<(CellRef, RangeRef)> = after.cells.array_formulas(reach).collect();
+        if array_holds_edit(&unspilled, &arrays) {
             return refused();
         }
     }
     Ok(())
+}
+
+/// Whether an array in `arrays` (formula cell, range) covers a cell in `edits` other than its own
+/// formula cell. A sweep down the rows with a Fenwick tree over the edits' columns counts the
+/// edits in each array's range: O((E + A) log (E + A)), where testing every edit against every
+/// array is O(E × A). `edits` holds each cell once.
+pub(crate) fn array_holds_edit(edits: &[CellRef], arrays: &[(CellRef, RangeRef)]) -> bool {
+    if edits.is_empty() || arrays.is_empty() {
+        return false;
+    }
+    let mut points: Vec<CellRef> = edits.to_vec();
+    points.sort_unstable();
+    points.dedup();
+    let mut cols: Vec<u32> = points.iter().map(|c| c.col).collect();
+    cols.sort_unstable();
+    cols.dedup();
+    // Edits by row, for the sweep.
+    let mut by_row: Vec<(u32, usize)> = points.iter().filter_map(|c| Some((c.row, cols.binary_search(&c.col).ok()?))).collect();
+    by_row.sort_unstable();
+    // Each array asks for the edits down to its last row (+1) and to the row above its first (-1).
+    let mut asks: Vec<(u32, usize, i64)> = Vec::with_capacity(arrays.len() * 2);
+    for (i, (_, a)) in arrays.iter().enumerate() {
+        asks.push((a.end.row, i, 1));
+        if let Some(above) = a.start.row.checked_sub(1) {
+            asks.push((above, i, -1));
+        }
+    }
+    asks.sort_unstable();
+    let mut tree = vec![0i64; cols.len() + 1];
+    let mut counts = vec![0i64; arrays.len()];
+    let mut next = 0;
+    for (row, i, sign) in asks {
+        while let Some(&(r, col)) = by_row.get(next)
+            && r <= row
+        {
+            let mut at = col + 1;
+            while let Some(slot) = tree.get_mut(at) {
+                *slot += 1;
+                at += at.isolate_lowest_one();
+            }
+            next += 1;
+        }
+        let Some((_, a)) = arrays.get(i) else { continue };
+        let upto = |n: usize| {
+            let (mut n, mut sum) = (n, 0i64);
+            while n > 0 {
+                sum += tree.get(n).copied().unwrap_or(0);
+                n -= n.isolate_lowest_one();
+            }
+            sum
+        };
+        let (lo, hi) = (cols.partition_point(|&c| c < a.start.col), cols.partition_point(|&c| c <= a.end.col));
+        if let Some(n) = counts.get_mut(i) {
+            *n += sign * (upto(hi) - upto(lo));
+        }
+    }
+    // An array's own formula cell is not part of it for this check.
+    arrays.iter().zip(&counts).any(|((anchor, _), &n)| n - i64::from(points.binary_search(anchor).is_ok()) > 0)
 }
 
 /// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
