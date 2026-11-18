@@ -2,7 +2,7 @@
 
 use egui::{Color32, RawInput, Rect, Shape, pos2, vec2};
 use gridcraft_engine::Session;
-use gridcraft_ui_egui::theme;
+use gridcraft_ui_egui::{SheetApp, theme};
 use serde_json::json;
 
 /// Builds a pivot report at D3 and returns the painted shapes after six frames in the caller's light or dark mode.
