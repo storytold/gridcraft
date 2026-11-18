@@ -21,8 +21,9 @@ pub const RECORD_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 /// Commands never recorded: recovery actions and the debugger, not steps of the person's work. A
 /// recording that replayed Stop Action would stop the run it is a step of, and the debugger runs
-/// on its own, never as a step of a script or macro.
-pub const NOT_RECORDED: [&str; 2] = ["automate.stopAction", "macro.debug"];
+/// on its own, never as a step of a script or macro. A plug-in run is refused as a script or macro
+/// step (it would run code past their checks), so it isn't recorded either.
+pub const NOT_RECORDED: [&str; 3] = ["automate.stopAction", "macro.debug", "plugin.run"];
 
 /// One recorded command and where it ran.
 #[derive(Clone, Debug, PartialEq, Serialize)]

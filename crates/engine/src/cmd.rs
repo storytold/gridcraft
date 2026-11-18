@@ -16,6 +16,7 @@ pub mod insert;
 pub mod inspect;
 pub mod macros;
 pub mod pivot;
+pub mod plugins;
 pub mod print;
 pub mod python;
 pub mod review;
@@ -187,6 +188,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(forecast::specs());
         v.extend(analysis::specs());
         v.extend(print::specs());
+        v.extend(plugins::specs());
         v
     })
 }

@@ -55,13 +55,14 @@ pub(crate) fn has_scripts(wb: &Workbook) -> bool {
 
 /// Why a script step is refused, whatever the workbook's trust: scripts stay inside the
 /// workbook. Anything that reads or writes files (`file.*`, or any `path` parameter: Get Data,
-/// From Text/CSV, Insert Picture) or leaves the app (`link.*` opens URLs) is the caller's to run
+/// From Text/CSV, Insert Picture), leaves the app (`link.*` opens URLs) or runs a plug-in's code
+/// (`plugin.*`, which also installs plug-ins) is the caller's to run
 /// directly, not a stored script's. (Nested `automate.*` steps are skipped.) This check goes by
 /// command id and parameter name, so it is only the up-front refusal: the steps also run inside
 /// an [`crate::io::ScriptSandbox`] (file access refused whatever the parameter is called) and
 /// [`run_script`] drops any `OpenUrl` request a step raises.
 fn denied_script_step(id: &str, params: &Json) -> Option<String> {
-    if id.starts_with("file.") || id.starts_with("link.") {
+    if id.starts_with("file.") || id.starts_with("link.") || id.starts_with("plugin.") {
         return Some(format!("scripts can't run `{id}`: it reaches outside the workbook"));
     }
     // Scripts are scoped to their workbook: a step that switches the active window would

@@ -20,6 +20,7 @@ pub mod outline;
 pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
+pub mod plugin;
 pub mod recent;
 pub mod record;
 pub mod sample;
@@ -429,6 +430,10 @@ pub struct Prefs {
     /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
     #[serde(deserialize_with = "recent::lenient")]
     pub recent_functions: Vec<String>,
+    /// Each plug-in's settings, by plug-in id (`plugin::MAX_SETTINGS_BYTES` each).
+    pub plugin_settings: std::collections::BTreeMap<String, serde_json::Map<String, Json>>,
+    /// Plug-in catalogs added with `plugin.catalog.add` (`index.json` URLs).
+    pub plugin_catalogs: Vec<String>,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -464,6 +469,8 @@ impl Default for Prefs {
             formula_bar: true,
             status_bar: StatusBarStats::default(),
             recent_functions: recent::defaults(),
+            plugin_settings: Default::default(),
+            plugin_catalogs: Vec::new(),
         }
     }
 }
@@ -562,6 +569,8 @@ pub struct Session {
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
+    /// Installed plug-ins, their store and the last run (see [`plugin`]).
+    pub plugins: plugin::Runtime,
 }
 
 impl Session {

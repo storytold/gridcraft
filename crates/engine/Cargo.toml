@@ -28,7 +28,12 @@ gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
 image = { workspace = true }
 unicode-segmentation = "=1.13.3"
+# WebAssembly command plug-ins (`plugin`, RFC-0046).
+craft-plugin = { workspace = true }
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }
+# Test plug-ins are written in WebAssembly text; the plug-in store is tested in a temporary folder.
+wat = "1.261"
+tempfile = "3"

@@ -29,6 +29,7 @@ const DENIED_PREFIXES: &[(&str, &str)] = &[
     ("window.", "macros don't switch windows"),
     ("automate.", "macros don't record or run scripts or other macros"),
     ("macro.", "macros don't record or run other macros"),
+    ("plugin.", "macros don't install or run plug-ins"),
 ];
 
 /// Single commands that never run in a macro.

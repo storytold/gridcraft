@@ -309,7 +309,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             new_cell_style
         ),
-        cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and scripts instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › scripts"}))),
+        cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through WebAssembly plug-ins (plugin.*), MCP and scripts instead of add-ins", always, |s, _| Ok(json!({"addIns": [], "plugins": s.plugins.list().iter().map(|p| json!({"id": p.manifest.id, "name": p.manifest.name, "version": p.manifest.version})).collect::<Vec<_>>(), "hint": "Use Automate › Plug-ins, gridcraft-cli mcp or Automate › scripts"}))),
         cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → the functions most recently entered in formulas, newest first", has_doc, recently_used),
         cmd!(query "formulas.financial", "Financial", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Financial"}))),
         cmd!(query "formulas.logical", "Logical", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Logical"}))),
