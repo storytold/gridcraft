@@ -182,7 +182,8 @@ fn xlsx_stores_the_code_in_the_python_part_with_cached_values() {
     assert_eq!(code(&s, "B1").unwrap().code, "xl('A1') * 2");
     assert!(code(&s, "E1").unwrap().object);
     assert_eq!(code(&s, "F1").unwrap().code, long, "long code with quotes and line breaks survives");
-    assert_eq!(v(&s, "G1"), Value::Error(CellError::Value));
+    // The file keeps the #PYTHON! error as a rich value, so it reads back as itself.
+    assert_eq!(v(&s, "G1"), Value::Error(CellError::Python));
     // A blocker typed into the spill area gives #SPILL!; clearing it spills again, without
     // running anything.
     s.execute("cell.set", json!({"cell": "D2", "input": "x"})).unwrap();

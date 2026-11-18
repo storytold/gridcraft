@@ -133,7 +133,7 @@ pub struct Out {
     pub table_id: u32,
     pub dynamic_arrays: bool,
     pub needs_calc: bool,
-    pub cell_pictures: crate::richdata::PicturesOut,
+    pub rich_values: crate::richdata::RichValuesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
     /// Decides which formulas need dynamic-array metadata.
@@ -280,7 +280,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         table_id: 0,
         dynamic_arrays: false,
         needs_calc: false,
-        cell_pictures: Default::default(),
+        rich_values: Default::default(),
         kept: Default::default(),
         functions,
         names: Default::default(),
@@ -398,7 +398,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     sst.push_str("</sst>");
     out.part("xl/sharedStrings.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"), sst.into_bytes());
     wb_rels.add("sharedStrings", "sharedStrings.xml");
-    if !out.cell_pictures.is_empty() {
+    if !out.rich_values.is_empty() {
         crate::richdata::write(&mut out, &mut wb_rels)?;
     } else if out.dynamic_arrays {
         out.part(

@@ -277,6 +277,40 @@ fn oversized_entry(mut bytes: Vec<u8>, path: &str, size: u32) -> Vec<u8> {
     panic!("fixture entry not found");
 }
 
+/// #SPILL!, #CALC! and the other errors without a cell error code are saved as rich values
+/// ([MS-XLSX] 2.3.6.1.3) and come back as themselves; the cell still caches #VALUE!.
+#[test]
+fn new_error_values_survive_save_and_reopen() {
+    let errors = [CellError::Spill, CellError::Calc, CellError::Blocked, CellError::Busy, CellError::Timeout, CellError::Python];
+    let mut wb = Workbook::new();
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.set_value(at("A1"), Value::Number(1.0));
+    for (row, error) in errors.iter().enumerate() {
+        let cell = CellRef::new(row as u32, 2);
+        sheet.cells.set(cell, Cell { value: Value::Error(*error), ..Cell::formula(Formula::new("A1:A3*2")) });
+    }
+    sheet.set_value(at("D1"), Value::Error(CellError::Calc));
+    sheet.set_value(at("D2"), Value::Error(CellError::NA));
+    sheet.set_picture(at("E1"), Arc::new(picture(png(), "image/png", "beside the errors")));
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut package = Package::open(&bytes).unwrap();
+    let xml = package.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let cells: Vec<_> = xml.child("sheetData").unwrap().kids("row").flat_map(|row| row.kids("c")).collect();
+    let c1 = cells.iter().find(|c| c.attr("r") == Some("C1")).unwrap();
+    assert_eq!((c1.attr("t"), c1.child("v").unwrap().text.as_str()), (Some("e"), "#VALUE!"));
+    assert!(c1.attr("vm").is_some());
+    assert!(cells.iter().find(|c| c.attr("r") == Some("D2")).unwrap().attr("vm").is_none());
+    let (loaded, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let sheet = loaded.sheet(0).unwrap();
+    for (row, error) in errors.iter().enumerate() {
+        assert_eq!(sheet.value(CellRef::new(row as u32, 2)), Value::Error(*error));
+    }
+    assert_eq!(sheet.value(at("D1")), Value::Error(CellError::Calc));
+    assert_eq!(sheet.value(at("D2")), Value::Error(CellError::NA));
+    assert_eq!(sheet.cell_pictures.get(&at("E1")).unwrap().alt, "beside the errors");
+}
+
 #[test]
 fn picture_metadata_limits_and_relationship_read_errors_do_not_block_workbooks() {
     let mut parts = independent_parts(false);
