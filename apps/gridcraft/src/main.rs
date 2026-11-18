@@ -142,6 +142,38 @@ fn save_prefs(app: &SheetApp) {
     }
 }
 
+/// Whether the window runs through XWayland (X11) rather than native Wayland, and the log line
+/// saying why. `GRIDCRAFT_WAYLAND` wins (`0`, `false`, `no` or `off`, in any case and with spaces
+/// around it, asks for X11; any other value, the empty one included, for Wayland), then File › Options › Display server (`app.ui.display_server`, loaded with
+/// the preferences). Automatic is X11 whenever there's an X server: winit had no file
+/// drag-and-drop on Wayland, so dropping files from the file manager showed a "no" cursor (#165).
+/// X11 is only forced with an X server (`DISPLAY`), and unforced winit picks Wayland when it's
+/// there and X11 otherwise, so a choice that isn't available falls back to the other instead of
+/// failing to start.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn uses_x11(setting: gridcraft_ui_egui::DisplayServer, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> (bool, String) {
+    use gridcraft_ui_egui::DisplayServer;
+    let set = |name: &str| env(name).is_some_and(|v| !v.is_empty());
+    let (wanted, by) = match env("GRIDCRAFT_WAYLAND") {
+        Some(v) if matches!(v.to_string_lossy().trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off") => {
+            (DisplayServer::X11, "GRIDCRAFT_WAYLAND")
+        }
+        Some(_) => (DisplayServer::Wayland, "GRIDCRAFT_WAYLAND"),
+        None => (setting, "the setting"),
+    };
+    let x11 = wanted != DisplayServer::Wayland && set("DISPLAY");
+    let runs = if x11 {
+        "X11"
+    } else if set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET") {
+        "native Wayland"
+    } else if set("DISPLAY") {
+        "X11 (no Wayland)"
+    } else {
+        "neither (no Wayland or X server found)"
+    };
+    (x11, format!("display: {runs}; {by} asks for {}", wanted.code()))
+}
+
 /// Read the system clipboard through the shared handle, creating it on first use.
 fn read_clipboard<T>(
     handle: &RefCell<Option<arboard::Clipboard>>,
@@ -363,15 +395,16 @@ fn main() -> eframe::Result<()> {
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
     #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && std::env::var_os("GRIDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
+    {
+        let (x11, why) = uses_x11(app.ui.display_server, |name| std::env::var_os(name));
+        log::info!("{why}");
+        if x11 {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                b.with_x11();
+            }));
+        }
     }
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
@@ -436,6 +469,70 @@ fn main() -> eframe::Result<()> {
         return run(options);
     }
     result
+}
+
+/// `GRIDCRAFT_WAYLAND` beats the setting, Automatic keeps XWayland where there's an X server, and
+/// a choice that isn't available falls back to the other.
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod display_server_tests {
+    use super::uses_x11;
+    use gridcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
+
+    /// Whether `uses_x11` forces X11 for `setting` with only `vars` in the environment, and its
+    /// log line.
+    fn chosen(setting: gridcraft_ui_egui::DisplayServer, vars: &[(&str, &str)]) -> (bool, String) {
+        uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v)))
+    }
+
+    /// Only whether X11 is forced.
+    fn x11(setting: gridcraft_ui_egui::DisplayServer, vars: &[(&str, &str)]) -> bool {
+        chosen(setting, vars).0
+    }
+
+    /// The variable, then the setting, then what's available decide, and the log line says which.
+    #[test]
+    fn the_display_server_follows_the_variable_then_the_setting() {
+        let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
+        assert!(x11(Auto, &both), "Automatic keeps XWayland, for file drag-and-drop");
+        assert!(x11(X11, &both));
+        assert!(!x11(Wayland, &both));
+        for (value, wants_x11) in [("1", false), ("", false), ("yes", false), ("0", true), (" Off ", true), ("FALSE", true), ("no", true)] {
+            let vars = [both[0], both[1], ("GRIDCRAFT_WAYLAND", value)];
+            let line = if wants_x11 {
+                "display: X11; GRIDCRAFT_WAYLAND asks for x11"
+            } else {
+                "display: native Wayland; GRIDCRAFT_WAYLAND asks for wayland"
+            };
+            for setting in [Auto, Wayland, X11] {
+                assert_eq!(chosen(setting, &vars), (wants_x11, line.to_string()), "GRIDCRAFT_WAYLAND={value:?} beats {setting:?}");
+            }
+        }
+        // Without an X server X11 isn't forced: winit connects to Wayland instead of failing.
+        let wayland_only = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", "")];
+        assert!(!x11(X11, &wayland_only) && !x11(Auto, &wayland_only));
+        // The variable asking for X11 falls back the same way, and the line says both.
+        let asked_for_x11 = [("WAYLAND_DISPLAY", "wayland-0"), ("GRIDCRAFT_WAYLAND", "0")];
+        assert_eq!(chosen(Wayland, &asked_for_x11), (false, "display: native Wayland; GRIDCRAFT_WAYLAND asks for x11".to_string()));
+        // Without Wayland, Wayland isn't forced either: unforced winit picks X11.
+        assert_eq!(chosen(Wayland, &[("DISPLAY", ":0")]), (false, "display: X11 (no Wayland); the setting asks for wayland".to_string()));
+        // The log line names what ran and what asked for it.
+        assert_eq!(chosen(Wayland, &both), (false, "display: native Wayland; the setting asks for wayland".to_string()));
+    }
+
+    /// A compositor that hands over a socket (`WAYLAND_SOCKET`) counts as Wayland, and with no
+    /// display server at all nothing is forced, so winit reports the failure itself.
+    #[test]
+    fn a_wayland_socket_or_no_server_at_all_never_forces_x11() {
+        for setting in [Auto, Wayland, X11] {
+            let asks = setting.code();
+            assert_eq!(chosen(setting, &[("WAYLAND_SOCKET", "5")]), (false, format!("display: native Wayland; the setting asks for {asks}")),);
+            assert_eq!(chosen(setting, &[]), (false, format!("display: neither (no Wayland or X server found); the setting asks for {asks}")),);
+        }
+        // With an X server beside the socket, only an explicit Wayland leaves X11.
+        let socket_and_x = [("WAYLAND_SOCKET", "5"), ("DISPLAY", ":0")];
+        assert_eq!(chosen(Auto, &socket_and_x), (true, "display: X11; the setting asks for auto".to_string()));
+        assert_eq!(chosen(Wayland, &socket_and_x), (false, "display: native Wayland; the setting asks for wayland".to_string()));
+    }
 }
 
 #[cfg(test)]
