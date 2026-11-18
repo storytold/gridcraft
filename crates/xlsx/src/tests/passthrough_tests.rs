@@ -833,6 +833,20 @@ fn a_dropped_chart_sheet_entry_keeps_a_relationship_another_still_uses() {
     assert!(!u.find(PRINTER).is_empty(), "the kept chart sheet's printer settings are written");
 }
 
+/// A kept chart sheet's name is cut like a worksheet name, so 15 emoji and `'a` are written as the
+/// 15 emoji: a cut that ends in an apostrophe would be a name Excel refuses (#4454).
+#[test]
+fn a_cut_chart_sheet_name_does_not_end_with_an_apostrophe() {
+    let e15 = "😀".repeat(15);
+    let bytes = chartsheet_package_with(&[("xl/workbook.xml", r#"<sheet name="Chart1""#, &format!(r#"<sheet name="{e15}'a""#))]);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let names = written_sheets(&u);
+    assert!(names.iter().any(|s| s.0 == e15), "{names:?}");
+    chart_sheet_chain(&u, &e15);
+}
+
 /// [`chartsheet_package`] with each `(part, from, to)` replacement made in that part's text.
 fn chartsheet_package_with(edits: &[(&str, &str, &str)]) -> Vec<u8> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(chartsheet_package())).unwrap();

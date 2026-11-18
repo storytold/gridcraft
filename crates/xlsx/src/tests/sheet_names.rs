@@ -97,3 +97,32 @@ fn repeated_sheet_names_are_repaired_without_rescans() {
         assert_eq!(names.unique("Data", i), format!("Data ({i})"));
     }
 }
+
+/// A sheet repaired on import can't take a later sheet's valid name: with sheets named 16 emoji
+/// and the first 15 of them, the second keeps its name and the first gets a suffix, so a formula
+/// that names the second still finds it (#4454).
+#[test]
+fn a_repaired_sheet_name_does_not_take_another_sheets_name() {
+    use crate::tests::{CT, ROOT_RELS, make_zip};
+    let ns = r#"xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+    let (e16, e15) = ("😀".repeat(16), "😀".repeat(15));
+    let wb = format!(
+        r#"<?xml version="1.0"?><workbook {ns}><sheets><sheet name="{e16}" sheetId="1" r:id="rId1"/><sheet name="{e15}" sheetId="2" r:id="rId2"/></sheets></workbook>"#
+    );
+    let ws = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet";
+    let rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{ws}" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="{ws}" Target="worksheets/sheet2.xml"/></Relationships>"#
+    );
+    let sheet = format!(r#"<?xml version="1.0"?><worksheet {ns}><sheetData/></worksheet>"#);
+    let bytes = make_zip(&[
+        ("[Content_Types].xml", CT.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", wb.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/worksheets/sheet2.xml", sheet.as_bytes()),
+    ]);
+    let (read, _) = crate::read_xlsx(&bytes).unwrap();
+    let names: Vec<&str> = read.sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, [format!("{} (2)", "😀".repeat(12)), e15]);
+}

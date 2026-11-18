@@ -101,6 +101,22 @@ impl SheetNames {
     }
 }
 
+/// The worksheets whose names are already valid, by name (ASCII-lowercased), each name held by the
+/// first worksheet with it; the names are taken in `names`. Such a sheet keeps its name, so a name
+/// another sheet is repaired to can't take it from a sheet that formulas name (#4454).
+fn valid_name_owners(sheet_els: &[&El], rel_by_id: &HashMap<&str, &Rel>, names: &mut SheetNames) -> HashMap<String, usize> {
+    let mut owners = HashMap::new();
+    for (i, se) in sheet_els.iter().enumerate() {
+        let name = se.attr("name").unwrap_or("");
+        let worksheet = se.attr("id").and_then(|id| rel_by_id.get(id)).is_some_and(|r| r.kind == "worksheet");
+        if worksheet && !name.trim().is_empty() && sheet_name_from(name) == name && !owners.contains_key(&name.to_ascii_lowercase()) {
+            owners.insert(name.to_ascii_lowercase(), i);
+            names.insert(name);
+        }
+    }
+    owners
+}
+
 impl Ctx<'_> {
     pub fn warn(&mut self, m: impl Into<String>) {
         self.report.warn(m);
@@ -387,6 +403,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         rel_by_id.entry(r.id.as_str()).or_insert(r);
     }
     let mut names = SheetNames::default();
+    let owners = valid_name_owners(&sheet_els, &rel_by_id, &mut names);
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
         let rel = se.attr("id").and_then(|id| rel_by_id.get(id).copied()).cloned();
@@ -405,7 +422,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             file_to_model.push(None);
             continue;
         }
-        let unique = names.unique(&name, i);
+        let unique = if owners.get(&name.to_ascii_lowercase()) == Some(&i) { name.clone() } else { names.unique(&name, i) };
         if unique != name {
             cx.warn(format!("sheet \"{name}\" was renamed \"{unique}\": sheet names must be unique and fit Excel's limits"));
         }
