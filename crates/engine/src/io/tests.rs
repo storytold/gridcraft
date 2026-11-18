@@ -853,6 +853,26 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
     assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Number(1.0));
 }
 
+#[test]
+fn sylk_decodes_escape_n_accented_text() {
+    let slk = b"ID;PWXL;N;E\r\n\
+        C;Y1;X1;K\"Gr\x1bNHo\x1bN{e f\x1bNHur K\x1bNHoln\"\r\n\
+        C;Y2;X1;K\"Plain ASCII 123\"\r\n\
+        C;Y3;X1;K\"caf\x1bNBe \x1bNAa \x1bNKc \x1bNDn \x1bN!\x1bN? \x1bNq\x1bNy\x1bNJa \x1bNx \x1bNMo \x1bNFg\"\r\n\
+        C;Y4;X1;K\"K\x1bNHoln\";E\"K\x1bNHoln\"\r\n\
+        C;Y5;X1;K\"tail\x1bN\"\r\n\
+        E\r\n";
+    let (wb, warnings) = open_bytes("sample.slk", slk).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::parse("A1").unwrap()), gridcraft_core::Value::Text("Größe für Köln".into()));
+    assert_eq!(sh.value(CellRef::parse("A2").unwrap()), gridcraft_core::Value::Text("Plain ASCII 123".into()));
+    assert_eq!(sh.value(CellRef::parse("A3").unwrap()), gridcraft_core::Value::Text("café à ç ñ ¡¿ æøå ł ő ğ".into()));
+    assert_eq!(sh.value(CellRef::parse("A4").unwrap()), gridcraft_core::Value::Text("Köln".into()));
+    assert_eq!(sh.cell(CellRef::parse("A4").unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("\"Köln\""));
+    assert_eq!(sh.value(CellRef::parse("A5").unwrap()), gridcraft_core::Value::Text("tail\x1bN".into()));
+}
+
 /// A FIFO with no writer would block an open forever: it is refused before it is opened.
 #[cfg(unix)]
 #[test]
