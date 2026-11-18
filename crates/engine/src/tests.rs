@@ -4205,7 +4205,7 @@ fn json_import_orders_ranges_and_repairs_arrays() {
     assert!(sh.cell(CellRef::parse("B5").unwrap()).unwrap().formula.is_some(), "the formula stays");
     assert_eq!(
         warnings.iter().filter(|w| w.contains("was damaged")).collect::<Vec<_>>(),
-        [&"The value saved in Sheet1!B5 (and 1 more) was damaged, so it was dropped; a formula there calculates it again.".to_string()]
+        [&"The value saved in Sheet1!B5 (and 1 more) was damaged, so it was dropped; the cells with a formula calculate theirs again.".to_string()]
     );
 
     // Opened in the session, the formula calculates its value again.

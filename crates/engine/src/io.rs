@@ -263,6 +263,7 @@ fn sane_python_output(v: &gridcraft_core::Value) -> bool {
 /// [`enforce_python_limits`]. Runs before anything reads the cells. Returns the warnings.
 fn drop_damaged_values(wb: &mut Workbook) -> Vec<String> {
     let mut damaged = Vec::new();
+    let mut with_formula = 0usize;
     for si in 0..wb.sheets.len() {
         let Some(sh) = wb.sheets.get(si) else { continue };
         let cells: Vec<CellRef> = sh.cells.iter().filter(|(_, cell)| !cell.value.is_well_formed()).map(|(c, _)| c).collect();
@@ -274,13 +275,22 @@ fn drop_damaged_values(wb: &mut Workbook) -> Vec<String> {
         for c in cells {
             if let Some(cell) = sh.cells.get_mut(c) {
                 cell.value = gridcraft_core::Value::Empty;
+                if cell.formula.is_some() {
+                    with_formula += 1;
+                }
             }
             damaged.push(format!("{name}!{}", c.a1()));
         }
     }
     let Some(first) = damaged.first() else { return vec![] };
     let more = if damaged.len() > 1 { format!(" (and {} more)", damaged.len() - 1) } else { String::new() };
-    vec![format!("The value saved in {first}{more} was damaged, so it was dropped; a formula there calculates it again.")]
+    // Only a cell with a formula gets its value back; a constant's value is gone.
+    let tail = match with_formula {
+        0 => "",
+        n if n == damaged.len() => "; a formula there calculates it again",
+        _ => "; the cells with a formula calculate theirs again",
+    };
+    vec![format!("The value saved in {first}{more} was damaged, so it was dropped{tail}.")]
 }
 
 /// Parses bytes that aren't encrypted, as they are.
