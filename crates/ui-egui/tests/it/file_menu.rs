@@ -176,8 +176,10 @@ fn title_bar_button(h: &mut egui_kittest::Harness<'static, SheetApp>, name: &str
         let at = egui::pos2(x, autosave.center().y);
         h.hover_at(at);
         h.run_steps(3);
-        if h.query_by_label_contains(&tip).is_some() {
-            return at;
+        // The button's accessible label carries its tooltip, so the node found may be the button
+        // itself rather than a tooltip at the pointer: aim at the node.
+        if let Some(node) = h.query_by_label_contains(&tip) {
+            return node.rect().center();
         }
         x += 6.0;
     }
