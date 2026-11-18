@@ -19,6 +19,15 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn set_region_reaches_every_open_workbook_and_keeps_them_clean() {
+    let mut s = s();
+    s.new_workbook();
+    s.set_region(gridcraft_core::region::find("pt-BR").unwrap());
+    let seen: Vec<_> = s.documents().iter().map(|d| (d.wb.region.tag, d.is_dirty())).collect();
+    assert_eq!(seen, vec![("pt-BR", false), ("pt-BR", false)]);
+}
+
+#[test]
 fn format_cells_reading_order_survives_undo_and_xlsx() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();

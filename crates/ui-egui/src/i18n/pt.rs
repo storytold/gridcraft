@@ -242,6 +242,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Descongelar Painéis",
         "Dark Mode" => "Modo Escuro",
         "Interface language" => "Idioma da interface",
+        "Regional format" => "Formato regional",
         "Interface size" => "Tamanho da interface",
         "Auto" => "Automático",
         "Drag to freeze columns" => "Arraste para congelar colunas",
