@@ -20,20 +20,79 @@ pub(crate) fn preset_button(ui: &mut Ui, label: &str, preset: &str) -> Response 
 
 /// Paints the remembered border preset as a compact Home ribbon icon.
 pub(crate) fn paint_preset_icon(painter: &egui::Painter, rect: Rect, preset: &str, color: Color32) {
-    let muted = Tokens::get(painter.ctx()).text_dim;
-    paint_preset_diagram(painter, rect.shrink(2.0), preset, color, muted);
+    let icon_rect = rect.shrink(1.0);
+    let edges = diagram_edges(icon_rect);
+    let styles = preset_styles(preset);
+    let diagonal = preset_diagonal_points(icon_rect, preset);
+    let has_active_border = diagonal.is_some() || styles.iter().any(|&style| style != BorderStyle::None);
+
+    if !has_active_border {
+        let muted = Tokens::get(painter.ctx()).text_dim;
+        for points in edges.into_iter().take(4) {
+            painter.extend(egui::Shape::dotted_line(&points, muted, 3.0, 0.45));
+        }
+        return;
+    }
+
+    for (points, style) in edges.into_iter().zip(styles) {
+        if style != BorderStyle::None {
+            paint_icon_border(painter, points, style, color, icon_rect);
+        }
+    }
+
+    if let Some(points) = diagonal {
+        paint_icon_border(painter, points, BorderStyle::Thin, color, icon_rect);
+    }
 }
 
-/// Uses the same edge styles for the Borders menu and its main button icon.
-fn paint_preset_diagram(painter: &egui::Painter, rect: Rect, preset: &str, color: Color32, muted: Color32) {
-    let edges = [
+/// Returns the six diagram edges in top, bottom, left, right, horizontal and vertical order.
+fn diagram_edges(rect: Rect) -> [[egui::Pos2; 2]; 6] {
+    [
         [rect.left_top(), rect.right_top()],
         [rect.left_bottom(), rect.right_bottom()],
         [rect.left_top(), rect.left_bottom()],
         [rect.right_top(), rect.right_bottom()],
         [rect.left_center(), rect.right_center()],
         [rect.center_top(), rect.center_bottom()],
-    ];
+    ]
+}
+
+/// Computes parallel line offsets separated by 2.0 px, shifted inward on outer `bounds` edges.
+fn double_line_offsets(points: [egui::Pos2; 2], bounds: Rect) -> (egui::Vec2, egui::Vec2) {
+    let (a, b) = (points[0], points[1]);
+    let horiz = (a.y - b.y).abs() < 0.5;
+    let (pos, min, max) = if horiz { (a.y, bounds.top(), bounds.bottom()) } else { (a.x, bounds.left(), bounds.right()) };
+    let (d0, d1) = if pos <= min + 0.5 {
+        (0.0, 2.0)
+    } else if pos >= max - 0.5 {
+        (-2.0, 0.0)
+    } else {
+        (-1.0, 1.0)
+    };
+    if horiz { (vec2(0.0, d0), vec2(0.0, d1)) } else { (vec2(d0, 0.0), vec2(d1, 0.0)) }
+}
+
+/// Paints a single border edge at weights tuned for the compact 14x14 ribbon icon.
+fn paint_icon_border(painter: &egui::Painter, points: [egui::Pos2; 2], style: BorderStyle, color: Color32, bounds: Rect) {
+    match style {
+        BorderStyle::Thin => {
+            painter.line_segment(points, Stroke::new(1.2, color));
+        }
+        BorderStyle::Thick => {
+            painter.line_segment(points, Stroke::new(2.4, color));
+        }
+        BorderStyle::Double => {
+            let (off_a, off_b) = double_line_offsets(points, bounds);
+            painter.line_segment([points[0] + off_a, points[1] + off_a], Stroke::new(1.0, color));
+            painter.line_segment([points[0] + off_b, points[1] + off_b], Stroke::new(1.0, color));
+        }
+        _ => paint_border(painter, points, style, color),
+    }
+}
+
+/// Uses the same edge styles for the Borders menu and its main button icon.
+fn paint_preset_diagram(painter: &egui::Painter, rect: Rect, preset: &str, color: Color32, muted: Color32) {
+    let edges = diagram_edges(rect);
 
     for (points, style) in edges.into_iter().zip(preset_styles(preset)) {
         if style == BorderStyle::None {
@@ -158,5 +217,182 @@ mod tests {
         // Other presets must not gain an unexpected diagonal stroke.
         assert_eq!(preset_diagonal_points(rect, "none"), None);
         assert_eq!(preset_diagonal_points(rect, "inside"), None);
+    }
+
+    struct PaintedShapes {
+        lines: Vec<([egui::Pos2; 2], Stroke)>,
+        circles: Vec<(egui::Pos2, Color32)>,
+        total_shapes: usize,
+    }
+
+    /// Flattens painted `egui::Shape` trees into line segments and dot circles for assertions.
+    fn collect_shape(shape: &egui::Shape, lines: &mut Vec<([egui::Pos2; 2], Stroke)>, circles: &mut Vec<(egui::Pos2, Color32)>) {
+        match shape {
+            egui::Shape::LineSegment { points, stroke } => lines.push((*points, *stroke)),
+            egui::Shape::Circle(c) => circles.push((c.center, c.fill)),
+            egui::Shape::Vec(shapes) => {
+                for s in shapes {
+                    collect_shape(s, lines, circles);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Runs a single offscreen `egui::Context` pass and collects the emitted shapes.
+    fn render_offscreen(dark: bool, paint: impl FnOnce(&egui::Painter)) -> PaintedShapes {
+        let ctx = egui::Context::default();
+        ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+        let mut paint = Some(paint);
+        let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 200.0))), ..Default::default() };
+        let mut output = ctx.run_ui(raw, |ui| {
+            if let Some(f) = paint.take() {
+                f(ui.painter());
+            }
+        });
+        output.textures_delta.clear();
+        let mut lines = Vec::new();
+        let mut circles = Vec::new();
+        for clipped in &output.shapes {
+            collect_shape(&clipped.shape, &mut lines, &mut circles);
+        }
+        PaintedShapes { lines, circles, total_shapes: output.shapes.len() }
+    }
+
+    const REPRESENTATIVE_PRESETS: [&str; 11] = [
+        "none",
+        "bottom",
+        "thickBottom",
+        "doubleBottom",
+        "outside",
+        "thickOutside",
+        "all",
+        "insideHorizontal",
+        "insideVertical",
+        "diagonalDown",
+        "diagonalUp",
+    ];
+
+    /// Every representative preset paints non-empty shapes cleanly in both icon and diagram modes.
+    #[test]
+    fn offscreen_presets_render_without_panics() {
+        let icon_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+        let diagram_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(20.0, 16.0));
+        let active = Color32::BLACK;
+        let muted = Tokens::light().text_disabled;
+
+        for preset in REPRESENTATIVE_PRESETS {
+            let icon = render_offscreen(false, |p| paint_preset_icon(p, icon_rect, preset, active));
+            assert!(icon.total_shapes > 0, "{preset} icon produced no shapes");
+
+            let diagram = render_offscreen(false, |p| paint_preset_diagram(p, diagram_rect, preset, active, muted));
+            assert!(diagram.total_shapes > 0, "{preset} diagram produced no shapes");
+        }
+    }
+
+    /// `"none"` in the compact ribbon icon paints only the four outer dotted perimeter edges.
+    #[test]
+    fn paint_preset_icon_none_draws_outer_dotted_edges_only() {
+        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+        let bounds = rect.shrink(1.0);
+        for dark in [false, true] {
+            let expected_muted = if dark { Tokens::dark().text_dim } else { Tokens::light().text_dim };
+            let painted = render_offscreen(dark, |p| paint_preset_icon(p, rect, "none", Color32::WHITE));
+            assert!(painted.lines.is_empty(), "none must not draw solid border lines");
+            assert!(!painted.circles.is_empty(), "none must draw outer dotted guides");
+            for (center, color) in &painted.circles {
+                assert_eq!(*color, expected_muted, "dotted guide uses text_dim");
+                let on_perimeter = (center.x - bounds.left()).abs() < 0.01
+                    || (center.x - bounds.right()).abs() < 0.01
+                    || (center.y - bounds.top()).abs() < 0.01
+                    || (center.y - bounds.bottom()).abs() < 0.01;
+                assert!(on_perimeter, "dot at {center:?} must lie on outer perimeter {bounds:?}, not interior cross");
+            }
+        }
+    }
+
+    /// Active presets omit dotted guides in `paint_preset_icon`, while `paint_preset_diagram` keeps them.
+    #[test]
+    fn paint_preset_icon_omits_dotted_guides_while_diagram_keeps_them() {
+        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+        let bounds = rect.shrink(1.0);
+        let active = Color32::from_rgb(0x24, 0x24, 0x24);
+
+        for preset in REPRESENTATIVE_PRESETS.into_iter().filter(|&p| p != "none") {
+            let icon = render_offscreen(false, |p| paint_preset_icon(p, rect, preset, active));
+            assert!(icon.circles.is_empty(), "{preset} icon must omit dotted guides, got {} dots", icon.circles.len());
+            assert!(!icon.lines.is_empty(), "{preset} icon must draw active border lines");
+        }
+
+        let bottom_icon = render_offscreen(false, |p| paint_preset_icon(p, rect, "bottom", active));
+        assert_eq!(bottom_icon.lines.len(), 1, "bottom icon draws exactly one line segment");
+        assert_eq!(bottom_icon.lines[0].0, [bounds.left_bottom(), bounds.right_bottom()]);
+        assert!((bottom_icon.lines[0].1.width - 1.2).abs() < 0.01);
+
+        let diagram_rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(20.0, 16.0));
+        let bottom_diagram = render_offscreen(false, |p| paint_preset_diagram(p, diagram_rect, "bottom", active, Tokens::light().text_disabled));
+        assert!(!bottom_diagram.circles.is_empty(), "menu diagram keeps dotted guides for absent edges");
+        assert_eq!(bottom_diagram.lines.len(), 1);
+    }
+
+    /// Thin, thick, and double strokes have distinct widths/counts and remain inside the icon bounds.
+    #[test]
+    fn paint_preset_icon_distinguishes_thin_thick_and_double() {
+        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+        let bounds = rect.shrink(1.0);
+        let active = Color32::BLACK;
+
+        let thin = render_offscreen(false, |p| paint_preset_icon(p, rect, "bottom", active));
+        let thick = render_offscreen(false, |p| paint_preset_icon(p, rect, "thickBottom", active));
+        let double = render_offscreen(false, |p| paint_preset_icon(p, rect, "doubleBottom", active));
+
+        assert_eq!(thin.lines.len(), 1);
+        assert_eq!(thick.lines.len(), 1);
+        assert_eq!(double.lines.len(), 2);
+
+        let thin_w = thin.lines[0].1.width;
+        let thick_w = thick.lines[0].1.width;
+        assert!(thick_w >= thin_w * 1.8, "thick ({thick_w}) must be visibly heavier than thin ({thin_w})");
+
+        let y0 = double.lines[0].0[0].y;
+        let y1 = double.lines[1].0[0].y;
+        assert!((y1 - y0).abs() >= 1.9, "double lines must stay separated: y0={y0}, y1={y1}");
+        for (pts, stroke) in &double.lines {
+            assert!((stroke.width - 1.0).abs() < 0.01);
+            assert!(pts.iter().all(|pt| bounds.expand(0.01).contains(*pt)), "double line {pts:?} stays inside {bounds:?}");
+        }
+
+        let outside = render_offscreen(false, |p| paint_preset_icon(p, rect, "outside", active));
+        let thick_outside = render_offscreen(false, |p| paint_preset_icon(p, rect, "thickOutside", active));
+        assert_eq!(outside.lines.len(), 4);
+        assert_eq!(thick_outside.lines.len(), 4);
+        assert!(thick_outside.lines[0].1.width > outside.lines[0].1.width);
+    }
+
+    /// Inside, all, and diagonal presets draw the expected line segments in `paint_preset_icon`.
+    #[test]
+    fn paint_preset_icon_renders_expected_inside_and_diagonal_segments() {
+        let rect = Rect::from_min_size(pos2(10.0, 10.0), vec2(16.0, 16.0));
+        let bounds = rect.shrink(1.0);
+        let active = Color32::BLACK;
+
+        let horiz = render_offscreen(false, |p| paint_preset_icon(p, rect, "insideHorizontal", active));
+        assert_eq!(horiz.lines.len(), 1);
+        assert_eq!(horiz.lines[0].0, [bounds.left_center(), bounds.right_center()]);
+
+        let vert = render_offscreen(false, |p| paint_preset_icon(p, rect, "insideVertical", active));
+        assert_eq!(vert.lines.len(), 1);
+        assert_eq!(vert.lines[0].0, [bounds.center_top(), bounds.center_bottom()]);
+
+        let down = render_offscreen(false, |p| paint_preset_icon(p, rect, "diagonalDown", active));
+        assert_eq!(down.lines.len(), 1);
+        assert_eq!(down.lines[0].0, [bounds.left_top(), bounds.right_bottom()]);
+
+        let up = render_offscreen(false, |p| paint_preset_icon(p, rect, "diagonalUp", active));
+        assert_eq!(up.lines.len(), 1);
+        assert_eq!(up.lines[0].0, [bounds.left_bottom(), bounds.right_top()]);
+
+        let all = render_offscreen(false, |p| paint_preset_icon(p, rect, "all", active));
+        assert_eq!(all.lines.len(), 6);
     }
 }
