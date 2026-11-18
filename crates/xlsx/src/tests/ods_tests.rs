@@ -237,8 +237,8 @@ fn ods_invalid_sheet_names_are_made_safe_for_xlsx() {
     assert_eq!(read_xlsx(&write_xlsx(&wb).unwrap()).unwrap().0.sheets.len(), 4);
 }
 
-/// An ODS sheet named with 16 emoji (32 UTF-16 units) opens as 15 emoji with a warning, so the
-/// workbook saves as an XLSX that Excel can open (#4454).
+/// An ODS sheet named with 16 emoji (32 UTF-16 units) opens as 15 emoji with a warning, and the
+/// workbook exports to XLSX (#4454).
 #[test]
 fn ods_sheet_name_is_cut_to_31_utf16_units() {
     let bytes = ods(&format!(r#"<table:table table:name="{}"/>"#, "😀".repeat(16)));

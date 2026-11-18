@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gridcraft_core::{DateSystem, RangeRef};
 use gridcraft_model::{
     CalcMode, CellPicture, DefinedName, MAX_SHEET_NAME_UNITS, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook,
-    WorkbookView, sheet_name_prefix,
+    WorkbookView, sheet_name_from, sheet_name_prefix, sheet_name_with_suffix,
 };
 
 use crate::package::{Package, Rel};
@@ -498,18 +498,14 @@ impl SheetNames {
 
     /// A valid name for the i-th sheet, unique among the names assigned so far, which it joins.
     pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
-        let clean: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).collect();
-        let mut base = sheet_name_prefix(&clean, MAX_SHEET_NAME_UNITS).to_string();
+        let mut base = sheet_name_from(name);
         if base.trim().is_empty() {
             base = format!("Sheet{}", i + 1);
         }
         let name = if self.taken.contains(&base.to_ascii_lowercase()) {
             // Room for a suffix up to ` (999)`; a longer suffix shortens the stem further.
             let stem = sheet_name_prefix(&base, MAX_SHEET_NAME_UNITS - 6).to_string();
-            let with = |n: u64| {
-                let suffix = format!(" ({n})");
-                format!("{}{suffix}", sheet_name_prefix(&stem, MAX_SHEET_NAME_UNITS.saturating_sub(suffix.len())))
-            };
+            let with = |n: u64| sheet_name_with_suffix(&stem, &format!(" ({n})"));
             let next = self.next.entry(stem.to_ascii_lowercase()).or_insert(2);
             let found = (*next..).find(|n| !self.taken.contains(&with(*n).to_ascii_lowercase()));
             match found {

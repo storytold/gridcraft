@@ -207,7 +207,7 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
         let bad = if name.is_empty() {
             Some("is blank")
         } else if name.encode_utf16().count() > MAX_SHEET_NAME_UNITS {
-            Some("is longer than 31 characters")
+            Some("is longer than 31 characters (most emoji count as two)")
         } else if name.chars().any(|c| matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')) {
             Some("contains one of : \\ / ? * [ ]")
         } else if !seen.insert(name.to_ascii_lowercase()) {

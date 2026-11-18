@@ -37,6 +37,16 @@ fn sheet_name_length_is_counted_in_utf16_units() {
     assert_eq!(names.unique(&emoji, 1), format!("{} (2)", "😀".repeat(12)));
 }
 
+/// A name cut on open loses an apostrophe the cut leaves at its end, which a sheet name can't have
+/// (#4454).
+#[test]
+fn a_cut_sheet_name_does_not_end_with_an_apostrophe() {
+    let e15 = "😀".repeat(15);
+    let mut names = crate::read::SheetNames::default();
+    assert_eq!(names.unique(&format!("{e15}'a"), 0), e15);
+    assert!(Workbook::new().check_sheet_name(&e15, None).is_ok());
+}
+
 /// An XLSX whose sheet name is longer than Excel allows (as earlier GridCraft versions wrote)
 /// opens with a shorter name and says so (#4454).
 #[test]

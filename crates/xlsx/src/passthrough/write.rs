@@ -261,14 +261,18 @@ pub(crate) fn sheet_names_in(formula: &str) -> Vec<String> {
 /// Whether a kept chart sheet can be written back: its chart's series must still refer to sheets
 /// that exist under the same names (the chart is kept as it was, so a series on a deleted or
 /// renamed sheet would be left pointing at nothing), and no worksheet may have taken its name.
+/// Names are compared as they are written, cut to [`MAX_SHEET_NAME_UNITS`]; a series must name a
+/// worksheet exactly, as a longer name sharing its first 31 units names no sheet in the output.
 ///
 /// `usable` caches, by the normalized target of the chart sheet's relationship, whether its graph
 /// refers only to sheets that exist (`false` when the relationship is missing): entries sharing one
 /// graph, under the same or different relationship ids, are analysed once, and only the verdict is
 /// kept, not the references it came from.
 fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet, usable: &mut HashMap<String, bool>) -> bool {
-    let same = |a: &str, b: &str| sheet_name_prefix(a, MAX_SHEET_NAME_UNITS).eq_ignore_ascii_case(sheet_name_prefix(b, MAX_SHEET_NAME_UNITS));
-    if wb.sheets.iter().any(|w| same(&w.name, &s.name)) {
+    fn written(name: &str) -> &str {
+        sheet_name_prefix(name, MAX_SHEET_NAME_UNITS)
+    }
+    if wb.sheets.iter().any(|w| written(&w.name).eq_ignore_ascii_case(written(&s.name))) {
         return false;
     }
     let Some(root) = p.rels.iter().find(|r| r.id == s.rel_id) else { return false };
@@ -280,7 +284,7 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet, usable: 
                 chart_formulas(&x, &mut formulas);
             }
         }
-        formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
+        formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| written(&w.name).eq_ignore_ascii_case(&n)))
     })
 }
 
@@ -290,7 +294,12 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
     let Some(p) = wb.preserved.as_deref() else { return WorkbookKept::default() };
     let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = {
         let mut refs = HashMap::new();
-        p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s, &mut refs))
+        // Two chart sheets whose names differ only past the cut would be written with one name, which
+        // Excel refuses: the later one is dropped, as when a worksheet takes a chart sheet's name.
+        let mut names = HashSet::new();
+        p.sheets.iter().partition(|s| {
+            chart_sheet_usable(wb, p, s, &mut refs) && names.insert(sheet_name_prefix(&s.name, MAX_SHEET_NAME_UNITS).to_ascii_lowercase())
+        })
     };
     let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
     let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();

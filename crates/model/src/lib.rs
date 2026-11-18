@@ -31,7 +31,7 @@ pub use style::{
 };
 pub use workbook::{
     CalcMode, CalcSettings, DefinedName, DocProps, EQUATION_BUDGET_MESSAGE, MAX_EQUATION_LAYOUT_BYTES, MAX_SHEET_NAME_UNITS, PhoneticProps,
-    PhoneticRun, PhoneticString, ShowObjects, Workbook, WorkbookView, sheet_name_prefix,
+    PhoneticRun, PhoneticString, ShowObjects, Workbook, WorkbookView, sheet_name_from, sheet_name_prefix, sheet_name_with_suffix,
 };
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font

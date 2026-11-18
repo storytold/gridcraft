@@ -2533,6 +2533,21 @@ fn sheet_names_with_emoji_stay_within_31_utf16_units() {
     assert!(gridcraft_xlsx::write_xlsx(&d.wb).is_ok());
 }
 
+/// A new sheet named after a file or with ` (2)` gets a name Excel holds: the cut doesn't leave an
+/// apostrophe at the end, and the whole suffix fits (#4454).
+#[test]
+fn imported_sheet_names_with_emoji_end_validly() {
+    let mut s = s();
+    let e15 = "😀".repeat(15);
+    let r = s.execute("data.fromTextCsv", json!({"text": "a\n1\n", "path": format!("/data/{e15}'a.csv")})).unwrap();
+    assert_eq!(r["sheet"], json!(e15));
+    let mut s = self::s();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "😀".repeat(14)})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1]]})).unwrap();
+    let r = s.execute("data.fromTableRange", json!({"range": "A1:A2"})).unwrap();
+    assert_eq!(r["sheet"], json!(format!("{} (2)", "😀".repeat(13))));
+}
+
 #[test]
 fn row_and_column_inserts_move_legacy_array_ranges() {
     // Found by the command-sequence fuzzer: the formula cell moved but its array range stayed,

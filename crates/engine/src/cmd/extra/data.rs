@@ -1,4 +1,4 @@
-use gridcraft_model::{MAX_SHEET_NAME_UNITS, sheet_name_prefix};
+use gridcraft_model::{sheet_name_from, sheet_name_with_suffix};
 
 use super::{CellRef, EngineError, Json, RangeRef, Result, Session, TableColumn, TotalsFn, Value, bad, edit, json, ok, str_param, target_range};
 
@@ -125,11 +125,9 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
     if rows.is_empty() || rows.len() > 1_048_576 {
         return Err(EngineError::Other("Nothing to import.".into()));
     }
-    let name = str_param(p, "sheet").map(str::to_string).or_else(|| {
-        str_param(p, "path").and_then(|x| {
-            std::path::Path::new(x).file_stem().and_then(std::ffi::OsStr::to_str).map(|f| sheet_name_prefix(f, MAX_SHEET_NAME_UNITS).to_string())
-        })
-    });
+    let name = str_param(p, "sheet")
+        .map(str::to_string)
+        .or_else(|| str_param(p, "path").and_then(|x| std::path::Path::new(x).file_stem().and_then(std::ffi::OsStr::to_str).map(sheet_name_from)));
     let r = s.execute("home.insertSheet", json!({"name": name})).or_else(|_| s.execute("home.insertSheet", json!({})))?;
     let w = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
     s.execute("range.setValues", json!({"range": "A1", "values": rows}))?;
@@ -145,7 +143,7 @@ pub(super) fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let r = if r.is_single() { crate::selection::current_region(sh, r.start) } else { r };
     let text = crate::display::range_text(&d.wb, d.wb.active_sheet(), r);
-    from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": sheet_name_prefix(&format!("{} (2)", sh.name), MAX_SHEET_NAME_UNITS)}))
+    from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": sheet_name_with_suffix(&sh.name, " (2)")}))
 }
 
 pub(super) fn queries(s: &mut Session, _: &Json) -> Result<Json> {
