@@ -12,6 +12,7 @@ mod chart_svg;
 mod clip_html;
 pub mod cmd;
 pub mod display;
+pub mod file_access;
 pub mod fill;
 pub mod io;
 pub mod links;
