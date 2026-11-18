@@ -87,11 +87,12 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     let crit = if bool_param(p, "clear").unwrap_or(false) {
         None
     } else if let Some(vals) = p.get("values").and_then(Json::as_array) {
-        let values: Vec<String> = vals.iter().map(crate::cmd::edit::json_to_input).collect();
+        let mut values: Vec<String> = vals.iter().map(crate::cmd::edit::json_to_input).collect();
         // Callers such as "Filter by Selected Cell's Value" pass `values` without `blanks`;
         // since whitespace-only text belongs to the dropdown's `(Blanks)` group, include blanks
         // automatically unless the caller explicitly passed `blanks`.
         let blanks = bool_param(p, "blanks").unwrap_or_else(|| values.iter().any(|v| v.trim().is_empty()));
+        values.retain(|v| !v.trim().is_empty());
         Some(FilterCriterion::Values { values, blanks })
     } else if let Some(c) = p.get("custom") {
         let a =
@@ -169,6 +170,35 @@ fn filter_value_eq(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+/// Checks whether a non-blank cell matches any selected value criterion via displayed or underlying text.
+fn row_matches_values(values: &[String], text: &str, v: &Value) -> bool {
+    values.iter().any(|x| filter_value_eq(x, text) || filter_value_eq(x, &v.display()))
+}
+
+/// Migrates legacy saved value criteria that listed whitespace-only strings into `blanks: true` on load.
+pub(crate) fn migrate_loaded_autofilters(wb: &mut Workbook) {
+    for si in 0..wb.sheets.len() {
+        let needs_migration = wb.sheet(si).and_then(|sh| sh.autofilter.as_ref()).is_some_and(|af| {
+            af.criteria.iter().any(|(_, c)| matches!(c, FilterCriterion::Values { values, .. } if values.iter().any(|v| v.trim().is_empty())))
+        });
+        if !needs_migration {
+            continue;
+        }
+        if let Some(sh) = wb.sheet_mut(si)
+            && let Some(af) = sh.autofilter.as_mut()
+        {
+            for (_, crit) in &mut af.criteria {
+                if let FilterCriterion::Values { values, blanks } = crit
+                    && values.iter().any(|v| v.trim().is_empty())
+                {
+                    *blanks = true;
+                    values.retain(|v| !v.trim().is_empty());
+                }
+            }
+        }
+    }
+}
+
 /// The filter's "(Blanks)" group: truly empty cells and zero-length text such as a `=""` result.
 fn filter_blank(v: &Value) -> bool {
     v.is_empty() || matches!(v, Value::Text(t) if t.is_empty())
@@ -234,9 +264,9 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let ok = match crit {
                 FilterCriterion::Values { values, blanks } => {
                     if filter_dropdown_blank(&v) {
-                        *blanks
+                        *blanks || values.iter().any(|x| x.trim().is_empty())
                     } else {
-                        values.iter().any(|x| filter_value_eq(x, &text) || filter_value_eq(x, &v.display()))
+                        row_matches_values(values, &text, &v)
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
@@ -314,13 +344,32 @@ pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     })
 }
 
-/// Distinct display values of a filter column (for the dropdown list).
-pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
+/// One entry in a column's AutoFilter value checklist: its distinct display `label`, the raw
+/// criterion `value` (`None` for the `(Blanks)` toggle), and whether it is `checked`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FilterChoice {
+    pub label: String,
+    pub value: Option<String>,
+    pub checked: bool,
+}
+
+/// Escapes literal text whose trimmed form is `(Blanks)` or `'...(Blanks)...'` by wrapping one
+/// outer pair of single quotes, keeping `(Blanks)`, `'(Blanks)'`, and `''(Blanks)''` distinct.
+fn escape_reserved_blanks_label(trimmed: &str) -> String {
+    let mut inner = trimmed;
+    while inner.len() >= 2 && inner.starts_with('\'') && inner.ends_with('\'') {
+        inner = &inner[1..inner.len() - 1];
+    }
+    if inner.eq_ignore_ascii_case("(Blanks)") { format!("'{trimmed}'") } else { trimmed.to_string() }
+}
+
+/// Distinct checklist entries of a filter column, keeping display labels separate from filter values.
+pub fn filter_choices(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterChoice> {
     let Some(sh) = wb.sheet(sheet) else { return vec![] };
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
-    let mut seen = std::collections::BTreeMap::new();
+    let mut seen: std::collections::BTreeMap<_, FilterChoice> = std::collections::BTreeMap::new();
     for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
@@ -329,34 +378,37 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         let on = match selected {
             Some(FilterCriterion::Values { values, blanks }) => {
                 if blank {
-                    *blanks
+                    *blanks || values.iter().any(|x| x.trim().is_empty())
                 } else {
-                    values.iter().any(|x| filter_value_eq(x, &t))
+                    row_matches_values(values, &t, &v)
                 }
             }
             _ => true,
         };
-        // Group equivalent text values without modifying cell contents.
+        // Group equivalent text values without merging rows that have different underlying filter identities.
         let is_text = !blank && matches!(v, Value::Text(_));
-        let (sort, canonical, label) = if is_text {
-            let normalized = t.trim().to_ascii_lowercase();
-            let label = if t.trim().eq_ignore_ascii_case("(Blanks)") {
-                format!("'{}'", t.trim())
-            } else if t.trim().is_empty() {
-                t.clone()
-            } else {
-                t.trim().to_string()
-            };
-            ((1, 0, normalized.clone()), normalized, label)
+        let (sort, canonical, label, raw_value) = if is_text {
+            let trimmed = t.trim();
+            let normalized = trimmed.to_ascii_lowercase();
+            let val_normalized = v.display().trim().to_ascii_lowercase();
+            let label = if trimmed.is_empty() { t.clone() } else { escape_reserved_blanks_label(trimmed) };
+            let raw = if trimmed.is_empty() { t } else { trimmed.to_string() };
+            ((1, 0, normalized.clone()), (normalized, val_normalized), label, Some(raw))
+        } else if blank {
+            (sort_key(&Value::Empty), (t.clone(), String::new()), t, None)
         } else {
-            let sort = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
-            (sort, t.clone(), t)
+            (sort_key(&v), (t.clone(), v.display().trim().to_ascii_lowercase()), t.clone(), Some(t))
         };
-        seen.entry((sort, canonical)).and_modify(|entry: &mut (String, bool)| entry.1 |= on).or_insert((label, on));
+        seen.entry((sort, canonical)).and_modify(|entry| entry.checked |= on).or_insert(FilterChoice { label, value: raw_value, checked: on });
     }
     let mut values: Vec<_> = seen.into_iter().collect();
-    values.sort_by(|((a, ta), _), ((b, tb), _)| {
-        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
+    values.sort_by(|((a, (ta, va)), _), ((b, (tb, vb)), _)| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb)).then_with(|| va.cmp(vb))
     });
     values.into_iter().map(|(_, entry)| entry).collect()
+}
+
+/// Distinct display values of a filter column (for the dropdown list).
+pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool)> {
+    filter_choices(wb, sheet, col).into_iter().map(|c| (c.label, c.checked)).collect()
 }

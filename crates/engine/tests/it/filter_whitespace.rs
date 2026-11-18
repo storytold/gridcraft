@@ -267,12 +267,80 @@ fn filter_by_selected_whitespace_cell_keeps_blanks_visible_2943() {
     }
     assert!(sh.is_row_hidden(5));
 
-    // Explicit `blanks: false` from the dropdown still hides blank/whitespace rows.
-    let result = s.execute("data.filterBy", json!({"column": "A", "values": ["Card"], "blanks": false})).unwrap();
+    // Explicit `blanks: false` from the dropdown overrides whitespace inference and hides blank/whitespace rows.
+    let result = s.execute("data.filterBy", json!({"column": "A", "values": ["Card", "   "], "blanks": false})).unwrap();
     assert_eq!(result["hiddenRows"], json!(4));
     let sh = s.doc().unwrap().wb.active().unwrap();
     for row in 1..=4 {
         assert!(sh.is_row_hidden(row), "row {row} should be hidden when blanks: false");
     }
     assert!(!sh.is_row_hidden(5));
+}
+
+/// Legacy saved criteria with whitespace-only `<filter val="   "/>` and `blanks: false` migrate on load and keep rows visible on reapply (#2943).
+#[test]
+fn restored_whitespace_only_criterion_keeps_rows_visible_on_reapply_2943() {
+    use gridcraft_engine::cmd::data::{FilterChoice, filter_choices};
+    use gridcraft_model::{AutoFilter, FilterCriterion};
+
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [
+                ["Name"],
+                ["   "],
+                ["Card"]
+            ]
+        }),
+    )
+    .unwrap();
+
+    // Simulate a legacy saved workbook whose filter stored `values: ["   "]` with `blanks: false`.
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().autofilter = Some(AutoFilter {
+            range: gridcraft_core::RangeRef::parse("A1:A3").unwrap(),
+            criteria: vec![(0, FilterCriterion::Values { values: vec!["   ".into()], blanks: false })],
+        });
+    }
+    // 1. Direct in-memory legacy criterion (`blanks: false`, `values: ["   "]`) keeps rows visible on reapply.
+    s.execute("data.reapply", json!({})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.is_row_hidden(1), "in-memory legacy whitespace-only row must stay visible after reapply");
+    assert!(sh.is_row_hidden(2), "non-matching row must be hidden after reapply");
+
+    // 2. XLSX save + reopen migrates `<filter val="   "/>` and keeps rows visible on reapply.
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("legacy_filter.xlsx", &bytes).unwrap();
+    s.active_mut().unwrap().wb = std::sync::Arc::new(reopened);
+
+    s.execute("data.reapply", json!({})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.is_row_hidden(1), "restored whitespace-only row must stay visible after reapply");
+    assert!(sh.is_row_hidden(2), "non-matching row must be hidden after reapply");
+
+    // Also verify Show Formulas mode and literal `(Blanks)` vs `'(Blanks)'` dropdown separation.
+    let mut s2 = Session::new();
+    s2.new_workbook();
+    s2.execute("cell.set", json!({"cell": "A1", "input": "Name"})).unwrap();
+    s2.execute("cell.set", json!({"cell": "A2", "input": "=\" Card \""})).unwrap();
+    s2.execute("range.setValues", json!({"range": "A3", "parse": false, "values": [[" =\" Card \" "], ["(Blanks)"], ["'(Blanks)'"], [" "]]}))
+        .unwrap();
+    s2.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s2.execute("data.filterBy", json!({"column": "A", "values": ["Card"], "blanks": false})).unwrap();
+
+    let choices = filter_choices(&s2.doc().unwrap().wb, 0, 0);
+    // Formula `=" Card "` and literal ` =" Card " ` stay separate under Show Formulas; only the formula row is checked.
+    let formula_like: Vec<_> = choices.iter().filter(|c| c.label.contains("=\" Card \"")).collect();
+    assert_eq!(formula_like.len(), 2, "formula and literal text must keep distinct filter identities: {choices:?}");
+    assert_eq!(formula_like.iter().filter(|c| c.checked).count(), 1, "only the matching formula row is checked: {choices:?}");
+
+    // Literal `(Blanks)`, literal `'(Blanks)'`, and the actual `(Blanks)` toggle all have distinct labels and values.
+    assert!(choices.contains(&FilterChoice { label: "(Blanks)".into(), value: None, checked: false }), "{choices:?}");
+    assert!(choices.contains(&FilterChoice { label: "'(Blanks)'".into(), value: Some("(Blanks)".into()), checked: false }), "{choices:?}");
+    assert!(choices.contains(&FilterChoice { label: "''(Blanks)''".into(), value: Some("'(Blanks)'".into()), checked: false }), "{choices:?}");
 }

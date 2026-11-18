@@ -59,16 +59,19 @@ fn filter_op(s: Option<&str>) -> &'static str {
     }
 }
 
+/// Parses an `<autoFilter>` element into model criteria, migrating legacy whitespace-only value entries to `blanks`.
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
     let mut criteria = vec![];
     for fc in e.kids("filterColumn") {
         let Some(col) = fc.attr_u32("colId") else { continue };
         let crit = if let Some(f) = fc.child("filters") {
-            FilterCriterion::Values {
-                values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
-                blanks: f.flag("blank", false),
+            let mut values: Vec<String> = f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect();
+            let had_whitespace_only = values.iter().any(|v| v.trim().is_empty());
+            if had_whitespace_only {
+                values.retain(|v| !v.trim().is_empty());
             }
+            FilterCriterion::Values { values, blanks: f.flag("blank", false) || had_whitespace_only }
         } else if let Some(cf) = fc.child("customFilters") {
             let mut it = cf.kids("customFilter").map(|c| (filter_op(c.attr("operator")).to_string(), c.attr("val").unwrap_or("").to_string()));
             let Some(a) = it.next() else { continue };
