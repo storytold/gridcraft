@@ -1061,6 +1061,7 @@ mod tests {
             pkg,
             report: Default::default(),
             sst: vec![],
+            long_strings: Default::default(),
             phonetics: vec![],
             xf_map: vec![],
             dxfs: vec![],
