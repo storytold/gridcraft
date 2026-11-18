@@ -324,6 +324,115 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     Ok((wb, report))
 }
 
+/// Reads a CSV without splitting it into columns: every line of the file becomes one text cell in
+/// column A, exactly as written (quotes, separators, a trailing `;`, leading zeros all kept), and
+/// nothing is converted. A line ends at CRLF, LF or CR; an empty line is an empty row. The
+/// workbook is marked [`Workbook::csv_unsplit`] so a CSV save writes the lines back with
+/// [`write_csv_lines`], and still records the separator sniffed from the text in
+/// [`Workbook::csv_delimiter`], which separates any cells the user adds in other columns.
+/// Only `opts.quote` (for sniffing), `opts.date_system` and `opts.max_used_cells` are used.
+pub fn read_csv_lines(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, ReadReport), IoError> {
+    let text = decode_text(bytes);
+    let quote = if opts.quote == 0 { '"' } else { opts.quote as char };
+    let mut report = ReadReport::default();
+    let mut wb = Workbook::new();
+    wb.date_system = opts.date_system;
+    wb.csv_delimiter = Some(sniff_delimiter(&text, quote)).filter(|d| char::from(*d) != quote);
+    wb.csv_unsplit = true;
+    let mut sheet = Sheet::new("Sheet1");
+    let mut row: u32 = 0;
+    // The first non-empty line: the used range runs from it to the last one stored.
+    let mut first: Option<u32> = None;
+    let mut rest = text.as_str();
+    while !rest.is_empty() {
+        if row >= MAX_ROWS {
+            report.warn(format!("The file has more than {MAX_ROWS} lines; only the first {MAX_ROWS} were opened."));
+            break;
+        }
+        let (line, next) = match rest.find(['\r', '\n']) {
+            // `end` is at an ASCII byte, so both slices are on character boundaries.
+            Some(end) => {
+                let after = if rest.get(end..).is_some_and(|t| t.starts_with("\r\n")) { end + 2 } else { end + 1 };
+                (rest.get(..end).unwrap_or_default(), rest.get(after..).unwrap_or_default())
+            }
+            None => (rest, ""),
+        };
+        if !line.is_empty() {
+            // Stop at the line that takes the used range past the limit, before it is stored.
+            let top = *first.get_or_insert(row);
+            if let Some(max) = opts.max_used_cells
+                && u64::from(row - top) + 1 > max
+            {
+                return Err(IoError::TooLarge(format!("the CSV's used range is over the limit of {max} cells")));
+            }
+            sheet.cells.set(CellRef::new(row, 0), Cell::value(Value::Text(Arc::from(line))));
+        }
+        rest = next;
+        row += 1;
+    }
+    wb.sheets = vec![Arc::new(sheet)];
+    Ok((wb, report))
+}
+
+/// Writes a sheet read with [`read_csv_lines`]: each row is the text of its column A as it is,
+/// unquoted, then CRLF, from row 1 to the end of the used range (empty rows are empty lines), so
+/// an unchanged sheet gives back the file it was read from (as UTF-8 with CRLF line ends). Cells
+/// the user filled in other columns are kept rather than dropped: they follow column A on their own
+/// row, each after `delimiter` (`,` when `0`), unquoted, up to the last non-empty one of that row;
+/// rows with nothing beyond column A are untouched. `cell_text` gives each cell's text, as for
+/// [`write_csv`], and the output is capped at [`MAX_CSV_BYTES`].
+pub fn write_csv_lines(sheet: &Sheet, delimiter: u8, mut cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    let delim = if delimiter == 0 { ',' } else { delimiter as char };
+    let limit = MAX_CSV_BYTES;
+    let mut out = String::new();
+    let Some(r) = sheet.used_range() else { return Ok(Vec::new()) };
+    let too_large =
+        |row: u32| IoError::TooLarge(format!("the CSV would be more than {} MiB (stopped at row {}); export a smaller range", limit >> 20, row + 1));
+    if (u64::from(r.end.row) + 1).saturating_mul(2) > limit as u64 {
+        return Err(too_large(r.end.row));
+    }
+    // The last stored column past A on each row, so a row is read only as far as its own cells go
+    // (one value in XFD1 doesn't make every other line format 16,383 empty cells).
+    let mut last_col: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
+    let mut reach = |row: u32, col: u32| {
+        if col > 0 {
+            let last = last_col.entry(row).or_insert(col);
+            *last = (*last).max(col);
+        }
+    };
+    for (c, _) in sheet.cells.iter() {
+        reach(c.row, c.col);
+    }
+    // Spilled values are not stored cells: their ranges reach as far as they spill.
+    for range in sheet.spill_ranges.values() {
+        for row in range.start.row..=range.end.row {
+            reach(row, range.end.col);
+        }
+    }
+    let mut extra: Vec<String> = Vec::new();
+    for row in 0..=r.end.row {
+        let line = cell_text(CellRef::new(row, 0));
+        extra.clear();
+        for col in 1..=last_col.get(&row).copied().unwrap_or(0) {
+            extra.push(cell_text(CellRef::new(row, col)));
+        }
+        while extra.last().is_some_and(String::is_empty) {
+            extra.pop();
+        }
+        let len = line.len() + extra.iter().map(|t| t.len() + delim.len_utf8()).sum::<usize>() + 2;
+        if out.len().saturating_add(len) > limit {
+            return Err(too_large(row));
+        }
+        out.push_str(&line);
+        for t in &extra {
+            out.push(delim);
+            out.push_str(t);
+        }
+        out.push_str("\r\n");
+    }
+    Ok(out.into_bytes())
+}
+
 /// Writes the sheet as CSV from A1 to the end of its used range, so leading empty columns and rows
 /// stay as empty fields and every cell keeps its position (CRLF line ends, UTF-8 without BOM). `cell_text` gives
 /// each cell's field text: the caller decides how values look (Save As CSV writes them as

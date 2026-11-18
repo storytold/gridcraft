@@ -274,6 +274,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
+                ("options.csvSplit", "Split CSV files into columns when opening them", "{on?: bool} (toggles without it) → {on}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.window.minimize", "Minimize Window", ""),
                 ("ui.window.maximize", "Maximize Window", "{on: bool}"),
@@ -483,7 +484,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let Some(path) = s("path") else { return err("missing `path`") };
             // Not `open_path`: that asks for a missing password in a dialog, and programmatic
             // calls never open one. A password-protected workbook takes `password` instead.
-            let r = app.run("file.open", json!({"path": path, "password": s("password")}));
+            let r = app.run("file.open", json!({"path": path, "password": s("password"), "csvSplit": app.ui.csv_split}));
             if let Ok(r) = &r {
                 app.after_open(Some(path), r);
             }

@@ -487,6 +487,127 @@ fn csv_save_keeps_the_separator_it_was_opened_with() {
     assert_eq!(String::from_utf8(save_bytes(&wb, "tabs.csv").unwrap()).unwrap(), tabs);
 }
 
+/// An ERP import file: `;`-separated, CRLF, a header with empty fields, article codes that read
+/// as numbers (`313.10`), decimal-comma prices and a trailing `;` on some lines only.
+const ERP_IMPORT: &str = ";;numitems;\r\n\
+                          CON;FS17-1.5BL;100;0,20639344\r\n\
+                          BTI;GC8813AC20;1;25,75409836\r\n\
+                          ARN;313.10;1;6,59016393;\r\n";
+
+const UNSPLIT: TextOpen = TextOpen { as_text: false, split: false };
+
+fn open_unsplit(name: &str, text: &str) -> Workbook {
+    open_bytes_opts(name, text.as_bytes(), None, UNSPLIT).unwrap().0
+}
+
+fn saved_csv(wb: &Workbook) -> String {
+    String::from_utf8(save_bytes(wb, "saved.csv").unwrap()).unwrap()
+}
+
+#[test]
+fn csv_opened_unsplit_keeps_each_line_whole_in_column_a() {
+    let wb = open_unsplit("import.csv", ERP_IMPORT);
+    assert!(wb.csv_unsplit);
+    let sh = wb.sheet(0).unwrap();
+    let lines: Vec<&str> = ERP_IMPORT.split("\r\n").filter(|l| !l.is_empty()).collect();
+    for (row, line) in lines.iter().enumerate() {
+        assert_eq!(sh.value(CellRef::new(row as u32, 0)), gridcraft_core::Value::text(*line), "row {}", row + 1);
+        assert!(sh.cell(CellRef::new(row as u32, 1)).is_none(), "nothing past column A on row {}", row + 1);
+    }
+    assert_eq!(saved_csv(&wb), ERP_IMPORT);
+}
+
+#[test]
+fn csv_opened_unsplit_saves_back_byte_for_byte() {
+    for (what, text) in [
+        ("ERP import", ERP_IMPORT),
+        ("codes that read as numbers", "313.10;0012;1E5;00313.100\r\n1E5\r\n0012\r\n"),
+        ("decimal and thousands commas", "ART;1,500;1.500,00\r\n1,500\r\n"),
+        ("quotes are not fields", "\"a;b\";\"c\"\"d\";\"\r\n\"open quote;x\r\n'apostrophe\r\n"),
+        ("empty lines in the middle", "a;b\r\n\r\n\r\nc;d;\r\n"),
+        ("leading empty line", "\r\nfirst;\r\n"),
+        ("trailing separator present and absent", "x;1;\r\nx;1\r\n;;\r\n;\r\n"),
+        ("what typed input would convert", "=SUM(A1);TRUE\r\n03/04/2026\r\n50%\r\n-0\r\n 12 \r\n"),
+        ("non-ASCII text", "ÀÉ;çà;€ 1,00\r\n日本\r\n"),
+        ("commas and tabs", "a,b,c\r\n1\t2\r\n"),
+    ] {
+        let wb = open_unsplit("import.csv", text);
+        assert_eq!(saved_csv(&wb), text, "{what}");
+        // Save As another .csv name does the same.
+        assert_eq!(String::from_utf8(save_bytes(&wb, "copy.CSV").unwrap()).unwrap(), text, "{what} (Save As)");
+    }
+}
+
+#[test]
+fn csv_opened_unsplit_writes_crlf_line_ends() {
+    // LF and lone CR line ends come back as CRLF; a last line without one gets one.
+    assert_eq!(saved_csv(&open_unsplit("lf.csv", "a;1\nb;2\n")), "a;1\r\nb;2\r\n");
+    assert_eq!(saved_csv(&open_unsplit("cr.csv", "a;1\rb;2\r")), "a;1\r\nb;2\r\n");
+    assert_eq!(saved_csv(&open_unsplit("end.csv", "a;1\r\nARN;313.10;1;6,59016393;")), "a;1\r\nARN;313.10;1;6,59016393;\r\n");
+    // An empty file opens empty and saves empty.
+    assert_eq!(saved_csv(&open_unsplit("empty.csv", "")), "");
+}
+
+#[test]
+fn csv_opened_unsplit_keeps_edits_and_cells_in_other_columns() {
+    let mut wb = open_unsplit("import.csv", ERP_IMPORT);
+    if let Some(sh) = wb.sheet_mut(0) {
+        // An edited line is written as it now reads; a number typed into A is written as a number.
+        sh.set_value(CellRef::new(1, 0), gridcraft_core::Value::text("CON;FS17-1.5BL;200;0,20639344"));
+        sh.set_value(CellRef::new(4, 0), gridcraft_core::Value::Number(5.0));
+        // Cells in other columns follow column A on their row, after the file's separator.
+        sh.set_value(CellRef::new(2, 2), gridcraft_core::Value::text("note"));
+        sh.set_value(CellRef::new(6, 1), gridcraft_core::Value::text("b only"));
+    }
+    assert_eq!(
+        saved_csv(&wb),
+        ";;numitems;\r\n\
+         CON;FS17-1.5BL;200;0,20639344\r\n\
+         BTI;GC8813AC20;1;25,75409836;;note\r\n\
+         ARN;313.10;1;6,59016393;\r\n\
+         5\r\n\
+         \r\n\
+         ;b only\r\n"
+    );
+}
+
+#[test]
+fn csv_split_stays_the_default_and_unsplit_applies_to_csv_only() {
+    // Without the option (and through `open_bytes_with`), a .csv is split and typed as before.
+    for (wb, _) in
+        [open_bytes("import.csv", ERP_IMPORT.as_bytes()).unwrap(), open_bytes_with("import.csv", ERP_IMPORT.as_bytes(), None, true).unwrap()]
+    {
+        assert!(!wb.csv_unsplit);
+        assert_eq!(wb.csv_delimiter, Some(b';'));
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(1, 1)), gridcraft_core::Value::text("FS17-1.5BL"));
+    }
+    assert_eq!(TextOpen::default(), TextOpen { as_text: false, split: true });
+    // .txt and .tsv are tab-separated text and keep their columns.
+    for name in ["list.txt", "list.tsv"] {
+        let (wb, _) = open_bytes_opts(name, b"a\tb\r\n", None, UNSPLIT).unwrap();
+        assert!(!wb.csv_unsplit, "{name}");
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 1)), gridcraft_core::Value::text("b"), "{name}");
+    }
+    // Through .xlsx the unsplit origin is gone: a CSV save splits nothing and quotes as usual.
+    let from_csv = open_unsplit("import.csv", "x;\"y\"\r\n");
+    let (reopened, _) = open_bytes("book.xlsx", &save_bytes(&from_csv, "book.xlsx").unwrap()).unwrap();
+    assert!(!reopened.csv_unsplit);
+    assert_eq!(saved_csv(&reopened), "\"x;\"\"y\"\"\"\r\n");
+}
+
+#[test]
+fn file_open_takes_csv_split() {
+    let mut s = crate::Session::new();
+    let b64 = base64_encode(ERP_IMPORT.as_bytes());
+    s.execute("file.open", serde_json::json!({"name": "import.csv", "base64": b64, "csvSplit": false})).unwrap();
+    let saved = s.execute("file.saveBytes", serde_json::json!({"format": "csv"})).unwrap();
+    let bytes = base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    assert_eq!(String::from_utf8(bytes).unwrap(), ERP_IMPORT);
+    // Without it the file is split, as before.
+    s.execute("file.open", serde_json::json!({"name": "other.csv", "base64": b64})).unwrap();
+    assert!(!s.doc().unwrap().wb.csv_unsplit);
+}
+
 #[test]
 fn csv_save_of_a_workbook_not_read_from_csv_uses_commas() {
     let mut wb = Workbook::new();
@@ -939,4 +1060,16 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
+}
+
+#[test]
+fn csv_opened_unsplit_saves_spilled_values() {
+    let mut s = crate::Session::new();
+    let b64 = base64_encode(b"ART;313.10;\r\n");
+    s.execute("file.open", serde_json::json!({"name": "import.csv", "base64": b64, "csvSplit": false})).unwrap();
+    s.execute("cell.set", serde_json::json!({"cell": "B1", "input": "=SEQUENCE(2,2)"})).unwrap();
+    let saved = s.execute("file.saveBytes", serde_json::json!({"format": "csv"})).unwrap();
+    let bytes = base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    // Column A as it was, then the spilled values after the file's separator.
+    assert_eq!(String::from_utf8(bytes).unwrap(), "ART;313.10;;1;2\r\n;3;4\r\n");
 }

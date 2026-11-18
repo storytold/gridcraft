@@ -1,7 +1,8 @@
 use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
-/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
+/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`, and whether
+/// a CSV is split into columns when opened, `app.ui.csv_split`), plus Formulas
 /// (calculation mode and iterative calculation) and the display options for this workbook (sheet
 /// tabs and scroll bars) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
@@ -31,6 +32,11 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.toggle_autosave();
     }
+    let mut csv_split = app.ui.csv_split;
+    if ui.checkbox(&mut csv_split, lang.tr("Split CSV files into columns when opening them")).changed() {
+        app.run_or_alert("options.csvSplit", json!({"on": csv_split}));
+    }
+    dim(ui, lang.tr("Off: each line of a .csv opens whole in column A, not parsed, and is saved back as it was, with CRLF line ends."));
     let Some((calc, view)) = app.session.active().map(|d| (d.wb.calc.clone(), d.wb.view)) else { return };
     ui.add_space(18.0);
     // Excel's Advanced › Display options for this workbook: saved with the workbook (#3101).

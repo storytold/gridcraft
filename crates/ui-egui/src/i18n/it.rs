@@ -434,6 +434,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Highlight the active cell's row" => "Evidenzia la riga della cella attiva",
         "Enable AutoComplete for cell values" => "Abilita Completamento automatico per i valori delle celle",
         "Save .xlsx workbooks automatically after every change" => "Salva automaticamente le cartelle di lavoro .xlsx dopo ogni modifica",
+        "Split CSV files into columns when opening them" => "Dividi i file CSV in colonne all'apertura",
+        "Off: each line of a .csv opens whole in column A, not parsed, and is saved back as it was, with CRLF line ends." => {
+            "Se disattivata, ogni riga di un file .csv si apre intera nella colonna A, senza essere interpretata, e viene salvata com'era, con fine riga CRLF."
+        }
         "Workbook calculation" => "Calcolo della cartella di lavoro",
         "Enable iterative calculation" => "Abilita calcolo iterativo",
         "Calculation settings are saved with the workbook." => "Le impostazioni di calcolo vengono salvate con la cartella di lavoro.",

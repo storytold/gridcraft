@@ -122,6 +122,10 @@ pub struct UiState {
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
+    /// Split CSV files into columns when opening them (File ▸ Options ▸ Save), on by default. Off,
+    /// a `.csv` opens with each line as it is in column A and saves back unchanged (`file.open`'s
+    /// `csvSplit`), for import files whose codes and separators must not be touched.
+    pub csv_split: bool,
     pub recent: Vec<String>,
     /// One-shot keytip request for a ribbon control: set when a keytip action resolves to
     /// [`keytips::Action::Control`], consumed (and cleared) by the control's render site.
@@ -172,6 +176,7 @@ impl Default for UiState {
             autocomplete: true,
             highlight_active_row: false,
             autosave: false,
+            csv_split: true,
             recent: vec![],
             keytip_invoke: None,
             keytip_invoke_next: None,

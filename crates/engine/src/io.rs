@@ -74,8 +74,31 @@ pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>
 /// the text it holds, with no number, date or boolean conversion (identifiers such as GTINs, SKUs
 /// and ZIP codes survive). It does not apply to other formats.
 pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_opts(name, bytes, password, TextOpen { as_text: csv_as_text, ..TextOpen::default() })
+}
+
+/// How a text file is read when it is opened ([`open_bytes_opts`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextOpen {
+    /// A CSV/TSV/TXT file keeps every field as the text it holds (see [`open_bytes_with`]).
+    pub as_text: bool,
+    /// A `.csv` file is split into columns at its (sniffed) separator, as it always was. With
+    /// `false` every line of the file is one text cell in column A, exactly as written, and the
+    /// workbook remembers it ([`Workbook::csv_unsplit`]) so Save as CSV writes the lines back
+    /// unchanged. Other formats, `.tsv` and `.txt` included, ignore it.
+    pub split: bool,
+}
+
+impl Default for TextOpen {
+    fn default() -> Self {
+        TextOpen { as_text: false, split: true }
+    }
+}
+
+/// [`open_bytes_with`], with every way of reading a text file in `text`.
+pub fn open_bytes_opts(name: &str, bytes: &[u8], password: Option<&str>, text: TextOpen) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
-        let (mut wb, warnings) = open_plain(name, bytes, csv_as_text)?;
+        let (mut wb, warnings) = open_plain(name, bytes, text)?;
         fit_imported_rows(&mut wb);
         return Ok((wb, warnings));
     }
@@ -89,7 +112,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
     if gridcraft_xlsx::sniff(&plain) == gridcraft_xlsx::Format::Encrypted {
         return Err(EngineError::Other(format!("We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).")));
     }
-    let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
+    let (mut wb, mut warnings) = open_plain(name, &plain, text)?;
     fit_imported_rows(&mut wb);
     warnings.insert(0, DECRYPTED_NOTICE.into());
     Ok((wb, warnings))
@@ -138,8 +161,8 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
 /// Parses bytes that aren't encrypted, then takes the workbook's macros, and the button actions
 /// xlsx has no place for, out of their hidden names, and adopts the Python cells they hold (see
 /// [`adopt_python`]) within the limits of [`enforce_python_limits`].
-fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
-    let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text)?;
+fn open_plain(name: &str, bytes: &[u8], text: TextOpen) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, mut warnings) = read_plain(name, bytes, text)?;
     warnings.extend(crate::macros::load(&mut wb));
     crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
@@ -272,7 +295,8 @@ fn sane_python_output(v: &gridcraft_core::Value) -> bool {
 }
 
 /// Parses bytes that aren't encrypted, as they are.
-fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+fn read_plain(name: &str, bytes: &[u8], text: TextOpen) -> Result<(Workbook, Vec<String>)> {
+    let csv_as_text = text.as_text;
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
@@ -309,6 +333,14 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
                     _ => format!("We can't open '{name}': {e}"),
                 })
             })?;
+        return Ok((wb, report.warnings));
+    }
+    // A `.csv` opened without splitting: every line as it is, in column A, before anything else
+    // (a web page saved as .csv included) reads it as something else.
+    if !text.split && kind == Some(FileKind::Csv) {
+        let (mut wb, report) =
+            gridcraft_xlsx::read_csv_lines(bytes, &gridcraft_xlsx::CsvOptions::default()).map_err(|e| EngineError::Other(e.to_string()))?;
+        rename_first_sheet(&mut wb, name);
         return Ok((wb, report.warnings));
     }
     if let Some(read) = read_html_table(name, kind, bytes, csv_as_text) {
@@ -527,6 +559,15 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         FileKind::Sylk => {
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
+        // A CSV opened without splitting writes its lines back as they were.
+        FileKind::Csv if wb.csv_unsplit => wb
+            .sheet(sheet)
+            .map(|sh| {
+                gridcraft_xlsx::write_csv_lines(sh, wb.csv_delimiter.unwrap_or(b','), |c| csv_cell_text(wb, sh, c))
+                    .map_err(|e| EngineError::Other(e.to_string()))
+            })
+            .transpose()
+            .map(Option::unwrap_or_default),
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
         FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
@@ -559,19 +600,21 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
 fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| {
-        // General's grid-width formatting rounds large identifiers to scientific notation.
-        // Delimited files have no column width, so preserve the whole numeric value instead.
-        if wb.styles.get(sh.style_id(c)).num_fmt.as_str().eq_ignore_ascii_case("General")
-            && let gridcraft_core::Value::Number(number) = sh.value(c)
-            && number.is_finite()
-        {
-            number.to_string()
-        } else {
-            crate::display::value_text(wb, sh, c)
-        }
-    })
-    .map_err(|e| EngineError::Other(e.to_string()))
+    gridcraft_xlsx::write_csv(sh, delimiter, |c| csv_cell_text(wb, sh, c)).map_err(|e| EngineError::Other(e.to_string()))
+}
+
+/// A cell's text in a saved CSV: as displayed, except General numbers at full precision.
+fn csv_cell_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> String {
+    // General's grid-width formatting rounds large identifiers to scientific notation.
+    // Delimited files have no column width, so preserve the whole numeric value instead.
+    if wb.styles.get(sh.style_id(c)).num_fmt.as_str().eq_ignore_ascii_case("General")
+        && let gridcraft_core::Value::Number(number) = sh.value(c)
+        && number.is_finite()
+    {
+        number.to_string()
+    } else {
+        crate::display::value_text(wb, sh, c)
+    }
 }
 
 /// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
