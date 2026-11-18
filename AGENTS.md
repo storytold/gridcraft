@@ -121,3 +121,7 @@ People trust GridCraft with their numbers; a crash loses their work. **This outr
 - Some workflow files here still run their own jobs. Don't add to them. Moving a job into craft-common-actions is its own task, never part of another PR, and the job stays here until a shared workflow runs it.
 
 New workspace crates include `workspace = true` under `[lints]` in `Cargo.toml`. Production crate roots declare the crate-level lint attributes before modules; crate-level `//!` documentation may precede them.
+
+## Shared libraries
+
+Before adding or changing file-format, codec, protocol, or reusable UI code, check `storytold/craft-libs` and its open PRs first; reuse or extend the shared library rather than duplicating it locally, keep app-specific policy and model mapping in the app, and preserve behavior, security/resource limits, attribution, and regression coverage during cutovers.
