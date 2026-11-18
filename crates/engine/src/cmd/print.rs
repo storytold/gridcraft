@@ -182,7 +182,7 @@ fn render_pdf_with_catalog(wb: &Workbook, layouts: &[SheetLayout], file: &str, p
     let mut pics = PicCache::default();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
-        let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
+        let mut cf = crate::cf::CfCache::new();
         let k = lay.k();
         let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
