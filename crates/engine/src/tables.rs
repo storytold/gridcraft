@@ -516,6 +516,8 @@ fn grow_down(
     // Below a table with no data rows the row above is the header: the new row takes
     // neither its format nor anything else from it.
     let first_data_row = t_range.start.row.saturating_add(u32::from(t_header));
+    // The cells this growth gives a calculated column's formula.
+    let mut filled: Vec<CellRef> = Vec::new();
     let new_cells: Vec<CellRef> = if old_end_row < first_data_row {
         Vec::new()
     } else {
@@ -609,17 +611,25 @@ fn grow_down(
             if let Some(shifted) = shifted {
                 let formula = Some(std::sync::Arc::new(shifted));
                 sh_mut.set_cell(target_cell, Cell { value: gridcraft_core::Value::Empty, formula, style, py: None });
+                filled.push(target_cell);
             } else if style != own_style {
                 sh_mut.set_cell(target_cell, Cell { value: gridcraft_core::Value::Empty, formula: None, style, py: None });
             }
         }
     }
     // Every cell of the new row is now in the table, empty or not: formulas over the
-    // table's columns (ROWS, COUNTBLANK, SUM…) recalculate through them.
+    // table's columns (ROWS, COUNTBLANK, SUM…) recalculate through them. A calculated
+    // column's formula written here is an edit, evaluated even in manual mode; a
+    // formula the row already held is not.
     cx.rebuild_deps = true;
     for r in old_end_row.saturating_add(1)..=new_end_row {
         for col in t_range.start.col..=t_range.end.col {
-            cx.touch(si, CellRef::new(r, col));
+            let cell = CellRef::new(r, col);
+            if filled.contains(&cell) {
+                cx.touch(si, cell);
+            } else {
+                cx.grown.push((si, cell));
+            }
         }
     }
 }
@@ -675,9 +685,13 @@ fn grow_right(
             cx.rebuild_deps = true;
         }
     }
-    // Likewise every cell of the new column, its header included.
+    // Likewise every cell of the new column, its header included; a header named
+    // here is an edit.
+    if write_header {
+        cx.touch(si, header_cell);
+    }
     for r in t_range.start.row..=t_range.end.row {
-        cx.touch(si, CellRef::new(r, c.col));
+        cx.grown.push((si, CellRef::new(r, c.col)));
     }
 }
 
@@ -1412,6 +1426,43 @@ mod tests {
         assert_eq!(get(&mut s, "D1"), json!(2.0));
         s.execute("formulas.calculateNow", json!({})).unwrap();
         assert_eq!(get(&mut s, "D1"), json!(10.0));
+    }
+
+    #[test]
+    fn table_auto_expand_leaves_formulas_already_in_the_new_cells_for_f9_in_manual_mode() {
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        // (cell holding a formula before the table existed, cell whose entry grows the table, range after)
+        for (held, entered, grown) in [("B3", "A3", "A1:B3"), ("C2", "C1", "A1:C2")] {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["A", "B"], [1, 2]]})).unwrap();
+            s.execute("cell.set", json!({"cell": "E1", "input": 1})).unwrap();
+            s.execute("cell.set", json!({"cell": held, "input": "=E1*2"})).unwrap();
+            s.execute("insert.table", json!({"range": "A1:B2", "header": true})).unwrap();
+            s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+            s.execute("cell.set", json!({"cell": "E1", "input": 5})).unwrap();
+
+            // The table takes the cell in, but the formula there wasn't edited: it waits for F9.
+            s.execute("cell.set", json!({"cell": entered, "input": 7})).unwrap();
+            assert_eq!(range(&s), grown, "{held}");
+            assert_eq!(get(&mut s, held), json!(2.0), "{held}");
+            s.execute("formulas.calculateNow", json!({})).unwrap();
+            assert_eq!(get(&mut s, held), json!(10.0), "{held}");
+        }
+    }
+
+    #[test]
+    fn table_auto_expand_evaluates_the_calculated_column_it_fills_in_manual_mode() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["A", "B"], [1, "=A2*10"], [2, "=A3*10"]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B3", "header": true})).unwrap();
+        s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+
+        // The formula the new row gets is entered by the growth: it is evaluated like any entry.
+        s.execute("cell.set", json!({"cell": "A4", "input": 3})).unwrap();
+        assert_eq!(range(&s), "A1:B4");
+        assert_eq!(s.execute("cell.get", json!({"cell": "B4"})).unwrap()["value"], json!(30.0));
     }
 
     #[test]

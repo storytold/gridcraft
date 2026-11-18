@@ -382,6 +382,10 @@ pub struct Ctx<'a> {
     /// again before the usual recalculation of what the changed cells feed (only the edited
     /// formulas in manual mode). The edit isn't structural, so legacy arrays are still checked.
     pub rebuild_deps: bool,
+    /// Cells a growing table took in without editing them: formulas reading the table (ROWS,
+    /// COUNTBLANK, SUM…) recalculate through them in automatic mode, but a formula already in one
+    /// is not an edit, so manual mode leaves it for F9.
+    pub grown: Vec<gridcraft_calc::Key>,
     /// The command enters data (typing, setValues, fill, paste): the cells it filled next to a
     /// table grow it. Other commands that rewrite or move cells (sort, Format Painter, checkboxes)
     /// leave tables as they are.
@@ -421,10 +425,11 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         protection_checked: false,
         edits: Vec::new(),
         rebuild_deps: false,
+        grown: Vec::new(),
         entry: false,
     };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, mut changed, structural, recalc_all, mut fit_rows, protection_checked, edits, rebuild_deps, .. } = ctx;
+    let Ctx { mut wb, mut changed, structural, recalc_all, mut fit_rows, protection_checked, edits, rebuild_deps, grown, .. } = ctx;
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
@@ -457,7 +462,13 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         d.calc.recalc_all(&mut wb);
     } else if rebuild_deps {
         d.calc.rebuild(&wb);
-        d.calc.cells_changed(&mut wb, &changed);
+        if wb.calc.mode == gridcraft_model::CalcMode::Manual || grown.is_empty() {
+            d.calc.cells_changed(&mut wb, &changed);
+        } else {
+            let mut seeds = changed.clone();
+            seeds.extend(grown);
+            d.calc.cells_changed(&mut wb, &seeds);
+        }
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
