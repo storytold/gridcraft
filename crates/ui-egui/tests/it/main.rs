@@ -40,6 +40,7 @@ mod fill_options_button;
 mod filter_list_scroll;
 mod filter_menu_enter;
 mod find_dialog_focus;
+mod find_dialog_not_found;
 mod floating_pictures;
 mod font_box_filter;
 mod font_size_box;

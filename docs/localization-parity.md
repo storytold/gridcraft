@@ -27,7 +27,9 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   Japanese 268 labels, Simplified Chinese, Korean, Russian, Brazilian Portuguese, German and Czech 266
   each. The tables are used by
   the ribbon, sheet tabs and widgets (`ribbon.rs`, `tabs.rs`, `widgets.rs`), the Format Cells
-  dialog, every dialog title and the shared OK/Cancel buttons; the other dialogs, menus,
+  dialog, every dialog title and the shared OK/Cancel buttons; the Find and Replace dialog routes
+  its labels, tabs, buttons and its results line through `tr`, and reports the not-found in its
+  results area in the interface language (11-03); the other dialogs, menus,
   context menus, task panes, status messages and command labels are still English literals.
   Untranslated labels fall back to English.
 - **Function help** (the argument hint, autocomplete, Insert Function and the Formulas-tab
