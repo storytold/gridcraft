@@ -273,8 +273,11 @@ fn validate_glyph_ranges(loca: &[u8], glyf_len: usize, num_glyphs: usize, long: 
     Some(())
 }
 
-/// The glyph ids a composite glyph refers to (none for a simple glyph). `None` when the component
-/// data is truncated or malformed: the face is refused rather than emitting an incomplete glyph.
+/// The glyph ids a composite glyph refers to (none for a simple glyph). The list is read until the
+/// component records stop asking for more, so a valid composite of any length is accepted; each
+/// record advances the cursor by at least six bytes through checked reads, which bounds the walk by
+/// the glyph's own bytes. `None` when the component data is truncated or malformed: the face is
+/// refused rather than emitting an incomplete glyph.
 fn components(glyph: &[u8]) -> Option<Vec<usize>> {
     let mut out = Vec::new();
     if glyph.is_empty() {
@@ -284,7 +287,7 @@ fn components(glyph: &[u8]) -> Option<Vec<usize>> {
         return Some(out);
     }
     let mut at = 10usize;
-    for _ in 0..1024 {
+    loop {
         let flags = be16(glyph, at)?;
         let component = be16(glyph, at + 2)?;
         out.push(usize::from(component));
@@ -307,7 +310,6 @@ fn components(glyph: &[u8]) -> Option<Vec<usize>> {
             return Some(out);
         }
     }
-    None
 }
 
 /// A `post` table version 3.0: no glyph names, but the style fields a font descriptor mirrors.
@@ -734,6 +736,24 @@ pub(crate) mod synthetic {
         }
         outlines.push(rectangle());
         build(&[('ạ', 1)], &outlines)
+    }
+
+    /// A font whose glyph 1 is one composite with `count` references to the simple glyph 2. OpenType
+    /// does not cap the number of component records, so a fixed traversal limit would refuse a
+    /// valid composite.
+    pub(crate) fn many_components(count: usize) -> Vec<u8> {
+        let mut composite = Vec::new();
+        composite.extend_from_slice(&(-1i16).to_be_bytes()); // composite
+        for value in [0i16, 0, 600, 700] {
+            composite.extend_from_slice(&value.to_be_bytes()); // bbox
+        }
+        for index in 0..count {
+            let more = if index + 1 < count { 0x0020u16 } else { 0 };
+            composite.extend_from_slice(&(0x0002u16 | more).to_be_bytes()); // ARGS_ARE_XY_VALUES
+            composite.extend_from_slice(&2u16.to_be_bytes());
+            composite.extend_from_slice(&[0, 0]);
+        }
+        build(&[('ạ', 1)], &[Vec::new(), composite, rectangle()])
     }
 
     /// One composite glyph drawing `component` at the same offset.

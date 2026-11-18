@@ -1337,6 +1337,23 @@ fn a_composite_glyph_chain_is_closed_completely() -> Result<(), Box<dyn Error>> 
     Ok(())
 }
 
+#[test]
+fn a_composite_with_many_components_is_not_cut_off() -> Result<(), Box<dyn Error>> {
+    // OpenType does not cap the component count; 1,025 records must not be refused.
+    let bytes = embed::synthetic::many_components(1025);
+    let mut doc = PdfDoc::new();
+    assert!(doc.set_unicode_font(Font::Helvetica, bytes, 0));
+    doc.add_page(200.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "ạ");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    let font_file = embedded_font_file(&pdf).ok_or_else(|| io::Error::other("no embedded font file"))?;
+    let font = skrifa::FontRef::from_index(&font_file, 0).map_err(|e| io::Error::other(e.to_string()))?;
+    let glyf = font.table_data(skrifa::Tag::new(b"glyf")).ok_or_else(|| io::Error::other("glyf missing"))?;
+    // 1,025 six-byte component records and the rectangle they all draw.
+    assert!(glyf.as_bytes().len() > 6000, "the whole component list is kept: {} bytes", glyf.as_bytes().len());
+    Ok(())
+}
+
 /// The bytes of the first `FontFile2` stream in `pdf` (streams are written uncompressed here).
 fn embedded_font_file(pdf: &[u8]) -> Option<Vec<u8>> {
     let at = find(pdf, b"/Length1 ")?;
