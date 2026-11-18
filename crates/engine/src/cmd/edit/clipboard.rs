@@ -359,7 +359,7 @@ fn numeric_from_html(cell: &mut Cell, field: &str, html: Option<&crate::clip_htm
     }
     cell.value = Value::number(n);
     if wb.styles.get(cell.style).num_fmt.as_str() == "General"
-        && let Some(code) = crate::clip_html::format_for(field, n)
+        && let Some(code) = crate::clip_html::format_for(field, n, wb.region)
     {
         cell.style = wb.styles.derive(cell.style, |s| s.num_fmt = gridcraft_model::NumFmt::new(&code));
     }

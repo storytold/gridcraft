@@ -338,8 +338,8 @@ pub(crate) fn normalized(s: &str) -> String {
 
 /// A number format that shows `n` exactly as `shown` ("Rp10,000.00" for 10000 →
 /// `"Rp"#,##0.00`), inferred from the text around the digits. `None` unless the format renders
-/// `shown` back character for character.
-pub(crate) fn format_for(shown: &str, n: f64) -> Option<String> {
+/// `shown` back character for character in the workbook's `region`.
+pub(crate) fn format_for(shown: &str, n: f64, region: &gridcraft_core::Region) -> Option<String> {
     let shown = normalized(shown);
     let start = shown.find(|c: char| c.is_ascii_digit())?;
     let end = shown.rfind(|c: char| c.is_ascii_digit()).map(|i| i + 1)?;
@@ -363,7 +363,10 @@ pub(crate) fn format_for(shown: &str, n: f64) -> Option<String> {
         code.push_str(&"0".repeat(decimals.min(30)));
     }
     code.push_str(&quote(suffix));
-    let rendered = gridcraft_numfmt::text_function(&gridcraft_core::Value::number(n), &code, gridcraft_core::date::DateSystem::D1900).ok()?;
+    // `code` is canonical (what the cell stores); TEXT reads codes written the region's way.
+    let typed = gridcraft_numfmt::regional_code(&code, region);
+    let rendered =
+        gridcraft_numfmt::text_function_in(&gridcraft_core::Value::number(n), &typed, gridcraft_core::date::DateSystem::D1900, region).ok()?;
     (normalized(&rendered) == shown).then_some(code)
 }
 
@@ -461,10 +464,10 @@ mod tests {
 
     #[test]
     fn infers_a_format_that_shows_the_same_text() {
-        assert_eq!(format_for("Rp10,000.00", 10000.0).as_deref(), Some("\"Rp\"#,##0.00"));
-        assert_eq!(format_for("1 234 kr", 1234.0), None, "space grouping is not reproduced");
-        assert_eq!(format_for("10.000,00 €", 10000.0), None, "comma decimals don't render back in en-US");
-        assert_eq!(format_for("-Rp5", -5.0).as_deref(), Some("\"Rp\"0"));
-        assert_eq!(format_for("12 EUR", 12.0).as_deref(), Some("0\" EUR\""));
+        assert_eq!(format_for("Rp10,000.00", 10000.0, &gridcraft_core::region::EN_US).as_deref(), Some("\"Rp\"#,##0.00"));
+        assert_eq!(format_for("1 234 kr", 1234.0, &gridcraft_core::region::EN_US), None, "space grouping is not reproduced");
+        assert_eq!(format_for("10.000,00 €", 10000.0, &gridcraft_core::region::EN_US), None, "comma decimals don't render back in en-US");
+        assert_eq!(format_for("-Rp5", -5.0, &gridcraft_core::region::EN_US).as_deref(), Some("\"Rp\"0"));
+        assert_eq!(format_for("12 EUR", 12.0, &gridcraft_core::region::EN_US).as_deref(), Some("0\" EUR\""));
     }
 }
