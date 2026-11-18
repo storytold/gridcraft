@@ -820,6 +820,36 @@ fn print_refuses_oversized_png_before_the_header_probe() {
     }
 }
 
+/// The size that admits a JPEG comes from the decoder's own header reader, not `io::image_size`:
+/// after a fill byte that sniffer lands on a decoy 1×1 SOF inside a comment, while the decoder
+/// skips the fill byte and the comment and reads the real, larger SOF.
+#[test]
+fn print_sizes_jpeg_pictures_by_the_decoder_not_the_sniffer() {
+    use super::objects::{DecodeCaps, decode_limited};
+    let mut real = Vec::new();
+    image::DynamicImage::ImageLuma8(image::GrayImage::new(128, 128))
+        .write_to(&mut std::io::Cursor::new(&mut real), image::ImageFormat::Jpeg)
+        .unwrap();
+    // After SOI: a fill byte, then a comment of the largest length. The sniffer reads the fill
+    // byte as a marker and the comment's marker and length high byte (0xFE, 0xFF) as its length.
+    let comment_start = 7; // SOI, fill byte, COM marker, two length bytes
+    let landing = 2 + 2 + 0xFEFF;
+    let mut comment = vec![0u8; 0xFFFF - 2];
+    comment[landing - comment_start..][..13].copy_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00]);
+    let mut jpeg = real[..2].to_vec();
+    jpeg.extend_from_slice(&[0xFF, 0xFF, 0xFE, 0xFF, 0xFF]);
+    jpeg.extend_from_slice(&comment);
+    jpeg.extend_from_slice(&real[2..]);
+    assert_eq!(crate::io::image_size(&jpeg), Some((1, 1)));
+    assert_eq!(image::ImageReader::with_format(std::io::Cursor::new(&jpeg), image::ImageFormat::Jpeg).into_dimensions().unwrap(), (128, 128));
+
+    let caps = DecodeCaps { max_side: 1024, max_pixels: 10_000, max_alloc: 1024 * 1024 };
+    // The crafted file decodes when its real size is within the caps...
+    assert!(decode_limited(&jpeg, DecodeCaps { max_pixels: 128 * 128, ..caps }).is_some_and(|img| (img.width(), img.height()) == (128, 128)));
+    // ...and is refused when its real size (16384 pixels) is over them, whatever the sniffer says.
+    assert!(decode_limited(&jpeg, caps).is_none());
+}
+
 #[test]
 fn checkbox_cells_print_as_boxes_not_true_false() {
     // #2972: a checkbox cell printed its value as TRUE or FALSE.
