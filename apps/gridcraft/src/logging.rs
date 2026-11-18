@@ -268,9 +268,10 @@ impl log::Log for AppLogger {
         }
         // Formatted before the sink is locked, so a message that logs while it is formatted can't deadlock.
         let thread = std::thread::current();
-        #[allow(clippy::disallowed_methods)] // the desktop app (native only): wasm never runs it
-        let line =
-            format_line(&timestamp(SystemTime::now()), record.level(), thread.name().unwrap_or("?"), record.target(), &record.args().to_string());
+        let logged_at = gridcraft_engine::core::date::unix_now_ms()
+            .and_then(|milliseconds| SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(milliseconds.max(0.0) as u64)))
+            .unwrap_or(SystemTime::UNIX_EPOCH);
+        let line = format_line(&timestamp(logged_at), record.level(), thread.name().unwrap_or("?"), record.target(), &record.args().to_string());
         if self.stderr {
             // No terminal (a Windows GUI build, a closed pipe) is not an error worth reporting.
             let _ = std::io::stderr().write_all(line.as_bytes());

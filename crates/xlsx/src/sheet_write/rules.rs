@@ -52,8 +52,10 @@ pub(super) fn x14_cfvo(v: &CfValueKind) -> String {
     format!("<x14:cfvo type=\"{ty}\"><xm:f>{}</xm:f></x14:cfvo>", esc(&val))
 }
 
+/// One `cfRule` element. The formulas generated for text, blank, error and date rules refer to the
+/// top-left cell of all the rule's areas, the cell Excel reads relative references from.
 pub(super) fn cf_rule_xml(cf: &CondFormat, priority: u32, out: &mut Out) -> String {
-    let tl = cf.ranges.first().map(|r| r.start.a1()).unwrap_or_else(|| "A1".into());
+    let tl = RangeRef::top_left(&cf.ranges).map(|c| c.a1()).unwrap_or_else(|| "A1".into());
     let stop = if cf.stop_if_true { " stopIfTrue=\"1\"" } else { "" };
     let mut dxf = |st: &Style| dxf_id(&mut out.dxfs, st);
     let f = |x: &str| format!("<formula>{}</formula>", esc(&text_to_file(x)));

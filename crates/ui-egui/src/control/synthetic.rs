@@ -1,4 +1,4 @@
-use super::*;
+use super::{CellRef, Json, SheetApp};
 
 pub(super) fn key_from(name: &str) -> Option<egui::Key> {
     egui::Key::from_name(name).or(match name.to_ascii_lowercase().as_str() {

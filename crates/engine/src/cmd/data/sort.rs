@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Anchor, AnchorMode, Arc, Cell, CellRef, Comment, EngineError, Formula, Hyperlink, Json, LineInfo, Ordering, RangeRef, Result, Session, Sheet,
+    Value, bad, bool_param, col_param, data_range, edit, guess_header, json, ok, sort_compare, split_sheet, str_param, target_sheet,
+};
 
 #[derive(Clone)]
 struct SortKey {
@@ -23,6 +26,21 @@ fn sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef)> {
         return Err(bad("data.sort", "missing `range`: the selection is on the active sheet"));
     }
     Ok((sheet, data_range(s, p)?))
+}
+
+/// The worksheet (index), range and header guess the Custom Sort dialog works on: the sheet named by
+/// `sheet` or a `Sheet!` prefix on `range`, else the active one.
+pub fn sort_context(s: &Session, p: &Json) -> Result<(usize, RangeRef, bool)> {
+    let (sheet, explicit) = sort_target(s, p)?;
+    let d = s.doc()?;
+    let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
+    let sel = d.selection.current();
+    // An explicit block wins over the table range, so a selected totals row can be sorted.
+    let r = match sh.used_range() {
+        Some(used) if p.get("range").is_none() && !sel.is_single() => sel.intersection(&used).unwrap_or(sel),
+        _ => explicit,
+    };
+    Ok((sheet, r, bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r))))
 }
 
 pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
@@ -65,7 +83,9 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         });
     }
     if keys.is_empty() {
-        s.ui_requests.push(crate::UiRequest::Dialog("sort".into(), json!({"range": r.a1(), "header": header})));
+        let (sheet, r, header) = sort_context(s, p)?;
+        let name = s.doc()?.wb.sheet(sheet).map(|sh| sh.name.clone()).ok_or(EngineError::NoDocument)?;
+        s.ui_requests.push(crate::UiRequest::Dialog("sort".into(), json!({"range": r.a1(), "header": header, "sheet": name})));
         return ok();
     }
     if keys.len() > 64 {
@@ -116,15 +136,29 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             for (ki, k) in keys.iter().enumerate() {
                 let (va, ca) = &keyed[a as usize][ki];
                 let (vb, cb) = &keyed[b as usize][ki];
+                let plain = || {
+                    if case && va.is_text() && vb.is_text() {
+                        sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
+                    } else {
+                        sort_compare(va, vb)
+                    }
+                };
                 let o = if k.by != "values" {
                     ca.cmp(cb)
                 } else if let Some(list) = &k.list {
-                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t))).unwrap_or(usize::MAX);
-                    pos(va).cmp(&pos(vb))
-                } else if case && va.is_text() && vb.is_text() {
-                    sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
+                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t)));
+                    match (pos(va), pos(vb)) {
+                        (Some(a), Some(b)) => a.cmp(&b),
+                        (Some(_), None) => Ordering::Less,
+                        (None, Some(_)) => Ordering::Greater,
+                        // Values not in the list follow the listed ones in the usual order, as in Excel.
+                        // A descending key is left as it was: they tie, so the next key decides.
+                        // A blank has no place in the list either, but still goes last.
+                        (None, None) if k.desc => va.is_empty().cmp(&vb.is_empty()),
+                        (None, None) => plain(),
+                    }
                 } else {
-                    sort_compare(va, vb)
+                    plain()
                 };
                 // Blanks always sort last, whatever the order.
                 let o = if k.desc && !(va.is_empty() || vb.is_empty()) { o.reverse() } else { o };
@@ -192,8 +226,7 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         // The object's own geometry (its top-left anchor cell, offset and size) is read from the
         // pre-sort `sh`; a two-cell object's bottom-right cell is derived from its size here so it
         // can be re-fitted to the lines it spans after the sort.
-        let objs: Vec<Anchor> =
-            sh.images.iter().map(|o| o.anchor).chain(sh.charts.iter().map(|o| o.anchor)).chain(sh.shapes.iter().map(|o| o.anchor)).collect();
+        let objs: Vec<Anchor> = sh.object_anchors().copied().collect();
         let descs: Vec<(u32, u32, f32, f32)> = objs
             .iter()
             .map(|a| {
@@ -239,33 +272,22 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 }
             }
         }
-        // Re-anchor floating objects now that the row heights are final. `objs` was collected as
-        // images ++ charts ++ shapes, so the same index maps straight onto each vec.
+        // Re-anchor floating objects now that the row heights are final. `objs` was collected in
+        // `object_anchors` order, which `object_anchors_mut` repeats.
         // Only objects anchored inside the sorted block move: within its lines on the sort axis
         // and within its span on the other axis (a picture beside the block stays put).
         let (b0, b1) = if by_cols { (body.start.col, body.end.col) } else { (body.start.row, body.end.row) };
         let (o0, o1) = if by_cols { (body.start.row, body.end.row) } else { (body.start.col, body.end.col) };
-        let ni = shm.images.len();
-        let nch = shm.charts.len();
-        for (i, (a, desc)) in objs.into_iter().zip(descs).enumerate() {
-            let other = if by_cols { a.cell.row } else { a.cell.col };
-            if other < o0 || other > o1 {
-                continue;
-            }
-            let na = sorted_anchor(shm, a, desc, by_cols, b0, b1, &dst_of);
-            if na != a {
-                if i < ni {
-                    if let Some(o) = shm.images.get_mut(i) {
-                        o.anchor = na;
-                    }
-                } else if i < ni + nch {
-                    if let Some(o) = shm.charts.get_mut(i - ni) {
-                        o.anchor = na;
-                    }
-                } else if let Some(o) = shm.shapes.get_mut(i - ni - nch) {
-                    o.anchor = na;
-                }
-            }
+        let new_anchors: Vec<Anchor> = objs
+            .into_iter()
+            .zip(descs)
+            .map(|(a, desc)| {
+                let other = if by_cols { a.cell.row } else { a.cell.col };
+                if other < o0 || other > o1 { a } else { sorted_anchor(shm, a, desc, by_cols, b0, b1, &dst_of) }
+            })
+            .collect();
+        for (a, n) in shm.object_anchors_mut().zip(new_anchors) {
+            *a = n;
         }
         for (c, _) in moved {
             cx.changed.push((sheet, c));
@@ -281,7 +303,9 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
 /// line index on the moving axis and is the identity outside `b0..=b1`. `sh` is the post-sort
 /// grid (row heights already reordered), so re-fitting uses the heights the object lands on.
 /// Objects pinned absolutely ("Don't move or size with cells") never move; "move but don't size"
-/// keeps its size; "move and size" is re-fitted when its whole extent stays inside the body.
+/// keeps its size; "move and size" is re-fitted when its whole extent stays inside the body, and
+/// keeps its size when the sort turns its lines around (its bottom line now sorts before its top
+/// line), since the lines then enclose nothing to stretch it between.
 fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: bool, b0: u32, b1: u32, dst_of: &[u32]) -> Anchor {
     if a.mode == AnchorMode::Absolute {
         return a;
@@ -299,7 +323,10 @@ fn sorted_anchor(sh: &Sheet, a: Anchor, bottom: (u32, u32, f32, f32), by_cols: b
         let y1 = sh.row_top(nr) + a.dy as f64;
         let x2 = sh.col_left(nbc) + tdx as f64;
         let y2 = sh.row_top(nbr) + tdy as f64;
-        Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode: a.mode }
+        // An extent that is not positive means the sort put the bottom-right line before the
+        // top-left one on that axis: the object keeps its old size there.
+        let fit = |extent: f64, old: f32| if extent > 0.0 { extent as f32 } else { old.max(0.0) };
+        Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: fit(x2 - x1, a.width), height: fit(y2 - y1, a.height), mode: a.mode }
     } else {
         Anchor { cell: CellRef::new(nr, nc), ..a }
     }

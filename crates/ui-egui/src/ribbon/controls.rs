@@ -1,4 +1,4 @@
-use super::*;
+use super::{Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
 
 pub(super) fn sep(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -27,7 +27,15 @@ pub(super) fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
 
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
 pub(super) fn keytip(app: &SheetApp, ui: &Ui, sequence: &str, at: egui::Pos2) {
-    let Some(rest) = app.keytips.prefix().and_then(|prefix| sequence.strip_prefix(prefix)).filter(|s| !s.is_empty()) else { return };
+    let Some(rest) = app
+        .keytips
+        .prefix()
+        .filter(|prefix| keytip_table::paints_badges(prefix))
+        .and_then(|prefix| sequence.strip_prefix(prefix))
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
     let t = Tokens::get(ui.ctx());
     let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("ribbon_keytips"))).with_clip_rect(ui.clip_rect());
     let text = painter.layout_no_wrap(rest.into(), theme::ui_bold(10.5), t.text);
@@ -98,7 +106,7 @@ pub(crate) fn editable_combo(
     items: &[(&str, String)],
     forced: bool,
 ) -> ComboResult {
-    combo_popup(ui, anchor, salt, current_value, items, forced, true, None)
+    combo_popup(ui, anchor, salt, current_value, items, ComboPopupOptions { forced, filter: true, under: None })
 }
 
 /// The dropdown of [`editable_combo`] without the filter field: the whole list, picked by click or
@@ -112,7 +120,7 @@ pub(super) fn list_combo(
     current_value: &str,
     items: &[(&str, String)],
 ) -> ComboResult {
-    combo_popup(ui, anchor, salt, current_value, items, false, false, Some(under))
+    combo_popup(ui, anchor, salt, current_value, items, ComboPopupOptions { forced: false, filter: false, under: Some(under) })
 }
 
 /// What the header of a combo popup hands to its list: the rows to show and the highlighted one.
@@ -122,6 +130,12 @@ struct ComboHead {
     down: bool,
     up: bool,
     enter: bool,
+}
+
+struct ComboPopupOptions {
+    forced: bool,
+    filter: bool,
+    under: Option<Rect>,
 }
 
 /// Arrow and Enter keys (taken out of the input so a filter field never sees them), the filter
@@ -202,10 +216,9 @@ fn combo_popup(
     salt: &'static str,
     current_value: &str,
     items: &[(&str, String)],
-    forced: bool,
-    filter: bool,
-    under: Option<Rect>,
+    options: ComboPopupOptions,
 ) -> ComboResult {
+    let ComboPopupOptions { forced, filter, under } = options;
     let popup_id = egui::Popup::default_response_id(anchor);
     let state_id = anchor.id.with(salt).with("__combo_state");
     let mut st = ui.data_mut(|d| d.get_temp::<ComboState>(state_id)).unwrap_or_default();

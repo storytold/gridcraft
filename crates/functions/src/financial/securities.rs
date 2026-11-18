@@ -1,5 +1,5 @@
 use super::day_count::{basis_arg, coup_daybs, coup_days, coup_daysnc, coupons, date, day_count, freq_arg, shift_months, year_basis, year_frac, ymd};
-use super::*;
+use super::{Arg, CellError, Ctx, DateSystem, R, Value, days_in_month, has, num, num_val, opt_bool};
 
 // ---------------------------------------------------------------------------------------------
 // Securities
@@ -71,7 +71,8 @@ pub(super) fn accrintm(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (issue, settle, rate) = (date(a, 0)?, date(a, 1)?, num(a, 2)?);
     let par = if has(a, 3) { num(a, 3)? } else { 1000.0 };
     let basis = basis_arg(a, 4)?;
-    if issue >= settle || rate <= 0.0 || par <= 0.0 {
+    // Excel accepts equal (whole-day) dates and accrues nothing; only issue after settlement is #NUM!.
+    if issue > settle || rate <= 0.0 || par <= 0.0 {
         return Err(CellError::Num);
     }
     num_val(par * rate * year_frac(c.date_system(), issue, settle, basis)?)
@@ -479,7 +480,10 @@ fn odd_last(sys: DateSystem, settle: f64, mat: f64, last: f64, freq: f64, basis:
 }
 
 /// settlement, maturity, last_interest, rate, yld/pr, redemption, frequency, [basis].
-fn odd_last_args(a: &[Arg], sys: DateSystem) -> R<((f64, f64, f64), f64, f64, f64, f64)> {
+/// `((dc, acc, dsc), rate, yield-or-price, redemption, frequency)` of an odd-last-period call.
+type OddLastArgs = ((f64, f64, f64), f64, f64, f64, f64);
+
+fn odd_last_args(a: &[Arg], sys: DateSystem) -> R<OddLastArgs> {
     let (s, m, last) = (date(a, 0)?, date(a, 1)?, date(a, 2)?);
     let (rate, x, red) = (num(a, 3)?, num(a, 4)?, num(a, 5)?);
     let (f, basis) = (freq_arg(a, 6)?, basis_arg(a, 7)?);
