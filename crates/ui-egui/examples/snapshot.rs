@@ -2,7 +2,7 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] out.png`
+//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] [--filter-menu A1] out.png`
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
@@ -25,6 +25,7 @@ fn main() {
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut filter_menu: Option<gridcraft_engine::core::CellRef> = None;
     let mut refedit: Option<String> = None;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
@@ -80,6 +81,10 @@ fn main() {
                 i += 1;
                 hf_edit = args.get(i).cloned();
             }
+            "--filter-menu" => {
+                i += 1;
+                filter_menu = args.get(i).and_then(|s| gridcraft_engine::core::CellRef::parse(s));
+            }
             "--language" => {
                 i += 1;
                 language = args.get(i).cloned();
@@ -124,6 +129,10 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
+                // The AutoFilter dropdown of a header cell, opened below the top-left of the grid.
+                if let Some(c) = filter_menu {
+                    app.grid.filter_menu = Some((c.col, c.row, egui::pos2(420.0, 190.0)));
+                }
                 app.select_object_id(chart);
                 if let Some(d) = &dialog {
                     let (name, p) =
