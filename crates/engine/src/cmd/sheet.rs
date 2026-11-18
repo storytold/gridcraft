@@ -711,7 +711,8 @@ fn check_lines_protection(s: &Session, p: &Json, axis: Axis, at: u32, count: u32
 /// however the Delete Rows or Delete Columns permission is set.
 ///
 /// A cell the sheet does not store is judged by the style `Sheet::style_id` gives it: its row's
-/// format, then its column's, then the default, which is locked. Reading a line with no format of
+/// format, then its column's, then the default: the workbook's Normal style, locked unless the
+/// file unlocked it (see `unlocked`). Reading a line with no format of
 /// its own as the default refused every delete, even over a row the user had unlocked through
 /// its columns; reading it as unlocked passed a blank row whose cells are all locked by default.
 /// The cross lines' formats are summarised once here, since a delete can span a million rows.

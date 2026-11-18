@@ -5405,10 +5405,10 @@ fn a_protected_sheet_deletes_blank_lines_when_the_normal_style_is_unlocked() {
         let mut normal = wb.styles.get(gridcraft_model::StyleId::DEFAULT).clone();
         normal.protection.locked = false;
         wb.styles = gridcraft_model::StyleTable::with_default(normal);
-        if let Some(p) = wb.sheet_mut(0).and_then(|sh| sh.protection.as_mut()) {
-            p.delete_rows = true;
-            p.delete_columns = true;
-        }
+        // The sheet must be protected, or the deletes below would pass without checking anything.
+        let p = wb.sheet_mut(0).and_then(|sh| sh.protection.as_mut()).expect("review.protectSheet protected sheet 0");
+        p.delete_rows = true;
+        p.delete_columns = true;
         d.wb = std::sync::Arc::new(wb);
     }
     sess.execute("selection.set", json!({"range": "A7:A7"})).unwrap();
