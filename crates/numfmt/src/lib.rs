@@ -238,10 +238,14 @@ impl NumberFormat {
     }
 
     /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
-    /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
-    /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
+    /// day) and whether it shows time parts, as `(date, time)`. A system tag decides by itself, since the
+    /// region picks what it shows. `None` for any other format and for elapsed-time codes like `[h]:mm`,
+    /// whose value is a duration, not a moment.
     pub fn date_shape(&self, value: f64) -> Option<(bool, bool)> {
         let s = self.select(value).map(|(s, _)| s).filter(|s| s.kind == SecKind::Date)?;
+        if let Some(system) = s.system {
+            return Some((system == System::LongDate, system == System::LongTime));
+        }
         let parts = || s.toks.iter().filter_map(|t| if let Tok::Date(d) = t { Some(*d) } else { None });
         if parts().any(|d| matches!(d, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))) {
             return None;
@@ -275,7 +279,10 @@ impl NumberFormat {
             SecKind::General => return FormatKind::General,
             SecKind::Text => return FormatKind::Text,
             SecKind::Date => {
-                let calendar = s.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar()));
+                let calendar = match s.system {
+                    Some(system) => system == System::LongDate,
+                    None => s.toks.iter().any(|t| matches!(t, Tok::Date(d) if d.is_calendar())),
+                };
                 return if calendar { FormatKind::Date } else { FormatKind::Time };
             }
             SecKind::Number => {}
@@ -434,7 +441,7 @@ impl NumberFormat {
         } else {
             0
         };
-        let empty = |s: &Section| s.toks.is_empty() && s.color.is_none() && s.cond.is_none();
+        let empty = |s: &Section| s.toks.is_empty() && s.color.is_none() && s.cond.is_none() && s.system.is_none();
         secs.get(slot..)?.iter().find(|s| !empty(s))
     }
 

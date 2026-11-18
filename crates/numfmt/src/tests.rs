@@ -1040,6 +1040,23 @@ fn system_long_date_and_time_follow_the_region() {
     assert_eq!(f(long, v), "Friday, September 25, 2026");
 }
 
+/// A bare system tag has no fallback tokens: the tag alone makes the section a date or a time,
+/// for the ribbon's category, the date shape and "precision as displayed".
+#[test]
+fn a_bare_system_tag_is_a_date_or_a_time() {
+    let v = 46290.75;
+    assert_eq!(fin("de-DE", "[$-F800]", v), "Freitag, 25. September 2026");
+    let (date, time) = (NumberFormat::parse("[$-F800]"), NumberFormat::parse("[$-F400]"));
+    assert_eq!(date.kind(), FormatKind::Date);
+    assert_eq!(time.kind(), FormatKind::Time);
+    assert_eq!(date.date_shape(v), Some((true, false)));
+    assert_eq!(time.date_shape(v), Some((false, true)));
+    // The region decides what the tag shows, whatever the fallback tokens are.
+    assert_eq!(NumberFormat::parse("[$-F800]h:mm").date_shape(v), Some((true, false)));
+    // A date section keeps the full value: it is not an empty section that passes to the next.
+    assert_eq!(NumberFormat::parse("[$-F800];0.0").round_as_displayed(1.234), 1.234);
+}
+
 #[test]
 fn en_us_region_matches_the_unqualified_functions() {
     for (code, n) in [
