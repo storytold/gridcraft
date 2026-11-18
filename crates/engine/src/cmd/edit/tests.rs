@@ -1144,3 +1144,26 @@ fn a_tiled_skip_blanks_paste_of_a_blank_copy_over_a_huge_selection_is_refused() 
     s.execute("selection.set", json!({"range": "B2:XFD1048576"})).unwrap();
     assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).is_err(), "an empty paste cannot walk the whole selection");
 }
+
+#[test]
+#[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+fn a_tiled_skip_blanks_paste_walks_only_the_cells_it_writes() {
+    // #4425 round 4: the skipBlanks bound counts only the non-blank source cells, but every
+    // tile still walked every cell the copy holds, blanks included. One value above 999
+    // formatted blanks, tiled over 100 columns, passed the bound as 100,000 writes and then
+    // walked 100 million cells to make them.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    s.execute("home.bold", json!({"range": "A2:A1000"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A1000"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:CW1000000"})).unwrap();
+    let start = std::time::Instant::now();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).unwrap();
+    let took = start.elapsed();
+    for a in ["B1", "B1001", "CW1", "CW999001"] {
+        assert_eq!(value_at(&s, a), Value::Number(7.0), "{a} gets the value");
+    }
+    assert_eq!(value_at(&s, "B2"), Value::Empty, "a blank source cell writes nothing");
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}

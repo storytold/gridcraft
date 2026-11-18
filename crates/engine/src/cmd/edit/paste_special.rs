@@ -448,6 +448,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             moved_formulas = taken.into_iter().collect();
         }
+        // Under Skip Blanks a blank source cell writes nothing: the loop below skips it.
+        let blank_source = |sc: CellRef| {
+            let cell = if cut_move { moved_formulas.get(&sc) } else { src_sheet.cell(sc) };
+            let picture = if cut_move { moved_pictures.contains_key(&sc) } else { src_sheet.cell_pictures.contains_key(&sc) };
+            !picture && src_sheet.value(sc).is_empty() && cell.is_none_or(|x| x.formula.is_none() && x.py.is_none())
+        };
         // The cells of the copied block that hold something (or that a link reads), as offsets
         // inside it. Blank source cells matter only where the destination holds something.
         let source_offsets: std::collections::BTreeSet<(u32, u32)> = if link {
@@ -458,6 +464,13 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             let side =
                 src_sheet.spill.keys().chain(src_sheet.cell_pictures.keys()).chain(src_sheet.comments.keys()).chain(src_sheet.hyperlinks.keys());
             held.extend(side.chain(moved_formulas.keys()).chain(moved_pictures.keys()).filter(|c| src.contains(**c)).map(|c| offset(*c)));
+            // Under Skip Blanks the blank ones (a formatted empty cell, a note) write nothing, so
+            // they stay out of the visit: every tile then walks only the cells the size check
+            // counted, not the whole copied block, which can be a thousand formatted blanks
+            // around one value.
+            if skip_blanks {
+                held.retain(|&(r, c)| !blank_source(CellRef::new(src.start.row + r, src.start.col + c)));
+            }
             held
         };
         let skip_cells = matches!(what, What::Validation | What::ColumnWidths);
@@ -498,11 +511,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     let src_cell = if cut_move { moved_formulas.get(&sc).cloned() } else { src_sheet.cell(sc).cloned() };
                     let src_val = src_sheet.value(sc);
                     let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
-                    if skip_blanks
-                        && src_picture.is_none()
-                        && src_val.is_empty()
-                        && src_cell.as_ref().is_none_or(|x| x.formula.is_none() && x.py.is_none())
-                    {
+                    if skip_blanks && blank_source(sc) {
                         continue;
                     }
                     let old = cx.wb.sheet(dest_sheet).and_then(|sh| sh.cell(dest)).cloned().unwrap_or_default();
