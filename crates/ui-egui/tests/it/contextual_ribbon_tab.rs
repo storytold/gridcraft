@@ -62,7 +62,7 @@ fn startup_opens_on_home_not_the_saved_tab() {
     assert!(json.contains(r#""ribbonTab":"Table Design""#), "{json}");
     let restored = serde_json::from_str::<gridcraft_ui_egui::UiState>(&json).unwrap().at_startup();
     assert_eq!(restored.ribbon_tab, "Home", "the saved tab is not restored");
-    assert!(!restored.ribbon_collapsed, "nor is a hidden ribbon");
+    assert!(restored.ribbon_collapsed, "a hidden ribbon stays hidden");
     assert!(restored.dark, "the other preferences are");
 }
 
@@ -122,9 +122,9 @@ fn a_second_window_does_not_reset_the_first_windows_table_design_tab() {
     assert!(d.wb.active().unwrap().table_at(d.selection.active).is_some(), "the table is still there");
 }
 
-/// Each window hides and shows its own ribbon. A new window shows its ribbon on Home, whatever
-/// the window it came from shows; after that, hiding or showing it in one leaves the other as it
-/// was, through both windows' frames.
+/// Each window hides and shows its own ribbon. A new window opens on Home, whatever tab the
+/// window it came from shows, and keeps its ribbon hidden or shown as that window has it; after
+/// that, hiding or showing it in one leaves the other as it was, through both windows' frames.
 #[test]
 fn each_window_hides_its_own_ribbon() {
     let mut h = harness(session_with_table());
@@ -146,26 +146,23 @@ fn each_window_hides_its_own_ribbon() {
     new_window(&mut h);
     assert_eq!(h.state().ui.ribbon_tab, "Home", "a new window starts on Home");
     assert!(!h.state().ui.ribbon_collapsed, "with its ribbon shown");
-    // From a window hiding its ribbon, the new window shows it.
+    // From a window hiding its ribbon, the new window hides it too, on Home.
     h.state_mut().run("window.activate", json!({"window": first})).unwrap();
     h.state_mut().run("view.collapseRibbon", json!({})).unwrap();
     h.run_steps(2);
     assert!(h.state().ui.ribbon_collapsed, "the first window hides its ribbon");
     let second = new_window(&mut h);
-    assert!(!h.state().ui.ribbon_collapsed, "a new window shows its ribbon even when the first hides it");
+    assert!(h.state().ui.ribbon_collapsed, "a new window keeps the ribbon hidden, as the first has it");
     assert_eq!(h.state().ui.ribbon_tab, "Home", "and starts on Home");
-    // Hiding the second window's ribbon and showing the first's leaves each as set.
+    // Showing the second window's ribbon leaves the first's hidden, and back.
     h.state_mut().run("view.collapseRibbon", json!({})).unwrap();
     h.run_steps(2);
-    assert!(h.state().ui.ribbon_collapsed, "the second window hides its ribbon");
+    assert!(!h.state().ui.ribbon_collapsed, "the second window shows its ribbon");
     h.state_mut().run("window.activate", json!({"window": first})).unwrap();
     h.run_steps(2);
     assert!(h.state().ui.ribbon_collapsed, "the first window's ribbon is still hidden");
     assert_eq!(h.state().ui.ribbon_tab, "Data", "on the tab it showed");
-    h.state_mut().run("view.collapseRibbon", json!({})).unwrap();
-    h.run_steps(2);
-    assert!(!h.state().ui.ribbon_collapsed, "the first window shows its ribbon again");
     h.state_mut().run("window.activate", json!({"window": second})).unwrap();
     h.run_steps(2);
-    assert!(h.state().ui.ribbon_collapsed, "and the second's stays hidden");
+    assert!(!h.state().ui.ribbon_collapsed, "and the second's stays shown");
 }

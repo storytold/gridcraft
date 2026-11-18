@@ -30,7 +30,7 @@ fn page(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<&'static str> {
 }
 
 #[test]
-fn a_workbook_new_from_the_file_tab_shows_its_ribbon_on_home() {
+fn a_workbook_new_from_the_file_tab_opens_on_home() {
     let opened = Arc::new(Mutex::new(0));
     let capture = opened.clone();
     let mut h = harness(Services {
@@ -59,7 +59,7 @@ fn a_workbook_new_from_the_file_tab_shows_its_ribbon_on_home() {
     h.run_steps(3);
     assert!(h.state().backstage.is_none(), "Esc returns to the sheet");
     assert_eq!(h.state().ui.ribbon_tab, "Home", "the new workbook's window opens on Home");
-    assert!(!h.state().ui.ribbon_collapsed, "with its ribbon shown");
+    assert!(h.state().ui.ribbon_collapsed, "with its ribbon still hidden");
 }
 
 /// Esc first cancels the focused File-page field, then closes File on the next press.
