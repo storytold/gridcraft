@@ -61,10 +61,10 @@ struct Home {
     /// copy of it is never taken for it, and an undo that brings it back makes it the dialog's
     /// again.
     uid: SheetUid,
-    /// The ranges and active cell on the dialog's sheet from before picking began, taken when a
-    /// box starts picking (from the sheet's kept selection when another sheet is shown then), and
-    /// put back once when the dialog runs its command or closes.
-    selection: Option<(String, String)>,
+    /// The ranges, active cell, and Shift anchor on the dialog's sheet from before picking began,
+    /// taken when a box starts picking (from the sheet's kept selection when another sheet is shown
+    /// then), and put back once when the dialog runs its command or closes.
+    selection: Option<(String, String, gridcraft_engine::core::CellRef)>,
 }
 
 /// Whether the dialog has reference boxes: Goal Seek, Solver, Data Analysis, and any form with a
@@ -86,14 +86,14 @@ pub(super) fn record_home(app: &SheetApp, d: &mut Dialog) {
     }
 }
 
-/// The selection on the dialog's own sheet as (ranges, active cell): the one shown while that
-/// sheet is active, else the one the sheet keeps for when it is shown again. `None` once the
-/// sheet is deleted.
-fn home_selection(doc: &DocState, home: &Home) -> Option<(String, String)> {
+/// The selection on the dialog's own sheet as (ranges, active cell, Shift anchor): the one shown
+/// while that sheet is active, else the one the sheet keeps for when it is shown again. `None`
+/// once the sheet is deleted.
+fn home_selection(doc: &DocState, home: &Home) -> Option<(String, String, gridcraft_engine::core::CellRef)> {
     let i = doc.wb.sheets.iter().position(|s| s.uid.get() == home.uid.get())?;
     let sel = if i == doc.wb.active_sheet() { &doc.selection } else { doc.sheet_selections.get(i)? };
     let ranges: Vec<String> = sel.ranges.iter().map(|r| r.a1()).collect();
-    Some((ranges.join(","), sel.active.a1()))
+    Some((ranges.join(","), sel.active.a1(), sel.anchor))
 }
 
 /// The grid's current area (the one being selected) as a reference for a dialog of `d`'s: with
@@ -255,10 +255,12 @@ fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
-/// Clears active grid selection drag state left behind when a reference pick ends.
+/// Clears active grid selection drag state owned by a reference-box pick.
 pub(super) fn clear_picker_drag(app: &mut SheetApp) {
-    app.grid.drag = crate::grid::Drag::None;
-    app.grid.drag_select = false;
+    if std::mem::take(&mut app.grid.picker_drag) {
+        app.grid.drag = crate::grid::Drag::None;
+        app.grid.drag_select = false;
+    }
 }
 
 /// After the dialog's window is drawn: remembers where the expanded window is, and ends picking
@@ -348,8 +350,12 @@ pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String>
     if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) {
         app.run("sheet.activate", json!({"sheet": sheet}))?;
     }
-    if let Some((range, active)) = home.selection.take() {
-        let _ = app.run("selection.set", json!({"range": range, "active": active}));
+    if let Some((range, active, anchor)) = home.selection.take()
+        && app.run("selection.set", json!({"range": range, "active": active})).is_ok()
+        && let Some(doc) = app.session.active_mut()
+        && doc.wb.active().is_some_and(|s| s.uid.get() == home.uid.get())
+    {
+        doc.selection.anchor = anchor;
     }
     Ok(())
 }

@@ -267,24 +267,37 @@ fn ref_edit_pick_interact(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 note_selecting_press(app);
                 app.grid.drag = Drag::Select;
                 app.grid.drag_select = true;
+                app.grid.picker_drag = true;
             }
         } else if in_col_header {
             let col = geo.col_at(sh, p.x);
             let anchor = if mods.shift { input.selection.anchor.col } else { col };
             let area = RangeRef::cols(anchor.min(col), anchor.max(col));
             if select_ranges(app, area, mods.command && !mods.shift, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), col)) {
+                if mods.shift
+                    && let Some(doc) = app.session.active_mut()
+                {
+                    doc.selection.anchor = input.selection.anchor;
+                }
                 note_selecting_press(app);
                 app.grid.drag = Drag::Cols(anchor);
                 app.grid.drag_select = true;
+                app.grid.picker_drag = true;
             }
         } else if in_row_header {
             let row = geo.row_at(sh, p.y);
             let anchor = if mods.shift { input.selection.anchor.row } else { row };
             let area = RangeRef::rows(anchor.min(row), anchor.max(row));
             if select_ranges(app, area, mods.command && !mods.shift, CellRef::new(row, geo.col_at(sh, geo.cells.left() + 1.0))) {
+                if mods.shift
+                    && let Some(doc) = app.session.active_mut()
+                {
+                    doc.selection.anchor = input.selection.anchor;
+                }
                 note_selecting_press(app);
                 app.grid.drag = Drag::Rows(anchor);
                 app.grid.drag_select = true;
+                app.grid.picker_drag = true;
             }
         }
     }
@@ -302,27 +315,53 @@ fn ref_edit_pick_interact(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::Rows(anchor) => {
                 let row = geo.row_at(sh, p.y);
                 let area = RangeRef::rows(anchor.min(row), anchor.max(row));
-                let active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
-                let _ = app.session.run("selection.set", json!({"range": area.a1(), "active": active.a1()}));
+                let mut active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
+                if !area.contains(active) {
+                    active = CellRef::new(anchor, active.col);
+                }
+                drag_header_selection(app, area, active);
                 scroll_by(app, vec2(0.0, auto.y));
             }
             Drag::Cols(anchor) => {
                 let col = geo.col_at(sh, p.x);
                 let area = RangeRef::cols(anchor.min(col), anchor.max(col));
-                let active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
-                let _ = app.session.run("selection.set", json!({"range": area.a1(), "active": active.a1()}));
+                let mut active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
+                if !area.contains(active) {
+                    active = CellRef::new(active.row, anchor);
+                }
+                drag_header_selection(app, area, active);
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             _ => {}
         }
     }
 
-    if resp.drag_stopped() || (!input.any_pointer_down && !resp.dragged()) {
+    if app.grid.picker_drag && (resp.drag_stopped() || (!input.any_pointer_down && !resp.dragged())) {
         app.grid.drag = Drag::None;
         app.grid.drag_select = false;
+        app.grid.picker_drag = false;
     }
 
     keyboard(app, &input.context, resp, geo, sh);
+}
+
+/// Replaces the last range of the active selection during a RefEdit header drag,
+/// preserving any earlier Cmd/Ctrl-selected areas and the current Shift anchor.
+fn drag_header_selection(app: &mut SheetApp, area: RangeRef, active: CellRef) {
+    let Some(doc) = app.session.active() else { return };
+    let anchor = doc.selection.anchor;
+    let mut ranges: Vec<String> = doc.selection.ranges.iter().map(|r| r.a1()).collect();
+    if ranges.is_empty() {
+        ranges.push(area.a1());
+    } else {
+        ranges.pop();
+        ranges.push(area.a1());
+    }
+    if app.session.run("selection.set", json!({"range": ranges.join(","), "active": active.a1()})).is_ok()
+        && let Some(doc) = app.session.active_mut()
+    {
+        doc.selection.anchor = anchor;
+    }
 }
 
 fn handle_draw_tool(app: &mut SheetApp, input: &InteractionInput<'_>) -> bool {

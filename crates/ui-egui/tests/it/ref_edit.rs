@@ -2586,3 +2586,164 @@ fn ref_edit_pick_hover_suppresses_fill_border_object_and_col_move_cursors_1388()
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Default);
 }
+
+/// #1388: cancelling a dialog that does not own a picker drag preserves any existing grid drag.
+#[test]
+fn cancelling_unrelated_dialog_preserves_non_picker_drag_1388() {
+    use gridcraft_ui_egui::grid::Drag;
+
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = harness(session);
+
+    let from = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        geo.range_rect(sheet, doc.selection.current()).right_bottom()
+    };
+    let to = cell_pos(&h, "B4");
+
+    h.input_mut().events.push(Event::PointerMoved(from));
+    press(&mut h, from, true);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(2);
+    assert!(matches!(h.state().grid.drag, Drag::Fill { .. }), "fill drag should be active");
+
+    h.state_mut().open_dialog("rowHeight", json!({}));
+    h.run_steps(2);
+
+    let ctx = h.ctx.clone();
+    let Outcome::Done(r) = handle(h.state_mut(), &ctx, "ui.dialog.cancel", &json!({})) else {
+        panic!("expected Done outcome");
+    };
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().dialog.is_none());
+    assert!(matches!(h.state().grid.drag, Drag::Fill { .. }), "unrelated cancel must preserve active Fill drag");
+
+    press(&mut h, to, false);
+    h.run_steps(3);
+    assert_eq!(h.state().grid.drag, Drag::None);
+}
+
+/// #1388: a shrinking Shift-drag across row or column headers keeps `selection.active` inside the picked lines.
+#[test]
+fn ref_edit_shrinking_shift_header_drag_keeps_active_cell_inside_area_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "A6"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let (row7, row8, col_d, col_e, col_f) = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let hx = (geo.head_left() + geo.cells.left()) * 0.5;
+        let hy = (geo.head_top() + geo.cells.top()) * 0.5;
+        let r7 = geo.cell_rect(sheet, CellRef::parse("A7").unwrap()).center().y;
+        let r8 = geo.cell_rect(sheet, CellRef::parse("A8").unwrap()).center().y;
+        let cd = geo.cell_rect(sheet, CellRef::parse("D1").unwrap()).center().x;
+        let ce = geo.cell_rect(sheet, CellRef::parse("E1").unwrap()).center().x;
+        let cf = geo.cell_rect(sheet, CellRef::parse("F1").unwrap()).center().x;
+        (egui::pos2(hx, r7), egui::pos2(hx, r8), egui::pos2(cd, hy), egui::pos2(ce, hy), egui::pos2(cf, hy))
+    };
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.input_mut().events.push(Event::PointerMoved(row8));
+    h.input_mut().events.push(Event::PointerButton { pos: row8, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::SHIFT });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(row7));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: row7, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::SHIFT });
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$A$6:$XFD$7");
+    {
+        let sel = &h.state().session.active().unwrap().selection;
+        assert!(sel.current().contains(sel.active), "active {:?} must stay inside {:?}", sel.active, sel.current());
+    }
+
+    click_at(&mut h, col_d);
+    assert_eq!(field(&h, "range"), "$D$1:$D$1048576");
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.input_mut().events.push(Event::PointerMoved(col_f));
+    h.input_mut().events.push(Event::PointerButton { pos: col_f, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::SHIFT });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(col_e));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: col_e, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::SHIFT });
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$D$1:$E$1048576");
+    let sel = &h.state().session.active().unwrap().selection;
+    assert!(sel.current().contains(sel.active), "active {:?} must stay inside {:?}", sel.active, sel.current());
+}
+
+/// #1388: Cmd/Ctrl-dragging column headers in a multi-area RefEdit preserves earlier areas.
+#[test]
+fn solver_additive_cmd_header_drag_preserves_prior_areas_1388() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("variables"));
+
+    drag(&mut h, "A1", "A2");
+    assert_eq!(field(&h, "variables"), "$A$1:$A$2");
+
+    let (col_d, col_f) = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let hy = (geo.head_top() + geo.cells.top()) * 0.5;
+        let cd = geo.cell_rect(sheet, CellRef::parse("D1").unwrap()).center().x;
+        let cf = geo.cell_rect(sheet, CellRef::parse("F1").unwrap()).center().x;
+        (egui::pos2(cd, hy), egui::pos2(cf, hy))
+    };
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.input_mut().events.push(Event::PointerMoved(col_d));
+    h.input_mut().events.push(Event::PointerButton { pos: col_d, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(col_f));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: col_f, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND });
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "variables"), "$A$1:$A$2,$D$1:$F$1048576");
+}
+
+/// #1388: cancelling a RefEdit pick restores the Shift-selection anchor alongside range and active cell.
+#[test]
+fn cancelling_ref_edit_restores_shift_selection_anchor_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"range": "B2:C4", "active": "C4"})).unwrap();
+
+    let mut h = harness(session);
+    let c4 = CellRef::parse("C4").unwrap();
+    h.state_mut().session.active_mut().unwrap().selection.anchor = c4;
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    single_click(&mut h, "D6");
+    assert_eq!(field(&h, "range"), "$D$6");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+
+    let sel = &h.state().session.active().unwrap().selection;
+    assert_eq!(sel.a1(), "B2:C4");
+    assert_eq!(sel.active, c4);
+    assert_eq!(sel.anchor, c4);
+}
