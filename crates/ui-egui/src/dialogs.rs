@@ -1190,6 +1190,89 @@ mod tests {
         assert!(!want.starts_with("Goal Seeking"));
     }
 
+    /// #4421: Ctrl+F (⌘F) with Find and Replace already open, after a click on the sheet took the
+    /// focus away, puts it back in "Find what" with its text selected; Ctrl+H does the same on
+    /// the Replace tab. Ctrl+Shift+F (the grid's filter) doesn't.
+    #[test]
+    fn the_find_shortcut_refocuses_an_open_find_box() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        let mut d = Dialog::open(&mut app, "find", json!({})).unwrap();
+        d.values.insert("what".into(), json!("total"));
+        let ctx = egui::Context::default();
+        let key = |key: Key, shift: bool| egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers {
+                    command: true,
+                    ctrl: !cfg!(target_os = "macos"),
+                    mac_cmd: cfg!(target_os = "macos"),
+                    shift,
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let frame = |app: &mut SheetApp, d: &mut Dialog, input: egui::RawInput| {
+            let mut out = ctx.run_ui(input, |ui| find::find(app, ui, d));
+            out.textures_delta.clear();
+        };
+        let field = find::find_what_id();
+        let focused = |ctx: &egui::Context| ctx.memory(|m| m.focused()) == Some(field);
+        frame(&mut app, &mut d, egui::RawInput::default());
+        assert!(focused(&ctx), "the field has the focus when the box opens");
+        // A click on the sheet: the field loses the focus, the box stays open.
+        ctx.memory_mut(|m| m.surrender_focus(field));
+        frame(&mut app, &mut d, egui::RawInput::default());
+        assert!(!focused(&ctx));
+        frame(&mut app, &mut d, key(Key::F, true));
+        assert!(!focused(&ctx), "Ctrl+Shift+F is the filter, not Find");
+        frame(&mut app, &mut d, key(Key::F, false));
+        frame(&mut app, &mut d, egui::RawInput::default());
+        assert!(focused(&ctx), "Ctrl+F puts the focus back in Find what");
+        let selected = egui::text_edit::TextEditState::load(&ctx, field).and_then(|s| s.cursor.char_range());
+        assert_eq!(selected.map(|r| (r.primary.index.0.min(r.secondary.index.0), r.primary.index.0.max(r.secondary.index.0))), Some((0, 5)));
+        assert_eq!(d.tab, "Find");
+        // Ctrl+H: the same, on the Replace tab.
+        ctx.memory_mut(|m| m.surrender_focus(field));
+        frame(&mut app, &mut d, key(Key::H, false));
+        frame(&mut app, &mut d, egui::RawInput::default());
+        assert!(focused(&ctx));
+        assert_eq!(d.tab, "Replace");
+
+        // After CodeRabbit's review: the shortcut and what is typed next can come in one frame,
+        // and the text replaces the search; and Ctrl+H, which a focused field reads as Backspace
+        // on Windows and Linux, deletes nothing.
+        let mut d = Dialog::open(&mut app, "find", json!({})).unwrap();
+        d.values.insert("what".into(), json!("total"));
+        frame(&mut app, &mut d, egui::RawInput::default());
+        ctx.memory_mut(|m| m.surrender_focus(field));
+        let mut input = key(Key::F, false);
+        input.events.push(egui::Event::Text("s".into()));
+        frame(&mut app, &mut d, input);
+        assert_eq!(d.values["what"], json!("s"), "the shortcut and a letter in one frame");
+        d.values.insert("what".into(), json!("total"));
+        frame(&mut app, &mut d, egui::RawInput::default());
+        // The field focused, the caret at the end, then Ctrl+H as Windows and Linux send it.
+        let at_end = egui::text::CCursorRange::one(egui::text::CCursor::new(5));
+        let mut state = egui::text_edit::TextEditState::load(&ctx, field).unwrap_or_default();
+        state.cursor.set_char_range(Some(at_end));
+        state.store(&ctx, field);
+        assert!(focused(&ctx));
+        let ctrl_h = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key { key: Key::H, physical_key: None, pressed: true, repeat: false, modifiers: ctrl_h }],
+            ..Default::default()
+        };
+        frame(&mut app, &mut d, input);
+        assert_eq!(d.values["what"], json!("total"), "Ctrl+H deleted nothing");
+        assert_eq!(d.tab, "Replace");
+    }
+
     #[test]
     fn remove_duplicates_prefills_the_selection_and_submits_the_edited_range() {
         let mut session = gridcraft_engine::Session::default();
