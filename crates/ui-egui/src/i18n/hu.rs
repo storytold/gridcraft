@@ -2,6 +2,147 @@
 
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "A % can't be combined with a link in an equation." => "Egyenletben a % jel nem kombinálható hivatkozással.",
+        "Add Level" => "Szint hozzáadása",
+        "An equation can be at most 4096 bytes long." => "Egy egyenlet legfeljebb 4096 bájt hosszú lehet.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Egy egyenlet legfeljebb 2500 mátrixcellát tartalmazhat (sorok száma szorozva a legszélesebb sorral)."
+        }
+        "Assign Action…" => "Művelet hozzárendelése…",
+        "Button" => "Gomb",
+        "Can't use function '{function}' in math mode" => "A(z) '{function}' függvény nem használható matematikai módban",
+        "Can't use function '{function}' in text mode" => "A(z) '{function}' függvény nem használható szöveges módban",
+        "Cannot use both \\tag and \\nonumber in the same row" => "A \\tag és a \\nonumber nem használható ugyanabban a sorban",
+        "Circular References: {cell}" => "Körkörös hivatkozások: {cell}",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Munkalapváltás vagy a munkalapok módosítása előtt zárja be a Rendezés párbeszédablakot."
+        }
+        "Column {letters}" => "{letters} oszlop",
+        "Copy Level" => "Szint másolása",
+        "Decorative Text" => "Díszszöveg",
+        "Delete Level" => "Szint törlése",
+        "Diagram" => "Ábra",
+        "Double subscript" => "Kettős alsó index",
+        "Double superscript" => "Kettős felső index",
+        "Doughnut hole size" => "Gyűrűlyuk mérete",
+        "Draw a button that runs a macro or a command" => "Makrót vagy parancsot futtató gomb rajzolása",
+        "Draw a slider that sets a whole number in a linked cell" => "A csatolt cellában egész számot beállító csúszka rajzolása",
+        "Draw a spin button that steps a whole number in a linked cell" => "A csatolt cellában egész számot léptető léptetőgomb rajzolása",
+        "Edit Text" => "Szöveg szerkesztése",
+        "Equations can nest at most 32 levels deep." => "Az egyenletek legfeljebb 32 szintig ágyazhatók egymásba.",
+        "Error at character {position}: {message}" => "Hiba a(z) {position}. karakternél: {message}",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "Várt jel: &, \\\\, \\cr vagy \\end; kapott jel: '{got}'",
+        "Expected '{expected}', got '{got}'" => "Várt érték: '{expected}', kapott érték: '{got}'",
+        "Expected URL" => "URL szükséges",
+        "Expected \\end after environment body" => "A környezet törzse után \\end szükséges",
+        "Expected \\right after \\left" => "A \\left után \\right szükséges",
+        "Expected ]" => "] szükséges",
+        "Expected argument for {command}" => "A(z) {command} argumentumot igényel",
+        "Expected argument to \\begin{{name}}" => "A \\begin{{name}} argumentumot igényel",
+        "Expected color token" => "Színmegadás szükséges",
+        "Expected column alignment character" => "Oszlopigazítási karakter szükséges",
+        "Expected delimiter as argument to '{function}'" => "A(z) '{function}' argumentumaként határolójel szükséges",
+        "Expected group after '{symbol}'" => "A(z) '{symbol}' után csoport szükséges",
+        "Expected group as argument to '{function}'" => "A(z) '{function}' argumentumaként csoport szükséges",
+        "Expected l or c or r" => "l, c vagy r szükséges",
+        "Expected raw style for \\htmlStyle" => "A \\htmlStyle nyers stílusmegadást igényel",
+        "Expected size for \\raisebox" => "A \\raisebox méretmegadást igényel",
+        "Expected size for \\rule height" => "A \\rule magasságához méretmegadás szükséges",
+        "Expected size for \\rule width" => "A \\rule szélességéhez méretmegadás szükséges",
+        "Extra }" => "Felesleges }",
+        "First slice angle" => "Első szelet szöge",
+        "Format Control: {name}" => "Vezérlő formázása: {name}",
+        "Format Control…" => "Vezérlő formázása…",
+        "Got function '{function}' with no arguments as \\tag" => "A(z) '{function}' argumentum nélküli függvény szerepel \\tag értékeként",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "A(z) '{function}' argumentum nélküli függvény szerepel a(z) '{parent}' argumentumaként"
+        }
+        "Got function '{function}' with no arguments as subscript" => "A(z) '{function}' argumentum nélküli függvény szerepel alsó indexként",
+        "Got function '{function}' with no arguments as superscript" => "A(z) '{function}' argumentum nélküli függvény szerepel felső indexként",
+        "Header Menu|Insert" => "Beszúrás",
+        "Height: {points} ({pixels} pixels)" => "Magasság: {points} ({pixels} képpont)",
+        "Invalid color: '{color}'" => "Érvénytelen szín: '{color}'",
+        "Invalid column alignment for array" => "Érvénytelen oszlopigazítás az array környezetben",
+        "Invalid column alignment for subarray" => "Érvénytelen oszlopigazítás a subarray környezetben",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Érvénytelen határolójel: '{delimiter}', a(z) '{function}' után",
+        "Invalid delimiter type '{type}'" => "Érvénytelen határolójeltípus: '{type}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Érvénytelen határolójeltípus: '{type}', a(z) '{function}' után",
+        "Invalid environment name" => "Érvénytelen környezetnév",
+        "Invalid environment name character: {character}" => "Érvénytelen karakter a környezetnévben: {character}",
+        "Invalid size: '{size}'" => "Érvénytelen méret: '{size}'",
+        "Invalid unit: '{unit}'" => "Érvénytelen mértékegység: '{unit}'",
+        "Largest to Smallest" => "Csökkenő",
+        "Macro definitions are not supported in equations." => "Az egyenletekben makródefiníciók nem támogatottak.",
+        "Macro “{name}” stopped: {message}" => "A(z) „{name}” makró leállt: {message}",
+        "Maximize" => "Teljes méret",
+        "Maximum" => "Maximum",
+        "Minimize" => "Kis méret",
+        "Minimum" => "Minimum",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Eltérés: a \\begin{{begin}} párja \\end{{end}}",
+        "Mismatched {command}" => "Nem illeszkedő {command}",
+        "Move Down" => "Lejjebb",
+        "Move Up" => "Feljebb",
+        "Multiple \\nonumber in a row" => "Több \\nonumber egy sorban",
+        "Multiple \\tag in a row" => "Több \\tag egy sorban",
+        "No such environment: {name}" => "Nincs ilyen környezet: {name}",
+        "Numerical Count" => "Számok darabszáma",
+        "Order" => "Sorrend",
+        "Picture in cell" => "Kép a cellában",
+        "Picture: {alt}" => "Kép: {alt}",
+        "Ran macro “{name}” ({steps} step)" => "A(z) „{name}” makró lefutott ({steps} lépés)",
+        "Ran macro “{name}” ({steps} steps)" => "A(z) „{name}” makró lefutott ({steps} lépés)",
+        "Recording stopped" => "A rögzítés leállt",
+        "Recursion limit exceeded" => "A rekurziós korlát túllépve",
+        "Restore Down" => "Előző méret",
+        "Return to the original worksheet to sort, or cancel." => {
+            "A rendezéshez térjen vissza az eredeti munkalapra, vagy válassza a Mégse lehetőséget."
+        }
+        "Saved macro “{name}” ({steps} step)" => "A(z) „{name}” makró mentve ({steps} lépés)",
+        "Saved macro “{name}” ({steps} steps)" => "A(z) „{name}” makró mentve ({steps} lépés)",
+        "Slider" => "Csúszka",
+        "Smallest to Largest" => "Növekvő",
+        "Sort On" => "Rendezés alapja",
+        "Sort|Column" => "Oszlop",
+        "Spin Button" => "Léptetőgomb",
+        "This equation could not be laid out." => "Az egyenletet nem sikerült elrendezni.",
+        "This equation is too large to draw." => "Az egyenlet túl nagy a kirajzoláshoz.",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Túl sok kifejtés: végtelen ciklus vagy a maxExpand beállítás növelése szükséges"
+        }
+        "Too many math in a row: expected {expected}, but got {got}" => {
+            "Túl sok matematikai elem egy sorban: várt érték: {expected}, kapott érték: {got}"
+        }
+        "Too many tab characters: &" => "Túl sok tabulátorjel: &",
+        "Undefined control sequence: {name}" => "Nem definiált vezérlőszekvencia: {name}",
+        "Unexpected end of CD row after @" => "Váratlanul véget ért a CD-sor a @ után",
+        "Unexpected end of input in a macro argument" => "Váratlanul véget ért a bemenet egy makróargumentumban",
+        "Unknown CD directive: @{directive}" => "Ismeretlen CD-utasítás: @{directive}",
+        "Unknown column alignment: {alignment}" => "Ismeretlen oszlopigazítás: {alignment}",
+        "Width: {chars} ({pixels} pixels)" => "Szélesség: {chars} ({pixels} képpont)",
+        "\\@char has non-numeric argument {argument}" => "A \\@char argumentuma nem szám: {argument}",
+        "\\@char with invalid code point {code}" => "A \\@char kódpontja érvénytelen: {code}",
+        "\\middle must be within \\left and \\right" => "A \\middle csak a \\left és a \\right között szerepelhet",
+        "\\nonumber must appear at the end of the row" => "A \\nonumber csak a sor végén szerepelhet",
+        "\\tag must appear at the end of the row after the equation body" => "A \\tag csak a sor végén, az egyenlet törzse után szerepelhet",
+        "\\tag requires an argument" => "A \\tag argumentumot igényel",
+        "\\verb assertion failed" => "A \\verb ellenőrzése sikertelen",
+        "only one infix operator per group" => "Csoportonként csak egy infix operátor használható",
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "A prooftree végén {count} elem maradt a bizonyítási vermen, az elvárt szám 1"
+        }
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "A prooftree \\LeftLabel vagy \\RightLabel eleme után nincs következtetési parancs"
+        }
+        "without {key}: another macro took it while recording" => "{key} nélkül: egy másik makró lefoglalta a rögzítés közben",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "A(z) {command} parancs {count} premisszát igényel, de csak {available} áll rendelkezésre"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "A(z) {command} csak támogatott bussproofs parancsként, prooftree környezetben érvényes"
+        }
+        "{command} valid only within array environment" => "A(z) {command} csak array környezetben érvényes",
+        "{subarray} can contain only one column" => "A(z) {subarray} csak egy oszlopot tartalmazhat",
+
         "Page order" => "Oldalsorrend",
         "Down, then over" => "Lefelé, majd jobbra",
         "Over, then down" => "Jobbra, majd lefelé",

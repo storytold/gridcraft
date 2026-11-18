@@ -118,7 +118,7 @@ cargo xtask ci                                                 # fmt, clippy, te
 
 Choose Magyar or Español under View → Interface language for localized formula names,
 decimal commas, and semicolon arguments ([Hungarian coverage](docs/localization-parity.md#hungarian-interface-2026-10-18),
-[formula input](docs/formula-input.md)). Hungarian has 980 interface catalog entries;
+[formula input](docs/formula-input.md)). Hungarian has 1,100 interface catalog entries;
 strings that bypass translation lookup (for example, some chart-pane labels and engine errors)
 remain English. Catalog coverage does not mean the entire interface is translated.
 Workbooks, clipboard exchange, and programmatic APIs retain canonical English syntax.
@@ -209,7 +209,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 
 GridCraft is in **alpha**: the core workflow works end to end, but depth, fidelity and file
 compatibility are still rough. It covers 89% of standard ribbon commands in our catalog
-([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 513 standard worksheet functions
+([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 514 standard worksheet functions
 ([`docs/function-parity.md`](docs/function-parity.md)); this is a parity inventory, not a count of working implementations. Weighted by what spreadsheet users rely on, we
 estimate it is about 50% ready for real work. Next up: XLSX fidelity on real-world files, very large
 workbooks and multi-threaded recalc, chart depth, text in every script, and `.xls` import. Stage,
