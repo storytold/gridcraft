@@ -519,31 +519,10 @@ fn stream(xml: &[u8], how: Streaming<'_>, cb: &mut dyn FnMut(El) -> Result<(), I
 
 // ---------------------------------------------------------------- writing helpers
 
-/// Escapes text content.
-pub fn esc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    push_esc(&mut o, s);
-    o
-}
-
-/// Appends [`esc`]`(s)` to `o`.
-pub fn push_esc(o: &mut String, s: &str) {
-    if s.bytes().all(|b| matches!(b, b'\t' | b'\n' | 0x20..=0x7E) && !matches!(b, b'&' | b'<' | b'>')) {
-        o.push_str(s);
-        return;
-    }
-    o.reserve(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '\r' => o.push_str("&#13;"),
-            c if is_xml_char(c) => o.push(c),
-            _ => {}
-        }
-    }
-}
+// XML escaping and SpreadsheetML strings are shared; phonetic/model mapping stays here.
+pub use craft_xml::{esc, esc_attr};
+#[cfg(test)]
+use craft_xml::{is_xml_char, push_esc};
 
 /// Appends `n` in decimal.
 pub fn push_u64(o: &mut String, mut n: u64) {
@@ -582,93 +561,8 @@ pub fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
     push_u64(o, u64::from(c.row) + 1);
 }
 
-/// Escapes an attribute value (double-quoted).
-pub fn esc_attr(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            '\n' => o.push_str("&#10;"),
-            '\r' => o.push_str("&#13;"),
-            '\t' => o.push_str("&#9;"),
-            c if is_xml_char(c) => o.push(c),
-            _ => {}
-        }
-    }
-    o
-}
-
-fn is_xml_char(c: char) -> bool {
-    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
-}
-
-/// ST_Xstring encoding for cell text: characters XML can't carry and carriage returns become
-/// `_xHHHH_`, and literal `_xHHHH_` sequences are protected with `_x005F_`. The result still needs
-/// [`esc`].
-pub fn encode_xstring(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if c == '_' && looks_like_escape(&chars, i) {
-            o.push_str("_x005F_");
-        } else if !is_xml_char(c) || (c.is_control() && !matches!(c, '\t' | '\n')) {
-            o.push_str(&format!("_x{:04X}_", c as u32 & 0xFFFF));
-        } else {
-            o.push(c);
-        }
-    }
-    o
-}
-
-fn looks_like_escape(chars: &[char], i: usize) -> bool {
-    chars.get(i + 1) == Some(&'x') && chars.get(i + 6) == Some(&'_') && (i + 2..i + 6).all(|k| chars.get(k).is_some_and(char::is_ascii_hexdigit))
-}
-
-fn escape_unit(chars: &[char], i: usize) -> Option<u32> {
-    let hex: String = chars.get(i + 2..i + 6)?.iter().collect();
-    u32::from_str_radix(&hex, 16).ok()
-}
-
-/// The character for a high surrogate escape at `i` (value `high`) followed directly by a low surrogate escape.
-fn surrogate_pair(chars: &[char], i: usize, high: u32) -> Option<char> {
-    if !(0xD800..=0xDBFF).contains(&high) || chars.get(i + 7) != Some(&'_') || !looks_like_escape(chars, i + 7) {
-        return None;
-    }
-    let low = escape_unit(chars, i + 7).filter(|l| (0xDC00..=0xDFFF).contains(l))?;
-    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
-}
-
-/// Inverse of [`encode_xstring`].
-pub fn decode_xstring(s: &str) -> String {
-    if !s.contains("_x") {
-        return s.to_string();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let mut o = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '_' && looks_like_escape(&chars, i) {
-            let unit = escape_unit(&chars, i);
-            if let Some(ch) = unit.and_then(char::from_u32) {
-                o.push(ch);
-                i += 7;
-                continue;
-            }
-            // A high surrogate escape followed by a low surrogate escape is one UTF-16 pair.
-            if let Some(ch) = unit.and_then(|high| surrogate_pair(&chars, i, high)) {
-                o.push(ch);
-                i += 14;
-                continue;
-            }
-        }
-        o.push(chars[i]);
-        i += 1;
-    }
-    o
-}
+// Existing call sites and regression coverage use the production shared codec.
+pub use craft_xlsx::{decode_xstring, encode_xstring};
 
 /// `<t>` element with `xml:space="preserve"` when needed.
 pub fn t_el(s: &str) -> String {
@@ -1072,5 +966,46 @@ mod tests {
         assert_eq!(num(-3.0), "-3");
         assert_eq!(num(1.5e20), "1.5E20");
         assert_eq!("1.5E20".parse::<f64>().unwrap(), 1.5e20);
+    }
+}
+
+#[cfg(test)]
+mod shared_escape_parity {
+    use super::*;
+    #[test]
+    fn xml_content_and_attributes_preserve_grid_bytes() {
+        let value = "&<>\"'\t\n\r\0\u{1f}\u{fffe}\u{ffff}é😀";
+        assert_eq!(esc(value), "&amp;&lt;&gt;\"'\t\n&#13;é😀");
+        assert_eq!(esc_attr(value), "&amp;&lt;&gt;&quot;'&#9;&#10;&#13;é😀");
+        let mut appended = "prefix:".to_owned();
+        push_esc(&mut appended, value);
+        assert_eq!(appended, format!("prefix:{}", esc(value)));
+        assert_eq!(esc("plain ASCII\t\n"), "plain ASCII\t\n");
+        assert_eq!(decode_xstring(&encode_xstring("_x000D_\r\0😀")), "_x000D_\r\0😀");
+    }
+}
+
+#[cfg(test)]
+mod shared_xstring_parity {
+    use super::*;
+
+    #[test]
+    fn xstring_preserves_controls_unicode_and_literal_escapes() {
+        // XML-invalid scalars, C1 controls and literal escapes survive save/reopen.
+        for c in (0..=0xffff).filter_map(char::from_u32) {
+            let text = format!("left{c}right_x0041_");
+            assert_eq!(decode_xstring(&encode_xstring(&text)), text);
+        }
+        for (encoded, decoded) in [
+            ("_x005F_x000D_", "_x000D_"),
+            ("_xD83D__xDE00_", "😀"),
+            ("_xD83D__x0041_", "_xD83D_A"),
+            ("_xD83D__x005F_xDE00_", "_xD83D__xDE00_"),
+            ("_X0041_", "_X0041_"),
+            ("_xZZZZ_", "_xZZZZ_"),
+        ] {
+            assert_eq!(decode_xstring(encoded), decoded);
+        }
+        assert_eq!(encode_xstring("\r\n\t\0"), "_x000D_\n\t_x0000_");
     }
 }
