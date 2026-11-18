@@ -814,7 +814,8 @@ fn picture_copies_across_pages_stay_within_the_image_budget() {
         mime: "image/png".into(),
         alt: String::new(),
     });
-    sh.cell_pictures.insert(CellRef::new(0, 2), std::sync::Arc::new(CellPicture { data: png, mime: "image/png".into(), alt: String::new() }));
+    // `set_picture` gives C1 the cell value `draw_block` needs to reach the picture at all.
+    sh.set_picture(CellRef::new(0, 2), std::sync::Arc::new(CellPicture { data: png, mime: "image/png".into(), alt: String::new() }));
     let d = s.doc().unwrap();
     let lays = layouts(&d.wb, &PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap());
 
@@ -824,7 +825,12 @@ fn picture_copies_across_pages_stay_within_the_image_budget() {
     // Identical copies are written to the file once, so the draws are what to count.
     let draws = |pdf: &[u8]| String::from_utf8_lossy(pdf).matches(" Do Q").count();
     let full_draws = draws(&full);
-    assert!(full_draws >= pages - 1, "{full_draws} picture draws on {pages} pages");
+    // The cell picture, on its own: the same render without it draws one picture fewer per page.
+    let mut floating_only = (*d.wb).clone();
+    floating_only.sheet_mut(0).unwrap().cell_pictures.clear();
+    let floating_draws = draws(&render_pdf(&floating_only, &lays, "t", "").unwrap().bytes);
+    assert!(floating_draws >= pages - 1, "{floating_draws} floating picture draws on {pages} pages");
+    assert_eq!(full_draws - floating_draws, pages, "the title-row cell picture draws once on each of {pages} pages");
 
     // 64×64 RGB is 12,288 bytes: a 64 KiB budget holds a handful of page copies, not one per page.
     let budget = 64 * 1024;
