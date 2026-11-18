@@ -849,7 +849,8 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 }
             }
             // The release may be the first frame to report the pointer's last position, so the
-            // block is taken from there. (Esc already dropped a cancelled drag.)
+            // block is taken from there. (Esc already dropped a cancelled drag, and so did a
+            // change to the chart's data; one in the release's own frame is caught here.)
             Drag::ChartData { chart, orig, corner, to } => {
                 let to = if resp.drag_stopped()
                     && let Some(p) = pos
@@ -858,7 +859,9 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 } else {
                     to
                 };
-                if let Some(to) = to.filter(|to| *to != orig) {
+                if let Some(to) = to.filter(|to| *to != orig)
+                    && chart_still_plots(app, chart, orig)
+                {
                     app.run_or_alert("chart.setValuesRange", json!({"chart": chart, "range": to.a1()}));
                 }
             }
@@ -1246,7 +1249,26 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
 /// (`chart.setValuesRange`).
 fn drag_chart_data(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     let Drag::ChartData { chart, orig, corner, .. } = app.grid.drag else { return };
+    // The chart's data changed under the drag: drop it, as Esc does, rather than preview a
+    // block the release would put over that change.
+    if !chart_still_plots(app, chart, orig) {
+        app.grid.drag = Drag::None;
+        return;
+    }
     app.grid.drag = Drag::ChartData { chart, orig, corner, to: Some(chart_data_target(geo, sh, orig, corner, p)) };
+}
+
+/// Whether chart `chart` on the active sheet still plots the values block `orig` its drag
+/// started from. A command run between frames (the control channel, a macro) may have changed
+/// or removed it, and the dragged block would then overwrite that change. Read from the session,
+/// not the frame's workbook, which predates such a command.
+fn chart_still_plots(app: &SheetApp, chart: u32, orig: RangeRef) -> bool {
+    let Some(wb) = app.session.active().map(|d| &d.wb) else { return false };
+    let si = wb.active_sheet();
+    wb.sheet(si)
+        .and_then(|sh| sh.charts.iter().find(|ch| ch.id == chart))
+        .and_then(|ch| gridcraft_engine::chart_data::chart_data(wb, si, ch))
+        .is_some_and(|data| data.sheet == si && data.values == orig)
 }
 
 /// The values block `orig` with its `corner` dragged to `p`. Each edge the corner moves snaps

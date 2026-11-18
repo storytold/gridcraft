@@ -168,6 +168,25 @@ fn a_release_in_the_same_frame_as_the_last_move_takes_the_release_position() {
     assert_eq!(values(&h), "Sheet1!$A$1:$A$8");
 }
 
+/// A command that changes the chart's data while the button is held (the control channel runs
+/// between frames) makes the drag stale: releasing must not put the dragged block over it,
+/// whether the pointer moves on first or is released straight away.
+#[test]
+fn a_chart_data_change_during_the_drag_is_not_overwritten_by_the_release() {
+    for move_on in [true, false] {
+        let (mut h, id) = fixture();
+        let (corner, a7, a8) = (rect(&h, "A1:A5").right_bottom(), rect(&h, "A7").right_bottom(), rect(&h, "A8").right_bottom());
+        press_and_move(&mut h, corner, a7);
+        h.state_mut().session.execute("chart.setValuesRange", json!({"chart": id, "range": "A2:A4"})).unwrap();
+        if move_on {
+            press_and_move_on(&mut h, a7, a8);
+        }
+        button(&mut h, if move_on { a8 } else { a7 }, false);
+        assert_eq!(values(&h), "Sheet1!$A$2:$A$4", "the newer data stays (pointer moved on: {move_on})");
+        assert!(!values_outline_at(&h, "A1:A8") && !values_outline_at(&h, "A1:A7"), "no stale preview is left (pointer moved on: {move_on})");
+    }
+}
+
 #[test]
 fn escape_with_ctrl_held_still_cancels_a_values_drag() {
     let (mut h, _) = fixture();
