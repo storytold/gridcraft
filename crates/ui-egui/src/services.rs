@@ -6,6 +6,8 @@ type CopyHtml = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 type Download = Box<dyn Fn(&str, &[u8])>;
 type PrintPdf = Box<dyn Fn(&[u8])>;
 pub type SavePrompt = Box<dyn Fn(&str, &str, &str) -> Option<std::sync::mpsc::Receiver<String>>>;
+/// Takes down the Save Changes sheet on the window with this title (`Services::end_save_prompt`).
+pub type EndSavePrompt = Box<dyn Fn(&str)>;
 
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
@@ -42,8 +44,9 @@ pub struct Services {
     /// detail); the answer ("save", "dontSave" or anything else for Cancel) arrives on the
     /// receiver. `None` asks in GridCraft's own Save Changes dialog.
     pub save_prompt: Option<SavePrompt>,
-    /// macOS: take down the `save_prompt` sheet still up, whose question the app took back.
-    pub end_save_prompt: Option<Box<dyn Fn()>>,
+    /// macOS: take down the `save_prompt` sheet still up on the window with this title, whose
+    /// question the app took back.
+    pub end_save_prompt: Option<EndSavePrompt>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.

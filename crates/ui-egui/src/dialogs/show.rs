@@ -518,9 +518,9 @@ fn save_sheet(app: &mut SheetApp, ctx: &egui::Context, mut d: crate::dialogs::Di
         let detail = "Your changes will be lost if you don't save them.";
         // No window that is surely the workbook's: the built-in dialog asks.
         let Some(rx) = ask(&window, &question, detail) else { return Some(d) };
-        app.save_sheet = Some(rx);
+        app.save_sheet = Some((window, rx));
     }
-    let reply = match app.save_sheet.as_ref().map(|rx| rx.try_recv()) {
+    let reply = match app.save_sheet.as_ref().map(|(_, rx)| rx.try_recv()) {
         Some(Err(TryRecvError::Empty)) => {
             app.dialog = Some(d);
             return None;

@@ -17,7 +17,7 @@ pub struct WindowUi {
     text_box_editor: Option<text_box::EditState>,
     dialog: Option<dialogs::Dialog>,
     /// The answer to this window's Save Changes sheet, which belongs with its dialog.
-    save_sheet: Option<std::sync::mpsc::Receiver<String>>,
+    save_sheet: Option<(String, std::sync::mpsc::Receiver<String>)>,
     backstage: Option<backstage::Backstage>,
     message: Option<(String, String)>,
     toast: Option<(String, f64)>,
