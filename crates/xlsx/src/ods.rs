@@ -103,7 +103,7 @@ fn map_value(v: craft_ods::Value) -> Value {
     match v {
         craft_ods::Value::Empty => Value::Empty,
         craft_ods::Value::Number(n) => Value::Number(n),
-        craft_ods::Value::Text(s) => Value::Text(Arc::from(s)),
+        craft_ods::Value::Text(s) => Value::Text(s),
         craft_ods::Value::Bool(b) => Value::Bool(b),
         craft_ods::Value::Error(e) => Value::Error(map_cell_error(e)),
     }
