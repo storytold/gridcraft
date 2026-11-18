@@ -795,7 +795,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Cor da Célula",
         "A to Z" => "De A a Z",
         "Z to A" => "De Z a A",
-        "+ Add Level" => "+ Adicionar Nível",
+        "Add Level" => "Adicionar Nível",
+        "Delete Level" => "Excluir Nível",
+        "Copy Level" => "Copiar Nível",
+        "Move Up" => "Mover para Cima",
+        "Move Down" => "Mover para Baixo",
+        "Order" => "Ordem",
+        "Sort On" => "Classificar em",
+        "Sort|Column" => "Coluna",
+        "Column {letters}" => "Coluna {letters}",
+        "Smallest to Largest" => "Do Menor para o Maior",
+        "Largest to Smallest" => "Do Maior para o Menor",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Feche a caixa de diálogo Classificar antes de alternar ou alterar planilhas."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Volte para a planilha original para classificar ou cancele.",
         "New…" => "Novo…",
         "Edit…" => "Editar…",
         "Name" => "Nome",
