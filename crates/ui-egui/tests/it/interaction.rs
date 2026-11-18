@@ -49,6 +49,12 @@ fn border_icon_tracks_only_successful_commands() {
     app.run("review.unprotectSheet", json!({})).unwrap();
     app.run("home.borders", json!({})).unwrap();
     assert_eq!(app.grid.last_border, "bottom");
+
+    // Unknown preset names are rejected before mutating styles or `last_border`.
+    app.run("home.borders", json!({"preset": "thickOutside"})).unwrap();
+    assert_eq!(app.grid.last_border, "thickOutside");
+    assert!(app.run("home.borders", json!({"preset": "outsidee"})).is_err());
+    assert_eq!(app.grid.last_border, "thickOutside");
 }
 
 #[test]

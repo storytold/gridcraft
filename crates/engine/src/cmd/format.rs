@@ -411,8 +411,32 @@ fn border_style(name: &str) -> BorderStyle {
     }
 }
 
+/// Applies a preset cell border layout across the target ranges, rejecting unknown preset names.
 fn borders(s: &mut Session, p: &Json) -> Result<Json> {
     let preset = str_param(p, "preset").unwrap_or("bottom").to_string();
+    if !matches!(
+        preset.as_str(),
+        "bottom"
+            | "top"
+            | "left"
+            | "right"
+            | "none"
+            | "all"
+            | "outside"
+            | "thickOutside"
+            | "thickBottom"
+            | "doubleBottom"
+            | "topBottom"
+            | "topThickBottom"
+            | "topDoubleBottom"
+            | "insideHorizontal"
+            | "insideVertical"
+            | "inside"
+            | "diagonalDown"
+            | "diagonalUp"
+    ) {
+        return Err(bad("preset", format!("unknown border preset `{preset}`")));
+    }
     let color = color_param(p.get("color")).unwrap_or(Color::Auto);
     let base = border_style(str_param(p, "style").unwrap_or("thin"));
     let sheet = target_sheet(s, p)?;

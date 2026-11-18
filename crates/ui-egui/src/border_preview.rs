@@ -300,14 +300,34 @@ mod tests {
             let painted = render_offscreen(dark, |p| paint_preset_icon(p, rect, "none", Color32::WHITE));
             assert!(painted.lines.is_empty(), "none must not draw solid border lines");
             assert!(!painted.circles.is_empty(), "none must draw outer dotted guides");
+            let (mut top_dots, mut bottom_dots, mut left_dots, mut right_dots) = (0usize, 0usize, 0usize, 0usize);
             for (center, color) in &painted.circles {
                 assert_eq!(*color, expected_muted, "dotted guide uses text_dim");
-                let on_perimeter = (center.x - bounds.left()).abs() < 0.01
-                    || (center.x - bounds.right()).abs() < 0.01
-                    || (center.y - bounds.top()).abs() < 0.01
-                    || (center.y - bounds.bottom()).abs() < 0.01;
+                let on_left = (center.x - bounds.left()).abs() < 0.01;
+                let on_right = (center.x - bounds.right()).abs() < 0.01;
+                let on_top = (center.y - bounds.top()).abs() < 0.01;
+                let on_bottom = (center.y - bounds.bottom()).abs() < 0.01;
+                let on_perimeter = on_left || on_right || on_top || on_bottom;
                 assert!(on_perimeter, "dot at {center:?} must lie on outer perimeter {bounds:?}, not interior cross");
+                let strictly_horiz = center.x > bounds.left() + 0.05 && center.x < bounds.right() - 0.05;
+                let strictly_vert = center.y > bounds.top() + 0.05 && center.y < bounds.bottom() - 0.05;
+                if on_top && strictly_horiz {
+                    top_dots += 1;
+                }
+                if on_bottom && strictly_horiz {
+                    bottom_dots += 1;
+                }
+                if on_left && strictly_vert {
+                    left_dots += 1;
+                }
+                if on_right && strictly_vert {
+                    right_dots += 1;
+                }
             }
+            assert!(
+                top_dots > 0 && bottom_dots > 0 && left_dots > 0 && right_dots > 0,
+                "expected non-corner dots on all 4 edges: top={top_dots}, bottom={bottom_dots}, left={left_dots}, right={right_dots}"
+            );
         }
     }
 
