@@ -91,7 +91,9 @@ fn add_level_keeps_adding_levels_when_every_column_is_used() {
 #[test]
 fn toolbar_fits_without_overlap_in_every_language() {
     use gridcraft_ui_egui::i18n::Language;
-    for language in Language::ALL.into_iter().filter(|l| !matches!(l, Language::Ja | Language::Ko | Language::Zh | Language::Vi)) {
+    // The strict harness has no Hebrew face (craft-fonts has none), as it lacks the CJK and
+    // Vietnamese glyphs.
+    for language in Language::ALL.into_iter().filter(|l| !matches!(l, Language::Ja | Language::Ko | Language::Zh | Language::Vi | Language::He)) {
         let mut app = crate::common::app(sales());
         app.ui.language = language;
         let mut h = crate::support::app_harness(app, 4);

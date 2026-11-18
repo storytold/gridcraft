@@ -482,6 +482,8 @@ fn language_switch_renders_the_ribbon_and_persists() {
     let languages: Vec<Language> = Language::ALL
         .into_iter()
         .filter(|l| gridcraft_ui_egui::theme::craft_fonts_loaded() || !matches!(l, Language::Ja | Language::Ko | Language::Zh))
+        // craft-fonts has no Hebrew face, and the suite never probes system fonts.
+        .filter(|l| *l != Language::He)
         .collect();
     for language in languages {
         h.state_mut().run("app.language.set", json!({"language": language.code()})).unwrap();

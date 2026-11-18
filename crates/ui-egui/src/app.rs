@@ -147,6 +147,12 @@ impl SheetApp {
         self.autosave(ctx);
         self.update_title(ctx);
         self.request_hidden_paint(ctx);
+        // New sheets read in the interface language's direction, and a new workbook nobody has
+        // changed yet follows a switch of language (Excel's Default direction option).
+        let rtl = self.ui.language.is_rtl();
+        if self.session.prefs.default_right_to_left != rtl {
+            self.session.set_default_right_to_left(rtl);
+        }
         // One window always shows a workbook, unless each workbook has a native window of its own
         // (`doc_windows` decides what having none left means).
         if self.session.active().is_none() && !self.native_windows {

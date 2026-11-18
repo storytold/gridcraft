@@ -398,6 +398,24 @@ impl DocState {
             self.saved = self.wb.clone();
         }
     }
+
+    /// A new workbook nobody has changed: not opened from or saved to a file, no edits.
+    pub fn is_untouched_new(&self) -> bool {
+        self.path.is_none() && !self.is_dirty() && self.undo.is_empty() && self.redo.is_empty()
+    }
+
+    /// Sets the reading direction of every sheet of an untouched new workbook, which stays
+    /// untouched: it follows the interface's direction until someone changes it.
+    fn follow_direction(&mut self, right_to_left: bool) {
+        if !self.is_untouched_new() || self.wb.sheets.iter().all(|sh| sh.right_to_left == right_to_left) {
+            return;
+        }
+        let wb = Arc::make_mut(&mut self.wb);
+        for sh in wb.sheets.iter_mut() {
+            Arc::make_mut(sh).right_to_left = right_to_left;
+        }
+        self.saved = self.wb.clone();
+    }
     pub fn display_title(&self) -> String {
         self.path
             .as_deref()
@@ -429,6 +447,9 @@ pub struct Prefs {
     /// (at most [`recent::MAX`]; see [`recent`]). An application list, as in Excel.
     #[serde(deserialize_with = "recent::lenient")]
     pub recent_functions: Vec<String>,
+    /// New sheets read right to left (Excel's Default direction option). The interface sets it
+    /// from its language through [`Session::set_default_right_to_left`].
+    pub default_right_to_left: bool,
 }
 
 /// The selection statistics shown on the status bar, set with `view.statusBar`. Excel turns on
@@ -464,6 +485,7 @@ impl Default for Prefs {
             formula_bar: true,
             status_bar: StatusBarStats::default(),
             recent_functions: recent::defaults(),
+            default_right_to_left: false,
         }
     }
 }
@@ -637,6 +659,15 @@ impl Session {
             }
         }
     }
+    /// Sets the direction new sheets read in, and turns the sheets of new workbooks nobody has
+    /// changed yet to it; opened and edited workbooks keep their own.
+    pub fn set_default_right_to_left(&mut self, on: bool) {
+        self.prefs.default_right_to_left = on;
+        for d in &mut self.docs {
+            d.follow_direction(on);
+        }
+    }
+
     /// A new blank workbook titled `BookN`.
     pub fn new_workbook(&mut self) -> usize {
         let n = (1..).find(|n| !self.docs.iter().any(|d| d.title == format!("Book{n}") && d.path.is_none())).unwrap_or(1);
@@ -645,6 +676,11 @@ impl Session {
         for _ in 1..self.prefs.sheets_in_new_workbook.clamp(1, 255) {
             let name = wb.next_sheet_name();
             wb.sheets.push(Arc::new(gridcraft_model::Sheet::new(name)));
+        }
+        if self.prefs.default_right_to_left {
+            for sh in wb.sheets.iter_mut() {
+                Arc::make_mut(sh).right_to_left = true;
+            }
         }
         self.add_document(DocState::new(wb, None, format!("Book{n}"), Trust::Local))
     }

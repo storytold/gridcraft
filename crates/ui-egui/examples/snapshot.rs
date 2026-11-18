@@ -1,7 +1,7 @@
 //! Renders the whole GridCraft window offscreen (wgpu, no window) to a PNG.
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
-//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
+//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--app-cmd 'ui.backstage={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr|he]
 //!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] out.png`
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
@@ -23,6 +23,8 @@ fn main() {
     let mut pane: Option<String> = None;
     let mut chart: Option<u32> = None;
     let mut dialog: Option<String> = None;
+    // Interface commands (`ui.*`, `app.*`), run by the app after it is built.
+    let mut app_cmds: Vec<String> = Vec::new();
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
     let mut refedit: Option<String> = None;
@@ -67,6 +69,12 @@ fn main() {
             "--object" | "--chart" => {
                 i += 1;
                 chart = args.get(i).and_then(|s| s.parse().ok());
+            }
+            "--app-cmd" => {
+                i += 1;
+                if let Some(c) = args.get(i) {
+                    app_cmds.push(c.clone());
+                }
             }
             "--dialog" => {
                 i += 1;
@@ -125,6 +133,13 @@ fn main() {
                 }
                 app.grid.pane = pane;
                 app.select_object_id(chart);
+                for c in &app_cmds {
+                    let (id, p) =
+                        c.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((c.as_str(), json!({})));
+                    if let Err(e) = app.run(id, p) {
+                        eprintln!("{id}: {e}");
+                    }
+                }
                 if let Some(d) = &dialog {
                     let (name, p) =
                         d.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((d.as_str(), json!({})));

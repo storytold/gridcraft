@@ -9,12 +9,15 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         None => s.doc()?.wb.next_sheet_name(),
     };
     s.doc()?.wb.check_sheet_name(&name, None).map_err(EngineError::Other)?;
+    // A new sheet reads in the default direction (right to left in a right-to-left interface).
+    let mut sheet = Sheet::new(name.clone());
+    sheet.right_to_left = s.prefs.default_right_to_left;
     let d = s.doc_mut()?;
     let before = p.get("before").and_then(Json::as_u64).map(|v| v as usize);
     let idx = edit_doc(d, |cx| {
         // Excel inserts before the active sheet; the "+" button appends after it.
         let at = before.unwrap_or(cx.wb.active_sheet() + 1).min(cx.wb.sheets.len());
-        cx.wb.sheets.insert(at, Arc::new(Sheet::new(name.clone())));
+        cx.wb.sheets.insert(at, Arc::new(sheet));
         // Names scoped to later sheets shift.
         for n in cx.wb.names.iter_mut() {
             if let Some(sc) = n.scope.as_mut()
