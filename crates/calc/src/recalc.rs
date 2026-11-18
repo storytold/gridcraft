@@ -36,7 +36,7 @@ mod pass_host;
 use graph::Intervals;
 pub use graph::{FxHasher, Graph, Key};
 use graph::{HashMap, HashSet, Node, Taken};
-use pass_host::{PassHost, spills_as_before};
+use pass_host::{PassHost, legacy_range, spills_as_before};
 
 /// Calculation state kept beside a workbook.
 #[derive(Clone, Debug)]
@@ -48,6 +48,9 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// The multi-cell legacy array formulas and their ranges, kept with the graph. Each one takes
+    /// its whole range, whether or not its result could be laid out there (#2949).
+    legacy: HashMap<Key, RangeRef>,
     /// Which anchors held a spill when the current calculation started (see [`Standing`]).
     standing: Standing,
     /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
@@ -142,6 +145,7 @@ impl Default for Calc {
             fixed_now: None,
             circular: vec![],
             last_recalc_cells: 0,
+            legacy: HashMap::default(),
             standing: Standing::default(),
             spill_errors: SpillErrors::default(),
         }
@@ -227,6 +231,7 @@ impl Calc {
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
         self.graph = Graph::default();
+        self.legacy.clear();
         let mut circ = Vec::new();
         self.spill_errors.clear();
         for (si, sheet) in wb.sheets.iter().enumerate() {
@@ -238,6 +243,9 @@ impl Calc {
                     && let Some((areas, dynamic)) = f.with_expr(|e| precedents(wb, si, e))
                 {
                     self.graph.insert((si, c), Node { areas, dynamic });
+                    if let Some(r) = legacy_range(sheet, c) {
+                        self.legacy.insert((si, c), r);
+                    }
                     if cell.value == Value::Error(CellError::Circ) {
                         circ.push((si, c));
                     }
@@ -338,6 +346,9 @@ impl Calc {
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
     pub fn cells_changed(&mut self, wb: &mut Workbook, changed: &[Key]) {
         let mut cleared: Vec<(usize, RangeRef)> = Vec::new();
+        // The ranges legacy arrays held and no longer do (deleted, or entered again over less),
+        // whether or not their results were laid out there.
+        let mut released: Vec<(usize, RangeRef)> = Vec::new();
         for &k in changed {
             if wb.sheet(k.0).and_then(|s| s.cell(k.1)).is_some_and(|c| c.value == Value::Error(CellError::Spill)) {
                 self.spill_errors.insert(k);
@@ -353,10 +364,21 @@ impl Calc {
             match precedent {
                 Some((areas, dynamic)) => {
                     self.graph.insert(k, Node { areas, dynamic });
+                    let now = wb.sheet(k.0).and_then(|sh| legacy_range(sh, k.1));
+                    let old = match now {
+                        Some(r) => self.legacy.insert(k, r),
+                        None => self.legacy.remove(&k),
+                    };
+                    if let Some(o) = old
+                        && !now.is_some_and(|r| r.contains(o.start) && r.contains(o.end))
+                    {
+                        released.push((k.0, o));
+                    }
                 }
                 // See `rebuild`: its spill is laid out again from its result when it is calculated.
                 None if python => {
                     self.graph.insert(k, Node { areas: Vec::new(), dynamic: false });
+                    released.extend(self.legacy.remove(&k).map(|r| (k.0, r)));
                     // New code has no result yet: the spill the cell had (its old result's, or a
                     // formula's) goes, and what read it is recalculated, as for a formula
                     // replaced by a constant.
@@ -370,6 +392,7 @@ impl Calc {
                 }
                 None => {
                     self.graph.remove(k);
+                    released.extend(self.legacy.remove(&k).map(|r| (k.0, r)));
                     // A formula replaced by a constant (or cleared) takes its spilled values with it.
                     if let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
@@ -443,11 +466,14 @@ impl Calc {
                 }
             }
         }
-        // So can the area a removed formula spilled over.
-        for (si, r) in &cleared {
-            match emptied.iter_mut().find(|x| x.0 == *si) {
+        // The area a cleared or overwritten array spilled over is emptied too, a legacy array's
+        // included, and can unblock an anchor as an emptied cell does (#2340). So is the range a
+        // legacy array no longer holds, even one too large to lay out (#NUM!), which spilled
+        // nothing: only its bounds count, its cells aren't seeded one by one (#2949).
+        for &(si, r) in cleared.iter().chain(&released) {
+            match emptied.iter_mut().find(|x| x.0 == si) {
                 Some(x) => x.1 = CellRef::new(x.1.row.max(r.end.row), x.1.col.max(r.end.col)),
-                None => emptied.push((*si, r.end)),
+                None => emptied.push((si, r.end)),
             }
         }
         // An emptied cell can unblock an anchor any distance above or to the left of it.
@@ -460,6 +486,15 @@ impl Calc {
         for &k in changed {
             if let Some(r) = wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
                 areas.push((k.0, *r));
+            }
+        }
+        // A legacy array entered over another formula's spill takes its whole range: that
+        // formula is evaluated again, and is now blocked (#2949).
+        for &k in changed {
+            if let Some(sh) = wb.sheet(k.0)
+                && let Some(r) = legacy_range(sh, k.1)
+            {
+                seeds.extend(sh.spill_ranges.iter().filter(|(a, s)| **a != k.1 && s.intersects(&r)).map(|(a, _)| (k.0, *a)));
             }
         }
         let t0 = prof_now();
@@ -563,7 +598,8 @@ impl Calc {
             let mut rng = self.rng;
             let tp = prof_now();
             let (results, spills, cycles) = {
-                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                let legacy = self.legacy.iter().map(|(k, r)| (k.0, *r)).collect();
+                let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python).with_legacy(legacy);
                 host.standing = Some(&self.standing);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
