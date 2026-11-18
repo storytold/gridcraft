@@ -26,6 +26,9 @@ impl SheetApp {
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
         }
+        if let Some(refused) = dialogs::refuse_sheet_change(self, id) {
+            return Err(refused);
+        }
         if matches!(
             id,
             "sheet.activate"
