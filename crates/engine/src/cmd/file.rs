@@ -86,9 +86,15 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     // Someone else may have made the file: its active content asks before it runs.
+    let xlsx = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx;
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+    if crate::io::FileKind::from_path(&name).is_none() && xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
+    }
+    // The package's own subtype (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`), from its workbook content
+    // type rather than its name: an ordinary Save writes the same one back (#4351).
+    if xlsx {
+        doc.package_kind = gridcraft_xlsx::package_kind(&bytes);
     }
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
@@ -122,11 +128,16 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     // The document's own file keeps the format its content had when opened; any other path
     // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
-    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
+    let own = d.path.as_deref() == Some(path.as_str());
+    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| own));
+    // An XLSX package's own file keeps the subtype it was opened as: a macro-enabled package
+    // named `.xlsx` or with no extension keeps its VBA project. A named destination goes by its
+    // extension instead, an explicit choice of format (#4351).
+    let package = d.package_kind.filter(|_| own);
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
     let bytes = match kind {
-        Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
+        Some(kind) => crate::io::save_bytes_as(wb, &path, kind, package)?,
         None => crate::io::save_bytes(wb, &path)?,
     };
     crate::io::write_file(&path, &bytes)?;
@@ -141,6 +152,9 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         }
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
+        // The file just written is the one an ordinary Save writes back: remember its kind.
+        d.package_kind =
+            if kind == Some(crate::io::FileKind::Xlsx) { Some(package.unwrap_or_else(|| gridcraft_xlsx::XlsxKind::from_path(&path))) } else { None };
     }
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }

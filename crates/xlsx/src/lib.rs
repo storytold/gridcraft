@@ -191,6 +191,40 @@ impl XlsxKind {
     pub fn is_macro_enabled(self) -> bool {
         matches!(self, XlsxKind::MacroWorkbook | XlsxKind::MacroTemplate)
     }
+
+    /// The kind a workbook part's content type declares, or `None` for another content type.
+    pub fn from_content_type(content_type: &str) -> Option<XlsxKind> {
+        [XlsxKind::Workbook, XlsxKind::MacroWorkbook, XlsxKind::Template, XlsxKind::MacroTemplate]
+            .into_iter()
+            .find(|kind| kind.main_content_type() == content_type)
+    }
+}
+
+/// The kind of SpreadsheetML package `bytes` holds, from the content type its package gives the
+/// workbook part. `None` when the bytes aren't a readable package, or the workbook part isn't one
+/// of the four kinds.
+pub fn package_kind(bytes: &[u8]) -> Option<XlsxKind> {
+    let mut pkg = package::Package::open(bytes).ok()?;
+    let root_rels = pkg.rels("").ok()?;
+    let part = read::find_rel(&root_rels, "officeDocument").map_or_else(|| "xl/workbook.xml".to_string(), |r| r.target.clone());
+    let types = pkg.read_limited("[Content_Types].xml", passthrough::MAX_META).ok().flatten()?;
+    let types = xml::parse(&types).ok()?;
+    let key = package::normalize(&part);
+    let content_type = types
+        .kids("Override")
+        .find(|o| o.attr("PartName").is_some_and(|p| package::normalize(p) == key))
+        .and_then(|o| o.attr("ContentType"))
+        .map(str::to_string)
+        .or_else(|| {
+            let (_, file) = package::split_dir(&key);
+            let ext = file.rsplit_once('.')?.1.to_ascii_lowercase();
+            types
+                .kids("Default")
+                .find(|d| d.attr("Extension").is_some_and(|e| e.eq_ignore_ascii_case(&ext)))
+                .and_then(|d| d.attr("ContentType"))
+                .map(str::to_string)
+        })?;
+    XlsxKind::from_content_type(&content_type)
 }
 
 /// Writes a workbook as an `.xlsx` package, or as an `.xlsm` one when it holds a VBA project,

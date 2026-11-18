@@ -3012,6 +3012,70 @@ fn an_xlsx_opened_under_an_unknown_extension_saves_back_as_xlsx() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #4351: an ordinary Save keeps the VBA project of a macro-enabled package opened under `.xlsx`
+/// or an unknown suffix, instead of writing a macro-free workbook over it.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn ordinary_save_keeps_the_vba_project_of_a_macro_enabled_package() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-vba-save-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let vba: Vec<u8> = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 inert vbaProject bytes".to_vec();
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).vba_project = Some(vba.clone().into());
+    // The package's VBA part (or `None`), its content types, and whether the workbook still has
+    // its VBA relationship.
+    let read = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        let mut vba = None;
+        if let Ok(mut part) = zip.by_name("xl/vbaProject.bin") {
+            let mut data = vec![];
+            std::io::Read::read_to_end(&mut part, &mut data).unwrap();
+            vba = Some(data);
+        }
+        let mut types = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut types).unwrap();
+        let mut rels = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("xl/_rels/workbook.xml.rels").unwrap(), &mut rels).unwrap();
+        (vba, types, rels.contains("relationships/vbaProject"))
+    };
+    // Both macro-enabled kinds keep the subtype they were opened as, whatever the file is called.
+    for (seed, content_type, names) in [
+        ("book.xlsm", "sheet.macroEnabled.main+xml", ["control.xlsm", "misnamed.xlsx", "misnamed.dat"]),
+        ("book.xltm", "template.macroEnabled.main+xml", ["control.xltm", "template.xlsx", "template.dat"]),
+    ] {
+        let package = crate::io::save_bytes(&src.doc().unwrap().wb, seed).unwrap();
+        for name in names {
+            let path = dir.join(name);
+            std::fs::write(&path, &package).unwrap();
+            let mut s = s();
+            let opened = s.execute("file.open", json!({"path": path})).unwrap();
+            assert!(opened["warnings"].to_string().contains("were kept but not executed"), "{name}: {}", opened["warnings"]);
+            s.execute("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+            s.execute("file.save", json!({})).unwrap();
+            let saved = std::fs::read(&path).unwrap();
+            let (kept, types, rel) = read(&saved);
+            assert_eq!(kept.as_deref(), Some(vba.as_slice()), "{name}: the VBA project survives an ordinary Save");
+            assert!(types.contains(content_type), "{name}: the {content_type} content type is kept, got {types}");
+            assert!(types.contains("/xl/vbaProject.bin"), "{name}: the VBA part's content type is kept, got {types}");
+            assert!(rel, "{name}: the workbook keeps its VBA relationship");
+            let (wb, _) = crate::io::open_bytes(name, &saved).unwrap();
+            assert_eq!(wb.active().unwrap().value(CellRef::parse("B1").unwrap()), Value::text("edited"), "{name}");
+            assert!(!s.doc().unwrap().is_dirty(), "{name}: the save is the document's own");
+        }
+    }
+    // Save As to a macro-free name is an explicit choice: it writes a macro-free workbook.
+    let copy = dir.join("copy.xlsx");
+    let mut s = s();
+    s.execute("file.open", json!({"path": dir.join("control.xlsm")})).unwrap();
+    s.execute("file.saveAs", json!({"path": copy})).unwrap();
+    let (kept, types, rel) = read(&std::fs::read(&copy).unwrap());
+    assert_eq!(kept, None, "Save As .xlsx writes no VBA project");
+    assert!(!types.contains("macroEnabled") && !rel, "Save As .xlsx writes a macro-free package: {types}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn validation_formulas_are_relative_and_see_the_new_value() {
     let mut s = s();

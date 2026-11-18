@@ -205,6 +205,11 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The SpreadsheetML package kind the file was opened as (`.xlsx`, `.xlsm`, `.xltx`,
+    /// `.xltm`), read from the package's workbook content type. An ordinary Save writes the same
+    /// kind back even when the file's name says otherwise, so a macro-enabled package named
+    /// `.xlsx` or with no extension keeps its VBA project (#4351).
+    pub package_kind: Option<gridcraft_xlsx::XlsxKind>,
     /// Whether the scripts stored in this workbook may run (`automate.runScript`). A workbook
     /// that arrives already carrying scripts (opened from a file) starts untrusted until the
     /// user trusts it in this session (`automate.trustScripts`); one with no scripts starts
@@ -356,6 +361,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            package_kind: None,
             scripts_trusted,
             trust,
             touched: None,
