@@ -395,3 +395,30 @@ fn csv_used_range_limit_is_enforced_while_reading() {
     // No limit by default.
     assert!(read_csv(dense, &CsvOptions::default()).is_ok());
 }
+
+/// A CSV is read in the region it is opened in: in pt-BR `1.234,56` is a number, an
+/// all-ambiguous date column reads day first, and the workbook takes the region. en-US is unchanged.
+#[test]
+fn csv_reads_numbers_and_dates_in_the_region() {
+    let pt_br = gridcraft_core::region::find("pt-BR").unwrap();
+    let src = b"Valor;Data\n1.234,56;03/04/2026\n0,5;05/06/2026\n";
+    let wb = read_csv(src, &CsvOptions { delimiter: 0, region: pt_br, ..Default::default() }).unwrap();
+    assert_eq!(v(&wb, 1, 0), Value::Number(1234.56));
+    assert_eq!(v(&wb, 2, 0), Value::Number(0.5));
+    // 3 April 2026, day first.
+    assert_eq!(v(&wb, 1, 1), Value::Number(46115.0));
+    assert_eq!(wb.region.tag, "pt-BR");
+    let wb = read_csv(src, &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(v(&wb, 1, 0), Value::text("1.234,56"));
+    // 4 March 2026, month first.
+    assert_eq!(v(&wb, 1, 1), Value::Number(46085.0));
+    assert_eq!(wb.region.tag, "en-US");
+    // Where the decimal is a comma, the semicolon wins a tie and the no-separator fallback.
+    let sniff = crate::csv::sniff_delimiter;
+    let tie = "a,b;c\n1,2;3\n";
+    assert_eq!(sniff(tie, '"', pt_br), b';');
+    assert_eq!(sniff(tie, '"', gridcraft_core::region::default_region()), b',');
+    assert_eq!(sniff("single", '"', pt_br), b';');
+    assert_eq!(sniff("a,b,c\n1,2;3\n", '"', pt_br), b',');
+    assert_eq!(sniff("a\tb\n1\t2\n", '"', pt_br), b'\t');
+}

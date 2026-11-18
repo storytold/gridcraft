@@ -96,7 +96,8 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
             let delim = str_param(p, "delimiter")
                 .and_then(|d| d.chars().next())
                 .unwrap_or(if text.lines().next().is_some_and(|l| l.contains('\t')) { '\t' } else { ',' });
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, max_used_cells: Some(MAX_IMPORT_CELLS), ..Default::default() };
+            let region = s.region();
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, max_used_cells: Some(MAX_IMPORT_CELLS), region, ..Default::default() };
             // The cell limit is enforced while parsing, before an oversized file is stored.
             let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| match e {
                 gridcraft_xlsx::IoError::TooLarge(_) => too_many_cells(),

@@ -5,8 +5,9 @@
 use std::sync::Arc;
 
 use gridcraft_core::date::{days_in_month_in, serial_from_ymd};
-use gridcraft_core::parse::{Parsed, parse_input};
-use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Value, col_to_letters};
+use gridcraft_core::parse::{Parsed, parse_input_in};
+use gridcraft_core::region::DateOrder;
+use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Region, Value, col_to_letters};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
 use crate::{CsvOptions, IoError, ReadReport};
@@ -14,7 +15,29 @@ use crate::{CsvOptions, IoError, ReadReport};
 /// The largest CSV or tab-separated file written (bytes).
 pub const MAX_CSV_BYTES: usize = 512 << 20;
 
-pub use craft_csv::{decode_text, sniff_delimiter};
+pub use craft_csv::decode_text;
+
+/// [`craft_csv::sniff_delimiter`] in `region`: where the decimal is a comma (`pt-BR`) the list
+/// separator is a semicolon, so it wins a tie with the comma and is the answer when no candidate
+/// is on every line. `craft-csv` tries the comma first, so the sample is read with the comma and
+/// the semicolon swapped and the answer swapped back.
+pub(crate) fn sniff_delimiter(text: &str, quote: char, region: &Region) -> u8 {
+    if region.decimal != ',' {
+        return craft_csv::sniff_delimiter(text, quote);
+    }
+    let swap = |ch: char| match ch {
+        ',' => ';',
+        ';' => ',',
+        other => other,
+    };
+    // `craft-csv` reads at most the first 64K characters.
+    let swapped: String = text.chars().take(64 * 1024).map(swap).collect();
+    match craft_csv::sniff_delimiter(&swapped, swap(quote)) {
+        b',' => b';',
+        b';' => b',',
+        other => other,
+    }
+}
 
 /// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
 fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {
@@ -71,10 +94,12 @@ struct NumericDate {
 }
 
 impl NumericDate {
-    /// The field under the column's rule: a date when that reading is valid, else text.
-    fn read(&self, field: &str, rule: DateRule) -> Parsed {
+    /// The field under the column's rule: a date when that reading is valid, else text. An
+    /// all-ambiguous column follows the region's date order (day first in `pt-BR`).
+    fn read(&self, field: &str, rule: DateRule, region: &Region) -> Parsed {
         let serial = match rule {
             DateRule::DayFirst => self.day_first,
+            DateRule::Ambiguous if region.date_order == DateOrder::Dmy => self.day_first,
             DateRule::MonthFirst | DateRule::Ambiguous => self.month_first,
             DateRule::Conflict | DateRule::NoDates => None,
         };
@@ -91,9 +116,9 @@ impl NumericDate {
 /// A numeric date written with `/` or `-`, with the serial it has read day first and month first.
 /// `None` when the field isn't such a date (including ISO `yyyy-mm-dd`, month names and dots,
 /// which read one way and keep the input parser).
-fn numeric_date(field: &str, sys: DateSystem) -> Option<NumericDate> {
+fn numeric_date(field: &str, sys: DateSystem, region: &Region) -> Option<NumericDate> {
     let text = field.trim();
-    let (date, time) = split_time(text, sys);
+    let (date, time) = split_time(text, sys, region);
     // Typed input reads a trailing comma after a date (`3/4/2026,`); do the same here.
     let date = date.trim_end_matches(',');
     let mut parts = date.split(['/', '-']);
@@ -120,7 +145,7 @@ fn numeric_date(field: &str, sys: DateSystem) -> Option<NumericDate> {
 
 /// Splits a field into its date and a time of day, when the tail reads as a time. Both the first
 /// and last space are tried, so `03/04/2026 10:30 AM` and `03 / 04 / 2026 10:30` both split.
-fn split_time(text: &str, sys: DateSystem) -> (&str, Option<f64>) {
+fn split_time<'t>(text: &'t str, sys: DateSystem, region: &Region) -> (&'t str, Option<f64>) {
     for at in [text.find(' '), text.rfind(' ')].into_iter().flatten() {
         let (date, time) = text.split_at(at);
         let time = time.trim();
@@ -128,15 +153,15 @@ fn split_time(text: &str, sys: DateSystem) -> (&str, Option<f64>) {
         if time.len() > 40 {
             continue;
         }
-        if let Some(fraction) = time_of_day(time, sys) {
+        if let Some(fraction) = time_of_day(time, sys, region) {
             return (date.trim(), Some(fraction));
         }
     }
     (text, None)
 }
 
-fn time_of_day(text: &str, sys: DateSystem) -> Option<f64> {
-    match parse_input(text, sys) {
+fn time_of_day(text: &str, sys: DateSystem, region: &Region) -> Option<f64> {
+    match parse_input_in(text, sys, region) {
         Parsed { value: Value::Number(fraction), format: Some(code) } if code.contains('h') => Some(fraction),
         _ => None,
     }
@@ -188,13 +213,13 @@ fn sample_records(text: &str, delim: char, quote: char) -> Vec<Vec<String>> {
 }
 
 /// The date rule for each column, from the sample.
-fn infer_date_rules(rows: &[Vec<String>], sys: DateSystem) -> Vec<(DateRule, DateEvidence)> {
+fn infer_date_rules(rows: &[Vec<String>], sys: DateSystem, region: &Region) -> Vec<(DateRule, DateEvidence)> {
     let width = rows.iter().map(Vec::len).max().unwrap_or(0).min(MAX_COLS as usize);
     let mut columns = vec![DateEvidence::default(); width];
     for row in rows {
         for (col, field) in row.iter().enumerate() {
             let Some(column) = columns.get_mut(col) else { continue };
-            let Some(date) = numeric_date(field, sys) else { continue };
+            let Some(date) = numeric_date(field, sys, region) else { continue };
             let example = || field.trim().chars().take(40).collect::<String>();
             match (date.day_first.is_some(), date.month_first.is_some()) {
                 (true, true) => {
@@ -217,12 +242,13 @@ fn infer_date_rules(rows: &[Vec<String>], sys: DateSystem) -> Vec<(DateRule, Dat
 }
 
 /// Warns when the sample could not choose a date order: an all-ambiguous column keeps the
-/// month-first reading, and a column with both kinds keeps its dates as text.
-fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) {
+/// reading of the region date order, and a column with both kinds keeps its dates as text.
+fn date_warnings(columns: &[(DateRule, DateEvidence)], region: &Region, report: &mut ReadReport) {
+    let order = if region.date_order == DateOrder::Dmy { "day first" } else { "month first" };
     for (col, (rule, evidence)) in columns.iter().enumerate() {
         match rule {
             DateRule::Ambiguous => report.warn(format!(
-                "column {}: every date is ambiguous, so it was read month first ({})",
+                "column {}: every date is ambiguous, so it was read {order} ({})",
                 col_to_letters(col as u32),
                 evidence.ambiguous_example.as_deref().unwrap_or("a date")
             )),
@@ -238,10 +264,10 @@ fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) 
 }
 
 /// Reads one field with the column's date rule; other values go through typed input.
-fn read_field(field: &str, sys: DateSystem, rule: DateRule) -> Parsed {
-    match numeric_date(field, sys) {
-        Some(date) if rule != DateRule::NoDates => date.read(field, rule),
-        _ => parse_input(field, sys),
+fn read_field(field: &str, sys: DateSystem, rule: DateRule, region: &Region) -> Parsed {
+    match numeric_date(field, sys, region) {
+        Some(date) if rule != DateRule::NoDates => date.read(field, rule, region),
+        _ => parse_input_in(field, sys, region),
     }
 }
 
@@ -254,15 +280,16 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
 pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook, ReadReport), IoError> {
     let text = decode_text(bytes);
     let quote = if opts.quote == 0 { '"' } else { opts.quote as char };
-    let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote) } else { opts.delimiter } as char;
+    let delim = if opts.delimiter == 0 { sniff_delimiter(&text, quote, opts.region) } else { opts.delimiter } as char;
     if delim == quote {
         return Err(IoError::Format("the delimiter and quote character must differ".into()));
     }
-    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
+    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system, opts.region) } else { vec![] };
     let mut report = ReadReport::default();
-    date_warnings(&date_columns, &mut report);
+    date_warnings(&date_columns, opts.region, &mut report);
     let mut wb = Workbook::new();
     wb.date_system = opts.date_system;
+    wb.region = opts.region;
     wb.csv_delimiter = u8::try_from(delim).ok();
     let mut sheet = Sheet::new("Sheet1");
     let mut styles = std::mem::take(&mut wb.styles);
@@ -288,7 +315,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
-                let p = read_field(&f, opts.date_system, rule);
+                let p = read_field(&f, opts.date_system, rule, opts.region);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
