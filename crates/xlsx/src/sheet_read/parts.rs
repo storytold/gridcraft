@@ -4,12 +4,12 @@ use super::{
     from_file, truncate_chars, xml,
 };
 
-/// `budget` counts the cells and bytes this sheet's hyperlinks have copied so far, across
-/// `<hyperlinks>` blocks.
-pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet, budget: &mut LinkBudget) {
+/// `rels` maps relationship ids to relationships (the first of duplicate ids). `budget` counts the
+/// cells and bytes this sheet's hyperlinks have copied so far, across `<hyperlinks>` blocks.
+pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &HashMap<&str, &Rel>, sheet: &mut Sheet, budget: &mut LinkBudget) {
     for h in e.kids("hyperlink") {
         let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
-        let rel_target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.as_str()).unwrap_or("");
+        let rel_target = h.attr("id").and_then(|id| rels.get(id)).map(|r| r.target.as_str()).unwrap_or("");
         let location = h.attr("location").filter(|l| !l.is_empty());
         // Each covered cell gets its own copy of the link: refuse oversized targets before copying.
         if rel_target.len().saturating_add(location.map_or(0, str::len)) > MAX_HYPERLINK_TARGET {

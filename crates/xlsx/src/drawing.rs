@@ -342,6 +342,9 @@ fn first_run_color(e: &El, depth: usize) -> Option<Color> {
 
 // ---------------------------------------------------------------- writing
 
+/// The size, in points, of the plain-text box that stands in for an equation.
+const PLAIN_TEXT_PT: f32 = 11.0;
+
 /// An equation shape (inside the anchor): Office Math with a plain-text fallback when the source
 /// is in the subset OMML covers, else the plain-text box alone. Both carry the source.
 fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
@@ -376,7 +379,11 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
             xfrm(&sh.anchor, "a:xfrm")
         )
     };
-    let plain = plain_paragraphs(&sh.text, &format!("<a:rPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:rPr>"));
+    // The plain text is the LaTeX source, much wider than the typeset equation: at the equation's
+    // size it would overflow the frame in Excel, so it uses a normal text size (11 pt, Excel's
+    // default for a text box), smaller only when the frame itself is.
+    let plain_sz = (size_pt.min(PLAIN_TEXT_PT) * 100.0).round() as u32;
+    let plain = plain_paragraphs(&sh.text, &format!("<a:rPr lang=\"en-US\" sz=\"{plain_sz}\">{fill}</a:rPr>"));
     match gridcraft_math::to_omml(&sh.text, size_pt, sh.line.resolve(theme)) {
         Ok(omml) => {
             let math = format!(

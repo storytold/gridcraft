@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod cf;
+pub mod chart_data;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
@@ -323,6 +324,7 @@ impl DocState {
     /// read from bytes (a file, a download, a recovery copy), [`Trust::Local`] only for a workbook
     /// made in this session.
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let _ = gridcraft_model::PIVOT_INDEXER.set(pivot::index_cells);
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
         Self::with_calc(wb, calc, path, title, trust)
