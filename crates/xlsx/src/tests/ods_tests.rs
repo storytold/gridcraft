@@ -138,6 +138,33 @@ fn ods_dates_and_durations_use_formats_and_unsupported_values_stay_text() {
 }
 
 #[test]
+fn ods_durations_read_zero_years_and_months() {
+    // #4358: XML Schema writes a duration with or without zero years and months; both are the same
+    // length. Each pair from the issue reads the same; a nonzero year or month still stays text.
+    let pairs = [("P1DT3H", "P0Y0M1DT3H"), ("PT3H", "P0MT3H"), ("-PT2H", "-P0YT2H"), ("PT0S", "P0Y0M0D"), ("P1DT2H3M4.5S", "P0Y0M1DT2H3M4.5S")];
+    let cell = |v: &str| format!(r#"<table:table-cell office:value-type="time" office:time-value="{v}"/>"#);
+    let cells: String = pairs.iter().flat_map(|(a, b)| [cell(a), cell(b)]).collect();
+    let (wb, _) = read_ods(&row(&cells)).unwrap();
+    let s = &wb.sheets[0];
+    for (i, (a, b)) in pairs.iter().enumerate() {
+        let (x, y) = (s.value(CellRef::new(0, 2 * i as u32)), s.value(CellRef::new(0, 2 * i as u32 + 1)));
+        assert!(matches!(x, Value::Number(_)), "{a}: {x:?}");
+        assert_eq!(x, y, "{a} / {b}");
+    }
+    assert_eq!(s.value(CellRef::new(0, 1)), Value::Number(1.125));
+    let others = ["P1Y", "P0Y1M", "P0M0Y1D", "P0Y0MT", "P0YX", "P00Y"];
+    let (wb, _) = read_ods(&row(&others.iter().map(|v| cell(v)).collect::<String>())).unwrap();
+    for (c, raw) in others.iter().enumerate() {
+        let got = wb.sheets[0].value(CellRef::new(0, c as u32));
+        if *raw == "P00Y" {
+            assert_eq!(got, Value::Number(0.0), "zero years written with two digits");
+        } else {
+            assert_eq!(got, text(raw), "{raw}");
+        }
+    }
+}
+
+#[test]
 fn ods_namespaces_are_resolved_not_inferred_from_prefix_or_local_name() {
     let xml = content(r#"<table:table table:name="Actual"><table:table-row><table:table-cell office:value-type="float" office:value="9"/></table:table-row></table:table>"#)
         .replace("<office:", "<o:").replace("</office:", "</o:").replace(" office:", " o:").replace("xmlns:office=", "xmlns:o=")

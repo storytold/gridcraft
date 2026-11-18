@@ -657,6 +657,19 @@ fn parse_duration(s: &str) -> Option<f64> {
     let mut rest = s.strip_prefix('P')?;
     let mut total = 0.0;
     let mut any = false;
+    // Years and months have no fixed length in days, so a count of either keeps the value as text.
+    // A zero count says nothing, and XML Schema allows it (`P0Y0M1DT3H` is `P1DT3H`), so it is
+    // read past (#4358). They come first and in that order, in the part before `T`.
+    for unit in ['Y', 'M'] {
+        let date_part = rest.split('T').next().unwrap_or_default();
+        if let Some(at) = date_part.find(unit) {
+            if digits(rest.get(..at)?)?.bytes().any(|b| b != b'0') {
+                return None;
+            }
+            rest = rest.get(at + 1..)?;
+            any = true;
+        }
+    }
     if let Some((days, tail)) = rest.split_once('D') {
         total += digits(days)?.parse::<f64>().ok()? * 86400.0;
         rest = tail;
