@@ -1,5 +1,5 @@
 use super::*;
-use crate::adjust::{Axis, Edit, adjust, rename_sheet, shift_relative};
+use crate::adjust::{Axis, Edit, adjust, adjust_name, rename_sheet, shift_relative};
 
 fn rt(src: &str) -> String {
     match parse(src) {
@@ -194,6 +194,82 @@ fn insert_delete() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(print(&adjust(e, "Other", "Sheet1", &del)), "Sheet1!A2");
     let e = parse("SUM(A:A)")?;
     assert_eq!(print(&adjust(e, "S", "S", &del)), "SUM(#REF!)");
+    Ok(())
+}
+
+/// A name's relative parts are offsets from A1: inserting or deleting lines moves only the absolute
+/// parts, on the edited axis.
+#[test]
+fn name_adjustment_moves_only_absolute_parts_on_insert() -> Result<(), Box<dyn std::error::Error>> {
+    let adj = |f: &str, e: &Edit| parse_name(f).map(|x| print(&adjust_name(x, "S", e)));
+    let rows = Edit::Insert { axis: Axis::Rows, at: 1, count: 2 }; // before row 2
+    // Cells: only a row marked absolute moves on a row insert.
+    assert_eq!(adj("S!$A$5+S!A$5+S!$A5+S!A5", &rows)?, "S!$A$7+S!A$7+S!$A5+S!A5");
+    // An absolute cell above the insertion point stays.
+    assert_eq!(adj("S!$A$1+S!A$1", &rows)?, "S!$A$1+S!A$1");
+    // Ranges: two absolute ends adjust as a span, two relative ends stay, a mixed range moves only
+    // its absolute end.
+    assert_eq!(adj("S!$A$1:$A$5", &rows)?, "S!$A$1:$A$7");
+    assert_eq!(adj("S!A1:A5", &rows)?, "S!A1:A5");
+    assert_eq!(adj("S!$A$3:$A5", &rows)?, "S!$A$5:$A5");
+    assert_eq!(adj("S!$A$1:$A5", &rows)?, "S!$A$1:$A5");
+    // Whole rows follow the same rule; whole columns are not on the edited axis.
+    assert_eq!(adj("S!$2:$4+S!2:4+S!$2:4", &rows)?, "S!$4:$6+S!2:4+S!$4:4");
+    assert_eq!(adj("S!$B:$D+S!B:D", &rows)?, "S!$B:$D+S!B:D");
+
+    let cols = Edit::Insert { axis: Axis::Cols, at: 1, count: 2 }; // before column B
+    assert_eq!(adj("S!$E$1+S!$E1+S!E$1+S!E1", &cols)?, "S!$G$1+S!$G1+S!E$1+S!E1");
+    assert_eq!(adj("S!$B:$D+S!B:D+S!$B:D", &cols)?, "S!$D:$F+S!B:D+S!$D:D");
+    assert_eq!(adj("S!$2:$4+S!2:4", &cols)?, "S!$2:$4+S!2:4");
+    // A reference to another sheet is not on the edited sheet.
+    assert_eq!(adj("Other!$A$5+Other!A5", &rows)?, "Other!$A$5+Other!A5");
+    Ok(())
+}
+
+#[test]
+fn name_adjustment_deletes_only_absolute_parts() -> Result<(), Box<dyn std::error::Error>> {
+    let adj = |f: &str, e: &Edit| parse_name(f).map(|x| print(&adjust_name(x, "S", e)));
+    let del = Edit::Delete { axis: Axis::Rows, at: 1, count: 1 }; // row 2
+    // An absolute reference to the deleted row is #REF!; a relative one is an offset and survives.
+    assert_eq!(adj("S!$A$2", &del)?, "#REF!");
+    assert_eq!(adj("S!A$2", &del)?, "#REF!");
+    assert_eq!(adj("S!$A2+S!A2", &del)?, "S!$A2+S!A2");
+    // An absolute reference below it moves up.
+    assert_eq!(adj("S!$A$3+S!A3", &del)?, "S!$A$2+S!A3");
+    // Absolute spans shrink and vanish; a mixed range loses its absolute end with its row.
+    assert_eq!(adj("S!$A$1:$A$3", &del)?, "S!$A$1:$A$2");
+    assert_eq!(adj("S!$A$2:$A$2", &del)?, "#REF!");
+    assert_eq!(adj("S!$A$2:$A3", &del)?, "#REF!");
+    assert_eq!(adj("S!$A$3:$A3", &del)?, "S!$A$2:$A3");
+    assert_eq!(adj("S!A2:A4", &del)?, "S!A2:A4");
+    assert_eq!(adj("S!$2:$4", &del)?, "S!$2:$3");
+    assert_eq!(adj("S!2:4", &del)?, "S!2:4");
+
+    // A stored offset that wrapped around the sheet ("the cell to the left" is column XFD)
+    // survives a column insert or delete instead of overflowing or drifting.
+    let ins = Edit::Insert { axis: Axis::Cols, at: 0, count: 1 };
+    let del_col = Edit::Delete { axis: Axis::Cols, at: 0, count: 1 };
+    assert_eq!(adj("S!XFD1", &ins)?, "S!XFD1");
+    assert_eq!(adj("S!XFD1", &del_col)?, "S!XFD1");
+    Ok(())
+}
+
+/// Only inserting and deleting lines changes the rule; every other edit is adjusted as before.
+#[test]
+fn name_adjustment_leaves_other_edits_to_adjust() -> Result<(), Box<dyn std::error::Error>> {
+    let range = |a: &str| gridcraft_core::RangeRef::parse(a).ok_or("none");
+    let edits = [
+        Edit::Move { from: range("A1:A3")?, to_row: 5, to_col: 0 },
+        Edit::InsertCells { axis: Axis::Rows, range: range("A2:A3")? },
+        Edit::DeleteCells { axis: Axis::Cols, range: range("A1:B1")? },
+    ];
+    for edit in &edits {
+        for f in ["S!$A$2", "S!A2", "S!$A$1:$A$3", "S!A1:B3", "S!$B:$B", "S!$2:$3"] {
+            let name = print(&adjust_name(parse_name(f)?, "S", edit));
+            let formula = print(&adjust(parse_name(f)?, "\u{0}", "S", edit));
+            assert_eq!(name, formula, "{f} after {edit:?}");
+        }
+    }
     Ok(())
 }
 
