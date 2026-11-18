@@ -80,6 +80,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let text = pts.iter().map(|q| format!("{:.1},{:.1}", q[0] - minx, q[1] - miny)).collect::<Vec<_>>().join(";");
     let id = d.wb.next_object_id();
     let shape = Shape {
+        math: Default::default(),
         id,
         kind: ShapeKind::Ink,
         anchor: Anchor {

@@ -6,6 +6,7 @@ use super::{
 
 // ---------------------------------------------------------------- filter
 
+/// Toggles an AutoFilter on the active table or worksheet selection.
 pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, r) = data_target(s, p, "data.filter")?;
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
@@ -61,6 +62,7 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// Applies, updates, or clears an AutoFilter criterion on a column.
 pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
     crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
@@ -85,10 +87,12 @@ pub(super) fn filter_by(s: &mut Session, p: &Json) -> Result<Json> {
     let crit = if bool_param(p, "clear").unwrap_or(false) {
         None
     } else if let Some(vals) = p.get("values").and_then(Json::as_array) {
-        Some(FilterCriterion::Values {
-            values: vals.iter().map(crate::cmd::edit::json_to_input).collect(),
-            blanks: bool_param(p, "blanks").unwrap_or(false),
-        })
+        let values: Vec<String> = vals.iter().map(crate::cmd::edit::json_to_input).collect();
+        // Callers such as "Filter by Selected Cell's Value" pass `values` without `blanks`;
+        // since whitespace-only text belongs to the dropdown's `(Blanks)` group, include blanks
+        // automatically unless the caller explicitly passed `blanks`.
+        let blanks = bool_param(p, "blanks").unwrap_or_else(|| values.iter().any(|v| v.trim().is_empty()));
+        Some(FilterCriterion::Values { values, blanks })
     } else if let Some(c) = p.get("custom") {
         let a =
             (c.get("op").and_then(Json::as_str).unwrap_or("=").to_string(), c.get("value").map(crate::cmd::edit::json_to_input).unwrap_or_default());
@@ -180,12 +184,13 @@ fn filter_dropdown_blank(v: &Value) -> bool {
 /// A table's own filter is left to the table, and a row typed after a blank row does not count.
 /// A formula counts before it is calculated: this runs inside the edit, ahead of the recalc.
 pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
-    if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
-        return;
-    }
+    // The AutoFilter checks come first: they are cheap, and most sheets have none.
     let Some(af) = sh.autofilter.as_ref() else { return };
     let r = af.range;
     if r.end.row.checked_add(1) != Some(at.row) || at.col < r.start.col || at.col > r.end.col || sh.tables.iter().any(|t| t.range == r) {
+        return;
+    }
+    if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
         return;
     }
     let grown = RangeRef::new(r.start, CellRef::new(at.row, r.end.col));
@@ -198,7 +203,8 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
-    let r = af.range;
+    // An imported range can name rows past the grid; none of those exist to hide.
+    let r = RangeRef::new(af.range.start, CellRef::new(af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), af.range.end.col));
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
@@ -282,8 +288,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     }
 }
 
+/// Clears all active AutoFilter criteria on the active worksheet.
 pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if let Some(a) = sh.autofilter.as_mut() {
@@ -295,8 +303,10 @@ pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
     })
 }
 
+/// Re-evaluates existing AutoFilter criteria against current cell values.
 pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         apply_filter(&mut cx.wb, sheet);
         cx.structural = true;
@@ -344,5 +354,9 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         };
         seen.entry((sort, canonical)).and_modify(|entry: &mut (String, bool)| entry.1 |= on).or_insert((label, on));
     }
-    seen.into_values().collect()
+    let mut values: Vec<_> = seen.into_iter().collect();
+    values.sort_by(|((a, ta), _), ((b, tb), _)| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
+    });
+    values.into_iter().map(|(_, entry)| entry).collect()
 }

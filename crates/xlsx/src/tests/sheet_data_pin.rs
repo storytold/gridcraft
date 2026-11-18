@@ -17,7 +17,7 @@ fn at(a: &str) -> CellRef {
 }
 
 fn formula(text: &str, value: Value, style: StyleId) -> Cell {
-    Cell { value, formula: Some(Arc::new(Formula::new(text))), style }
+    Cell { value, formula: Some(Arc::new(Formula::new(text))), style, py: None }
 }
 
 fn sheet_data(wb: &Workbook) -> String {
@@ -37,7 +37,8 @@ fn sheet_data_is_written_byte_for_byte_as_pinned() {
     sh.rows.insert(1, LineInfo { hidden: true, ..LineInfo::default() });
     sh.rows.insert(4, LineInfo { size: Some(30.0), custom: true, ..LineInfo::default() });
     sh.rows.insert(7, LineInfo { outline: 2, style: Some(money), ..LineInfo::default() });
-    let set = |sh: &mut gridcraft_model::Sheet, a: &str, value: Value, style: StyleId| sh.cells.set(at(a), Cell { value, formula: None, style });
+    let set =
+        |sh: &mut gridcraft_model::Sheet, a: &str, value: Value, style: StyleId| sh.cells.set(at(a), Cell { value, formula: None, style, py: None });
     set(sh, "A3", Value::text("a & <b> \"q\""), StyleId::DEFAULT);
     set(sh, "B3", Value::Number(-5.0), StyleId::DEFAULT);
     set(sh, "C3", Value::Number(0.1), money);

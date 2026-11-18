@@ -1,6 +1,7 @@
 use gridcraft_engine::Session;
 use serde_json::json;
 
+/// Value-list and equality criteria ignore leading and trailing spaces (#2911).
 #[test]
 fn autofilter_ignores_surrounding_spaces_2911() {
     let mut s = Session::new();
@@ -71,6 +72,7 @@ fn autofilter_ignores_surrounding_spaces_2911() {
     }
 }
 
+/// Wildcard custom equality trims surrounding spaces before matching (#2911).
 #[test]
 fn filter_whitespace_wildcard_2911() {
     let mut s = Session::new();
@@ -92,6 +94,7 @@ fn filter_whitespace_wildcard_2911() {
     assert!(sh.is_row_hidden(3));
 }
 
+/// Custom `=` with spaces matches empty and whitespace-only cells as in Excel (#2911).
 #[test]
 fn filter_whitespace_custom_blank_distinction_2911() {
     let mut s = Session::new();
@@ -114,6 +117,7 @@ fn filter_whitespace_custom_blank_distinction_2911() {
     assert!(sh.is_row_hidden(5));
 }
 
+/// Custom `<>` trims surrounding spaces before excluding matching text (#2911).
 #[test]
 fn filter_whitespace_custom_not_equal_2911() {
     let mut s = Session::new();
@@ -135,6 +139,7 @@ fn filter_whitespace_custom_not_equal_2911() {
     assert!(!sh.is_row_hidden(3));
 }
 
+/// Empty and whitespace-only custom `=` and `<>` criteria match Excel Desktop behavior (#2911).
 #[test]
 fn filter_whitespace_empty_criteria_regression_2911() {
     let mut s = Session::new();
@@ -180,6 +185,7 @@ fn filter_whitespace_empty_criteria_regression_2911() {
     }
 }
 
+/// Selecting `(Blanks)` in the AutoFilter dropdown includes whitespace-only text cells (#2943).
 #[test]
 fn filter_whitespace_dropdown_blanks_excel_2943() {
     let mut s = Session::new();
@@ -224,4 +230,49 @@ fn filter_whitespace_dropdown_blanks_excel_2943() {
     }
 
     assert!(sh.is_row_hidden(5));
+}
+
+/// Filtering by a selected whitespace-only cell (`values: ["   "]` with `blanks` omitted) keeps blank rows visible (#2943).
+#[test]
+fn filter_by_selected_whitespace_cell_keeps_blanks_visible_2943() {
+    let mut s = Session::new();
+    s.new_workbook();
+
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [
+                ["Name"],
+                [null],
+                [""],
+                [" "],
+                ["   "],
+                ["Card"]
+            ]
+        }),
+    )
+    .unwrap();
+
+    s.execute("data.filter", json!({"range": "A1:A6"})).unwrap();
+
+    // Simulates "Filter by Selected Cell's Value" (`values: [text]`, no `blanks` key).
+    let result = s.execute("data.filterBy", json!({"column": "A", "values": ["   "]})).unwrap();
+    assert_eq!(result["hiddenRows"], json!(1));
+
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    for row in 1..=4 {
+        assert!(!sh.is_row_hidden(row), "whitespace/blank row {row} must stay visible");
+    }
+    assert!(sh.is_row_hidden(5));
+
+    // Explicit `blanks: false` from the dropdown still hides blank/whitespace rows.
+    let result = s.execute("data.filterBy", json!({"column": "A", "values": ["Card"], "blanks": false})).unwrap();
+    assert_eq!(result["hiddenRows"], json!(4));
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    for row in 1..=4 {
+        assert!(sh.is_row_hidden(row), "row {row} should be hidden when blanks: false");
+    }
+    assert!(!sh.is_row_hidden(5));
 }
