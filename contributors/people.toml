@@ -118,3 +118,8 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.raphaelmo-creator]
+real_name = "Raphael Monteiro"
+display_name = "Raphael Monteiro"
+sync_github_name = false

@@ -52,14 +52,56 @@ pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
 /// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
 /// fractions kept as text are not flagged, as in Excel.
+///
+/// Euro amounts are flagged too: the euro sign before or after the amount, with at most a plain
+/// space between them, a minus before the sign or the amount, and the amount in European
+/// (`1.234,56`) or en-US (`65.00`) form, as in `65,00€`, `-6,04 €`, `€ 1.234,56` and `65.00€`.
 pub fn number_stored_as_text(s: &str) -> Option<f64> {
     let t = s.trim();
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
     match parenthesized(t) {
         Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
         Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
-        None => parse_plain(t).map(|(n, _)| n),
+        None => parse_plain(t).map(|(n, _)| n).or_else(|| euro_text(t)),
     }
+}
+
+/// Euro amounts as European bank exports write them, which Excel in a European locale flags:
+/// `65,00€`, `-6,04 €`, `€ 1.234,56` (comma decimal, dot thousands), and the en-US body `65.00€`.
+/// Only a plain space may stand between the amount and the sign: Excel (pt-PT) does not flag these
+/// forms when a no-break or narrow no-break space is used.
+// Limitation: euro sign only; a plain `65,00` needs the workbook's number locale, which isn't
+// modelled yet (#889).
+fn euro_text(t: &str) -> Option<f64> {
+    let (neg, t) = match t.strip_prefix('-') {
+        Some(r) => (true, r.trim_start_matches(' ')),
+        None => (false, t),
+    };
+    let body = t.strip_suffix('€').or_else(|| t.strip_prefix('€'))?.trim_matches(' ');
+    let (neg, body) = match body.strip_prefix('-') {
+        Some(r) if !neg => (true, r),
+        _ => (neg, body),
+    };
+    if body.is_empty() || !body.bytes().all(|c| c.is_ascii_digit() || c == b',' || c == b'.') {
+        return None;
+    }
+    let n = european_number(body).or_else(|| parse_plain(body).map(|(n, _)| n))?;
+    Some(if neg { -n } else { n })
+}
+
+/// `1.234,56`: dot thousands in groups of three, an optional comma decimal part. Rejected: a group
+/// after the first that isn't exactly three digits, and an empty decimal part (`1,`).
+fn european_number(s: &str) -> Option<f64> {
+    let (int, frac) = s.rsplit_once(',').map_or((s, None), |(a, b)| (a, Some(b)));
+    let groups: Vec<&str> = int.split('.').collect();
+    let first = groups.first()?;
+    if first.is_empty() || (groups.len() > 1 && first.len() > 3) || groups.iter().skip(1).any(|g| g.len() != 3) {
+        return None;
+    }
+    if frac.is_some_and(|f| f.is_empty() || f.contains(['.', ','])) {
+        return None;
+    }
+    format!("{}.{}", groups.concat(), frac.unwrap_or("0")).parse().ok().filter(|n: &f64| n.is_finite())
 }
 
 fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
@@ -625,8 +667,21 @@ mod tests {
             ("(100)", -100.0),
             ("$(5)", -5.0),
             ("(5)%", -0.05),
+            // Euro amounts from European bank exports.
+            ("65,00€", 65.0),
+            ("65.00€", 65.0),
+            ("-6,04 €", -6.04),
+            ("€ -6,04", -6.04),
+            ("1.234,56 €", 1234.56),
+            ("1.234€", 1234.0),
+            ("€12", 12.0),
         ] {
             assert_eq!(number_stored_as_text(text), Some(n), "{text}");
+        }
+        // A no-break or narrow no-break space next to the sign isn't read, as in Excel (pt-PT).
+        let spaced = ["65,00\u{a0}€", "65,00\u{202f}€", "€\u{a0}65,00", "-6,04\u{a0}€", "1\u{a0}234,56 €", "1 234,56 €"];
+        for text in ["€", "65,00", "6,0,4€", "12.34.5€", "1,2.3€", "abc€", "€$5", "--5€", "5%€", ",€"].into_iter().chain(spaced) {
+            assert_eq!(number_stored_as_text(text), None, "{text}");
         }
         // Dates, times, fractions, words and blanks are not flagged.
         for text in ["3/4/2026", "10:30", "1 1/2", "abc", "12abc", "", "  ", "TRUE", "#N/A", "((1))", "(-5)", "$(5)%", "(1/2)"] {
