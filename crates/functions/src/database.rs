@@ -16,18 +16,19 @@ use crate::criteria::Criterion;
 use crate::util::{A, R, as_array, has, num_val};
 use crate::{Arg, Ctx, FnSpec};
 
-/// Column index of a label in the header row.
-fn find_column(db: &Array, label: &str) -> Option<usize> {
+/// Column index of a label in the header row. A number label reads with the region's decimal
+/// separator (`1,5` in pt-BR).
+fn find_column(db: &Array, label: &str, decimal: char) -> Option<usize> {
     let label = label.trim();
     (0..db.cols).find(|&c| match db.get(0, c) {
         Some(Value::Text(t)) => compare_text(t.trim(), label).is_eq(),
-        Some(Value::Number(n)) => gridcraft_core::number_to_text(*n) == label,
+        Some(Value::Number(n)) => gridcraft_core::number_to_text(*n).replace('.', decimal.encode_utf8(&mut [0; 4])) == label,
         _ => false,
     })
 }
 
 /// Resolves the field argument: a label or a 1-based column number. `None` when omitted.
-fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
+fn field_index(db: &Array, a: &[Arg], decimal: char) -> R<Option<usize>> {
     if !has(a, 1) {
         return Ok(None);
     }
@@ -41,7 +42,7 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
             }
             Ok(Some((i as usize).saturating_sub(1)))
         }
-        Value::Text(t) => find_column(db, &t).map(Some).ok_or(CellError::Value),
+        Value::Text(t) => find_column(db, &t, decimal).map(Some).ok_or(CellError::Value),
         Value::Bool(_) => Err(CellError::Value),
         Value::Error(e) => Err(e),
         _ => Ok(None),
@@ -49,20 +50,24 @@ fn field_index(db: &Array, a: &[Arg]) -> R<Option<usize>> {
 }
 
 /// One criteria cell as a matcher. Plain text becomes a "begins with" pattern.
-fn cell_criterion(v: &Value) -> Option<Criterion> {
+fn cell_criterion(v: &Value, region: &'static gridcraft_core::Region) -> Option<Criterion> {
     match v {
         Value::Empty => None,
         Value::Text(t) => {
             let s: &str = t;
             let has_op = s.starts_with(['=', '<', '>']);
             let plain_text = !has_op
-                && gridcraft_core::parse::parse_number_text(s).is_none()
+                && gridcraft_core::parse::parse_number_text_in_region(s, gridcraft_core::DateSystem::D1900, region).is_none()
                 && !s.eq_ignore_ascii_case("TRUE")
                 && !s.eq_ignore_ascii_case("FALSE")
                 && CellError::parse(s).is_none();
-            if plain_text && !s.ends_with('*') { Some(Criterion::parse(&Value::from(format!("{s}*")))) } else { Some(Criterion::parse(v)) }
+            if plain_text && !s.ends_with('*') {
+                Some(Criterion::parse(&Value::from(format!("{s}*")), region))
+            } else {
+                Some(Criterion::parse(v, region))
+            }
         }
-        other => Some(Criterion::parse(other)),
+        other => Some(Criterion::parse(other, region)),
     }
 }
 
@@ -78,11 +83,14 @@ const SELECTION_WORK_BUDGET: usize = 500_000_000;
 
 /// Rows (1-based within the database, excluding the header) of matching records.
 fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>> {
+    let decimal = ctx.region().decimal;
     // The database column under each criteria label, found once per label rather than per cell.
     let columns: Vec<Option<usize>> = (0..crit.cols)
         .map(|c| match crit.get(0, c) {
-            Some(Value::Text(t)) => find_column(db, t),
-            Some(Value::Number(n)) => find_column(db, &gridcraft_core::number_to_text(*n)),
+            Some(Value::Text(t)) => find_column(db, t, decimal),
+            Some(Value::Number(n)) => {
+                find_column(db, &gridcraft_core::number_to_text(*n).replace('.', decimal.encode_utf8(&mut [0; 4])), decimal)
+            }
             _ => None,
         })
         .collect();
@@ -94,7 +102,7 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>
         let mut conds = Vec::new();
         for c in 0..crit.cols {
             let Some(cell) = crit.get(r, c) else { continue };
-            let Some(cr) = cell_criterion(cell) else { continue };
+            let Some(cr) = cell_criterion(cell, ctx.region()) else { continue };
             conds.push((c, columns.get(c).copied().flatten(), cr));
         }
         tests = tests.saturating_add(conds.len().max(1));
@@ -142,7 +150,7 @@ fn select<'a>(a: &'a [Arg], ctx: &mut dyn Ctx) -> R<Selection<'a>> {
     }
     let db = as_array(dbv);
     let crit = as_array(critv);
-    let field = field_index(&db, a)?;
+    let field = field_index(&db, a, ctx.region().decimal)?;
     let records = matching_records(&db, &crit, ctx)?;
     Ok(Selection { db, field, records })
 }

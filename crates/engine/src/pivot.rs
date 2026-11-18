@@ -45,8 +45,6 @@ pub const MAX_VALUE_FIELDS: usize = 256;
 /// reports are rejected).
 pub const MAX_INDEXED_CELLS: usize = 1_000_000;
 
-const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 // ---------------------------------------------------------------- source
 
 /// The source list: header names, per-column number formats and the records.

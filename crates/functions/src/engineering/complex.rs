@@ -69,20 +69,22 @@ impl Cx {
 
 pub(super) const ONE: Cx = Cx { re: 1.0, im: 0.0 };
 
-/// Parses a real number written in a complex string (no spaces, optional exponent).
-fn parse_real(s: &str) -> Option<f64> {
+/// Parses a real number written in a complex string (no spaces, optional exponent). A `.` is
+/// always a decimal point; where the region writes decimals with a `,` (`1,5+2i` in pt-BR) that
+/// is one too.
+fn parse_real(s: &str, decimal: char) -> Option<f64> {
     if s.is_empty() || s.contains(char::is_whitespace) {
         return None;
     }
-    let ok = s.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'));
+    let ok = s.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-') || (c == ',' && decimal == ','));
     if !ok {
         return None;
     }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
+    s.replace(',', ".").parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 /// Parses "a+bi" forms. Returns the number and its suffix ('i', 'j' or none).
-pub(super) fn parse_complex(s: &str) -> R<(Cx, Option<char>)> {
+pub(super) fn parse_complex(s: &str, decimal: char) -> R<(Cx, Option<char>)> {
     if s.is_empty() {
         return Ok((Cx::new(0.0, 0.0), None));
     }
@@ -91,7 +93,7 @@ pub(super) fn parse_complex(s: &str) -> R<(Cx, Option<char>)> {
         _ => None,
     };
     let Some(sfx) = suffix else {
-        return parse_real(s).map(|r| (Cx::new(r, 0.0), None)).ok_or(CellError::Num);
+        return parse_real(s, decimal).map(|r| (Cx::new(r, 0.0), None)).ok_or(CellError::Num);
     };
     let body = &s[..s.len() - 1];
     // Split at the last sign that is not at the start and not part of an exponent.
@@ -109,28 +111,28 @@ pub(super) fn parse_complex(s: &str) -> R<(Cx, Option<char>)> {
         Some(i) => (&body[..i], &body[i..]),
         None => ("", body),
     };
-    let re = if re_s.is_empty() { 0.0 } else { parse_real(re_s).ok_or(CellError::Num)? };
+    let re = if re_s.is_empty() { 0.0 } else { parse_real(re_s, decimal).ok_or(CellError::Num)? };
     let im = match im_s {
         "" | "+" => 1.0,
         "-" => -1.0,
-        t => parse_real(t).ok_or(CellError::Num)?,
+        t => parse_real(t, decimal).ok_or(CellError::Num)?,
     };
     Ok((Cx::new(re, im), Some(sfx)))
 }
 
-fn cx_of(v: &Value) -> R<(Cx, Option<char>)> {
+fn cx_of(v: &Value, decimal: char) -> R<(Cx, Option<char>)> {
     match v {
         Value::Number(n) => Ok((Cx::new(*n, 0.0), None)),
         Value::Empty => Ok((Cx::new(0.0, 0.0), None)),
         Value::Bool(_) => Err(CellError::Value),
         Value::Error(e) => Err(*e),
-        Value::Text(t) => parse_complex(t),
-        Value::Array(a) => cx_of(a.data.first().unwrap_or(&Value::Empty)),
+        Value::Text(t) => parse_complex(t, decimal),
+        Value::Array(a) => cx_of(a.data.first().unwrap_or(&Value::Empty), decimal),
     }
 }
 
-fn cx_arg(a: &[Arg], i: usize) -> R<(Cx, Option<char>)> {
-    cx_of(&a.get(i).map(scalar).unwrap_or(Value::Empty))
+fn cx_arg(a: &[Arg], i: usize, decimal: char) -> R<(Cx, Option<char>)> {
+    cx_of(&a.get(i).map(scalar).unwrap_or(Value::Empty), decimal)
 }
 
 fn merge_suffix(acc: Option<char>, s: Option<char>) -> R<Option<char>> {
@@ -141,19 +143,21 @@ fn merge_suffix(acc: Option<char>, s: Option<char>) -> R<Option<char>> {
     }
 }
 
-fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
+/// Writes `z` as `a+bi`, with the region's decimal separator (`1,5+2i` in pt-BR).
+fn fmt_complex(z: Cx, suffix: char, decimal: char) -> R<Value> {
     if !z.re.is_finite() || !z.im.is_finite() {
         return Err(CellError::Num);
     }
+    let num_text = |x: f64| number_to_text(x).replace('.', decimal.encode_utf8(&mut [0; 4]));
     let re = clean(z.re);
     let im = clean(z.im);
     let mut s = String::new();
     if im == 0.0 {
-        s.push_str(&number_to_text(re));
+        s.push_str(&num_text(re));
         return text_val(s);
     }
     if re != 0.0 {
-        s.push_str(&number_to_text(re));
+        s.push_str(&num_text(re));
         if im > 0.0 {
             s.push('+');
         }
@@ -161,7 +165,7 @@ fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
     if im == -1.0 {
         s.push('-');
     } else if im != 1.0 {
-        s.push_str(&number_to_text(im));
+        s.push_str(&num_text(im));
     }
     s.push(suffix);
     text_val(s)
@@ -173,7 +177,7 @@ fn clean(x: f64) -> f64 {
     s.parse().unwrap_or(x)
 }
 
-pub(super) fn complex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+pub(super) fn complex(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let re = num(a, 0)?;
     let im = num(a, 1)?;
     let sfx = if has(a, 2) { text(a, 2)? } else { "i".into() };
@@ -182,52 +186,53 @@ pub(super) fn complex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         "j" => 'j',
         _ => return Err(CellError::Value),
     };
-    fmt_complex(Cx::new(re, im), sfx)
+    fmt_complex(Cx::new(re, im), sfx, c.region().decimal)
 }
 
-pub(super) fn im_unary(a: &[Arg], f: fn(Cx) -> R<Cx>) -> R<Value> {
-    let (z, s) = cx_arg(a, 0)?;
-    fmt_complex(f(z)?, s.unwrap_or('i'))
+pub(super) fn im_unary(a: &[Arg], f: fn(Cx) -> R<Cx>, decimal: char) -> R<Value> {
+    let (z, s) = cx_arg(a, 0, decimal)?;
+    fmt_complex(f(z)?, s.unwrap_or('i'), decimal)
 }
 
-fn im_real_fn(a: &[Arg], f: fn(Cx) -> R<f64>) -> R<Value> {
-    let (z, _) = cx_arg(a, 0)?;
+fn im_real_fn(a: &[Arg], f: fn(Cx) -> R<f64>, decimal: char) -> R<Value> {
+    let (z, _) = cx_arg(a, 0, decimal)?;
     num_val(f(z)?)
 }
 
-pub(super) fn imabs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| Ok(z.abs()))
+pub(super) fn imabs(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(a, |z| Ok(z.abs()), c.region().decimal)
 }
 
-pub(super) fn imreal(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| Ok(z.re))
+pub(super) fn imreal(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(a, |z| Ok(z.re), c.region().decimal)
 }
 
-pub(super) fn imaginary(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| Ok(z.im))
+pub(super) fn imaginary(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(a, |z| Ok(z.im), c.region().decimal)
 }
 
-pub(super) fn imargument(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| if z.re == 0.0 && z.im == 0.0 { Err(CellError::Div0) } else { Ok(z.arg()) })
+pub(super) fn imargument(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_real_fn(a, |z| if z.re == 0.0 && z.im == 0.0 { Err(CellError::Div0) } else { Ok(z.arg()) }, c.region().decimal)
 }
 
-fn im_binary(a: &[Arg], f: fn(Cx, Cx) -> R<Cx>) -> R<Value> {
-    let (x, s1) = cx_arg(a, 0)?;
-    let (y, s2) = cx_arg(a, 1)?;
+fn im_binary(a: &[Arg], f: fn(Cx, Cx) -> R<Cx>, decimal: char) -> R<Value> {
+    let (x, s1) = cx_arg(a, 0, decimal)?;
+    let (y, s2) = cx_arg(a, 1, decimal)?;
     let s = merge_suffix(s1, s2)?;
-    fmt_complex(f(x, y)?, s.unwrap_or('i'))
+    fmt_complex(f(x, y)?, s.unwrap_or('i'), decimal)
 }
 
-pub(super) fn imdiv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_binary(a, Cx::div)
+pub(super) fn imdiv(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_binary(a, Cx::div, c.region().decimal)
 }
 
-pub(super) fn imsub(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_binary(a, |x, y| Ok(x.sub(y)))
+pub(super) fn imsub(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_binary(a, |x, y| Ok(x.sub(y)), c.region().decimal)
 }
 
-pub(super) fn impower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (z, s) = cx_arg(a, 0)?;
+pub(super) fn impower(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    let decimal = c.region().decimal;
+    let (z, s) = cx_arg(a, 0, decimal)?;
     let n = num(a, 1)?;
     // Integer powers by repeated multiplication are exact for small Gaussian integers.
     let r = if n == n.trunc() && n.abs() <= 64.0 && !(z.re == 0.0 && z.im == 0.0) {
@@ -239,10 +244,10 @@ pub(super) fn impower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     } else {
         z.powf(n)?
     };
-    fmt_complex(r, s.unwrap_or('i'))
+    fmt_complex(r, s.unwrap_or('i'), decimal)
 }
 
-fn im_fold(a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx) -> R<Value> {
+fn im_fold(a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx, decimal: char) -> R<Value> {
     let mut acc = init;
     let mut sfx = None;
     for arg in a {
@@ -251,18 +256,18 @@ fn im_fold(a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx) -> R<Value> {
             if matches!(v, Value::Empty) && !direct {
                 continue;
             }
-            let (z, s) = cx_of(&v)?;
+            let (z, s) = cx_of(&v, decimal)?;
             sfx = merge_suffix(sfx, s)?;
             acc = f(acc, z);
         }
     }
-    fmt_complex(acc, sfx.unwrap_or('i'))
+    fmt_complex(acc, sfx.unwrap_or('i'), decimal)
 }
 
-pub(super) fn imsum(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_fold(a, Cx::new(0.0, 0.0), Cx::add)
+pub(super) fn imsum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_fold(a, Cx::new(0.0, 0.0), Cx::add, c.region().decimal)
 }
 
-pub(super) fn improduct(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_fold(a, ONE, Cx::mul)
+pub(super) fn improduct(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+    im_fold(a, ONE, Cx::mul, c.region().decimal)
 }

@@ -1,4 +1,4 @@
-use super::{CellError, HashMap, MONTHS, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial};
+use super::{CellError, HashMap, Ordering, PivotDateGroup, PivotField, PivotFunc, PivotSort, Source, Value, Workbook, datetime_from_serial};
 
 // ---------------------------------------------------------------- items
 
@@ -24,6 +24,12 @@ fn cmp_items(a: &Item, b: &Item) -> Ordering {
     a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| gridcraft_core::compare_text(&a.text, &b.text))
 }
 
+/// The word before a quarter's number in a grouped date field: `Trim1` in Portuguese, `Qtr1`
+/// elsewhere. The file keeps the en-US label; this is only what the report shows.
+fn quarter_label(region: &gridcraft_core::Region) -> &'static str {
+    if region.tag.starts_with("pt") { "Trim" } else { "Qtr" }
+}
+
 /// (identity key, item) for a source value under a field's date grouping.
 fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: usize) -> (String, Item) {
     let it = |value: Value, label: String, class: u8, num: f64, formatted: bool| Item {
@@ -41,12 +47,12 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &str, first: 
             if group != PivotDateGroup::None
                 && let Some(dt) = datetime_from_serial(wb.date_system, *n)
             {
-                let mon = MONTHS.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or("Jan");
+                let mon = wb.region.months_abbr.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or_default();
                 let (label, key) = match group {
                     PivotDateGroup::Years => (dt.year.to_string(), dt.year as f64),
                     PivotDateGroup::Quarters => {
                         let q = (dt.month.saturating_sub(1)) / 3 + 1;
-                        (format!("Qtr{q}"), q as f64)
+                        (format!("{}{q}", quarter_label(wb.region)), q as f64)
                     }
                     PivotDateGroup::Months => (mon.to_string(), dt.month as f64),
                     _ => (format!("{}-{mon}", dt.day), (dt.month * 100 + dt.day) as f64),

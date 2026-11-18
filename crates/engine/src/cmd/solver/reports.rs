@@ -107,7 +107,9 @@ pub(super) fn title(out: &mut Lines, kind: ReportKind, sheet: &str) -> u32 {
     3
 }
 
-fn format_constraint_row(sh: &Sheet, c: &Constraint, cell: CellRef, v: f64, rhs: &[f64], k: usize) -> Vec<Value> {
+/// A constraint row of the Answer Report. A number on the right is written with the region's
+/// decimal separator (`$B$5<=1,5` in pt-BR).
+fn format_constraint_row(sh: &Sheet, c: &Constraint, cell: CellRef, v: f64, rhs: &[f64], k: usize, decimal: char) -> Vec<Value> {
     let (formula, status, slack) = match (c.rel, &c.rhs) {
         (Rel::Int, _) => (format!("{}=Integer", abs_ref(cell)), "Binding", 0.0),
         (Rel::Bin, _) => (format!("{}=Binary", abs_ref(cell)), "Binding", 0.0),
@@ -115,7 +117,7 @@ fn format_constraint_row(sh: &Sheet, c: &Constraint, cell: CellRef, v: f64, rhs:
             let b = rhs.get(k).or_else(|| rhs.first()).copied().unwrap_or(f64::NAN);
             let rhs_text = match rhs_cells {
                 Rhs::Cells(cells) => cells.get(k).or_else(|| cells.first()).map(|c| abs_ref(*c)).unwrap_or_default(),
-                _ => gridcraft_core::number_to_text(b),
+                _ => gridcraft_core::number_to_text(b).replace('.', decimal.encode_utf8(&mut [0; 4])),
             };
             let slack = (v - b).abs();
             let binding = rel == Rel::Eq || slack <= PRECISION * (1.0 + b.abs());
@@ -190,7 +192,7 @@ fn answer_report(d: &DocState, sh: &Sheet, inp: &ReportInput) -> Lines {
             Rhs::None => vec![],
         };
         for (k, (cell, v)) in c.lhs.iter().zip(&lhs).enumerate() {
-            rows.push(format_constraint_row(sh, c, *cell, *v, &rhs, k));
+            rows.push(format_constraint_row(sh, c, *cell, *v, &rhs, k, d.wb.region.decimal));
         }
     }
     table(&mut out, r + 1, &["Cell", "Name", "Cell Value", "Formula", "Status", "Slack"], rows);

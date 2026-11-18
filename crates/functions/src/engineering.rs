@@ -240,8 +240,8 @@ fn erfc_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 macro_rules! im1 {
     ($name:ident, $f:expr) => {
-        fn $name(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-            im_unary(a, $f)
+        fn $name(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
+            im_unary(a, $f, c.region().decimal)
         }
     };
 }
@@ -398,7 +398,7 @@ mod tests {
     #[track_caller]
     fn cx(v: Value, re: f64, im: f64) {
         let Value::Text(s) = &v else { panic!("expected complex text, got {v:?}") };
-        let (z, _) = parse_complex(s).unwrap();
+        let (z, _) = parse_complex(s, '.').unwrap();
         let tol = 1e-12;
         assert!((z.re - re).abs() <= tol * re.abs().max(1.0), "{s}: re {} vs {re}", z.re);
         assert!((z.im - im).abs() <= tol * im.abs().max(1.0), "{s}: im {} vs {im}", z.im);
