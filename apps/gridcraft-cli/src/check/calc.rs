@@ -88,6 +88,28 @@ pub fn bool_cached_as_number(expected: &Value, actual: &Value) -> bool {
     matches!((expected, actual), (Value::Number(n), Value::Bool(b)) if *n == if *b { 1.0 } else { 0.0 })
 }
 
+/// Whether a text cache entry uses the error spelling emitted by Google Sheets and older writers.
+fn cached_error_text(s: &str) -> Option<&'static str> {
+    match s.trim() {
+        "#DIV/0!" => Some("#DIV/0!"),
+        "#N/A" | "#N/A!" => Some("#N/A"),
+        "#VALUE!" => Some("#VALUE!"),
+        "#REF!" => Some("#REF!"),
+        "#NAME?" => Some("#NAME?"),
+        "#NUM!" => Some("#NUM!"),
+        "#NULL!" => Some("#NULL!"),
+        "#GETTING_DATA" => Some("#GETTING_DATA"),
+        "#CALC!" => Some("#CALC!"),
+        "#SPILL!" => Some("#SPILL!"),
+        _ => None,
+    }
+}
+
+/// Whether a cached string error literal agrees with the evaluated error value.
+fn text_cached_as_error(expected: &Value, actual: &Value) -> bool {
+    matches!((expected, actual), (Value::Text(s), Value::Error(err)) if cached_error_text(s).is_some_and(|lit| lit.eq_ignore_ascii_case(err.as_str())))
+}
+
 /// Whether GridCraft's `actual` agrees with the producer's `expected`.
 pub fn values_match(expected: &Value, actual: &Value, tolerance: f64) -> bool {
     match (expected, actual) {
@@ -200,7 +222,7 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
                 None => vec!["(unparsed)".to_string()],
             };
             let bool_as_number = bool_cached_as_number(&cell.value, &actual);
-            let ok = bool_as_number || values_match(&cell.value, &actual, opts.tolerance);
+            let ok = bool_as_number || text_cached_as_error(&cell.value, &actual) || values_match(&cell.value, &actual, opts.tolerance);
             if bool_as_number {
                 r.bool_as_number += 1;
             }
