@@ -150,6 +150,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "formatCells" => 560.0,
         "about" => 820.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
+        crate::plugins_ui::MANAGE | crate::plugins_ui::CONFIRM | crate::plugins_ui::PARAMS => 480.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -215,6 +216,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     ui.label(format!("{} engine commands are available. See docs/mcp.md and docs/control-protocol.md.", gridcraft_engine::command_specs().len()));
                 }
                 "about" => about(ui, &mut d),
+                crate::plugins_ui::MANAGE | crate::plugins_ui::CONFIRM | crate::plugins_ui::PARAMS => {
+                    crate::plugins_ui::body(app, ui, &mut d, &mut confirm, &mut open)
+                }
                 "journal" => {
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                         for (id, p) in app.session.journal.iter().rev().take(500) {
@@ -434,6 +438,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         match app.run(cmd, params) {
             Ok(r) => {
                 open = false;
+                // A plug-in's install or run says how it went (other dialogs: nothing).
+                crate::plugins_ui::after_ok(app, &d, &r);
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);
                 } else if d.name == "openPassword" {

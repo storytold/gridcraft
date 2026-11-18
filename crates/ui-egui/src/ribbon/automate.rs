@@ -70,6 +70,9 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
+    // Plug-ins: the button opens the Plug-ins dialog; its menu runs the installed plug-ins' commands.
+    crate::plugins_ui::ribbon_button(app, ui);
+    sep(ui);
     let __k = big_button(ui, Icon::Script, "Command\nPalette", "Search and run any command", false);
     control_keytip(app, ui, &__k, "commandSearch");
     if __k.clicked() {

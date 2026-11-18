@@ -49,6 +49,7 @@ pub mod outline;
 pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
+pub mod plugins_ui;
 pub mod printing;
 pub mod ribbon;
 pub mod selection_glide;
@@ -318,6 +319,8 @@ pub struct SheetApp {
     tab_run: Option<(u64, usize, u32, CellRef)>,
     /// Automate › Macros: relative recording, recent macros, a macro's question.
     pub macros: macro_ui::MacroUi,
+    /// Automate › Plug-ins: a download for the Plug-ins dialog in progress.
+    pub(crate) plugins: plugins_ui::PluginsUi,
     pub started: f64,
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.

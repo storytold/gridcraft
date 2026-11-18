@@ -1011,6 +1011,7 @@ impl Dialog {
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
+            crate::plugins_ui::MANAGE => crate::plugins_ui::manage_dialog(),
             "about" => {
                 let mut d = Dialog::custom("about", "About GridCraft", json!({}));
                 d.tab = match p("tab").as_str() {

@@ -183,6 +183,9 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_plugin: Some(Box::new(|| {
+            rfd::FileDialog::new().add_filter("GridCraft plug-in", &["craftplugin"]).pick_file().and_then(|p| p.to_str().map(str::to_string))
+        })),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -329,6 +332,14 @@ fn main() -> eframe::Result<()> {
     app.start_update_check();
     let control_port = control_port;
     load_prefs(&mut app);
+    // Plug-ins live in `Plug-ins/` beside the preferences (RFC-0046), and download over the
+    // update checker's HTTPS client. Runs without preferences keep plug-ins for the session.
+    if prefs_enabled()
+        && let Some(dir) = config_dir()
+    {
+        app.session.plugins.open_store(&dir);
+    }
+    app.session.plugins.fetch = gridcraft_ui_egui::plugins_ui::http_fetch();
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();

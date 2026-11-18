@@ -2399,6 +2399,7 @@ dependencies = [
  "sys-locale",
  "toml",
  "unicode-bidi",
+ "wat",
  "web-sys",
  "web-time",
  "zbus",

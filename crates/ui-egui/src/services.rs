@@ -20,6 +20,8 @@ pub struct Services {
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
     /// insert into a subsequent dialog or open the image as a workbook.
     pub pick_picture_async: Option<Box<dyn Fn(Inbox)>>,
+    /// Native plug-in picker (`.craftplugin`) for Automate › Plug-ins.
+    pub pick_plugin: Option<Box<dyn Fn() -> Option<String>>>,
     pub open_url: Option<OpenUrl>,
     /// Publish HTML and its plain-text alternative together. `Ok` means the host owns the
     /// write (including any asynchronous fallback); an immediate error uses egui's text path.
