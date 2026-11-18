@@ -182,11 +182,13 @@ impl Default for UiState {
 }
 
 impl UiState {
-    /// The state saved by an earlier run, as the app starts with it. The ribbon tab is written to
-    /// the preferences but not restored: Excel opens on Home every launch, so a contextual tab
+    /// The state saved by an earlier run, as the app starts with it. The ribbon tab and whether
+    /// it is hidden are written to the preferences but not restored: the workbooks a launch opens
+    /// show their ribbon on Home, as every new or opened workbook does, and a contextual tab
     /// (Table Design) cannot come back with nothing selected to justify it.
     pub fn at_startup(mut self) -> Self {
         self.ribbon_tab = "Home".into();
+        self.ribbon_collapsed = false;
         self
     }
 

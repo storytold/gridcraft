@@ -39,12 +39,12 @@ pub struct WindowUi {
 
 impl WindowUi {
     /// A new window's state. The last border, fill and font colour picked carry over, as they are
-    /// the user's recent choices rather than the window's; so do the ribbon tab and whether the
-    /// ribbon is hidden, which the new window then changes on its own.
-    fn fresh(like: &grid::GridState, ribbon_tab: &str, ribbon_collapsed: bool) -> WindowUi {
+    /// the user's recent choices rather than the window's. A new or opened workbook always shows
+    /// its ribbon on Home, whatever the window it came from showed.
+    fn fresh(like: &grid::GridState) -> WindowUi {
         WindowUi {
-            ribbon_tab: ribbon_tab.to_string(),
-            ribbon_collapsed,
+            ribbon_tab: "Home".into(),
+            ribbon_collapsed: false,
             grid: grid::GridState {
                 last_border: like.last_border.clone(),
                 last_fill: like.last_fill.clone(),
@@ -124,7 +124,7 @@ impl SheetApp {
             self.ui_window = active;
             return;
         };
-        let mut outgoing = WindowUi::fresh(&self.grid, &self.ui.ribbon_tab, self.ui.ribbon_collapsed);
+        let mut outgoing = WindowUi::fresh(&self.grid);
         self.swap_window_ui(&mut outgoing);
         if let Some(window) = self.session.window(previous) {
             // A hidden window isn't drawn: a key tip request waiting for its next frame would
