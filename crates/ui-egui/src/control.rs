@@ -15,6 +15,7 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
+//! - `ui.fonts` — the font list the app offers and the families installed on the OS
 //! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
@@ -280,6 +281,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("ui.window.close", "Close Window", ""),
                 ("ui.window.beginResize", "Resize Window", "{direction: north|south|east|west|northeast|northwest|southeast|southwest}"),
                 ("ui.dialog", "Open Dialog", ""),
+                ("ui.fonts", "Fonts", "→ {families, installed, scanning}"),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
                 (
                     "ui.printSettings",

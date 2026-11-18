@@ -59,6 +59,12 @@ pub struct EditState {
     /// The cell's text when an F2-style edit began. Committing it unchanged leaves the cell alone
     /// (no undo step, the workbook stays clean). `None` for an edit started by typing.
     pub original: Option<String>,
+    /// The editor previews an IME composition while the grid still owns the IME: the text is the
+    /// current preedit, the editor has not taken focus (moving it would interrupt the
+    /// composition), and a commit hands it the keyboard.
+    pub ime_preview: bool,
+    /// The text the IME committed during this composition preview, before the current preedit.
+    pub ime_committed: String,
     /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
     /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
     pub python: bool,
@@ -99,8 +105,51 @@ impl EditState {
             caret_to_end: true,
             completion: None,
             original,
+            ime_preview: false,
+            ime_committed: String::new(),
             python: false,
         }
+    }
+
+    /// Shows an IME composition in the editor without taking the keyboard. `committed` is the
+    /// text the IME has already committed in this composition session and `preedit` the active
+    /// composition shown after it; the grid keeps the IME context, because moving focus to the
+    /// editor would interrupt the composition and lose its first kana.
+    pub fn show_ime_preview(&mut self, committed: &str, preedit: &str) {
+        self.ime_preview = true;
+        self.ime_committed.clear();
+        self.ime_committed.push_str(committed);
+        self.text.clear();
+        self.text.push_str(committed);
+        self.text.push_str(preedit);
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.point = None;
+        self.point_cell = None;
+        self.point_anchor = None;
+        self.autocomplete.clear();
+        self.completion = None;
+        self.caret_to_end = false;
+        self.request_focus = false;
+        self.sync_caret = true;
+    }
+
+    /// Ends an IME composition preview with the text the IME committed: the editor keeps it and
+    /// takes the keyboard, which is safe now that the composition has ended.
+    pub fn finish_ime_preview(&mut self, committed: String) {
+        self.ime_preview = false;
+        self.ime_committed.clear();
+        self.text = committed;
+        self.caret = self.text.chars().count();
+        self.anchor = self.caret;
+        self.point = None;
+        self.point_cell = None;
+        self.point_anchor = None;
+        self.autocomplete.clear();
+        self.completion = None;
+        self.caret_to_end = false;
+        self.request_focus = true;
+        self.sync_caret = true;
     }
 
     /// An edit of a cell's Python code, in the formula bar.

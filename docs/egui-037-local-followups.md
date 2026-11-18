@@ -139,9 +139,18 @@ has.
   alone no installed face has `✕` or `📋` (Hack, which the theme adds as a fallback, has the
   arrows and triangles but neither of those).
 - `theme::font_definitions_with` appends egui's bundled `Hack` face (arrows, triangles, `↳`) behind
-  the UI/cell and emoji faces of every family, and appends the optional craft-fonts faces at the
-  very end. The order is: app/bundled faces, Hack/emoji, system script fallbacks, permitted craft
+  the UI/cell text faces of every family, keeps egui's bundled emoji/icon faces behind the system
+  script fallbacks, and appends the optional craft-fonts faces at the very end. The order is:
+  app/bundled text faces, Hack, system script fallbacks, bundled emoji/icon faces, permitted craft
   faces last. A craft face never displaces a system face that already has the glyph.
+- Script fallback faces (system and craft) keep egui's centring, so a line's height stays the
+  primary font's; each role family gives them a `FontTweak::y_offset_factor` computed from the two
+  faces' metrics to put their baseline on the primary's. `FallbackAlign::Baseline` would grow the
+  row to fit the script font's descent, and a widget that centres the line box (menu items, the
+  Backstage sidebar, a cell's vertical alignment) would then draw Japanese higher than Latin. The
+  bundled emoji/icon faces keep the default centering and sit behind the script faces:
+  `emoji-icon-font` maps full-width forms such as `１` (U+FF11), which must be drawn by the script
+  face at the text size, not at the icon font's 0.90 scale (#4).
 - `crates/ui-egui/build.rs` embeds the faces named by `CRAFT_FONTS_DIR` through
   `crates/ui-egui/src/craft_fonts_policy.rs`, the single policy shared by the build script and the
   tests. Nothing reads a fixture path from Cargo configuration: the checked `.cargo/config.toml`

@@ -216,17 +216,26 @@ fn catalog_now() -> Option<&'static [Face]> {
     CATALOG.get().map(Vec::as_slice)
 }
 
+/// Whether the background scan was started (and its thread spawned).
+static SCAN_STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Start cataloging the installed fonts on a background thread, so the first frame doesn't wait for
-/// it. A no-op on wasm and after the scan has started.
-pub fn start_scan() {
+/// it, and repaint once it ends so the font list and workbook fonts pick the result up. A no-op on
+/// wasm and after the scan has started.
+pub fn start_scan(ctx: &egui::Context) {
+    #[cfg(target_arch = "wasm32")]
+    let _ = ctx;
     static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
         #[cfg(not(target_arch = "wasm32"))]
         if CATALOG.get().is_none() {
             // A failed spawn leaves the scan to the first blocking lookup.
-            let _ = std::thread::Builder::new().name("font-scan".into()).spawn(|| {
+            let ctx = ctx.clone();
+            let spawned = std::thread::Builder::new().name("font-scan".into()).spawn(move || {
                 catalog();
+                ctx.request_repaint();
             });
+            SCAN_STARTED.store(spawned.is_ok(), std::sync::atomic::Ordering::Release);
         }
     });
 }
@@ -283,22 +292,49 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
     out
 }
 
+/// Every installed family A–Z, one entry per name (case-insensitively). Empty until the background
+/// scan finishes, and on wasm, which has no system fonts.
+pub fn installed_families() -> Vec<String> {
+    catalog_now().map(installed_families_in).unwrap_or_default()
+}
+
+/// [`installed_families`] over a given catalog.
+fn installed_families_in(cat: &[Face]) -> Vec<String> {
+    let mut out: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
+    out.sort_by_key(|a| a.to_lowercase());
+    out.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    out
+}
+
+/// The merged list, built once the scan has finished: the catalog never changes afterwards.
+static FAMILIES: OnceLock<Vec<String>> = OnceLock::new();
+
 /// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
 /// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
 /// background scan finishes it returns just the standard names.
 pub fn families() -> Vec<String> {
+    match catalog_now() {
+        Some(cat) => FAMILIES.get_or_init(|| merged_families(cat)).clone(),
+        None => crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// [`families`] over a given catalog.
+fn merged_families(cat: &[Face]) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
-    let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
-    installed.sort_by_key(|a| a.to_lowercase());
-    installed.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
-    for f in installed {
+    for f in installed_families_in(cat) {
         if seen.insert(f.to_lowercase()) {
             out.push(f);
         }
     }
     out
+}
+
+/// Whether the background system-font scan is still running. False on wasm, where there is none,
+/// and when it never started (a test harness, or a failed thread spawn).
+pub fn scanning() -> bool {
+    SCAN_STARTED.load(std::sync::atomic::Ordering::Acquire) && !scan_done()
 }
 
 /// The egui family name for one role of one family: `fnt:{family}:{b|n}{i|n}`.
@@ -583,6 +619,22 @@ mod tests {
         let c = face("Gamma", &["Gamma", "Beta"], "0/gamma.ttf", 400.0);
         let found = faces_named(&[c, b], "Beta");
         assert_eq!(found.iter().map(|f| f.family.as_str()).collect::<Vec<_>>(), ["Beta"]);
+    }
+
+    #[test]
+    fn installed_families_are_sorted_once_and_the_merged_list_keeps_the_standard_names_first() {
+        let cat = [
+            face("Zapf", &["Zapf"], "z.ttf", 400.0),
+            face("arial", &["arial"], "a.ttf", 400.0),
+            face("Arial", &["Arial"], "b.ttf", 700.0),
+            face("Beta", &["Beta"], "c.ttf", 400.0),
+        ];
+        assert_eq!(installed_families_in(&cat), ["arial", "Beta", "Zapf"], "A–Z, one per name");
+        let merged = merged_families(&cat);
+        let lead: Vec<&str> = merged[..crate::ribbon::FONTS.len()].iter().map(String::as_str).collect();
+        assert_eq!(lead, crate::ribbon::FONTS, "the standard names lead");
+        assert_eq!(merged.len(), crate::ribbon::FONTS.len() + 2, "an installed standard name is not repeated");
+        assert_eq!(merged.iter().filter(|f| f.eq_ignore_ascii_case("arial")).count(), 1);
     }
 
     #[test]

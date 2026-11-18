@@ -38,7 +38,7 @@ pub use font_setup::{
     font_definitions, font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
 };
 #[cfg(test)]
-use font_setup::{candidates, craft_font_faces, font_definitions_impl, try_load};
+use font_setup::{candidates, craft_font_faces, font_definitions_impl, is_bundled_emoji, try_load};
 #[cfg(test)]
 pub(crate) use font_setup::{drop_unparseable_fonts, font_parses};
 
