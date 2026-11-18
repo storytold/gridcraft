@@ -186,7 +186,12 @@ fn named_labels(wb: &Workbook, sh: &Sheet, col: u32, rows: std::ops::RangeInclus
 /// spelling (`1234` for a cell shown as `1,234`) matches too, unless it is a label some cell shows
 /// (`labels`, from [`named_labels`]).
 fn values_match(values: &[String], labels: &std::collections::HashSet<String>, text: &str, v: &Value) -> bool {
-    values.iter().any(|x| x.eq_ignore_ascii_case(text) || (x.eq_ignore_ascii_case(&v.display()) && !labels.contains(&x.to_ascii_lowercase())))
+    // The canonical spelling is formatted once, and only when a value isn't the shown text.
+    let mut canonical: Option<String> = None;
+    values.iter().any(|x| {
+        x.eq_ignore_ascii_case(text)
+            || (x.eq_ignore_ascii_case(canonical.get_or_insert_with(|| v.display())) && !labels.contains(&x.to_ascii_lowercase()))
+    })
 }
 
 /// Excel grows an AutoFilter range when a value is entered in the row right below it, in one of its columns (#2342).
@@ -332,11 +337,15 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
-    let rows = af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000);
+    // The labels that block a canonical spelling come from every row the filter reads (as in
+    // `apply_filter`), so a checkbox agrees with what the filter shows; only the list is capped.
     let labels = match selected {
-        Some(FilterCriterion::Values { values, .. }) => named_labels(wb, sh, col, rows.clone(), values),
+        Some(FilterCriterion::Values { values, .. }) => {
+            named_labels(wb, sh, col, af.range.start.row + 1..=af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), values)
+        }
         _ => std::collections::HashSet::new(),
     };
+    let rows = af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000);
     let mut seen = std::collections::BTreeMap::new();
     for row in rows {
         let c = CellRef::new(row, col);
