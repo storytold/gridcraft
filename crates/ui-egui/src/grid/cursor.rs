@@ -57,7 +57,7 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-        Drag::Object { handle: Some(h), .. } => Some(h.cursor(rtl)),
+        Drag::Object { handle: Some(h), .. } | Drag::ChartData { corner: h, .. } => Some(h.cursor(rtl)),
     }
 }
 
@@ -87,7 +87,9 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     let mods = ctx.input(|i| i.modifiers);
     let works = hit.is_some_and(|(o, _)| o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl);
     let on_object = hit.is_some();
-    if let Some(h) = object_handle {
+    // A corner of the selected chart's values outline resizes the chart's data, where no object covers it.
+    let data_handle = if idle && !on_object { crate::chartview::chart_data_handle(app, geo, sh, p).map(|(.., h)| h) } else { None };
+    if let Some(h) = object_handle.or(data_handle) {
         ctx.set_cursor_icon(h.cursor(geo.rtl));
     } else if works {
         ctx.set_cursor_icon(CursorIcon::PointingHand);
