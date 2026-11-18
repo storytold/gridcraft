@@ -481,14 +481,15 @@ impl Prefs {
 }
 
 /// Deserializes `defaultColumnWidth` leniently so an invalid hand-edited preference falls back to
-/// [`gridcraft_model::DEFAULT_COL_WIDTH`] without discarding sibling settings.
+/// [`gridcraft_model::DEFAULT_COL_WIDTH`] without discarding sibling settings, while propagating
+/// malformed JSON syntax errors.
 fn deserialize_default_col_width<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<f32, D::Error> {
     use serde::Deserialize;
-    Ok(serde_json::Value::deserialize(d)
-        .ok()
-        .and_then(|v| v.as_f64())
-        .map(|n| n as f32)
+    let val = serde_json::Value::deserialize(d)?;
+    Ok(val
+        .as_f64()
         .filter(|w| w.is_finite() && (0.0..=1800.0).contains(w))
+        .map(|w| if w == 0.0 { 0.0 } else { w as f32 })
         .unwrap_or(gridcraft_model::DEFAULT_COL_WIDTH))
 }
 /// Requests from commands to the UI (open a dialog, show a message…).

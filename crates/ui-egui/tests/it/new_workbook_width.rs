@@ -120,4 +120,42 @@ fn options_width_rejects_german_thousands_dot_and_preserves_newer_pref_when_unto
     h.run_steps(3);
     assert_eq!(h.state().session.prefs.default_column_width, 120.0, "German grouping dot must be rejected");
     assert!(h.state().message.is_some(), "invalid German width must show validation error");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+
+    // 3. Re-typing the initial value (`64`) after an external update (`120`) commits `64`, while `-1e-50` is rejected.
+    h.state_mut().run("options.newWorkbookColumnWidth", json!({"width": 64.0})).unwrap();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::TextInput, label).click();
+    h.run_steps(2);
+    h.state_mut().run("options.newWorkbookColumnWidth", json!({"width": 120.0})).unwrap();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    for c in "80".chars() {
+        h.input_mut().events.push(egui::Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    for c in "64".chars() {
+        h.input_mut().events.push(egui::Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().session.prefs.default_column_width, 64.0, "deliberate edit back to 64 must commit");
+
+    h.get_by_role_and_label(Role::TextInput, label).click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    for c in "-1e-50".chars() {
+        h.input_mut().events.push(egui::Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(h.state().session.prefs.default_column_width, 64.0, "-1e-50 must be rejected before f32 rounding");
+    assert!(h.state().message.is_some());
 }

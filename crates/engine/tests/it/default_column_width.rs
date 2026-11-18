@@ -100,4 +100,17 @@ fn invalid_pref_keeps_sibling_settings_and_zero_width_roundtrips_xlsx() {
     let bytes = gridcraft_xlsx::write_xlsx(&session.documents()[idx].wb).unwrap();
     let (reopened, _) = gridcraft_engine::io::open_bytes("zero.xlsx", &bytes).unwrap();
     assert_eq!(reopened.sheets[0].default_col_width, 0.0, "explicit zero default column width must survive XLSX round-trip");
+
+    // Malformed JSON syntax errors still fail deserialization, while tiny negative floats fall back to 64.
+    assert!(serde_json::from_str::<gridcraft_engine::Prefs>(r#"{"enterDirection":"right","defaultColumnWidth":}"#).is_err());
+    let neg_prefs: gridcraft_engine::Prefs = serde_json::from_str(r#"{"defaultColumnWidth":-1e-50}"#).unwrap();
+    assert_eq!(neg_prefs.default_column_width, 64.0);
+
+    // Positive subpixel widths remain positive across XLSX round-trip rather than collapsing to zero.
+    let mut subpx = Session::new();
+    subpx.execute("options.newWorkbookColumnWidth", json!({"width": 0.4})).unwrap();
+    let sidx = subpx.new_workbook();
+    let subpx_bytes = gridcraft_xlsx::write_xlsx(&subpx.documents()[sidx].wb).unwrap();
+    let (reopened_subpx, _) = gridcraft_engine::io::open_bytes("subpx.xlsx", &subpx_bytes).unwrap();
+    assert!(reopened_subpx.sheets[0].default_col_width > 0.0, "positive subpixel width must stay positive on reopen");
 }

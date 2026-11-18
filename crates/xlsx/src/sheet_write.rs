@@ -29,6 +29,7 @@ fn sqref(ranges: &[RangeRef]) -> String {
     ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")
 }
 
+/// Serializes worksheet `si` of `wb` into an OOXML `<worksheet>` XML document and its relationships.
 pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (String, Rels) {
     let mut rels = Rels::default();
     let Some(sheet) = wb.sheet(si) else { return (String::new(), rels) };
@@ -133,7 +134,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     let max_col_outline = sheet.cols.values().map(|r| r.outline).max().unwrap_or(0);
     s.push_str("<sheetFormatPr");
     if (sheet.default_col_width - gridcraft_model::DEFAULT_COL_WIDTH).abs() > 0.01 {
-        let _ = write!(s, " defaultColWidth=\"{}\"", num(px_to_col_width(sheet.default_col_width)));
+        // Keep positive subpixel widths distinct from explicit zero (`defaultColWidth="0"`).
+        let px = if sheet.default_col_width > 0.0 { sheet.default_col_width.max(1.0) } else { sheet.default_col_width };
+        let _ = write!(s, " defaultColWidth=\"{}\"", num(px_to_col_width(px)));
     }
     let _ = write!(s, " defaultRowHeight=\"{}\"", num(px_to_pt(sheet.default_row_height)));
     if (sheet.default_row_height - gridcraft_model::DEFAULT_ROW_HEIGHT).abs() > 0.01 {
