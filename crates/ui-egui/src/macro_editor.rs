@@ -459,10 +459,7 @@ pub fn parse_refs(text: &str) -> Vec<(Option<String>, RangeRef)> {
     text.split(',')
         .filter_map(|part| {
             let part = part.trim();
-            let (sheet, body) = match part.rsplit_once('!') {
-                Some((s, b)) => (Some(s.trim().trim_matches('\'').replace("''", "'")), b),
-                None => (None, part),
-            };
+            let (sheet, body) = gridcraft_engine::core::split_sheet(part);
             RangeRef::parse(&body.replace('$', "")).map(|r| (sheet, r))
         })
         .take(500)
@@ -2398,6 +2395,15 @@ pub fn paint_overlay(p: &egui::Painter, geo: &crate::grid::Geo, sh: &gridcraft_e
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn example_references_unquote_sheet_names_as_formulas_do() {
+        // #2012: one shared reading of `'Bob''s'!A1` and `'a!b'!A1`.
+        let refs = parse_refs("'Bob''s'!$A$1:$B$2, 'a!b'!C3, D4");
+        let sheets: Vec<Option<String>> = refs.iter().map(|(s, _)| s.clone()).collect();
+        assert_eq!(sheets, [Some("Bob's".to_string()), Some("a!b".to_string()), None]);
+        assert_eq!(refs.iter().map(|(_, r)| r.a1()).collect::<Vec<_>>(), ["A1:B2", "C3", "D4"]);
+    }
 
     #[test]
     fn an_edited_input_keeps_a_shape_a_macro_may_declare() {

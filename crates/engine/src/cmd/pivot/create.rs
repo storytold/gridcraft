@@ -67,9 +67,6 @@ fn field_list(v: Option<&Json>) -> Vec<Json> {
 }
 
 pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
-    if s.doc()?.wb.protected_structure && matches!(str_param(p, "destination"), None | Some("new")) {
-        return Err(other("The workbook is protected and cannot be changed."));
-    }
     let source = source_param(s, p)?;
     let active = s.doc()?.wb.active_sheet();
     // Validate the source now (header names, size).
@@ -98,6 +95,10 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
         let at = RangeRef::parse(body).map(|r| r.start).ok_or_else(|| bad("insert.pivotTable", format!("not a cell: `{dest}`")))?;
         Some((si, at))
     };
+    // Decided on the resolved destination: `New`, ` new ` and an empty one all make a sheet.
+    if target.is_none() && s.doc()?.wb.protected_structure {
+        return Err(other("The workbook is protected and cannot be changed."));
+    }
     let replace = bool_param(p, "replace").unwrap_or(false);
     let rows = field_list(p.get("rows"));
     let columns = field_list(p.get("columns"));
