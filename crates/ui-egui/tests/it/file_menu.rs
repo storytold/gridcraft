@@ -859,43 +859,54 @@ fn each_window_waits_on_its_own_save_sheet() {
 /// that window's sheet; the other still waits for its answer.
 #[test]
 fn cancelling_one_windows_question_takes_down_only_its_sheet() {
-    type Asked = Arc<Mutex<Vec<(u64, std::sync::mpsc::Sender<String>)>>>;
+    type Asked = Arc<Mutex<Vec<(u64, String, std::sync::mpsc::Sender<String>)>>>;
     let asked: Asked = Arc::default();
     let log = asked.clone();
     let ends: Arc<Mutex<Vec<u64>>> = Arc::default();
     let ended = ends.clone();
     let services = Services {
-        save_prompt: Some(Box::new(move |id, _, _, _| {
+        save_prompt: Some(Box::new(move |id, window, _, _| {
             let (tx, rx) = std::sync::mpsc::channel();
-            log.lock().unwrap().push((id, tx));
+            log.lock().unwrap().push((id, window.to_string(), tx));
             Some(rx)
         })),
         end_save_prompt: Some(Box::new(move |id| ended.lock().unwrap().push(id))),
         ..Default::default()
     };
+    // Two workbooks both named Book.xlsx, in two folders: their windows have the same title.
+    let dir = std::env::temp_dir().join(format!("gridcraft-same-title-{}", std::process::id()));
     let mut h = harness(services);
-    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
-    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
-    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "7"})).unwrap();
+    for (n, input) in [("a", "42"), ("b", "7")] {
+        if n == "b" {
+            h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+        }
+        let path = dir.join(n).join("Book.xlsx");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        h.state_mut().run("file.save", serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": input})).unwrap();
+    }
     for index in [0, 1] {
         h.state_mut().run("window.activate", serde_json::json!({"index": index})).unwrap();
         h.run_steps(2);
         choose(&mut h, "Close");
         h.run_steps(2);
     }
-    let ids: Vec<u64> = asked.lock().unwrap().iter().map(|(id, _)| *id).collect();
+    let ids: Vec<u64> = asked.lock().unwrap().iter().map(|(id, ..)| *id).collect();
     assert_eq!(ids.len(), 2, "each window asks in a sheet of its own");
+    let titles: Vec<String> = asked.lock().unwrap().iter().map(|(_, w, _)| w.clone()).collect();
+    assert_eq!(titles[0], titles[1], "both windows have the same title");
     assert_ne!(ids[0], ids[1], "with its own id, whatever the windows are titled");
     let ctx = h.ctx.clone();
     gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.dialog.cancel", &serde_json::json!({}));
     assert_eq!(*ends.lock().unwrap(), vec![ids[1]], "only the second window's sheet is taken down");
     // The first window's sheet still answers its own question.
-    asked.lock().unwrap()[0].1.send("dontSave".into()).unwrap();
+    asked.lock().unwrap()[0].2.send("dontSave".into()).unwrap();
     h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
     h.run_steps(4);
     let docs = h.state().session.documents();
     assert_eq!(docs.len(), 1, "the first window's answer closes its workbook");
     assert_eq!(docs[0].wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(7.0), "and not the second one");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A sheet's answer belongs to its question: after `ui.dialog.cancel` takes the question away, a
