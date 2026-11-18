@@ -623,3 +623,58 @@ fn long_flat_chains_are_scalar_formulas() {
     assert_dynamic(&sheet, "B4", "B4");
     assert_eq!(cell(&sheet, "B1").child("f").unwrap().text, refs);
 }
+
+/// Each name mention finds its definition through an index, so a pass costs names + mentions. It
+/// used to scan the whole name list for every mention, which is names × mentions (#4438).
+#[test]
+#[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+fn legacy_name_lookup_does_not_scale_with_the_name_list() {
+    // Chains of eight names, one formula per chain reading its last link, as in the report.
+    let pass = |names: usize| {
+        let mut wb = Workbook::new();
+        for chain in 0..names / 8 {
+            for link in 0..8 {
+                let formula = if link == 0 { "Sheet1!$B$1".to_string() } else { format!("Chain_{chain}_Link_{}", link - 1) };
+                wb.names.push(DefinedName {
+                    name: format!("Chain_{chain}_Link_{link}"),
+                    scope: None,
+                    formula,
+                    comment: String::new(),
+                    hidden: false,
+                });
+            }
+        }
+        let cells: Vec<CellRef> = (0..names as u32 / 8).map(|c| CellRef::new(c + 1, 0)).collect();
+        for (c, chain) in cells.iter().zip(0..) {
+            wb.sheet_mut(0).unwrap().cells.set(*c, Cell::formula(Formula::new(&format!("=Chain_{chain}_Link_7"))));
+        }
+        let t0 = std::time::Instant::now();
+        crate::array_formula::apply_legacy(&mut wb, vec![(0, cells)], crate::FunctionInfo::default());
+        t0.elapsed()
+    };
+    pass(1000);
+    let took = pass(32000);
+    // About 0.06 s here; scanning the whole name list for every mention took over 4 s.
+    assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+}
+
+/// The index finds the name [`Workbook::name`] finds: the first in workbook order matching
+/// without ASCII case, in the formula's sheet scope, then workbook scope.
+#[test]
+fn name_lookup_matches_workbook_name() {
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(Sheet::new("Results")));
+    for (name, scope, text) in [
+        ("Total", None, "2"),
+        // A later duplicate is never found, as the scan never found it.
+        ("TOTAL", None, "Sheet1!$A$1:$A$3"),
+        ("Rate", None, "Sheet1!$A$1:$A$3"),
+        ("Rate", Some(1), "2"),
+        ("Local", None, "Sheet1!$A$1:$A$3"),
+        ("Local", Some(0), "2"),
+    ] {
+        wb.names.push(DefinedName { name: name.into(), scope, formula: text.into(), comment: String::new(), hidden: false });
+    }
+    check_formula_metadata(wb.clone(), 0, &[("total", false), ("TOTAL*2", false), ("rate", true), ("LOCAL", false)]);
+    check_formula_metadata(wb, 1, &[("RATE", false), ("local", true)]);
+}

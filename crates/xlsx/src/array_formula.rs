@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use gridcraft_core::CellRef;
 use gridcraft_formula::{BinOp, Expr, RefKind, SheetSel, StructItem, UnOp};
-use gridcraft_model::{Formula, Workbook};
+use gridcraft_model::{DefinedName, Formula, Workbook};
 
 use crate::FunctionInfo;
 
@@ -262,6 +262,53 @@ pub(crate) struct NameCache {
     map: HashMap<NameKey, NameInfo>,
     /// How many names were analysed (not found in the cache).
     pub(crate) analyses: usize,
+    /// The workbook's defined names by lower-cased name and scope, built when the pass first
+    /// looks one up (names do not change during a pass).
+    index: Option<NameIndex>,
+}
+
+impl NameCache {
+    /// [`Workbook::name`] through the index, built on first use: every mention costs a lookup
+    /// instead of a scan of the whole name list, so a pass costs names + mentions, not names ×
+    /// mentions (#4438).
+    fn name<'w>(&mut self, wb: &'w Workbook, name: &str, sheet: usize) -> Option<&'w DefinedName> {
+        self.index.get_or_insert_with(|| NameIndex::build(wb)).get(wb, name, sheet)
+    }
+}
+
+/// Defined names by lower-cased name and scope, as [`Workbook::name`] finds them: the first name
+/// in workbook order for a key wins, sheet scope before workbook scope.
+#[derive(Default)]
+struct NameIndex {
+    /// By lower-cased name, then scope sheet.
+    sheet: HashMap<String, HashMap<usize, usize>>,
+    /// By lower-cased name, workbook scope.
+    book: HashMap<String, usize>,
+}
+
+impl NameIndex {
+    fn build(wb: &Workbook) -> Self {
+        let mut index = NameIndex::default();
+        for (i, n) in wb.names.iter().enumerate() {
+            // `Workbook::name` compares with `eq_ignore_ascii_case`, which this folding matches.
+            let key = n.name.to_ascii_lowercase();
+            match n.scope {
+                Some(scope) => {
+                    index.sheet.entry(key).or_default().entry(scope).or_insert(i);
+                }
+                None => {
+                    index.book.entry(key).or_insert(i);
+                }
+            }
+        }
+        index
+    }
+
+    fn get<'w>(&self, wb: &'w Workbook, name: &str, sheet: usize) -> Option<&'w DefinedName> {
+        let key = name.to_ascii_lowercase();
+        let i = self.sheet.get(&key).and_then(|scopes| scopes.get(&sheet)).or_else(|| self.book.get(&key))?;
+        wb.names.get(*i)
+    }
 }
 
 /// Names kept at most: the cache is bounded even when a workbook defines a great many.
@@ -512,7 +559,7 @@ impl<'a> Legacy<'a> {
             Some((s, name)) => (self.wb.sheet_index(&gridcraft_core::unquote_sheet(s)).unwrap_or(sheet), name),
             None => (sheet, n),
         };
-        if let Some(def) = self.wb.name(bare, scope) {
+        if let Some(def) = self.shared.name(self.wb, bare, scope) {
             let key = (bare.to_ascii_uppercase(), scope, self.collapsed);
             match self.names.get(&key) {
                 Some(Some((kind, one_cell_range))) => {
@@ -593,7 +640,7 @@ impl<'a> Legacy<'a> {
         if name == "LET" && args.len() >= 3 {
             return self.let_(args, sheet, ctx, depth);
         }
-        let lambda_name = !(self.functions.is_builtin)(&name) && !host_function(&name) && self.wb.name(&name, sheet).is_some();
+        let lambda_name = !(self.functions.is_builtin)(&name) && !host_function(&name) && self.shared.name(self.wb, &name, sheet).is_some();
         if args.len() > 255
             || lambda_name
             || matches!(name.as_str(), "LAMBDA" | "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY" | "ISOMITTED")
