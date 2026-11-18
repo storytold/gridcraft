@@ -14,7 +14,97 @@ use crate::{CsvOptions, IoError, ReadReport};
 /// The largest CSV or tab-separated file written (bytes).
 pub const MAX_CSV_BYTES: usize = 512 << 20;
 
-pub use craft_csv::{decode_text, sniff_delimiter};
+pub use craft_csv::decode_text;
+
+/// [`craft_csv::sniff_delimiter`], except that semicolons on every line win over commas that all
+/// sit between two digits: those are decimal commas (`1,5;2,25`), as in the files GridCraft's and
+/// Excel's semicolon CSVs hold.
+pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
+    let picked = craft_csv::sniff_delimiter(text, quote);
+    if picked == b',' && semicolons_on_every_line(text, quote) && commas_are_decimal(text, quote) { b';' } else { picked }
+}
+
+/// Whether each non-blank line, of the first 20, has a semicolon outside quotes.
+fn semicolons_on_every_line(text: &str, quote: char) -> bool {
+    let (mut lines, mut found, mut blank, mut in_q) = (0usize, false, true, false);
+    for ch in text.chars().take(64 * 1024) {
+        if !in_q && ch == '\n' {
+            if !blank {
+                if !found {
+                    return false;
+                }
+                lines += 1;
+                if lines >= 20 {
+                    return true;
+                }
+            }
+            (found, blank) = (false, true);
+            continue;
+        }
+        if ch != '\r' {
+            blank = false;
+        }
+        if ch == quote {
+            in_q = !in_q;
+        } else if !in_q && ch == ';' {
+            found = true;
+        }
+    }
+    blank || found
+}
+
+/// Whether every comma outside quotes in the lines [`sniff_delimiter`] looks at has a digit on
+/// both sides.
+fn commas_are_decimal(text: &str, quote: char) -> bool {
+    let mut in_q = false;
+    let mut lines = 0usize;
+    let mut prev = '\n';
+    let mut chars = text.chars().take(64 * 1024).peekable();
+    while let Some(ch) = chars.next() {
+        if ch == quote {
+            in_q = !in_q;
+        } else if !in_q && ch == '\n' {
+            lines += 1;
+            if lines >= 20 {
+                break;
+            }
+        } else if !in_q && ch == ',' && !(prev.is_ascii_digit() && chars.peek().is_some_and(char::is_ascii_digit)) {
+            return false;
+        }
+        prev = ch;
+    }
+    true
+}
+
+/// A field of a semicolon CSV written with a decimal comma (`1,5`, `-1.234,50`, `12,5%`) in the
+/// form [`parse_input`] reads (`1.5`, `-1234.50`, `12.5%`); `None` for anything else, which is read
+/// as it is. Only a single comma with digits on both sides counts, and dots only as thousands
+/// groups before it, so text, dates and plain integers are untouched.
+fn decimal_comma_number(field: &str) -> Option<String> {
+    let t = field.trim();
+    let (sign, rest) = match t.strip_prefix('-') {
+        Some(r) => ("-", r),
+        None => ("", t.strip_prefix('+').unwrap_or(t)),
+    };
+    let (body, pct) = match rest.strip_suffix('%') {
+        Some(b) => (b, "%"),
+        None => (rest, ""),
+    };
+    let (int, frac) = body.split_once(',')?;
+    if frac.is_empty() || !frac.bytes().all(|b| b.is_ascii_digit()) || int.is_empty() {
+        return None;
+    }
+    let mut groups = int.split('.');
+    let first = groups.next()?;
+    let grouped = int.contains('.');
+    if first.is_empty() || !first.bytes().all(|b| b.is_ascii_digit()) || (grouped && first.len() > 3) {
+        return None;
+    }
+    if !groups.all(|g| g.len() == 3 && g.bytes().all(|b| b.is_ascii_digit())) {
+        return None;
+    }
+    Some(format!("{sign}{}.{frac}{pct}", int.replace('.', "")))
+}
 
 /// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
 fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {
@@ -271,6 +361,8 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     // The bounding box of the non-empty cells, which is the sheet's used range.
     let mut used: Option<(u32, u32, u32, u32)> = None;
     let mut too_many = false;
+    // A semicolon file is one from a decimal-comma region: `1,5` is a number there.
+    let decimal_comma = delim == ';';
     parse_records(&text, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
@@ -287,8 +379,15 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             let (r0, c0, c1) = used.map_or((row, col as u32, col as u32), |(r0, c0, _, c1)| (r0, c0.min(col as u32), c1.max(col as u32)));
             used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
-                let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
-                let p = read_field(&f, opts.date_system, rule);
+                // A decimal-comma number is a number, never a date; anything else reads by the
+                // column's date order.
+                let p = match decimal_comma.then(|| decimal_comma_number(&f)).flatten() {
+                    Some(n) => parse_input(&n, opts.date_system),
+                    None => {
+                        let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
+                        read_field(&f, opts.date_system, rule)
+                    }
+                };
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
