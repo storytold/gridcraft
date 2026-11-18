@@ -32,6 +32,41 @@ fn subtotal_honours_header_false() {
 }
 
 #[test]
+fn subtotal_of_the_grouping_field_keeps_its_captions() {
+    // #4264: counting the grouping field wrote its formulas over the "A Count", "B Count" and
+    // "Grand Count" captions. Excel inserts a caption column and shifts the list right instead.
+    for columns in [json!(["A", "B"]), json!(["A"])] {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"], ["A", 10], ["A", 20], ["B", 30]]})).unwrap();
+        s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": columns, "function": "count"})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "A4")["text"], json!("A Count"), "{columns}");
+        assert_eq!(get(&mut s, "A6")["text"], json!("B Count"), "{columns}");
+        assert_eq!(get(&mut s, "A7")["text"], json!("Grand Count"), "{columns}");
+        assert_eq!(get(&mut s, "B1")["value"], json!("Group"), "{columns}");
+        assert_eq!(get(&mut s, "B2")["value"], json!("A"), "{columns}");
+        assert_eq!(get(&mut s, "C2")["value"], json!(10.0), "{columns}");
+        assert_eq!(get(&mut s, "B4")["formula"], json!("=SUBTOTAL(3,B2:B3)"), "{columns}");
+        assert_eq!(get(&mut s, "B4")["value"], json!(2.0), "{columns}");
+        assert_eq!(get(&mut s, "B6")["value"], json!(1.0), "{columns}");
+        assert_eq!(get(&mut s, "B7")["value"], json!(3.0), "{columns}");
+        let amount = |s: &mut Session, a: &str| get(s, a)["value"].clone();
+        if columns.as_array().is_some_and(|c| c.len() == 2) {
+            assert_eq!(amount(&mut s, "C4"), json!(2.0));
+            assert_eq!(amount(&mut s, "C6"), json!(1.0));
+            assert_eq!(amount(&mut s, "C7"), json!(3.0));
+        } else {
+            assert_eq!(amount(&mut s, "C4"), json!(null), "Amount is not summarised");
+        }
+        // One undo takes the caption column back out with the subtotals.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(get(&mut s, "A4")["value"], json!("B"), "{columns}");
+        assert_eq!(get(&mut s, "B4")["value"], json!(30.0), "{columns}");
+    }
+}
+
+#[test]
 fn subtotal_puts_summary_rows_below_their_detail() {
     let mut s = Session::new();
     s.new_workbook();
