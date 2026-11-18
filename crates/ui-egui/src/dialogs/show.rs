@@ -184,6 +184,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
+    let window = super::sort_dialog::window(window, &d.name, ctx, app.ui.language);
     let (window, collapsed) = place_window(app, ctx, &mut d, window, window_id);
     // A mirrored interface puts the window's close button on the left, as egui does when its style
     // runs right to left. Only for this window: the rest of the interface is laid out by `rtl`.

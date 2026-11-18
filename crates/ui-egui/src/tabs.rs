@@ -561,33 +561,36 @@ pub(crate) fn selection_statistics(app: &SheetApp) -> Vec<String> {
         return vec![];
     }
     let on = app.session.prefs.status_bar;
-    let lang = app.ui.language;
     let st = gridcraft_engine::display::stats(sh, &d.selection.ranges);
     let fmt = |v: f64| {
         let code = d.wb.styles.get(sh.style_id(d.selection.active)).num_fmt.as_str().to_string();
         let code = if code == "General" { "#,##0.##########".to_string() } else { code };
         gridcraft_engine::display::format(&gridcraft_engine::core::Value::Number(v), &code, &d.wb).text.trim_end_matches('.').to_string()
     };
+    // The label the right-click menu shows, then the value: clicking a statistic copies the part
+    // after `": "`.
+    let lang = app.ui.language;
+    let part = |label: &str, value: String| format!("{}: {value}", lang.tr(label));
     let mut parts = Vec::new();
     if on.average
         && let Some(a) = st.average
     {
-        parts.push(lang.tr_with("Average: {value}", &[("value", &fmt(a))]));
+        parts.push(part("Average", fmt(a)));
     }
     if on.count && st.count > 0 {
-        parts.push(lang.tr_with("Count: {value}", &[("value", &st.count.to_string())]));
+        parts.push(part("Count", st.count.to_string()));
     }
     if on.numerical_count && st.count > 0 {
-        parts.push(lang.tr_with("Numerical Count: {value}", &[("value", &st.numeric.to_string())]));
+        parts.push(part("Numerical Count", st.numeric.to_string()));
     }
     if on.minimum && st.numeric > 0 {
-        parts.push(lang.tr_with("Minimum: {value}", &[("value", &fmt(st.min))]));
+        parts.push(part("Minimum", fmt(st.min)));
     }
     if on.maximum && st.numeric > 0 {
-        parts.push(lang.tr_with("Maximum: {value}", &[("value", &fmt(st.max))]));
+        parts.push(part("Maximum", fmt(st.max)));
     }
     if on.sum && st.numeric > 0 {
-        parts.push(lang.tr_with("Sum: {value}", &[("value", &fmt(st.sum))]));
+        parts.push(part("Sum", fmt(st.sum)));
     }
     parts
 }
@@ -636,6 +639,26 @@ mod tests {
 
     fn names(app: &SheetApp) -> Vec<String> {
         app.session.active().unwrap().wb.sheets.iter().map(|s| s.name.clone()).collect()
+    }
+
+    #[test]
+    fn status_bar_statistics_follow_the_interface_language() {
+        use crate::i18n::Language;
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        for (cell, input) in [("A1", "1"), ("A2", "2"), ("A3", "3")] {
+            app.run("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        app.run("selection.set", json!({"range": "A1:A3"})).unwrap();
+        app.run("view.statusBar", json!({"numericalCount": true, "minimum": true, "maximum": true})).unwrap();
+        let parts = [("Average", "2"), ("Count", "3"), ("Numerical Count", "3"), ("Minimum", "1"), ("Maximum", "3"), ("Sum", "6")];
+        let english: Vec<String> = parts.iter().map(|(label, value)| format!("{label}: {value}")).collect();
+        assert_eq!(super::selection_statistics(&app), english);
+        app.ui.language = Language::It;
+        let italian: Vec<String> = parts.iter().map(|(label, value)| format!("{}: {value}", Language::It.tr(label))).collect();
+        assert_eq!(super::selection_statistics(&app), italian, "each label as the right-click menu shows it");
+        assert!(italian.iter().zip(&english).all(|(it, en)| it != en), "the Italian catalog translates every label: {italian:?}");
     }
 
     #[test]
