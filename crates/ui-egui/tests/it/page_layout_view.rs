@@ -385,3 +385,46 @@ fn header_distance_cannot_be_dragged_past_the_top_margin() {
     assert!((after[4] - start[2]).abs() < 0.011, "header {} should stop at the top margin {}", after[4], start[2]);
     assert_eq!(after[2], start[2]);
 }
+
+/// Page Layout headers use the displayed worksheet ink after each appearance change.
+#[test]
+fn page_layout_header_follows_worksheet_appearance() {
+    let mut h = fixture();
+    for dark in [false, true, false] {
+        h.state_mut().ui.dark = dark;
+        h.run_steps(4);
+        let expected = if dark { egui::Color32::WHITE } else { egui::Color32::BLACK };
+        let text = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Left" => Some(text),
+                _ => None,
+            })
+            .expect("page header is painted");
+        assert!(text.galley.job.sections.iter().all(|section| section.format.color == expected), "header ink follows dark={dark}");
+    }
+}
+
+/// Page labels remain visible against either worksheet background.
+#[test]
+fn page_break_labels_follow_worksheet_appearance() {
+    let mut h = fixture();
+    h.state_mut().run("view.pageBreakPreview", json!({})).unwrap();
+    for dark in [false, true, false] {
+        h.state_mut().ui.dark = dark;
+        h.run_steps(4);
+        let expected = if dark { egui::Color32::from_white_alpha(45) } else { egui::Color32::from_black_alpha(45) };
+        let text = h
+            .output()
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Page 1" => Some(text),
+                _ => None,
+            })
+            .expect("page label is painted");
+        assert!(text.galley.job.sections.iter().all(|section| section.format.color == expected), "page label ink follows dark={dark}");
+    }
+}

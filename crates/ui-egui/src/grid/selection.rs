@@ -133,7 +133,7 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
     // Fill handle (bottom-right of the current area).
     if app.editor.is_none() && range_in_pane(RangeRef::cell(sel.current().end), rows, cols) {
         let h = Rect::from_center_size(outline.right_bottom(), vec2(6.0, 6.0));
-        p.rect_filled(h.expand(1.0), 0.0, Color32::WHITE);
+        p.rect_filled(h.expand(1.0), 0.0, t.grid_bg);
         p.rect_filled(h, 0.0, t.sel_border);
     }
     // Fill-handle drag preview.
