@@ -360,11 +360,27 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         })
                         .count();
                     let pics = ssh.cell_pictures.keys().filter(|c| clip.range.contains(**c) && ssh.cell(**c).is_none()).count();
-                    held + pics
+                    // Spilled results hold no cell of their own, so the scan above misses
+                    // them, but the write loop visits them (its offsets include the spill
+                    // keys) and writes them, since `value` reads the spill. Count the ones
+                    // inside the copy whose value is not blank, the write loop's own rule;
+                    // a spill key with a stored cell was already counted above.
+                    let spills = ssh.spill.iter().filter(|(c, v)| clip.range.contains(**c) && ssh.cell(**c).is_none() && !v.is_empty()).count();
+                    held + pics + spills
                 }
                 None => 0,
             };
-            (u32::try_from(non_blank).unwrap_or(u32::MAX), 1)
+            if non_blank == 0 {
+                // Nothing would be written at any tile, but the tile loops still walk
+                // every tile, so the traversal itself is the work: bound it by the
+                // copied area at every tile, as the check did before the non-blank
+                // count, instead of letting an empty paste walk a whole-sheet
+                // selection. Pastes the area bound accepts keep their selection,
+                // merge, and validation effects.
+                (used_h, used_w)
+            } else {
+                (u32::try_from(non_blank).unwrap_or(u32::MAX), 1)
+            }
         } else {
             (used_h, used_w)
         };

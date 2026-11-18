@@ -1116,3 +1116,31 @@ fn a_tiled_whole_column_paste_with_skip_blanks_does_not_count_the_cells_it_leave
         assert_eq!(value_at(&s, a), Value::Number(7.0), "{a} keeps its value");
     }
 }
+
+#[test]
+fn a_tiled_skip_blanks_paste_counts_spilled_cells_toward_the_bound() {
+    // #4425 round 3: spilled results hold no cell of their own, so the skipBlanks count
+    // saw only the SEQUENCE anchor (1 cell) while the write loop writes all 1,000
+    // spilled values at every tile: 5,005 tiles would write 5,005,000 cells, past the
+    // bound, so the paste is refused and nothing lands.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(1000)"})).unwrap();
+    assert_eq!(value_at(&s, "A1000"), Value::Number(1000.0));
+    s.execute("edit.copy", json!({"range": "A1:A1000"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:G1001000"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).is_err(), "the spilled cells count toward the bound");
+    assert_eq!(value_at(&s, "C1"), Value::Empty, "nothing was pasted");
+}
+
+#[test]
+fn a_tiled_skip_blanks_paste_of_a_blank_copy_over_a_huge_selection_is_refused() {
+    // #4425 round 3: an empty copy counted as zero written cells, so the size check
+    // accepted it and the tile loops still walked every tile of the selection
+    // (about 17 billion here). The area bound refuses it before anything is walked.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:XFD1048576"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).is_err(), "an empty paste cannot walk the whole selection");
+}
