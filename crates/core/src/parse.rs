@@ -2,9 +2,11 @@
 //!
 //! Recognises numbers with thousands separators, percentages, currency, scientific notation,
 //! fractions (`1 1/2`), dates (`3/4/2026`, `2026-03-04`, `4-Mar-2026`, `Mar 4, 2026`), times
-//! (`10:30`, `10:30:15 PM`) and date-times. Locale: en-US.
+//! (`10:30`, `10:30:15 PM`) and date-times. The default region is English (United States);
+//! [`parse_input_in`] reads the decimal and thousands separators of any [`Region`].
 
 use crate::date::{DateSystem, MONTHS, serial_from_ymd, time_fraction};
+use crate::region::{DateOrder, EN_US, Grouping, Region};
 use crate::value::{CellError, Value};
 
 /// A parsed entry: its value and the number format Excel would apply automatically.
@@ -15,8 +17,15 @@ pub struct Parsed {
 }
 
 /// Interprets typed cell input (not formulas). Text that isn't a number, date, boolean or error
-/// stays text. A leading apostrophe forces text.
+/// stays text. A leading apostrophe forces text. Numbers are read with en-US separators.
 pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
+    parse_input_in(s, sys, &EN_US)
+}
+
+/// Like [`parse_input`], reading numbers with the decimal and thousands separators of `region`
+/// (`1.769,41` is a number in `pt-BR`) and numeric dates in its day, month and year order
+/// (`03/04/2026` is 3 April in `pt-BR`). Fractions keep their en-US spelling.
+pub fn parse_input_in(s: &str, sys: DateSystem, region: &Region) -> Parsed {
     if s.is_empty() {
         return Parsed { value: Value::Empty, format: None };
     }
@@ -33,7 +42,7 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if let Some(e) = CellError::parse(t) {
         return Parsed { value: Value::Error(e), format: None };
     }
-    if let Some((n, f)) = parse_numeric(t, sys) {
+    if let Some((n, f)) = parse_numeric(t, sys, region) {
         return Parsed { value: Value::number(n), format: f };
     }
     Parsed { value: Value::text(s), format: None }
@@ -46,46 +55,57 @@ pub fn parse_number_text(s: &str) -> Option<f64> {
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys).map(|(n, _)| n)
+    parse_number_text_in_region(s, sys, &EN_US)
+}
+
+/// Like [`parse_number_text_in`], reading numbers with the decimal and thousands separators of
+/// `region`: `">1.200,00"` is 1200 in `pt-BR`, where [`parse_number_text_in`] finds no number.
+pub fn parse_number_text_in_region(s: &str, sys: DateSystem, region: &Region) -> Option<f64> {
+    parse_numeric(s.trim(), sys, region).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
 /// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
 /// fractions kept as text are not flagged, as in Excel.
 pub fn number_stored_as_text(s: &str) -> Option<f64> {
+    number_stored_as_text_in(s, &EN_US)
+}
+
+/// Like [`number_stored_as_text`], with numbers read in the given region.
+pub fn number_stored_as_text_in(s: &str, region: &Region) -> Option<f64> {
     let t = s.trim();
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
     match parenthesized(t) {
         Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
-        Some(inner) => parse_plain(&inner).map(|(n, _)| -n),
-        None => parse_plain(t).map(|(n, _)| n),
+        Some(inner) => parse_plain(&inner, region).map(|(n, _)| -n),
+        None => parse_plain(t, region).map(|(n, _)| n),
     }
 }
 
-fn parse_numeric(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_numeric(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
     // Parenthesised negatives: (100) = -100, and the accounting forms `$(100)` and `(5)%`.
     if let Some(inner) = parenthesized(t) {
         // Excel reads no sign and no nested parentheses inside: `(-5)`, `($-5)`, `((5))`.
         if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) {
             return None;
         }
-        let r = parse_plain(&inner).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
+        let r = parse_plain(&inner, region).or_else(|| parse_fraction(&inner).map(|n| (n, Some("# ?/?"))));
         return r.map(|(n, f)| (-n, f));
     }
-    parse_unparenthesised(t, sys)
+    parse_unparenthesised(t, sys, region)
 }
 
-fn parse_unparenthesised(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
+fn parse_unparenthesised(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
     if t.is_empty() {
         return None;
     }
-    if let Some(r) = parse_plain(t) {
+    if let Some(r) = parse_plain(t, region) {
         return Some(r);
     }
     if let Some(r) = parse_fraction(t) {
         return Some((r, Some("# ?/?")));
     }
-    if let Some(r) = parse_datetime(t, sys) {
+    if let Some(r) = parse_datetime(t, sys, region) {
         return Some(r);
     }
     None
@@ -107,8 +127,28 @@ fn parenthesized(t: &str) -> Option<String> {
     Some(format!("{currency}{}{percent}", body.trim()))
 }
 
-/// Signs, currency, thousands separators, percent, exponent.
-fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
+/// The number text with the region's decimal point as `.` and its grouping characters as `,`, so
+/// the en-US rules below read any region. Text already using en-US separators is left untouched.
+fn canonical_separators<'a>(s: &'a str, region: &Region) -> std::borrow::Cow<'a, str> {
+    if region.decimal == '.' && region.group == ',' {
+        return std::borrow::Cow::Borrowed(s);
+    }
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c == region.decimal {
+            out.push('.');
+        } else if region.is_group(c) {
+            out.push(',');
+        } else {
+            out.push(c);
+        }
+    }
+    std::borrow::Cow::Owned(out)
+}
+
+/// Signs, currency, thousands separators, percent, exponent. The separators are `region`'s:
+/// `1.769,41` reads in `pt-BR` and `1,769.41` in `en-US`, and the format returned is canonical.
+fn parse_plain(t: &str, region: &Region) -> Option<(f64, Option<&'static str>)> {
     let mut s = t;
     let mut neg = false;
     let mut currency = false;
@@ -135,13 +175,23 @@ fn parse_plain(t: &str) -> Option<(f64, Option<&'static str>)> {
     if s.is_empty() || currency && percent {
         return None;
     }
+    let s = canonical_separators(s, region);
+    let s = s.as_ref();
     let has_sep = s.contains(',');
     let digits: String = if has_sep {
-        // Thousands separators must be in groups of three before the decimal point.
+        // Thousands separators must be in groups of three before the decimal point, or in the
+        // Indian system a last group of three after groups of two (`12,34,567`).
         let (int, frac) = s.split_once('.').map_or((s, None), |(a, b)| (a, Some(b)));
         let groups: Vec<&str> = int.split(',').collect();
-        let first = groups.first()?;
-        if first.is_empty() || first.len() > 3 || groups.iter().skip(1).any(|g| g.len() != 3) {
+        let (first, rest) = groups.split_first()?;
+        let grouped = match region.grouping {
+            Grouping::Thousands => first.len() <= 3 && rest.iter().all(|g| g.len() == 3),
+            Grouping::Indian => {
+                let (last, middle) = rest.split_last()?;
+                first.len() <= 2 && last.len() == 3 && middle.iter().all(|g| g.len() == 2)
+            }
+        };
+        if first.is_empty() || !grouped {
             return None;
         }
         let mut d = groups.concat();
@@ -227,7 +277,7 @@ fn month_from_name(s: &str) -> Option<u32> {
 }
 
 /// Time part: `h:mm`, `h:mm:ss`, `h:mm:ss.000`, `h AM`, with optional AM/PM.
-fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
+fn parse_time(t: &str, _region: &Region) -> Option<(f64, bool, bool)> {
     let t = t.trim();
     let lower = t.to_ascii_lowercase();
     let (body, ampm) = if let Some(b) = lower.strip_suffix("am").or_else(|| lower.strip_suffix('a')) {
@@ -266,7 +316,9 @@ fn parse_time(t: &str) -> Option<(f64, bool, bool)> {
     Some((time_fraction(h, m, s), parts.len() == 3, ampm.is_some()))
 }
 
-fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
+/// A typed date. Numeric `a/b/c` and `a/b` follow `region.date_order`. The format returned stays
+/// the canonical `m/d/yyyy`, shown in the region's short date and saved as `numFmtId` 14.
+fn parse_date(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, &'static str)> {
     let t = t.trim().trim_end_matches(',');
     let num = |s: &str| {
         let s = s.trim();
@@ -285,8 +337,13 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
         {
             return valid_ymd(sys, y, m, d).map(|s| (s, "yyyy-mm-dd"));
         }
-        if let (Some(m), Some(d), Some(y)) = (num(a), num(b), num(c)) {
-            let y = if c.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
+        let (ms, ds, ys) = match region.date_order {
+            DateOrder::Mdy => (a, b, c),
+            DateOrder::Dmy => (b, a, c),
+            DateOrder::Ymd => (b, c, a),
+        };
+        if let (Some(m), Some(d), Some(y)) = (num(ms), num(ds), num(ys)) {
+            let y = if ys.len() <= 2 { if y < 30 { 2000 + y } else { 1900 + y } } else { y };
             return valid_ymd(sys, y, m, d).map(|s| (s, "m/d/yyyy"));
         }
         // 4-Mar-2026
@@ -299,14 +356,14 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
         let (a, b) = (parts[0].trim(), parts[1].trim());
         // m/d in the current year is ambiguous without a clock; use month/day of 2026? Excel uses
         // the current year. We accept d-mmm / mmm-d only with month names, and m/d → current year.
-        if let (Some(m), Some(d)) = (num(a), num(b)) {
-            let y = current_year();
+        if let (Some(x), Some(z)) = (num(a), num(b)) {
+            let (m, d) = if region.date_order == DateOrder::Dmy { (z, x) } else { (x, z) };
             if (1..=12).contains(&m) && (1..=31).contains(&d) {
-                return valid_ymd(sys, y, m, d).map(|s| (s, "d-mmm"));
+                return valid_ymd(sys, current_year(), m, d).map(|s| (s, "d-mmm"));
             }
             // m/yyyy
-            if (1..=12).contains(&m) && b.len() == 4 {
-                return valid_ymd(sys, d, m, 1).map(|s| (s, "mmm-yy"));
+            if (1..=12).contains(&x) && b.len() == 4 {
+                return valid_ymd(sys, z, x, 1).map(|s| (s, "mmm-yy"));
             }
         }
         if let (Some(d), Some(m)) = (num(a), month_from_name(b)) {
@@ -356,8 +413,8 @@ pub fn current_year() -> i64 {
     2026
 }
 
-fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>)> {
-    if let Some((tf, secs, ampm)) = parse_time(t) {
+fn parse_datetime(t: &str, sys: DateSystem, region: &Region) -> Option<(f64, Option<&'static str>)> {
+    if let Some((tf, secs, ampm)) = parse_time(t, region) {
         let f = match (secs, ampm) {
             // 24 hours or more: elapsed hours, so 25:00 shows as 25:00:00, not 1:00.
             _ if tf >= 1.0 => "[h]:mm:ss",
@@ -368,7 +425,7 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         };
         return Some((tf, Some(f)));
     }
-    if let Some((d, f)) = parse_date(t, sys) {
+    if let Some((d, f)) = parse_date(t, sys, region) {
         return Some((d, Some(f)));
     }
     // date + time: split at the last space(s) before a time-looking tail. Only splits where the
@@ -380,7 +437,8 @@ fn parse_datetime(t: &str, sys: DateSystem) -> Option<(f64, Option<&'static str>
         if b.len() > 36 || !bytes.first().is_some_and(u8::is_ascii_digit) || !b.contains(':') {
             continue;
         }
-        if let (Some((d, _)), Some((tf, _, _))) = (t.get(..i).and_then(|a| parse_date(a, sys)), parse_time(b)) {
+        let date = t.get(..i).and_then(|a| parse_date(a, sys, region));
+        if let (Some((d, _)), Some((tf, _, _))) = (date, parse_time(b, region)) {
             return Some((d + tf, Some("m/d/yyyy h:mm")));
         }
     }
