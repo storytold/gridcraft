@@ -318,11 +318,55 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     let (sr, sc) = if transpose { (lc, lr) } else { (lr, lc) };
                     clip.range.contains(CellRef::new(src.start.row.saturating_add(sr), src.start.col.saturating_add(sc)))
                 };
+                // With `skipBlanks`, the write loop leaves a destination cell alone when the source
+                // cell that would land on it is blank, so those cells are not writes and must not
+                // count either (the same blank rule the loop applies at the write site).
+                let src_sh = clip.wb.sheet(clip.sheet);
+                let leaves_unchanged = |d: CellRef| {
+                    if !skip_blanks {
+                        return false;
+                    }
+                    let lr = d.row.saturating_sub(at.row).checked_rem(h).unwrap_or(0);
+                    let lc = d.col.saturating_sub(at.col).checked_rem(w).unwrap_or(0);
+                    let (sr, sc) = if transpose { (lc, lr) } else { (lr, lc) };
+                    let sref = CellRef::new(src.start.row.saturating_add(sr), src.start.col.saturating_add(sc));
+                    match src_sh {
+                        Some(ssh) => {
+                            !ssh.cell_pictures.contains_key(&sref)
+                                && ssh.value(sref).is_empty()
+                                && ssh.cell(sref).is_none_or(|x| x.formula.is_none() && x.py.is_none())
+                        }
+                        None => true,
+                    }
+                };
                 let limit = usize::try_from(MAX_TILED_PASTE_CELLS).unwrap_or(usize::MAX).saturating_add(1);
                 let held = sh.cells.iter_range(pasted).map(|(c, _)| c).chain(sh.cell_pictures.keys().copied().filter(|c| pasted.contains(*c)));
-                held.filter(|d| !under_used(*d)).take(limit).count() as u64
+                held.filter(|d| !under_used(*d) && !leaves_unchanged(*d)).take(limit).count() as u64
             }
             _ => 0,
+        };
+        // With `skipBlanks`, blank source cells inside the copy's used range write nothing
+        // either, so the bounding used range overcounts in the same way: count the copy's
+        // non-blank cells (the same blank rule as the write loop) and let each tile write
+        // that many, plus the destination-only writes counted above.
+        let (used_h, used_w) = if skip_blanks && !link {
+            let non_blank = match clip.wb.sheet(clip.sheet) {
+                Some(ssh) => {
+                    let held = ssh
+                        .cells
+                        .iter_range(clip.range)
+                        .filter(|(c, cell)| {
+                            ssh.cell_pictures.contains_key(c) || !ssh.value(*c).is_empty() || cell.formula.is_some() || cell.py.is_some()
+                        })
+                        .count();
+                    let pics = ssh.cell_pictures.keys().filter(|c| clip.range.contains(**c) && ssh.cell(**c).is_none()).count();
+                    held + pics
+                }
+                None => 0,
+            };
+            (u32::try_from(non_blank).unwrap_or(u32::MAX), 1)
+        } else {
+            (used_h, used_w)
         };
         check_tiled_size(tiles_r, tiles_c, used_h, used_w, cleared)?;
     }

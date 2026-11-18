@@ -1097,3 +1097,22 @@ fn a_tiled_whole_column_paste_counts_the_cells_it_clears() {
         assert_eq!(value_at(&s, a), Value::Number(7.0), "{a} keeps its value");
     }
 }
+
+#[test]
+fn a_tiled_whole_column_paste_with_skip_blanks_does_not_count_the_cells_it_leaves() {
+    // #4425 re-review: the destination-only count included the cells below the copy's used
+    // part even with skipBlanks, although the write loop leaves every one of them unchanged
+    // (their source cells are blank). The same setup that is refused without skipBlanks is
+    // a five-cell paste with it.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    paste_over(&mut s, "A1", "B1:F1000000").unwrap();
+    s.execute("cell.set", json!({"cell": "B1000001", "input": "7"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A:A"})).unwrap();
+    s.execute("selection.set", json!({"range": "B:F"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).unwrap();
+    for a in ["B1", "F1", "B2", "F1000000", "B1000001"] {
+        assert_eq!(value_at(&s, a), Value::Number(7.0), "{a} keeps its value");
+    }
+}
