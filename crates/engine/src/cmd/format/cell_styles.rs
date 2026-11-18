@@ -1,14 +1,15 @@
 use super::{
-    ACCOUNTING, BorderLine, BorderStyle, Borders, COMMA, Color, Fill, Json, NumFmt, Result, Session, Style, Theme, apply_style, bad, str_param,
+    ACCOUNTING, BorderLine, BorderStyle, Borders, COMMA, Color, Fill, Json, NumFmt, Result, Session, Style, StyleId, apply_style, bad, str_param,
 };
 
-/// Built-in cell styles (our own palette).
-pub fn builtin_cell_style(name: &str, theme: &Theme) -> Option<Style> {
-    let _ = theme;
+/// Built-in cell styles (our own palette). Normal is the workbook's own Normal style, so a workbook
+/// whose default font is Arial 10 (from its file, or from the preferences it was made with) keeps it.
+pub fn builtin_cell_style(name: &str, wb: &gridcraft_model::Workbook) -> Option<Style> {
+    let theme = &wb.theme;
     let mut s = Style::default();
     let accent = |i: u8, tint: i16| Color::Theme(i, tint);
     match name {
-        "Normal" => {}
+        "Normal" => s = wb.styles.get(StyleId::DEFAULT).clone(),
         "Good" => {
             s.fill = Fill::solid(Color::rgb(0xC6, 0xEF, 0xCE));
             s.font.color = Color::rgb(0x00, 0x61, 0x00);
@@ -177,11 +178,7 @@ pub(super) fn cell_style(s: &mut Session, p: &Json) -> Result<Json> {
     let name = str_param(p, "name").unwrap_or("Normal").to_string();
     let d = s.doc()?;
     let style =
-        d.wb.cell_styles
-            .iter()
-            .find(|(n, _)| n.eq_ignore_ascii_case(&name))
-            .map(|(_, s)| s.clone())
-            .or_else(|| builtin_cell_style(&name, &d.wb.theme));
+        d.wb.cell_styles.iter().find(|(n, _)| n.eq_ignore_ascii_case(&name)).map(|(_, s)| s.clone()).or_else(|| builtin_cell_style(&name, &d.wb));
     let Some(style) = style else { return Err(bad("home.cellStyle", format!("unknown cell style `{name}`"))) };
     // Number-format styles only change the number format.
     let only_fmt = matches!(name.as_str(), "Comma" | "Comma [0]" | "Currency" | "Currency [0]" | "Percent");

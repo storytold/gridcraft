@@ -102,7 +102,7 @@ pub(super) fn cell_style_gallery(app: &mut SheetApp, ui: &mut Ui) {
         ui.label(egui::RichText::new(*g).strong());
         egui::Grid::new(("csg", *g)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
             for (i, n) in names.iter().enumerate() {
-                let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb.theme).unwrap_or_default();
+                let st = gridcraft_engine::cmd::format::builtin_cell_style(n, &wb).unwrap_or_default();
                 let (r, resp) = ui.allocate_exact_size(vec2(82.0, 24.0), Sense::click());
                 let fill = st
                     .fill
