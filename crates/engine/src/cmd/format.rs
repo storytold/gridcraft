@@ -411,9 +411,12 @@ fn border_style(name: &str) -> BorderStyle {
     }
 }
 
-/// Applies a preset cell border layout across the target ranges, rejecting unknown preset names.
+/// Applies a preset cell border layout across the target ranges, rejecting invalid or unknown presets.
 fn borders(s: &mut Session, p: &Json) -> Result<Json> {
-    let preset = str_param(p, "preset").unwrap_or("bottom").to_string();
+    let preset = match p.get("preset") {
+        None => "bottom".to_string(),
+        Some(v) => v.as_str().ok_or_else(|| bad("home.borders", "expected a string border preset"))?.to_string(),
+    };
     if !matches!(
         preset.as_str(),
         "bottom"
@@ -435,7 +438,7 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
             | "diagonalDown"
             | "diagonalUp"
     ) {
-        return Err(bad("preset", format!("unknown border preset `{preset}`")));
+        return Err(bad("home.borders", format!("unknown border preset `{preset}`")));
     }
     let color = color_param(p.get("color")).unwrap_or(Color::Auto);
     let base = border_style(str_param(p, "style").unwrap_or("thin"));

@@ -50,10 +50,13 @@ fn border_icon_tracks_only_successful_commands() {
     app.run("home.borders", json!({})).unwrap();
     assert_eq!(app.grid.last_border, "bottom");
 
-    // Unknown preset names are rejected before mutating styles or `last_border`.
+    // Unknown or non-string preset parameters are rejected under `home.borders` without mutating `last_border`.
     app.run("home.borders", json!({"preset": "thickOutside"})).unwrap();
     assert_eq!(app.grid.last_border, "thickOutside");
-    assert!(app.run("home.borders", json!({"preset": "outsidee"})).is_err());
+    let err = app.run("home.borders", json!({"preset": "outsidee"})).unwrap_err();
+    assert!(err.contains("home.borders"), "{err}");
+    assert_eq!(app.grid.last_border, "thickOutside");
+    assert!(app.run("home.borders", json!({"preset": 42})).is_err());
     assert_eq!(app.grid.last_border, "thickOutside");
 }
 
