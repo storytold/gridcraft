@@ -14,6 +14,14 @@ const MAX_PREVIEW_ROWS: usize = 200;
 const KIND_SAMPLE_ROWS: usize = 200;
 /// The most rows an import takes (a sheet's height).
 const MAX_IMPORT_ROWS: usize = 1_048_576;
+/// Most cells (rows × columns, blanks included) Get Data imports. The rows are built densely
+/// before they are written, so a few sparse records or one far-away CSV cell must not expand
+/// into a rectangle of billions of slots.
+const MAX_IMPORT_CELLS: u64 = 10_000_000;
+
+fn too_many_cells() -> EngineError {
+    EngineError::Other(format!("The data is too large to import ({MAX_IMPORT_CELLS} cells at most)."))
+}
 /// The error a workbook (XLSX, XLS, XLSB, ODS, templates…) gets from the text import: the UI opens
 /// it as File › Open would.
 pub const WORKBOOK_NOT_TEXT: &str = "This file is a workbook, not text. Open it with File > Open.";
@@ -120,14 +128,24 @@ fn read_records(bytes: &[u8], p: &Json) -> Result<Records> {
     let text = String::from_utf8_lossy(bytes);
     let (delimiter, mut all) = if let Some(arr) = json_objects(&text) {
         let mut keys: Vec<String> = Vec::new();
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for o in &arr {
             if let Some(m) = o.as_object() {
                 for k in m.keys() {
-                    if !keys.contains(k) {
+                    if !seen.contains(k.as_str()) {
+                        // Stop collecting at the column limit.
+                        if keys.len() >= gridcraft_core::MAX_COLS as usize {
+                            return Err(EngineError::Other("The data has more fields than a sheet has columns.".into()));
+                        }
+                        seen.insert(k.as_str());
                         keys.push(k.clone());
                     }
                 }
             }
+        }
+        let rows = (arr.len() as u64).min(MAX_IMPORT_ROWS as u64) + 1;
+        if rows.saturating_mul(keys.len().max(1) as u64) > MAX_IMPORT_CELLS {
+            return Err(too_many_cells());
         }
         let field = |v: Option<&Json>| match v {
             None | Some(Json::Null) => String::new(),
@@ -139,10 +157,23 @@ fn read_records(bytes: &[u8], p: &Json) -> Result<Records> {
         out.extend(arr.iter().take(MAX_IMPORT_ROWS).map(|o| keys.iter().map(|k| field(o.get(k))).collect()));
         (',', out)
     } else {
-        let opts = gridcraft_xlsx::CsvOptions { delimiter: delimiter_param(p).unwrap_or(0), parse_values: false, ..Default::default() };
-        let wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
+        let opts = gridcraft_xlsx::CsvOptions {
+            delimiter: delimiter_param(p).unwrap_or(0),
+            parse_values: false,
+            max_used_cells: Some(MAX_IMPORT_CELLS),
+            ..Default::default()
+        };
+        // The cell limit is enforced while parsing, before an oversized file is stored.
+        let wb = gridcraft_xlsx::read_csv(bytes, &opts).map_err(|e| match e {
+            gridcraft_xlsx::IoError::TooLarge(_) => too_many_cells(),
+            e => EngineError::Other(e.to_string()),
+        })?;
         let sh = wb.sheet(0).ok_or(EngineError::NoDocument)?;
         let Some(u) = sh.used_range() else { return Err(EngineError::Other("The file is empty.".into())) };
+        // Rows are built from column A, so the dense rectangle starts there.
+        if u64::from(u.end.row - u.start.row + 1).saturating_mul(u64::from(u.end.col) + 1) > MAX_IMPORT_CELLS {
+            return Err(too_many_cells());
+        }
         let rows = (u.start.row..=u.end.row)
             .map(|r| {
                 (0..=u.end.col)

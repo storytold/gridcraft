@@ -94,8 +94,8 @@ mod tests {
         let err = s.execute("data.fromTextCsv", json!({"text": text})).expect_err("too many cells");
         assert!(err.to_string().contains("too large"), "{err}");
         assert_eq!(s.doc().unwrap().wb.sheets.len(), sheets);
-        // Small imports still work.
+        // Small imports still work: two records under a header row.
         let out = s.execute("data.getData", json!({"text": r#"[{"a": 1}, {"b": 2}]"#})).unwrap();
-        assert_eq!((out["rows"].as_u64(), out["cols"].as_u64()), (Some(3), Some(2)), "{out}");
+        assert_eq!((out["rows"].as_u64(), out["cols"].as_u64()), (Some(2), Some(2)), "{out}");
     }
 }
