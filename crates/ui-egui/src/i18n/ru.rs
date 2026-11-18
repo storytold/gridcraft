@@ -496,6 +496,138 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "My list has headers" => "Мои данные содержат заголовки",
+        "Sort by" => "Сортировать по",
+        "Then by" => "Затем по",
+        "Cell Values" => "Значения ячеек",
+        "Cell Color" => "Цвет ячейки",
+        "A to Z" => "От А до Я",
+        "Z to A" => "От Я до А",
+        "Add Level" => "Добавить уровень",
+        "Delete Level" => "Удалить уровень",
+        "Copy Level" => "Копировать уровень",
+        "Move Up" => "Вверх",
+        "Move Down" => "Вниз",
+        "Order" => "Порядок",
+        "Sort On" => "Сортировка",
+        "Sort|Column" => "Столбец",
+        "Column {letters}" => "Столбец {letters}",
+        "Smallest to Largest" => "От наименьшего к наибольшему",
+        "Largest to Smallest" => "От наибольшего к наименьшему",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Закройте диалоговое окно «Сортировка», прежде чем переключать или изменять листы."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Вернитесь на исходный лист, чтобы выполнить сортировку, или отмените действие.",
+        "Numerical Count" => "Количество чисел",
+        "Minimum" => "Минимум",
+        "Maximum" => "Максимум",
+        "Circular References: {cell}" => "Циклические ссылки: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Ширина: {chars} (пикселей: {pixels})",
+        "Height: {points} ({pixels} pixels)" => "Высота: {points} (пикселей: {pixels})",
+        "Picture in cell" => "Изображение в ячейке",
+        "Picture: {alt}" => "Изображение: {alt}",
+        "Format Control: {name}" => "Формат элемента управления: {name}",
+        "Error at character {position}: {message}" => "Ошибка в символе {position}: {message}",
+        "Macro definitions are not supported in equations." => "Определения макросов в формулах не поддерживаются.",
+        "A % can't be combined with a link in an equation." => "Знак % нельзя сочетать со ссылкой в формуле.",
+        "Equations can nest at most 32 levels deep." => "Формулы могут иметь не более 32 уровней вложенности.",
+        "An equation can be at most 4096 bytes long." => "Длина формулы не может превышать 4096 байт.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Формула может содержать не более 2500 ячеек матрицы (строки, умноженные на самую широкую строку)."
+        }
+        "This equation is too large to draw." => "Эта формула слишком велика для отрисовки.",
+        "This equation could not be laid out." => "Не удалось построить эту формулу.",
+        "Saved macro “{name}” ({steps} step)" => "Макрос «{name}» сохранён ({steps} шаг)",
+        "Saved macro “{name}” ({steps} steps)" => "Макрос «{name}» сохранён (шагов: {steps})",
+        "without {key}: another macro took it while recording" => "без {key}: во время записи его занял другой макрос",
+        "Recording stopped" => "Запись остановлена",
+        "Macro “{name}” stopped: {message}" => "Макрос «{name}» остановлен: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Макрос «{name}» выполнен ({steps} шаг)",
+        "Ran macro “{name}” ({steps} steps)" => "Макрос «{name}» выполнен (шагов: {steps})",
+        "Average" => "Среднее",
+        "Count" => "Количество",
+        "Sum" => "Сумма",
+        "Goal Seeking found a solution: {value}" => "Подбор параметра нашёл решение: {value}",
+        "Sheets: {sheets}" => "Листы: {sheets}",
+        "Hidden: {sheets}" => "Скрытые: {sheets}",
+        "Double superscript" => "Двойной верхний индекс",
+        "Double subscript" => "Двойной нижний индекс",
+        "Extra }" => "Лишняя }",
+        "Unexpected end of input in a macro argument" => "Неожиданный конец ввода в аргументе макроса",
+        "Expected \\right after \\left" => "После \\left ожидается \\right",
+        "\\middle must be within \\left and \\right" => "\\middle должен стоять между \\left и \\right",
+        "Invalid environment name" => "Недопустимое имя окружения",
+        "Expected \\end after environment body" => "После содержимого окружения ожидается \\end",
+        "Expected URL" => "Ожидается URL-адрес",
+        "\\tag requires an argument" => "Для \\tag требуется аргумент",
+        "only one infix operator per group" => "В группе допускается только один инфиксный оператор",
+        "Expected color token" => "Ожидается цвет",
+        "Expected size for \\raisebox" => "Для \\raisebox ожидается размер",
+        "Expected size for \\rule width" => "Для ширины \\rule ожидается размер",
+        "Expected size for \\rule height" => "Для высоты \\rule ожидается размер",
+        "Cannot use both \\tag and \\nonumber in the same row" => "Нельзя использовать \\tag и \\nonumber в одной строке",
+        "Multiple \\tag in a row" => "Несколько \\tag в одной строке",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag должен стоять в конце строки после формулы",
+        "Multiple \\nonumber in a row" => "Несколько \\nonumber в одной строке",
+        "\\nonumber must appear at the end of the row" => "\\nonumber должен стоять в конце строки",
+        "Too many tab characters: &" => "Слишком много символов табуляции: &",
+        "Invalid column alignment for array" => "Недопустимое выравнивание столбцов для array",
+        "Expected column alignment character" => "Ожидается символ выравнивания столбца",
+        "Expected l or c or r" => "Ожидается l, c или r",
+        "Expected ]" => "Ожидается ]",
+        "Unexpected end of CD row after @" => "Неожиданный конец строки CD после @",
+        "Invalid column alignment for subarray" => "Недопустимое выравнивание столбцов для subarray",
+        "{subarray} can contain only one column" => "{subarray} может содержать только один столбец",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "В prooftree есть \\LeftLabel или \\RightLabel без последующей команды вывода"
+        }
+        "Recursion limit exceeded" => "Превышен предел рекурсии",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Слишком много раскрытий макросов: бесконечный цикл или слишком малое значение maxExpand"
+        }
+        "Expected raw style for \\htmlStyle" => "Для \\htmlStyle ожидается необработанный стиль",
+        "\\verb assertion failed" => "Проверка \\verb не пройдена",
+        "Undefined control sequence: {name}" => "Неопределённая управляющая последовательность: {name}",
+        "Expected '{expected}', got '{got}'" => "Ожидается '{expected}', получено '{got}'",
+        "Expected group after '{symbol}'" => "После '{symbol}' ожидается группа",
+        "Expected delimiter as argument to '{function}'" => "В качестве аргумента '{function}' ожидается разделитель",
+        "Expected group as argument to '{function}'" => "В качестве аргумента '{function}' ожидается группа",
+        "Got function '{function}' with no arguments as superscript" => "Функция '{function}' без аргументов использована как верхний индекс",
+        "Got function '{function}' with no arguments as subscript" => "Функция '{function}' без аргументов использована как нижний индекс",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Функция '{function}' без аргументов использована как аргумент '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Функция '{function}' без аргументов использована как \\tag",
+        "Can't use function '{function}' in text mode" => "Функцию '{function}' нельзя использовать в текстовом режиме",
+        "Can't use function '{function}' in math mode" => "Функцию '{function}' нельзя использовать в математическом режиме",
+        "Invalid color: '{color}'" => "Недопустимый цвет: '{color}'",
+        "Invalid size: '{size}'" => "Недопустимый размер: '{size}'",
+        "Invalid unit: '{unit}'" => "Недопустимая единица: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Недопустимый разделитель '{delimiter}' после '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Недопустимый тип разделителя '{type}' после '{function}'",
+        "Invalid delimiter type '{type}'" => "Недопустимый тип разделителя '{type}'",
+        "No such environment: {name}" => "Неизвестное окружение: {name}",
+        "Expected argument to \\begin{{name}}" => "Для \\begin{{name}} ожидается аргумент",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Несоответствие: \\begin{{begin}} закрыт \\end{{end}}",
+        "{command} valid only within array environment" => "{command} допускается только в окружении array",
+        "Mismatched {command}" => "{command} без пары",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "Ожидается &, \\\\, \\cr или \\end, получено '{got}'",
+        "Unknown column alignment: {alignment}" => "Неизвестное выравнивание столбца: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Слишком много формул в строке: ожидалось {expected}, получено {got}",
+        "Unknown CD directive: @{directive}" => "Неизвестная директива CD: @{directive}",
+        "Expected argument for {command}" => "Для {command} ожидается аргумент",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "Для {command} нужно посылок: {count}, но доступно только {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} допускается в prooftree только как поддерживаемая команда bussproofs"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "prooftree завершился с элементами в стеке доказательства: {count}, ожидался 1"
+        }
+        "\\@char has non-numeric argument {argument}" => "У \\@char нечисловой аргумент {argument}",
+        "\\@char with invalid code point {code}" => "\\@char с недопустимой кодовой точкой {code}",
+        "Invalid environment name character: {character}" => "Недопустимый символ в имени окружения: {character}",
         _ => return None,
     })
 }

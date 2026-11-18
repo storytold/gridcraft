@@ -763,7 +763,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Kolor komórki",
         "A to Z" => "Od A do Z",
         "Z to A" => "Od Z do A",
-        "+ Add Level" => "+ Dodaj poziom",
+        "Add Level" => "Dodaj poziom",
+        "Delete Level" => "Usuń poziom",
+        "Copy Level" => "Kopiuj poziom",
+        "Move Up" => "Przesuń w górę",
+        "Move Down" => "Przesuń w dół",
+        "Order" => "Kolejność",
+        "Sort On" => "Sortuj na podstawie",
+        "Sort|Column" => "Kolumna",
+        "Column {letters}" => "Kolumna {letters}",
+        "Smallest to Largest" => "Od najmniejszych do największych",
+        "Largest to Smallest" => "Od największych do najmniejszych",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Zamknij okno dialogowe Sortowanie przed przełączeniem lub zmianą arkuszy."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Wróć do oryginalnego arkusza, aby posortować, lub anuluj.",
         "New…" => "Nowy…",
         "Edit…" => "Edytuj…",
         "Name" => "Nazwa",
@@ -1011,6 +1025,110 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Pokaż",
         "Collapse dialog" => "Zwiń okno dialogowe",
         "Expand dialog" => "Rozwiń okno dialogowe",
+        "Numerical Count" => "Liczba wartości liczbowych",
+        "Minimum" => "Minimum",
+        "Maximum" => "Maksimum",
+        "Circular References: {cell}" => "Odwołania cykliczne: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Szerokość: {chars} (pikseli: {pixels})",
+        "Height: {points} ({pixels} pixels)" => "Wysokość: {points} (pikseli: {pixels})",
+        "Picture in cell" => "Obraz w komórce",
+        "Picture: {alt}" => "Obraz: {alt}",
+        "Format Control: {name}" => "Formatuj formant: {name}",
+        "Error at character {position}: {message}" => "Błąd przy znaku {position}: {message}",
+        "Macro definitions are not supported in equations." => "Definicje makr nie są obsługiwane w równaniach.",
+        "A % can't be combined with a link in an equation." => "Znaku % nie można łączyć z linkiem w równaniu.",
+        "Equations can nest at most 32 levels deep." => "Równania mogą być zagnieżdżone na co najwyżej 32 poziomach.",
+        "An equation can be at most 4096 bytes long." => "Równanie może mieć co najwyżej 4096 bajtów.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Równanie może mieć co najwyżej 2500 komórek macierzy (wiersze razy najszerszy wiersz)."
+        }
+        "This equation is too large to draw." => "To równanie jest za duże, aby je narysować.",
+        "This equation could not be laid out." => "Nie można złożyć tego równania.",
+        "Saved macro “{name}” ({steps} step)" => "Zapisano makro „{name}” ({steps} krok)",
+        "Saved macro “{name}” ({steps} steps)" => "Zapisano makro „{name}” (liczba kroków: {steps})",
+        "without {key}: another macro took it while recording" => "bez {key}: inne makro zajęło go podczas nagrywania",
+        "Recording stopped" => "Nagrywanie zatrzymane",
+        "Macro “{name}” stopped: {message}" => "Makro „{name}” zatrzymane: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Uruchomiono makro „{name}” ({steps} krok)",
+        "Ran macro “{name}” ({steps} steps)" => "Uruchomiono makro „{name}” (liczba kroków: {steps})",
+        "Double superscript" => "Podwójny indeks górny",
+        "Double subscript" => "Podwójny indeks dolny",
+        "Extra }" => "Nadmiarowy }",
+        "Unexpected end of input in a macro argument" => "Nieoczekiwany koniec danych w argumencie makra",
+        "Expected \\right after \\left" => "Oczekiwano \\right po \\left",
+        "\\middle must be within \\left and \\right" => "\\middle musi być między \\left a \\right",
+        "Invalid environment name" => "Nieprawidłowa nazwa środowiska",
+        "Expected \\end after environment body" => "Oczekiwano \\end po treści środowiska",
+        "Expected URL" => "Oczekiwano adresu URL",
+        "\\tag requires an argument" => "\\tag wymaga argumentu",
+        "only one infix operator per group" => "Tylko jeden operator wrostkowy na grupę",
+        "Expected color token" => "Oczekiwano koloru",
+        "Expected size for \\raisebox" => "Oczekiwano rozmiaru dla \\raisebox",
+        "Expected size for \\rule width" => "Oczekiwano rozmiaru dla szerokości \\rule",
+        "Expected size for \\rule height" => "Oczekiwano rozmiaru dla wysokości \\rule",
+        "Cannot use both \\tag and \\nonumber in the same row" => "Nie można użyć \\tag i \\nonumber w tym samym wierszu",
+        "Multiple \\tag in a row" => "Wiele \\tag w jednym wierszu",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag musi stać na końcu wiersza, po treści równania",
+        "Multiple \\nonumber in a row" => "Wiele \\nonumber w jednym wierszu",
+        "\\nonumber must appear at the end of the row" => "\\nonumber musi stać na końcu wiersza",
+        "Too many tab characters: &" => "Za dużo znaków tabulacji: &",
+        "Invalid column alignment for array" => "Nieprawidłowe wyrównanie kolumn dla array",
+        "Expected column alignment character" => "Oczekiwano znaku wyrównania kolumny",
+        "Expected l or c or r" => "Oczekiwano l, c lub r",
+        "Expected ]" => "Oczekiwano ]",
+        "Unexpected end of CD row after @" => "Nieoczekiwany koniec wiersza CD po @",
+        "Invalid column alignment for subarray" => "Nieprawidłowe wyrównanie kolumn dla subarray",
+        "{subarray} can contain only one column" => "{subarray} może zawierać tylko jedną kolumnę",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "prooftree zawiera \\LeftLabel lub \\RightLabel bez następującego polecenia wnioskowania"
+        }
+        "Recursion limit exceeded" => "Przekroczono limit rekurencji",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Za dużo rozwinięć makr: nieskończona pętla lub zbyt niskie ustawienie maxExpand"
+        }
+        "Expected raw style for \\htmlStyle" => "Oczekiwano surowego stylu dla \\htmlStyle",
+        "\\verb assertion failed" => "Sprawdzenie \\verb nie powiodło się",
+        "Undefined control sequence: {name}" => "Niezdefiniowana sekwencja sterująca: {name}",
+        "Expected '{expected}', got '{got}'" => "Oczekiwano '{expected}', napotkano '{got}'",
+        "Expected group after '{symbol}'" => "Oczekiwano grupy po '{symbol}'",
+        "Expected delimiter as argument to '{function}'" => "Oczekiwano ogranicznika jako argumentu '{function}'",
+        "Expected group as argument to '{function}'" => "Oczekiwano grupy jako argumentu '{function}'",
+        "Got function '{function}' with no arguments as superscript" => "Funkcja '{function}' bez argumentów użyta jako indeks górny",
+        "Got function '{function}' with no arguments as subscript" => "Funkcja '{function}' bez argumentów użyta jako indeks dolny",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Funkcja '{function}' bez argumentów użyta jako argument '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Funkcja '{function}' bez argumentów użyta jako \\tag",
+        "Can't use function '{function}' in text mode" => "Funkcji '{function}' nie można użyć w trybie tekstowym",
+        "Can't use function '{function}' in math mode" => "Funkcji '{function}' nie można użyć w trybie matematycznym",
+        "Invalid color: '{color}'" => "Nieprawidłowy kolor: '{color}'",
+        "Invalid size: '{size}'" => "Nieprawidłowy rozmiar: '{size}'",
+        "Invalid unit: '{unit}'" => "Nieprawidłowa jednostka: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Nieprawidłowy ogranicznik '{delimiter}' po '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Nieprawidłowy typ ogranicznika '{type}' po '{function}'",
+        "Invalid delimiter type '{type}'" => "Nieprawidłowy typ ogranicznika '{type}'",
+        "No such environment: {name}" => "Nieznane środowisko: {name}",
+        "Expected argument to \\begin{{name}}" => "Oczekiwano argumentu dla \\begin{{name}}",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Niezgodność: \\begin{{begin}} zamknięte przez \\end{{end}}",
+        "{command} valid only within array environment" => "{command} jest dozwolone tylko w środowisku array",
+        "Mismatched {command}" => "{command} bez pary",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "Oczekiwano &, \\\\, \\cr lub \\end, napotkano '{got}'",
+        "Unknown column alignment: {alignment}" => "Nieznane wyrównanie kolumny: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Za dużo formuł w wierszu: oczekiwano {expected}, jest {got}",
+        "Unknown CD directive: @{directive}" => "Nieznana dyrektywa CD: @{directive}",
+        "Expected argument for {command}" => "Oczekiwano argumentu dla {command}",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "{command} wymaga {count} przesłanek, ale dostępnych jest tylko {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} jest dozwolone w prooftree tylko jako obsługiwane polecenie bussproofs"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "prooftree zakończyło się z {count} elementami na stosie dowodu, oczekiwano 1"
+        }
+        "\\@char has non-numeric argument {argument}" => "\\@char ma nienumeryczny argument {argument}",
+        "\\@char with invalid code point {code}" => "\\@char z nieprawidłowym punktem kodowym {code}",
+        "Invalid environment name character: {character}" => "Nieprawidłowy znak w nazwie środowiska: {character}",
         _ => return None,
     })
 }
