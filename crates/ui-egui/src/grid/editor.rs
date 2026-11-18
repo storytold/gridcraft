@@ -90,26 +90,14 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
             painter.rect_filled(geo.mirror_rect(r), 0.0, colour);
         }
     };
-    // The cell inside its gridlines, and the cells it has grown over.
+    // The cell inside its gridlines, and the cells it has grown over. Those reach over the
+    // gridline between them and the cell, which is how the line the text runs over is cleared.
     paint(Rect::from_min_max(pos2(left.right(), top.bottom()), pos2(right.left(), bottom.top())), fill);
     for cells in &cover.cells {
         paint(*cells, fill);
     }
-    // A side the text runs over goes, with the gridline under it; the corners of the sides that
-    // stay are drawn over it.
-    if cover.over {
-        paint(right, fill);
-    }
-    if cover.tall {
-        paint(bottom, fill);
-    }
-    paint(left, green);
-    paint(top, green);
-    if !cover.over {
-        paint(right, green);
-    }
-    if !cover.tall {
-        paint(bottom, green);
+    for side in highlight_sides([left, top, right, bottom], cover.over, cover.tall).into_iter().flatten() {
+        paint(side, green);
     }
     let id = egui::Id::unique("gridcraft.cell_editor");
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(erect.shrink2(vec2(2.0, 1.0))));
@@ -210,6 +198,30 @@ fn editor_cover(cell: Rect, editor: Rect, field_w: f32, text_w: f32, mirror: Opt
     }
     let to_the_line = if mirror.is_some() { cell.left() + field_w - inner.right() } else { inner.right() - cell.left() };
     EditorCover { cells, over: wide && EDITOR_TEXT_AT + text_w + EDITOR_CARET >= to_the_line, tall }
+}
+
+/// The sides of the highlight round a cell being edited (`sides`, as [`outline_sides`] gives
+/// them: left, top, right, bottom) that stay: the far side goes once the text has run over it
+/// (`over`), and the bottom side when the editor is taller than the cell (`tall`). A side that
+/// stays stops at the line of one that went, so none reaches across a gridline the text cleared.
+fn highlight_sides([left, top, right, bottom]: [Rect; 4], over: bool, tall: bool) -> [Option<Rect>; 4] {
+    let down_to_the_line = |side: Rect| if tall { Rect::from_min_max(side.min, pos2(side.max.x, side.max.y.min(bottom.top()))) } else { side };
+    let across_to_the_line = |side: Rect| if over { Rect::from_min_max(side.min, pos2(side.max.x.min(right.left()), side.max.y)) } else { side };
+    [
+        Some(down_to_the_line(left)),
+        Some(across_to_the_line(top)),
+        (!over).then(|| down_to_the_line(right)),
+        (!tall).then(|| across_to_the_line(bottom)),
+    ]
+}
+
+/// Whether the in-cell editor is shown for `area` of the sheet `sh`, the one on screen. It then
+/// draws that area's highlight itself, which is the selection's own outline less the sides the
+/// text clears, so the outline is not drawn under it as well: its corners would show there.
+pub(super) fn edits_in_cell(app: &SheetApp, sh: &Sheet, area: RangeRef) -> bool {
+    app.editor.as_ref().is_some_and(|ed| {
+        !ed.from_formula_bar && app.view_key() == Some((ed.doc, ed.sheet)) && sh.merge_at(ed.cell).unwrap_or_else(|| RangeRef::cell(ed.cell)) == area
+    })
 }
 
 /// Test the popup itself, not whether the pointer is over any part of the app.
@@ -437,5 +449,32 @@ mod editor_tests {
             let cover = cover(editor, text_w, false);
             assert!(cover.cells.iter().all(|r| r.is_finite() && r.is_positive()), "{editor:?}: {cover:?}");
         }
+    }
+
+    #[test]
+    fn the_sides_that_stay_stop_at_the_line_the_text_cleared() {
+        let cell = Rect::from_min_max(pos2(100.0, 50.0), pos2(160.0, 66.0));
+        let sides = outline_sides(cell, 1.0, None);
+        let [left, top, right, bottom] = sides;
+        // Nothing cleared: the whole outline, corners and all.
+        assert_eq!(highlight_sides(sides, false, false), [Some(left), Some(top), Some(right), Some(bottom)]);
+        // The text runs over the right side: it goes, and the top and bottom stop at its line.
+        let [l, t, r, b] = highlight_sides(sides, true, false);
+        assert_eq!((l, r), (Some(left), None));
+        assert_eq!(t, Some(Rect::from_min_max(top.min, pos2(right.left(), top.bottom()))));
+        assert_eq!(b, Some(Rect::from_min_max(bottom.min, pos2(right.left(), bottom.bottom()))));
+        assert_eq!(right.left(), 159.0, "the gridline's own pixel, at a pixel a point");
+        // Taller than the cell: the bottom goes, and the left and right stop at its line.
+        let [l, t, r, b] = highlight_sides(sides, false, true);
+        assert_eq!((t, b), (Some(top), None));
+        assert_eq!(l, Some(Rect::from_min_max(left.min, pos2(left.right(), bottom.top()))));
+        assert_eq!(r, Some(Rect::from_min_max(right.min, pos2(right.right(), bottom.top()))));
+        // Both: the left and top stay, each stopping at the other's line.
+        let [l, t, r, b] = highlight_sides(sides, true, true);
+        assert_eq!((r, b), (None, None));
+        assert_eq!(l.map(|s| s.bottom()), Some(bottom.top()));
+        assert_eq!(t.map(|s| s.right()), Some(right.left()));
+        // Numbers that make no sense give no panic.
+        let _ = highlight_sides(outline_sides(Rect::NAN, 1.0, None), true, true);
     }
 }

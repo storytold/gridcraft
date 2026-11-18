@@ -322,3 +322,42 @@ fn on_a_right_to_left_sheet_the_text_stays_over_its_own_cell_as_the_editor_grows
     let [_, _, right, _] = outline_sides(cell(&h, "C4"), h.ctx.pixels_per_point(), g.mirror_axis());
     assert_eq!(on_top(&h, g.mirror_rect(right).center()), Some(white), "the line the text crosses");
 }
+
+/// The middle of the corner where two sides of the outline meet.
+fn corner(a: Rect, b: Rect) -> Pos2 {
+    a.intersect(b).center()
+}
+
+#[test]
+fn no_corner_of_the_highlight_reaches_across_a_line_the_text_cleared() {
+    // Sideways: the text runs over C4's right side.
+    let mut h = harness(session());
+    let green = Paint::Fill(Tokens::get(&h.ctx).sel_border);
+    let [left, top, right, bottom] = sides(&h, "C4");
+    for (a, b) in [(top, right), (bottom, right)] {
+        assert_eq!(on_top(&h, corner(a, b)), Some(green), "before typing, the outline's corner at {:?}", corner(a, b));
+    }
+    typed(&mut h, LONG);
+    for (a, b) in [(top, right), (bottom, right)] {
+        let at = corner(a, b);
+        assert_ne!(on_top(&h, at), Some(green), "the corner at {at:?}, across the cleared right side");
+    }
+    for (a, b) in [(top, left), (bottom, left)] {
+        let at = corner(a, b);
+        assert_eq!(on_top(&h, at), Some(green), "the corner at {at:?}, of two sides that stay");
+    }
+    // Downwards: a second line runs over C4's bottom side.
+    let mut h = harness(session());
+    h.state_mut().begin_edit(Some("one\ntwo".into()), false);
+    h.run_steps(3);
+    // Where the cells are once editing has begun: a formula bar that grows with the text moves the grid.
+    let [left, top, right, bottom] = sides(&h, "C4");
+    for (a, b) in [(left, bottom), (right, bottom)] {
+        let at = corner(a, b);
+        assert_ne!(on_top(&h, at), Some(green), "the corner at {at:?}, across the cleared bottom side");
+    }
+    for (a, b) in [(left, top), (right, top)] {
+        let at = corner(a, b);
+        assert_eq!(on_top(&h, at), Some(green), "the corner at {at:?}, of two sides that stay");
+    }
+}

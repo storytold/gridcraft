@@ -1,3 +1,4 @@
+use super::editor::edits_in_cell;
 use super::geo::Geo;
 #[cfg(test)]
 use super::interact::{hidden_col_edge, hidden_row_edge};
@@ -196,7 +197,8 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
             }
         }
     }
-    if cur_here {
+    // A cell typed into has its outline drawn by the in-cell editor, less the sides its text clears.
+    if cur_here && !edits_in_cell(app, sh, sel.current()) {
         for side in outline_bands(outline, p.ctx().pixels_per_point(), geo.mirror_axis(), p.clip_rect()) {
             p.rect_filled(side, 0.0, t.sel_border);
         }
