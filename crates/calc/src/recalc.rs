@@ -48,6 +48,8 @@ pub struct Calc {
     /// Cells whose formulas have errors from cycles.
     pub circular: Vec<Key>,
     pub last_recalc_cells: usize,
+    /// Answers IMAGE; without one it is `#BLOCKED!`.
+    images: Option<std::sync::Arc<dyn gridcraft_functions::ImageFetcher>>,
     /// Which anchors held a spill when the current calculation started (see [`Standing`]).
     standing: Standing,
     /// The cells whose value is `#SPILL!`, kept so that finding the formulas an emptied cell or a
@@ -144,6 +146,7 @@ impl Default for Calc {
             last_recalc_cells: 0,
             standing: Standing::default(),
             spill_errors: SpillErrors::default(),
+            images: None,
         }
     }
 }
@@ -222,6 +225,12 @@ impl Calc {
             return n;
         }
         now_serial()
+    }
+
+    /// Installs (or with `None` removes) what answers IMAGE. Cells already calculated keep their
+    /// pictures until they next recalculate.
+    pub fn set_image_fetcher(&mut self, fetcher: Option<std::sync::Arc<dyn gridcraft_functions::ImageFetcher>>) {
+        self.images = fetcher;
     }
 
     /// Rebuilds the graph from scratch.
@@ -562,8 +571,9 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
+            let (results, spills, cycles, pictures) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                host.images = self.images.clone();
                 host.standing = Some(&self.standing);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
@@ -575,7 +585,7 @@ impl Calc {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                (host.results, host.spills, host.cycles, host.pictures)
             };
             self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
@@ -589,7 +599,7 @@ impl Calc {
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
-            let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            let mut spill_changes = self.write_back(wb, &dirty, results, pictures, &spills);
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
@@ -623,12 +633,24 @@ impl Calc {
         wb: &mut Workbook,
         dirty: &[Key],
         results: HashMap<Key, Value>,
+        mut pictures: HashMap<Key, gridcraft_functions::ImagePicture>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
         for (key, value) in results {
+            let picture = pictures.remove(&key).filter(|_| !matches!(value, Value::Error(_)));
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
+            // IMAGE shows its picture in the cell; the value it returned stays underneath.
+            match picture {
+                Some(p) => {
+                    let picture = gridcraft_model::CellPicture { data: p.data, mime: p.mime.to_string(), alt: p.alt, sizing: p.sizing };
+                    sheet.cell_pictures.insert(key.1, std::sync::Arc::new(picture));
+                }
+                None => {
+                    sheet.cell_pictures.remove(&key.1);
+                }
+            }
             if let Some(cell) = sheet.cells.get_mut(key.1) {
                 if value == Value::Error(CellError::Spill) {
                     self.spill_errors.insert(key);

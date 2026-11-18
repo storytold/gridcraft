@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gridcraft_core::{DateSystem, RangeRef};
+use gridcraft_core::{DateSystem, PictureSizing, RangeRef};
 use gridcraft_model::{
     CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
 };
@@ -33,6 +33,12 @@ pub struct Ctx<'a> {
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
+    /// Copies of `cell_pictures` entries with another sizing (IMAGE formulas), one per picture and
+    /// sizing, so cells that share a picture share its bytes. Keyed by the original's address,
+    /// which `cell_pictures` keeps alive for the whole read.
+    pub sized_pictures: HashMap<(usize, PictureSizing), Arc<CellPicture>>,
+    /// Picture bytes held: the distinct `cell_pictures` plus `sized_pictures`, against one budget.
+    pub sized_bytes: usize,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
     /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
@@ -262,6 +268,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         next_id: 1,
         num_fmts: Default::default(),
         cell_pictures: vec![],
+        sized_pictures: HashMap::new(),
+        sized_bytes: 0,
         cf_ext_ids: vec![],
         legacy_formulas: vec![],
         shared_formula_bytes: 0,
@@ -280,6 +288,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             vec![]
         }
     };
+    let mut seen = HashSet::new();
+    cx.sized_bytes = cx.cell_pictures.iter().flatten().filter(|p| seen.insert(Arc::as_ptr(p))).fold(0usize, |n, p| n.saturating_add(p.data.len()));
     // The code of Python cells, which their formulas name by index.
     cx.python = crate::python_part::read(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();

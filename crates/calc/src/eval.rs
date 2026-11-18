@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
 use gridcraft_formula::{BinOp, Expr, Reference, SheetSel, StructItem, StructRef, UnOp};
-use gridcraft_functions::{Arg, Ctx};
+use gridcraft_functions::{Arg, Ctx, ImagePicture};
 use gridcraft_model::Workbook;
 
 mod array;
@@ -137,6 +137,13 @@ pub trait Host {
     }
     /// Called when a formula's evaluation runs past the stack budget.
     fn stack_exhausted(&mut self) {}
+    /// The encoded picture for IMAGE (`url` is already checked: https, at most 2048 characters).
+    /// `#BLOCKED!` when this host has no fetcher.
+    fn image_get(&mut self, _url: &str) -> Result<Vec<u8>, CellError> {
+        Err(CellError::Blocked)
+    }
+    /// A picture IMAGE produced in the cell at `sheet`/`at`.
+    fn set_image(&mut self, _sheet: usize, _at: CellRef, _picture: ImagePicture) {}
 }
 
 pub struct Evaluator<'h> {
@@ -229,6 +236,13 @@ impl Ctx for FnCtx<'_, '_> {
         active.pop();
         self.ev.active_criteria = active;
         Some(v)
+    }
+    fn image_get(&mut self, url: &str) -> Result<Vec<u8>, CellError> {
+        self.ev.host.image_get(url)
+    }
+    fn set_image(&mut self, picture: ImagePicture) {
+        let (sheet, at) = (self.ev.sheet, self.ev.at);
+        self.ev.host.set_image(sheet, at, picture);
     }
     fn exhausted(&self) -> bool {
         self.ev.exhausted

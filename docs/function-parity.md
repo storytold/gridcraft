@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-04 · **Change:** minor (GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-15 · **Change:** minor (IMAGE added: shows an https picture in the cell through the host's `ImageFetcher`, off by default, with Excel's sizing 0–3; earlier: GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -12,7 +12,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
   them), plus 14 text functions the page lists under combined entries (FIND/FINDB, LEFT/LEFTB,
   LEN/LENB, MID/MIDB, REPLACE/REPLACEB, RIGHT/RIGHTB, SEARCH/SEARCHB), BETA.INV, and COPILOT and
   PY (Microsoft 365 functions not on that page when fetched).
-- **Ours (514):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
+- **Ours (515):** every function spec in `crates/functions/src/*.rs` (`f!("NAME", …)`) plus the
   evaluator's special forms in `crates/calc/src/eval.rs` (`SPECIAL_FUNCTIONS`: IF, IFS, CHOOSE,
   OFFSET, INDIRECT, INDEX, GETPIVOTDATA, SUBTOTAL, AGGREGATE, TEXT, LET, LAMBDA, MAP, REDUCE, SCAN, BYROW, BYCOL,
   MAKEARRAY…), excluding the test-only `ADD2`. Every one is an Excel name.
@@ -25,16 +25,16 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 
 ## Coverage
 
-**Measured: 514 / 523 by name (98.3%); 505 / 523 working (96.6%).**
+**Measured: 515 / 523 by name (98.5%); 506 / 523 working (96.7%).**
 
 | Category | Excel | Ours | Working | % working | Missing |
 |---|---|---|---|---|---|
 | Statistical | 111 | 111 | 111 | 100% | — |
-| Math and trigonometry | 80 | 79 | 79 | 99% | PERCENTOF |
+| Math and trigonometry | 80 | 80 | 80 | 100% | — |
 | Financial | 55 | 55 | 55 | 100% | — |
 | Engineering | 54 | 54 | 54 | 100% | — |
 | Text | 50 | 48 | 48 | 96% | DETECTLANGUAGE, TRANSLATE |
-| Lookup and reference | 40 | 38 | 38 | 95% | IMAGE, RTD |
+| Lookup and reference | 40 | 39 | 39 | 98% | RTD |
 | Compatibility | 40 | 40 | 40 | 100% | — |
 | Date and time | 25 | 25 | 25 | 100% | — |
 | Information | 22 | 21 | 21 | 95% | STOCKHISTORY |
@@ -44,7 +44,7 @@ Excel's worksheet functions, category by category, against GridCraft's function 
 | Web | 3 | 3 | 1 | 33% | (WEBSERVICE, FILTERXML are stubs; ENCODEURL works) |
 | Add-in and Automation | 3 | 1 | 1 | 33% | CALL, REGISTER.ID |
 | AI and Python | 2 | 0 | 0 | 0% | COPILOT, PY |
-| **Total** | **523** | **514** | **505** | **96.6%** | 9 missing, 9 stubs |
+| **Total** | **523** | **515** | **506** | **96.7%** | 8 missing, 9 stubs |
 
 By the Excel version that introduced them (working / total): before 2010 349 / 360, 2010
 56 / 56, 2013 49 / 51, 2016 5 / 5, 2019 6 / 6, 2021 11 / 11, 2024 22 / 23, Microsoft 365 7 / 11.
@@ -63,7 +63,7 @@ This improves series preparation; it does not change the model-fitting or season
 | FORECAST.ETS family (4) | yes | 4–6 h | AAA exponential smoothing with seasonality detection; needed for Forecast Sheet too |
 | ODDFPRICE, ODDFYIELD, ODDLPRICE, ODDLYIELD | yes | 2–4 h | Odd first/last period bond maths |
 | Generate GetPivotData | yes | 1–2 h | GETPIVOTDATA works; clicking a PivotTable value while typing a formula doesn't insert it yet |
-| IMAGE | yes | 3–5 h | Pictures in cells (see PR #105); fetching URLs needs a privacy decision |
+| IMAGE | partly | — | Done: https URLs, argument rules, sizing 0–3 (fit, fill, original size, custom), PNG/JPEG/GIF/BMP, picture shown in the cell and kept through XLSX (PNG and JPEG up to 8192 px a side; other pictures are left out of the file and fetched again on open). Fetching goes through the host's `ImageFetcher`: no fetcher or a refused URL is `#BLOCKED!` (none ships, so that is what the app shows), a failed request is `#CONNECT!` |
 | CUBE* (7), WEBSERVICE, FILTERXML | partly | 4–8 h | FILTERXML can work offline; CUBE needs an OLAP/data-model source |
 | TRANSLATE, DETECTLANGUAGE, STOCKHISTORY, COPILOT, PY | no (cloud) | — | Microsoft cloud services; open equivalents only by owner decision |
 | CALL, REGISTER.ID, RTD | no | — | Native DLL/COM calls; not portable or safe |
@@ -95,7 +95,7 @@ This improves series preparation; it does not change the model-fitting or season
 | External workbook references (`[Book.xlsx]Sheet1!A1`) | parsed; links dropped on open, no update |
 | Localized function names and `;` separators | **missing** (#45); en-US only |
 | Long flat operator chains (`=A1+A2+…`, `-`, `*`, `/`, `^`, `&`, comparisons) | done: no operand limit below Excel's 8,192-character formula limit (Excel, observed: `=1+1+…` with 4,096 operands is exactly 8,192 characters with the `=` and calculates; one more character is refused). Evaluated (#484), printed (#628), stored, copied, adjusted, saved and reopened without recursing once per operand, on a 1 MiB stack (#916); written to XLSX as plain formulas, not dynamic arrays; Spanish entry accepts them |
-| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA`, and the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!`, `#BLOCKED!` done; `#FIELD!`, `#CONNECT!`, `#UNKNOWN!` missing (minor: they come from data types and cloud features). `ERROR.TYPE` gives 11 for `#BLOCKED!` as Excel does; Microsoft documents no number for `#PYTHON!`, `#BUSY!` or `#TIMEOUT!`, and GridCraft gives them 19, 20 and 21 |
+| Error values | the seven classic errors plus `#SPILL!`, `#CALC!`, `#GETTING_DATA`, `#CONNECT!` (IMAGE), `#BLOCKED!` (IMAGE and Python), and the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` done; `#FIELD!`, `#UNKNOWN!` missing (minor: they come from data types and cloud features). `ERROR.TYPE` gives 10 for `#CONNECT!` and 11 for `#BLOCKED!`; Microsoft documents no number for `#PYTHON!`, `#BUSY!` or `#TIMEOUT!`, and GridCraft gives them 19, 20 and 21 |
 | Python in cells | partial: Python cells are stored, edited (`python.set`, and Python mode in the formula bar: Ctrl+Alt+Shift+P or `=PY` then Tab), copied, moved and saved, and Excel's `_xlfn._xlws.PY` cells open with their cached results; the code doesn't run, so new or changed code shows `#BLOCKED!`. Typing `=PY(` and Enter is refused with a pointer to `python.set`, so `PY` stays counted as missing above |
 
 ## Depth (estimated)
@@ -137,6 +137,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | IMAGE added: validates source (https, 2048 characters), alt text, sizing 0–3 and height/width, fetches the bytes through the host's `ImageFetcher`, accepts PNG, JPEG, GIF and BMP up to 10 MiB, and shows the picture in the cell with its sizing. Files hold the PNG and JPEG pictures the format allows; others are left out and fetched again on open. Without a fetcher or for a refused URL it is `#BLOCKED!`, for a failed request `#CONNECT!` (`#CONNECT!` is new, ERROR.TYPE 10; `#BLOCKED!` is shared with Python; cached in files as `#VALUE!`). Formula pictures keep their formula through XLSX. Coverage totals reconciled: the Math and Lookup rows still listed PERCENTOF and TRIMRANGE as missing (both landed 2026-10-11), so rows, Total and the Measured line now agree; with GETPIVOTDATA (2026-10-12) that is 515 / 523 by name, 506 working |
 | 2026-11-04 | minor | GCD and LCM reject negative fractional arguments before truncation; scalar and range regressions in the extracted math tests preserve positive truncation and signed-zero behavior; estimates unchanged |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
