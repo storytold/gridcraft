@@ -2,16 +2,17 @@ use super::controls::{act, anchor_keytip, checkbox_on, control_keytip, invoke, k
 use super::{Color32, Icon, Sense, SheetApp, Tokens, Ui, big_button, json, keytip_table, vec2};
 
 pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
     let th = big_button(ui, Icon::Theme, "Themes", "Themes", true);
     anchor_keytip(app, ui, &th, &["pageLayout.theme"]);
-    egui::Popup::menu(&th).show(|ui| {
+    crate::rtl::menu(&th).show(|ui| {
         for (name, colors) in gridcraft_engine::cmd::view::themes() {
             ui.horizontal(|ui| {
                 for c in colors.iter().skip(4).take(6) {
                     let (r, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
                     ui.painter().rect_filled(r, 1.0, Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, *c as u8));
                 }
-                if ui.button(name).clicked() {
+                if ui.button(lang.tr(name)).clicked() {
                     act(app, "pageLayout.theme", json!({"name": name}));
                 }
             });
@@ -22,7 +23,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.margins", "dialog:pageSetup"]) {
         keytip(app, ui, sequence, m.rect.center_bottom());
     }
-    egui::Popup::menu(&m).show(|ui| {
+    crate::rtl::menu(&m).show(|ui| {
         menu_items(
             app,
             ui,
@@ -36,7 +37,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     });
     let o = big_button(ui, Icon::Orient, "Page Layout|Orientation", "Page Layout|Orientation", true);
     control_keytip(app, ui, &o, "pageLayout.orientation");
-    egui::Popup::menu(&o).show(|ui| {
+    crate::rtl::menu(&o).show(|ui| {
         menu_items(
             app,
             ui,
@@ -48,7 +49,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     });
     let s = big_button(ui, Icon::Paper, "Size", "Paper Size", true);
     control_keytip(app, ui, &s, "pageLayout.size");
-    egui::Popup::menu(&s).show(|ui| {
+    crate::rtl::menu(&s).show(|ui| {
         // B4/B5/B6 are the JIS sizes Japanese Excel uses; the ISO ones stay selectable by name.
         for p in [
             "Letter",
@@ -79,7 +80,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     });
     let pa = big_button(ui, Icon::PrintArea, "Print\nArea", "Print Area", true);
     anchor_keytip(app, ui, &pa, &["pageLayout.printArea"]);
-    egui::Popup::menu(&pa).show(|ui| {
+    crate::rtl::menu(&pa).show(|ui| {
         menu_items(
             app,
             ui,
@@ -90,7 +91,7 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     for sequence in keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["pageLayout.breaks"]) {
         keytip(app, ui, sequence, br.rect.center_bottom());
     }
-    egui::Popup::menu(&br).show(|ui| {
+    crate::rtl::menu(&br).show(|ui| {
         menu_items(
             app,
             ui,
@@ -116,31 +117,31 @@ pub(super) fn page_layout(app: &mut SheetApp, ui: &mut Ui) {
     // Excel), but the key is distinct from the "View" tab so languages can word them apart.
     let screen = app.ui.language.tr("Sheet Options|View");
     let print = app.ui.language.tr("Print");
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new(app.ui.language.tr("Gridlines")).strong().small());
+    crate::rtl::vertical(ui, |ui| {
+        ui.label(egui::RichText::new(lang.tr("Gridlines")).strong().small());
         let mut v = sh.0;
-        let resp = ui.checkbox(&mut v, screen);
+        let resp = crate::rtl::checkbox(ui, &mut v, screen);
         control_keytip(app, ui, &resp, "view.gridlines");
         if resp.changed() || invoke(app, "view.gridlines") {
             act(app, "view.gridlines", json!({"on": checkbox_on(resp.changed(), v)}));
         }
         let mut p = sh.2;
-        let resp = ui.checkbox(&mut p, print);
+        let resp = crate::rtl::checkbox(ui, &mut p, print);
         control_keytip(app, ui, &resp, "pageLayout.printGridlines");
         if resp.changed() || invoke(app, "pageLayout.printGridlines") {
             act(app, "pageLayout.printGridlines", json!({"on": checkbox_on(resp.changed(), p)}));
         }
     });
-    ui.vertical(|ui| {
-        ui.label(egui::RichText::new(app.ui.language.tr("Headings")).strong().small());
+    crate::rtl::vertical(ui, |ui| {
+        ui.label(egui::RichText::new(lang.tr("Headings")).strong().small());
         let mut v = sh.1;
-        let resp = ui.checkbox(&mut v, screen);
+        let resp = crate::rtl::checkbox(ui, &mut v, screen);
         control_keytip(app, ui, &resp, "view.headings");
         if resp.changed() || invoke(app, "view.headings") {
             act(app, "view.headings", json!({"on": checkbox_on(resp.changed(), v)}));
         }
         let mut p = sh.3;
-        let resp = ui.checkbox(&mut p, print);
+        let resp = crate::rtl::checkbox(ui, &mut p, print);
         control_keytip(app, ui, &resp, "pageLayout.printHeadings");
         if resp.changed() || invoke(app, "pageLayout.printHeadings") {
             act(app, "pageLayout.printHeadings", json!({"on": checkbox_on(resp.changed(), p)}));

@@ -1,8 +1,9 @@
 //! Renders the whole GridCraft window offscreen (wgpu, no window) to a PNG.
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
-//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] out.png`
+//!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr|ar]
+//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--backstage home|new|open|info|saveAs|print|export|options]
+//!  [--hf-edit header|footer] [--click x,y]... [--rclick x,y]... out.png` (clicks use window pixels at scale 1 and run in order)
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
@@ -24,6 +25,8 @@ fn main() {
     let mut chart: Option<u32> = None;
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
+    let mut backstage: Option<String> = None;
+    let mut clicks: Vec<(egui::Pos2, egui::PointerButton)> = vec![];
     let mut hf_edit: Option<String> = None;
     let mut refedit: Option<String> = None;
     let mut out = "snapshot.png".to_string();
@@ -80,6 +83,17 @@ fn main() {
                 i += 1;
                 hf_edit = args.get(i).cloned();
             }
+            "--click" | "--rclick" => {
+                let button = if args[i] == "--click" { egui::PointerButton::Primary } else { egui::PointerButton::Secondary };
+                i += 1;
+                if let Some((x, y)) = args.get(i).and_then(|s| s.split_once(',')) {
+                    clicks.push((egui::pos2(x.parse().unwrap_or(0.0), y.parse().unwrap_or(0.0)), button));
+                }
+            }
+            "--backstage" => {
+                i += 1;
+                backstage = args.get(i).cloned();
+            }
             "--language" => {
                 i += 1;
                 language = args.get(i).cloned();
@@ -130,6 +144,9 @@ fn main() {
                         d.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((d.as_str(), json!({})));
                     app.open_dialog(name, p);
                 }
+                if let Some(page) = backstage.as_deref().and_then(gridcraft_ui_egui::backstage::Page::parse) {
+                    app.open_backstage(page);
+                }
                 // Page Layout view: edit the first page's centre header (or footer) section.
                 let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet(), s)));
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
@@ -142,6 +159,15 @@ fn main() {
     // The workbook's installed fonts bind once the font scan is done; frames past the first few
     // apply them, so the snapshot shows them as the app does.
     harness.run_steps(14);
+    for (pos, button) in clicks {
+        harness.event(egui::Event::PointerMoved(pos));
+        harness.run_steps(2);
+        for pressed in [true, false] {
+            harness.event(egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE });
+            harness.run_steps(2);
+        }
+        harness.run_steps(3);
+    }
     if let Some((key, range)) = refedit.as_deref().and_then(|r| r.split_once('=')) {
         let app = harness.state_mut();
         if let Some(mut d) = app.dialog.take() {

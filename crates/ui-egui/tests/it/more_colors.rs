@@ -51,7 +51,7 @@ fn more_colors_applies_the_typed_colour_and_remembers_it() {
     h.get_by_label("More Colors…").click();
     h.run_steps(3);
     type_hex(&mut h, "#12AB34");
-    h.get_by_label("  OK  ").click();
+    h.get_by_label("OK").click();
     h.run_steps(4);
     assert_eq!(h.state().grid.last_fill, "#12AB34");
     assert_eq!(h.state().session.journal.iter().filter(|(id, _)| id == "home.fillColor").count(), 1);
@@ -90,7 +90,7 @@ fn the_font_colour_menu_has_them_too_and_shares_the_recent_colours() {
     h.get_by_label("More Colors…").click();
     h.run_steps(3);
     type_hex(&mut h, "#00FF7F");
-    h.get_by_label("  OK  ").click();
+    h.get_by_label("OK").click();
     h.run_steps(4);
     for k in [Key::F10, Key::H, Key::F, Key::C] {
         press(&mut h, k, Modifiers::NONE);

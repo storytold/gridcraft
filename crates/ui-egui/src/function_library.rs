@@ -100,7 +100,7 @@ fn function_items<'a>(app: &mut SheetApp, ui: &mut Ui, names: impl Iterator<Item
         for n in names {
             let Some(entry) = find(n) else { continue };
             let name = display_name(app, &entry.name);
-            let r = ui.add(egui::Button::new(name).frame(false).min_size(vec2(180.0, 20.0)));
+            let r = ui.add(crate::rtl::item(ui, name, vec2(180.0, 20.0)));
             // The description is looked up only while the row is hovered.
             let r = r.on_hover_ui(|ui| {
                 ui.label(crate::formula_locale::description(&entry.name, locale, language).unwrap_or_default());
@@ -117,7 +117,7 @@ fn function_items<'a>(app: &mut SheetApp, ui: &mut Ui, names: impl Iterator<Item
 fn insert_function_item(app: &mut SheetApp, ui: &mut Ui, category: &str) {
     ui.separator();
     let label = app.ui.language.tr("Insert Function…");
-    if ui.add(egui::Button::new(label).frame(false).min_size(vec2(180.0, 22.0))).clicked() {
+    if ui.add(crate::rtl::item(ui, label, vec2(180.0, 22.0))).clicked() {
         app.open_dialog("insertFunction", json!({"category": category}));
         ui.close();
     }
@@ -156,14 +156,14 @@ pub fn more_menu(app: &mut SheetApp, ui: &mut Ui) {
 pub fn auto_sum_menu(app: &mut SheetApp, ui: &mut Ui) {
     for (label, f) in [("Sum", "SUM"), ("Average", "AVERAGE"), ("Count Numbers", "COUNT"), ("Max", "MAX"), ("Min", "MIN")] {
         let label = app.ui.language.tr(label);
-        if ui.add(egui::Button::new(label).frame(false).min_size(vec2(160.0, 22.0))).clicked() {
+        if ui.add(crate::rtl::item(ui, label, vec2(160.0, 22.0))).clicked() {
             app.run_or_alert("formulas.autoSum", json!({"function": f}));
             ui.close();
         }
     }
     ui.separator();
     let label = app.ui.language.tr("More Functions…");
-    if ui.add(egui::Button::new(label).frame(false).min_size(vec2(160.0, 22.0))).clicked() {
+    if ui.add(crate::rtl::item(ui, label, vec2(160.0, 22.0))).clicked() {
         app.open_dialog("insertFunction", json!({}));
         ui.close();
     }

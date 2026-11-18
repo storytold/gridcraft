@@ -105,7 +105,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Simplified Chinese | zh-Hans | menus only | ~12% |
 | Spanish | es | none | 0% |
 | Hindi | hi | none | 0% |
-| Arabic | ar | catalog pending; shared shaping/bidi works | 0% |
+| Arabic | ar | full interface, mirrored right to left (function descriptions and engine messages stay English) | ~63% |
 | French | fr | none | 0% |
 | Portuguese | pt-BR | menus, File view, dialogs | ~43% |
 | Indonesian | id | none | 0% |
@@ -149,6 +149,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
+| 2026-10-28 | Arabic interface: the whole catalog-routed interface in modern standard Arabic, with the window mirrored right to left (ribbon, title bar, formula bar, sheet tabs, status bar, task panes, Backstage, menus, dialogs); Sheet Right-to-Left stays a sheet setting |
 | 2026-10-31 | System and embedded CJK fallback text shares the Latin baseline in cells, editors and window titles (#1265, #2621). Symbol and emoji alignment, manual row heights and clipping are unchanged |
 | 2026-10-26 | PDF preserves Context/LTR/RTL reading direction through wrapping and drawing; RTL sheet cells, borders, headings, objects and sparklines mirror consistently |
 | 2026-10-26 | Arabic PDF export shapes licensed glyph outlines and preserves searchable logical text; characters the font lacks, or a missing Arabic font, fall back to the standard fonts instead of failing the export |

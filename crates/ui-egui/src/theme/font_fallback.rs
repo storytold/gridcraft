@@ -319,9 +319,24 @@ pub(super) fn hebrew() -> Vec<(String, u32)> {
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn arabic() -> Vec<(String, u32)> {
     let mut v = script_fonts(
-        &["tahoma.ttf", "arial.ttf", "segoeui.ttf"],
-        &["/System/Library/Fonts/GeezaPro.ttc", "/System/Library/Fonts/Supplemental/GeezaPro.ttc"],
-        &["NotoSansArabic-Regular.ttf", "NotoNaskhArabic-Regular.ttf", "noto/NotoSansArabic-Regular.ttf", "noto/NotoNaskhArabic-Regular.ttf"],
+        // Tahoma, Arial, Segoe UI, then Traditional Arabic and Arabic Typesetting
+        &["tahoma.ttf", "arial.ttf", "segoeui.ttf", "trado.ttf", "arabtype.ttf"],
+        &[
+            "/System/Library/Fonts/GeezaPro.ttc",
+            "/System/Library/Fonts/Supplemental/GeezaPro.ttc",
+            "/System/Library/Fonts/Supplemental/Al Nile.ttc",
+            "/System/Library/Fonts/Supplemental/Baghdad.ttf",
+            "/System/Library/Fonts/Supplemental/Damascus.ttf",
+        ],
+        &[
+            "NotoSansArabic-Regular.ttf",
+            "NotoNaskhArabic-Regular.ttf",
+            "noto/NotoSansArabic-Regular.ttf",
+            "noto/NotoNaskhArabic-Regular.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "amiri/Amiri-Regular.ttf",
+            "kacst/KacstBook.ttf",
+        ],
         "/usr/share/fonts/google-noto-vf/NotoSansArabic[wght].ttf",
     );
     for family in ["Noto Sans Arabic", "Noto Naskh Arabic", "Amiri"] {
