@@ -2625,13 +2625,15 @@ fn part_of_an_array_in_merged_cells_cant_be_changed() {
     let range = gridcraft_core::RangeRef::parse("J9:M14").unwrap();
     let array = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().cell(range.start).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
     assert_eq!(array(&s), Some(range), "the array takes the merged range");
-    let e = s.execute("cell.set", json!({"cell": "L9", "input": "-5.89", "sheet": 0})).unwrap_err();
-    assert!(e.to_string().contains("part of an array"), "{e}");
     let values = |s: &Session| -> Vec<Value> {
         let sh = s.doc().unwrap().wb.sheet(0).unwrap();
         range.iter().map(|c| sh.value(c)).collect()
     };
     let before = values(&s);
+    let e = s.execute("cell.set", json!({"cell": "L9", "input": "-5.89", "sheet": 0})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    // The refusal itself changed nothing, before any round-trip.
+    assert_eq!(values(&s), before);
     assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("L9").unwrap()), Value::Empty);
     // The round-trip invariant the fuzzer checks: what the workbook holds is what the file keeps.
     reopen(&mut s);
