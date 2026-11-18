@@ -134,7 +134,8 @@ fn settle_python_spills_past_budget(st: &RowState, sheet: &mut Sheet) {
     }
 }
 
-/// The most cell elements read from one workbook, across its sheets (the calc engine's limit).
+/// The most cell elements read from one workbook, across its sheets: the reader's own cap.
+/// (`calc::eval::MAX_CELLS` has the same value but limits one array result, not a workbook.)
 pub(crate) const MAX_CELLS: u64 = 16_000_000;
 /// Target and tooltip bytes kept for hyperlinks of one sheet, over all cells: the same URL is
 /// copied for every cell of its range, so length × cells must stay bounded whatever the file.
