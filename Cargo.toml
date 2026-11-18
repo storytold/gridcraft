@@ -26,9 +26,11 @@ gridcraft-ui-egui = { path = "crates/ui-egui" }
 gridcraft-mcp = { path = "crates/mcp" }
 gridcraft-pdf = { path = "crates/pdf" }
 gridcraft-math = { path = "crates/math" }
-# Every craft-libs crate (craft-update, craft-window and the file-format crates here, craft-ui in
-# ui-egui, craft-print in the app, craft-web-api and craft-web-host in the web app) comes from one
-# craft-libs revision.
+# Most craft-libs crates here (craft-update, craft-window and the file-format crates below,
+# craft-print in the app, craft-web-api and craft-web-host in the web app) share one craft-libs
+# revision, the one most of these pins carry. craft-pdf, craft-gridcraft-format and craft-ui /
+# craft-cloud (the latter two in crates/ui-egui/Cargo.toml and below) have each moved on their
+# own, for a feature only that crate needed, and sit on their own newer revision instead.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "=0.1.0", features = ["egui"] }
 # PDF RunLength encoding; this revision also fixes the vendored JBIG2 dependency for Git consumers.
@@ -89,6 +91,12 @@ epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
 # driver. Same craft-libs revision as craft-update above.
 craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", default-features = false, features = ["egui"] }
+# Vendor-neutral cloud contracts (Entry, Capability; no IO, no provider name): buildable for the
+# web and testable with no service. Same revision as craft-ui (crates/ui-egui/Cargo.toml), the
+# revision that merged storytold/craft-libs#160, where both crates landed their current shape.
+# craft-cloud has no egui dependency, so pinning it apart from the baseline craft-libs revision
+# above carries no egui-version risk on its own.
+craft-cloud = { git = "https://github.com/storytold/craft-libs", rev = "fd7232d7a3a03ca1ccfe059a8afc8391b65668f0" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

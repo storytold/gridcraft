@@ -294,6 +294,15 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.language.set", "Interface Language", language_params.as_str()),
                 ("app.language.english", "Interface Language: English", ""),
                 ("app.language.japanese", "Interface Language: Japanese", ""),
+                // Cloud storage, behind a `cloud::CloudBackend` a host application connects
+                // (crate::cloud). Every command refuses with "no cloud service is configured"
+                // until one does, which no host does yet; see docs/control-protocol.md.
+                ("cloud.open", "Open from the Cloud", "{} opens File › Open and lists your cloud files"),
+                ("cloud.browse", "Browse a Cloud Folder", "{path?} (the root when empty) → the folder being listed"),
+                ("cloud.openFile", "Open a Cloud File", "{id} | {name}, from the current listing"),
+                ("cloud.save", "Save to the Cloud", "{} writes back to the entry this workbook was opened from"),
+                ("cloud.saveAs", "Save to the Cloud As", "{folder, name} saves at once; without them, opens File › Save As on the cloud"),
+                ("cloud.status", "Cloud Status", "{} → whether a backend is connected, the account, the folder, a transfer in flight"),
             ] {
                 v.push(json!({"id": id, "label": label, "params": params, "enabled": true, "ui": true}));
             }

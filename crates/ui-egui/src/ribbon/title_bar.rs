@@ -124,6 +124,17 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
                     ui.add_space(3.0 * CONTROL_W);
                 }
                 ui.add_space(8.0);
+                // Who is signed in, at the far right (drawn first because this layout runs
+                // right to left). craft-ui's `who` draws the account badge and its menu, or,
+                // for somebody who followed a shared link, the address it was sent to instead;
+                // either reads from state a connected `CloudBackend` is not the only way into
+                // (`as_guest` sets the second with none). `who` itself draws nothing when
+                // neither applies, so the gate here is for the spacing beside it, not for
+                // suppressing the guest case along with the account case.
+                if crate::cloud::available(app) || app.cloud.guest().is_some() {
+                    crate::cloud::who(app, ui);
+                    ui.add_space(8.0);
+                }
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
                 if __k.clicked() {

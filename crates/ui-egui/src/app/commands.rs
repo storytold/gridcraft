@@ -1,6 +1,6 @@
 use super::{
-    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
-    formula_locale, i18n, json, now_ms, printing,
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, cloud,
+    dialogs, formula_locale, i18n, json, now_ms, printing,
 };
 
 impl SheetApp {
@@ -165,7 +165,67 @@ impl SheetApp {
 
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
+        // A workbook that came from the cloud, and has no local file of its own, saves back
+        // there instead of asking for a local path. A workbook that also has a file on this
+        // computer behaves exactly as it always did.
+        if id == "file.save" && self.session.active().is_some_and(|d| d.path.is_none()) && cloud::has_target(self) {
+            return Some(cloud::save(self));
+        }
         let r = match id {
+            "cloud.status" => Ok(cloud::report(self)),
+            "cloud.open" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                self.open_backstage(backstage::Page::Open);
+                cloud::start(self);
+                Ok(cloud::report(self))
+            }
+            "cloud.browse" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                let path = p.get("path").and_then(Json::as_str).unwrap_or("");
+                cloud::browse(self, path);
+                Ok(json!({"folder": path}))
+            }
+            // Opens something already listed, by id or by name: the listing is what the user
+            // can see, which keeps a scripted open and a clicked one on the same footing.
+            "cloud.openFile" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                let id_param = p.get("id").and_then(Json::as_str);
+                let name = p.get("name").and_then(Json::as_str).unwrap_or("");
+                let found = self
+                    .cloud
+                    .mine
+                    .entries
+                    .iter()
+                    .chain(self.cloud.shared.entries.iter())
+                    .find(|e| id_param.is_some_and(|id| e.id == id) || (!name.is_empty() && e.name == name))
+                    .cloned();
+                match found {
+                    Some(entry) => {
+                        cloud::open_entry(self, entry, None);
+                        Ok(cloud::report(self))
+                    }
+                    None => return Some(Err("no such file in the cloud listing".to_owned())),
+                }
+            }
+            "cloud.save" => cloud::save(self),
+            "cloud.saveAs" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                match (p.get("folder").and_then(Json::as_str), p.get("name").and_then(Json::as_str)) {
+                    (Some(folder), Some(name)) => cloud::save_as(self, folder, name),
+                    _ => {
+                        self.open_backstage(backstage::Page::SaveAs);
+                        Ok(cloud::report(self))
+                    }
+                }
+            }
             "ui.window.minimize" => {
                 self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
                 Ok(Json::Null)
@@ -470,6 +530,11 @@ impl SheetApp {
         if !self.commit_edit(0, 0, false, false) {
             return;
         }
+        // This is always an ordinary open or page switch, never the conflict modal's "Save as a
+        // copy" (which sets `self.backstage` directly so it can set the copy target right after
+        // without this clearing it). Cancelling here too, not only on the way out in
+        // `backstage::show`, covers a command-driven open that bypasses the Backstage nav.
+        cloud::cancel_save_as(self);
         match &mut self.backstage {
             Some(b) => b.page = page,
             None => self.backstage = Some(backstage::Backstage::new(page)),

@@ -328,6 +328,12 @@ fn main() -> eframe::Result<()> {
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
     app.start_update_check();
+    // No `cloud::CloudBackend` is wired up yet. The contract is in craft-cloud and the pages are
+    // in craft-ui, so connecting one is this app's own commit, and the cloud UI stays hidden until
+    // it lands. `app.sharing.connect(..)` (a `craft_ui::share::ShareBackend`) belongs in that same
+    // commit: `ShareDialog::show` already runs every frame (see `SheetApp::ui`), so sharing works
+    // as soon as a backend is connected here, and stays unavailable (`ShareDialog::available`)
+    // until then.
     let control_port = control_port;
     load_prefs(&mut app);
     // Stamp the startup workbook's author from the persisted user name.

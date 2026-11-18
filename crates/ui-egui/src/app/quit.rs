@@ -70,15 +70,65 @@ impl SheetApp {
                     return false;
                 }
                 self.run_or_alert("file.save", json!({}));
-                if self.session.active().is_some_and(|x| !x.is_dirty()) {
-                    self.run_or_alert("file.close", json!({"force": true, "document": true}));
-                    if quitting {
-                        self.continue_quit(ctx);
+                let after = self.session.active().map(|d| (d.uid, d.is_dirty()));
+                match after {
+                    Some((_, false)) => {
+                        self.run_or_alert("file.close", json!({"force": true, "document": true}));
+                        if quitting {
+                            self.continue_quit(ctx);
+                        }
                     }
+                    // Still dirty, with a cloud transfer in flight: a cloud save is
+                    // asynchronous, so nothing has cleared the flag yet. Closing and
+                    // continuing the quit wait for `poll_quit_after_save`, once
+                    // `cloud::pump` sees that transfer finish, rather than happening here
+                    // (where it would not) or never happening at all.
+                    Some((uid, true)) if self.cloud.busy.is_some() => {
+                        self.quit_after_save = Some((uid, quitting));
+                    }
+                    // Still dirty with nothing in flight: the save failed synchronously.
+                    // Neither closing nor continuing the quit, as a failed local save
+                    // already did not before this change.
+                    _ => {}
                 }
             }
         }
         true
+    }
+
+    /// Finishes a quit (or a lone File › Close) that `answer_save_changes` deferred because
+    /// Save started a cloud transfer rather than finishing one. Called once a frame, after
+    /// `cloud::pump`, so the wait ends on whichever frame that transfer stops being busy.
+    pub(super) fn poll_quit_after_save(&mut self, ctx: &egui::Context) {
+        let Some((uid, quitting)) = self.quit_after_save else { return };
+        if self.cloud.busy.is_some() {
+            // Still on the wire.
+            return;
+        }
+        self.quit_after_save = None;
+        let Some(index) = self.session.document_index(uid) else {
+            // Closed, or replaced by a reload, some other way while this was waiting.
+            if quitting {
+                self.continue_quit(ctx);
+            }
+            return;
+        };
+        if self.session.documents()[index].is_dirty() {
+            // The save was refused (a conflict, a session that expired): `cloud::pump`
+            // already put the reason to the user. The document stays open with its edits,
+            // and the quit does not continue, exactly as a failed local save leaves it.
+            return;
+        }
+        // Saved. Its window becomes the active one first, the same as `continue_quit` does
+        // before asking about a document, since `file.close` acts on whichever window that is
+        // and the user may have switched away from this one while the transfer was running.
+        if let Some(window) = self.session.doc_window(uid) {
+            self.enter_window(window);
+        }
+        self.run_or_alert("file.close", json!({"force": true, "document": true}));
+        if quitting {
+            self.continue_quit(ctx);
+        }
     }
 
     /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, lets the
