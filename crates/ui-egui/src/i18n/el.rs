@@ -271,6 +271,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Αποθήκευση",
         "Save As" => "Αποθήκευση ως",
         "Export" => "Εξαγωγή",
+        "Minimize" => "Ελαχιστοποίηση",
+        "Maximize" => "Μεγιστοποίηση",
+        "Restore Down" => "Επαναφορά",
         "Close" => "Κλείσιμο",
         "Options" => "Επιλογές",
         "Blank workbook" => "Κενό βιβλίο εργασίας",
@@ -882,7 +885,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Χρώμα κελιού",
         "A to Z" => "Α έως Ω",
         "Z to A" => "Ω έως Α",
-        "+ Add Level" => "+ Προσθήκη επιπέδου",
+        "Add Level" => "Προσθήκη επιπέδου",
+        "Delete Level" => "Διαγραφή επιπέδου",
+        "Copy Level" => "Αντιγραφή επιπέδου",
+        "Move Up" => "Μετακίνηση πάνω",
+        "Move Down" => "Μετακίνηση κάτω",
+        "Order" => "Σειρά",
+        "Sort On" => "Ταξινόμηση ως προς",
+        "Sort|Column" => "Στήλη",
+        "Column {letters}" => "Στήλη {letters}",
+        "Smallest to Largest" => "Από το μικρότερο στο μεγαλύτερο",
+        "Largest to Smallest" => "Από το μεγαλύτερο στο μικρότερο",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Κλείστε το παράθυρο διαλόγου Ταξινόμηση πριν αλλάξετε ή τροποποιήσετε φύλλα εργασίας."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Επιστρέψτε στο αρχικό φύλλο εργασίας για να ταξινομήσετε ή ακυρώστε.",
         "New…" => "Νέο…",
         "Edit…" => "Επεξεργασία…",
         "Name" => "Όνομα",
@@ -1018,6 +1035,112 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
             "Αυτό το βιβλίο εργασίας έχει μια συγκεντρωτική λίστα με πεδίο τιμών «Πλήθος διακριτών». Στο αρχείο .xlsx αποθηκεύεται ως απλό Πλήθος μαζί με έναν δείκτη που διαβάζει μόνο το GridCraft, οπότε η Ανανέωση στο Excel το μετατρέπει σε απλό πλήθος."
         }
+        "Numerical Count" => "Αριθμητικό πλήθος",
+        "Minimum" => "Ελάχιστο",
+        "Maximum" => "Μέγιστο",
+        "Circular References: {cell}" => "Κυκλικές αναφορές: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Πλάτος: {chars} ({pixels} pixel)",
+        "Height: {points} ({pixels} pixels)" => "Ύψος: {points} ({pixels} pixel)",
+        "Picture in cell" => "Εικόνα σε κελί",
+        "Picture: {alt}" => "Εικόνα: {alt}",
+        "Format Control: {name}" => "Μορφοποίηση στοιχείου ελέγχου: {name}",
+        "Error at character {position}: {message}" => "Σφάλμα στον χαρακτήρα {position}: {message}",
+        "Macro definitions are not supported in equations." => "Οι ορισμοί μακροεντολών δεν υποστηρίζονται στις εξισώσεις.",
+        "A % can't be combined with a link in an equation." => "Ένα % δεν μπορεί να συνδυαστεί με σύνδεσμο σε μια εξίσωση.",
+        "Equations can nest at most 32 levels deep." => "Οι εξισώσεις μπορούν να έχουν έως 32 επίπεδα ένθεσης.",
+        "An equation can be at most 4096 bytes long." => "Μια εξίσωση μπορεί να έχει έως 4096 byte.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Μια εξίσωση μπορεί να έχει έως 2500 κελιά πίνακα (γραμμές επί τη φαρδύτερη γραμμή)."
+        }
+        "This equation is too large to draw." => "Αυτή η εξίσωση είναι πολύ μεγάλη για να σχεδιαστεί.",
+        "This equation could not be laid out." => "Δεν ήταν δυνατή η στοιχειοθέτηση αυτής της εξίσωσης.",
+        "Saved macro “{name}” ({steps} step)" => "Η μακροεντολή «{name}» αποθηκεύτηκε ({steps} βήμα)",
+        "Saved macro “{name}” ({steps} steps)" => "Η μακροεντολή «{name}» αποθηκεύτηκε ({steps} βήματα)",
+        "without {key}: another macro took it while recording" => "χωρίς {key}: το πήρε άλλη μακροεντολή κατά την καταγραφή",
+        "Recording stopped" => "Η καταγραφή σταμάτησε",
+        "Macro “{name}” stopped: {message}" => "Η μακροεντολή «{name}» σταμάτησε: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Η μακροεντολή «{name}» εκτελέστηκε ({steps} βήμα)",
+        "Ran macro “{name}” ({steps} steps)" => "Η μακροεντολή «{name}» εκτελέστηκε ({steps} βήματα)",
+        "Double superscript" => "Διπλός εκθέτης",
+        "Double subscript" => "Διπλός δείκτης",
+        "Extra }" => "Περιττό }",
+        "Unexpected end of input in a macro argument" => "Απρόσμενο τέλος εισόδου σε όρισμα μακροεντολής",
+        "Expected \\right after \\left" => "Αναμενόταν \\right μετά από \\left",
+        "\\middle must be within \\left and \\right" => "Το \\middle πρέπει να βρίσκεται μεταξύ \\left και \\right",
+        "Invalid environment name" => "Μη έγκυρο όνομα περιβάλλοντος",
+        "Expected \\end after environment body" => "Αναμενόταν \\end μετά το σώμα του περιβάλλοντος",
+        "Expected URL" => "Αναμενόταν URL",
+        "\\tag requires an argument" => "Το \\tag απαιτεί όρισμα",
+        "only one infix operator per group" => "Μόνο ένας ενδοθετικός τελεστής ανά ομάδα",
+        "Expected color token" => "Αναμενόταν χρώμα",
+        "Expected size for \\raisebox" => "Αναμενόταν μέγεθος για το \\raisebox",
+        "Expected size for \\rule width" => "Αναμενόταν μέγεθος για το πλάτος του \\rule",
+        "Expected size for \\rule height" => "Αναμενόταν μέγεθος για το ύψος του \\rule",
+        "Cannot use both \\tag and \\nonumber in the same row" => "Δεν μπορούν να χρησιμοποιηθούν \\tag και \\nonumber στην ίδια γραμμή",
+        "Multiple \\tag in a row" => "Πολλά \\tag σε μία γραμμή",
+        "\\tag must appear at the end of the row after the equation body" => {
+            "Το \\tag πρέπει να βρίσκεται στο τέλος της γραμμής, μετά το σώμα της εξίσωσης"
+        }
+        "Multiple \\nonumber in a row" => "Πολλά \\nonumber σε μία γραμμή",
+        "\\nonumber must appear at the end of the row" => "Το \\nonumber πρέπει να βρίσκεται στο τέλος της γραμμής",
+        "Too many tab characters: &" => "Πάρα πολλοί χαρακτήρες στηλοθέτη: &",
+        "Invalid column alignment for array" => "Μη έγκυρη στοίχιση στηλών για array",
+        "Expected column alignment character" => "Αναμενόταν χαρακτήρας στοίχισης στήλης",
+        "Expected l or c or r" => "Αναμενόταν l, c ή r",
+        "Expected ]" => "Αναμενόταν ]",
+        "Unexpected end of CD row after @" => "Απρόσμενο τέλος γραμμής CD μετά το @",
+        "Invalid column alignment for subarray" => "Μη έγκυρη στοίχιση στηλών για subarray",
+        "{subarray} can contain only one column" => "Το {subarray} μπορεί να περιέχει μόνο μία στήλη",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "Το prooftree έχει \\LeftLabel ή \\RightLabel χωρίς επόμενη εντολή συμπερασμού"
+        }
+        "Recursion limit exceeded" => "Υπέρβαση ορίου αναδρομής",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Πάρα πολλές αναπτύξεις μακροεντολών: ατέρμων βρόχος ή πολύ χαμηλή ρύθμιση maxExpand"
+        }
+        "Expected raw style for \\htmlStyle" => "Αναμενόταν ακατέργαστο στυλ για το \\htmlStyle",
+        "\\verb assertion failed" => "Αποτυχία ελέγχου του \\verb",
+        "Undefined control sequence: {name}" => "Μη ορισμένη ακολουθία ελέγχου: {name}",
+        "Expected '{expected}', got '{got}'" => "Αναμενόταν '{expected}', βρέθηκε '{got}'",
+        "Expected group after '{symbol}'" => "Αναμενόταν ομάδα μετά από '{symbol}'",
+        "Expected delimiter as argument to '{function}'" => "Αναμενόταν οριοθέτης ως όρισμα του '{function}'",
+        "Expected group as argument to '{function}'" => "Αναμενόταν ομάδα ως όρισμα του '{function}'",
+        "Got function '{function}' with no arguments as superscript" => "Η συνάρτηση '{function}' χωρίς ορίσματα χρησιμοποιήθηκε ως εκθέτης",
+        "Got function '{function}' with no arguments as subscript" => "Η συνάρτηση '{function}' χωρίς ορίσματα χρησιμοποιήθηκε ως δείκτης",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Η συνάρτηση '{function}' χωρίς ορίσματα χρησιμοποιήθηκε ως όρισμα του '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Η συνάρτηση '{function}' χωρίς ορίσματα χρησιμοποιήθηκε ως \\tag",
+        "Can't use function '{function}' in text mode" => "Η συνάρτηση '{function}' δεν μπορεί να χρησιμοποιηθεί σε λειτουργία κειμένου",
+        "Can't use function '{function}' in math mode" => "Η συνάρτηση '{function}' δεν μπορεί να χρησιμοποιηθεί σε μαθηματική λειτουργία",
+        "Invalid color: '{color}'" => "Μη έγκυρο χρώμα: '{color}'",
+        "Invalid size: '{size}'" => "Μη έγκυρο μέγεθος: '{size}'",
+        "Invalid unit: '{unit}'" => "Μη έγκυρη μονάδα: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Μη έγκυρος οριοθέτης '{delimiter}' μετά από '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Μη έγκυρος τύπος οριοθέτη '{type}' μετά από '{function}'",
+        "Invalid delimiter type '{type}'" => "Μη έγκυρος τύπος οριοθέτη '{type}'",
+        "No such environment: {name}" => "Άγνωστο περιβάλλον: {name}",
+        "Expected argument to \\begin{{name}}" => "Αναμενόταν όρισμα για το \\begin{{name}}",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Αναντιστοιχία: το \\begin{{begin}} κλείνει με \\end{{end}}",
+        "{command} valid only within array environment" => "Το {command} ισχύει μόνο μέσα σε περιβάλλον array",
+        "Mismatched {command}" => "{command} χωρίς αντίστοιχο",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "Αναμενόταν &, \\\\, \\cr ή \\end, βρέθηκε '{got}'",
+        "Unknown column alignment: {alignment}" => "Άγνωστη στοίχιση στήλης: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Πάρα πολλοί τύποι σε μία γραμμή: αναμένονταν {expected}, βρέθηκαν {got}",
+        "Unknown CD directive: @{directive}" => "Άγνωστη οδηγία CD: @{directive}",
+        "Expected argument for {command}" => "Αναμενόταν όρισμα για το {command}",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "Το {command} χρειάζεται {count} προκείμενες, αλλά υπάρχουν μόνο {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "Το {command} ισχύει στο prooftree μόνο ως υποστηριζόμενη εντολή bussproofs"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "Το prooftree τελείωσε με {count} στοιχεία στη στοίβα απόδειξης, αναμενόταν 1"
+        }
+        "\\@char has non-numeric argument {argument}" => "Το \\@char έχει μη αριθμητικό όρισμα {argument}",
+        "\\@char with invalid code point {code}" => "\\@char με μη έγκυρο σημείο κώδικα {code}",
+        "Invalid environment name character: {character}" => "Μη έγκυρος χαρακτήρας στο όνομα περιβάλλοντος: {character}",
         _ => return None,
     })
 }
