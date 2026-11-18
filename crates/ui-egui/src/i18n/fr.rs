@@ -2662,7 +2662,6 @@ pub(super) const ERROR_TEMPLATES: &[(&str, &str)] = &[
         "a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})",
         "un graphique histogramme, cascade, compartimentage… sans sa partie graphique a été ignoré ({part}, objet {n})",
     ),
-    ("an embedded object (SmartArt, OLE…) was skipped ({part}, object {n})", "un objet incorporé (SmartArt, OLE…) a été ignoré ({part}, objet {n})"),
     (
         "cell-picture {kind} count does not match its records",
         "le nombre de {kind} des images dans les cellules ne correspond pas à leurs enregistrements",
