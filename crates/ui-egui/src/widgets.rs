@@ -82,7 +82,7 @@ pub fn glyph_button(ui: &mut Ui, ch: char, tip: &str) -> Response {
     ui.button(label).on_hover_text(tip_text(ui, tip))
 }
 
-/// A toggle-able small button (e.g. Bold) showing a checked state.
+/// A toggle-able small button (e.g. Bold) showing a pressed state.
 pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(26.0, 24.0), Sense::click());
     let t = Tokens::get(ui.ctx());
@@ -95,7 +95,7 @@ pub fn toggle_button(ui: &mut Ui, icon: Icon, on: bool, tip: &str) -> Response {
     icons::paint(ui.painter(), Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), icon, t.text);
     let enabled = ui.is_enabled();
     let name = tr(ui, tip);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, enabled, on, name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, name));
     resp.on_hover_text(tip_text(ui, tip))
 }
 
