@@ -338,33 +338,39 @@ pub(crate) fn normalized(s: &str) -> String {
 
 /// A number format that shows `n` exactly as `shown` ("Rp10,000.00" for 10000 →
 /// `"Rp"#,##0.00`), inferred from the text around the digits. `None` unless the format renders
-/// `shown` back character for character.
-pub(crate) fn format_for(shown: &str, n: f64) -> Option<String> {
+/// `shown` back character for character in the workbook's `region`.
+pub(crate) fn format_for(shown: &str, n: f64, region: &gridcraft_core::Region) -> Option<String> {
     let shown = normalized(shown);
     let start = shown.find(|c: char| c.is_ascii_digit())?;
     let end = shown.rfind(|c: char| c.is_ascii_digit()).map(|i| i + 1)?;
     let core = shown.get(start..end)?;
     let mut prefix = shown.get(..start)?.to_string();
     let suffix = shown.get(end..)?;
-    if core.chars().any(|c| !(c.is_ascii_digit() || c == ',' || c == '.')) {
+    // The digits are grouped and split the region's way; `normalized` already turned a
+    // non-breaking space (fr-FR, pt-PT grouping) into a plain one.
+    let group = if region.group.is_whitespace() { ' ' } else { region.group };
+    let decimal = region.decimal;
+    if core.chars().any(|c| !(c.is_ascii_digit() || c == group || c == decimal)) {
         return None;
     }
     if n < 0.0 {
         // A one-section format shows the minus sign itself, in front of everything.
         prefix = prefix.strip_prefix('-')?.to_string();
     }
-    let decimals = core.split_once('.').map_or(0, |(_, f)| f.len());
+    let decimals = core.split_once(decimal).map_or(0, |(_, f)| f.len());
     let mut code = String::new();
     let quote = |s: &str| if s.is_empty() { String::new() } else { format!("\"{}\"", s.replace('"', "")) };
     code.push_str(&quote(&prefix));
-    code.push_str(if core.contains(',') { "#,##0" } else { "0" });
+    code.push_str(if core.contains(group) { "#,##0" } else { "0" });
     if decimals > 0 {
         code.push('.');
         code.push_str(&"0".repeat(decimals.min(30)));
     }
     code.push_str(&quote(suffix));
-    let rendered = gridcraft_numfmt::text_function(&gridcraft_core::Value::number(n), &code, gridcraft_core::date::DateSystem::D1900).ok()?;
-    (normalized(&rendered) == shown).then_some(code)
+    // `code` is canonical (what the cell stores); the check renders it as the workbook shows it.
+    let fmt = gridcraft_numfmt::NumberFormat::parse(&code);
+    let rendered = gridcraft_numfmt::format_value_in(&gridcraft_core::Value::number(n), &fmt, gridcraft_core::date::DateSystem::D1900, region);
+    (normalized(&rendered.text) == shown).then_some(code)
 }
 
 #[cfg(test)]
@@ -461,10 +467,24 @@ mod tests {
 
     #[test]
     fn infers_a_format_that_shows_the_same_text() {
-        assert_eq!(format_for("Rp10,000.00", 10000.0).as_deref(), Some("\"Rp\"#,##0.00"));
-        assert_eq!(format_for("1 234 kr", 1234.0), None, "space grouping is not reproduced");
-        assert_eq!(format_for("10.000,00 €", 10000.0), None, "comma decimals don't render back in en-US");
-        assert_eq!(format_for("-Rp5", -5.0).as_deref(), Some("\"Rp\"0"));
-        assert_eq!(format_for("12 EUR", 12.0).as_deref(), Some("0\" EUR\""));
+        assert_eq!(format_for("Rp10,000.00", 10000.0, &gridcraft_core::region::EN_US).as_deref(), Some("\"Rp\"#,##0.00"));
+        assert_eq!(format_for("1 234 kr", 1234.0, &gridcraft_core::region::EN_US), None, "space grouping is not reproduced");
+        // An en-US workbook reads `.` as the decimal point, so comma decimals do not render back
+        // there. A pt-BR workbook infers a format for the same text (see the next test).
+        assert_eq!(format_for("10.000,00 €", 10000.0, &gridcraft_core::region::EN_US), None, "comma decimals in en-US");
+        assert_eq!(format_for("-Rp5", -5.0, &gridcraft_core::region::EN_US).as_deref(), Some("\"Rp\"0"));
+        assert_eq!(format_for("12 EUR", 12.0, &gridcraft_core::region::EN_US).as_deref(), Some("0\" EUR\""));
+    }
+
+    /// The pasted text is grouped and split as the workbook's region writes numbers, and the
+    /// inferred (canonical) format must show it back in that region.
+    #[test]
+    fn infers_the_format_with_the_workbook_region_separators() {
+        let pt = gridcraft_core::region::lookup("pt-BR");
+        let fr = gridcraft_core::region::lookup("fr-FR");
+        assert_eq!(format_for("10.000,00 €", 10000.0, pt).as_deref(), Some("#,##0.00\" €\""));
+        assert_eq!(format_for("R$ 1.234,5", 1234.5, pt).as_deref(), Some("\"R$ \"#,##0.0"));
+        assert_eq!(format_for("1 234 kr", 1234.0, fr).as_deref(), Some("#,##0\" kr\""));
+        assert_eq!(format_for("Rp10,000.00", 10000.0, pt), None, "en-US separators are not pt-BR's");
     }
 }
