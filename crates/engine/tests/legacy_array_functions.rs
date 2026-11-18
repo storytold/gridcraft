@@ -228,6 +228,28 @@ fn legacy_unions_names_and_parentheses_calculate_and_save_as_read() {
     assert!(!xml.contains("cm=") && !xml.contains("SINGLE") && !xml.contains("t=\"array\""), "{xml}");
 }
 
+/// A whole column in a scalar argument of a legacy formula meets the formula's row (issue #1636,
+/// from PR #1660): `ISBLANK(B:B)` in row 4 tests `B4`, so the formula shows `C4` instead of
+/// spilling into `G5`, and in row 6, where `B6` is blank, shows 0.
+#[test]
+fn whole_column_in_a_legacy_scalar_argument_meets_the_formulas_row() {
+    let formulas: Vec<(String, String)> = [
+        ("B4", r#""Thierry""#),
+        ("C4", "7"),
+        ("G4", r#"IF(ISBLANK(B:B),0,IF(B4="Thierry",C4,0))"#),
+        ("G5", "1"),
+        ("G6", r#"IF(ISBLANK(B:B),0,IF(B6="Thierry",C6,0))"#),
+    ]
+    .iter()
+    .map(|(a, f)| (a.to_string(), f.to_string()))
+    .collect();
+    let s = open(&legacy_xlsx(&formulas, ""));
+    let at = |a: &str| CellRef::parse(a).unwrap();
+    assert_eq!(value(&s, at("G4")), Value::Number(7.0), "B:B meets row 4 instead of spilling");
+    assert_eq!(value(&s, at("G5")), Value::Number(1.0), "nothing spills below G4");
+    assert_eq!(one_value(&s, at("G6"), "G6").unwrap(), Value::Number(0.0), "B6 is blank");
+}
+
 /// One-cell ranges written as ranges (`B1:B1`) outside any `@`, and formulas whose reading
 /// reaches the parser's nesting limit (254 nested functions, far past Excel's 64): saved as read,
 /// without `@`. Only a one-cell range under an `@` counts as one an edit may have shrunk. All but
@@ -302,9 +324,18 @@ fn legacy_xlsx(formulas: &[(String, String)], names: &str) -> Vec<u8> {
     let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;");
     let mut rows =
         String::from(r#"<row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>2</v></c></row><row r="2"><c r="A2"><v>3</v></c><c r="B2"><v>4</v></c></row>"#);
+    // Cells in one row share its `<row>`, in the order given.
+    let mut by_row: Vec<(String, String)> = Vec::new();
     for (a, f) in formulas {
         let r: String = a.chars().filter(char::is_ascii_digit).collect();
-        rows.push_str(&format!(r#"<row r="{r}"><c r="{a}"><f>{}</f></c></row>"#, esc(f)));
+        let c = format!(r#"<c r="{a}"><f>{}</f></c>"#, esc(f));
+        match by_row.iter_mut().find(|(row, _)| *row == r) {
+            Some((_, cells)) => cells.push_str(&c),
+            None => by_row.push((r, c)),
+        }
+    }
+    for (r, cells) in by_row {
+        rows.push_str(&format!(r#"<row r="{r}">{cells}</row>"#));
     }
     let names = if names.is_empty() { String::new() } else { format!("<definedNames>{names}</definedNames>") };
     let parts: [(&str, String); 5] = [
