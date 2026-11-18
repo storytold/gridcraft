@@ -46,8 +46,10 @@ pub fn sheet_name_from(text: &str) -> String {
 }
 
 /// `base` followed by `suffix` (such as ` (2)`), with `base` shortened so the whole suffix fits in
-/// [`MAX_SHEET_NAME_UNITS`] and stripped of trailing spaces. For a valid `base` and a suffix
-/// shorter than the limit, the result is a valid sheet name.
+/// [`MAX_SHEET_NAME_UNITS`] and stripped of trailing spaces. The suffix is kept as it is, so the
+/// caller passes one without the characters a sheet name can't hold; the result is then no longer
+/// than [`MAX_SHEET_NAME_UNITS`] UTF-16 units when the suffix is no longer than that. Whether the
+/// name is free in a workbook is the caller's check.
 pub fn sheet_name_with_suffix(base: &str, suffix: &str) -> String {
     let keep = MAX_SHEET_NAME_UNITS.saturating_sub(suffix.encode_utf16().count());
     format!("{}{suffix}", sheet_name_prefix(base, keep).trim_end())

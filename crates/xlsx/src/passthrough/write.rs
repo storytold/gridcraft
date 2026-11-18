@@ -301,10 +301,12 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
             chart_sheet_usable(wb, p, s, &mut refs) && names.insert(sheet_name_prefix(&s.name, MAX_SHEET_NAME_UNITS).to_ascii_lowercase())
         })
     };
-    let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
-    let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
+    // A relationship that a kept chart sheet still uses stays with it, even if a dropped entry
+    // names it too.
+    let live_ids: HashSet<&str> = live.iter().map(|s| s.rel_id.as_str()).collect();
+    let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).filter(|id| !live_ids.contains(id)).collect();
     // Parts reached only by dropped chart sheets go with them.
-    let mut gone: HashSet<String> = dropped.iter().filter_map(|s| root_of(s)).flat_map(|r| reachable(p, r)).collect();
+    let mut gone: HashSet<String> = p.rels.iter().filter(|r| dropped_ids.contains(r.id.as_str())).flat_map(|r| reachable(p, r)).collect();
     if !gone.is_empty() {
         let others = p.rels.iter().filter(|r| !dropped_ids.contains(r.id.as_str())).flat_map(|r| reachable(p, r));
         for n in others {

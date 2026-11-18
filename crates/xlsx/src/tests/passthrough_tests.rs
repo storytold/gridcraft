@@ -814,9 +814,31 @@ fn a_chart_sheet_whose_name_a_worksheet_took_is_dropped() {
     chart_sheet_chain(&u, "Chart1");
 }
 
+/// A dropped chart-sheet entry that shares its relationship with a kept one leaves that
+/// relationship, so the kept chart sheet is still written with its chart (#4454).
+#[test]
+fn a_dropped_chart_sheet_entry_keeps_a_relationship_another_still_uses() {
+    let bytes = chartsheet_package_with(&[(
+        "xl/workbook.xml",
+        r#"<sheet name="Last" sheetId="9" state="hidden" r:id="rId5"/>"#,
+        r#"<sheet name="Last" sheetId="9" state="hidden" r:id="rId5"/><sheet name="data" sheetId="10" r:id="rId2"/>"#,
+    )]);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let names = written_sheets(&u);
+    assert!(names.iter().any(|s| s.0 == "Chart1"), "{names:?}");
+    assert!(!names.iter().any(|s| s.0 == "data"), "{names:?}");
+    chart_sheet_chain(&u, "Chart1");
+    assert!(!u.find(PRINTER).is_empty(), "the kept chart sheet's printer settings are written");
+}
+
 /// [`chartsheet_package`] with each `(part, from, to)` replacement made in that part's text.
 fn chartsheet_package_with(edits: &[(&str, &str, &str)]) -> Vec<u8> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(chartsheet_package())).unwrap();
+    for (part, ..) in edits {
+        assert!(z.by_name(part).is_ok(), "the package has no {part}");
+    }
     let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();

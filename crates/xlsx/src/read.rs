@@ -504,7 +504,7 @@ impl SheetNames {
         }
         let name = if self.taken.contains(&base.to_ascii_lowercase()) {
             // Room for a suffix up to ` (999)`; a longer suffix shortens the stem further.
-            let stem = sheet_name_prefix(&base, MAX_SHEET_NAME_UNITS - 6).to_string();
+            let stem = sheet_name_prefix(&base, MAX_SHEET_NAME_UNITS - 6).trim_end().to_string();
             let with = |n: u64| sheet_name_with_suffix(&stem, &format!(" ({n})"));
             let next = self.next.entry(stem.to_ascii_lowercase()).or_insert(2);
             let found = (*next..).find(|n| !self.taken.contains(&with(*n).to_ascii_lowercase()));
