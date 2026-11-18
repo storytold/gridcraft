@@ -235,8 +235,8 @@ fn resolve_source(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) -
 }
 
 fn range_source_xml(sheet: &str, r: RangeRef) -> String {
-    let name: String = sheet.chars().take(31).collect();
-    format!("<worksheetSource ref=\"{}\" sheet=\"{}\"/>", r.a1(), esc_attr(&name))
+    let name = gridcraft_model::sheet_name_prefix(sheet, gridcraft_model::MAX_SHEET_NAME_UNITS);
+    format!("<worksheetSource ref=\"{}\" sheet=\"{}\"/>", r.a1(), esc_attr(name))
 }
 
 fn header_text(v: &Value) -> String {

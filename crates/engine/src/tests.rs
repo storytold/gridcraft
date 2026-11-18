@@ -2520,6 +2520,19 @@ fn copies_of_a_long_named_sheet_get_unique_names() {
     assert_eq!(names, ["Long name of a sheet 31 chars!", "Long name of a sheet 31 cha (2)", "Long name of a sheet 31 cha (3)"]);
 }
 
+/// Excel counts a sheet name in UTF-16 units: 16 emoji (32 units) are refused, and a copy of a
+/// 14-emoji sheet is shortened so ` (2)` still fits in 31 units (#4454).
+#[test]
+fn sheet_names_with_emoji_stay_within_31_utf16_units() {
+    let mut s = s();
+    assert!(s.execute("sheet.rename", json!({"sheet": 0, "name": "😀".repeat(16)})).is_err());
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "😀".repeat(14)})).unwrap();
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets[1].name, format!("{} (2)", "😀".repeat(13)));
+    assert!(gridcraft_xlsx::write_xlsx(&d.wb).is_ok());
+}
+
 #[test]
 fn row_and_column_inserts_move_legacy_array_ranges() {
     // Found by the command-sequence fuzzer: the formula cell moved but its array range stayed,

@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
 use gridcraft_model::{
-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+    CalcMode, CellPicture, DefinedName, MAX_SHEET_NAME_UNITS, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook,
+    WorkbookView, sheet_name_prefix,
 };
 
 use crate::package::{Package, Rel};
@@ -338,7 +339,11 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             file_to_model.push(None);
             continue;
         }
-        let name = names.unique(&name, i);
+        let unique = names.unique(&name, i);
+        if unique != name {
+            cx.warn(format!("sheet \"{name}\" was renamed \"{unique}\", a name Excel can hold"));
+        }
+        let name = unique;
         cx.legacy_formulas.clear();
         let (mut sheet, read_controls) = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,
@@ -493,18 +498,24 @@ impl SheetNames {
 
     /// A valid name for the i-th sheet, unique among the names assigned so far, which it joins.
     pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
-        let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
+        let clean: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).collect();
+        let mut base = sheet_name_prefix(&clean, MAX_SHEET_NAME_UNITS).to_string();
         if base.trim().is_empty() {
             base = format!("Sheet{}", i + 1);
         }
         let name = if self.taken.contains(&base.to_ascii_lowercase()) {
-            let stem: String = base.chars().take(25).collect();
+            // Room for a suffix up to ` (999)`; a longer suffix shortens the stem further.
+            let stem = sheet_name_prefix(&base, MAX_SHEET_NAME_UNITS - 6).to_string();
+            let with = |n: u64| {
+                let suffix = format!(" ({n})");
+                format!("{}{suffix}", sheet_name_prefix(&stem, MAX_SHEET_NAME_UNITS.saturating_sub(suffix.len())))
+            };
             let next = self.next.entry(stem.to_ascii_lowercase()).or_insert(2);
-            let found = (*next..).find(|n| !self.taken.contains(&format!("{stem} ({n})").to_ascii_lowercase()));
+            let found = (*next..).find(|n| !self.taken.contains(&with(*n).to_ascii_lowercase()));
             match found {
                 Some(n) => {
                     *next = n + 1;
-                    format!("{stem} ({n})")
+                    with(n)
                 }
                 None => base,
             }

@@ -310,6 +310,15 @@ fn csv_named_history_does_not_get_the_reserved_sheet_name() {
     assert_eq!(wb.sheets[0].name, "Sales");
 }
 
+/// A sheet named after its file is cut to 31 UTF-16 units, so 16 emoji keep 15 and the workbook
+/// still saves as XLSX (#4454).
+#[test]
+fn csv_named_with_emoji_gets_a_sheet_name_xlsx_can_hold() {
+    let (wb, _) = open_bytes(&format!("{}.csv", "😀".repeat(16)), b"1\n").unwrap();
+    assert_eq!(wb.sheets[0].name, "😀".repeat(15));
+    assert!(save_bytes(&wb, "book.xlsx").is_ok());
+}
+
 #[test]
 fn csv_and_text_open_read_day_first_dates_and_report_a_guessed_order() {
     let may = gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, 2026, 5, 31).unwrap();

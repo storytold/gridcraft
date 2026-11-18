@@ -18,6 +18,24 @@ pub const MAX_EQUATION_LAYOUT_BYTES: usize = 128 * 1024;
 /// Why an equation past [`MAX_EQUATION_LAYOUT_BYTES`] has no layout.
 pub const EQUATION_BUDGET_MESSAGE: &str = "This workbook has more equations than are laid out at once; edit this equation to lay it out.";
 
+/// The longest sheet name Excel accepts, in UTF-16 code units: a character outside the Basic
+/// Multilingual Plane, such as most emoji, counts as two. Excel refuses an XLSX whose sheet name
+/// is longer, even when it has no more than 31 characters (#4454).
+pub const MAX_SHEET_NAME_UNITS: usize = 31;
+
+/// The longest start of `name` that fits in `units` UTF-16 code units, without splitting a
+/// character.
+pub fn sheet_name_prefix(name: &str, units: usize) -> &str {
+    let mut used = 0;
+    for (i, c) in name.char_indices() {
+        used += c.len_utf16();
+        if used > units {
+            return name.get(..i).unwrap_or_default();
+        }
+    }
+    name
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CalcMode {
     #[default]
@@ -399,14 +417,14 @@ impl Workbook {
     pub fn next_sheet_name(&self) -> String {
         (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())
     }
-    /// Validates a sheet name like Excel: 1–31 chars, none of `: \ / ? * [ ]`, not starting or
-    /// ending with `'`, unique (case-insensitive) unless it is `except`'s own name.
+    /// Validates a sheet name like Excel: 1–31 UTF-16 units ([`MAX_SHEET_NAME_UNITS`]), none of
+    /// `: \ / ? * [ ]`, not starting or ending with `'`, unique (case-insensitive) unless it is
+    /// `except`'s own name.
     pub fn check_sheet_name(&self, name: &str, except: Option<usize>) -> Result<(), String> {
-        let n = name.chars().count();
-        if n == 0 {
+        if name.is_empty() {
             return Err("A sheet name can't be blank.".into());
         }
-        if n > 31 {
+        if name.encode_utf16().count() > MAX_SHEET_NAME_UNITS {
             return Err("A sheet name can't be longer than 31 characters.".into());
         }
         if name.chars().any(|c| matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')) {
@@ -609,6 +627,19 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    /// Excel counts a sheet name's length in UTF-16 units, so an emoji takes two of the 31 (#4454).
+    #[test]
+    fn sheet_name_length_counts_utf16_units() {
+        let wb = Workbook::new();
+        assert!(wb.check_sheet_name(&"😀".repeat(16), None).is_err());
+        assert!(wb.check_sheet_name(&format!("{}a", "😀".repeat(15)), None).is_ok());
+        assert!(wb.check_sheet_name(&"é".repeat(31), None).is_ok());
+        assert_eq!(sheet_name_prefix(&"😀".repeat(16), MAX_SHEET_NAME_UNITS), "😀".repeat(15));
+        assert_eq!(sheet_name_prefix(&format!("{}ab", "😀".repeat(15)), MAX_SHEET_NAME_UNITS), format!("{}a", "😀".repeat(15)));
+        assert_eq!(sheet_name_prefix("Data", MAX_SHEET_NAME_UNITS), "Data");
+        assert_eq!(sheet_name_prefix("😀", 1), "");
     }
 
     #[test]

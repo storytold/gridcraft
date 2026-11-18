@@ -1,5 +1,6 @@
 use super::read::{map_rel_ids, vml_block_max};
 use super::*;
+use gridcraft_model::{MAX_SHEET_NAME_UNITS, sheet_name_prefix};
 
 // ---------------------------------------------------------------- writing
 
@@ -180,9 +181,9 @@ impl WorkbookKept {
                 Visibility::Hidden => " state=\"hidden\"",
                 Visibility::VeryHidden => " state=\"veryHidden\"",
             };
-            let name: String = s.name.chars().take(31).collect();
+            let name = sheet_name_prefix(&s.name, MAX_SHEET_NAME_UNITS);
             let id = ids.take(s.sheet_id);
-            let _ = write!(x, "<sheet name=\"{}\" sheetId=\"{id}\"{state} r:id=\"{}\"/>", esc_attr(&name), esc_attr(&s.rid));
+            let _ = write!(x, "<sheet name=\"{}\" sheetId=\"{id}\"{state} r:id=\"{}\"/>", esc_attr(name), esc_attr(&s.rid));
         }
         x
     }
@@ -266,7 +267,7 @@ pub(crate) fn sheet_names_in(formula: &str) -> Vec<String> {
 /// graph, under the same or different relationship ids, are analysed once, and only the verdict is
 /// kept, not the references it came from.
 fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet, usable: &mut HashMap<String, bool>) -> bool {
-    let same = |a: &str, b: &str| a.chars().take(31).collect::<String>().eq_ignore_ascii_case(&b.chars().take(31).collect::<String>());
+    let same = |a: &str, b: &str| sheet_name_prefix(a, MAX_SHEET_NAME_UNITS).eq_ignore_ascii_case(sheet_name_prefix(b, MAX_SHEET_NAME_UNITS));
     if wb.sheets.iter().any(|w| same(&w.name, &s.name)) {
         return false;
     }
