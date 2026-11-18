@@ -45,6 +45,8 @@ impl SheetApp {
             print_feedback_seen: None,
             synthetic: Default::default(),
             synthetic_pending: false,
+            numpad_decimal_pending: false,
+            deferred_input: Vec::new(),
             synthetic_injected_at_pass: None,
             control_rx: None,
             grid: grid::GridState {
