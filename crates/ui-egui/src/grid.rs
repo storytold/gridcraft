@@ -151,6 +151,14 @@ pub enum Drag {
         /// step of an earlier drag.
         stepped: bool,
     },
+    /// Dragging a corner of the selected chart's values outline (#4389): `to` is the previewed
+    /// block, which the release gives the chart.
+    ChartData {
+        chart: u32,
+        orig: RangeRef,
+        corner: crate::objects::Handle,
+        to: Option<RangeRef>,
+    },
 }
 
 /// The fill a left-drag of the handle just made, which the Auto Fill Options button can redo
