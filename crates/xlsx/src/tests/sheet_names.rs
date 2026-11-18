@@ -35,3 +35,17 @@ fn sheet_ids_survive_a_save() {
     let (again, _) = crate::read_xlsx(&write_xlsx(&read).unwrap()).unwrap();
     assert_eq!(again.sheets.iter().map(|s| s.file_id).collect::<Vec<_>>(), ids);
 }
+
+/// Repairing repeated names takes one set lookup per candidate, so thousands of sheets sharing
+/// a name are renamed without rescanning the workbook for every suffix tried.
+#[test]
+fn repeated_sheet_names_are_repaired_without_rescans() {
+    let mut names = crate::read::SheetNames::default();
+    assert_eq!(names.unique("Data", 0), "Data");
+    assert_eq!(names.unique("data", 1), "data (2)");
+    assert_eq!(names.unique("", 2), "Sheet3");
+    assert_eq!(names.unique("Data (3)", 3), "Data (3)");
+    for i in 4..100_000 {
+        assert_eq!(names.unique("Data", i), format!("Data ({i})"));
+    }
+}

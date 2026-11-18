@@ -5,6 +5,7 @@ use serde_json::{Value as Json, json};
 use super::{CommandSpec, Result, Session, always, bad, bool_param, cmd, edit, has_doc, ok, str_param, target_sheet, u32_param};
 use crate::DocState;
 
+/// Command specifications for File, Options, and Window operations.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
@@ -21,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Options",
             ["File"],
             None,
-            "{} → {calculation: {mode, iterative, maxIterations, maxChange}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
+            "{} → {calculation: {mode, iterative, maxIterations, maxChange, precisionAsDisplayed}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
             always,
             options
         ),
@@ -239,7 +240,7 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
             gridcraft_model::CalcMode::AutomaticExceptTables => "automaticExceptTables",
             gridcraft_model::CalcMode::Manual => "manual",
         };
-        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change})
+        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "precisionAsDisplayed": c.precision_as_displayed})
     });
     Ok(json!({"calculation": calculation}))
 }

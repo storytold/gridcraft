@@ -6,16 +6,19 @@ use gridcraft_engine::Session;
 use gridcraft_ui_egui::{Services, SheetApp, i18n::Language};
 use serde_json::json;
 
+/// English decimal input updates the new-workbook column width preference.
 #[test]
 fn options_width_field_applies_to_new_workbooks_only() {
     check_options_width_input(Language::En, "112.5");
 }
 
+/// Spanish comma-decimal input updates the new-workbook column width preference.
 #[test]
 fn options_width_field_accepts_spanish_decimal_separator() {
     check_options_width_input(Language::Es, "112,5");
 }
 
+/// German and French comma-decimal inputs are accepted via the UI decimal separator.
 #[test]
 fn options_width_field_accepts_german_and_french_decimal_separator() {
     for language in [Language::De, Language::Fr] {
@@ -23,6 +26,7 @@ fn options_width_field_accepts_german_and_french_decimal_separator() {
     }
 }
 
+/// Exercises the File › Options default-width input in `language` and checks blank-workbook behavior.
 fn check_options_width_input(language: Language, input: &str) {
     let mut session = Session::new();
     let original = session.new_workbook();

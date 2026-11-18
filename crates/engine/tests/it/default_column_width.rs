@@ -1,12 +1,14 @@
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
 
+/// Helper that writes `defaultColumnWidth` into `Session::prefs` via JSON round-trip.
 fn set_preferred_width(session: &mut Session, width: f64) {
     let mut prefs = serde_json::to_value(&session.prefs).unwrap();
     prefs["defaultColumnWidth"] = json!(width);
     session.prefs = serde_json::from_value(prefs).unwrap();
 }
 
+/// Every sheet in a newly created workbook inherits `Prefs::default_column_width`.
 #[test]
 fn configured_width_applies_to_every_sheet_in_a_new_workbook() {
     let mut session = Session::new();
@@ -26,6 +28,7 @@ fn configured_width_applies_to_every_sheet_in_a_new_workbook() {
     assert_eq!(saved.get("defaultColumnWidth").and_then(Value::as_f64), Some(96.0), "The preference must survive JSON serialization");
 }
 
+/// Updating the new-workbook default width leaves already-open workbooks untouched.
 #[test]
 fn changing_default_width_does_not_modify_existing_workbooks() {
     let mut session = Session::new();
@@ -41,6 +44,8 @@ fn changing_default_width_does_not_modify_existing_workbooks() {
 
     assert_eq!(session.documents()[old].wb.sheets[0].default_col_width, 64.0, "Existing workbooks must retain their original width");
 }
+
+/// `options.newWorkbookColumnWidth` validates bounds and persists across preference reloads.
 #[test]
 fn command_updates_new_workbook_column_width() {
     let mut session = Session::new();

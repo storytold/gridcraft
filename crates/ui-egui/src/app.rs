@@ -71,12 +71,15 @@ impl SheetApp {
             capture_geometry: None,
             capture_geometry_from_raw: false,
             selected_object: None,
+            chart_cache: Default::default(),
             clipboard_text_at_copy: None,
             cut_text: None,
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            window_controls: false,
+            viewport_commands: Vec::new(),
             bring_forward: false,
             open_switch_windows: false,
             ui_window: None,
@@ -107,11 +110,14 @@ impl SheetApp {
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
-        // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
+        // anything that never reached a control (collapsed ribbon, tab switch) is dropped. One
+        // made with a switch to the control's tab waits, with its window, for the next `ui` of
+        // that window.
         self.ui.keytip_invoke = None;
         // Floating pictures' textures go with their workbook, even when no sheet is painted.
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         floating_pictures::forget_closed(ctx, &open);
+        self.chart_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).retain_docs(open.iter().copied());
         self.apply_font_state(ctx);
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
@@ -194,6 +200,9 @@ impl SheetApp {
         let t0 = now_ms();
         // A script may have switched windows since the last frame.
         self.follow_active_window();
+        // This window's key tip request that waited for this frame (its tab or ribbon was just
+        // shown); any other window's request was dropped before it.
+        self.ui.keytip_invoke = self.ui.keytip_invoke_next.take();
         text_box::before_ui(self, &ctx);
         // Another window came forward without going through a command (which settles drafts
         // first): the draft goes into its own window instead of floating over this one. If its
@@ -245,6 +254,9 @@ impl SheetApp {
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
+        // Last, so its resize cursors win over the widgets under the window edges.
+        ribbon::window_frame(self, &ctx);
+        self.flush_viewport_commands(&ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.
         if ctx.viewport_id() == egui::ViewportId::ROOT {
             control::issue_screenshots(self, &ctx);
@@ -296,6 +308,12 @@ impl SheetApp {
             return format!("{}R x {}C", cur.height(), cur.width());
         }
         sel.active.a1()
+    }
+
+    pub(crate) fn flush_viewport_commands(&mut self, ctx: &egui::Context) {
+        for command in self.viewport_commands.drain(..) {
+            ctx.send_viewport_cmd(command);
+        }
     }
 }
 

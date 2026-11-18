@@ -39,6 +39,7 @@ const DENIED: &[(&str, &str)] = &[
     ("view.newWindow", "macros don't open, hide or show windows"),
     ("view.hideWindow", "macros don't open, hide or show windows"),
     ("view.unhideWindow", "macros don't open, hide or show windows"),
+    ("control.press", "macros don't press form controls"),
 ];
 
 /// Commands under a denied prefix that only change the workbook.
@@ -92,6 +93,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Verifies macro execution deny, permission, and allow classifications across commands.
     #[test]
     fn the_deny_and_permission_lists() {
         let none = json!({});
@@ -114,6 +116,7 @@ mod tests {
             "view.newWindow",
             "view.hideWindow",
             "view.unhideWindow",
+            "control.press",
         ] {
             assert!(matches!(macro_policy(id, &none, Trust::Local), Policy::Deny(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::Deny(_)), "{id}");
