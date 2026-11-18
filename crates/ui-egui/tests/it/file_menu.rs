@@ -863,12 +863,15 @@ fn a_cancelled_or_abandoned_save_sheet_closes_nothing() {
     type Asked = Arc<Mutex<Vec<std::sync::mpsc::Sender<String>>>>;
     let asked: Asked = Arc::default();
     let log = asked.clone();
+    let ends: Arc<Mutex<usize>> = Arc::default();
+    let ended = ends.clone();
     let services = Services {
         save_prompt: Some(Box::new(move |_, _, _| {
             let (tx, rx) = std::sync::mpsc::channel();
             log.lock().unwrap().push(tx);
             Some(rx)
         })),
+        end_save_prompt: Some(Box::new(move || *ended.lock().unwrap() += 1)),
         ..Default::default()
     };
     let mut h = harness(services);
@@ -877,6 +880,7 @@ fn a_cancelled_or_abandoned_save_sheet_closes_nothing() {
     request_window_close(&mut h);
     let ctx = h.ctx.clone();
     gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.dialog.cancel", &serde_json::json!({}));
+    assert_eq!(*ends.lock().unwrap(), 1, "the cancelled question's sheet is taken down");
     // The sheet still answers; nothing listens any more.
     let _ = asked.lock().unwrap()[0].send("dontSave".into());
     h.run_steps(3);

@@ -42,6 +42,8 @@ pub struct Services {
     /// detail); the answer ("save", "dontSave" or anything else for Cancel) arrives on the
     /// receiver. `None` asks in GridCraft's own Save Changes dialog.
     pub save_prompt: Option<SavePrompt>,
+    /// macOS: take down the `save_prompt` sheet still up, whose question the app took back.
+    pub end_save_prompt: Option<Box<dyn Fn()>>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
