@@ -255,12 +255,18 @@ fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Clears active grid selection drag state left behind when a reference pick ends.
+pub(super) fn clear_picker_drag(app: &mut SheetApp) {
+    app.grid.drag = crate::grid::Drag::None;
+    app.grid.drag_select = false;
+}
+
 /// After the dialog's window is drawn: remembers where the expanded window is, and ends picking
 /// into a reference box when the box was not drawn (the dialog stopped showing it) or when
 /// another text field of the dialog takes the keyboard. A collapsed dialog shows no other field,
 /// so its box keeps picking whatever else is clicked (the Name Box, the formula bar, the
 /// ribbon): only Escape, Enter or the expand button end that state.
-pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool, rect: Option<egui::Rect>) {
+pub(super) fn window_shown(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, collapsed: bool, rect: Option<egui::Rect>) {
     if !collapsed {
         d.refs.rect = rect;
     }
@@ -268,6 +274,7 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
     // A press the boxes did not take this frame (none was picking) is not kept for a later one.
     d.refs.pressed = false;
     d.refs.other_field = d.refs.collapsed.as_deref().is_some_and(|key| other_field_focused(ctx, key));
+    let was_picking = d.refs.target.is_some();
     // The box compares the grid selection with the one it last saw only while it is drawn: a
     // hidden box would take a selection made meanwhile when it comes back.
     if !std::mem::take(&mut d.refs.target_drawn) {
@@ -275,6 +282,9 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
     }
     if !collapsed && ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
         d.refs.target = None;
+    }
+    if was_picking && d.refs.target.is_none() {
+        clear_picker_drag(app);
     }
 }
 
@@ -330,6 +340,7 @@ pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String>
     super::sort_dialog::restore_selection(app, d);
     d.refs.target = None;
     d.refs.collapsed = None;
+    clear_picker_drag(app);
     let Some(home) = d.refs.home.as_mut() else { return Ok(()) };
     let Some(sheet) = app.session.active().and_then(|doc| home_sheet(&doc.wb, home)).map(|s| s.name.clone()) else { return Ok(()) };
     // After an OK that failed, the selection is already back and only the sheet is shown again,

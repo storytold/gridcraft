@@ -226,9 +226,6 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
 /// slicers, filter buttons, fill handles, move borders and double-click edits.
 /// Neither clicking nor dragging here may execute a workbook-editing action.
 fn ref_edit_pick_interact(app: &mut SheetApp, input: &InteractionInput<'_>) {
-    if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
-        return;
-    }
     let (resp, geo, sh, wb) = (input.response, input.geo, input.sheet, input.workbook);
     let mods = input.modifiers;
     let clicked = input.primary_clicked;
@@ -240,42 +237,55 @@ fn ref_edit_pick_interact(app: &mut SheetApp, input: &InteractionInput<'_>) {
     if (drag_started || (clicked && app.grid.drag == Drag::None))
         && let Some(p) = input.press_origin.map(|p| geo.mirror_pos(p)).or(input.position)
     {
-        if p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top() {
-            note_selecting_press(app);
-            let _ = app.session.run("selection.set", json!({"range": RangeRef::all().a1()}));
-        } else if geo.in_cells(p) {
+        let in_corner = p.x < geo.cells.left() && p.y < geo.cells.top() && p.x >= geo.head_left() && p.y >= geo.head_top();
+        let in_cells = geo.in_cells(p);
+        let in_col_header = p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left();
+        let in_row_header = p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top();
+        if (in_corner || in_cells || in_col_header || in_row_header) && app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
+            return;
+        }
+        if in_corner {
+            if app.session.run("selection.set", json!({"range": RangeRef::all().a1()})).is_ok() {
+                note_selecting_press(app);
+            }
+        } else if in_cells {
             let c = geo.cell_at(sh, p);
-            note_selecting_press(app);
-            if mods.shift {
+            let ok = if mods.shift {
                 let sel = &input.selection;
                 let area = RangeRef::new(sel.anchor, c);
-                let _ = app.session.run("selection.set", json!({"range": area.a1(), "active": sel.active.a1()}));
-                if let Some(doc) = app.session.active_mut() {
+                let ok = app.session.run("selection.set", json!({"range": area.a1(), "active": sel.active.a1()})).is_ok();
+                if ok && let Some(doc) = app.session.active_mut() {
                     doc.selection.anchor = sel.anchor;
                 }
+                ok
             } else if mods.command {
-                select_ranges(app, RangeRef::cell(c), true, c);
+                select_ranges(app, RangeRef::cell(c), true, c)
             } else {
-                let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
+                app.session.run("selection.set", json!({"cell": c.a1()})).is_ok()
+            };
+            if ok {
+                note_selecting_press(app);
+                app.grid.drag = Drag::Select;
+                app.grid.drag_select = true;
             }
-            app.grid.drag = Drag::Select;
-            app.grid.drag_select = true;
-        } else if p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left() {
+        } else if in_col_header {
             let col = geo.col_at(sh, p.x);
             let anchor = if mods.shift { input.selection.anchor.col } else { col };
             let area = RangeRef::cols(anchor.min(col), anchor.max(col));
-            note_selecting_press(app);
-            select_ranges(app, area, mods.command && !mods.shift, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), col));
-            app.grid.drag = Drag::Cols(anchor);
-            app.grid.drag_select = true;
-        } else if p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top() {
+            if select_ranges(app, area, mods.command && !mods.shift, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), col)) {
+                note_selecting_press(app);
+                app.grid.drag = Drag::Cols(anchor);
+                app.grid.drag_select = true;
+            }
+        } else if in_row_header {
             let row = geo.row_at(sh, p.y);
             let anchor = if mods.shift { input.selection.anchor.row } else { row };
             let area = RangeRef::rows(anchor.min(row), anchor.max(row));
-            note_selecting_press(app);
-            select_ranges(app, area, mods.command && !mods.shift, CellRef::new(row, geo.col_at(sh, geo.cells.left() + 1.0)));
-            app.grid.drag = Drag::Rows(anchor);
-            app.grid.drag_select = true;
+            if select_ranges(app, area, mods.command && !mods.shift, CellRef::new(row, geo.col_at(sh, geo.cells.left() + 1.0))) {
+                note_selecting_press(app);
+                app.grid.drag = Drag::Rows(anchor);
+                app.grid.drag_select = true;
+            }
         }
     }
 
@@ -292,13 +302,15 @@ fn ref_edit_pick_interact(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::Rows(anchor) => {
                 let row = geo.row_at(sh, p.y);
                 let area = RangeRef::rows(anchor.min(row), anchor.max(row));
-                let _ = app.session.run("selection.set", json!({"range": area.a1(), "active": input.selection.active.a1()}));
+                let active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
+                let _ = app.session.run("selection.set", json!({"range": area.a1(), "active": active.a1()}));
                 scroll_by(app, vec2(0.0, auto.y));
             }
             Drag::Cols(anchor) => {
                 let col = geo.col_at(sh, p.x);
                 let area = RangeRef::cols(anchor.min(col), anchor.max(col));
-                let _ = app.session.run("selection.set", json!({"range": area.a1(), "active": input.selection.active.a1()}));
+                let active = app.session.active().map(|d| d.selection.active).unwrap_or(input.selection.active);
+                let _ = app.session.run("selection.set", json!({"range": area.a1(), "active": active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             _ => {}

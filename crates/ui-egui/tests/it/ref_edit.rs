@@ -2337,6 +2337,15 @@ fn remove_duplicates_slicer_tile_pick_is_read_only_1388() {
         pos
     };
 
+    let expected_cell = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let c = geo.cell_at(sheet, geo.mirror_pos(pos));
+        format!("${}${}", gridcraft_engine::core::col_to_letters(c.col), c.row + 1)
+    };
+
     h.state_mut().open_dialog("removeDuplicates", json!({}));
     h.run_steps(4);
     click_button(&mut h, "Collapse dialog", 0);
@@ -2344,7 +2353,7 @@ fn remove_duplicates_slicer_tile_pick_is_read_only_1388() {
     click_at(&mut h, pos);
 
     assert_eq!(h.state().dialog.as_ref().unwrap().name, "removeDuplicates");
-    assert_ne!(field(&h, "range"), "B2:C4");
+    assert_eq!(field(&h, "range"), expected_cell);
     assert!(h.state().selected_object.is_none());
     assert_eq!(h.state().session.active().unwrap().wb, before, "slicer tile must not change table filtering during reference picking");
 }
@@ -2392,4 +2401,188 @@ fn other_ref_edit_dialogs_pick_selected_checkbox_and_control_cells_1388() {
     single_click(&mut h, "D6");
     assert_eq!(field(&h, "range"), "$D$6");
     assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: idle RefEdit picker frames never commit an open cell draft.
+#[test]
+fn ref_edit_idle_frames_do_not_commit_open_cell_draft_1388() {
+    let mut session = workbook();
+    session.execute("cell.set", json!({"cell": "B2", "input": "old"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().begin_edit(Some("draft".into()), false);
+    assert!(h.state().editor.is_some());
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(6);
+    assert!(h.state().editor.is_some(), "opening/focusing RefEdit must not commit the draft on idle frames");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+
+    // Cancelling without clicking the grid leaves the draft uncommitted.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: clicking a non-selectable locked cell must not overwrite Remove Duplicates' inferred range.
+#[test]
+fn ref_edit_rejected_locked_cell_click_keeps_inferred_range_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "B2:C4",
+                "values": [["Name", "Qty"], ["A", 1], ["B", 2]]
+            }),
+        )
+        .unwrap();
+    session.execute("home.lockCell", json!({"range": "B2:C4", "on": false})).unwrap();
+    session.execute("review.protectSheet", json!({"selectLockedCells": false})).unwrap();
+    session.execute("selection.set", json!({"range": "C3"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    assert_eq!(field(&h, "range"), "B2:C4");
+
+    click_button(&mut h, "Collapse dialog", 0);
+    single_click(&mut h, "D6");
+
+    assert_eq!(selection(&h).1, "C3", "locked D6 stays unselectable");
+    assert_eq!(field(&h, "range"), "B2:C4", "failed selection must not record C3 as a pick");
+}
+
+/// #1388: cancelling a RefEdit pick mid-drag clears drag state so release does not apply Format Painter.
+#[test]
+fn ending_pick_mid_drag_does_not_apply_format_painter_on_release_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    session.execute("home.bold", json!({})).unwrap();
+    session.execute("edit.formatPainter", json!({})).unwrap();
+    session.execute("selection.set", json!({"cell": "B5"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let from = cell_pos(&h, "C3");
+    let to = cell_pos(&h, "D4");
+    h.input_mut().events.push(Event::PointerMoved(from));
+    press(&mut h, from, true);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(2);
+
+    // Cancel the dialog via control channel while the primary button is still held down.
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().dialog.is_none());
+
+    press(&mut h, to, false);
+    h.run_steps(3);
+
+    let d4_bold = {
+        let doc = h.state().session.active().unwrap();
+        let sh = doc.wb.active().unwrap();
+        doc.wb.styles.get(sh.style_id(CellRef::parse("D4").unwrap())).font.bold
+    };
+    assert!(!d4_bold, "cancelling mid-drag must not apply Format Painter on pointer release");
+}
+
+/// #1388: dragging row or column headers while picking keeps the active cell inside the picked lines.
+#[test]
+fn ref_edit_header_drag_keeps_active_cell_inside_picked_lines_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let (row6, row8, col_d, col_f) = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let hx = (geo.head_left() + geo.cells.left()) * 0.5;
+        let hy = (geo.head_top() + geo.cells.top()) * 0.5;
+        let r6 = geo.cell_rect(sheet, CellRef::parse("A6").unwrap()).center().y;
+        let r8 = geo.cell_rect(sheet, CellRef::parse("A8").unwrap()).center().y;
+        let cd = geo.cell_rect(sheet, CellRef::parse("D1").unwrap()).center().x;
+        let cf = geo.cell_rect(sheet, CellRef::parse("F1").unwrap()).center().x;
+        (egui::pos2(hx, r6), egui::pos2(hx, r8), egui::pos2(cd, hy), egui::pos2(cf, hy))
+    };
+
+    h.input_mut().events.push(Event::PointerMoved(row6));
+    press(&mut h, row6, true);
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(row8));
+    h.run_steps(2);
+    press(&mut h, row8, false);
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$A$6:$XFD$8");
+    assert_eq!(h.state().session.active().unwrap().selection.active.row, 5, "active row should stay on row 6");
+
+    h.input_mut().events.push(Event::PointerMoved(col_d));
+    press(&mut h, col_d, true);
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(col_f));
+    h.run_steps(2);
+    press(&mut h, col_f, false);
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$D$1:$F$1048576");
+    assert_eq!(h.state().session.active().unwrap().selection.active.col, 3, "active col should stay on column D");
+}
+
+/// #1388: hovering fill handle, selection border, objects, or selected column headers during
+/// RefEdit pick shows only pick cursors and no fill-handle crosshair or move cursor.
+#[test]
+fn ref_edit_pick_hover_suppresses_fill_border_object_and_col_move_cursors_1388() {
+    use egui::CursorIcon;
+
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("insert.shape", json!({"kind": "rectangle", "at": "F6", "width": 110, "height": 55})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let (handle_pos, border_pos, shape_pos) = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let r = geo.range_rect(sheet, doc.selection.current());
+        (r.right_bottom(), egui::pos2(r.center().x, r.top()), cell_pos(&h, "F6"))
+    };
+
+    for pos in [handle_pos, border_pos, shape_pos] {
+        h.input_mut().events.push(Event::PointerMoved(pos));
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Cell, "cursor at {pos:?}");
+    }
+
+    // Select column C and verify column header hover uses Default, not Move.
+    let col_c_header = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        egui::pos2(geo.cell_rect(sheet, CellRef::parse("C1").unwrap()).center().x, (geo.head_top() + geo.cells.top()) * 0.5)
+    };
+    click_at(&mut h, col_c_header);
+    assert_eq!(field(&h, "range"), "$C$1:$C$1048576");
+    h.input_mut().events.push(Event::PointerMoved(col_c_header));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Default);
 }
