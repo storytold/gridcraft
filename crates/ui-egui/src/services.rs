@@ -9,6 +9,9 @@ type PrintPdf = Box<dyn Fn(&[u8])>;
 /// Host services the platform shell provides (file pickers, opening URLs).
 #[derive(Default)]
 pub struct Services {
+    /// Native Wayland only: its event bridge can lose button releases after `PointerGone`.
+    /// Cancel worksheet scrollbar capture there; other hosts keep held drags across window exit.
+    pub scrollbar_release_on_pointer_gone: bool,
     /// Desktop: discover configured printers on a worker.
     pub printers: Option<printing::Discover>,
     /// Desktop: submit the PDF with the chosen settings on a worker.
