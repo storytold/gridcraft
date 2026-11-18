@@ -237,6 +237,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Зняти закріплення областей",
         "Dark Mode" => "Темний режим",
         "Interface language" => "Мова інтерфейсу",
+        "User name" => "Ім'я користувача",
+        "Signs new notes and comments, and is the author of new workbooks." => "Підписує нові нотатки й коментарі та вказується як автор нових книг.",
         "Interface size" => "Розмір інтерфейсу",
         "Auto" => "Авто",
         "Drag to freeze columns" => "Перетягніть, щоб закріпити стовпці",

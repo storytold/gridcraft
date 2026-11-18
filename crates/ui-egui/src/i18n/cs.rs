@@ -382,6 +382,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Light" => "Světlý",
         "Dark" => "Tmavý",
         "Interface language" => "Jazyk rozhraní",
+        "User name" => "Uživatelské jméno",
+        "Signs new notes and comments, and is the author of new workbooks." => "Podepisuje nové poznámky a komentáře a je autorem nových sešitů.",
         "Command\nPalette" => "Paleta\npříkazů",
         "Agent\nControl" => "Řízení\nagenty",
         "Action\nJournal" => "Deník\nakcí",

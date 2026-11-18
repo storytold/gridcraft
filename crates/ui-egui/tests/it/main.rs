@@ -122,6 +122,7 @@ mod trace_navigation;
 mod translated_form_fields;
 mod ui_clock;
 mod undo_while_grouping;
+mod user_name_option;
 mod validation_alert;
 mod validation_input_message;
 mod wheel_zoom;

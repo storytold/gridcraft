@@ -248,6 +248,10 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Light" => "Licht",
         "Dark" => "Donker",
         "Interface language" => "Weergavetaal",
+        "User name" => "Gebruikersnaam",
+        "Signs new notes and comments, and is the author of new workbooks." => {
+            "Ondertekent nieuwe notities en opmerkingen en is de auteur van nieuwe werkmappen."
+        }
         "Interface size" => "Grootte van de interface",
         "Auto" => "Automatisch",
         "Drag to freeze columns" => "Sleep om kolommen te blokkeren",

@@ -242,6 +242,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Unfreeze Panes" => "Anulare înghețare panouri",
         "Dark Mode" => "Mod întunecat",
         "Interface language" => "Limba interfeței",
+        "User name" => "Nume de utilizator",
+        "Signs new notes and comments, and is the author of new workbooks." => "Semnează notele și comentariile noi și este autorul registrelor noi.",
         "Interface size" => "Dimensiunea interfeței",
         "Auto" => "Automat",
         "Drag to freeze columns" => "Trageți pentru a îngheța coloane",

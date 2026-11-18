@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-11-02 · **Change:** minor (form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-07 · **Change:** minor (options commands such as `options.userName` change the app and never run in a macro; earlier: form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -107,9 +107,10 @@ reference text of at most 1,024 characters, or that names no cell (a bad referen
 doesn't exist, a cell outside the grid), is refused before anything runs:
 
 1. **Policy.** File commands other than Properties, exports and printing (such as Open, Save
-   and Close), app, window (including New Window, Hide and Unhide), automate and macro commands,
-   Undo and Redo, and pressing a form control (`control.press`), never run in a macro. File ›
-   Properties runs, and so do exports and printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
+   and Close), app and options commands (such as `options.userName`), window (including New
+   Window, Hide and Unhide), automate and macro commands, Undo and Redo, and pressing a form
+   control (`control.press`), never run in a macro. File › Properties runs, and so do exports
+   and printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
    that only produce bytes. Reading or writing a file (`data.getData`, `data.fromTextCsv`,
    `insert.picture` or `pageLayout.background` with a `path`, or an export or print with a
    `path`) needs the command in the macro's `permissions`. Any `path` other than `null` counts,
