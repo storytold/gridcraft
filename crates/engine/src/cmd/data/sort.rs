@@ -28,6 +28,21 @@ fn sort_target(s: &Session, p: &Json) -> Result<(usize, RangeRef)> {
     Ok((sheet, data_range(s, p)?))
 }
 
+/// The worksheet (index), range and header guess the Custom Sort dialog works on: the sheet named by
+/// `sheet` or a `Sheet!` prefix on `range`, else the active one.
+pub fn sort_context(s: &Session, p: &Json) -> Result<(usize, RangeRef, bool)> {
+    let (sheet, explicit) = sort_target(s, p)?;
+    let d = s.doc()?;
+    let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
+    let sel = d.selection.current();
+    // An explicit block wins over the table range, so a selected totals row can be sorted.
+    let r = match sh.used_range() {
+        Some(used) if p.get("range").is_none() && !sel.is_single() => sel.intersection(&used).unwrap_or(sel),
+        _ => explicit,
+    };
+    Ok((sheet, r, bool_param(p, "header").unwrap_or_else(|| guess_header(&d.wb, sh, r))))
+}
+
 pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
     let (sheet, r) = sort_target(s, p)?;
     let col = col_param(p.get("column"), r.start.col).unwrap_or(s.doc()?.selection.active.col).clamp(r.start.col, r.end.col);
@@ -68,7 +83,9 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
         });
     }
     if keys.is_empty() {
-        s.ui_requests.push(crate::UiRequest::Dialog("sort".into(), json!({"range": r.a1(), "header": header})));
+        let (sheet, r, header) = sort_context(s, p)?;
+        let name = s.doc()?.wb.sheet(sheet).map(|sh| sh.name.clone()).ok_or(EngineError::NoDocument)?;
+        s.ui_requests.push(crate::UiRequest::Dialog("sort".into(), json!({"range": r.a1(), "header": header, "sheet": name})));
         return ok();
     }
     if keys.len() > 64 {
@@ -119,15 +136,29 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
             for (ki, k) in keys.iter().enumerate() {
                 let (va, ca) = &keyed[a as usize][ki];
                 let (vb, cb) = &keyed[b as usize][ki];
+                let plain = || {
+                    if case && va.is_text() && vb.is_text() {
+                        sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
+                    } else {
+                        sort_compare(va, vb)
+                    }
+                };
                 let o = if k.by != "values" {
                     ca.cmp(cb)
                 } else if let Some(list) = &k.list {
-                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t))).unwrap_or(usize::MAX);
-                    pos(va).cmp(&pos(vb))
-                } else if case && va.is_text() && vb.is_text() {
-                    sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))
+                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t)));
+                    match (pos(va), pos(vb)) {
+                        (Some(a), Some(b)) => a.cmp(&b),
+                        (Some(_), None) => Ordering::Less,
+                        (None, Some(_)) => Ordering::Greater,
+                        // Values not in the list follow the listed ones in the usual order, as in Excel.
+                        // A descending key is left as it was: they tie, so the next key decides.
+                        // A blank has no place in the list either, but still goes last.
+                        (None, None) if k.desc => va.is_empty().cmp(&vb.is_empty()),
+                        (None, None) => plain(),
+                    }
                 } else {
-                    sort_compare(va, vb)
+                    plain()
                 };
                 // Blanks always sort last, whatever the order.
                 let o = if k.desc && !(va.is_empty() || vb.is_empty()) { o.reverse() } else { o };

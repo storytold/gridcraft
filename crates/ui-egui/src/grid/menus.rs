@@ -385,14 +385,22 @@ pub(super) fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     }
 }
 
-/// The right-click menu of a chart, picture, shape or slicer.
+/// The right-click menu of a chart, picture, shape, slicer or form control (Edit Text and Assign
+/// Action for a button, and Format Control, before Delete).
 pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     let Some((at, kind, id)) = app.grid.object_menu else { return };
     let mut close = false;
     let resp = egui::Area::new(egui::Id::unique("object_context")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(200.0);
-            let mut items = vec![("Delete", "object.delete")];
+            let mut items = vec![];
+            if kind == "control" {
+                if crate::control_ui::is_button(app, id) {
+                    items.extend([("Edit Text", "ui:editText"), ("Assign Action…", "ui:assignAction")]);
+                }
+                items.extend([("Format Control…", "ui:formatControl"), ("-", "")]);
+            }
+            items.push(("Delete", "object.delete"));
             if kind == "chart" {
                 items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
             }
@@ -407,6 +415,9 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     match action {
                         "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
                         "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
+                        "ui:editText" => app.open_dialog("formatControl", json!({"id": id, "textOnly": true})),
+                        "ui:assignAction" => app.open_dialog("assignAction", json!({"id": id})),
+                        "ui:formatControl" => app.open_dialog("formatControl", json!({"id": id})),
                         _ => {
                             app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
                             app.selected_object = None;
@@ -485,7 +496,7 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
                     ("Copy", "edit.copy"),
                     ("Paste", "edit.paste"),
                     ("-", ""),
-                    ("Insert", "home.insertRows"),
+                    ("Header Menu|Insert", "home.insertRows"),
                     ("Delete", "home.deleteRows"),
                     ("Clear Contents", "edit.clearContents"),
                     ("-", ""),
@@ -502,7 +513,7 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
                     ("Copy", "edit.copy"),
                     ("Paste", "edit.paste"),
                     ("-", ""),
-                    ("Insert", "home.insertColumns"),
+                    ("Header Menu|Insert", "home.insertColumns"),
                     ("Delete", "home.deleteColumns"),
                     ("Clear Contents", "edit.clearContents"),
                     ("-", ""),

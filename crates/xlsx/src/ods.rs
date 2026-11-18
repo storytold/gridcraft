@@ -233,6 +233,7 @@ struct Import {
     text: u64,
     formats: Vec<(&'static str, StyleId)>,
     spreadsheet_seen: bool,
+    names: crate::read::SheetNames,
 }
 
 impl Import {
@@ -241,7 +242,20 @@ impl Import {
         wb.sheets.clear();
         let mut report = ReadReport::default();
         report.warn("ODS data-only import: formulas become their saved results and will not recalculate. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported.");
-        Self { wb, report, stack: vec![], sheet: None, row: None, cell: None, cells: 0, merges: 0, text: 0, formats: vec![], spreadsheet_seen: false }
+        Self {
+            wb,
+            report,
+            stack: vec![],
+            sheet: None,
+            row: None,
+            cell: None,
+            cells: 0,
+            merges: 0,
+            text: 0,
+            formats: vec![],
+            spreadsheet_seen: false,
+            names: Default::default(),
+        }
     }
 
     fn parse(&mut self, bytes: &[u8]) -> Result<(), IoError> {
@@ -280,7 +294,7 @@ impl Import {
                 Event::GeneralRef(r) => {
                     let ch = match r.resolve_char_ref().map_err(xml_error)? {
                         Some(c) => c,
-                        None => match r.as_ref() {
+                        None => match &*r {
                             b"amp" => '&',
                             b"lt" => '<',
                             b"gt" => '>',
@@ -317,9 +331,10 @@ impl Import {
                     return Err(IoError::TooLarge("ODS contains more than 1024 sheets".into()));
                 }
                 let original = attr(reader, e, TABLE, b"name")?.unwrap_or_default();
-                let mut name = crate::read::SheetNames::of(&self.wb).unique(original.trim_matches('\''), self.wb.sheets.len());
+                let mut name = self.names.unique(original.trim_matches('\''), self.wb.sheets.len());
                 if self.wb.check_sheet_name(&name, None).is_err() {
                     name = self.wb.next_sheet_name();
+                    self.names.insert(&name);
                 }
                 if name != original {
                     self.report.warn("Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names.");
@@ -470,6 +485,14 @@ impl Import {
             None => return Err(IoError::TooLarge("ODS row exceeds worksheet width".into())),
         };
         if kept {
+            // Charge the text a row keeps before the row is done, so a row of many long cells is
+            // refused as it grows; finish_row charges the row's repeats beyond the first.
+            if let Value::Text(t) = &cell.value {
+                self.text = self.text.saturating_add(u64::from(draft.repeat).saturating_mul(t.len() as u64));
+                if self.text > MAX_TEXT {
+                    return Err(IoError::TooLarge("ODS expands beyond the import limit (64 MiB of text)".into()));
+                }
+            }
             row.cells.push(RepeatedCell { col: row.col, repeat: draft.repeat, width, height, cell });
         }
         row.col = end;
@@ -537,7 +560,8 @@ impl Import {
             if !entry.cell.is_blank() {
                 self.cells = self.cells.saturating_add(count);
                 if let Value::Text(t) = &entry.cell.value {
-                    self.text = self.text.saturating_add(count.saturating_mul(t.len() as u64));
+                    let repeats = count.saturating_sub(u64::from(entry.repeat));
+                    self.text = self.text.saturating_add(repeats.saturating_mul(t.len() as u64));
                 }
             }
             let merged = entry.width > 1 || entry.height > 1;
