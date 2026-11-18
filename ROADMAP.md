@@ -2,6 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-15 · **Change:** minor (performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
 > **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-05 · **Change:** minor (CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped) · **Target:** Microsoft Excel (Microsoft 365)
 
 GridCraft aims at full Microsoft Excel parity, and at being better in places: faster, open (XLSX
@@ -22,7 +23,7 @@ This page is the summary. The detail is in:
 | Number | Value | Kind |
 |---|---|---|
 | 2026-10-14 | Editing a cell with text that would read back as a number, boolean, date or formula (entered with a leading apostrophe) shows the apostrophe in the editor and formula bar, so Enter unchanged keeps it text (#1362) |
-| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 281 / 296 (94.9%), worksheet functions 513 / 523 (98.1%; 504 working, 96.4%) |
+| **Feature breadth** (weighted) | **~75%** | estimated, anchored on two measurements: ribbon catalog 281 / 296 (94.9%), worksheet functions 514 / 523 (98.3%; 505 working, 96.6%) |
 | **Ready for real work** | **~50%** | estimated from written weights (51.6); [target-app-parity.md](docs/target-app-parity.md) |
 | **Mainstream practitioner** | **~50%** | estimated: typical analyst/finance user, weekly features, × 0.90 interaction × 0.92 stability × 0.88 file exchange; [method](docs/target-app-parity.md#mainstream-practitioner) |
 | **Essentials user** | **~63%** | estimated: core features only, × 0.92 launch/stability × 0.95 clarity × 0.90 opening sent files; [method](docs/target-app-parity.md#essentials-user) |
@@ -74,7 +75,7 @@ collaboration, mobile, AI).
 | Area | Breadth | Ready | Hours | Doc |
 |---|---|---|---|---|
 | Formula language and calculation | ~92% | ~72% | 20–30 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
-| Worksheet functions | 96.6% measured | ~82% | 16–26 | [function-parity.md](docs/function-parity.md) |
+| Worksheet functions | 96.6% measured | ~82% | 15–25 | [function-parity.md](docs/function-parity.md) |
 | Editing, navigation, clipboard, fill | ~90% | ~70% | 15–25 | [ui-parity.md](docs/ui-parity.md) |
 | Cell formatting, styles, conditional formatting | ~95% | ~80% | 8–14 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
 | Sort, filter, tables, validation, outline | ~82% | ~70% | 10–16 | [target-app-parity.md](docs/target-app-parity.md#feature-areas) |
@@ -149,6 +150,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | Recently Used lists the functions most recently entered in a formula from any source (ribbon, control channel, MCP, scripts), kept with the preferences and returned by `formulas.recentlyUsed`; the Insert Function dialog takes Excel's title and a working category list (Most Recently Used, All, each category) |
 | 2026-10-31 | Formulas › Function Library as a big Insert Function button, the AutoSum split button and three columns of labelled small buttons, each category book in its own colour; category menus end with Insert Function… on that category; More Functions cascades into the remaining categories; Home › Editing shares the AutoSum menu; the MR key tip opens Recently Used |
 | 2026-10-31 | System and embedded CJK fallback text shares the Latin baseline in cells, editors and window titles (#1265, #2621). Symbol and emoji alignment, manual row heights and clipping are unchanged |
+| 2026-10-26 | PDF preserves Context/LTR/RTL reading direction through wrapping and drawing; RTL sheet cells, borders, headings, objects and sparklines mirror consistently |
+| 2026-10-26 | Arabic PDF export shapes licensed glyph outlines and preserves searchable logical text; characters the font lacks, or a missing Arabic font, fall back to the standard fonts instead of failing the export |
 | 2026-10-26 | Arabic bidi display/editing preserve logical source text; per-cell reading direction is editable and survives undo, XLSX and conditional-format priority |
 | 2026-10-26 | Arabic text shows in cells and the interface through a system, fontconfig or craft-fonts Arabic face; workbook fonts keep their script fallbacks |
 | 2026-10-25 | AutoSum over a selection does what Excel does: a selected row gets one total to its right (in its last cell if that is empty), not a one-cell total under each cell; a block whose last column is empty gets each row's total there, one whose last row is empty each column's, and with both the corner gets the total of the block; otherwise totals go under each column as before |
@@ -174,6 +177,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-19 | Long flat operator chains (`=A1+A2+…`) up to Excel's 8,192-character limit (4,096 operands): entering, filling, inserting rows, undo, Evaluate Formula and XLSX save no longer overflow the stack; chains past 64 operands are saved as plain formulas, not dynamic arrays; Spanish formula entry accepts chains past 256 operands (#916) |
 | 2026-10-19 | Linux: "Use system setting" for the theme keeps following the desktop when the XDG Desktop Portal stops answering: each read gives up after 2 s and the next poll reconnects, where one unanswered call stalled the watcher for the rest of the session |
 | 2026-10-16 | Memory: undo steps share a sheet's picture bytes and the workbook's VBA project instead of copying them: 50 edits on a sheet with a 20 MB picture keep 22 MB instead of 992 MB |
+| 2026-10-16 | Custom Sort dialog: header-named column dropdowns, smart Order labels, add/delete/copy/move levels, resizable window, selection follows the headers checkbox and returns on close; a selected block (such as a table's totals row) is sorted as selected |
 | 2026-10-16 | Memory: floating pictures are decoded at about the size they are drawn, with limits, into a cache bounded by bytes and dropped with their workbook, instead of at full size into one that never let go; two open workbooks no longer show each other's picture. 12 large pictures scrolled through keep 40 MB of textures instead of 258 MB, and none once the workbook closes |
 | 2026-10-16 | The web app keeps its preferences between visits (#1562): theme (dark mode), interface size, language, editing options and the rest of what the desktop app saves in `ui.json` and `prefs.json` are kept in the browser's `localStorage`, written as soon as they change |
 | 2026-10-16 | Memory: the interface and script fallback fonts are read once per run and shared with egui instead of copied into it: an empty workbook settles at 158 MB instead of 258 MB on macOS |
@@ -200,6 +204,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | Conditional formatting: a rule gathers range statistics only when it reads them (top/bottom, above average, duplicates, scales, bars, icons) and borrows them instead of copying them per cell, so the per-frame lookup of an expression or cell-value rule no longer visits its whole range (#1098, part 1) |
 | 2026-10-13 | Grid: resizing several selected columns or rows previews on the dragged one and applies the size to all on release; Esc cancels (#1082) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-12 | GETPIVOTDATA reads PivotTable values by field and items (#284) |
 | 2026-10-12 | PDF writer: objects are written straight to the output, identical pictures are stored once, style operators are emitted only when they change, `q` nesting is limited to 28 and polyline joins no longer leak into later strokes (#816) |
 | 2026-10-12 | Insert › Text › WordArt (`insert.wordArt`, `wordArt.set`): floating decorative text with 10 original styles, outline and shadow, in-place editing, XLSX and print (#784) |
 | 2026-10-12 | Number formatting: one table of built-in formats (xlsx); numbers, dates and General render with one scratch buffer instead of per-token strings; output unchanged, checked against digests recorded from the old code (#817) |
@@ -285,6 +290,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-31 | minor | Progress log: Recently Used and Insert Function categories |
 | 2026-10-31 | minor | Progress log: Function Library |
 | 2026-10-31 | minor | Progress log: shared CJK/Latin baselines in cells, editors and window titles |
+| 2026-10-26 | minor | Progress log: PDF reading direction and RTL sheets |
+| 2026-10-26 | minor | Progress log: Arabic PDF text |
 | 2026-10-26 | minor | Progress log: Arabic bidi display and editing |
 | 2026-10-26 | minor | Progress log: Arabic font fallback |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
@@ -317,6 +324,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | trivial | Progress log: shared pictures written once on XLSX export (#985) |
 | 2026-10-13 | minor | Progress log: conditional-format lookups no longer scan the range for rules without statistics (#1098) |
 | 2026-10-12 | minor | Progress log: hidden-sheet navigation at workbook boundaries |
+| 2026-10-12 | minor | Worksheet functions 514 / 523 (GETPIVOTDATA); progress log row |
 | 2026-10-13 | trivial | Progress log: charts cached between frames (#1139) |
 | 2026-10-12 | minor | Progress log: PDF writer cleanup (#816) |
 | 2026-10-12 | minor | Catalog 276 → 277 / 292: Insert › WordArt (#784) |
