@@ -104,6 +104,46 @@ pub fn cell_family(name: &str, bold: bool, italic: bool) -> FontFamily {
     )
 }
 
+/// Whether `defs` has a distinct bold primary face for `font_name` and `italic`.
+pub fn defs_have_bold_face(defs: &FontDefinitions, font_name: &str, italic: bool) -> bool {
+    let bold_fam = cell_family(font_name, true, italic);
+    let reg_fam = cell_family(font_name, false, italic);
+    if bold_fam == reg_fam {
+        return false;
+    }
+    let b_first = defs.families.get(&bold_fam).and_then(|c| c.first());
+    let r_first = defs.families.get(&reg_fam).and_then(|c| c.first());
+    b_first.is_some() && b_first != r_first
+}
+
+/// Whether `ctx` has a distinct bold primary face loaded for `font_name` and `italic`. When false
+/// (for example in `pinned_font_definitions`, or a serif/monospace role without a bold face),
+/// `paint_cell` draws a second galley pass offset horizontally so bold remains visually distinct.
+pub fn has_bold_face(ctx: &egui::Context, font_name: &str, italic: bool) -> bool {
+    ctx.fonts(|f| defs_have_bold_face(f.definitions(), font_name, italic))
+}
+
+/// Resolves a built-in role to its OFL Latin face (`Carlito` or `Caladea`) in `latin_fonts`.
+fn craft_role_font_from(role: &str, latin_fonts: &[(&str, &str, &'static [u8])]) -> Option<FontData> {
+    let (family, style) = match role {
+        UI | CELL => ("Carlito", "Regular"),
+        UI_BOLD | CELL_BOLD => ("Carlito", "Bold"),
+        CELL_ITALIC => ("Carlito", "Italic"),
+        CELL_BOLD_ITALIC => ("Carlito", "Bold Italic"),
+        SERIF | MATH => ("Caladea", "Regular"),
+        MATH_ITALIC => ("Caladea", "Italic"),
+        MATH_BOLD => ("Caladea", "Bold"),
+        _ => return None,
+    };
+    latin_fonts.iter().find(|(f, s, _)| *f == family && *s == style).map(|(_, _, bytes)| FontData::from_static(bytes))
+}
+
+/// Embedded OFL Latin role face from `fonts/latin-manifest.txt` when no system font candidate was
+/// found (such as on `wasm32` or a minimal Linux host).
+fn craft_role_font(role: &str) -> Option<FontData> {
+    craft_role_font_from(role, craft_fonts::CRAFT_LATIN_FONTS)
+}
+
 /// Width in points, at 100% zoom, of one line of cell text drawn as the grid draws it: in the
 /// face [`cell_family`] picks, which on a machine without the named font is a wider or narrower
 /// substitute (#1316). A family the active font set doesn't have yet (bound fonts apply from the
@@ -559,7 +599,7 @@ fn build_role_chain(
     let paths = candidates(role);
     let refs: Vec<(&str, u32)> = paths.iter().map(|(p, i)| (p.as_str(), *i)).collect();
     let mut chain: Vec<String> = Vec::new();
-    let loaded = if system { try_load(&refs) } else { None };
+    let loaded = if system { try_load(&refs).or_else(|| craft_role_font(role)) } else { None };
     if let Some(mut fd) = loaded {
         // Helvetica Neue Bold's own TrueType hints close Cyrillic е into ө at 13 pt on a Retina
         // screen (#1184). Core Text never runs them, so this draws it the way macOS does.
@@ -691,5 +731,70 @@ mod font_binding_tests {
             let FontFamily::Name(fam) = cell_family(&name, seed % 2 == 0, seed % 3 == 0) else { continue };
             assert!(crate::fonts::is_bound(&fam), "{name:?} → unbound {fam:?}");
         }
+    }
+
+    /// Verifies that Latin role font lookup maps each built-in role to its distinct regular, bold, italic, and bold-italic face.
+    #[test]
+    fn craft_role_fonts_supply_distinct_bold_and_italic_faces() {
+        static TABLE: &[(&str, &str, &[u8])] = &[
+            ("Carlito", "Regular", b"carlito-regular"),
+            ("Carlito", "Bold", b"carlito-bold"),
+            ("Carlito", "Italic", b"carlito-italic"),
+            ("Carlito", "Bold Italic", b"carlito-bold-italic"),
+            ("Caladea", "Regular", b"caladea-regular"),
+            ("Caladea", "Bold", b"caladea-bold"),
+            ("Caladea", "Italic", b"caladea-italic"),
+            ("Caladea", "Bold Italic", b"caladea-bold-italic"),
+        ];
+        for table in std::iter::once(TABLE).chain((!craft_fonts::CRAFT_LATIN_FONTS.is_empty()).then_some(craft_fonts::CRAFT_LATIN_FONTS)) {
+            assert_eq!(table.len(), 8, "all 8 Carlito and Caladea faces must be present");
+            let ui = super::craft_role_font_from(UI, table).expect("ui face");
+            let ui_bold = super::craft_role_font_from(UI_BOLD, table).expect("ui-bold face");
+            let reg = super::craft_role_font_from(CELL, table).expect("cell face");
+            let bold = super::craft_role_font_from(CELL_BOLD, table).expect("cell-bold face");
+            let italic = super::craft_role_font_from(CELL_ITALIC, table).expect("cell-italic face");
+            let bi = super::craft_role_font_from(CELL_BOLD_ITALIC, table).expect("cell-bold-italic face");
+            let serif = super::craft_role_font_from(SERIF, table).expect("serif face");
+            let math = super::craft_role_font_from(MATH, table).expect("math face");
+            let math_italic = super::craft_role_font_from(MATH_ITALIC, table).expect("math-italic face");
+            let math_bold = super::craft_role_font_from(MATH_BOLD, table).expect("math-bold face");
+            assert!(super::craft_role_font_from(MONO, table).is_none());
+            assert_eq!((*ui.font).as_ref(), (*reg.font).as_ref());
+            assert_eq!((*ui_bold.font).as_ref(), (*bold.font).as_ref());
+            assert_eq!((*serif.font).as_ref(), (*math.font).as_ref());
+            assert_ne!((*reg.font).as_ref(), (*bold.font).as_ref(), "bold must use a distinct font face from regular");
+            assert_ne!((*reg.font).as_ref(), (*italic.font).as_ref(), "italic must use a distinct font face from regular");
+            assert_ne!((*bold.font).as_ref(), (*bi.font).as_ref(), "bold-italic must use a distinct font face from bold");
+            assert_ne!((*serif.font).as_ref(), (*math_bold.font).as_ref(), "Caladea Bold must differ from Caladea Regular");
+            assert_ne!((*serif.font).as_ref(), (*math_italic.font).as_ref(), "Caladea Italic must differ from Caladea Regular");
+        }
+    }
+
+    /// Verifies `defs_have_bold_face` and `has_bold_face` when regular and bold families share or differ in their primary face.
+    #[test]
+    fn has_bold_face_distinguishes_shared_and_distinct_primary_faces() {
+        let _g = crate::fonts::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::fonts::set_bound(always_bound());
+
+        let mut defs = pinned_font_definitions();
+        assert!(!defs_have_bold_face(&defs, "Calibri", false), "pinned definitions share primary face between cell and cell-bold");
+        assert!(!defs_have_bold_face(&defs, "Times New Roman", false), "serif role has no separate bold family");
+        assert!(!defs_have_bold_face(&defs, "Courier New", false), "mono role has no separate bold family");
+
+        let ctx = egui::Context::default();
+        ctx.set_fonts(defs.clone());
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+        assert!(!has_bold_face(&ctx, "Calibri", false));
+
+        let sample = defs.font_data.values().next().cloned().expect("default font data");
+        defs.font_data.insert("distinct-bold".into(), sample);
+        defs.families.entry(FontFamily::Name(CELL_BOLD.into())).or_default().insert(0, "distinct-bold".into());
+        assert!(defs_have_bold_face(&defs, "Calibri", false), "distinct primary face in cell-bold is detected");
+        assert!(!defs_have_bold_face(&defs, "Calibri", true), "cell-bold-italic still shares primary face");
+
+        ctx.set_fonts(defs);
+        ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+        assert!(has_bold_face(&ctx, "Calibri", false));
+        assert!(!has_bold_face(&ctx, "Calibri", true));
     }
 }

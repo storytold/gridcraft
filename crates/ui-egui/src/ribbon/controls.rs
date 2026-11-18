@@ -23,6 +23,14 @@ pub(super) fn theme_colors(app: &SheetApp) -> [u32; 12] {
 /// Runs a command from a ribbon click (menu-style: no params may open a dialog).
 pub(super) fn act(app: &mut SheetApp, id: &str, params: serde_json::Value) {
     app.run_or_alert(id, params);
+    if app.dialog.is_none()
+        && app.backstage.is_none()
+        && app.message.is_none()
+        && let Some(ed) = app.editor.as_mut()
+    {
+        ed.request_focus = true;
+        ed.keep_selection = true;
+    }
 }
 
 /// Keytips are painted, not focusable widgets: the grid retains keyboard focus.
