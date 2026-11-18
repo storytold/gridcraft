@@ -131,8 +131,9 @@ pub struct Sheet {
     #[serde(default = "yes")]
     pub summary_right: bool,
     pub right_to_left: bool,
-    /// Focus Cell: tint the active cell's whole row and column.
-    #[serde(default)]
+    /// Focus Cell: tint the active cell's whole row and column. Left out of the native file when
+    /// off, so a workbook without it saves the same bytes as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub focus_cell: bool,
     /// The Focus Cell tint. `None` uses the theme's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
