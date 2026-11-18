@@ -35,6 +35,7 @@ impl eframe::App for App {
         #[cfg(target_os = "macos")]
         {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                gridcraft_ui_egui::i18n::set_current(ctx, self.0.ui.language);
                 self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
             if let Some(m) = &mut self.2 {
