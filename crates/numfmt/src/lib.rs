@@ -330,33 +330,32 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem, region: &Region) -> (Formatted, bool) {
+    /// With `full`, General is not narrowed to the cell width but written by [`general_full`].
+    fn format_number(&self, n: f64, sys: DateSystem, region: &Region, full: bool) -> (Formatted, bool) {
         // Substituted once: the region's own code is shown as it is, even when it is itself `m/d/yyyy`
         // (a region may be built by hand, so its codes can point at each other).
         match system_short_code(&self.inner.code, region) {
-            Some(code) => region_code(code).format_resolved(n, sys, region),
-            None => self.format_resolved(n, sys, region),
+            Some(code) => region_code(code).format_resolved(n, sys, region, full),
+            None => self.format_resolved(n, sys, region, full),
         }
     }
 
     /// [`format_number`](Self::format_number) for a code that is already the one to show.
-    fn format_resolved(&self, n: f64, sys: DateSystem, region: &Region) -> (Formatted, bool) {
-        let general = |n: f64| Formatted {
-            text: general_fit_in(n, GENERAL_WIDTH, region).unwrap_or_else(|| OVERFLOW.into()),
-            color: None,
-            fill: None,
-            numeric: true,
-        };
+    fn format_resolved(&self, n: f64, sys: DateSystem, region: &Region, full: bool) -> (Formatted, bool) {
+        let general_text = |n: f64, width: usize| if full { Some(general_full(n)) } else { general_fit_in(n, width, region) };
+        let general =
+            |n: f64| Formatted { text: general_text(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()), color: None, fill: None, numeric: true };
         if self.is_general() {
             return (general(n), false);
         }
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &general_fit_in(n, GENERAL_WIDTH, region).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &general_text(n, GENERAL_WIDTH).unwrap_or_default())),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width, region))
+                let text = general_text(n.abs(), width).unwrap_or_else(|| "#".repeat(width.clamp(1, 11)));
+                Some(render::render_general(sec, &text))
             }
             SecKind::Date => {
                 if minus {
@@ -448,6 +447,14 @@ impl NumberFormat {
             None => Formatted { text: t.to_string(), color: None, fill: None, numeric: false },
         }
     }
+
+    /// [`Self::format_text`]'s text, or `None` once it passes `max_units` UTF-16 code units.
+    fn format_text_within(&self, t: &str, max_units: usize) -> Option<String> {
+        match self.inner.text_section.and_then(|i| self.inner.sections.get(i)) {
+            Some(sec) => render::render_text_within(sec, t, max_units).map(|out| out.text),
+            None => (t.encode_utf16().count() <= max_units).then(|| t.to_string()),
+        }
+    }
 }
 
 /// Formats a cell value for display the en-US way.
@@ -458,16 +465,45 @@ pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted
 /// Formats a cell value for display in `region`: its separators, month and day names and AM/PM,
 /// and the system dates for built-in formats 14 and 22 and `[$-F800]` / `[$-F400]`.
 pub fn format_value_in(v: &Value, fmt: &NumberFormat, sys: DateSystem, region: &Region) -> Formatted {
+    format_value_with(v, fmt, sys, region, false)
+}
+
+/// Formats a cell value as Save As CSV/Text writes it: like [`format_value`] (en-US), except that
+/// a number shown as General (a General or Text section, with or without colour and literals) is
+/// not narrowed to the cell width but written by `general_full`: `124412140710`, not
+/// `1.24412E+11`. Excel writes the cell display here; GridCraft keeps the digits.
+pub fn format_value_full(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_with(v, fmt, sys, &EN_US, true)
+}
+
+/// General for Save As CSV/Text: the text `&` gives (15 significant digits), but never with an
+/// exponent, because reopening the file would give the cell a scientific format that rounds it
+/// on the next save. Where `&` writes an exponent, a number of 1 or more is written as the
+/// shortest digits that read back as the same value (every integer f64 holds below 1e16 exactly,
+/// so 16-digit card numbers survive), and a smaller one as its 15 significant digits in full.
+fn general_full(n: f64) -> String {
+    let text = gridcraft_core::number_to_text(n);
+    if !text.contains('E') {
+        text
+    } else if n.abs() >= 1.0 {
+        format!("{n}")
+    } else {
+        let mag: i32 = format!("{n:.14e}").split_once('e').and_then(|(_, e)| e.parse().ok()).unwrap_or(0);
+        gridcraft_core::value::trim_decimal(&format!("{:.*}", (14 - mag).max(0) as usize, n))
+    }
+}
+
+fn format_value_with(v: &Value, fmt: &NumberFormat, sys: DateSystem, region: &Region, full: bool) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys, region).0,
+        Value::Number(n) => fmt.format_number(*n, sys, region, full).0,
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value_in(first, fmt, sys, region),
+            Some(first) => format_value_with(first, fmt, sys, region, full),
         },
     }
 }
@@ -547,6 +583,10 @@ impl NumberFormat {
 /// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
 /// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
 /// section, or are returned as is.
+/// Longest text a cell holds, in UTF-16 code units (Excel's 32,767 characters, which XLSB also
+/// stores that way), and so the longest `TEXT` result.
+const MAX_CELL_TEXT_CHARS: usize = 32_767;
+
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
     if code.is_empty() {
         return Ok(String::new());
@@ -565,14 +605,16 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         Value::Bool(b) => return Ok(fmt.format_text(if b { "TRUE" } else { "FALSE" }).text),
         Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
             Some(n) => n,
-            None => return Ok(fmt.format_text(&t).text),
+            // Every `@` repeats the text: a result past a cell's limit is `#VALUE!`, so nested
+            // TEXT calls can't multiply it further.
+            None => return fmt.format_text_within(&t, MAX_CELL_TEXT_CHARS).ok_or(CellError::Value),
         },
         Value::Array(_) => return Err(CellError::Value),
     };
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys, &EN_US);
+    let (f, overflow) = fmt.format_number(n, sys, &EN_US, false);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 
