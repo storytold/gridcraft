@@ -221,7 +221,16 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let tx_box = obj.path(&["nvSpPr", "cNvSpPr"]).is_some_and(|c| c.flag("txBox", false));
     let ln = sp.child("ln");
     let arrow = ln.is_some_and(|l| l.child("tailEnd").or_else(|| l.child("headEnd")).is_some_and(|t| t.attr("type").is_some_and(|v| v != "none")));
+    // WordArt: our marker, a text body with the non-warping text warp `textNoShape`, on a rectangle
+    // that is a text box (as the writer saves it) or has no fill and no outline of its own (as
+    // WordArt usually comes). `textNoShape` is the standard "no warp" value, so on an ordinary
+    // shape (an ellipse, a filled rectangle) it, like any other warp, leaves the shape what its
+    // geometry says.
+    let word_art = prst == "rect"
+        && (tx_box || (sp.child("noFill").is_some() && !ln.is_some_and(|l| l.child("solidFill").is_some())))
+        && obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some_and(|w| w.attr("prst") == Some("textNoShape"));
     let kind = match prst {
+        _ if word_art => ShapeKind::WordArt,
         _ if tx_box => ShapeKind::TextBox,
         "roundRect" => ShapeKind::RoundedRectangle,
         "ellipse" => ShapeKind::Ellipse,
@@ -294,6 +303,7 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         f.italic = r.flag("i", false);
         f.font = r.child("latin").and_then(|l| l.attr("typeface")).filter(|t| !t.is_empty() && !t.starts_with('+')).map(str::to_string);
         f.text_color = r.child("solidFill").and_then(dml_color);
+        f.text_shadow = r.child("effectLst").and_then(|e| e.child("outerShdw")).and_then(dml_color);
         f.text_outline = r.child("ln").and_then(|l| {
             let c = l.child("solidFill").and_then(dml_color)?;
             // Width in EMU (12700 per point); Excel's default hairline is 0.75 pt.
@@ -332,6 +342,9 @@ fn first_run_color(e: &El, depth: usize) -> Option<Color> {
 
 // ---------------------------------------------------------------- writing
 
+/// The size, in points, of the plain-text box that stands in for an equation.
+const PLAIN_TEXT_PT: f32 = 11.0;
+
 /// An equation shape (inside the anchor): Office Math with a plain-text fallback when the source
 /// is in the subset OMML covers, else the plain-text box alone. Both carry the source.
 fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
@@ -366,7 +379,11 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
             xfrm(&sh.anchor, "a:xfrm")
         )
     };
-    let plain = plain_paragraphs(&sh.text, &format!("<a:rPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:rPr>"));
+    // The plain text is the LaTeX source, much wider than the typeset equation: at the equation's
+    // size it would overflow the frame in Excel, so it uses a normal text size (11 pt, Excel's
+    // default for a text box), smaller only when the frame itself is.
+    let plain_sz = (size_pt.min(PLAIN_TEXT_PT) * 100.0).round() as u32;
+    let plain = plain_paragraphs(&sh.text, &format!("<a:rPr lang=\"en-US\" sz=\"{plain_sz}\">{fill}</a:rPr>"));
     match gridcraft_math::to_omml(&sh.text, size_pt, sh.line.resolve(theme)) {
         Ok(omml) => {
             let math = format!(
@@ -520,7 +537,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     ShapeKind::Triangle => ("triangle", false),
                     ShapeKind::Line | ShapeKind::Arrow => ("line", false),
                     // Equations are written by `write_equation`; this arm keeps the match whole.
-                    ShapeKind::TextBox | ShapeKind::Equation => ("rect", true),
+                    ShapeKind::TextBox | ShapeKind::WordArt | ShapeKind::Equation => ("rect", true),
                     ShapeKind::Icon | ShapeKind::Ink => ("rect", false),
                 };
                 let _ = write!(
@@ -550,7 +567,8 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     s.push_str("</a:ln>");
                 }
                 s.push_str("</xdr:spPr>");
-                if !sh.text.is_empty() {
+                // A WordArt with no text still writes its body, which carries the WordArt marker.
+                if !sh.text.is_empty() || sh.kind == ShapeKind::WordArt {
                     let f = &sh.format;
                     let anchor = match f.anchor {
                         Some(ShapeTextAnchor::Top) => " anchor=\"t\"",
@@ -559,7 +577,15 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                         None if sh.kind == ShapeKind::TextBox => " anchor=\"t\"",
                         None => "",
                     };
-                    let _ = write!(s, "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}/><a:lstStyle/>");
+                    if sh.kind == ShapeKind::WordArt {
+                        // Our WordArt marker: a (non-warping) text warp, which the reader maps back to WordArt.
+                        let _ = write!(
+                            s,
+                            "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}><a:prstTxWarp prst=\"textNoShape\"><a:avLst/></a:prstTxWarp></a:bodyPr><a:lstStyle/>"
+                        );
+                    } else {
+                        let _ = write!(s, "<xdr:txBody><a:bodyPr wrap=\"square\" rtlCol=\"0\"{anchor}/><a:lstStyle/>");
+                    }
                     let algn = match f.align {
                         None => "",
                         Some(ShapeTextAlign::Left) => " algn=\"l\"",
@@ -613,6 +639,12 @@ fn run_props(f: &ShapeFormat, theme: &Theme) -> (String, String) {
     }
     if let Some(c) = f.text_color.as_ref().and_then(|c| srgb(c, theme)) {
         let _ = write!(body, "<a:solidFill>{c}</a:solidFill>");
+    }
+    if let Some(c) = f.text_shadow.as_ref().and_then(|c| srgb(c, theme)) {
+        let _ = write!(
+            body,
+            "<a:effectLst><a:outerShdw blurRad=\"38100\" dist=\"38100\" dir=\"2700000\" algn=\"tl\" rotWithShape=\"0\">{c}</a:outerShdw></a:effectLst>"
+        );
     }
     if let Some(font) = &f.font {
         let _ = write!(body, "<a:latin typeface=\"{}\"/>", esc_attr(font));
