@@ -46,6 +46,7 @@ pub mod macro_editor;
 pub mod macro_ui;
 pub mod objects;
 pub mod outline;
+pub mod page_breaks;
 pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
