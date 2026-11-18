@@ -951,8 +951,9 @@ impl Page {
         // Room for the worst case (RGB plus an alpha plane) is checked before anything is
         // allocated, so the document's image bytes stay bounded however many pages it has. Past
         // the budget, a picture this page already holds can still be drawn again: it is only
-        // built for the lookup when the page holds one of the same size, so the copy made to
-        // compare is never bigger than an image the page already kept.
+        // built for the lookup when the page holds one of the same size, so the temporary copy
+        // made to compare is bounded by pixel dimensions the page already accepted (up to
+        // `px * 4` bytes) and is dropped when nothing matches.
         let over_budget = px * 4 > self.image_room;
         if over_budget && !self.images.iter().any(|o| o.width == pw && o.height == ph) {
             return;
@@ -975,16 +976,20 @@ impl Page {
             }
         }
         let img = ImageData::new(pw, ph, rgb, alpha);
-        // The same picture drawn again on this page shares one XObject.
-        let candidates = self.image_index.entry(img.hash).or_default();
+        // The same picture drawn again on this page shares one XObject. The lookup does not
+        // insert: only an accepted picture gets an index entry, so refused pictures past the
+        // budget don't grow the index.
         #[cfg(test)]
         let comparisons = &mut self.image_comparisons;
-        let known = candidates.iter().copied().find(|&i| {
-            #[cfg(test)]
-            {
-                *comparisons += 1;
-            }
-            self.images.get(i).is_some_and(|o| o.same(&img))
+        let images = &self.images;
+        let known = self.image_index.get(&img.hash).and_then(|candidates| {
+            candidates.iter().copied().find(|&i| {
+                #[cfg(test)]
+                {
+                    *comparisons += 1;
+                }
+                images.get(i).is_some_and(|o| o.same(&img))
+            })
         });
         let idx = match known {
             Some(i) => i,
@@ -994,9 +999,10 @@ impl Page {
                 let kept = (img.rgb.len() as u64).saturating_add(img.alpha.as_ref().map_or(0, |a| a.len() as u64));
                 self.image_room = self.image_room.saturating_sub(kept);
                 self.image_kept = self.image_kept.saturating_add(kept);
-                candidates.push(self.images.len());
+                let idx = self.images.len();
+                self.image_index.entry(img.hash).or_default().push(idx);
                 self.images.push(img);
-                self.images.len() - 1
+                idx
             }
         };
         let s = format!("q {} 0 0 {} {} {} cm /Im{} Do Q", n(w), n(h), n(x), n(self.y(y + h)), idx + 1);

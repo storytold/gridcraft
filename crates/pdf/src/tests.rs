@@ -983,6 +983,13 @@ fn a_picture_the_page_holds_is_drawn_again_after_the_budget_is_spent() -> Result
     p.image_rgba(Rect::new(40.0, 0.0, 10.0, 10.0), &[10u8, 20, 30, 64], [1, 1]);
     assert_eq!(p.images.len(), 1, "a new picture past the budget is refused");
     assert_eq!(p.content.matches("/Im1 Do Q").count(), 2, "the picture the page holds is drawn both times");
+    // Refused pictures leave no trace in the duplicate index, however many distinct ones come.
+    for v in 0..=255u8 {
+        p.image_rgba(Rect::new(60.0, 0.0, 10.0, 10.0), &[v, 0, 0, 64], [1, 1]);
+    }
+    assert_eq!(p.images.len(), 1);
+    assert_eq!(p.image_index.len(), 1, "a refused picture adds no index entry");
+    assert_eq!(p.image_index.values().map(Vec::len).sum::<usize>(), 1);
     check_xref(&d.finish()?)?;
     Ok(())
 }
