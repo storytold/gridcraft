@@ -43,6 +43,7 @@ pub(super) fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             "dataLabels" => c.data_labels = on,
+            "dataTable" => crate::cmd::insert::update_data_table(c, p, Some(on))?,
             "gridlines" => c.gridlines = on,
             "axisTitles" => {
                 c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| "Axis Title".into()));
