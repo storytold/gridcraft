@@ -5395,6 +5395,29 @@ fn unique_nonce() -> u64 {
 /// is locked, so every delete was refused however the permission was set; a cell the sheet does
 /// not store is judged by the format it shows, its row's, then its column's, then the default.
 #[test]
+fn a_protected_sheet_deletes_blank_lines_when_the_normal_style_is_unlocked() {
+    // A file whose Normal style is unlocked leaves every unformatted cell unlocked, stored or not.
+    let mut sess = s();
+    sess.execute("review.protectSheet", json!({})).unwrap();
+    {
+        let d = sess.doc_mut().unwrap();
+        let mut wb = (*d.wb).clone();
+        let mut normal = wb.styles.get(gridcraft_model::StyleId::DEFAULT).clone();
+        normal.protection.locked = false;
+        wb.styles = gridcraft_model::StyleTable::with_default(normal);
+        if let Some(p) = wb.sheet_mut(0).and_then(|sh| sh.protection.as_mut()) {
+            p.delete_rows = true;
+            p.delete_columns = true;
+        }
+        d.wb = std::sync::Arc::new(wb);
+    }
+    sess.execute("selection.set", json!({"range": "A7:A7"})).unwrap();
+    assert!(sess.execute("home.deleteRows", json!({})).is_ok(), "a blank row of unlocked default cells");
+    sess.execute("selection.set", json!({"range": "F1:F1"})).unwrap();
+    assert!(sess.execute("home.deleteColumns", json!({})).is_ok(), "a blank column of unlocked default cells");
+}
+
+#[test]
 fn a_protected_sheet_deletes_lines_when_it_says_so() {
     fn grant(sess: &mut Session) {
         let d = sess.doc_mut().unwrap();

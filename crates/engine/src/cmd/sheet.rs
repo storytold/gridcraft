@@ -757,9 +757,14 @@ impl LockedLines {
         }
         // The cells left are those under a cross line with no format. Deleting a column, they take
         // the column's own format, which may unlock them all. Deleting a row, neither line has a
-        // format, so they take the default, which is locked: each has to be a stored cell, and
+        // format, so they take the default; when it is locked, each has to be a stored cell, and
         // the stored ones were all checked above.
         if !rows && own.is_some_and(|st| !locked(st)) {
+            return true;
+        }
+        // Neither line has a format, so the cells take the workbook's Normal style, which a file
+        // may have unlocked: then they all are.
+        if own.is_none() && !locked(gridcraft_model::StyleId::DEFAULT) {
             return true;
         }
         let plain = stored.iter().filter(|k| !cross.get(k).is_some_and(|x| x.style.is_some())).count();
