@@ -536,12 +536,12 @@ fn an_if_reading_a_dropdown_cell_recalculates_when_a_list_item_is_picked() {
     s.execute("range.setValues", json!({"range": "K1:K2", "values": [["On"], ["Off"]]})).unwrap();
     let cases = [
         // (toggle, source, first item, second item, IF formula, outcome after first, after second)
-        ("A1", r#""Yes,No""#, "Yes", "No", r#"=IF(A1="Yes","shown","hidden")"#, "shown", "hidden"),
-        ("A2", "1,2", "1", "2", r#"=IF(A2=1,"one","two")"#, "one", "two"),
-        ("A3", "TRUE,FALSE", "TRUE", "FALSE", r#"=IF(A3,"on","off")"#, "on", "off"),
-        ("A4", "=$K$1:$K$2", "On", "Off", r#"=IF(A4="On",100,0)"#, "100", "0"),
+        ("A1", r#""Yes,No""#, "Yes", "No", r#"=IF(A1="Yes","shown","hidden")"#, Value::text("shown"), Value::text("hidden")),
+        ("A2", "1,2", "1", "2", r#"=IF(A2=1,"one","two")"#, Value::text("one"), Value::text("two")),
+        ("A3", "TRUE,FALSE", "TRUE", "FALSE", r#"=IF(A3,"on","off")"#, Value::text("on"), Value::text("off")),
+        ("A4", "=$K$1:$K$2", "On", "Off", r#"=IF(A4="On",100,0)"#, Value::number(100.0), Value::number(0.0)),
     ];
-    for (toggle, source, _, _, formula, _, _) in cases {
+    for (toggle, source, _, _, formula, _, _) in &cases {
         s.execute("data.validation", json!({"range": toggle, "type": "list", "formula1": source})).unwrap();
         let row = &toggle[1..];
         s.execute("cell.set", json!({"cell": format!("B{row}"), "input": formula})).unwrap();
@@ -549,19 +549,20 @@ fn an_if_reading_a_dropdown_cell_recalculates_when_a_list_item_is_picked() {
     for (toggle, _, first, second, _, when_first, when_second) in cases {
         let out = format!("B{}", &toggle[1..]);
         pick_from_dropdown(&mut s, toggle, first);
-        assert_eq!(shown(&s, &out).display(), when_first, "{out} after picking {first} in {toggle}");
+        assert_eq!(shown(&s, &out), when_first, "{out} after picking {first} in {toggle}");
         pick_from_dropdown(&mut s, toggle, second);
-        assert_eq!(shown(&s, &out).display(), when_second, "{out} after picking {second} in {toggle}");
+        assert_eq!(shown(&s, &out), when_second, "{out} after picking {second} in {toggle}");
         pick_from_dropdown(&mut s, toggle, first);
-        assert_eq!(shown(&s, &out).display(), when_first, "{out} after picking {first} again in {toggle}");
+        assert_eq!(shown(&s, &out), when_first, "{out} after picking {first} again in {toggle}");
     }
 }
 
 #[test]
 fn an_if_reading_a_typed_cell_recalculates_when_it_is_retyped() {
-    // The control for #3570: the same IF over a cell without validation, edited by typing. If this
-    // passes and the dropdown test fails, the fault is in the dropdown's edit path, not the graph
-    // or IF.
+    // The baseline for #3570's text case: the same IF over a cell without validation, edited by
+    // typing (the unvalidated text comparison at B1 only). It does not cover the boolean case,
+    // and both tests edit through cell.set, so it does not by itself isolate the dropdown's
+    // edit path.
     let mut s = Session::new();
     s.new_workbook();
     s.execute("cell.set", json!({"cell": "B1", "input": r#"=IF(A1="Yes","shown","hidden")"#})).unwrap();
