@@ -138,6 +138,44 @@ fn ods_dates_and_durations_use_formats_and_unsupported_values_stay_text() {
 }
 
 #[test]
+fn ods_date_at_hour_24_is_the_next_midnight() {
+    // #4359: XML Schema's 24:00:00 is the following midnight; Excel reads both spellings as 45352.
+    let bytes = row(r#"
+        <table:table-cell office:value-type="date" office:date-value="2024-02-29T24:00:00"/>
+        <table:table-cell office:value-type="date" office:date-value="2024-03-01T00:00:00"/>
+        <table:table-cell office:value-type="date" office:date-value="2024-02-29T24:00:00.000"/>
+        <table:table-cell office:value-type="date" office:date-value="2024-02-29T23:59:59"/>
+        <table:table-cell office:value-type="date" office:date-value="2024-02-29T24:00:01"/>
+        <table:table-cell office:value-type="date" office:date-value="2024-02-29T24:01:00"/>
+        <table:table-cell office:value-type="date" office:date-value="2024-12-31T24:00:00"/>
+        <table:table-cell office:value-type="date" office:date-value="9999-12-31T24:00:00"/>
+        <table:table-cell office:value-type="date" office:date-value="9999-12-30T24:00:00"/>
+        <table:table-cell office:value-type="date" office:date-value="1900-02-28T24:00:00"/>
+        <table:table-cell office:value-type="date" office:date-value="1900-03-01T00:00:00"/>
+    "#);
+    let (wb, report) = read_ods(&bytes).unwrap();
+    let s = &wb.sheets[0];
+    let v = |c: u32| s.value(CellRef::new(0, c));
+    for c in [0, 1, 2] {
+        assert_eq!(v(c), Value::Number(45352.0), "column {c}");
+    }
+    assert_eq!(v(3), Value::Number(45351.0 + 86399.0 / 86400.0));
+    // Later than midnight is no time, and the midnight after 9999-12-31 has no date.
+    for (c, raw) in [(4, "2024-02-29T24:00:01"), (5, "2024-02-29T24:01:00"), (7, "9999-12-31T24:00:00")] {
+        assert_eq!(v(c), text(raw), "column {c}");
+    }
+    // The year rolls over, and the last day there is can still end at 24:00.
+    assert_eq!(v(6), Value::Number(45658.0), "2025-01-01");
+    assert_eq!(v(8), Value::Number(2958465.0), "9999-12-31");
+    // The day after 1900-02-28 is 1900-03-01 (61), past the 1900 system's fictitious 60.
+    assert_eq!(v(9), Value::Number(61.0));
+    assert_eq!(v(10), Value::Number(61.0));
+    assert_eq!(wb.styles.get(s.cell(CellRef::new(0, 0)).unwrap().style).num_fmt.0.as_ref(), "yyyy-mm-dd hh:mm:ss.000");
+    // The usual data-only notice, and one for the values kept as text.
+    assert_eq!(report.warnings.len(), 2, "{:?}", report.warnings);
+}
+
+#[test]
 fn ods_namespaces_are_resolved_not_inferred_from_prefix_or_local_name() {
     let xml = content(r#"<table:table table:name="Actual"><table:table-row><table:table-cell office:value-type="float" office:value="9"/></table:table-row></table:table>"#)
         .replace("<office:", "<o:").replace("</office:", "</o:").replace(" office:", " o:").replace("xmlns:office=", "xmlns:o=")

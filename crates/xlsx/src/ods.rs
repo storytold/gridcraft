@@ -617,6 +617,7 @@ fn parse_date(s: &str) -> Option<(f64, &'static str)> {
     if !(1900..=9999).contains(&year) || !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
         return None;
     }
+    let ymd = (year, month, day);
     let day = serial_from_ymd(DateSystem::D1900, year.into(), month.into(), day.into())?;
     let Some(time) = time else { return Some((day, "yyyy-mm-dd")) };
     let mut parts = time.split(':');
@@ -629,6 +630,20 @@ fn parse_date(s: &str) -> Option<(f64, &'static str)> {
     let h: u32 = digits(h)?.parse().ok()?;
     let m: u32 = digits(m)?.parse().ok()?;
     let sec = decimal(sec)?;
+    // XML Schema's `24:00:00` (with nothing after it) is the next day's midnight, as ODF's
+    // dateOrDateTime allows and Excel reads it (#4359); `24:00:01` and later aren't times. The
+    // midnight after the last day there is has no date, so it stays text.
+    // The next day is found on the calendar (with `chrono`), not by adding one to the serial:
+    // after 1900-02-28 the serials skip 60, the 1900 system's fictitious 1900-02-29.
+    if h == 24 && m == 0 && sec == 0.0 {
+        use chrono::Datelike;
+        let (year, month, day) = ymd;
+        let next = chrono::NaiveDate::from_ymd_opt(year, month, day)?.succ_opt()?;
+        if next.year() > 9999 {
+            return None;
+        }
+        return Some((serial_from_ymd(DateSystem::D1900, next.year().into(), next.month().into(), next.day().into())?, "yyyy-mm-dd hh:mm:ss.000"));
+    }
     if h >= 24 || m >= 60 || sec >= 60.0 {
         return None;
     }
