@@ -535,24 +535,38 @@ fn an_if_reading_a_dropdown_cell_recalculates_when_a_list_item_is_picked() {
     s.new_workbook();
     s.execute("range.setValues", json!({"range": "K1:K2", "values": [["On"], ["Off"]]})).unwrap();
     let cases = [
-        // (toggle, source, first item, second item, IF formula, outcome after first, after second)
-        ("A1", r#""Yes,No""#, "Yes", "No", r#"=IF(A1="Yes","shown","hidden")"#, Value::text("shown"), Value::text("hidden")),
-        ("A2", "1,2", "1", "2", r#"=IF(A2=1,"one","two")"#, Value::text("one"), Value::text("two")),
-        ("A3", "TRUE,FALSE", "TRUE", "FALSE", r#"=IF(A3,"on","off")"#, Value::text("on"), Value::text("off")),
-        ("A4", "=$K$1:$K$2", "On", "Off", r#"=IF(A4="On",100,0)"#, Value::number(100.0), Value::number(0.0)),
+        // (toggle, source, first item, second item, IF formula, outcome after first, after second,
+        // stored value after first pick, stored value after second pick)
+        (
+            "A1",
+            r#""Yes,No""#,
+            "Yes",
+            "No",
+            r#"=IF(A1="Yes","shown","hidden")"#,
+            Value::text("shown"),
+            Value::text("hidden"),
+            Value::text("Yes"),
+            Value::text("No"),
+        ),
+        ("A2", "1,2", "1", "2", r#"=IF(A2=1,"one","two")"#, Value::text("one"), Value::text("two"), Value::number(1.0), Value::number(2.0)),
+        ("A3", "TRUE,FALSE", "TRUE", "FALSE", r#"=IF(A3,"on","off")"#, Value::text("on"), Value::text("off"), Value::Bool(true), Value::Bool(false)),
+        ("A4", "=$K$1:$K$2", "On", "Off", r#"=IF(A4="On",100,0)"#, Value::number(100.0), Value::number(0.0), Value::text("On"), Value::text("Off")),
     ];
-    for (toggle, source, _, _, formula, _, _) in &cases {
+    for (toggle, source, _, _, formula, _, _, _, _) in &cases {
         s.execute("data.validation", json!({"range": toggle, "type": "list", "formula1": source})).unwrap();
         let row = &toggle[1..];
         s.execute("cell.set", json!({"cell": format!("B{row}"), "input": formula})).unwrap();
     }
-    for (toggle, _, first, second, _, when_first, when_second) in cases {
+    for (toggle, _, first, second, _, when_first, when_second, stored_first, stored_second) in cases {
         let out = format!("B{}", &toggle[1..]);
         pick_from_dropdown(&mut s, toggle, first);
+        assert_eq!(shown(&s, toggle), stored_first, "{toggle} stored value after picking {first}");
         assert_eq!(shown(&s, &out), when_first, "{out} after picking {first} in {toggle}");
         pick_from_dropdown(&mut s, toggle, second);
+        assert_eq!(shown(&s, toggle), stored_second, "{toggle} stored value after picking {second}");
         assert_eq!(shown(&s, &out), when_second, "{out} after picking {second} in {toggle}");
         pick_from_dropdown(&mut s, toggle, first);
+        assert_eq!(shown(&s, toggle), stored_first, "{toggle} stored value after picking {first} again");
         assert_eq!(shown(&s, &out), when_first, "{out} after picking {first} again in {toggle}");
     }
 }
