@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, EngineError, Json, Result, Session, SheetViewMode, VIEWS_NAME, WATCH_NAME, Workbook, bad, bool_param, edit, json, ok, split_sheet,
+    stash_get, stash_map, stash_set, str_param, target_sheet, u32_param,
+};
 
 /// Switches a sheet's view. Like zoom, the view is saved with the file but is not an edit: it
 /// neither records an undo step nor marks a clean workbook as changed.
@@ -33,6 +36,35 @@ pub(crate) fn keep_watch_list(from: &Workbook, to: &mut std::sync::Arc<Workbook>
     let wb = std::sync::Arc::make_mut(to);
     wb.names.retain(|n| n.name != WATCH_NAME);
     wb.names.extend(keep);
+}
+
+/// Normal, Page Layout and Page Break Preview belong to the window, not to the edits: Excel doesn't
+/// undo a switch between them, and `set_view` is no undo step. So undo and redo keep each sheet's
+/// current view when they swap in another snapshot of the workbook, and a view kept this way
+/// doesn't make a saved workbook dirty.
+pub(crate) fn keep_view_modes(d: &mut crate::DocState, now: &Workbook) {
+    // Sheets have no stable id. A name missing from `now` is a rename being undone or redone, which
+    // keeps the sheet count and position: the sheet is the one at the same index, under a name the
+    // restored snapshot doesn't have.
+    let renamed = |i: usize| {
+        (now.sheets.len() == d.wb.sheets.len()).then(|| now.sheets.get(i)).flatten().filter(|sh| !d.wb.sheets.iter().any(|s| s.name == sh.name))
+    };
+    let current = |i: usize, name: &str| now.sheets.iter().find(|sh| sh.name == name).or_else(|| renamed(i)).map(|sh| sh.view);
+    let changed: Vec<(usize, SheetViewMode)> =
+        d.wb.sheets.iter().enumerate().filter_map(|(i, sh)| current(i, &sh.name).filter(|v| *v != sh.view).map(|v| (i, v))).collect();
+    if changed.is_empty() {
+        return;
+    }
+    let dirty = d.is_dirty();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    for (i, v) in changed {
+        if let Some(sh) = wb.sheet_mut(i) {
+            sh.view = v;
+        }
+    }
+    if !dirty {
+        d.saved = d.wb.clone();
+    }
 }
 
 pub(super) fn custom_views(s: &mut Session, p: &Json) -> Result<Json> {

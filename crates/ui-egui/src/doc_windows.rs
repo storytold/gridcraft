@@ -160,6 +160,15 @@ impl DocWindows {
             self.list.focus(id);
             self.viewports.focus(ctx, id);
         }
+        // macOS ignores Focus for a minimized window or a hidden app, so restore and show first.
+        if std::mem::take(&mut app.bring_forward)
+            && let Some(id) = self.list.active()
+        {
+            let vp = self.viewports.viewport_id(id);
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Focus);
+        }
     }
 
     /// Draws every window. Call from the root viewport's UI each frame, in place of

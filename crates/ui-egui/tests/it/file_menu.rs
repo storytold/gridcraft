@@ -62,6 +62,74 @@ fn new_and_open_from_the_file_tab_keep_the_ribbon_as_it_was() {
     assert!(h.state().ui.ribbon_collapsed);
 }
 
+/// Esc first cancels the focused File-page field, then closes File on the next press.
+#[test]
+fn escape_leaves_file_fields_before_closing_the_view() {
+    use egui::accesskit::Role;
+
+    for (page_id, label) in [
+        ("info", "Title"),
+        ("info", "Subject"),
+        ("info", "Author"),
+        ("info", "Company"),
+        ("info", "Keywords"),
+        ("info", "Description"),
+        ("options", "Maximum Iterations:"),
+        ("options", "Maximum Change:"),
+        ("print", "Copies"),
+    ] {
+        let services = Services {
+            printers: Some(Box::new(|| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(Vec::new()).unwrap();
+                rx
+            })),
+            ..Default::default()
+        };
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut h = crate::common::harness_with(
+            crate::common::builder().with_size(egui::vec2(1200.0, 1400.0)),
+            crate::common::prepare(SheetApp::new(session, services)),
+            4,
+        );
+        h.state_mut().run("formulas.calculationOptions", serde_json::json!({"iterative": true})).unwrap();
+        h.state_mut().run("ui.backstage", serde_json::json!({"page": page_id})).unwrap();
+        h.run_steps(3);
+        let role = if page_id == "print" { Role::SpinButton } else { Role::TextInput };
+        h.get_by_role_and_label(role, label).click();
+        h.run_steps(2);
+        assert!(h.ctx.text_edit_focused(), "{label} has the caret");
+        let original = h.get_by_role_and_label(role, label).value();
+        let revision = h.state().session.active().unwrap().revision;
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        h.input_mut().events.push(egui::Event::Text("7".into()));
+        h.run_steps(2);
+        if page_id == "print" {
+            assert_eq!(h.state().printing.settings.copies, 7, "Copies applies the entered value while editing");
+        } else {
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value().as_deref(), Some("7"));
+        }
+        let copies = h.state().printing.settings.copies;
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), Some(page_id), "Esc in {label} keeps File open");
+        assert!(!h.ctx.text_edit_focused(), "Esc leaves {label}");
+        assert_eq!(h.state().session.active().unwrap().revision, revision, "Esc does not commit {label}");
+        if page_id == "print" {
+            assert_eq!(h.state().printing.settings.copies, copies, "leaving Copies preserves its existing live value");
+        } else {
+            assert_eq!(h.get_by_role_and_label(Role::TextInput, label).value(), original, "Esc discards the {label} draft");
+        }
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(page(&h), None, "the next Esc returns to the sheet");
+    }
+}
+
 #[test]
 fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     let downloads = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
@@ -96,6 +164,54 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
     assert_eq!(h.state().session.documents().len(), 1);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0));
+}
+
+/// Where the title bar's icon button for `name` is. Its icon has no text, so it is found by
+/// hovering along the title bar until its tooltip ("Save (⌘S)") shows.
+fn title_bar_button(h: &mut egui_kittest::Harness<'static, SheetApp>, name: &str) -> egui::Pos2 {
+    let autosave = h.get_by_label("AutoSave").rect();
+    let tip = format!("{name} (");
+    let mut x = autosave.right();
+    while x < autosave.right() + 300.0 {
+        let at = egui::pos2(x, autosave.center().y);
+        h.hover_at(at);
+        h.run_steps(3);
+        if h.query_by_label_contains(&tip).is_some() {
+            return at;
+        }
+        x += 6.0;
+    }
+    panic!("no title bar button shows a {tip:?} tooltip");
+}
+
+#[test]
+fn the_title_bar_save_button_saves_the_cell_being_typed() {
+    // Regression test for #223: the title bar's Save button saved the file without the cell the
+    // user was still typing in.
+    let dir = std::env::temp_dir().join(format!("gridcraft-title-bar-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Text("123".into()));
+    h.run_steps(2);
+    assert!(h.state().editor.is_some());
+    let save = title_bar_button(&mut h, "Save");
+    for pressed in [true, false] {
+        h.input_mut().events.push(egui::Event::PointerButton {
+            pos: save,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    h.run_steps(2);
+    assert!(h.state().editor.is_none(), "Save commits the cell draft");
+    let (wb, _) = gridcraft_engine::io::open_bytes("Book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(123.0), "the saved file has the typed value");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use super::*;
+use super::{SheetApp, control};
 
 impl SheetApp {
     /// Records capture geometry from the fresh raw frame, then offers exactly one pending synthetic batch and tracks whether it was applied.

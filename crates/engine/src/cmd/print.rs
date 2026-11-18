@@ -1,20 +1,27 @@
 //! Printing: Page Setup, pagination and PDF output (File › Print, File › Export › PDF).
 //!
-//! Sheets are paginated like Excel's default "down, then over": the print area (or the used
-//! range plus drawing objects) is split into bands of rows and columns that fit the printable
-//! area at the page scale, honouring manual breaks, repeated title rows/columns, headings, Fit
-//! To and centring. Each page is drawn into a PDF with `gridcraft-pdf`: fills, gridlines,
-//! borders, formatted text (fonts mapped to the standard 14 PDF fonts), merged cells, wrapping,
-//! overflow into empty neighbours, conditional formats, table styles, charts, images, shapes and
-//! sparklines. Headers and footers support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z`
-//! codes.
+//! Sheets are paginated like Excel: the print area (or the used range plus drawing objects) is
+//! split into bands of rows and columns that fit the printable area at the page scale, honouring
+//! manual breaks, repeated title rows/columns, headings, Fit To and centring, and the pages follow
+//! the sheet's page order ("down, then over" by default, or "over, then down"). Each page is
+//! drawn into a PDF with `gridcraft-pdf`: fills, gridlines, borders, formatted text (fonts mapped
+//! to the standard 14 PDF fonts), merged cells, wrapping, overflow into empty neighbours,
+//! conditional formats, table styles, charts, images, shapes and sparklines. Headers and footers
+//! support `&L`/`&C`/`&R` sections and the `&P &N &D &T &A &F &Z` codes.
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::*;
-use gridcraft_pdf::{Font, Page, PdfDoc, Rgb};
+#[cfg(test)]
+use gridcraft_model::{Alignment, Image, SheetViewMode};
+use gridcraft_model::{
+    Anchor, BorderLine, BorderStyle, Borders, Color, HAlign, Orientation, PageOrder, PatternType, PrintSettings, ReadingOrder, ShapeKind, Sheet,
+    Style, StyleId, StyleTable, Underline, VAlign, Visibility, Workbook,
+};
+use gridcraft_pdf::{Baseline, Font, Page, PdfDoc, Point, Rect, Rgb, TextDirection};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param,
+};
 
 mod draw;
 mod header_footer;
@@ -27,6 +34,70 @@ use header_footer::draw_header_footer;
 pub use header_footer::{
     HF_FIELDS, HfContext, HfSection, codes_to_fields, expand_header_footer, fields_to_codes, hf_date_time, join_header_footer, split_header_footer,
 };
+type DecodedPicture = (Vec<u8>, u32, u32);
+
+/// What one PDF render shares across the pages an object spans.
+#[derive(Default)]
+struct PicCache {
+    /// Decoded pictures (bytes, width, height) keyed by (sheet, picture); `None` = undecodable.
+    decoded: std::collections::HashMap<(usize, usize), Option<DecodedPicture>>,
+    /// Laid-out charts (with their [`chart_cost`]) keyed by (sheet, chart), rendered once however
+    /// many pages they touch. Only charts that can still be drawn are kept.
+    charts: std::collections::HashMap<(usize, usize), (Vec<gridcraft_chart::Prim>, usize)>,
+    /// Charts too big for what was left of the budget: never drawn, so not rendered again.
+    rejected_charts: std::collections::HashSet<(usize, usize)>,
+    /// Bytes of picture pixels embedded so far, and chart cost units emitted so far. Each page an
+    /// object touches gets its own copy in the PDF, so a workbook-controlled anchor over thousands
+    /// of pages would multiply them without bound.
+    image_bytes: usize,
+    chart_prims: usize,
+}
+
+impl PicCache {
+    /// The chart's primitives for one more page, or `None` once they no longer fit
+    /// [`MAX_CHART_PRIMS`]. `render` runs at most once per chart; a chart that doesn't fit is
+    /// dropped at once and remembered, so its vectors are never retained.
+    fn chart(&mut self, key: (usize, usize), render: impl FnOnce() -> Vec<gridcraft_chart::Prim>) -> Option<&[gridcraft_chart::Prim]> {
+        if self.rejected_charts.contains(&key) {
+            return None;
+        }
+        let (prims, cost) = match self.charts.remove(&key) {
+            Some(cached) => cached,
+            None => {
+                let prims = render();
+                let cost = chart_cost(&prims);
+                (prims, cost)
+            }
+        };
+        if self.chart_prims.saturating_add(cost) > MAX_CHART_PRIMS {
+            self.rejected_charts.insert(key);
+            return None;
+        }
+        self.chart_prims += cost;
+        Some(&self.charts.entry(key).or_insert((prims, cost)).0)
+    }
+}
+
+/// What a chart's drawing costs in the PDF: one unit per primitive plus one per path point (a
+/// smoothed line holds thousands of points, each written out) and per point of a wedge's outline.
+fn chart_cost(prims: &[gridcraft_chart::Prim]) -> usize {
+    use gridcraft_chart::Prim;
+    prims
+        .iter()
+        .map(|p| match p {
+            Prim::Line { pts, .. } | Prim::Polygon { pts, .. } => pts.len().saturating_add(1),
+            // At most 400 steps along each of the outer and inner arcs (see `draw_prims`).
+            Prim::Wedge { .. } => 803,
+            _ => 1,
+        })
+        .fold(0, usize::saturating_add)
+}
+
+/// Most picture pixel bytes (RGBA, before PDF packing) one render embeds across all pages.
+const MAX_EMBEDDED_IMAGE_BYTES: usize = 512 * 1024 * 1024;
+/// Most chart cost units (primitives and path points, see [`chart_cost`]) one render draws across all pages.
+const MAX_CHART_PRIMS: usize = 4_000_000;
+
 #[cfg(test)]
 use layout::bands;
 pub(crate) use layout::split_bands;
@@ -61,7 +132,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Print Preview",
             ["File"],
             None,
-            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, width, height}]}",
+            "{page? (1-based), sheets?: active|all, range?, fitToPage?} → {pages, pageList: [{page, sheet, range, rows, columns, scale, paper, orientation, pageOrder, width, height}]} in print order",
             has_doc,
             print_preview
         ),
@@ -70,7 +141,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Page Setup…",
             ["Page Layout", "Page Setup"],
             None,
-            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"]} → the sheet's print settings",
+            "{sheet?, orientation?: portrait|landscape, paper?: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes), margins?: {left,right,top,bottom,header,footer} (inches; also accepted as top-level keys), scale?: 10..400, fitWidth?, fitHeight? (pages; 0 = automatic), fitToPage?: bool, centerH?, centerV?, gridlines?, headings?, header?: \"&L&A&RPage &P of &N\", footer?, printArea?: \"A1:F50\" (\"\" clears), titleRows?: \"1:2\", titleCols?: \"A:A\", rowBreaks?: [46, 91], colBreaks?: [\"K\"], pageOrder?: downThenOver|overThenDown} → the sheet's print settings",
             has_doc,
             page_setup
         ),
@@ -82,8 +153,17 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 
+/// A rendered PDF and whether some of its Arabic text was set without an Arabic face.
+pub struct RenderedPdf {
+    pub bytes: Vec<u8>,
+    pub pages: usize,
+    pub missing_arabic_font: bool,
+}
+
+const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this PDF because no Noto Sans Arabic face was found for it.";
+
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> (Vec<u8>, usize) {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -94,10 +174,10 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
     // spanning 40 pages was decoded (and pushed into the PDF) 40 times (#2389).
-    let mut pics: std::collections::HashMap<(usize, usize), Option<(Vec<u8>, u32, u32)>> = std::collections::HashMap::new();
+    let mut pics = PicCache::default();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
-        let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
+        let mut cf = crate::cf::CfCache::new();
         let k = lay.k();
         let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
@@ -116,10 +196,19 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             for (rsi, rs) in rsegs.iter().enumerate() {
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
-                    let b = make_block(wb, lay.sheet, sh, *rs, *cs, x, y, lay);
+                    let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
                     draw_block(pg, &b, lay.settings.gridlines, &mut cf);
                     draw_block_links(pg, &b, page_index, &mut pending_links);
-                    printed_blocks.push(PrintedBlock { page: page_index, sheet: lay.sheet, rows: *rs, cols: *cs, x, y, k });
+                    printed_blocks.push(PrintedBlock {
+                        page: page_index,
+                        sheet: lay.sheet,
+                        rows: *rs,
+                        cols: *cs,
+                        x,
+                        y,
+                        k,
+                        mirror_axis: sh.right_to_left.then_some(b.mirror_axis),
+                    });
                     if lay.settings.headings {
                         draw_headings(pg, &b, rsi == 0, csi == 0, (ox, oy), (lay.heading_w * k, lay.heading_h * k));
                     }
@@ -135,6 +224,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             }
             if lay.settings.headings {
                 let fill = [0xF2, 0xF2, 0xF2];
+                let ox = if sh.right_to_left { lay.page_w - ox - lay.heading_w * k } else { ox };
                 pg.fill_rect(ox, oy, lay.heading_w * k, lay.heading_h * k, fill);
                 pg.rect_stroke(ox, oy, lay.heading_w * k, lay.heading_h * k, 0.3, [0xA0, 0xA0, 0xA0]);
             }
@@ -155,21 +245,27 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
             && let Some(page) = doc.page_mut(link.page)
         {
             let (lx, ly, w, h) = link.rect;
-            page.link_page(lx, ly, w, h, target_page, x, y);
+            page.link_page(Rect::new(lx, ly, w, h), target_page, Point::new(x, y));
         }
     }
-    let n = doc.page_count();
-    (doc.finish(), n)
+    let pages = doc.page_count();
+    let missing_arabic_font = doc.missing_arabic_font();
+    let bytes = doc.finish().map_err(|error| EngineError::Other(error.to_string()))?;
+    Ok(RenderedPdf { bytes, pages, missing_arabic_font })
 }
 
 // ---------------------------------------------------------------- commands
 
-fn build_pdf(s: &Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
+fn build_pdf(s: &mut Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let opts = PrintOptions::from_params(p, cmd)?;
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    Ok(render_pdf(&d.wb, &lays, &d.display_title(), &path))
+    let pdf = render_pdf(&d.wb, &lays, &d.display_title(), &path)?;
+    if pdf.missing_arabic_font {
+        s.ui_requests.push(crate::UiRequest::Message(MISSING_ARABIC_FONT.into()));
+    }
+    Ok((pdf.bytes, pdf.pages))
 }
 
 pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -214,6 +310,7 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
                 "scale": (lay.scale * 1000.0).round() / 10.0,
                 "paper": lay.settings.paper,
                 "orientation": if lay.settings.orientation == Orientation::Landscape { "landscape" } else { "portrait" },
+                "pageOrder": lay.settings.page_order.id(),
                 "width": lay.page_w,
                 "height": lay.page_h,
             }));
@@ -235,6 +332,16 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
         Some("portrait") => Some(Orientation::Portrait),
         Some("landscape") => Some(Orientation::Landscape),
         Some(o) => return Err(bad(CMD, format!("orientation must be portrait or landscape, not `{o}`"))),
+    };
+    let page_order = match p.get("pageOrder") {
+        None => None,
+        Some(v) => match v.as_str().and_then(PageOrder::parse) {
+            Some(o) => Some(o),
+            None => {
+                let shown = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                return Err(bad(CMD, format!("pageOrder must be downThenOver or overThenDown, not `{shown}`")));
+            }
+        },
     };
     let paper = match str_param(p, "paper") {
         None => None,
@@ -376,6 +483,9 @@ fn page_setup(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(b) = &col_breaks {
             pr.col_breaks = b.clone();
+        }
+        if let Some(o) = page_order {
+            pr.page_order = o;
         }
         Ok(())
     })?;

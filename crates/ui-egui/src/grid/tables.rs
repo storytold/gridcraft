@@ -1,5 +1,5 @@
 use super::geo::Geo;
-use super::*;
+use super::{CellRef, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, pos2, vec2};
 
 pub fn filter_button_rect(geo: &Geo, sh: &Sheet, c: CellRef) -> Rect {
     let rect = geo.cell_rect(sh, c);
