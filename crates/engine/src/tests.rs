@@ -5402,6 +5402,48 @@ fn filter_labels_are_the_regions_text_not_the_canonical_value() {
     assert_eq!(hidden(&s), vec![2]);
 }
 
+/// The labels that keep a canonical spelling from matching are the dropdown's: blank rows offer
+/// none, a label blocks only a value it matches itself, and the dropdown checks what the filter
+/// shows.
+#[test]
+fn canonical_filter_values_follow_the_dropdown_labels() {
+    // A de-DE sheet with column A, formulas and number formats by cell, filtered by `values`.
+    let filtered = |cells: serde_json::Value, formulas: &[(&str, &str)], codes: &[(&str, &str)], values: &[&str]| -> Session {
+        let mut s = s();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": cells})).unwrap();
+        for (cell, input) in formulas {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        for (range, code) in codes {
+            s.execute("home.numberFormat", json!({"range": range, "code": code})).unwrap();
+        }
+        s.execute("data.filter", json!({})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": values})).unwrap();
+        s
+    };
+    let text =
+        |s: &Session, a: &str| crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse(a).unwrap());
+    let hidden = |s: &Session| -> Vec<u32> {
+        let mut h: Vec<u32> = s.doc().unwrap().wb.sheet(0).unwrap().rows.iter().filter(|(_, r)| r.hidden).map(|(k, _)| *k).collect();
+        h.sort();
+        h
+    };
+    // A2 is blank (an empty text) shown `1234` by its text section; A3 holds 1234 shown `1.234`.
+    let s = filtered(json!([["n"], ["-"], [1234], ["x"]]), &[("A2", "=\"\"")], &[("A2", "0;0;0;\"1234\""), ("A3", "#,##0")], &["1234"]);
+    assert_eq!((text(&s, "A2"), text(&s, "A3")), ("1234".into(), "1.234".into()));
+    assert_eq!(hidden(&s), vec![1, 3]);
+    // No cell shows `1.234` but A2 holds it: its row stays, and its dropdown entry is checked.
+    let s = filtered(json!([["n"], [1.234], ["x"]]), &[], &[], &["1.234"]);
+    assert_eq!(text(&s, "A2"), "1,234");
+    assert_eq!(hidden(&s), vec![2]);
+    assert_eq!(crate::cmd::data::filter_values(&s.doc().unwrap().wb, 0, 0), vec![("1,234".to_string(), true), ("x".to_string(), false)]);
+    // `ä1` does not match `Ä1` (matching folds ASCII case only), so it doesn't block A3's value.
+    let s = filtered(json!([["t"], ["ä1"], ["Ä1"], ["x"]]), &[], &[("A3", "\"prefix\"@")], &["Ä1"]);
+    assert_eq!(text(&s, "A3"), "prefixÄ1");
+    assert_eq!(hidden(&s), vec![1, 3]);
+}
+
 /// The clipboard's text is read back by `edit.paste`, which reads en-US: a number copied from a
 /// region pastes back as the same number, not as the region's grouped text read the en-US way.
 #[test]
