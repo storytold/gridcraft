@@ -1,4 +1,4 @@
-use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
+use super::{Form, Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
 /// Excel's File › Options page: General (display theme, interface language and Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
@@ -55,41 +55,47 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
 
 /// The display theme and interface language controls of the General section.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
-    egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        let label = ui.label(lang.tr("Display theme"));
-        let mode = app.ui.theme_mode();
-        let current = match mode {
-            "system" => "System",
-            "dark" => "Dark",
-            _ => "Light",
-        };
-        craft_ui::ComboBox::from_id_salt("backstage_theme")
-            .width(160.0)
-            .selected_text(lang.tr(current))
-            .show_ui(ui, |ui| {
-                for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                    if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
-                        app.run_or_alert("view.theme", json!({"mode": value}));
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-        ui.end_row();
-        let label = ui.label(lang.tr("Interface language"));
-        craft_ui::ComboBox::from_id_salt("backstage_language")
-            .width(160.0)
-            .selected_text(lang.name())
-            .show_ui(ui, |ui| {
-                for l in i18n::Language::for_picker() {
-                    if ui.selectable_label(l == lang, l.name()).clicked() {
-                        app.run_or_alert("app.language.set", json!({"language": l.code()}));
-                    }
-                }
-            })
-            .response
-            .labelled_by(label.id);
-        ui.end_row();
+    Form::show(ui, "backstage_options_general", lang.is_rtl(), vec2(18.0, 10.0), |form| {
+        form.row(
+            |ui| ui.label(lang.tr("Display theme")),
+            |ui, label| {
+                let mode = app.ui.theme_mode();
+                let current = match mode {
+                    "system" => "System",
+                    "dark" => "Dark",
+                    _ => "Light",
+                };
+                craft_ui::ComboBox::from_id_salt("backstage_theme")
+                    .width(160.0)
+                    .selected_text(lang.tr(current))
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                            if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
+                                app.run_or_alert("view.theme", json!({"mode": value}));
+                            }
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+            },
+        );
+        form.row(
+            |ui| ui.label(lang.tr("Interface language")),
+            |ui, label| {
+                craft_ui::ComboBox::from_id_salt("backstage_language")
+                    .width(160.0)
+                    .selected_text(lang.name())
+                    .show_ui(ui, |ui| {
+                        for l in i18n::Language::for_picker() {
+                            if ui.selectable_label(l == lang, l.name()).clicked() {
+                                app.run_or_alert("app.language.set", json!({"language": l.code()}));
+                            }
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+            },
+        );
     });
 }
 
@@ -121,40 +127,46 @@ fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gri
     ui.add_enabled_ui(iterative, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
-            egui::Grid::new("backstage_options_iteration").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
-                let label = ui.label(lang.tr("Maximum Iterations:"));
-                let id = ui.make_persistent_id("backstage_max_iterations");
-                // Text left in the field when iteration is switched off (it loses focus) is dropped.
-                let committed = crate::widgets::committed_text(ui, id, &calc.max_iterations.to_string(), Some(80.0));
-                if let Some(response) = ui.ctx().read_response(id) {
-                    response.labelled_by(label.id);
-                }
-                if let Some(text) = committed.filter(|_| iterative) {
-                    match parse_max_iterations(&text) {
-                        Some(n) if n != calc.max_iterations => {
-                            app.run_or_alert("formulas.calculationOptions", json!({"maxIterations": n}));
+            Form::show(ui, "backstage_options_iteration", lang.is_rtl(), vec2(12.0, 6.0), |form| {
+                form.row(
+                    |ui| ui.label(lang.tr("Maximum Iterations:")),
+                    |ui, label| {
+                        let id = ui.make_persistent_id("backstage_max_iterations");
+                        // Text left in the field when iteration is switched off (it loses focus) is dropped.
+                        let committed = crate::widgets::committed_text(ui, id, &calc.max_iterations.to_string(), Some(80.0));
+                        if let Some(response) = ui.ctx().read_response(id) {
+                            response.labelled_by(label.id);
                         }
-                        Some(_) => {}
-                        None => refuse(app, ui, "Maximum Iterations must be a whole number from 1 to 32767."),
-                    }
-                }
-                ui.end_row();
-                let label = ui.label(lang.tr("Maximum Change:"));
-                let id = ui.make_persistent_id("backstage_max_change");
-                let committed = crate::widgets::committed_text(ui, id, &calc.max_change.to_string(), Some(80.0));
-                if let Some(response) = ui.ctx().read_response(id) {
-                    response.labelled_by(label.id);
-                }
-                if let Some(text) = committed.filter(|_| iterative) {
-                    match parse_max_change(&text, lang.formula_locale()) {
-                        Some(d) if d != calc.max_change => {
-                            app.run_or_alert("formulas.calculationOptions", json!({"maxChange": d}));
+                        if let Some(text) = committed.filter(|_| iterative) {
+                            match parse_max_iterations(&text) {
+                                Some(n) if n != calc.max_iterations => {
+                                    app.run_or_alert("formulas.calculationOptions", json!({"maxIterations": n}));
+                                }
+                                Some(_) => {}
+                                None => refuse(app, ui, "Maximum Iterations must be a whole number from 1 to 32767."),
+                            }
                         }
-                        Some(_) => {}
-                        None => refuse(app, ui, "Maximum Change must be a number of 0 or more."),
-                    }
-                }
-                ui.end_row();
+                    },
+                );
+                form.row(
+                    |ui| ui.label(lang.tr("Maximum Change:")),
+                    |ui, label| {
+                        let id = ui.make_persistent_id("backstage_max_change");
+                        let committed = crate::widgets::committed_text(ui, id, &calc.max_change.to_string(), Some(80.0));
+                        if let Some(response) = ui.ctx().read_response(id) {
+                            response.labelled_by(label.id);
+                        }
+                        if let Some(text) = committed.filter(|_| iterative) {
+                            match parse_max_change(&text, lang.formula_locale()) {
+                                Some(d) if d != calc.max_change => {
+                                    app.run_or_alert("formulas.calculationOptions", json!({"maxChange": d}));
+                                }
+                                Some(_) => {}
+                                None => refuse(app, ui, "Maximum Change must be a number of 0 or more."),
+                            }
+                        }
+                    },
+                );
             });
         });
     });

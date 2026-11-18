@@ -20,8 +20,18 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
         bs.preview = Some((key, preview));
     }
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
+    // In a right-to-left language the row runs from the right; `vertical` would anchor each column
+    // at the left edge instead, under the preview, so the columns there are aligned to the right.
+    let rtl = lang.is_rtl();
+    let column = |ui: &mut Ui, width: f32, add: &mut dyn FnMut(&mut Ui)| {
+        if rtl {
+            ui.allocate_ui_with_layout(vec2(width, ui.available_height()), egui::Layout::top_down(egui::Align::Max), |ui| add(ui));
+        } else {
+            ui.vertical(|ui| add(ui));
+        }
+    };
     ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+        column(ui, 250.0, &mut |ui| {
             ui.set_width(250.0);
             if let Some(discover) = &app.services.printers {
                 crate::printing::show(&mut app.printing, ui, discover, |label| lang.tr(label).to_owned());
@@ -58,7 +68,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             }
         });
         ui.add_space(24.0);
-        ui.vertical(|ui| {
+        column(ui, ui.available_width(), &mut |ui| {
             if pages.is_empty() {
                 dim(ui, lang.tr("Nothing to print."));
                 return;

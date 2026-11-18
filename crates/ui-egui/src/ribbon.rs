@@ -61,7 +61,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         .show(ui, |ui| {
             // Tabs row.
             let tabs_rect = Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), 32.0));
-            ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
+            let mut tab_row = egui::UiBuilder::new().max_rect(tabs_rect);
+            if let Some(layout) = tab_row_layout(app.ui.language) {
+                tab_row = tab_row.layout(layout);
+            }
+            ui.scope_builder(tab_row, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     ui.add_space(8.0);
@@ -140,8 +144,23 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 {
                     area = area.horizontal_scroll_offset(x);
                 }
+                // Right to left, the groups start at the right end: a tab first shown scrolls there,
+                // and the arrows then read as usual. The width of its groups is known from the frame
+                // after the first (a sizing pass can measure none), so the first two frames with a
+                // measured width are scrolled.
+                let rtl = app.ui.language.is_rtl();
+                let last = RibbonOverflow::get(ui.ctx());
+                let content = if last.content.is_finite() { last.content } else { 0.0 };
+                let started = egui::Id::unique(("ribbon_rtl_started", tab.as_str()));
+                let frames = ui.ctx().data(|d| d.get_temp::<u8>(started).unwrap_or(0));
+                if rtl && frames < 2 && content > 0.0 && last.visible.is_finite() {
+                    ui.ctx().data_mut(|d| d.insert_temp(started, frames + 1));
+                    area = area.horizontal_scroll_offset((content - last.visible).max(0.0));
+                }
+                // Groups laid out leftward from the right edge would run past the left edge of the
+                // scrolled area, out of reach: the area is kept as wide as last frame's groups.
                 let scroll = area.show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    let groups = |ui: &mut Ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
@@ -158,11 +177,39 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
-                    });
+                    };
+                    if rtl {
+                        // A right-to-left language starts the groups at the right edge; their own
+                        // rows and columns follow (`horizontal` inherits the direction, `column`
+                        // keeps up with it).
+                        ui.set_min_width(content);
+                        ui.scope_builder(egui::UiBuilder::new().layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| ui.horizontal(groups));
+                    } else {
+                        ui.horizontal(groups);
+                    }
                 });
                 scroll_arrows(ui, &t, tab.as_str(), scroll);
             });
         });
+}
+
+/// A column of controls in a ribbon group: `ui.vertical`, except in a row that runs right to left,
+/// where `vertical` would start the column at the far left of the space still free (over the
+/// groups drawn there later). There the column starts next to the previous control instead, with
+/// its controls aligned to the right.
+pub(crate) fn column<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<R> {
+    if crate::i18n::current(ui.ctx()).is_rtl() && ui.layout().prefer_right_to_left() {
+        ui.scope_builder(egui::UiBuilder::new().layout(egui::Layout::top_down(egui::Align::Max)), add)
+    } else {
+        ui.vertical(add)
+    }
+}
+
+/// The tab row's layout in a right-to-left language, which mirrors it: File at the right edge and
+/// the tabs running leftward (the row's `horizontal` inherits the direction). `None` keeps the
+/// usual left-to-right row.
+fn tab_row_layout(language: crate::i18n::Language) -> Option<egui::Layout> {
+    language.is_rtl().then(|| egui::Layout::right_to_left(egui::Align::Center))
 }
 
 /// How much of the active tab's groups the ribbon card shows, recorded each frame for the scroll
@@ -319,5 +366,22 @@ mod tooltip_tests {
         ];
         let mac_only = sources.iter().flat_map(|s| s.lines()).filter(|l| l.contains('\u{2318}')).collect::<Vec<_>>();
         assert!(mac_only.is_empty(), "Command-key glyph in ribbon text: {mac_only:?}");
+    }
+}
+
+#[cfg(test)]
+mod direction_tests {
+    use crate::i18n::Language;
+
+    /// Hebrew mirrors the tab row (File at the right edge); every other language keeps it left to
+    /// right.
+    #[test]
+    fn only_right_to_left_languages_mirror_the_tab_row() {
+        for language in Language::ALL {
+            let dir = super::tab_row_layout(language).map(|layout| layout.main_dir());
+            let want = (language == Language::He).then_some(egui::Direction::RightToLeft);
+            assert_eq!(dir, want, "{language:?}");
+            assert_eq!(language.is_rtl(), language == Language::He, "{language:?}");
+        }
     }
 }

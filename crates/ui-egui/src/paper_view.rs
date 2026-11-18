@@ -927,7 +927,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
         app.session.active().and_then(|d| d.wb.sheet(app.grid.hf_edit.as_ref().map_or(0, |e| e.sheet))).map_or((false, false, true, true), |s| {
             (s.print.different_first, s.print.different_odd_even, s.print.hf_scale_with_doc, s.print.hf_align_with_margins)
         });
-    ui.vertical(|ui| {
+    crate::ribbon::column(ui, |ui| {
         let (mut f, mut o) = (first, odd_even);
         if ui.checkbox(&mut f, tr(app, "Different First Page")).changed() {
             set_option(app, "differentFirst", f);
@@ -936,7 +936,7 @@ pub fn ribbon_tab(app: &mut SheetApp, ui: &mut egui::Ui) {
             set_option(app, "differentOddEven", o);
         }
     });
-    ui.vertical(|ui| {
+    crate::ribbon::column(ui, |ui| {
         let (mut sd, mut am) = (scale_doc, align);
         if ui.checkbox(&mut sd, tr(app, "Scale with Document")).changed() {
             set_option(app, "scaleWithDoc", sd);

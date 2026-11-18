@@ -15,6 +15,7 @@ mod el;
 mod es;
 mod es_functions;
 mod fr;
+mod he;
 mod it;
 mod ja;
 mod ko;
@@ -53,10 +54,11 @@ pub enum Language {
     Vi,
     Nl,
     Ro,
+    He,
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -76,11 +78,13 @@ impl Language {
         Self::Nl,
         Self::Ro,
         Self::Tr,
+        Self::He,
     ];
 
     /// Every language in the order the switcher lists them: English first (the source language),
     /// then the rest by their own name with accents folded, so Čeština sits under C. Names in
-    /// other scripts follow the Latin ones in code point order: Cyrillic, then the CJK languages.
+    /// other scripts follow the Latin ones in code point order: Greek, Cyrillic, Hebrew, then the
+    /// CJK languages.
     pub fn for_picker() -> Vec<Self> {
         let mut rest: Vec<Self> = Self::ALL.into_iter().filter(|l| *l != Self::En).collect();
         rest.sort_by_cached_key(|l| name_sort_key(l.name()));
@@ -109,6 +113,7 @@ impl Language {
             Self::Vi => "Tiếng Việt",
             Self::Nl => "Nederlands",
             Self::Ro => "Română",
+            Self::He => "עברית",
         }
     }
 
@@ -134,6 +139,7 @@ impl Language {
             Self::Vi => "vi",
             Self::Nl => "nl",
             Self::Ro => "ro",
+            Self::He => "he",
         }
     }
 
@@ -168,6 +174,8 @@ impl Language {
             "vi" => Some(Self::Vi),
             "nl" => Some(Self::Nl),
             "ro" => Some(Self::Ro),
+            // `iw` is Hebrew's withdrawn code, which some locale APIs still report.
+            "he" | "iw" => Some(Self::He),
             _ => None,
         }
     }
@@ -183,6 +191,12 @@ impl Language {
         {
             web_sys::window().and_then(|window| window.navigator().language()).and_then(|tag| Self::from_tag(&tag)).unwrap_or(Self::En)
         }
+    }
+
+    /// Whether the language reads right to left. The ribbon's tab row mirrors for it (File at the
+    /// right edge); the rest of the interface does not yet.
+    pub const fn is_rtl(self) -> bool {
+        matches!(self, Self::He)
     }
 
     pub fn formula_locale(self) -> gridcraft_engine::formula::FormulaLocale {
@@ -219,6 +233,7 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
+            Self::He => he::translate(text),
         }
     }
 
@@ -255,6 +270,26 @@ impl Language {
             _ => None,
         }
     }
+}
+
+/// Whether the system's preferred language reads right to left (Hebrew, Arabic, Persian, Urdu,
+/// Yiddish). macOS can then lay windows out right to left, with the traffic lights at the right.
+pub fn system_is_rtl() -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static RTL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *RTL.get_or_init(|| sys_locale::get_locale().is_some_and(|tag| tag_is_rtl(&tag)))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        false
+    }
+}
+
+/// Whether a language tag (`he-IL`, `ar_EG.UTF-8`) names a right-to-left language.
+fn tag_is_rtl(tag: &str) -> bool {
+    let primary = tag.trim().split(['-', '_', '.']).next().unwrap_or("").to_ascii_lowercase();
+    matches!(primary.as_str(), "he" | "iw" | "ar" | "fa" | "ur" | "yi")
 }
 
 /// Fills in the `{name}` placeholders of a translated template in one pass, so a value that itself
@@ -622,6 +657,16 @@ mod tests {
     }
 
     #[test]
+    fn right_to_left_system_tags() {
+        for tag in ["he-IL", "iw_IL.UTF-8", "ar-EG", "fa", "ur-PK", "yi"] {
+            assert!(tag_is_rtl(tag), "{tag}");
+        }
+        for tag in ["en-US", "hr-HR", "", "fr_CA.UTF-8", "ja"] {
+            assert!(!tag_is_rtl(tag), "{tag}");
+        }
+    }
+
+    #[test]
     fn tags_reduce_to_supported_languages() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
@@ -678,6 +723,9 @@ mod tests {
         assert_eq!(Language::from_tag("ro-RO"), Some(Language::Ro));
         assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
         assert_eq!(Language::parse("ro"), Some(Language::Ro));
+        assert_eq!(Language::from_tag("he-IL"), Some(Language::He));
+        assert_eq!(Language::from_tag("iw_IL.UTF-8"), Some(Language::He), "Hebrew's withdrawn code");
+        assert_eq!(Language::parse("he"), Some(Language::He));
     }
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
