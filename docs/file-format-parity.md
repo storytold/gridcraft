@@ -238,3 +238,57 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-11 | minor | XLSX: Allow Edit Ranges (`protectedRanges`) read and written with their password hashes (#307) |
 | 2026-10-10 | minor | Encrypted and `.xls` files are now recognised and refused with a message (#17) |
 | 2026-10-10 | major | Created: every Excel format with our read/write support; XLSB and ODS values-only imports recorded; `.xls`, encryption and large files flagged as beta gates |
+
+
+## Contribution #2836 — scoped notes
+
+> **Last updated:** 2026-11-15 · These notes describe this contribution. The mainline assessment and progress tables above are retained verbatim from `1d0b311b4a94`. The contribution does not revise the mainline readiness estimates.
+
+The behavior described in these scoped notes applies to this branch and supersedes corresponding older baseline statements above. Dated rows below record the contribution history, rather than adding a new claim of general parity.
+
+### Imported cell-function namespaces (#2775)
+Mixed bare and prefixed occurrences of known functions (for example `XLOOKUP` /
+`_xlfn.XLOOKUP` and `FILTER` / `_xlfn._xlws.FILTER`) retain their per-call spelling on
+import, unrelated/argument edits, copying, undo/redo and repeated saves. Uniform canonical
+calls keep their existing behavior; this does not change function calculation support.
+The active table-rename command preserves imported namespaces. All expression rewrites,
+including Name Manager edits, discard stale occurrence metadata when local LET/LAMBDA
+bindings change; XLSX output then chooses the canonical global/local function spelling.
+Explicit namespaces typed or pasted into the formula editor override the previous per-call
+sequence for that function. Unmarked functions keep inherited or canonical XLSX spelling;
+namespace-looking string contents do not override metadata. Automatic parenthesis closing
+retains the explicit namespace as well.
+Namespaces are assigned to the original expression calls before file-only operator calls are
+generated. Model-normalized trim calls are aligned on import; mismatched occurrence counts
+fall back to canonical spelling instead of attaching a namespace to another call.
+Cell formulas keep explicit `_xlfn.` / `_xlfn._xlws.` spellings that the known-function table
+cannot recreate. The evaluator still sees normalized names; this does not implement the
+functions. Shared/array formulas, JSON, formula confirmation and argument edits, copy/fill,
+structural edits and sheet/table renaming retain the metadata. New replacement expressions
+keep only prefixes for calls still present. This complements #2793's default spellings for
+newly entered functions. Defined-name, validation and conditional-format formula strings do
+not yet carry equivalent metadata. Per-name call-count changes drop ambiguous metadata;
+LET/LAMBDA binding-structure changes use fresh formula spelling instead of retargeting a local
+call. Synthetic regression checks do not qualify arbitrary
+Excel-authored workbooks or native Excel calculation.
+
+#### Upstream integration — 2026-11-15
+
+Imported function namespaces survive the borrowed-tree structural edit paths and JSON's
+cached-tree deserializer. Shared-formula expansion retains the upstream byte allowance,
+length refusal and Google Sheets dynamic-array marks, including the stored namespace cost.
+Both upstream and namespace-preservation regression suites remain in place.
+
+#### Imported namespaces through legacy intersection — 2026-11-15
+
+Legacy formula analysis retains per-occurrence namespaces when it adds implicit
+intersection operators on import and removes those operators on save. The XLSX
+regression reads and writes unknown calls twice with explicit function facts;
+command-level argument-edit and explicit-prefix undo/reopen regressions remain in place.
+
+### Contribution revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-29 | minor | #2836 outside-diff review: preserve mixed bare/prefixed known-function occurrences; XLSX and command regressions; estimates unchanged |
+| 2026-10-28 | minor | Preserve imported cell-function namespaces through read/edit/save, including shared formulas; synthetic compatibility regressions (#2775) |

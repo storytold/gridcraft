@@ -664,7 +664,10 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
                     crate::array_formula::Export::Dynamic => Some(RangeRef::cell(cell_ref)),
                     // Every `@` is one Excel implies in a legacy formula: write it without them.
                     crate::array_formula::Export::Legacy(e) => {
-                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(e))), ..x.clone() });
+                        legacy_cell = cell.map(|x| Cell {
+                            formula: Some(std::sync::Arc::new(Formula { file_functions: f.file_functions.clone(), ..Formula::from_expr(e) })),
+                            ..x.clone()
+                        });
                         None
                     }
                 }

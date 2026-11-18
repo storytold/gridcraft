@@ -29,8 +29,7 @@ use rules::{read_cf, read_validation};
 
 struct Shared {
     anchor: CellRef,
-    expr: Option<Expr>,
-    text: String,
+    formula: Formula,
     unwrapped: bool,
     /// Approximate bytes one dependent cell costs (its printed text plus its expression tree);
     /// what exceeds [`SHARED_FORMULA_FREE_COST`] is charged against [`MAX_SHARED_FORMULA_BYTES`].
@@ -697,23 +696,27 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
     Some(Formula { dynamic, ..fm })
 }
 
+/// Read ordinary, shared and array formulas with source namespaces and bounded expansion.
 fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool, unwrapped: &mut bool) -> Option<Formula> {
-    let mut model = from_file(f.text.trim());
+    let mut formula = crate::fmla::cell_from_file(f.text.trim());
     if let Some(known) = cx.known_function
-        && let Some(u) = unwrap_google_sheets(&model, known)
+        && let Some(u) = unwrap_google_sheets(&formula.text, known)
     {
-        model = u;
+        // The wrapper's calls are gone: derive namespace metadata from its replacement.
+        formula = crate::fmla::cell_from_file(&u);
         *unwrapped = true;
     }
-    let text = model.as_str();
+    let text = formula.text.as_str();
     match f.attr("t").unwrap_or("normal") {
         "shared" => {
             let si = f.attr_u32("si")?;
             if !text.is_empty() {
-                let expr = gridcraft_formula::parse(text).ok();
-                let cost = shared_cost(text, expr.as_ref());
-                st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), unwrapped: *unwrapped, cost });
-                Some(Formula::new(text))
+                let namespace_cost = formula.file_functions.iter().fold(0u64, |bytes, (name, prefixes)| {
+                    bytes.saturating_add(name.len() as u64).saturating_add((prefixes.len() as u64).saturating_mul(8)).saturating_add(128)
+                });
+                let cost = shared_cost(text, formula.expr.as_deref()).saturating_add(namespace_cost);
+                st.shared.insert(si, Shared { anchor: pos, formula: formula.clone(), unwrapped: *unwrapped, cost });
+                Some(formula)
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
@@ -721,9 +724,9 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                 };
                 // The parser's own test: bytes first (cheap), then characters, so a multibyte
                 // master that failed to parse for another reason gets no false length warning.
-                if sh.expr.is_none()
-                    && sh.text.len() > gridcraft_formula::MAX_FORMULA_LEN
-                    && sh.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN
+                if sh.formula.expr.is_none()
+                    && sh.formula.text.len() > gridcraft_formula::MAX_FORMULA_LEN
+                    && sh.formula.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN
                 {
                     cx.warn(format!(
                         "a shared formula is longer than {} characters; kept the cached values of the cells that share it",
@@ -738,13 +741,13 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                     return None;
                 }
                 *unwrapped |= sh.unwrapped;
-                Some(match &sh.expr {
+                Some(match sh.formula.expr.as_deref() {
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
                         let dc = pos.col as i64 - sh.anchor.col as i64;
-                        Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
+                        sh.formula.rewrite_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
                     }
-                    None => Formula::new(&sh.text),
+                    None => sh.formula.clone(),
                 })
             }
         }
@@ -752,7 +755,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 return None;
             }
-            let mut fm = Formula::new(text);
+            let mut fm = formula;
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
                 push_dynamic(st, range);
@@ -770,7 +773,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 None
             } else {
-                Some(Formula::new(text))
+                Some(formula)
             }
         }
     }
