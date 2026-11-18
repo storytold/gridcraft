@@ -42,7 +42,7 @@ impl FileKind {
             "ods" => FileKind::Ods,
             "csv" => FileKind::Csv,
             "tsv" | "tab" | "txt" => FileKind::Tsv,
-            "json" | "scjson" => FileKind::Json,
+            ext if craft_gridcraft_format::is_extension(ext) => FileKind::Json,
             "html" | "htm" => FileKind::Html,
             "slk" => FileKind::Sylk,
             _ => return None,
@@ -316,7 +316,7 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     }
     match kind {
         Some(FileKind::Json) => {
-            let mut wb: Workbook = serde_json::from_slice(bytes).map_err(|e| EngineError::Other(format!("not a GridCraft JSON workbook: {e}")))?;
+            let mut wb: Workbook = craft_gridcraft_format::read(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
                 // The file's macros are read after this (`macros::load`), so they come along.
@@ -1107,6 +1107,11 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     let prior = metadata.as_ref().map(std::fs::Metadata::permissions);
     let mut temp = create_save_temp(std::path::Path::new(path), metadata.as_ref()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     temp.write_all(bytes).and_then(|()| temp.flush()).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    // Flush the complete workbook before replacing the old one.
+    temp.as_file()
+        .sync_all()
+        .or_else(|e| if full_sync_unsupported(&e) { Ok(()) } else { Err(e) })
+        .map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
     #[cfg(windows)]
     {
         // Antivirus and indexing software can briefly hold the destination without
@@ -1135,10 +1140,37 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
                 .set_permissions(permissions)
                 .map_err(|e| EngineError::Other(format!("{path}: saved, but could not restore file attributes: {e}")))?;
         }
-        Ok(())
     }
     #[cfg(not(windows))]
-    temp.persist(path).map(|_| ()).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))
+    temp.persist(path).map_err(|e| EngineError::Other(format!("{path}: {}", e.error)))?;
+    // Make the rename itself durable. Best effort: the workbook is already in place, so a
+    // directory that can't be opened or synced (some file systems) is not a failed save.
+    #[cfg(unix)]
+    {
+        let dir = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or_else(|| std::path::Path::new("."));
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+    }
+    Ok(())
+}
+
+/// True when a flush failed only because the file system cannot do it: on Unix ENOTTY (25, what
+/// `fcntl(F_FULLFSYNC)` returns on such volumes; on Windows 25 is ERROR_SEEK, a real failure), on
+/// Apple targets ENOTSUP (45, which std leaves uncategorized there), or an unsupported-operation
+/// error (EOPNOTSUPP/ENOSYS, and ENOTSUP where it equals EOPNOTSUPP). Any other error is a real
+/// failure.
+#[cfg(not(target_arch = "wasm32"))]
+fn full_sync_unsupported(e: &std::io::Error) -> bool {
+    flush_unsupported_on(e, cfg!(unix), cfg!(target_vendor = "apple"))
+}
+
+/// [`full_sync_unsupported`] for a given platform, so each platform's raw codes can be tested
+/// on any host.
+#[cfg(not(target_arch = "wasm32"))]
+fn flush_unsupported_on(e: &std::io::Error, unix: bool, apple: bool) -> bool {
+    let raw = e.raw_os_error();
+    (unix && raw == Some(25)) || (apple && raw == Some(45)) || e.kind() == std::io::ErrorKind::Unsupported
 }
 
 /// The mode a saved file gets from the file it replaces (`old`): all of it when its group was
