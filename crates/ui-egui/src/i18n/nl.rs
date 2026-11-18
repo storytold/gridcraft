@@ -3,6 +3,8 @@
 /// Returns the Dutch translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Lineaire trend",
+        "Growth Trend" => "Groeitrend",
         "Diagram" => "Diagram",
         "Decorative Text" => "Decoratieve tekst",
         "Paste" => "Plakken",

@@ -3,6 +3,8 @@
 /// Returns the Korean translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "선형 추세",
+        "Growth Trend" => "지수 추세",
         "Diagram" => "다이어그램",
         "Decorative Text" => "장식 텍스트",
         "Paste" => "붙여넣기",
