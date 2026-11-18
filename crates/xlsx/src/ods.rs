@@ -355,7 +355,7 @@ impl Import {
                     Some("boolean") => b"boolean-value",
                     Some("date") => b"date-value",
                     Some("time") => b"time-value",
-                    Some("string") => b"string-value",
+                    Some("string" | "error") => b"string-value",
                     _ => b"value",
                 };
                 self.cell = Some(CellDraft {
@@ -524,6 +524,10 @@ impl Import {
                 format = Some("[h]:mm:ss.000");
                 Value::Number(n)
             }),
+            // An error, typed (`office:value-type="error"`) or a formula's cached one
+            // (`calcext:value-type="error"`): its code is the string value or the cell's text (#4301).
+            // A code that isn't Excel's (`Err:502`) stays text.
+            Some("error") => gridcraft_core::CellError::parse(raw.filter(|r| !r.trim().is_empty()).unwrap_or(&draft.text).trim()).map(Value::Error),
             None if !draft.formula => Some(if draft.text.is_empty() { Value::Empty } else { Value::Text(Arc::from(draft.text.as_str())) }),
             _ => None,
         };
