@@ -67,6 +67,39 @@ fn subtotal_of_the_grouping_field_keeps_its_captions() {
 }
 
 #[test]
+fn subtotal_rolls_back_caption_column_when_row_insert_is_refused() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"], ["A", 10], ["A", 20], ["B", 30]]})).unwrap();
+    s.execute("review.protectSheet", json!({"insertColumns": true, "insertRows": false})).unwrap();
+    let undo_before = s.doc().unwrap().undo.len();
+    let err = s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["A", "B"], "function": "count"})).unwrap_err();
+    assert!(!err.to_string().is_empty());
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    assert_eq!(get(&mut s, "A1")["value"], json!("Group"), "caption column must be rolled back");
+    assert_eq!(get(&mut s, "B1")["value"], json!("Amount"));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_before, "failed subtotal must not add an undo step");
+}
+
+#[test]
+fn subtotal_shifts_only_columns_at_or_after_range_start() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Code", "Group", "Amount"], [1, "A", 10], [2, "A", 20], [3, "B", 30]]})).unwrap();
+    s.execute("data.subtotal", json!({"range": "B1:C4", "groupBy": "B", "columns": ["A", "B"], "function": "sum"})).unwrap();
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    assert_eq!(get(&mut s, "B4")["text"], json!("A Total"));
+    assert_eq!(get(&mut s, "B6")["text"], json!("B Total"));
+    assert_eq!(get(&mut s, "B7")["text"], json!("Grand Total"));
+    assert_eq!(get(&mut s, "A4")["formula"], json!("=SUBTOTAL(9,A2:A3)"));
+    assert_eq!(get(&mut s, "A4")["value"], json!(3.0));
+    assert_eq!(get(&mut s, "A6")["value"], json!(3.0));
+    assert_eq!(get(&mut s, "A7")["value"], json!(6.0));
+    assert_eq!(get(&mut s, "C1")["value"], json!("Group"));
+    assert_eq!(get(&mut s, "D1")["value"], json!("Amount"));
+}
+
+#[test]
 fn subtotal_puts_summary_rows_below_their_detail() {
     let mut s = Session::new();
     s.new_workbook();

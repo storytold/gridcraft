@@ -258,7 +258,7 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
     let (label_col, cols, end_col) = if cols.contains(&group_col) {
         let at = RangeRef::cols(r.start.col, r.start.col).a1();
         s.execute("home.insertColumns", json!({"sheet": sheet, "cols": at}))?;
-        let shifted = cols.iter().map(|c| c.saturating_add(1)).collect::<Vec<u32>>();
+        let shifted = cols.iter().map(|&c| if c >= r.start.col { c.saturating_add(1) } else { c }).collect::<Vec<u32>>();
         (r.start.col, shifted, r.end.col.saturating_add(1))
     } else {
         (group_col, cols, r.end.col)
