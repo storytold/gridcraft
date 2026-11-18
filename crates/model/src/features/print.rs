@@ -53,6 +53,11 @@ pub struct PrintSettings {
     /// sheet is more than one page wide and tall.
     #[serde(default)]
     pub page_order: PageOrder,
+    /// Page Setup › Page › First page number: the number the sheet's first printed page takes,
+    /// or `None` for Automatic (XLSX `pageSetup firstPageNumber` with `useFirstPageNumber`). Left
+    /// out of a JSON workbook when Automatic, so files without it are written as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_page_number: Option<u32>,
 }
 
 fn yes() -> bool {
@@ -187,6 +192,7 @@ impl Default for PrintSettings {
             hf_scale_with_doc: true,
             hf_align_with_margins: true,
             page_order: PageOrder::DownThenOver,
+            first_page_number: None,
         }
     }
 }
@@ -284,5 +290,18 @@ mod tests {
         assert!(saved.as_object_mut().unwrap().remove("page_order").is_some());
         p = serde_json::from_value(saved).unwrap();
         assert_eq!(p, PrintSettings::default());
+    }
+
+    #[test]
+    fn first_page_number_is_saved_only_when_set() {
+        // Automatic writes nothing, so a JSON workbook without a first page number is unchanged and
+        // one saved before the field existed loads as Automatic.
+        let saved = serde_json::to_value(PrintSettings::default()).unwrap();
+        assert!(saved.get("first_page_number").is_none(), "{saved}");
+        assert_eq!(serde_json::from_value::<PrintSettings>(saved).unwrap().first_page_number, None);
+        let p = PrintSettings { first_page_number: Some(7), ..Default::default() };
+        let saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["first_page_number"], 7);
+        assert_eq!(serde_json::from_value::<PrintSettings>(saved).unwrap(), p);
     }
 }

@@ -280,7 +280,8 @@ fn active_input(app: &SheetApp) -> String {
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
-        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+        let lang = app.ui.language;
+        return if picture.alt.is_empty() { lang.tr("Picture in cell").into() } else { lang.tr_fill("Picture: {alt}", &[("alt", &picture.alt)]) };
     }
     // Python code is shown as it is: it isn't a formula to translate or a value to format. Like
     // a formula, it stays out of view in a Hidden cell on a protected sheet.
@@ -940,6 +941,31 @@ mod spill_tests {
         let mut s = Session::new();
         s.new_workbook();
         SheetApp::new(s, Default::default())
+    }
+
+    #[test]
+    fn a_picture_in_a_cell_is_named_in_the_interface_language() {
+        use crate::i18n::Language;
+        use gridcraft_engine::core::CellRef;
+        use gridcraft_engine::model::CellPicture;
+        let mut app = app();
+        let put = |app: &mut SheetApp, cell: &str, alt: &str| {
+            let at = CellRef::parse(cell).unwrap();
+            let picture = std::sync::Arc::new(CellPicture { data: vec![], mime: "image/png".into(), alt: alt.into() });
+            std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().wb).sheet_mut(0).unwrap().set_picture(at, picture);
+        };
+        put(&mut app, "A1", "");
+        put(&mut app, "A2", "Logo {alt}");
+        select(&mut app, "A1");
+        assert_eq!(active_input(&app), "Picture in cell");
+        select(&mut app, "A2");
+        assert_eq!(active_input(&app), "Picture: Logo {alt}");
+        app.ui.language = Language::It;
+        select(&mut app, "A1");
+        assert_eq!(active_input(&app), Language::It.tr("Picture in cell"));
+        assert_ne!(active_input(&app), "Picture in cell");
+        select(&mut app, "A2");
+        assert_eq!(active_input(&app), Language::It.tr("Picture: {alt}").replace("{alt}", "Logo {alt}"));
     }
 
     fn set(app: &mut SheetApp, cell: &str, input: &str) {

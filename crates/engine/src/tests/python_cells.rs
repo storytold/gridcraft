@@ -175,8 +175,8 @@ fn text_to_columns_keeps_a_py_piece_as_text() {
     s.execute("cell.set", json!({"cell": "A1", "input": "'=PY(\"x\");7"})).unwrap();
     assert_eq!(super::v(&s, "A1"), Value::text("=PY(\"x\");7"));
     s.execute("data.textToColumns", json!({"range": "A1", "delimiters": [";"]})).unwrap();
-    // The default text qualifier takes the quotes away, as in Excel.
-    assert_eq!(super::v(&s, "A1"), Value::text("=PY(x)"), "the piece is kept, not cleared");
+    // A quote in the middle of a field is kept, as in Excel.
+    assert_eq!(super::v(&s, "A1"), Value::text("=PY(\"x\")"), "the piece is kept, not cleared");
     assert_eq!(code(&s, 0, "A1"), None, "and it is not a Python cell");
     assert_eq!(super::v(&s, "B1"), Value::Number(7.0));
 }
@@ -529,4 +529,17 @@ fn python_code_with_an_empty_value_counts_as_content() {
     plant_empty(&mut s, "T1");
     s.execute("edit.copy", json!({"range": "T1"})).unwrap();
     assert!(s.execute("edit.paste", json!({"at": "R2"})).is_err_and(|e| e.to_string().contains("part of an array")));
+}
+
+#[test]
+fn inserting_a_link_without_text_preserves_an_empty_python_cell() {
+    let mut s = s();
+    plant_empty(&mut s, "A1");
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.org"})).unwrap();
+    assert_eq!(code(&s, 0, "A1"), Some("x = 1".into()));
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(0).unwrap();
+    let at = CellRef::parse("A1").unwrap();
+    assert_eq!(sh.value(at), Value::Empty);
+    assert_eq!(sh.hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
 }
