@@ -1179,7 +1179,7 @@ mod tests {
 
     /// The text of the dialog's note.
     fn note(d: &Dialog) -> String {
-        d.fields.iter().find_map(|f| if let Field::Note(text) = f { Some(text.clone()) } else { None }).unwrap_or_default()
+        d.fields.iter().find_map(|f| if let Field::Note(text) | Field::Shown(text) = f { Some(text.clone()) } else { None }).unwrap_or_default()
     }
 
     #[test]

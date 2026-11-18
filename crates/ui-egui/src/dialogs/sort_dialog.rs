@@ -246,7 +246,7 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
             selected += 1;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            crate::rtl::checkbox(ui, &mut header, lang.tr("My list has headers"));
+            ui.checkbox(&mut header, lang.tr("My list has headers"));
         });
     });
     d.values.insert("header".into(), json!(header));

@@ -1826,6 +1826,111 @@ Macro",
     ("Context", "حسب السياق"),
     ("Left to right", "من اليسار إلى اليمين"),
     ("Right to left", "من اليمين إلى اليسار"),
+    // From main (2026-11, window controls, custom sort, equation messages)
+    ("Minimize", "تصغير"),
+    ("Maximize", "تكبير"),
+    ("Restore Down", "استعادة"),
+    ("Add Level", "إضافة مستوى"),
+    ("Delete Level", "حذف مستوى"),
+    ("Copy Level", "نسخ مستوى"),
+    ("Move Up", "نقل لأعلى"),
+    ("Move Down", "نقل لأسفل"),
+    ("Order", "الترتيب"),
+    ("Sort|Column", "العمود"),
+    ("Column {letters}", "العمود {letters}"),
+    ("Smallest to Largest", "من الأصغر إلى الأكبر"),
+    ("Largest to Smallest", "من الأكبر إلى الأصغر"),
+    ("Close the Sort dialog before switching or changing worksheets.", "أغلق مربع حوار الفرز قبل التبديل بين الأوراق أو تغييرها."),
+    ("Return to the original worksheet to sort, or cancel.", "ارجع إلى الورقة الأصلية للفرز، أو ألغِ."),
+    ("Numerical Count", "العدد الرقمي"),
+    ("Minimum", "الحد الأدنى"),
+    ("Maximum", "الحد الأقصى"),
+    ("Width: {chars} ({pixels} pixels)", "العرض: {chars} ({pixels} بكسل)"),
+    ("Height: {points} ({pixels} pixels)", "الارتفاع: {points} ({pixels} بكسل)"),
+    ("Format Control: {name}", "تنسيق عنصر التحكم: {name}"),
+    ("Error at character {position}: {message}", "خطأ عند الحرف {position}: {message}"),
+    ("Macro definitions are not supported in equations.", "تعريفات الماكرو غير مدعومة في المعادلات."),
+    ("A % can't be combined with a link in an equation.", "لا يمكن الجمع بين % وارتباط في معادلة."),
+    ("Equations can nest at most 32 levels deep.", "يمكن أن تتداخل المعادلات بعمق 32 مستوى كحد أقصى."),
+    ("An equation can be at most 4096 bytes long.", "يمكن أن يبلغ طول المعادلة 4096 بايت كحد أقصى."),
+    (
+        "An equation can have at most 2500 matrix cells (rows times the widest row).",
+        "يمكن أن تحتوي المعادلة على 2500 خلية مصفوفة كحد أقصى (الصفوف في أعرض صف).",
+    ),
+    ("This equation is too large to draw.", "هذه المعادلة أكبر من أن تُرسم."),
+    ("This equation could not be laid out.", "تعذّر تنسيق هذه المعادلة."),
+    ("Saved macro “{name}” ({steps} step)", "حُفظ الماكرو «{name}» ({steps} خطوة)"),
+    ("without {key}: another macro took it while recording", "بدون {key}: استخدمه ماكرو آخر أثناء التسجيل"),
+    ("Ran macro “{name}” ({steps} step)", "جرى تشغيل الماكرو «{name}» ({steps} خطوة)"),
+    ("Double superscript", "رمز علوي مزدوج"),
+    ("Double subscript", "رمز سفلي مزدوج"),
+    ("Extra }", "} زائد"),
+    ("Unexpected end of input in a macro argument", "نهاية غير متوقعة للإدخال في وسيطة ماكرو"),
+    ("Expected \\right after \\left", "كان متوقعًا \\right بعد \\left"),
+    ("\\middle must be within \\left and \\right", "يجب أن يقع \\middle بين \\left و\\right"),
+    ("Invalid environment name", "اسم بيئة غير صالح"),
+    ("Expected \\end after environment body", "كان متوقعًا \\end بعد متن البيئة"),
+    ("Expected URL", "كان متوقعًا عنوان URL"),
+    ("\\tag requires an argument", "\\tag يتطلب وسيطة"),
+    ("only one infix operator per group", "معامل وسيط واحد فقط في كل مجموعة"),
+    ("Expected color token", "كان متوقعًا رمز لون"),
+    ("Expected size for \\raisebox", "كان متوقعًا حجم لـ \\raisebox"),
+    ("Expected size for \\rule width", "كان متوقعًا حجم لعرض \\rule"),
+    ("Expected size for \\rule height", "كان متوقعًا حجم لارتفاع \\rule"),
+    ("Cannot use both \\tag and \\nonumber in the same row", "لا يمكن استخدام \\tag و\\nonumber معًا في الصف نفسه"),
+    ("Multiple \\tag in a row", "عدة \\tag في صف واحد"),
+    ("\\tag must appear at the end of the row after the equation body", "يجب أن يظهر \\tag في نهاية الصف بعد متن المعادلة"),
+    ("Multiple \\nonumber in a row", "عدة \\nonumber في صف واحد"),
+    ("\\nonumber must appear at the end of the row", "يجب أن يظهر \\nonumber في نهاية الصف"),
+    ("Too many tab characters: &", "عدد كبير جدًا من محارف الجدولة: &"),
+    ("Invalid column alignment for array", "محاذاة عمود غير صالحة لـ array"),
+    ("Expected column alignment character", "كان متوقعًا حرف محاذاة العمود"),
+    ("Expected l or c or r", "كان متوقعًا l أو c أو r"),
+    ("Expected ]", "كان متوقعًا ]"),
+    ("Unexpected end of CD row after @", "نهاية غير متوقعة لصف CD بعد @"),
+    ("Invalid column alignment for subarray", "محاذاة عمود غير صالحة لـ subarray"),
+    ("{subarray} can contain only one column", "يمكن أن يحتوي {subarray} على عمود واحد فقط"),
+    (
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command",
+        "يحتوي prooftree على \\LeftLabel أو \\RightLabel بلا أمر استدلال يليه",
+    ),
+    ("Recursion limit exceeded", "تم تجاوز حد التكرار الذاتي"),
+    ("Too many expansions: infinite loop or need to increase maxExpand setting", "عمليات توسيع كثيرة جدًا: حلقة لا نهائية أو يلزم رفع إعداد maxExpand"),
+    ("Expected raw style for \\htmlStyle", "كان متوقعًا نمط خام لـ \\htmlStyle"),
+    ("\\verb assertion failed", "فشل التحقق من \\verb"),
+    ("Undefined control sequence: {name}", "تسلسل تحكم غير معرّف: {name}"),
+    ("Expected '{expected}', got '{got}'", "كان متوقعًا '{expected}'، لكن وُجد '{got}'"),
+    ("Expected group after '{symbol}'", "كانت متوقعة مجموعة بعد '{symbol}'"),
+    ("Expected delimiter as argument to '{function}'", "كان متوقعًا محدِّد كوسيطة لـ '{function}'"),
+    ("Expected group as argument to '{function}'", "كانت متوقعة مجموعة كوسيطة لـ '{function}'"),
+    ("Got function '{function}' with no arguments as superscript", "وُجدت الدالة '{function}' بلا وسائط كرمز علوي"),
+    ("Got function '{function}' with no arguments as subscript", "وُجدت الدالة '{function}' بلا وسائط كرمز سفلي"),
+    ("Got function '{function}' with no arguments as argument to '{parent}'", "وُجدت الدالة '{function}' بلا وسائط كوسيطة لـ '{parent}'"),
+    ("Got function '{function}' with no arguments as \\tag", "وُجدت الدالة '{function}' بلا وسائط كـ \\tag"),
+    ("Can't use function '{function}' in text mode", "لا يمكن استخدام الدالة '{function}' في وضع النص"),
+    ("Can't use function '{function}' in math mode", "لا يمكن استخدام الدالة '{function}' في الوضع الرياضي"),
+    ("Invalid color: '{color}'", "لون غير صالح: '{color}'"),
+    ("Invalid size: '{size}'", "حجم غير صالح: '{size}'"),
+    ("Invalid unit: '{unit}'", "وحدة غير صالحة: '{unit}'"),
+    ("Invalid delimiter '{delimiter}' after '{function}'", "محدِّد غير صالح '{delimiter}' بعد '{function}'"),
+    ("Invalid delimiter type '{type}' after '{function}'", "نوع محدِّد غير صالح '{type}' بعد '{function}'"),
+    ("Invalid delimiter type '{type}'", "نوع محدِّد غير صالح '{type}'"),
+    ("No such environment: {name}", "لا توجد بيئة بهذا الاسم: {name}"),
+    ("Expected argument to \\begin{{name}}", "كانت متوقعة وسيطة لـ \\begin{{name}}"),
+    ("Mismatch: \\begin{{begin}} matched by \\end{{end}}", "عدم تطابق: \\begin{{begin}} أُغلق بـ \\end{{end}}"),
+    ("{command} valid only within array environment", "{command} صالح داخل بيئة array فقط"),
+    ("Mismatched {command}", "{command} بلا مقابل"),
+    ("Expected & or \\\\ or \\cr or \\end, got '{got}'", "كان متوقعًا & أو \\\\ أو \\cr أو \\end، لكن وُجد '{got}'"),
+    ("Unknown column alignment: {alignment}", "محاذاة عمود غير معروفة: {alignment}"),
+    ("Too many math in a row: expected {expected}, but got {got}", "عدد كبير جدًا من الصيغ في صف واحد: كان متوقعًا {expected}، لكن وُجد {got}"),
+    ("Unknown CD directive: @{directive}", "توجيه CD غير معروف: @{directive}"),
+    ("Expected argument for {command}", "كانت متوقعة وسيطة لـ {command}"),
+    ("{command} needs {count} premise(s), but only {available} available", "{command} يحتاج إلى {count} من المقدمات، لكن المتاح {available} فقط"),
+    ("{command} valid only as a supported bussproofs command within prooftree", "{command} صالح فقط كأمر bussproofs مدعوم داخل prooftree"),
+    ("prooftree ended with {count} proof stack item(s), expected 1", "انتهى prooftree بـ {count} من عناصر مكدس البرهان، والمتوقع 1"),
+    ("\\@char has non-numeric argument {argument}", "\\@char له وسيطة غير رقمية {argument}"),
+    ("\\@char with invalid code point {code}", "\\@char بنقطة رمز غير صالحة {code}"),
+    ("Invalid environment name character: {character}", "حرف غير صالح في اسم البيئة: {character}"),
 ];
 
 /// The Arabic for `text`, or `None` while it has no entry.
@@ -1916,13 +2021,31 @@ mod tests {
                 if after.trim().is_empty() {
                     continue;
                 }
-                let key = key.replace("\\n", "\n").replace("\\\"", "\"");
+                let key = unescape(key);
                 if translate(&key).is_none() && !missing.contains(&key) {
                     missing.push(key);
                 }
             }
         }
         assert!(missing.is_empty(), "no Arabic for: {missing:#?}");
+    }
+
+    /// A catalog key as the source writes it between quotes, with its escapes (`\\`, `\"`, `\n`) resolved.
+    fn unescape(source: &str) -> String {
+        let mut out = String::new();
+        let mut chars = source.chars();
+        while let Some(c) = chars.next() {
+            if c != '\\' {
+                out.push(c);
+                continue;
+            }
+            match chars.next() {
+                Some('n') => out.push('\n'),
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            }
+        }
+        out
     }
 
     #[test]
