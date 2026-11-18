@@ -20,10 +20,10 @@ mod paste_special;
 mod selection;
 
 use cell::{cell_set, range_fill, range_set_values};
-pub(crate) use cell::{check_arg_counts, input_to_cell, json_to_input, parse_typed_formula};
+pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to_input, parse_typed_formula};
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
-use clipboard::{clear_clipboard, copy, cut, paste};
+use clipboard::{clear_clipboard, copy, cut, paste, range_move};
 use fill::{auto_fill, fill_dir, fill_series, flash_fill};
 #[cfg(test)]
 use find::replace_ci;
@@ -35,8 +35,8 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::rewrite_all_formulas;
-use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_set};
+pub(crate) use paste_special::{rewrite_all_formulas, rewrite_cell_links, rewrite_python_refs};
+use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_next_corner, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Values",
             [],
             None,
-            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so \"05.04.2026\" becomes a date and \"2.500\" a number, by en-US rules; false stores every other string as the text it is, so a dd.mm.yyyy date or a thousands separator survives)}",
+            "{range?: \"A1\", values: [[...]] (rows of numbers/strings/bools/null; strings starting with = are formulas), parse?: bool (default true: a string goes through typed input, so \"05.04.2026\" becomes a date and \"2.500\" a number, by en-US rules; false stores every other string as the text it is, so a dd.mm.yyyy date or a thousands separator survives, a leading ' is kept and an empty string clears the cell)} → {cells, convertedCount, converted: [{cell, input, stored}] (up to 20 of the strings typed input read as a number, date, time, boolean or error, so a script can notice)}",
             has_doc,
             range_set_values
         ),
@@ -62,6 +62,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "selection.set", "Select", [], None, "{range: \"A1:B2,D4\" | cell, active?: \"A1\", sheet?}", has_doc, selection_set),
         cmd!(noundo "selection.move", "Move Selection", [], None, "{dr, dc, extend?: bool, jump?: bool (Ctrl+arrow), page?: bool}", has_doc, selection_move),
         cmd!(noundo "selection.next", "Next Cell in Selection", [], None, "{forward?: true, byRow?: false} (Enter/Tab inside a selection)", has_doc, selection_next),
+        cmd!(
+            noundo "selection.nextCorner",
+            "Next Corner of Selection",
+            [],
+            Some("Ctrl+."),
+            "{} (the active cell moves clockwise to the next corner of the selected area, which stays selected)",
+            has_doc,
+            selection_next_corner
+        ),
         cmd!(noundo "edit.selectAll", "Select All", ["Edit"], Some("Cmd+A"), "{} (current region first, then the whole sheet)", has_doc, select_all),
         cmd!(noundo "selection.currentRegion", "Select Current Region", [], Some("Ctrl+Shift+8"), "{}", has_doc, select_region),
         cmd!(noundo "selection.row", "Select Entire Row", [], Some("Shift+Space"), "{}", has_doc, select_row),
@@ -82,14 +91,26 @@ pub fn specs() -> Vec<CommandSpec> {
             paste
         ),
         cmd!(
-            "edit.pasteSpecial",
-            "Paste Special…",
-            ["Home", "Clipboard"],
-            Some("Ctrl+Cmd+V"),
-            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
-            has_clipboard,
-            paste_special
+            "range.move",
+            "Drag and Drop",
+            [],
+            None,
+            "{range?, to: \"C3\", overwrite?: bool} (drag the selection's border: a cut and paste that asks before replacing data unless overwrite)",
+            has_doc,
+            range_move
         ),
+        CommandSpec {
+            shortcut_mac: Some("Ctrl+Cmd+V"),
+            ..cmd!(
+                "edit.pasteSpecial",
+                "Paste Special…",
+                ["Home", "Clipboard"],
+                Some("Ctrl+Alt+V"),
+                "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
+                has_clipboard,
+                paste_special
+            )
+        },
         cmd!(noundo "edit.clearClipboard", "Cancel Copy", [], Some("Escape"), "{}", has_doc, clear_clipboard),
         cmd!("edit.clearAll", "Clear All", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "all")),
         cmd!("edit.clearFormats", "Clear Formats", ["Home", "Editing", "Clear"], None, "{range?}", has_doc, |s, p| clear(s, p, "formats")),
@@ -123,13 +144,13 @@ pub fn specs() -> Vec<CommandSpec> {
             fill_series
         ),
         cmd!("edit.flashFill", "Flash Fill", ["Home", "Editing", "Fill"], Some("Ctrl+E"), "{range?}", has_doc, flash_fill),
-        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook}", has_doc, find),
+        cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook|selection} (selection: only the selected cells; Find Next keeps them selected and moves the active cell)", has_doc, find),
         cmd!(
             "edit.replace",
             "Replace…",
             ["Home", "Editing", "Find & Select"],
             Some("Ctrl+H"),
-            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook}",
+            "{what, with, matchCase?, wholeCell?, all?: true, within?: sheet|workbook|selection} → {replaced, skipped?} (in a Python cell the code is edited; skipped counts Python cells whose code would no longer fit)",
             has_doc,
             replace
         ),
@@ -183,6 +204,8 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        // Step by step: a rename and a new sheet undone together match up only one step apart.
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -203,6 +226,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         label = e.label.clone();
         d.wb = e.wb;
         d.selection = e.selection;
+        super::extra::keep_view_modes(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -213,6 +237,18 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- clear
 
+/// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
+fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
+    let spans = sh.filter_row_spans();
+    if spans.is_empty() {
+        return Default::default();
+    }
+    let filtered = |row: u32| spans.iter().any(|&(first, last)| row >= first && row <= last);
+    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && filtered(**r)).map(|(r, _)| *r).collect()
+}
+
+/// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
+/// are left as they are; rows hidden by hand are cleared.
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let ranges = target_ranges(s, p)?;
@@ -223,22 +259,44 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
         d.wb.sheet(sheet).is_some_and(|sh| {
             ranges.iter().any(|r| {
                 r.intersection(&sh.used_range().unwrap_or(RangeRef::cell(r.start))).is_some_and(|r| {
-                    sh.cells.iter_range(r).any(|(c, x)| x.value == Value::Bool(true) && super::extra::is_checkbox_cell(&d.wb, sh, c))
+                    let skip = filtered_rows(sh, r);
+                    sh.cells
+                        .iter_range(r)
+                        .any(|(c, x)| !skip.contains(&c.row) && x.value == Value::Bool(true) && super::extra::is_checkbox_cell(&d.wb, sh, c))
                 })
             })
         })
     };
+    // Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
+    // doesn't see them go: a locked cell's are refused here, stored cell or not.
+    if matches!(what, "all" | "comments" | "hyperlinks") {
+        let d = s.doc()?;
+        if let Some(sh) = d.wb.sheet(sheet).filter(|sh| sh.is_protected()) {
+            for &whole in &ranges {
+                let skip = filtered_rows(sh, whole);
+                let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                for &c in notes.chain(links).filter(|c| whole.contains(**c) && !skip.contains(&c.row)) {
+                    if d.wb.styles.get(sh.style_id(c)).protection.locked
+                        && let Some(m) = locked_cell_error(sh, c, &d.unlocked_ranges)
+                    {
+                        return Err(EngineError::Other(m));
+                    }
+                }
+            }
+        }
+    }
     edit(s, |cx| {
-        for r in &ranges {
-            let r = match cx.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
-                Some(u) => match r.intersection(&u) {
-                    Some(x) => x,
-                    None => continue,
-                },
-                None => continue,
+        for &whole in &ranges {
+            // Cells are only stored inside the used range. Notes and links are kept apart from
+            // them, so they are cleared over the whole range: one from a file can sit on a cell
+            // with nothing stored in it.
+            let used = cx.wb.sheet(sheet).and_then(|sh| sh.used_range()).and_then(|u| whole.intersection(&u));
+            let skip = cx.wb.sheet(sheet).map(|sh| filtered_rows(sh, whole)).unwrap_or_default();
+            let cells: Vec<(CellRef, Cell)> = match (cx.wb.sheet(sheet), used) {
+                (Some(sh), Some(r)) => sh.cells.iter_range(r).filter(|(c, _)| !skip.contains(&c.row)).map(|(c, x)| (c, x.clone())).collect(),
+                _ => Vec::new(),
             };
-            let cells: Vec<(CellRef, Cell)> =
-                cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(r).map(|(c, x)| (c, x.clone())).collect()).unwrap_or_default();
             // Report every stored cell we touch, even beyond a million coordinates in a sparse
             // selection. Removed formula anchors must also reach calc so their spills disappear.
             cx.changed.extend(cells.iter().map(|(c, _)| (sheet, *c)));
@@ -247,6 +305,7 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 for (_, cell) in cells.iter_mut() {
                     let checkbox = cx.wb.styles.get(cell.style).num_fmt.as_str() == "checkbox";
                     cell.formula = None;
+                    cell.py = None;
                     if checkbox && uncheck_only {
                         cell.value = Value::Bool(false);
                     } else {
@@ -257,6 +316,18 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                     }
                 }
             }
+            let cleared = |c: CellRef| whole.contains(c) && !skip.contains(&c.row);
+            // A removed note or link changes its cell even with nothing stored there.
+            let metadata: Vec<CellRef> = cx
+                .wb
+                .sheet(sheet)
+                .map(|sh| {
+                    let notes = matches!(what, "all" | "comments").then(|| sh.comments.keys()).into_iter().flatten();
+                    let links = matches!(what, "all" | "hyperlinks").then(|| sh.hyperlinks.keys()).into_iter().flatten();
+                    notes.chain(links).copied().filter(|c| cleared(*c)).collect()
+                })
+                .unwrap_or_default();
+            cx.changed.extend(metadata.into_iter().map(|c| (sheet, c)));
             let sh = cx.sheet_mut(sheet)?;
             for (c, mut cell) in cells {
                 match what {
@@ -274,15 +345,17 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 }
             }
             if matches!(what, "all" | "comments") {
-                sh.comments.retain(|c, _| !r.contains(*c));
+                sh.comments.retain(|c, _| !cleared(*c));
             }
             if matches!(what, "all" | "hyperlinks") {
-                sh.hyperlinks.retain(|c, _| !r.contains(*c));
+                sh.hyperlinks.retain(|c, _| !cleared(*c));
             }
-            if matches!(what, "all" | "formats") {
+            if let Some(r) = used
+                && matches!(what, "all" | "formats")
+            {
                 let mut unmerged = false;
                 sh.merges.retain(|m| {
-                    let keep = !r.contains_range(m);
+                    let keep = !r.contains_range(m) || skip.range(m.start.row..=m.end.row).next().is_some();
                     unmerged |= !keep;
                     keep
                 });

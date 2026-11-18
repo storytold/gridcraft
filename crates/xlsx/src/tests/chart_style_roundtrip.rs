@@ -7,6 +7,7 @@ use gridcraft_model::{Anchor, Chart, ChartKind, LegendPos, Series, Sheet, Workbo
 
 use crate::{read_xlsx, write_xlsx};
 
+/// Verifies explicit chart styles survive full XLSX save and reload cycles.
 #[test]
 fn explicit_styles_survive_xlsx_save_and_reload() {
     // Start from the XLSX reader so this fixture follows new optional Chart fields.

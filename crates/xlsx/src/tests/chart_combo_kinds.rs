@@ -45,6 +45,7 @@ fn line_first_group_stays_a_line() {
     assert_eq!(k[1], Some(ChartKind::ColumnClustered));
 }
 
+/// Verifies explicit `<c:style>` values round-trip unchanged through chart XML serialization.
 #[test]
 fn explicit_chart_style_survives_xml_roundtrip() {
     use gridcraft_model::Workbook;
