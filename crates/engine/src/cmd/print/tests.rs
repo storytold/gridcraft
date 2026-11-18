@@ -1224,12 +1224,16 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
 }
 
 /// Whether this machine has a font the PDF writer can embed for Vietnamese text. The check draws
-/// one character the way printing does; a machine without such a font skips the test rather than
-/// failing, as the other real-font tests do.
+/// each character the export test relies on the way printing does and requires the embedded face
+/// for both: `/FontFile2` alone only proves that one of them was embedded. A machine without such
+/// a font skips the test rather than failing, as the other real-font tests do.
 fn vietnamese_pdf_face_available() -> bool {
-    let mut doc = gridcraft_pdf::PdfDoc::new();
-    doc.add_page(100.0, 100.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], "ệ");
-    doc.finish().is_ok_and(|pdf| contains(&pdf, "/FontFile2"))
+    let embeds = |text: &str, cid_hex: &str| {
+        let mut doc = gridcraft_pdf::PdfDoc::new();
+        doc.add_page(100.0, 100.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], text);
+        doc.finish().is_ok_and(|pdf| contains(&pdf, "/FontFile2") && !contains(&pdf, cid_hex))
+    };
+    embeds("ệ", "<1EC7> Tj") && embeds("ế", "<1EBF> Tj")
 }
 
 #[test]

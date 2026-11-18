@@ -31,13 +31,12 @@ use crate::{Error, FONT_COUNT, Font};
 const MAX_FONT_BYTES: usize = 64 << 20;
 /// Most glyphs a font may claim (the `maxp` limit).
 const MAX_GLYPHS: usize = 65_535;
-/// Deepest composite-glyph nesting followed when collecting components.
-const MAX_COMPOSITE_DEPTH: u32 = 8;
 /// Largest subset this writer builds.
 const MAX_SUBSET_BYTES: usize = 64 << 20;
 
-/// Glyphs of one embedded face used on a page: glyph id → the character it draws (the ToUnicode
-/// mapping). One character per glyph is enough for copying and search.
+/// Glyphs of one embedded face used on a page: glyph id → a character it draws (the ToUnicode
+/// fallback; the page's `ActualText` preserves the exact source text, including characters that
+/// share a glyph).
 pub(crate) type Usage = BTreeMap<u16, char>;
 
 fn be16(data: &[u8], at: usize) -> Option<u16> {
@@ -184,7 +183,7 @@ impl Face {
             };
             (start <= end && end <= glyf.len()).then_some((start, end))
         };
-        let keep = self.keep_set(usage, num_glyphs, range, glyf);
+        let keep = self.keep_set(usage, num_glyphs, range, glyf)?;
         let mut new_glyf: Vec<u8> = Vec::new();
         let mut new_loca: Vec<u8> = Vec::with_capacity((num_glyphs + 1) * 4);
         for glyph in 0..num_glyphs {
@@ -223,25 +222,28 @@ impl Face {
         sfnt(&tables)
     }
 
-    /// Glyph ids kept in a subset: the used ones, `.notdef`, and every component of a composite
-    /// glyph (closing over components of components, up to [`MAX_COMPOSITE_DEPTH`]).
-    fn keep_set(&self, usage: &Usage, num_glyphs: usize, range: impl Fn(usize) -> Option<(usize, usize)>, glyf: &[u8]) -> BTreeSet<usize> {
+    /// Glyph ids kept in a subset: the used ones, `.notdef`, and the complete transitive closure of
+    /// the components of composite glyphs. A worklist with a visited set bounded by `num_glyphs`
+    /// finishes every chain without a depth limit; a malformed composite (truncated data or a
+    /// component id the face does not have) refuses the face instead of silently dropping an
+    /// outline the kept glyph still refers to.
+    fn keep_set(&self, usage: &Usage, num_glyphs: usize, range: impl Fn(usize) -> Option<(usize, usize)>, glyf: &[u8]) -> Option<BTreeSet<usize>> {
         let mut keep: BTreeSet<usize> = usage.keys().map(|glyph| usize::from(*glyph)).filter(|glyph| *glyph < num_glyphs).collect();
         keep.insert(0);
-        let mut frontier: Vec<(usize, u32)> = keep.iter().map(|glyph| (*glyph, 0)).collect();
-        while let Some((glyph, depth)) = frontier.pop() {
-            if depth >= MAX_COMPOSITE_DEPTH {
-                continue;
-            }
-            let Some((start, end)) = range(glyph) else { continue };
-            let Some(bytes) = glyf.get(start..end) else { continue };
-            for component in components(bytes) {
-                if component < num_glyphs && keep.insert(component) {
-                    frontier.push((component, depth + 1));
+        let mut pending: Vec<usize> = keep.iter().copied().collect();
+        while let Some(glyph) = pending.pop() {
+            let (start, end) = range(glyph)?;
+            let bytes = glyf.get(start..end)?;
+            for component in components(bytes)? {
+                if component >= num_glyphs {
+                    return None;
+                }
+                if keep.insert(component) {
+                    pending.push(component);
                 }
             }
         }
-        keep
+        Some(keep)
     }
 }
 
@@ -271,31 +273,41 @@ fn validate_glyph_ranges(loca: &[u8], glyf_len: usize, num_glyphs: usize, long: 
     Some(())
 }
 
-/// The glyph ids a composite glyph refers to (none for a simple glyph). Malformed component data
-/// simply ends the list.
-fn components(glyph: &[u8]) -> Vec<usize> {
+/// The glyph ids a composite glyph refers to (none for a simple glyph). `None` when the component
+/// data is truncated or malformed: the face is refused rather than emitting an incomplete glyph.
+fn components(glyph: &[u8]) -> Option<Vec<usize>> {
     let mut out = Vec::new();
-    if bei16(glyph, 0).is_none_or(|contours| contours >= 0) {
-        return out;
+    if glyph.is_empty() {
+        return Some(out);
+    }
+    if bei16(glyph, 0)? >= 0 {
+        return Some(out);
     }
     let mut at = 10usize;
     for _ in 0..1024 {
-        let (Some(flags), Some(component)) = (be16(glyph, at), be16(glyph, at + 2)) else { break };
+        let flags = be16(glyph, at)?;
+        let component = be16(glyph, at + 2)?;
         out.push(usize::from(component));
-        at += 4;
-        at += if flags & 0x0001 != 0 { 4 } else { 2 };
-        if flags & 0x0008 != 0 {
-            at += 2;
+        at = at.checked_add(4)?;
+        at = at.checked_add(if flags & 0x0001 != 0 { 4 } else { 2 })?;
+        let arguments = if flags & 0x0008 != 0 {
+            2
         } else if flags & 0x0040 != 0 {
-            at += 4;
+            4
         } else if flags & 0x0080 != 0 {
-            at += 8;
+            8
+        } else {
+            0
+        };
+        at = at.checked_add(arguments)?;
+        if at > glyph.len() {
+            return None;
         }
         if flags & 0x0020 == 0 {
-            break;
+            return Some(out);
         }
     }
-    out
+    None
 }
 
 /// A `post` table version 3.0: no glyph names, but the style fields a font descriptor mirrors.
@@ -522,12 +534,16 @@ pub(crate) fn default_face(font: Font) -> Option<&'static Face> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn system_face(font: Font) -> Option<Face> {
+    use std::io::Read as _;
     for path in candidates(font) {
-        let Ok(metadata) = std::fs::metadata(&path) else { continue };
-        if metadata.len() > MAX_FONT_BYTES as u64 {
+        let Ok(file) = std::fs::File::open(&path) else { continue };
+        // Read from the open handle with a hard bound: a candidate that is a FIFO or a device can
+        // pass a metadata size check and then never reach EOF.
+        let mut data = Vec::new();
+        if file.take(MAX_FONT_BYTES as u64 + 1).read_to_end(&mut data).is_err() || data.len() > MAX_FONT_BYTES {
             continue;
         }
-        if let Some(face) = std::fs::read(&path).ok().and_then(|data| Face::parse(data, 0)) {
+        if let Some(face) = Face::parse(data, 0) {
             return Some(face);
         }
     }
@@ -699,27 +715,56 @@ pub(crate) mod synthetic {
     //! A tiny, deterministic TrueType font built in code, so the embedding tests need no system
     //! font and no font file committed to the repository.
 
-    /// A font whose character map holds `chars` (character and glyph id, starting at 1), with one
-    /// simple rectangular outline per glyph and an advance of 700 font units.
+    /// A font whose character map holds `chars` (character and glyph id, glyph 0 being `.notdef`),
+    /// with one simple rectangular outline per glyph and an advance of 700 font units. Two
+    /// characters may name the same glyph, as some faces do for look-alike letters.
     pub(crate) fn font(chars: &[(char, u16)]) -> Vec<u8> {
-        let glyphs = chars.len() + 1;
+        let glyphs = chars.iter().map(|(_, glyph)| usize::from(*glyph)).max().unwrap_or(0) + 1;
+        let outlines: Vec<Vec<u8>> = (0..glyphs).map(|glyph| if glyph == 0 { Vec::new() } else { rectangle() }).collect();
+        build(chars, &outlines)
+    }
+
+    /// A font whose glyph 1 is a composite referring to glyph 2, which refers to glyph 3, and so on
+    /// down a chain of 12 glyphs; the last one is a simple rectangle. Used to check that a subset
+    /// keeps the whole component closure however deep the chain is.
+    pub(crate) fn composite_chain() -> Vec<u8> {
+        let mut outlines: Vec<Vec<u8>> = vec![Vec::new()];
+        for glyph in 1..=11u16 {
+            outlines.push(composite(glyph + 1));
+        }
+        outlines.push(rectangle());
+        build(&[('ạ', 1)], &outlines)
+    }
+
+    /// One composite glyph drawing `component` at the same offset.
+    fn composite(component: u16) -> Vec<u8> {
+        let mut glyph = Vec::new();
+        glyph.extend_from_slice(&(-1i16).to_be_bytes()); // composite
+        for value in [0i16, 0, 600, 700] {
+            glyph.extend_from_slice(&value.to_be_bytes()); // bbox
+        }
+        glyph.extend_from_slice(&0x0002u16.to_be_bytes()); // ARGS_ARE_XY_VALUES, int8 arguments
+        glyph.extend_from_slice(&component.to_be_bytes());
+        glyph.extend_from_slice(&[0, 0]);
+        glyph
+    }
+
+    /// Builds a TrueType file from `chars` and one outline per glyph, each glyph keeping its index.
+    fn build(chars: &[(char, u16)], outlines: &[Vec<u8>]) -> Vec<u8> {
+        let glyphs = outlines.len();
         let mut glyf = Vec::new();
         let mut loca: Vec<u8> = Vec::new();
         let mut hmtx: Vec<u8> = Vec::new();
-        // Glyph 0 is `.notdef`: no outline.
-        loca.extend_from_slice(&0u32.to_be_bytes());
-        hmtx.extend_from_slice(&700u16.to_be_bytes());
-        hmtx.extend_from_slice(&0i16.to_be_bytes());
-        for (index, (_, glyph)) in chars.iter().enumerate() {
-            assert_eq!(*glyph as usize, index + 1, "glyph ids follow the characters in order");
+        for outline in outlines {
             loca.extend_from_slice(&(glyf.len() as u32).to_be_bytes());
             hmtx.extend_from_slice(&700u16.to_be_bytes());
             hmtx.extend_from_slice(&0i16.to_be_bytes());
-            glyf.extend_from_slice(&rectangle());
+            glyf.extend_from_slice(outline);
         }
         // The character map groups must be sorted by character, which need not be glyph order.
         let mut groups: Vec<(char, u16)> = chars.to_vec();
         groups.sort_by_key(|(character, _)| *character);
+        groups.dedup_by_key(|(character, _)| *character);
         let mut cmap = Vec::new();
         for (character, glyph) in groups {
             cmap.extend_from_slice(&u32::from(character).to_be_bytes());

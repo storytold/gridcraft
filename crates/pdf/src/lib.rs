@@ -934,6 +934,7 @@ impl Page {
         // in Symbol's own encoding (the CID and fallback faces have no maths symbols).
         let symbol = font == Font::Symbol;
         let mut runs = String::new();
+        let mut embedded = false;
         if !symbol && !visual.chars().any(needs_cid) {
             // The common case: every character is in the standard font's encoding, so no fallback
             // face is looked at.
@@ -948,18 +949,24 @@ impl Page {
                 Some(face) if !symbol => face.glyphs(&visual),
                 _ => visual.chars().map(|c| (c, None)).collect(),
             };
-            self.text_runs(&mut runs, matrix, &size, font, symbol, &glyphs);
+            embedded = self.text_runs(&mut runs, matrix, &size, font, symbol, &glyphs);
         }
         let mut s = String::new();
         self.set_fill(&mut s, color);
         let _ = write!(s, "BT\n{runs}ET");
-        let s = if visual != text { format!("/Span << /ActualText {} >> BDC\n{s}\nEMC", arabic::unicode_string(text, true)) } else { s };
+        // The ToUnicode map is per glyph, so two source characters that share a glyph (Greek `Α`
+        // and Cyrillic `А` in a face that maps both to one outline) would copy as the same
+        // character. `ActualText` carries the exact source text for the marked content, so copied
+        // and searched text keeps each occurrence. It is also needed when the visual order differs
+        // from the logical one.
+        let s = if visual != text || embedded { format!("/Span << /ActualText {} >> BDC\n{s}\nEMC", arabic::unicode_string(text, true)) } else { s };
         self.text_op(&s);
     }
 
     /// Appends one `Tf`/`Tm`/`Tj` run for every stretch of characters `glyphs` that is drawn the
-    /// same way.
-    fn text_runs(&mut self, runs: &mut String, matrix: &str, size: &str, font: Font, symbol: bool, glyphs: &[(char, Option<u16>)]) {
+    /// same way; true when some run used the embedded fallback face.
+    fn text_runs(&mut self, runs: &mut String, matrix: &str, size: &str, font: Font, symbol: bool, glyphs: &[(char, Option<u16>)]) -> bool {
+        let mut embedded = false;
         let mut start = 0;
         while let Some(&(first, glyph)) = glyphs.get(start) {
             let kind = run_kind(first, glyph, symbol);
@@ -968,6 +975,7 @@ impl Page {
                 end += 1;
             }
             let run = glyphs.get(start..end).unwrap_or_default();
+            embedded |= kind == Run::Embedded;
             if kind != Run::Embedded
                 && let Some(used) = self.fonts.get_mut(if kind == Run::Cid { CID_FONT } else { font.index() })
             {
@@ -986,6 +994,7 @@ impl Page {
             push_run(runs, matrix, size, &resource, &string);
             start = end;
         }
+        embedded
     }
 
     /// The content-stream hex string of an embedded run, recording each glyph's character for the
@@ -1163,13 +1172,18 @@ impl PdfDoc {
     }
 
     /// Writes one embedded fallback face for every standard font a page drew such text in, holding
-    /// every glyph any page used, and adds its resource name to `font_dict`.
+    /// every glyph any page used, and adds its resource name to `font_dict`. A glyph keeps the first
+    /// character seen for it across the document, so a later page cannot change how an earlier
+    /// page's ToUnicode reads; `ActualText` still preserves each page's own source text.
     fn write_unicode_faces(&self, font_dict: &mut String, next: &mut u32, out: &mut craft_pdf::classic::Writer) -> Result<(), Error> {
         let mut unicode: Vec<Option<embed::Usage>> = (0..FONT_COUNT).map(|_| None).collect();
         for page in &self.pages {
             for (i, page_usage) in page.unicode.iter().enumerate() {
                 let (Some(page_usage), Some(slot)) = (page_usage, unicode.get_mut(i)) else { continue };
-                slot.get_or_insert_with(embed::Usage::default).extend(page_usage.iter().map(|(glyph, c)| (*glyph, *c)));
+                let usage = slot.get_or_insert_with(embed::Usage::default);
+                for (glyph, c) in page_usage {
+                    usage.entry(*glyph).or_insert(*c);
+                }
             }
         }
         for (i, usage) in unicode.iter().enumerate() {

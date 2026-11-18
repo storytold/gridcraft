@@ -8,7 +8,9 @@ The 14 standard fonts (Helvetica, Times, Courier, Symbol) are not embedded and c
 `WinAnsiEncoding` (CP1252). Text they cannot encode — Vietnamese `ạ ế ơ đ`, Czech `č ř ě`, Greek,
 Cyrillic, the rest of Latin Extended — is set in an embedded, subset system TrueType face standing
 in for the standard font: a Type0 font with a CIDFontType2 descendant, `Identity-H` encoding and a
-ToUnicode CMap, so the printed text stays searchable and copyable. The face is the metric-compatible
+ToUnicode CMap, so the printed text stays searchable and copyable. Marked content carries the
+source `ActualText`, so copied text is exact even when a face maps two characters (say Greek `Α`
+and Cyrillic `А`) to one glyph. The face is the metric-compatible
 system family of the standard font (Arial for Helvetica, Times New Roman for Times, Courier New for
 Courier; Liberation, DejaVu, Noto or FreeFont where those are not installed), so `advance()` and
 `text_width()` measure exactly what is drawn. Nothing is committed to the repository: faces are
