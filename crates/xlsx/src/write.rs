@@ -6,6 +6,7 @@ use std::fmt::Write as _;
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+use sha2::Digest as _;
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
@@ -110,8 +111,15 @@ pub struct Out {
     overrides: Vec<(String, String)>,
     defaults: BTreeMap<String, String>,
     pub dxfs: Vec<Style>,
+    /// Number format ids assigned so far (inline `x14:dxf` formats); `styles.xml` adds the rest.
+    pub num_fmts: crate::styles::NumFmts,
+    /// Excel 2010 conditional format rules written so far (each needs a unique id).
+    pub x14_cf_rules: u32,
     pub sst: Sst,
     pub images: u32,
+    /// Media parts written so far, by extension and SHA-256 of their bytes: a picture used again
+    /// is found here instead of being compared byte by byte with every earlier one.
+    media: HashMap<(String, [u8; 32]), String>,
     pub charts: u32,
     /// The workbook's file name, which a PivotChart's link to its PivotTable names in brackets.
     pub book_name: String,
@@ -145,20 +153,25 @@ impl Out {
         if let Some(ct) = content_type {
             self.overrides.push((format!("/{name}"), ct.to_string()));
         }
+        // Every `xl/media/image*.ext` part is indexed as it is added, preserved ones included, so a
+        // later identical picture finds it instead of writing a second copy.
+        if let Some((ext, file)) = name.strip_prefix("xl/media/").filter(|f| f.starts_with("image")).and_then(|f| Some((f.rsplit_once('.')?.1, f))) {
+            self.media.entry((ext.to_string(), sha2::Sha256::digest(&data).into())).or_insert_with(|| file.to_string());
+        }
         self.parts.push((name.to_string(), data));
     }
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
-        let existing = self.parts.iter().find(|(name, bytes)| {
-            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
-        });
-        if let Some((name, _)) = existing {
-            return name.trim_start_matches("xl/media/").to_string();
+        let key = (ext.to_string(), sha2::Sha256::digest(data).into());
+        if let Some(file) = self.media.get(&key) {
+            return file.clone();
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
-        self.part(&format!("xl/media/{file}"), None, data.to_vec());
+        // Not through `part`: that would hash the same bytes again to index them.
+        self.parts.push((format!("xl/media/{file}"), data.to_vec()));
+        self.media.insert(key, file.clone());
         file
     }
     pub fn default_type(&mut self, ext: &str, ct: &str) {
@@ -170,6 +183,12 @@ impl Out {
 /// file only needs ids that are unique within it).
 pub fn person_guid(i: usize) -> String {
     format!("{{00000000-0000-4000-8002-{:012X}}}", i as u64 & 0xFFFF_FFFF_FFFF)
+}
+
+/// Id of the i-th Excel 2010 conditional format rule of the package (deterministic and unique,
+/// like [`person_guid`]).
+pub fn x14_cf_rule_guid(i: u32) -> String {
+    format!("{{00000000-0000-4000-8003-{i:012X}}}")
 }
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
@@ -255,8 +274,11 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
         overrides: vec![],
         defaults: BTreeMap::new(),
         dxfs: vec![],
+        num_fmts: Default::default(),
+        x14_cf_rules: 0,
         sst: Sst::default(),
         images: 0,
+        media: HashMap::new(),
         charts: 0,
         book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
@@ -357,7 +379,7 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     w.push_str("</workbook>");
 
     // Workbook-level parts.
-    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb));
+    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &pivots.number_formats(wb), std::mem::take(&mut out.num_fmts));
     pivots.finish(wb, &mut out, &|code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied()));
     out.part("xl/styles.xml", Some("application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"), styles.into_bytes());
     wb_rels.add("styles", "styles.xml");

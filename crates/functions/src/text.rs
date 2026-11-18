@@ -30,17 +30,27 @@ fn check_len(s: String) -> R<Value> {
 
 /// Pushes `piece` onto `out`, failing once the result exceeds the cell limit.
 fn push_capped(out: &mut String, piece: &str) -> R<()> {
-    out.push_str(piece);
-    if out.len() > MAX_TEXT * 4 {
+    // Checked before copying, so one oversized piece is refused without being appended.
+    if out.len().saturating_add(piece.len()) > MAX_TEXT * 4 {
         return Err(CellError::Value);
     }
+    out.push_str(piece);
     Ok(())
+}
+
+/// `v.to_text()` without copying text values.
+fn piece(v: &Value) -> R<std::borrow::Cow<'_, str>> {
+    match v {
+        Value::Text(t) => Ok(std::borrow::Cow::Borrowed(t)),
+        Value::Array(a) => a.data.first().map_or(Ok(std::borrow::Cow::Borrowed("")), piece),
+        _ => v.to_text().map(std::borrow::Cow::Owned),
+    }
 }
 
 fn concatenate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
-        push_capped(&mut out, &scalar(x).to_text()?)?;
+        push_capped(&mut out, &piece(&scalar(x))?)?;
     }
     check_len(out)
 }
@@ -49,31 +59,49 @@ fn concat(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
         for v in as_array(&x.value).iter() {
-            push_capped(&mut out, &v.to_text()?)?;
+            push_capped(&mut out, &piece(v)?)?;
         }
     }
     check_len(out)
 }
 
+/// The error `v.to_text()` would give, found without building any text.
+fn text_error(v: &Value) -> Option<CellError> {
+    match v {
+        Value::Error(e) => Some(*e),
+        Value::Array(a) => a.data.first().and_then(text_error),
+        _ => None,
+    }
+}
+
 fn textjoin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let delims: Vec<String> = as_array(&arg(a, 0)?.value).iter().map(|v| v.to_text()).collect::<R<_>>()?;
+    // Errors are found first, in argument order, so they win as before; text is then built one
+    // piece at a time into the capped output, so many references to one long text (or a long
+    // delimiter list) stop at the cap instead of first copying every piece.
+    let delims = as_array(&arg(a, 0)?.value);
+    if let Some(e) = delims.iter().find_map(text_error) {
+        return Err(e);
+    }
     let ignore = boolean(a, 1)?;
-    let mut items = Vec::new();
-    for x in a.iter().skip(2) {
-        for v in as_array(&x.value).iter() {
-            let s = v.to_text()?;
-            if ignore && s.is_empty() {
-                continue;
-            }
-            items.push(s);
-        }
+    let items: Vec<_> = a.iter().skip(2).map(|x| as_array(&x.value)).collect();
+    if let Some(e) = items.iter().flat_map(|x| x.iter()).find_map(text_error) {
+        return Err(e);
     }
     let mut out = String::new();
-    for (i, s) in items.iter().enumerate() {
-        if i > 0 && !delims.is_empty() {
-            push_capped(&mut out, &delims[(i - 1) % delims.len()])?;
+    let mut joined = 0usize;
+    for v in items.iter().flat_map(|x| x.iter()) {
+        let s = piece(v)?;
+        if ignore && s.is_empty() {
+            continue;
         }
-        push_capped(&mut out, s)?;
+        if joined > 0
+            && !delims.data.is_empty()
+            && let Some(d) = delims.data.get((joined - 1) % delims.data.len())
+        {
+            push_capped(&mut out, &piece(d)?)?;
+        }
+        push_capped(&mut out, &s)?;
+        joined += 1;
     }
     check_len(out)
 }
@@ -1181,6 +1209,22 @@ mod tests {
         is_err(ev("CONCAT", vec![t("a"), e(CellError::NA)]), CellError::NA);
         // Lifting: CONCATENATE over an array.
         assert_eq!(rows_of(&ev("CONCATENATE", vec![av(row_t(&["a", "b"])), t("x")])), vec![vec![tv("ax"), tv("bx")]]);
+    }
+
+    /// Security: TEXTJOIN builds its result piece by piece and stops at the text cap, rather
+    /// than first copying every input (100,000 references to one 32,767-character text were
+    /// 3 GB of copies). Errors among the inputs still win, in argument order.
+    #[test]
+    fn textjoin_stops_at_the_text_cap() {
+        use gridcraft_core::Array;
+        let long = tv(&"x".repeat(32_767));
+        let many = || av(Array::filled(100_000, 1, long.clone()).into());
+        is_err(ev("TEXTJOIN", vec![t(","), b(true), many()]), CellError::Value);
+        is_err(ev("TEXTJOIN", vec![av(Array::filled(1, 100_000, long.clone()).into()), b(false), t("a"), t("b")]), CellError::Value);
+        is_err(ev("TEXTJOIN", vec![t(","), b(true), many(), e(CellError::Div0)]), CellError::Div0);
+        is_err(ev("TEXTJOIN", vec![av(arr(vec![vec![tv(","), Value::Error(CellError::NA)]])), b(true), t("a")]), CellError::NA);
+        // Delimiters cycle and are converted only where used.
+        is_text(ev("TEXTJOIN", vec![av(arr(vec![vec![nv(1.0), tv(";")]])), b(false), t("a"), t("b"), t("c"), t("d")]), "a1b;c1d");
     }
 
     fn row_t(xs: &[&str]) -> Value {
