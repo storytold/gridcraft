@@ -121,24 +121,8 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
-fn show_macro_editor(app: &mut SheetApp, ctx: &egui::Context, mut d: Dialog) {
-    let home = app.ui_window();
-    let mut open = true;
-    crate::macro_editor::window(app, ctx, &mut d, &mut open);
-    if !open {
-        app.macros.editor = None;
-        app.grid.macro_overlay = None;
-    } else if app.ui_window() != home {
-        // Something run from the editor switched windows: the editor stays in its own.
-        app.return_dialog(home, d);
-    } else {
-        app.dialog = Some(d);
-    }
-}
-
-/// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
-pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
-    let Some(mut d) = app.dialog.take() else { return };
+fn take_dialog(app: &mut SheetApp) -> Option<Dialog> {
+    let mut d = app.dialog.take()?;
     let covered = app.macros.question.is_some() || app.message.is_some();
     #[cfg(not(target_arch = "wasm32"))]
     let covered = covered || crate::updates_ui::prompt_shown(app);
@@ -146,14 +130,30 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         d.save_changes_armed = None;
         d.save_changes_pending = None;
         app.dialog = Some(d);
-        return;
+        return None;
     }
+    Some(d)
+}
+
+/// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
+pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
+    let Some(mut d) = take_dialog(app) else { return };
+    let home = app.ui_window();
     // The macro step editor is a large resizable window of its own.
     if d.name == "macroEditor" {
-        show_macro_editor(app, ctx, d);
+        let mut open = true;
+        crate::macro_editor::window(app, ctx, &mut d, &mut open);
+        if !open {
+            app.macros.editor = None;
+            app.grid.macro_overlay = None;
+        } else if app.ui_window() != home {
+            // Something run from the editor switched windows: the editor stays in its own.
+            app.return_dialog(home, d);
+        } else {
+            app.dialog = Some(d);
+        }
         return;
     }
-    let home = app.ui_window();
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
