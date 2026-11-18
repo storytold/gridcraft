@@ -59,6 +59,7 @@ mod header_column_drag;
 mod host_chrome;
 mod hyperlink_ctrl_click;
 mod hyperlink_dialog;
+mod ime_composition;
 mod in_cell_editor_size;
 mod in_cell_editor_wrap;
 mod ink_render;
