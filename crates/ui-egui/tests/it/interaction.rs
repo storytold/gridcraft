@@ -20,6 +20,30 @@ fn blank() -> Session {
 }
 
 #[test]
+fn the_formulas_ribbon_keeps_watch_window_inside_the_ribbon() {
+    // Regression test for #360 (#342): Watch Window was a fourth small button in a column of
+    // three, so it hung below the ribbon and was cut off.
+    fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| texts(s, out)),
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+            _ => {}
+        }
+    }
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Formulas".into();
+    h.run_steps(3);
+    // Ribbon button labels are painted text: find them among the frame's shapes.
+    let mut painted = Vec::new();
+    h.output().shapes.iter().for_each(|c| texts(&c.shape, &mut painted));
+    let bottom_of = |word: &str| painted.iter().filter(|(s, _)| s.contains(word)).map(|(_, r)| r.bottom()).fold(f32::NEG_INFINITY, f32::max);
+    // "Calculation Options" is a big button whose second line sits at the foot of the ribbon.
+    let (watch, foot) = (bottom_of("Window"), bottom_of("Options"));
+    assert!(watch.is_finite() && foot.is_finite(), "the Formulas ribbon paints Watch Window and Calculation Options");
+    assert!(watch <= foot + 0.5, "Watch Window's label ends at y={watch}, below the ribbon's last label row (y={foot})");
+}
+
+#[test]
 fn vertical_scrollbar_pages_and_drags_without_changing_selection() {
     let mut h = harness(blank());
     let grid = h.state().grid.rect.unwrap();
@@ -1394,6 +1418,28 @@ fn macro_workbook_bytes() -> Vec<u8> {
     let mut wb = gridcraft_engine::model::Workbook::new();
     wb.vba_project = Some(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 fake OLE2 vbaProject".to_vec().into());
     gridcraft_engine::io::save_bytes(&wb, "macros.xlsm").unwrap()
+}
+
+#[test]
+fn circle_invalid_data_warns_when_its_scan_was_cut_short() {
+    let mut h = harness(blank());
+    h.state_mut().run("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
+    h.state_mut().run("range.setValues", json!({"range": "A200000", "values": [[-1]]})).unwrap();
+    h.state_mut().run("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().expect("a notice was shown");
+    assert!(n.text.contains("100,000 cell visits"), "{}", n.text);
+    // An open-time warning keeps its action when the scan note joins it.
+    h.state_mut().notice = Some(gridcraft_ui_egui::Notice {
+        text: "Macros.".into(),
+        kind: gridcraft_ui_egui::NoticeKind::Info,
+        action: Some(("More".into(), "macros".into())),
+    });
+    h.state_mut().run("data.circleInvalid", json!({})).unwrap();
+    let n = h.state().notice.clone().unwrap();
+    assert!(n.text.starts_with("Macros. ") && n.text.contains("cell visits"), "{}", n.text);
+    assert_eq!(n.action.as_ref().map(|a| a.1.as_str()), Some("macros"));
+    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Warning);
 }
 
 #[test]
