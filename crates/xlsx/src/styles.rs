@@ -79,6 +79,7 @@ pub fn read_font(e: &El, palette: &[u32]) -> Font {
     f.bold = bool_prop(e, "b");
     f.italic = bool_prop(e, "i");
     f.strike = bool_prop(e, "strike");
+    f.outline = bool_prop(e, "outline");
     if let Some(u) = e.child("u") {
         f.underline = match u.attr("val").unwrap_or("single") {
             "double" => Underline::Double,
@@ -414,6 +415,7 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
         st.bold = e.child("b").is_some() && !f.bold;
         st.italic = e.child("i").is_some() && !f.italic;
         st.strike = e.child("strike").is_some() && !f.strike;
+        st.outline = e.child("outline").is_some() && !f.outline;
         st.underline = e.child("u").is_some() && f.underline == Underline::None;
         st.size = has_size && size == def.size;
         st.name = has_name && name == def.name;
@@ -471,6 +473,12 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
         } else if said {
             let _ = write!(s, "<{tag} val=\"0\"/>");
         }
+    }
+    // Excel's order puts outline after strike (condense and extend aren't modelled).
+    if f.outline {
+        s.push_str("<outline/>");
+    } else if stated.outline {
+        s.push_str("<outline val=\"0\"/>");
     }
     match f.underline {
         Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
@@ -751,6 +759,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
         if d.font.bold
             || d.font.italic
             || d.font.strike
+            || d.font.outline
             || d.font.underline != Underline::None
             || d.font.color != Color::Auto
             || d.font.vert != VertAlign::Baseline
@@ -759,6 +768,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String]) -> (St
             || st.bold
             || st.italic
             || st.strike
+            || st.outline
             || st.underline
             || st.size
             || st.name
