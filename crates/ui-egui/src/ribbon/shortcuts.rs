@@ -1,7 +1,50 @@
 use super::{Key, Modifiers, SheetApp, json};
 
+/// The command a ribbon shortcut runs for this key, when that does not depend on the selection.
+/// Insert and delete stay out: those pick a command from the selection, and each branch checks
+/// the binding itself.
+pub(crate) fn bound_command(key: Key, m: Modifiers) -> Option<&'static str> {
+    let shift = m.shift;
+    Some(match key {
+        Key::B => "home.bold",
+        Key::I => "home.italic",
+        Key::U => "home.underline",
+        Key::Z if shift => "edit.redo",
+        Key::Z => "edit.undo",
+        Key::Y => "edit.redo",
+        Key::A => "edit.selectAll",
+        Key::D => "edit.fillDown",
+        Key::R => "edit.fillRight",
+        Key::S if shift => "file.saveAs",
+        Key::S => "file.save",
+        Key::O => "file.open",
+        Key::N => "file.new",
+        Key::W => "file.close",
+        Key::P => "file.print",
+        Key::K => "insert.link",
+        Key::F if shift => "data.filter",
+        Key::F => "edit.find",
+        Key::H => "edit.replace",
+        Key::G => "edit.goTo",
+        Key::T if shift => "formulas.autoSum",
+        Key::T => "insert.table",
+        Key::E => "edit.flashFill",
+        Key::Num1 => "home.formatCells",
+        Key::Num9 if shift => "home.unhideRows",
+        Key::Num9 => "home.hideRows",
+        Key::Num0 if shift => "home.unhideColumns",
+        Key::Num0 => "home.hideColumns",
+        Key::Backtick => "formulas.showFormulas",
+        _ => return None,
+    })
+}
+
 /// Command-key shortcuts when the grid has focus.
 pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
+    // A command the user moved no longer answers this chord. Its new chord is handled first.
+    if bound_command(key, m).is_some_and(|id| app.ui.command_hotkeys.contains_key(id)) {
+        return;
+    }
     let shift = m.shift;
     let id: Option<(&str, serde_json::Value)> = match key {
         Key::B => Some(("home.bold", json!({}))),
@@ -87,8 +130,12 @@ pub fn shortcut(app: &mut SheetApp, key: Key, m: Modifiers) {
         _ => None,
     };
     if let Some((id, p)) = id {
-        app.run_or_alert(id, p);
-        app.grid.ensure_visible = true;
+        // Insert and delete choose the command from the selection, so the check is here rather
+        // than in `bound_command`.
+        if !app.ui.command_hotkeys.contains_key(id) {
+            app.run_or_alert(id, p);
+            app.grid.ensure_visible = true;
+        }
     }
 }
 

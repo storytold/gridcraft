@@ -44,13 +44,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     let mut shortcut_ran = false;
     for ev in events {
         match ev {
-            egui::Event::Copy => {
-                app.copy_to_clipboard(ctx, "edit.copy");
-            }
-            egui::Event::Cut => {
-                app.copy_to_clipboard(ctx, "edit.cut");
-            }
-            egui::Event::Paste(text) => app.paste_external(text),
+            egui::Event::Copy => copy_unless_overridden(app, ctx, "edit.copy"),
+            egui::Event::Cut => copy_unless_overridden(app, ctx, "edit.cut"),
+            egui::Event::Paste(text) => paste_unless_overridden(app, text),
             // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
             // a floating picture at the active cell, as Excel does.
             egui::Event::PasteImage(image) => app.paste_color_image(&image),
@@ -67,7 +63,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
-                if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
+                // User bindings win over the hardcoded keymap and the ribbon shortcuts.
+                if run_overridden_shortcut(app, ctx, key, physical_key, m) || crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;
                 }
@@ -154,6 +151,33 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+/// Copy and cut keep the system chord unless that command's shortcut was moved.
+fn copy_unless_overridden(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
+    if !crate::hotkeys::is_overridden(&app.ui.command_hotkeys, id) {
+        app.copy_to_clipboard(ctx, id);
+    }
+}
+
+/// Paste keeps the system chord unless Paste's shortcut was moved.
+fn paste_unless_overridden(app: &mut SheetApp, text: String) {
+    if !crate::hotkeys::is_overridden(&app.ui.command_hotkeys, "edit.paste") {
+        app.paste_external(text);
+    }
+}
+
+/// Runs a user binding for this key. AltGr text is not a shortcut.
+fn run_overridden_shortcut(app: &mut SheetApp, ctx: &egui::Context, key: egui::Key, physical: Option<egui::Key>, modifiers: egui::Modifiers) -> bool {
+    let mac = ctx.os() == egui::os::OperatingSystem::Mac;
+    if crate::keymap::altgr_text(ctx, modifiers, mac) {
+        return false;
+    }
+    let Some(id) = crate::hotkeys::matched(&app.ui.command_hotkeys, key, physical, modifiers, mac) else {
+        return false;
+    };
+    crate::hotkeys::run(app, ctx, &id);
+    true
 }
 
 /// This frame's input events, without those the focused form control took.

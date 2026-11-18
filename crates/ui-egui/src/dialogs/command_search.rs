@@ -28,7 +28,10 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         .into_iter()
         .filter(|c| c.enabled)
         .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
+        .map(|c| {
+            let shortcut = crate::hotkeys::search_shortcut(&app.ui.command_hotkeys, c.id, c.shortcut_for_platform(mac), mac);
+            (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), shortcut)
+        })
         .take(40)
         .collect();
 
