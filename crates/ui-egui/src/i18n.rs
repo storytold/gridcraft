@@ -532,6 +532,35 @@ mod tests {
         }
     }
 
+    /// The fill-handle menus (the right-drag menu and the Auto Fill Options button) and the
+    /// Home › Fill menu have a row in every catalog, with no silent English fallback (#4458).
+    #[test]
+    fn fill_menu_labels_are_translated_in_every_catalog() {
+        let keys = [
+            "Copy Cells",
+            "Fill Series",
+            "Fill Formatting Only",
+            "Fill Without Formatting",
+            "Fill Days",
+            "Fill Weekdays",
+            "Fill Months",
+            "Fill Years",
+            "Auto Fill Options",
+            "Series…",
+            "Down",
+            "Up",
+        ];
+        for key in keys {
+            assert_eq!(Language::En.tr(key), key);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('\n'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_ne!(shown, key, "{code}: the row for {key:?} is still English");
+            }
+        }
+    }
+
     #[test]
     fn fill_puts_each_value_in_once() {
         // A value holding a placeholder (a macro named `{steps}`) is shown as it is.
