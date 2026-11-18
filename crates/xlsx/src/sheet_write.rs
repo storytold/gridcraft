@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{
-    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, PageOrder,
-    Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
+    Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, Formula, LineInfo, NoteBox, NoteCorner, Orientation,
+    PageOrder, Sheet, SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
@@ -409,6 +409,9 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
     if p.scale != 100 && (10..=400).contains(&p.scale) {
         let _ = write!(s, " scale=\"{}\"", p.scale);
     }
+    if let Some(n) = p.first_page_number {
+        let _ = write!(s, " firstPageNumber=\"{n}\"");
+    }
     if let Some((w, h)) = p.fit_to {
         let _ = write!(s, " fitToWidth=\"{w}\" fitToHeight=\"{h}\"");
     }
@@ -417,6 +420,10 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
         let _ = write!(s, " pageOrder=\"{}\"", p.page_order.id());
     }
     let _ = write!(s, " orientation=\"{}\"", if p.orientation == Orientation::Landscape { "landscape" } else { "portrait" });
+    // In the schema's attribute order, as Excel writes it: after the orientation.
+    if p.first_page_number.is_some() {
+        s.push_str(" useFirstPageNumber=\"1\"");
+    }
     if let Some(id) = kept.page_setup_id() {
         let _ = write!(s, " r:id=\"{id}\"");
     }
@@ -643,13 +650,28 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
             continue;
         }
         s.push('>');
-        for &(cell_ref, cell) in cells {
+        for &(cell_ref, mut cell) in cells {
             let ov = overrides.get(&cell_ref);
             let ex = extra.get(&cell_ref);
+            let mut legacy_cell = None;
             let array = dynamic.get(&cell_ref).copied().or_else(|| {
-                let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(workbook, index, cell_ref, f)).then_some(RangeRef::cell(cell_ref))
+                let f = cell?.formula.as_ref().filter(|f| f.array.is_none())?;
+                if f.dynamic {
+                    return Some(RangeRef::cell(cell_ref));
+                }
+                match crate::array_formula::export(workbook, index, cell_ref, f, out.functions, &mut out.names) {
+                    crate::array_formula::Export::Unchanged => None,
+                    crate::array_formula::Export::Dynamic => Some(RangeRef::cell(cell_ref)),
+                    // Every `@` is one Excel implies in a legacy formula: write it without them.
+                    crate::array_formula::Export::Legacy(e) => {
+                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(e))), ..x.clone() });
+                        None
+                    }
+                }
             });
+            if legacy_cell.is_some() {
+                cell = legacy_cell.as_ref();
+            }
             write_cell(
                 s,
                 CellWriteInput {
