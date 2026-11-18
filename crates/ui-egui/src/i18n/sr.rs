@@ -427,6 +427,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Prethodna stranica",
         "Next page" => "Sledeća stranica",
         "Create PDF" => "Napravi PDF",
+        "Nothing to export." => "Nema ničega za izvoz.",
         "Save the sheet as a PDF document that keeps its page layout." => "Sačuvaj list kao PDF dokument koji zadržava izgled stranice.",
         "Change File Type" => "Promeni tip fajla",
         "CSV (Comma delimited)" => "CSV (odvojeno zapetama)",

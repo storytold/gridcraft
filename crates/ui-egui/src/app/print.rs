@@ -15,15 +15,16 @@ impl SheetApp {
     }
 
     /// Asks for a `.pdf` path with the save picker, then re-runs `file.exportPdf` with it. Other
-    /// params (range, sheets, fitToPage) are kept. A cancelled picker does nothing.
-    pub(super) fn export_pdf_with_picker(&mut self, mut params: Json) {
+    /// params (range, sheets, fitToPage) are kept. A cancelled picker does nothing. Returns
+    /// whether the PDF was written (false when cancelled, refused or failed; a failure alerts).
+    pub(crate) fn export_pdf_with_picker(&mut self, mut params: Json) -> bool {
         if !self.commit_edit(0, 0, false, false) {
-            return;
+            return false;
         }
         let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
         let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
-        let Some(pick) = &self.services.pick_save else { return };
-        let Some(path) = pick(&format!("{stem}.pdf")) else { return };
+        let Some(pick) = &self.services.pick_save else { return false };
+        let Some(path) = pick(&format!("{stem}.pdf")) else { return false };
         // The picker may suggest a workbook extension; the export writes a PDF.
         let path = std::path::Path::new(&path).with_extension("pdf").to_string_lossy().into_owned();
         match &mut params {
@@ -32,8 +33,12 @@ impl SheetApp {
             }
             other => *other = json!({"path": path}),
         }
-        if let Err(e) = self.run("file.exportPdf", params) {
-            self.alert(e);
+        match self.run("file.exportPdf", params) {
+            Ok(_) => true,
+            Err(e) => {
+                self.alert(e);
+                false
+            }
         }
     }
 

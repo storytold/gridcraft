@@ -434,6 +434,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Page précédente",
         "Next page" => "Page suivante",
         "Create PDF" => "Créer un PDF",
+        "Nothing to export." => "Rien à exporter.",
         "Save the sheet as a PDF document that keeps its page layout." => {
             "Enregistrer la feuille en tant que document PDF qui conserve sa mise en page."
         }

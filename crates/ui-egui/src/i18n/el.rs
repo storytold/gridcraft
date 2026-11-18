@@ -319,6 +319,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Previous page" => "Προηγούμενη σελίδα",
         "Next page" => "Επόμενη σελίδα",
         "Create PDF" => "Δημιουργία PDF",
+        "Nothing to export." => "Δεν υπάρχει περιεχόμενο για εξαγωγή.",
         "Save the sheet as a PDF document that keeps its page layout." => "Αποθηκεύστε το φύλλο ως PDF διατηρώντας τη διάταξη των σελίδων.",
         "Change File Type" => "Αλλαγή τύπου αρχείου",
         "CSV (Comma delimited)" => "CSV (οριοθέτηση με κόμματα)",
