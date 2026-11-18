@@ -1,7 +1,13 @@
 use super::{
-    Anchor, BorderLine, BorderStyle, Borders, CfOperator, CfRule, CfValueKind, Color, CondFormat, EngineError, Fill, Json, Result, Session, Shape,
-    ShapeKind, Style, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, str_param, target_ranges, target_sheet, u32_param,
+    Anchor, BorderLine, BorderStyle, Borders, CellRef, CfOperator, CfRule, CfValueKind, Color, CondFormat, EngineError, Fill, Json, RangeRef, Result,
+    Session, Shape, ShapeKind, Style, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, str_param, target_ranges,
+    target_sheet, u32_param,
 };
+
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
 
 // ---------------------------------------------------------------- conditional formatting
 
@@ -248,6 +254,7 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
         other => return Err(bad("home.conditionalFormat", format!("unknown rule type `{other}`"))),
     };
     check_cf_rule(&rule)?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Changing conditional formatting", |p| p.format_cells)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let priority = sh.cond_formats.iter().map(|c| c.priority).max().unwrap_or(0) + 1;
@@ -265,18 +272,38 @@ pub(super) fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let whole = bool_param(p, "sheet").unwrap_or(false);
     let ranges = target_ranges(s, p)?;
+    crate::cmd::refuse_unless_allowed(s, sheet, "Changing conditional formatting", |p| p.format_cells)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if whole {
             sh.cond_formats.clear();
         } else {
             for cf in sh.cond_formats.iter_mut() {
+                let before = RangeRef::top_left(&cf.ranges);
                 cf.ranges.retain(|r| !ranges.iter().any(|x| x.intersects(r)));
+                // The relative formulas are written for the top-left cell: when it goes, they're
+                // rewritten for the new one, so the areas left keep reading the same cells.
+                if let (Some(from), Some(to)) = (before, RangeRef::top_left(&cf.ranges)) {
+                    rebase_cf_formulas(&mut cf.rule, from, to);
+                }
             }
             sh.cond_formats.retain(|c| !c.ranges.is_empty());
         }
         Ok(Json::Null)
     })
+}
+
+/// Moves the relative references of a rule's per-cell formulas written for `from` to `to`.
+fn rebase_cf_formulas(rule: &mut CfRule, from: CellRef, to: CellRef) {
+    let mv = |f: &str| crate::cmd::data::move_rule_formula(f, from, to);
+    match rule {
+        CfRule::CellIs { a, b, .. } => {
+            *a = mv(a);
+            *b = b.as_deref().map(mv);
+        }
+        CfRule::Expression { formula, .. } => *formula = mv(formula),
+        _ => {}
+    }
 }
 
 pub(super) fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
@@ -292,6 +319,7 @@ pub(super) fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
             .unwrap_or_default();
         return Ok(json!({"rules": list}));
     }
+    crate::cmd::refuse_unless_allowed(s, sheet, "Changing conditional formatting", |p| p.format_cells)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         // The count is taken again after each step: a delete shortens the list.
