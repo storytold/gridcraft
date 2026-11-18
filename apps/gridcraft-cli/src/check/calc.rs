@@ -88,7 +88,6 @@ pub fn bool_cached_as_number(expected: &Value, actual: &Value) -> bool {
     matches!((expected, actual), (Value::Number(n), Value::Bool(b)) if *n == if *b { 1.0 } else { 0.0 })
 }
 
-/// Whether GridCraft's `actual` agrees with the producer's `expected`.
 pub fn values_match(expected: &Value, actual: &Value, tolerance: f64) -> bool {
     match (expected, actual) {
         (Value::Number(a), Value::Number(b)) => (a - b).abs() <= tolerance * a.abs().max(b.abs()).max(1.0),
@@ -146,13 +145,28 @@ impl MismatchIndex {
     }
 }
 
-/// Compares every formula cell of `cached` (as the producer saved it) with `fresh` (recalculated
+/// Captures the producer-cached scalar values of formula cells before recalculation so `check`
+/// can recalculate the workbook in place without copy-on-write cloning every formula band.
+pub(super) fn snapshot_formula_values(wb: &Workbook) -> HashMap<Key, Value> {
+    let mut out = HashMap::new();
+    for (si, sh) in wb.sheets.iter().enumerate() {
+        for (c, cell) in sh.cells.iter() {
+            if cell.formula.is_some() && !cell.value.is_empty() {
+                out.insert((si, c), cell.value.clone());
+            }
+        }
+    }
+    out
+}
+
+/// Compares every formula cell's producer-cached value in `saved` with `fresh` (recalculated
 /// by GridCraft). Without `trust_cache` nothing is compared (see [`CalcReport::stale_cache`]).
-pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: bool, opts: &Options) -> CalcReport {
+pub(super) fn oracle(saved: &HashMap<Key, Value>, fresh: &Workbook, calc: &Calc, trust_cache: bool, opts: &Options) -> CalcReport {
+    let formula_wb = fresh;
     let mut r = CalcReport { stale_cache: !trust_cache, ..Default::default() };
-    let vnames = volatile_names(cached);
+    let vnames = volatile_names(formula_wb);
     let mut volatile: HashSet<Key> = HashSet::new();
-    for (si, sh) in cached.sheets.iter().enumerate() {
+    for (si, sh) in formula_wb.sheets.iter().enumerate() {
         for (c, cell) in sh.cells.iter() {
             if let Some(f) = &cell.formula {
                 r.formula_cells += 1;
@@ -179,14 +193,18 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
     }
 
     let mut bad: Vec<(Key, Vec<String>)> = Vec::new();
-    for (si, sh) in cached.sheets.iter().enumerate() {
+    for (si, sh) in formula_wb.sheets.iter().enumerate() {
         for (c, cell) in sh.cells.iter() {
             let Some(f) = &cell.formula else { continue };
             if volatile.contains(&(si, c)) {
                 r.volatile += 1;
                 continue;
             }
-            if cell.value.is_empty() || !trust_cache {
+            let Some(expected_val) = saved.get(&(si, c)).filter(|v| !v.is_empty()) else {
+                r.no_oracle += 1;
+                continue;
+            };
+            if !trust_cache {
                 r.no_oracle += 1;
                 continue;
             }
@@ -199,8 +217,8 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
                 }
                 None => vec!["(unparsed)".to_string()],
             };
-            let bool_as_number = bool_cached_as_number(&cell.value, &actual);
-            let ok = bool_as_number || values_match(&cell.value, &actual, opts.tolerance);
+            let bool_as_number = bool_cached_as_number(expected_val, &actual);
+            let ok = bool_as_number || values_match(expected_val, &actual, opts.tolerance);
             if bool_as_number {
                 r.bool_as_number += 1;
             }
@@ -215,7 +233,7 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
                 r.matched += 1;
             } else {
                 r.mismatched += 1;
-                *r.signatures.entry(format!("{} → {}", type_name(&cell.value), type_name(&actual))).or_default() += 1;
+                *r.signatures.entry(format!("{} → {}", type_name(expected_val), type_name(&actual))).or_default() += 1;
                 bad.push(((si, c), funcs));
             }
         }
@@ -241,11 +259,11 @@ pub fn oracle(cached: &Workbook, fresh: &Workbook, calc: &Calc, trust_cache: boo
     // Primary mismatches first, each group in sheet then row-major order (already sorted).
     listed.sort_by_key(|(primary, _, _)| !*primary);
     for (primary, k, functions) in listed.into_iter().take(opts.max_report) {
-        let cell = cached.sheet(k.0).and_then(|s| s.cell(k.1));
-        let expected = cell.map(|c| c.value.clone()).unwrap_or_default();
+        let cell = formula_wb.sheet(k.0).and_then(|s| s.cell(k.1));
+        let expected = saved.get(&k).cloned().unwrap_or_default();
         let actual = fresh.sheet(k.0).and_then(|s| s.cell(k.1)).map(|x| x.value.scalar()).unwrap_or_default();
         r.mismatches.push(Mismatch {
-            cell: cell_name(cached, k),
+            cell: cell_name(formula_wb, k),
             formula: cell.map(formula_text).unwrap_or_default(),
             kind: mismatch_kind(&expected, &actual),
             expected,
