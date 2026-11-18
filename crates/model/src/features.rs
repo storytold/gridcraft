@@ -11,7 +11,7 @@ mod print;
 
 pub use pivot::{
     PIVOT_INDEXER, PivotCalcField, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotIndexer, PivotItemRef, PivotLayout,
-    PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, pivot_key,
+    PivotLookup, PivotScopeItem, PivotShowAs, PivotSort, PivotTable, PivotValue, pivot_key,
 };
 pub use print::{EditRange, HfPage, LineInfo, Orientation, PageOrder, PrintSettings, SheetProtection, password_hash};
 
