@@ -31,11 +31,13 @@ pub(crate) fn canonical(
         let expr = formula::parse_closing_parens(body, |text| formula::parse_input(text, locale, known));
         return Ok(format!("={}", formula::print(&expr?)));
     }
-    // Decimal-comma number entry follows the same preference, without rewriting text or dates.
-    let normalized = body.trim().replace(locale.decimal_separator(), ".");
-    let number = normalized.strip_suffix('%').unwrap_or(&normalized);
-    if number.parse::<f64>().is_ok_and(f64::is_finite) {
-        return Ok(normalized);
+    // A number typed with the formula language's decimal separator is handed on with the
+    // workbook region's, which is what `cell.set` reads: Spanish formulas in an en-US workbook
+    // turn `1,5` into `1.5`. Writing `.` whatever the region would make pt-BR read `1,5` as 1 May.
+    let separator = locale.decimal_separator();
+    let number = body.trim().replace(separator, ".");
+    if number.strip_suffix('%').unwrap_or(&number).parse::<f64>().is_ok_and(f64::is_finite) {
+        return Ok(body.trim().replace(separator, &wb.region.decimal.to_string()));
     }
     Ok(text.to_string())
 }

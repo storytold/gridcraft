@@ -56,6 +56,10 @@ pub(crate) const MAX_WEDGES: usize = 2_048;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    /// The region number labels are written with.
+    region: &'static gridcraft_core::Region,
+    /// The workbook's date system date labels are read in.
+    dates: gridcraft_core::DateSystem,
 }
 
 #[cfg(test)]
@@ -207,13 +211,28 @@ pub(crate) fn sanitized(d: &ChartData) -> Cow<'_, ChartData> {
     if needs_sanitizing(d) { Cow::Owned(apply_budget(sanitize(d))) } else { Cow::Borrowed(d) }
 }
 
-/// Lays out and draws a chart into a `w`×`h` box at the origin. Empty for a degenerate box.
+/// Lays out and draws a chart into a `w`×`h` box at the origin, with en-US number labels and
+/// 1900 dates. Empty for a degenerate box.
 pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) -> Vec<Prim> {
+    render_in(chart, data, w, h, m, &gridcraft_core::region::EN_US, gridcraft_core::DateSystem::D1900)
+}
+
+/// Like [`render`], writing number labels with the decimal and thousands separators of `region`
+/// and date labels in the workbook's date system `dates`.
+pub fn render_in(
+    chart: &Chart,
+    data: &ChartData,
+    w: f32,
+    h: f32,
+    m: &dyn Measure,
+    region: &'static gridcraft_core::Region,
+    dates: gridcraft_core::DateSystem,
+) -> Vec<Prim> {
     if !(w.is_finite() && h.is_finite()) || w < 1.0 || h < 1.0 || w > 1e7 || h > 1e7 {
         return vec![];
     }
     let data = sanitized(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut ctx = Ctx { out: Vec::new(), m, region, dates };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };

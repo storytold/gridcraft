@@ -1773,3 +1773,43 @@ fn volatile_defined_names_are_followed() {
     assert!(!has_volatile_series(&wb, 1, &with("=Dice")));
     assert!(has_volatile_series(&wb, 1, &with("=FreshClock")));
 }
+
+#[test]
+fn date_labels_follow_the_workbook_date_system() {
+    // Serial 45000 is 2023-03-15 in the 1900 system and 2027-03-16 in the 1904 system.
+    let mut s = series("Days", &[45000.0, 45010.0], [20, 96, 130, 255], ChartKind::Line);
+    s.number_format = "yyyy".into();
+    let d = ChartData { categories: vec!["a".into(), "b".into()], series: vec![s], ..Default::default() };
+    let c = chart(ChartKind::Line);
+    let en = &gridcraft_core::region::EN_US;
+    let d1900 = render_in(&c, &d, 400.0, 300.0, &ApproxMeasure, en, gridcraft_core::DateSystem::D1900);
+    let d1904 = render_in(&c, &d, 400.0, 300.0, &ApproxMeasure, en, gridcraft_core::DateSystem::D1904);
+    assert!(texts(&d1900).contains(&"2023"), "{:?}", texts(&d1900));
+    assert!(texts(&d1904).contains(&"2027"), "{:?}", texts(&d1904));
+    assert!(!texts(&d1904).contains(&"2023"), "{:?}", texts(&d1904));
+}
+
+#[test]
+fn general_labels_and_numeric_categories_use_the_region_decimal() {
+    let pt = gridcraft_core::region::lookup("pt-BR");
+    // General axis and data labels.
+    let mut s = series("Rate", &[0.5, 1.5, 2.5], [20, 96, 130, 255], ChartKind::Line);
+    s.number_format = "General".into();
+    let d = ChartData { categories: vec!["a".into(), "b".into(), "c".into()], series: vec![s], ..Default::default() };
+    let prims = render_in(&chart(ChartKind::Line), &d, 400.0, 300.0, &ApproxMeasure, pt, gridcraft_core::DateSystem::D1900);
+    let t = texts(&prims);
+    assert!(t.contains(&"1,5"), "{t:?}");
+    assert!(!t.iter().any(|x| x.contains('.')), "{t:?}");
+    // Numeric categories in General take the workbook region's decimal.
+    let mut wb = Workbook::new();
+    wb.region = pt;
+    if let Some(sh) = wb.sheet_mut(0) {
+        for (r, (x, y)) in [(1.5, 10.0), (2.25, 20.0)].iter().enumerate() {
+            sh.set_value(CellRef::new(r as u32, 0), Value::Number(*x));
+            sh.set_value(CellRef::new(r as u32, 1), Value::Number(*y));
+        }
+    }
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series { categories: Some("A1:A2".into()), values: "B1:B2".into(), ..Default::default() }];
+    assert_eq!(resolve(&wb, 0, &c).categories, vec!["1,5".to_string(), "2,25".to_string()]);
+}
