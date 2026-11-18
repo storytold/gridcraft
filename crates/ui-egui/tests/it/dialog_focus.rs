@@ -377,3 +377,31 @@ fn existing_message_takes_enter_and_escape_before_open_dialog() {
     assert!(h.state().message.is_none());
     assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "LaterName");
 }
+
+/// #2189: Ctrl+Escape while an error message is open must not close the dialog behind it or lose the draft.
+#[test]
+fn ctrl_escape_does_not_close_dialog_behind_error_message() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some());
+    assert!(h.state().dialog.is_some());
+
+    h.key_press_modifiers(egui::Modifiers::CTRL, Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "Ctrl+Escape does not dismiss the error alert");
+    assert!(h.state().dialog.is_some(), "Ctrl+Escape must not close the dialog behind the alert");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("name"), Some(&json!("a/b")), "rename draft remains intact");
+
+    // Plain Escape still dismisses only the message.
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    assert!(h.state().dialog.is_some());
+}

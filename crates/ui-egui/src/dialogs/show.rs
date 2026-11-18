@@ -522,6 +522,7 @@ pub(super) fn open_confirmed_link(app: &mut SheetApp, d: &Dialog) -> Result<(), 
     r
 }
 
+/// Draws the standard OK and Cancel button row, consuming unmodified Enter on confirmation (#2189).
 pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     // A row as tall as the buttons: a right-to-left layout straight in the window takes all the

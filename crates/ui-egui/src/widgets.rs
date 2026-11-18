@@ -598,9 +598,14 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Dismissal keys belong to this message, not the dialog underneath.
-            let (enter, escape) =
-                ui.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, egui::Key::Enter), i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)));
+            // Dismissal keys belong to this message, not the dialog underneath; modified Enter/Escape
+            // events (such as Ctrl+Escape) are also drained so they cannot close the open dialog.
+            let (enter, escape) = ui.input_mut(|i| {
+                let enter = i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+                let escape = i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Enter | egui::Key::Escape, pressed: true, .. }));
+                (enter, escape)
+            });
             if ui.button("  OK  ").clicked() || enter || escape {
                 close = true;
             }
