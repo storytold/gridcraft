@@ -1,6 +1,6 @@
 # Roadmap detail
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (test command) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-18 · **Change:** minor (plug-ins: command plug-ins landed; earlier: test command) · **Target:** Microsoft Excel (Microsoft 365)
 
 Forward-looking plan. The one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work
 list is [`gaps.md`](gaps.md); numbers and method are in
@@ -94,7 +94,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 | Page Layout view, print polish | #14 | 12–20 |
 | Mobile layout | #23 | 30–60 |
 | AI features with local models | #22 | 30–50 |
-| Plugin / custom-function API | #21 | 25–40 |
+| Plug-in panels and custom functions (command plug-ins landed) | #21 | 15–28 |
 
 ## Measuring
 
@@ -113,6 +113,7 @@ to check our files, and Windows machines with the reported GPU drivers.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Next: command plug-ins landed (#21); panels and custom functions left, 15–28 h |
 | 2026-10-23 | minor | Measuring: tests run through `cargo xtask test` |
 | 2026-10-11 | minor | PivotTable calculated fields landed |
 | 2026-10-10 | minor | Current focus and M15 updated for the 10-10 merges |

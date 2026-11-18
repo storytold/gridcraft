@@ -1,6 +1,6 @@
 # Target-app parity: GridCraft vs Microsoft Excel
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-15 · **Change:** minor (performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change; earlier: form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-18 · **Change:** minor (automation: WebAssembly command plug-ins; ecosystem ~10% → ~15%, headline unchanged; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change; earlier: form controls; catalog 281 / 296; earlier: insert objects: equations; earlier: what-if and analysis: Solver Sensitivity report; no score change; earlier: chart resizing no longer listed as missing; no score change; earlier: what-if and analysis: Analysis ToolPak has all 19 tools; earlier: page layout and print: Page Setup's page order; no score change; earlier: charts: data tables with XLSX round-trip and print/PDF; no score change; earlier: what-if and analysis: Solver Options; the Insert Function dialog is named as in Excel; no score change; earlier: Solver Load/Save Model and Reset All; automation: macro interface; catalog count 276 / 292, as `cargo xtask parity` measures; automation: typed macros in the engine; several windows: a native window per workbook window, New Window on the same workbook, Arrange All; no score change) · **Target:** Microsoft Excel (Microsoft 365)
 
 This is the authoritative parity assessment. [`ROADMAP.md`](../ROADMAP.md) summarizes it,
 [`gaps.md`](gaps.md) lists every shortfall, and the area checklists hold the detail:
@@ -107,7 +107,7 @@ performance 8, stability 8, localization 4, hardware 2, platforms 2, ecosystem 2
 | Localization | 4 | ~10% | 100–165 | Ribbon-only catalog in five languages (ja, zh, ko, pt-BR, ru; ~12% of strings each), CJK/Thai/Hebrew font fallback, no shaping or RTL. [localization-parity.md](localization-parity.md) |
 | Hardware | 2 | ~40% | 25–40 | GPU UI via wgpu; single-threaded calc; no pen pressure; a native window per workbook window, Arrange All on one monitor. [hardware-parity.md](hardware-parity.md) |
 | Platforms | 2 | ~80% | 30–60 | [Platforms](#platforms) |
-| Ecosystem / add-ins | 2 | ~10% | 25–40 | [Ecosystem and AI](#ecosystem-and-ai) |
+| Ecosystem / add-ins | 2 | ~15% | 15–28 | [Ecosystem and AI](#ecosystem-and-ai) |
 | AI features | 2 | ~15% | 30–50 | [Ecosystem and AI](#ecosystem-and-ai) |
 | **Ready for real work** | 100 | **~50%** (51.6 computed: 0.45 × 59.0 features + the other rows × their weights) | **~700–1,100** | |
 
@@ -230,8 +230,9 @@ Linux, BSD and RISC-V, where Excel doesn't run.
 
 - **Add-ins:** Excel has Office JavaScript add-ins, COM/XLL add-ins, VBA, Office Scripts and
   Power Automate. GridCraft has its own recorded scripts, plus a control channel, MCP server and
-  CLI that reach every command. VBA is out of scope (owner decision). A plugin or custom-function
-  API (for example LAMBDA libraries and WASM custom functions) is the open-equivalent path: 25–40 h.
+  CLI that reach every command, and WebAssembly command plug-ins (Automate › Plug-ins, the shared
+  craft-plugin runtime; [plugins.md](plugins.md)). VBA is out of scope (owner decision). Custom
+  worksheet functions (LAMBDA libraries, WASM functions) and plug-in panels are left: 15–28 h.
 - **AI:** Excel has Copilot, the COPILOT() function, Analyze Data, Python in Excel and Flash
   Fill. GridCraft has Flash Fill and best-in-class agent control (any MCP client can drive every
   command headless or live), but no in-app assistant, no natural-language formulas and no
@@ -334,6 +335,7 @@ The inventory carried over from the 2026-10-07 ROADMAP.md, updated for what land
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Automation: WebAssembly command plug-ins (RFC-0046); custom functions and panels left, 25–40 → 15–28 h; ecosystem ~10% → ~15% (weight 2), headline unchanged |
 | 2026-11-15 | minor | Performance: formula entry 465 → 420 ms and XLSX save 540 → 488 ms on the 100k-row benchmark (#2654); Sandbox refuses fcntl's asynchronous notification and notifying socket ioctls on Linux (#3846); CI provisions pinned fonts for coverage tests; no score change |
 | 2026-11-02 | minor | Form controls (buttons, scroll bars, spin buttons) in Insert objects and Automation; catalog 277 / 292 → 281 / 296 (Developer › Controls) |
 | 2026-11-02 | minor | Insert objects: equations; catalog count 277 / 292 (no score change) |
