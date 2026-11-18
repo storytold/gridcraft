@@ -1995,3 +1995,39 @@ fn explicit_excel_styles_set_line_stroke_width() {
         }
     }
 }
+
+/// Narrow style 9 bars (at or below the 1 px outline width) omit the white stroke so their gray fill stays visible.
+#[test]
+fn narrow_style_9_bars_retain_visible_fill() {
+    let fill_color: Rgba = [0x61, 0x61, 0x61, 0xFF];
+    let count = 240usize;
+    let categories: Vec<String> = (0..count).map(|i| format!("C{i}")).collect();
+    let values = vec![50.0; count];
+
+    for kind in [ChartKind::ColumnClustered, ChartKind::BarClustered] {
+        let data = ChartData {
+            categories: categories.clone(),
+            category_levels: vec![],
+            palette: vec![],
+            series: vec![series("S1", &values, fill_color, kind)],
+        };
+        let mut c = chart(kind);
+        c.legend = LegendPos::None;
+        // Data labels keep bars on the unmerged direct path even when narrower than 1 px.
+        c.data_labels = true;
+        c.gridlines = false;
+        c.style = 9;
+
+        let prims = render(&c, &data, 220.0, 220.0, &ApproxMeasure);
+        let narrow_bars: Vec<_> = prims
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Rect { w, h, fill: Some(fill), stroke, .. } if *fill == fill_color && (*w <= 1.0 || *h <= 1.0) => Some(*stroke),
+                _ => None,
+            })
+            .collect();
+
+        assert!(!narrow_bars.is_empty(), "Expected narrow unmerged bars for {kind:?}");
+        assert!(narrow_bars.iter().all(Option::is_none), "Narrow style 9 bars must omit the 1 px white outline: {narrow_bars:?}");
+    }
+}

@@ -144,11 +144,10 @@ impl BarSink {
         let pos = self.pos(c);
         let band = self.band();
         if !merge {
-            if self.horizontal {
-                ctx.rect(lo, pos, len, self.bw, self.color, self.stroke);
-            } else {
-                ctx.rect(pos, lo, self.bw, len, self.color, self.stroke);
-            }
+            let (x, y, w, h) = if self.horizontal { (lo, pos, len, self.bw) } else { (pos, lo, self.bw, len) };
+            // Omit the outline when a bar is no wider/taller than the stroke, so the inner fill never disappears.
+            let stroke = self.stroke.filter(|(_, sw)| w > *sw && h > *sw);
+            ctx.rect(x, y, w, h, self.color, stroke);
             return;
         }
         match &mut self.run {

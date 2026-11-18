@@ -133,3 +133,31 @@ fn excel_alternate_content_chart_styles_roundtrip() {
         }
     }
 }
+
+/// Surrounding whitespace on `<c:style val="..."/>` trims cleanly, while out-of-range fallback values default to style 2.
+#[test]
+fn alternate_content_fallback_style_trims_and_validates_range() {
+    use crate::chart::read_chart;
+    use crate::xml::parse;
+
+    for (raw_val, expected) in [(" 9 ", 9), ("\t1\n", 1), ("0", 2), ("49", 2), ("200", 2)] {
+        let xml = format!(
+            r#"<c:chartSpace
+                xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+                xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                xmlns:c14="http://schemas.microsoft.com/office/drawing/2007/8/2/chart">
+                <mc:AlternateContent>
+                    <mc:Choice Requires="c14"><c14:style val="109"/></mc:Choice>
+                    <mc:Fallback><c:style val="{raw_val}"/></mc:Fallback>
+                </mc:AlternateContent>
+                <c:chart>
+                    <c:plotArea>
+                        <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/></c:ser></c:barChart>
+                    </c:plotArea>
+                </c:chart>
+            </c:chartSpace>"#
+        );
+        let chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+        assert_eq!(chart.style, expected, "raw fallback style {raw_val:?}");
+    }
+}

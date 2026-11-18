@@ -218,6 +218,11 @@ fn axis_ids(g: &El) -> Vec<String> {
     g.kids("axId").filter_map(|a| a.attr("val")).map(str::to_string).collect()
 }
 
+/// Parses a legacy OOXML `<c:style val="..."/>` index (`1..=48`), trimming surrounding spaces.
+fn parse_chart_style(val: &str) -> Option<u32> {
+    val.trim().parse::<u32>().ok().filter(|s| (1..=48).contains(s))
+}
+
 /// Parses a DrawingML `<c:chartSpace>` element into a [`Chart`] model.
 pub fn read_chart(root: &El) -> Option<Chart> {
     let chart = root.child("chart")?;
@@ -284,8 +289,8 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         // The c14 Choice uses different IDs, so read the c:style Fallback.
         style: root
             .child_val("style")
-            .and_then(|v| v.parse().ok())
-            .or_else(|| root.path(&["AlternateContent", "Fallback"]).and_then(|fallback| fallback.child_val("style")).and_then(|v| v.parse().ok()))
+            .and_then(parse_chart_style)
+            .or_else(|| root.path(&["AlternateContent", "Fallback"]).and_then(|fallback| fallback.child_val("style")).and_then(parse_chart_style))
             .unwrap_or(2),
         hole_size,
         first_slice_angle,
