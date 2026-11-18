@@ -237,6 +237,35 @@ fn delimiter_sniffing() {
 }
 
 #[test]
+fn a_first_record_wider_than_the_sniff_sample_keeps_its_delimiter() {
+    // A header row of about 105 KiB: longer than the sample delimiter detection reads.
+    let header: Vec<String> = (0..12_000).map(|i| format!("col{i:05}")).collect();
+    let text = format!("{}\n1;2;3\n", header.join(";"));
+    assert!(text.len() > 96 << 10);
+    assert_eq!(sniff_delimiter(&text, '"'), b';');
+    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(wb.csv_delimiter, Some(b';'));
+    assert_eq!(v(&wb, 1, 1), Value::Number(2.0));
+}
+
+#[test]
+fn a_sparse_semicolon_export_reopens_with_its_cells() {
+    // Only B40001 holds a value: the 40,000 rows above it are written as bare separators, more
+    // than the sample delimiter detection reads.
+    let mut s = Sheet::new("S");
+    s.set_value(CellRef::new(40_000, 1), Value::Number(7.0));
+    let raw = |c: CellRef| match s.value(c) {
+        Value::Number(n) => gridcraft_core::number_to_text(n),
+        _ => String::new(),
+    };
+    let out = write_csv(&s, b';', raw).unwrap();
+    assert!(out.len() > 64 << 10);
+    let back = read_csv(&out, &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(back.csv_delimiter, Some(b';'));
+    assert_eq!(v(&back, 40_000, 1), Value::Number(7.0));
+}
+
+#[test]
 fn writing() {
     let mut wb = Workbook::new();
     let mut s = Sheet::new("S");
