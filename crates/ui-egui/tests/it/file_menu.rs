@@ -167,6 +167,173 @@ fn save_actions_include_the_cell_draft_and_close_keeps_the_unsaved_prompt() {
 }
 
 #[test]
+fn host_save_sends_save_as_for_untitled_and_in_place_save_for_saved_xlsx() {
+    let saves = Arc::new(Mutex::new(Vec::<(String, bool, Vec<u8>)>::new()));
+    let capture = saves.clone();
+    let mut h = harness(Services {
+        host_save: Some(Box::new(move |name, bytes, save_as| {
+            capture.lock().unwrap().push((name.to_string(), save_as, bytes.to_vec()));
+            Ok(())
+        })),
+        ..Default::default()
+    });
+
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    assert!(h.state().session.active().unwrap().is_dirty());
+    choose(&mut h, "Save");
+    assert_eq!(page(&h), Some("saveAs"), "untitled workbook opens Save As first");
+    click(&mut h, "Download (.xlsx)");
+    assert!(h.state().backstage.is_none());
+    assert!(!h.state().session.active().unwrap().is_dirty(), "host_save marks the workbook clean");
+
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "99"})).unwrap();
+    assert!(h.state().session.active().unwrap().is_dirty());
+    choose(&mut h, "Save");
+    assert!(h.state().backstage.is_none(), "Backstage Save closes immediately for a saved .xlsx");
+    assert!(!h.state().session.active().unwrap().is_dirty());
+
+    let got = saves.lock().unwrap();
+    assert_eq!(got.len(), 2);
+    assert_eq!((got[0].0.as_str(), got[0].1), ("Book1.xlsx", true));
+    assert_eq!((got[1].0.as_str(), got[1].1), ("Book1.xlsx", false));
+    for (expected, (_, _, bytes)) in [(42.0, &got[0]), (99.0, &got[1])] {
+        assert!(!bytes.is_empty());
+        let (wb, _) = gridcraft_engine::io::open_bytes("Book1.xlsx", bytes).unwrap();
+        assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(expected));
+    }
+}
+
+#[test]
+fn host_save_saves_opened_xlsx_in_place_and_save_as_sends_save_as_flag() {
+    let mut seed = Session::new();
+    seed.new_workbook();
+    seed.execute("cell.set", serde_json::json!({"cell": "A1", "input": "10"})).unwrap();
+    let seed_bytes = gridcraft_engine::io::save_bytes(&seed.doc().unwrap().wb, "Quarterly.xlsx").unwrap();
+
+    let saves = Arc::new(Mutex::new(Vec::<(String, bool, Vec<u8>)>::new()));
+    let capture = saves.clone();
+    let mut h = harness(Services {
+        host_save: Some(Box::new(move |name, bytes, save_as| {
+            capture.lock().unwrap().push((name.to_string(), save_as, bytes.to_vec()));
+            Ok(())
+        })),
+        ..Default::default()
+    });
+
+    let b64 = gridcraft_engine::io::base64_encode(&seed_bytes);
+    h.state_mut().run("file.open", serde_json::json!({"name": "Quarterly.xlsx", "base64": b64})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B1", "input": "7"})).unwrap();
+    assert!(h.state().session.active().unwrap().is_dirty());
+
+    choose(&mut h, "Save");
+    assert!(h.state().backstage.is_none(), "opened .xlsx saves in-place from Backstage");
+    assert!(!h.state().session.active().unwrap().is_dirty());
+
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B1", "input": "8"})).unwrap();
+    choose(&mut h, "Save As");
+    click(&mut h, "Download (.xlsx)");
+    assert!(h.state().backstage.is_none());
+    assert!(!h.state().session.active().unwrap().is_dirty());
+
+    h.state_mut().run("file.saveAs", serde_json::json!({})).unwrap();
+
+    let got = saves.lock().unwrap();
+    assert_eq!(got.len(), 3);
+    assert_eq!((got[0].0.as_str(), got[0].1), ("Quarterly.xlsx", false));
+    assert_eq!((got[1].0.as_str(), got[1].1), ("Quarterly.xlsx", true));
+    assert_eq!((got[2].0.as_str(), got[2].1), ("Quarterly.xlsx", true));
+    for (_, _, bytes) in got.iter() {
+        assert!(!bytes.is_empty());
+        let (wb, _) = gridcraft_engine::io::open_bytes("Quarterly.xlsx", bytes).unwrap();
+        assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(10.0));
+    }
+}
+
+#[test]
+fn failing_host_save_keeps_workbook_dirty_and_backstage_open() {
+    let mut h = harness(Services { host_save: Some(Box::new(|_, _, _| Err("disk quota exceeded".into()))), ..Default::default() });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+
+    choose(&mut h, "Save As");
+    click(&mut h, "Download (.xlsx)");
+    assert_eq!(page(&h), Some("saveAs"), "failed host_save keeps Backstage Save As open");
+    let doc = h.state().session.active().unwrap();
+    assert!(doc.is_dirty(), "failed host_save leaves workbook dirty");
+    assert_eq!(doc.wb.source_path, None);
+    assert_eq!(doc.display_title(), "Book1");
+    assert_eq!(h.state().message.as_ref().map(|(_, m)| m.as_str()), Some("disk quota exceeded"));
+    assert!(!h.state_mut().save_as_xlsx(true), "save_as_xlsx returns false even when a message is already present");
+}
+
+#[test]
+fn backstage_save_on_imported_or_encrypted_workbooks_opens_save_as_without_calling_host_save() {
+    let mut seed = Session::new();
+    seed.new_workbook();
+    seed.execute("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    let xlsx = gridcraft_engine::io::save_bytes(&seed.doc().unwrap().wb, "Secret.xlsx").unwrap();
+    let encrypted = gridcraft_xlsx::testing::encrypt_workbook(&xlsx, "pw-42");
+
+    let saves = Arc::new(Mutex::new(Vec::<(String, bool)>::new()));
+    let capture = saves.clone();
+    let mut h = harness(Services {
+        host_save: Some(Box::new(move |name, _, save_as| {
+            capture.lock().unwrap().push((name.to_string(), save_as));
+            Ok(())
+        })),
+        ..Default::default()
+    });
+
+    // Encrypted .xlsx opened with password must not save in-place over the encrypted original.
+    h.state_mut()
+        .run("file.open", serde_json::json!({"name": "Secret.xlsx", "base64": gridcraft_engine::io::base64_encode(&encrypted), "password": "pw-42"}))
+        .unwrap();
+    choose(&mut h, "Save");
+    assert_eq!(page(&h), Some("saveAs"), "encrypted workbook opens Save As instead of saving in-place");
+    assert!(saves.lock().unwrap().is_empty());
+
+    // Imported formats (.xls, .xlsb, .ods) have content_kind = None and also open Save As.
+    for ext in ["xls", "xlsb", "ods"] {
+        h.state_mut().run("ui.backstage", serde_json::json!({"page": "home"})).unwrap();
+        h.run_steps(2);
+        if let Some(doc) = h.state_mut().session.active_mut() {
+            std::sync::Arc::make_mut(&mut doc.wb).source_path = Some(std::path::PathBuf::from(format!("Imported.{ext}")));
+            doc.content_kind = None;
+        }
+        click(&mut h, "Save");
+        assert_eq!(page(&h), Some("saveAs"), ".{ext} import opens Save As instead of saving in-place");
+        assert!(saves.lock().unwrap().is_empty(), ".{ext} import must not call host_save on Save");
+    }
+}
+
+#[test]
+fn download_only_web_save_downloads_opened_xlsx_and_save_as_leaves_marking_to_host_bridge() {
+    let mut seed = Session::new();
+    seed.new_workbook();
+    seed.execute("cell.set", serde_json::json!({"cell": "A1", "input": "5"})).unwrap();
+    let xlsx = gridcraft_engine::io::save_bytes(&seed.doc().unwrap().wb, "WebBook.xlsx").unwrap();
+
+    let downloads = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+    let capture = downloads.clone();
+    let mut h = harness(Services {
+        download: Some(Box::new(move |name, bytes| capture.lock().unwrap().push((name.to_string(), bytes.to_vec())))),
+        ..Default::default()
+    });
+
+    h.state_mut().run("file.open", serde_json::json!({"name": "WebBook.xlsx", "base64": gridcraft_engine::io::base64_encode(&xlsx)})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "6"})).unwrap();
+    assert!(h.state().session.active().unwrap().is_dirty());
+
+    // An opened .xlsx on web with `download` service is treated as having a file by Backstage Save.
+    choose(&mut h, "Save");
+    assert!(h.state().backstage.is_none());
+    assert!(h.state().session.active().unwrap().is_dirty(), "download-only branch does not mark the workbook clean inline");
+    let got = downloads.lock().unwrap();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].0, "WebBook.xlsx");
+    assert!(!got[0].1.is_empty());
+}
+
+#[test]
 /// Options opens, named Backstage pages are reachable and accessible, an invalid page errors, and both close and Back leave Backstage.
 fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     let mut h = harness(Services::default());

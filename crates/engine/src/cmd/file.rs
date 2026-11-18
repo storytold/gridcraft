@@ -43,6 +43,7 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"index": i, "title": s.doc()?.display_title()}))
 }
 
+/// Opens a workbook from `base64` bytes or a `path`, or requests the Open dialog when neither is given.
 fn open(s: &mut Session, p: &Json) -> Result<Json> {
     let (name, bytes) = if let Some(b) = str_param(p, "base64") {
         (str_param(p, "name").unwrap_or("Book.xlsx").to_string(), crate::io::base64_decode(b).ok_or_else(|| bad("file.open", "invalid base64"))?)
@@ -87,7 +88,13 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     // Someone else may have made the file: its active content asks before it runs.
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+    if !imported
+        && !encrypted
+        && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx
+        && matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Xlsx) | None)
+        && gridcraft_xlsx::XlsxKind::from_path(&name) == gridcraft_xlsx::XlsxKind::Workbook
+        && doc.wb.vba_project.is_none()
+    {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
     let i = s.add_document(doc);
@@ -110,7 +117,8 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
         None => {
-            s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({})));
+            let has_host_xlsx = s.active().is_some_and(|d| d.wb.source_path.is_some() && d.content_kind == Some(crate::io::FileKind::Xlsx));
+            s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": !has_host_xlsx})));
             return ok();
         }
     };
@@ -145,9 +153,10 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"path": path, "bytes": bytes.len()}))
 }
 
+/// Saves the active workbook to `path`, or requests the Save As dialog with `saveAs = true` when no path is given.
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
     if str_param(p, "path").is_none() {
-        s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({})));
+        s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({"saveAs": true})));
         return ok();
     }
     save(s, p)
