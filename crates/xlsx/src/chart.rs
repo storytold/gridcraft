@@ -135,7 +135,7 @@ const MAX_CACHED_POINTS: usize = gridcraft_core::MAX_ROWS as usize;
 /// points are `None`. Points without a valid `idx` (schema-invalid, but some writers omit it) go
 /// in document order. A missing, unreadable or too small `ptCount` gives way to the points present.
 ///
-/// The per-chart budget is checked before allocation. If the requested count would exceed the
+/// The workbook-wide budget is checked before allocation. If the requested count would exceed the
 /// remaining budget, all present points are retained when they fit; only trailing gaps are
 /// clamped. If present points extend past the remaining budget, points beyond that boundary are
 /// dropped as well, and the caller is warned.
