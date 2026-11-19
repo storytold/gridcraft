@@ -132,11 +132,11 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     // sheetFormatPr
     let max_row_outline = sheet.rows.values().map(|r| r.outline).max().unwrap_or(0);
     let max_col_outline = sheet.cols.values().map(|r| r.outline).max().unwrap_or(0);
+    // Keep positive subpixel widths distinct from explicit zero (`defaultColWidth="0"`).
+    let default_px = if sheet.default_col_width > 0.0 { sheet.default_col_width.max(1.0) } else { sheet.default_col_width };
     s.push_str("<sheetFormatPr");
     if (sheet.default_col_width - gridcraft_model::DEFAULT_COL_WIDTH).abs() > 0.01 {
-        // Keep positive subpixel widths distinct from explicit zero (`defaultColWidth="0"`).
-        let px = if sheet.default_col_width > 0.0 { sheet.default_col_width.max(1.0) } else { sheet.default_col_width };
-        let _ = write!(s, " defaultColWidth=\"{}\"", num(px_to_col_width(px)));
+        let _ = write!(s, " defaultColWidth=\"{}\"", num(px_to_col_width(default_px)));
     }
     let _ = write!(s, " defaultRowHeight=\"{}\"", num(px_to_pt(sheet.default_row_height)));
     if (sheet.default_row_height - gridcraft_model::DEFAULT_ROW_HEIGHT).abs() > 0.01 {
@@ -156,7 +156,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         let mut run: Option<(u32, u32, LineInfo)> = None;
         let flush = |s: &mut String, r: (u32, u32, LineInfo)| {
             let (a, b, i) = r;
-            let w = i.size.unwrap_or(sheet.default_col_width);
+            let w = i.size.unwrap_or(default_px);
             let _ = write!(s, "<col min=\"{}\" max=\"{}\" width=\"{}\"", a + 1, b + 1, num(px_to_col_width(w)));
             if let Some(st) = i.style {
                 let _ = write!(s, " style=\"{}\"", sid(st));

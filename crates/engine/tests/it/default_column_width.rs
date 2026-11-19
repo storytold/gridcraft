@@ -106,11 +106,16 @@ fn invalid_pref_keeps_sibling_settings_and_zero_width_roundtrips_xlsx() {
     let neg_prefs: gridcraft_engine::Prefs = serde_json::from_str(r#"{"defaultColumnWidth":-1e-50}"#).unwrap();
     assert_eq!(neg_prefs.default_column_width, 64.0);
 
-    // Positive subpixel widths remain positive across XLSX round-trip rather than collapsing to zero.
+    // Positive subpixel widths remain positive across XLSX round-trip rather than collapsing to zero,
+    // including styled `<col>` records that inherit the sheet's default column width.
     let mut subpx = Session::new();
     subpx.execute("options.newWorkbookColumnWidth", json!({"width": 0.4})).unwrap();
     let sidx = subpx.new_workbook();
+    subpx.execute("home.bold", json!({"range": "B:B"})).unwrap();
     let subpx_bytes = gridcraft_xlsx::write_xlsx(&subpx.documents()[sidx].wb).unwrap();
     let (reopened_subpx, _) = gridcraft_engine::io::open_bytes("subpx.xlsx", &subpx_bytes).unwrap();
-    assert!(reopened_subpx.sheets[0].default_col_width > 0.0, "positive subpixel width must stay positive on reopen");
+    let reopened_sh = &reopened_subpx.sheets[0];
+    assert!(reopened_sh.default_col_width > 0.0, "positive subpixel width must stay positive on reopen");
+    assert_eq!(reopened_sh.cols.get(&1).and_then(|c| c.size), None, "styled column B must keep inheriting default width");
+    assert!(reopened_sh.col_width(1) > 0.0, "inherited column B width must stay positive on reopen");
 }
