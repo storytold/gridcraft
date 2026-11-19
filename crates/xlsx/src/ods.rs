@@ -33,6 +33,10 @@ pub(crate) fn has_mimetype(bytes: &[u8]) -> bool {
 /// imported as constants, so editing their inputs does not recalculate the original formula.
 /// Always inspect the returned warnings. Saving to ODS is not supported.
 pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
+    // The exact mimetype, as `sniff` requires: craft-ods alone accepts some near misses.
+    if !has_mimetype(bytes) {
+        return Err(IoError::Format("missing or invalid ODS mimetype".into()));
+    }
     let book = craft_ods::read(bytes, &craft_ods::Options::default()).map_err(map_error)?;
     if book.sheets.is_empty() {
         return Err(IoError::Format("ODS contains no worksheets".into()));
@@ -64,25 +68,37 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         }
 
         for (coord, src_cell) in src_sheet.cells {
-            let value = match src_cell.value() {
-                Some(v) => map_value(v),
-                None if src_cell.formula.is_some() => {
-                    if !warned_unavailable {
-                        warned_unavailable = true;
-                        report.warn("Some ODS values or formula caches were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result].");
-                    }
-                    Value::Text(Arc::from("[Unavailable ODS formula result]"))
+            // A typed value that cannot be read (an unparsable number or date, an error cache,
+            // a formula without a result) keeps what the cell showed, else its raw value.
+            let Some(value) = src_cell.value().map(map_value) else {
+                if !warned_unavailable {
+                    warned_unavailable = true;
+                    report.warn("Some ODS values or formula caches were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result].");
                 }
-                None => continue,
+                let text = if !src_cell.text.is_empty() {
+                    src_cell.text.as_str()
+                } else if let Some(raw) = src_cell.raw.as_deref() {
+                    raw
+                } else if src_cell.formula.is_some() {
+                    "[Unavailable ODS formula result]"
+                } else {
+                    "[Unsupported ODS value]"
+                };
+                sheet.set_cell(CellRef::new(coord.row, coord.col), Cell::styled(Value::Text(Arc::from(text)), StyleId::DEFAULT));
+                continue;
             };
 
-            let style_id = match src_cell.value_type {
-                Some(craft_ods::ValueType::Date) => wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("yyyy-mm-dd")),
-                Some(craft_ods::ValueType::Time) => wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("[h]:mm:ss")),
-                Some(craft_ods::ValueType::Percentage) => wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("0.00%")),
-                Some(craft_ods::ValueType::Currency) => wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("#,##0.00")),
-                _ => StyleId::DEFAULT,
+            let format = match src_cell.value_type {
+                Some(craft_ods::ValueType::Date) => {
+                    let with_time = src_cell.raw.as_deref().and_then(craft_ods::date_serial).is_some_and(|(_, time)| time);
+                    Some(if with_time { "yyyy-mm-dd hh:mm:ss.000" } else { "yyyy-mm-dd" })
+                }
+                Some(craft_ods::ValueType::Time) => Some("[h]:mm:ss.000"),
+                Some(craft_ods::ValueType::Percentage) => Some("0.00%"),
+                Some(craft_ods::ValueType::Currency) => Some("#,##0.00"),
+                _ => None,
             };
+            let style_id = format.map_or(StyleId::DEFAULT, |code| wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code)));
 
             let target_coord = CellRef::new(coord.row, coord.col);
             sheet.set_cell(target_coord, Cell::styled(value, style_id));
