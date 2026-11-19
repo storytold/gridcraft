@@ -3,6 +3,11 @@ use super::{
     block, bool_param, edit, json, rewrite, shift_cell_features, str_param, target_range, target_sheet, with,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- tables
 
 pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
@@ -51,7 +56,7 @@ pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             // The header row pushes the data down one row: never off the end of the sheet.
             let last = RangeRef::new(CellRef::new(MAX_ROWS - 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col));
-            if sh.cells.iter_range(last).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+            if sh.cells.iter_range(last).any(|(_, x)| x.has_content()) {
                 return Err(EngineError::Other("To prevent possible loss of data, cells can't be pushed off the end of the worksheet.".into()));
             }
             sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
@@ -211,7 +216,10 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
             let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
-            sh.set_cell(c, Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c) });
+            sh.set_cell(
+                c,
+                Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
+            );
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));
         } else {
@@ -315,9 +323,27 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     edit(s, |cx| {
+        let Some(t) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)).cloned() else { return Ok(Json::Null) };
+        // Structured references to the table become ordinary cell references, as in Excel.
+        let rewrites = plain_table_refs(&cx.wb, si, &t);
+        let rewrites: Vec<_> = rewrites.into_iter().map(|(i, c, e)| (i, c, Formula::from_expr(e))).collect();
+        // Qualified references are longer than structured ones. Text past the parser's limit would
+        // not parse after saving and reopening, leaving a formula that never recalculates.
+        if rewrites.iter().any(|(_, _, f)| f.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN) {
+            return Err(EngineError::Other(format!(
+                "Converting to a range would make a formula longer than {} characters.",
+                gridcraft_formula::MAX_FORMULA_LEN
+            )));
+        }
+        for (i, c, f) in rewrites {
+            if let Some(cell) = cx.wb.sheet_mut(i).and_then(|sh| sh.cells.get_mut(c)) {
+                // Keep a legacy array's entered range and a dynamic-array mark.
+                let (array, dynamic) = cell.formula.as_ref().map_or((None, false), |old| (old.array, old.dynamic));
+                cell.formula = Some(std::sync::Arc::new(Formula { array, dynamic, ..f }));
+            }
+        }
         // Apply the table look as plain formatting, then drop the table.
         let wb = &mut cx.wb;
-        let Some(t) = wb.sheet(si).and_then(|sh| sh.tables.get(ti)).cloned() else { return Ok(Json::Null) };
         let looks: Vec<(CellRef, Style)> = t.range.iter().map(|c| (c, crate::tables::table_cell_style(wb, si, &t, c))).collect();
         for (c, st) in looks {
             let id = wb.styles.intern(st);
@@ -331,4 +357,61 @@ pub(super) fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
         cx.structural = true;
         Ok(Json::Null)
     })
+}
+
+/// Every formula that refers to table `t` on sheet `si`, rewritten with ordinary references to the
+/// cells it reads: absolute, except that a this-row reference keeps a relative row.
+fn plain_table_refs(wb: &gridcraft_model::Workbook, si: usize, t: &Table) -> Vec<(usize, CellRef, gridcraft_formula::Expr)> {
+    use gridcraft_formula::{Expr, RefKind, Reference, SheetSel, StructItem};
+    let plain = |from: usize, a: gridcraft_calc::Area, relative_row: bool| {
+        let sheet = match wb.sheet(a.sheet) {
+            Some(sh) if a.sheet != from => SheetSel::Named(sh.name.clone()),
+            _ => SheetSel::Current,
+        };
+        let end = |c: CellRef| gridcraft_formula::Anchor { row: c.row, col: c.col, row_abs: !relative_row, col_abs: true };
+        let kind = if a.range.is_single() { RefKind::Cell(end(a.range.start)) } else { RefKind::Range(end(a.range.start), end(a.range.end)) };
+        Expr::Ref(Reference { sheet, kind })
+    };
+    let mut out = Vec::new();
+    for (i, sh) in wb.sheets.iter().enumerate() {
+        for (c, x) in sh.cells.iter() {
+            let Some(e) = x.formula.as_ref().and_then(|f| f.expr()) else { continue };
+            let mut hit = false;
+            let ne = e.map(&mut |x| match x {
+                Expr::Struct(st) if st.table.eq_ignore_ascii_case(&t.name) || (st.table.is_empty() && i == si && t.range.contains(c)) => {
+                    hit = true;
+                    match gridcraft_calc::eval::resolve_struct(wb, i, c, &st) {
+                        Ok(a) => plain(i, a, st.specifiers.contains(&StructItem::ThisRow)),
+                        Err(e) => Expr::Error(e),
+                    }
+                }
+                Expr::Name(n) if names_table(wb, i, &n, &t.name) => {
+                    hit = true;
+                    match t.data_range() {
+                        Some(range) => plain(i, gridcraft_calc::Area { sheet: si, range }, false),
+                        None => Expr::Error(gridcraft_core::CellError::Ref),
+                    }
+                }
+                o => o,
+            });
+            if hit {
+                out.push((i, c, ne));
+            }
+        }
+    }
+    out
+}
+
+/// Whether the name `n`, used on sheet `from`, denotes the table `table`. A sheet-qualified
+/// `Sheet1!Orders` is split at its last `!` as the calculator does. A defined name of the same
+/// name in scope wins over the table, so it is not the table.
+fn names_table(wb: &gridcraft_model::Workbook, from: usize, n: &str, table: &str) -> bool {
+    let (scope, bare) = match n.rsplit_once('!') {
+        Some((s, b)) => match wb.sheet_index(s) {
+            Some(i) => (i, b),
+            None => return false,
+        },
+        None => (from, n),
+    };
+    bare.eq_ignore_ascii_case(table) && wb.name(bare, scope).is_none()
 }
