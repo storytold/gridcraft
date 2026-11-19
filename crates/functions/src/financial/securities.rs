@@ -452,7 +452,11 @@ fn odd_last(sys: DateSystem, settle: f64, mat: f64, last: f64, freq: f64, basis:
     }
     // Excel needs the maturity-anchored coupon date on or before last_interest: a last_interest
     // in 1900 ahead of that year's maturity anniversary has none on or after 1900-01-01 (#4074).
-    coupons(sys, last, mat, freq)?;
+    // Only the 1900 system was observed; in the 1904 system the backward probe can reach a year
+    // the calendar cannot represent, so that system keeps the walk-forward behaviour.
+    if sys == DateSystem::D1900 {
+        coupons(sys, last, mat, freq)?;
+    }
     let anchor = ymd(sys, last)?;
     let eom = anchor.2 == days_in_month(anchor.0, anchor.1);
     let step = (12.0 / freq) as i64;
