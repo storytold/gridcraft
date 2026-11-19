@@ -143,7 +143,16 @@ fn read_series(s: &El) -> Series {
         quartiles: Default::default(),
         smooth: bool_val(s, "smooth"),
         trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
+        line_width: line_width(sp.and_then(|p| p.child("ln"))),
     }
+}
+
+/// Widest line DrawingML allows (`ST_LineWidth`, 20116800 EMU), in points.
+const MAX_LINE_PT: f64 = 1584.0;
+
+/// An `<a:ln w>` width in points: finite, not negative, at most [`MAX_LINE_PT`].
+fn line_width(ln: Option<&El>) -> Option<f32> {
+    ln.and_then(|l| l.attr_f64("w")).map(|w| w / EMU_PER_PT).filter(|w| w.is_finite() && *w >= 0.0).map(|w| w.min(MAX_LINE_PT) as f32)
 }
 
 const DASHES: [(LineDash, &str); 11] = [
@@ -548,9 +557,15 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
     }
     let color = s.color.as_ref().and_then(|c: &Color| srgb(c, &wb.theme));
     let line_like = matches!(g, G::Line { .. } | G::Radar | G::Scatter { lines: true });
+    // A width set on the series, else Excel's default 2.25 pt.
+    let w = s.line_width.filter(|w| w.is_finite() && *w >= 0.0).map_or(28575, |w| (f64::from(w).min(MAX_LINE_PT) * EMU_PER_PT).round() as i64);
     match (&color, line_like) {
         (Some(c), true) => {
-            let _ = write!(x, "<c:spPr><a:ln w=\"28575\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
+            let _ = write!(x, "<c:spPr><a:ln w=\"{w}\" cap=\"rnd\"><a:solidFill>{c}</a:solidFill><a:round/></a:ln></c:spPr>");
+        }
+        // The automatic colour with a width of its own.
+        (None, true) if s.line_width.is_some() => {
+            let _ = write!(x, "<c:spPr><a:ln w=\"{w}\" cap=\"rnd\"><a:round/></a:ln></c:spPr>");
         }
         (Some(c), false) if g == (G::Scatter { lines: false }) => {
             let _ = write!(

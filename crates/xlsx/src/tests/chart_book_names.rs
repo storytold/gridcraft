@@ -37,6 +37,7 @@ fn this_book_prefix_is_dropped_only_in_front_of_names() {
 
 fn series(name: &str, values: &str) -> Series {
     Series {
+        line_width: None,
         name: Some(name.into()),
         categories: Some("Items".into()),
         values: values.into(),

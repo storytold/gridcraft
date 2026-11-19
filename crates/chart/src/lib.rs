@@ -153,6 +153,9 @@ pub struct SeriesData {
     pub trendlines: Vec<TrendlineData>,
     /// Number format code of the source values ("General" by default).
     pub number_format: String,
+    /// Width in points of the series line; `None` = the kind's default.
+    #[serde(default)]
+    pub line_width: Option<f32>,
 }
 
 /// A trendline to draw: the model settings with the line colour resolved against the theme.
@@ -175,6 +178,7 @@ impl Default for SeriesData {
             smooth: false,
             trendlines: vec![],
             number_format: "General".into(),
+            line_width: None,
         }
     }
 }
