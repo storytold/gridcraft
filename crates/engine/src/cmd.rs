@@ -744,7 +744,7 @@ pub(crate) fn array_holds_edit(edits: &[CellRef], arrays: &[(CellRef, RangeRef)]
             let mut at = col + 1;
             while let Some(slot) = tree.get_mut(at) {
                 *slot += 1;
-                at += at.isolate_lowest_one();
+                at += 1 << at.trailing_zeros();
             }
             next += 1;
         }
@@ -753,7 +753,7 @@ pub(crate) fn array_holds_edit(edits: &[CellRef], arrays: &[(CellRef, RangeRef)]
             let (mut n, mut sum) = (n, 0i64);
             while n > 0 {
                 sum += tree.get(n).copied().unwrap_or(0);
-                n -= n.isolate_lowest_one();
+                n -= 1 << n.trailing_zeros();
             }
             sum
         };
