@@ -1,8 +1,9 @@
 //! Polish formula words: function names as Polish Excel shows them, error values and
 //! structured-reference specifiers.
 //!
-//! Sources for the function names: PhpSpreadsheet's `locale/pl/functions` table (MIT), checked
-//! against a second independent table; every name the two agree on is used. Where they disagree
+//! Sources for the function names: PhpSpreadsheet's `locale/pl/functions` table (MIT; its notice is
+//! in `NOTICE` and `ATTRIBUTION.md`), checked against a second independent table that served only
+//! as a cross-check, with nothing copied from it; every name the two agree on is used. Where they disagree
 //! or one is missing, Microsoft's pl-pl support pages decide (`X.WYSZUKAJ`, `REGLINX.ETS`…), and
 //! the names #1678 observed in Excel for the web (BYROW, GROUPBY, PIVOTBY, PERCENTOF, TRIMRANGE,
 //! VALUETOTEXT) fill the rest. Functions not listed keep their English name in Polish Excel
