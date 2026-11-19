@@ -20,7 +20,16 @@ pub const REL_COLORS: &str = "http://schemas.microsoft.com/office/2011/relations
 
 /// Kinds written as chartex parts.
 pub fn is_chartex(k: ChartKind) -> bool {
-    matches!(k, ChartKind::Histogram | ChartKind::BoxWhisker | ChartKind::Waterfall | ChartKind::Funnel | ChartKind::Treemap | ChartKind::Sunburst)
+    use craft_drawingml::chart::ChartType;
+    match k {
+        ChartKind::Histogram => ChartType::Histogram.is_chartex(),
+        ChartKind::BoxWhisker => ChartType::BoxWhisker.is_chartex(),
+        ChartKind::Waterfall => ChartType::Waterfall.is_chartex(),
+        ChartKind::Funnel => ChartType::Funnel.is_chartex(),
+        ChartKind::Treemap => ChartType::Treemap.is_chartex(),
+        ChartKind::Sunburst => ChartType::Sunburst.is_chartex(),
+        _ => false,
+    }
 }
 
 /// The `mc:Choice` requirement for a kind's drawing frame: (prefix, namespace). Funnel charts
