@@ -268,9 +268,10 @@ pub(crate) struct NameCache {
 }
 
 impl NameCache {
-    /// [`Workbook::name`] through the index, built on first use: every mention costs a lookup
-    /// instead of a scan of the whole name list, so a pass costs names + mentions, not names ×
-    /// mentions (#4438).
+    /// [`Workbook::name`] through the index, built on first use: the name list is scanned once to
+    /// build the index, and every mention after that costs a lookup instead of a scan of the whole
+    /// list (#4438). The rest of the pass (analysing definitions, copying their closures) is
+    /// unchanged.
     fn name<'w>(&mut self, wb: &'w Workbook, name: &str, sheet: usize) -> Option<&'w DefinedName> {
         self.index.get_or_insert_with(|| NameIndex::build(wb)).get(wb, name, sheet)
     }
