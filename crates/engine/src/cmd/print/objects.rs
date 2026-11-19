@@ -1,7 +1,7 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::{TextLine, wrap_lines};
 use super::text_unicode::{draw_shaped_text_with_direction, needs_unicode_text, shaped_width_with_direction, wrap_shaped_with_direction};
-use super::{Anchor, Font, FontCatalog, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
+use super::{Anchor, Baseline, Font, FontCatalog, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -193,29 +193,42 @@ fn draw_shape(
 ) -> Result<(), String> {
     let fill = rgb_of(shp.fill, wb);
     let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
+    let angle = if shp.rotation.is_finite() { shp.rotation.to_radians() } else { 0.0 };
+    let (sn, cs) = angle.sin_cos();
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let turn = |[px, py]: [f32; 2]| {
+        let (dx, dy) = (px - cx, py - cy);
+        [cx + dx * cs - dy * sn, cy + dx * sn + dy * cs]
+    };
     match shp.kind {
         ShapeKind::Ellipse => {
             let pts: Vec<[f32; 2]> = (0..72)
                 .map(|i| {
                     let a = i as f32 / 72.0 * std::f32::consts::TAU;
-                    [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+                    turn([x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()])
                 })
                 .collect();
             pg.polygon(&pts, fill, line);
         }
-        ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
+        ShapeKind::Triangle => {
+            let pts = [[x + w / 2.0, y], [x + w, y + h], [x, y + h]].map(turn);
+            pg.polygon(&pts, fill, line);
+        }
         ShapeKind::Line | ShapeKind::Arrow => {
             let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
-            pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);
+            let [x0, y0] = turn([x, y]);
+            let [x1, y1] = turn([x + w, y + h]);
+            pg.stroke_line(x0, y0, x1, y1, (1.0 * b.k).max(0.3), c);
             if shp.kind == ShapeKind::Arrow {
                 let ang = h.atan2(w);
                 let al = 8.0 * b.k;
-                let p = |da: f32| [x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()];
-                pg.polygon(&[[x + w, y + h], p(0.4), p(-0.4)], Some(c), None);
+                let p = |da: f32| turn([x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()]);
+                pg.polygon(&[turn([x + w, y + h]), p(0.4), p(-0.4)], Some(c), None);
             }
         }
         _ => {
-            pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
+            let pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(turn);
+            pg.polygon(&pts, fill, line);
         }
     }
     if shp.text.is_empty() {
@@ -257,10 +270,11 @@ fn draw_shape(
         // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
         if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
             let off = (size * 0.06).max(0.5);
+            let [sx, sy] = turn([lx + off, yy + off]);
             if unicode {
-                draw_shaped_text_with_direction(pg, catalog, lx + off, yy + off, size, family, fm.bold, fm.italic, sc, &l.text, 0.0, l.direction)?;
+                draw_shaped_text_with_direction(pg, catalog, sx, sy, size, family, fm.bold, fm.italic, sc, &l.text, angle, l.direction)?;
             } else {
-                pg.text_with_direction(Point::new(lx + off, yy + off), size, font, sc, &l.text, l.direction);
+                pg.text_rotated_with_direction(Baseline { origin: Point::new(sx, sy), angle }, size, font, sc, &l.text, l.direction);
             }
         }
         // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
@@ -270,30 +284,19 @@ fn draw_shape(
         {
             let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
             for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
+                let [ox, oy] = turn([lx + dx * d, yy + dy * d]);
                 if unicode {
-                    draw_shaped_text_with_direction(
-                        pg,
-                        catalog,
-                        lx + dx * d,
-                        yy + dy * d,
-                        size,
-                        family,
-                        fm.bold,
-                        fm.italic,
-                        oc,
-                        &l.text,
-                        0.0,
-                        l.direction,
-                    )?;
+                    draw_shaped_text_with_direction(pg, catalog, ox, oy, size, family, fm.bold, fm.italic, oc, &l.text, angle, l.direction)?;
                 } else {
-                    pg.text_with_direction(Point::new(lx + dx * d, yy + dy * d), size, font, oc, &l.text, l.direction);
+                    pg.text_rotated_with_direction(Baseline { origin: Point::new(ox, oy), angle }, size, font, oc, &l.text, l.direction);
                 }
             }
         }
+        let [tx, ty] = turn([lx, yy]);
         if unicode {
-            draw_shaped_text_with_direction(pg, catalog, lx, yy, size, family, fm.bold, fm.italic, color, &l.text, 0.0, l.direction)?;
+            draw_shaped_text_with_direction(pg, catalog, tx, ty, size, family, fm.bold, fm.italic, color, &l.text, angle, l.direction)?;
         } else {
-            pg.text_with_direction(Point::new(lx, yy), size, font, color, &l.text, l.direction);
+            pg.text_rotated_with_direction(Baseline { origin: Point::new(tx, ty), angle }, size, font, color, &l.text, l.direction);
         }
         yy += size * 1.2;
     }

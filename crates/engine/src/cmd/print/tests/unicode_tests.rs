@@ -13,6 +13,18 @@ fn thai_catalog() -> Option<(FontCatalog, PdfFont)> {
     }
 }
 
+#[test]
+fn rotated_shape_preserves_thai_shaping() {
+    let Some(_) = thai_catalog() else { return };
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle", "at": "A1", "width": 120, "height": 60, "text": "ภาษาไทย"})).unwrap()["shape"]
+        .as_u64()
+        .unwrap();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "at": "A1", "rotation": 90})).unwrap();
+    let page = pdf_pages(&mut s).remove(0);
+    assert!(page.contains("/UF") && page.contains("0 -1 1 0"), "Thai shape text uses the embedded font and rotation: {page}");
+}
+
 fn minimal_test_ttf() -> Vec<u8> {
     let mut head = vec![0; 54];
     head[0..4].copy_from_slice(&0x0001_0000u32.to_be_bytes());
