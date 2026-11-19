@@ -832,10 +832,12 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
         return;
     }
     let default = sh.default_row_height;
-    // Fast path: rows of default-size, unwrapped content keep the default height.
+    // Fast path: rows of default-size, unfolded content keep the default height. A blank cell that
+    // would fold has nothing to fold, so it doesn't send the row through the merge sweep.
     let plain = sh.cells.row(row, 0, gridcraft_core::MAX_COLS - 1).all(|(_, cell)| {
         let st = wb.styles.get(cell.style);
-        st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE && !st.align.folds()
+        let has_text = !cell.value.is_empty() || cell.formula.is_some();
+        st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE && !(has_text && st.align.folds())
     });
     if plain {
         if sh.rows.get(&row).is_some_and(|i| i.size.is_some())
