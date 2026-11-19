@@ -3,6 +3,11 @@ use super::{
     block, bool_param, edit, json, rewrite, shift_cell_features, str_param, target_range, target_sheet, with,
 };
 
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
+
 // ---------------------------------------------------------------- tables
 
 pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
@@ -51,7 +56,7 @@ pub(super) fn insert_table(s: &mut Session, p: &Json) -> Result<Json> {
             let sh = cx.sheet_mut(sheet)?;
             // The header row pushes the data down one row: never off the end of the sheet.
             let last = RangeRef::new(CellRef::new(MAX_ROWS - 1, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col));
-            if sh.cells.iter_range(last).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
+            if sh.cells.iter_range(last).any(|(_, x)| x.has_content()) {
                 return Err(EngineError::Other("To prevent possible loss of data, cells can't be pushed off the end of the worksheet.".into()));
             }
             sh.cells.shift_rows_in_cols(r.start.col, r.end.col, r.start.row, 1);
@@ -211,7 +216,10 @@ fn write_totals(sh: &mut Sheet, ti: usize) {
         let c = CellRef::new(row, t.range.start.col + i as u32);
         if let Some(code) = col.totals.subtotal_code() {
             let f = format!("=SUBTOTAL({code},{}[{}])", t.name, col.name);
-            sh.set_cell(c, Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c) });
+            sh.set_cell(
+                c,
+                Cell { formula: Some(std::sync::Arc::new(Formula::new(&f))), value: gridcraft_core::Value::Empty, style: sh.style_id(c), py: None },
+            );
         } else if let Some(l) = &col.totals_label {
             sh.set_value(c, gridcraft_core::Value::text(l.as_str()));
         } else {
@@ -304,6 +312,15 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 });
                 if let Some(cell) = sh.cells.get_mut(c) {
                     cell.formula = Some(std::sync::Arc::new(Formula::from_expr(ne)));
+                }
+            }
+        }
+        // A PivotTable whose source is the table follows the rename (#3737).
+        for i in 0..cx.wb.sheets.len() {
+            let Some(sh) = cx.wb.sheet_mut(i) else { continue };
+            for pt in sh.pivots.iter_mut() {
+                if !old.is_empty() && pt.source.trim().trim_start_matches('=').trim().eq_ignore_ascii_case(&old) {
+                    pt.source = name.clone();
                 }
             }
         }
