@@ -234,11 +234,18 @@ fn bond_price(b: &Bond, rate: f64, yld: f64, red: f64) -> f64 {
 /// first step from 0 can overshoot to a yield of `-freq` or below, where `1 + yld / freq <= 0`
 /// and the price is undefined, or land so close to it that the next step cannot be taken.
 /// Excel returns #NUM! there although a root exists (#4076). Callers keep their own root.
+/// A step whose slope is not finite counts as a failure: the division yields no movement, and
+/// the convergence test would otherwise accept the yield it started from.
 fn newton_fails(g: impl Fn(f64) -> f64, freq: f64) -> bool {
     let h = 1e-6;
     let mut y = 0.0;
     for _ in 0..100 {
         let slope = (g(y + h) - g(y - h)) / (2.0 * h);
+        // A price at the edge of the domain can overflow one side of the difference to infinity,
+        // leaving the step a no-op that the convergence test below would read as success.
+        if !slope.is_finite() {
+            return true;
+        }
         let next = y - g(y) / slope;
         // NaN fails the comparison too.
         if !(next > -freq && next.is_finite()) {

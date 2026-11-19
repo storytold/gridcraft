@@ -281,6 +281,9 @@ fn yield_is_num_where_newton_cannot_reach_a_negative_root() {
     is_err(ev("ODDFYIELD", of(5.0)), CellError::Num);
     close_tol(ev("ODDFYIELD", of(50.0)), -0.19890043031234195, 1e-10);
     close_tol(ev("ODDFYIELD", of(100.0)), 0.04953301837965257, 1e-10);
+    // A first step to -1.999984 leaves the next slope overflowing to -infinity; the step then
+    // moves nowhere and must not be read as convergence.
+    is_err(ev("YIELD", vec![d(2024, 1, 1), d(2054, 1, 1), n(0.0002), n(100.0), n(1.32952106), n(2.0), n(0.0)]), CellError::Num);
 }
 
 fn number(v: Value) -> f64 {
