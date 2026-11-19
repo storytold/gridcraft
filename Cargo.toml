@@ -50,7 +50,8 @@ craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev 
 # SpreadsheetML string encoding/decoding; workbook model mapping stays in gridcraft-xlsx.
 craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
-craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", version = "0.1.0" }
+craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "3b8e426a260695af840a2cd79a064d40778f939e", version = "0.1.0" }
+craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "3b8e426a260695af840a2cd79a064d40778f939e", version = "0.1.0" }
 
 # foundation
 thiserror = "2"
