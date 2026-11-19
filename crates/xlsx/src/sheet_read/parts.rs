@@ -62,8 +62,13 @@ fn filter_op(s: Option<&str>) -> &'static str {
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
     let mut criteria = vec![];
+    let mut hidden_buttons: Vec<u32> = vec![];
     for fc in e.kids("filterColumn") {
         let Some(col) = fc.attr_u32("colId") else { continue };
+        // The arrow's visibility is the column's own setting, kept with or without a criterion.
+        if fc.flag("hiddenButton", false) && col < range.width() && !hidden_buttons.contains(&col) {
+            hidden_buttons.push(col);
+        }
         let crit = if let Some(f) = fc.child("filters") {
             FilterCriterion::Values {
                 values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
@@ -99,7 +104,8 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
         };
         criteria.push((col, crit));
     }
-    Some(AutoFilter { range, criteria })
+    hidden_buttons.sort_unstable();
+    Some(AutoFilter { range, criteria, hidden_buttons })
 }
 
 pub fn read_table(cx: &mut Ctx<'_>, x: &El) -> Option<Table> {

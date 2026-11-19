@@ -178,7 +178,11 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     sh.tables.retain(|t| t.range != RangeRef::default() && !t.columns.is_empty());
     if let Some(af) = sh.autofilter.as_mut() {
         match map_range(af.range) {
-            Some(r) => af.range = r,
+            Some(r) => {
+                let old = std::mem::replace(&mut af.range, r);
+                // Criteria and hidden arrows stay on the columns they were on.
+                af.remap_columns(old, map_range);
+            }
             None => sh.autofilter = None,
         }
     }
@@ -782,7 +786,10 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     sh.tables.retain(|t| t.range != RangeRef::default() && !t.columns.is_empty());
     if let Some(af) = sh.autofilter.as_mut() {
         match map_range(af.range, e) {
-            Some(r) => af.range = r,
+            Some(r) => {
+                let old = std::mem::replace(&mut af.range, r);
+                af.remap_columns(old, |x| map_range(x, e));
+            }
             None => sh.autofilter = None,
         }
     }

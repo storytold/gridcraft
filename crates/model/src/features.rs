@@ -1098,6 +1098,38 @@ pub struct AutoFilter {
     pub range: RangeRef,
     /// Column offset within `range` → criterion.
     pub criteria: Vec<(u32, FilterCriterion)>,
+    /// Column offsets within `range` whose dropdown arrow is hidden (`filterColumn hiddenButton`,
+    /// Excel's `VisibleDropDown:=False`). Kept whether or not the column has a criterion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_buttons: Vec<u32>,
+}
+
+impl AutoFilter {
+    /// Moves the criteria and hidden arrows, which are column offsets in the range, with an edit
+    /// that moved the range from `old` to `self.range`: `map` gives a range's place after the edit
+    /// (None when it was deleted). Each column is followed through its cells in the range, so
+    /// deleting the header row keeps it. A column that was deleted, moved out of the range, or
+    /// split (an insert of cells that moved some of its rows and not the others) loses its
+    /// criterion and its hidden arrow.
+    pub fn remap_columns(&mut self, old: RangeRef, mut map: impl FnMut(RangeRef) -> Option<RangeRef>) {
+        let new = self.range;
+        let mut offset = |o: u32| {
+            let col = old.start.col.checked_add(o)?;
+            let mut landed: Option<u32> = None;
+            for row in old.start.row..=old.end.row {
+                let Some(r) = map(RangeRef::cell(CellRef::new(row, col))) else { continue };
+                match landed {
+                    Some(c) if c != r.start.col => return None,
+                    _ => landed = Some(r.start.col),
+                }
+            }
+            landed.filter(|c| (new.start.col..=new.end.col).contains(c)).map(|c| c - new.start.col)
+        };
+        self.criteria = std::mem::take(&mut self.criteria).into_iter().filter_map(|(o, c)| Some((offset(o)?, c))).collect();
+        self.hidden_buttons = std::mem::take(&mut self.hidden_buttons).into_iter().filter_map(&mut offset).collect();
+        self.hidden_buttons.sort_unstable();
+        self.hidden_buttons.dedup();
+    }
 }
 
 /// A slicer: an on-sheet filter widget bound to one column of a table. Clicking its value tiles
