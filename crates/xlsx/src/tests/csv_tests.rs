@@ -249,6 +249,22 @@ fn a_first_record_wider_than_the_sniff_sample_keeps_its_delimiter() {
 }
 
 #[test]
+fn a_multi_byte_first_field_longer_than_64_kib_keeps_its_delimiter() {
+    // 23,000 three-byte characters (69,000 bytes) come before the first `;`: past 64 KiB of bytes,
+    // inside the 65,536 characters delimiter detection reads.
+    let first = "\u{4e00}".repeat(23_000);
+    let text = format!("{first};title\n1;2\n3;4\n");
+    assert!(first.len() > 64 << 10);
+    assert_eq!(sniff_delimiter(&text, '"'), b';');
+    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(wb.csv_delimiter, Some(b';'));
+    assert_eq!(v(&wb, 0, 0), Value::text(first.as_str()));
+    assert_eq!(v(&wb, 0, 1), Value::text("title"));
+    assert_eq!(v(&wb, 2, 0), Value::Number(3.0));
+    assert_eq!(v(&wb, 2, 1), Value::Number(4.0));
+}
+
+#[test]
 fn a_sparse_semicolon_export_reopens_with_its_cells() {
     // Only B40001 holds a value: the 40,000 rows above it are written as bare separators, more
     // than the sample delimiter detection reads.
