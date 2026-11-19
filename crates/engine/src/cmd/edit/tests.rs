@@ -805,3 +805,31 @@ fn paste_special_all_except_borders_merges_every_tile_and_skips_filtered_rows() 
     assert_eq!(s.execute("cell.get", json!({"cell": "A4"})).unwrap()["merge"], "A4:B4");
     assert_eq!(s.execute("cell.get", json!({"cell": "A3"})).unwrap()["merge"], "A3:B3", "hidden row's merge untouched");
 }
+
+#[test]
+fn paste_special_tiled_merges_large_selection_and_preserves_non_overlapping() {
+    // Non-overlapping destination merges inside the pasted rectangle stay intact while
+    // overlapping ones are replaced.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "E2:E3"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F1:F4"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:C1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:F4"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats"})).unwrap();
+    assert_eq!(s.execute("cell.get", json!({"cell": "F1"})).unwrap()["merge"], "F1:F4");
+    for r in 1..=4 {
+        assert_eq!(s.execute("cell.get", json!({"cell": format!("D{r}")})).unwrap()["merge"], format!("D{r}:E{r}"));
+    }
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().merges.len(), 6);
+
+    // Pasting a merged block across 100,000 tiles completes without rescanning inserted tiles.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:E100000"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().merges.len(), 100_001);
+}
