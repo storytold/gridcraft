@@ -816,3 +816,32 @@ fn paste_special_transpose_preserves_merged_cells() {
     assert_eq!(merge_of(&mut s, "F1"), json!("F1:G1"));
     assert_eq!(merge_of(&mut s, "G1"), json!("F1:G1"));
 }
+
+/// A filter hides destination rows: the tiles that land on them take no cells, so they take no
+/// merged area either.
+#[test]
+fn paste_special_transpose_skips_filtered_rows_for_merges() {
+    let merge_of = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["merge"].clone();
+    let mut s = Session::new();
+    s.new_workbook();
+    // A filter over A1:B11 hides rows 3, 5, 7 and 9.
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=11 {
+        rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    assert_eq!(s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap()["hiddenRows"], 4);
+    // A vertical G1:G2 merge pasted transposed tiles down one row at a time over D2:E5, so the
+    // tiles on rows 3 and 5 are the hidden ones.
+    s.execute("cell.set", json!({"cell": "G1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "G1:G2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "G1:G2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D2:E5"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(merge_of(&mut s, "D2"), json!("D2:E2"));
+    assert_eq!(merge_of(&mut s, "D3"), json!(null));
+    assert_eq!(merge_of(&mut s, "D4"), json!("D4:E4"));
+    assert_eq!(merge_of(&mut s, "D5"), json!(null));
+}
