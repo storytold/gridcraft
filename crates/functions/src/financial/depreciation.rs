@@ -166,9 +166,14 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let mut n = 1.0;
     while n <= period {
         if n >= last - 1.0 {
-            // The two final scheduled periods split the remaining value.
-            let left = period - n;
-            return num_val(if left <= 1.0 { (book * 0.5).round() } else { 0.0 });
+            // The rate grows to 50% in the period before the last and to 100% in the
+            // last, so those two charge the whole remaining value between them. A life
+            // of two years or less makes the first of them the last.
+            if n >= last {
+                return num_val(book);
+            }
+            let half = (book * 0.5).round();
+            return num_val(if period > n { book - half } else { half });
         }
         dep = (r * book).round();
         rest -= dep;
