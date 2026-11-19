@@ -186,6 +186,30 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sort A to Z" => "Rendezés A-tól Z-ig",
         "Sort Z to A" => "Rendezés Z-től A-ig",
         "Custom Sort…" => "Egyéni rendezés…",
+        "Sort by" => "Rendezés",
+        "Then by" => "Majd",
+        "My list has headers" => "A listának van fejsora",
+        "Cell Values" => "Cellaértékek",
+        "Cell Color" => "Cellaszín",
+        "A to Z" => "A-tól Z-ig",
+        "Z to A" => "Z-től A-ig",
+        "Add Level" => "Szint hozzáadása",
+        "Delete Level" => "Szint törlése",
+        "Copy Level" => "Szint másolása",
+        "Move Up" => "Mozgatás felfelé",
+        "Move Down" => "Mozgatás lefelé",
+        "Order" => "Sorrend",
+        "Sort On" => "Rendezés alapja",
+        "Sort|Column" => "Oszlop",
+        "Column {letters}" => "Oszlop {letters}",
+        "Smallest to Largest" => "Legkisebbtől a legnagyobbig",
+        "Largest to Smallest" => "Legnagyobbtól a legkisebbig",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Zárja be a Rendezés párbeszédpanelt, mielőtt másik munkalapra vált vagy módosítja azt."
+        }
+        "Return to the original worksheet to sort, or cancel." => {
+            "Térjen vissza az eredeti munkalapra a rendezéshez, vagy vonja vissza a műveletet."
+        }
         "Filter" => "Szűrő",
         "Reapply" => "Újbóli alkalmazás",
         "Get Data\n(Text/CSV)" => "Adatok lekérése\n(szöveg/CSV)",
