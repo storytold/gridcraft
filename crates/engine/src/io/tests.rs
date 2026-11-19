@@ -955,6 +955,8 @@ fn sylk_survives_huge_relative_offsets_and_width_floods() {
 #[test]
 fn sylk_decodes_escape_n_accented_text() {
     let slk = b"ID;PWXL;N;E\r\n\
+        P;P0\x1bN\"\r\n\
+        P;P\"tail\x1bN\"0.00\r\n\
         C;Y1;X1;K\"Gr\x1bNHo\x1bN{e f\x1bNHur K\x1bNHoln\"\r\n\
         C;Y2;X1;K\"Plain ASCII 123\"\r\n\
         C;Y3;X1;K\"caf\x1bNBe \x1bNAa \x1bNKc \x1bNDn \x1bN!\x1bN? \x1bNq\x1bNy\x1bNJa \x1bNx \x1bNMo \x1bNFg\"\r\n\
@@ -962,6 +964,11 @@ fn sylk_decodes_escape_n_accented_text() {
         C;Y5;X1;K\"tail\x1bN\"\r\n\
         C;Y6;X1;K\"tail\x1bN\";E\"tail\x1bN\"\r\n\
         C;Y7;X1;K\"\x1bN\"\";E\"\x1bN\"\"\r\n\
+        F;P0;Y8;X1\r\n\
+        F;P1;Y9;X1\r\n\
+        C;Y8;X1;K1\r\n\
+        C;Y9;X1;K1\r\n\
+        C;Y10;X1;K0;E\"a\x1bN\"b\"\r\n\
         E\r\n";
     let (wb, warnings) = open_bytes("sample.slk", slk).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -983,6 +990,14 @@ fn sylk_decodes_escape_n_accented_text() {
     // A cent sign escape has its own closing quote, so it still decodes in text and formulas.
     assert_eq!(sh.value(CellRef::parse("A7").unwrap()), gridcraft_core::Value::Text("¢".into()));
     assert_eq!(sh.cell(CellRef::parse("A7").unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("\"¢\""));
+    let fmt = |a: &str| wb.styles.get(sh.style_id(CellRef::parse(a).unwrap())).num_fmt.0.to_string();
+    // No literal is open, so the quote is the escape's payload: the format is `0¢`.
+    assert_eq!(fmt("A8"), "0¢");
+    // The quote closes the literal that `"tail` opened, so the escape has no payload and `0.00`
+    // is still a number placeholder rather than more literal text.
+    assert_eq!(fmt("A9"), "\"tail\x1bN\"0.00");
+    // A quote that is the escape's payload keeps a formula's literal open and balanced.
+    assert_eq!(sh.cell(CellRef::parse("A10").unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("\"a¢b\""));
 }
 
 /// A FIFO with no writer would block an open forever: it is refused before it is opened.

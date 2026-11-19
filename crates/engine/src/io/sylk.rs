@@ -74,15 +74,22 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
 /// Decodes SYLK 7-bit ISO/IEC 6937 escape sequences (`\x1bN<byte>`).
 ///
 /// `quoted` says the string carries its own quotes as syntax (a formula or a number format)
-/// rather than as text: there a `"` right after `\x1bN` with nothing after it is the quote that
-/// closes the literal, so the incomplete escape is kept.
+/// rather than as text: there a `"` opens and closes a literal, and a `"` right after `\x1bN`
+/// may be the quote that closes an open literal rather than the payload for `¢`.
 fn decode_sylk_escapes(s: &str, quoted: bool) -> Cow<'_, str> {
     if !s.contains('\x1b') {
         return Cow::Borrowed(s);
     }
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
+    let mut in_literal = false;
+    // Quotes not yet read: the parity of what is left decides whether a `"` after `\x1bN`
+    // inside an open literal is that literal's closing quote or the payload for `¢`.
+    let mut quotes_left = if quoted { s.matches('"').count() } else { 0 };
     while let Some(ch) = chars.next() {
+        if quoted && ch == '"' {
+            quotes_left = quotes_left.saturating_sub(1);
+        }
         if ch == '\x1b' && chars.peek() == Some(&'N') {
             chars.next();
             let Some(code_ch) = chars.next() else {
@@ -90,18 +97,23 @@ fn decode_sylk_escapes(s: &str, quoted: bool) -> Cow<'_, str> {
                 out.push('N');
                 break;
             };
+            if quoted && code_ch == '"' {
+                quotes_left = quotes_left.saturating_sub(1);
+            }
             if !code_ch.is_ascii() || (code_ch as u8) < 0x20 {
                 out.push('\x1b');
                 out.push('N');
                 out.push(code_ch);
                 continue;
             }
-            // A `"` here may be the quote that closes a formula's or format's literal, not the
-            // payload for `¢`: keep the incomplete escape and let the quote close it.
-            if quoted && code_ch == '"' && chars.peek().is_none() {
+            // Inside an open literal, a `"` is the literal's closing quote when an even number
+            // of quotes follow it, because those then pair up and the literal ends closed.
+            // Keep the incomplete escape and let that quote close the literal.
+            if quoted && in_literal && code_ch == '"' && quotes_left % 2 == 0 {
                 out.push('\x1b');
                 out.push('N');
                 out.push(code_ch);
+                in_literal = false;
                 continue;
             }
             let b = (code_ch as u8) | 0x80;
@@ -131,6 +143,9 @@ fn decode_sylk_escapes(s: &str, quoted: bool) -> Cow<'_, str> {
                 out.push(code_ch);
             }
         } else {
+            if quoted && ch == '"' {
+                in_literal = !in_literal;
+            }
             out.push(ch);
         }
     }
