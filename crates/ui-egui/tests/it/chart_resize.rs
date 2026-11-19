@@ -1,0 +1,217 @@
+//! Resizing a chart by dragging its bottom-right corner or with the Format Chart Area Size fields, through real input.
+
+use egui::{Event, Key, Modifiers, PointerButton, accesskit::Role, pos2, vec2};
+use egui_kittest::kittest::Queryable as _;
+use gridcraft_engine::Session;
+use gridcraft_engine::core::CellRef;
+use gridcraft_ui_egui::{SheetApp, grid::Geo};
+use serde_json::json;
+
+type Harness = egui_kittest::Harness<'static, SheetApp>;
+
+fn fixture() -> (Harness, u32) {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    session.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    session.execute("selection.set", json!({"range": "A1:A2"})).unwrap();
+    let chart = session.execute("insert.chart", json!({"type": "column", "at": "D3", "width": 300, "height": 200})).unwrap();
+    let id = chart["chart"].as_u64().unwrap() as u32;
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        crate::common::app(session),
+    );
+    h.run_steps(4);
+    (h, id)
+}
+
+fn size(h: &Harness, id: u32) -> (f32, f32) {
+    let a = h.state().session.doc().unwrap().wb.active().unwrap().charts.iter().find(|c| c.id == id).unwrap().anchor;
+    (a.width, a.height)
+}
+
+fn corner(h: &Harness, id: u32) -> egui::Pos2 {
+    let app = h.state();
+    let sh = app.session.doc().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
+    let a = sh.charts.iter().find(|c| c.id == id).unwrap().anchor;
+    let min = geo.cell_rect(sh, CellRef::parse("D3").unwrap()).min + vec2(a.dx, a.dy) * geo.z;
+    min + vec2(a.width, a.height) * geo.z
+}
+
+fn button(h: &mut Harness, pos: egui::Pos2, pressed: bool) {
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+#[test]
+fn dragging_the_corner_handle_resizes_the_chart() {
+    let (mut h, id) = fixture();
+    let (w0, h0) = size(&h, id);
+    let start = corner(&h, id);
+    // Select the chart first, as the user does before grabbing a handle.
+    let inside = start - vec2(40.0, 40.0);
+    h.input_mut().events.push(Event::PointerMoved(inside));
+    h.run_steps(2);
+    button(&mut h, inside, true);
+    button(&mut h, inside, false);
+    assert_eq!(h.state().selected_chart(), Some(id));
+
+    h.input_mut().events.push(Event::PointerMoved(start));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe, "the corner shows a resize cursor");
+    button(&mut h, start, true);
+    // The pointer moves well past the drag threshold in one step, like a quick drag.
+    let end = start + vec2(60.0, 30.0);
+    h.input_mut().events.push(Event::PointerMoved(pos2(end.x, end.y)));
+    h.run_steps(3);
+    button(&mut h, end, false);
+    let (w1, h1) = size(&h, id);
+    assert!(w1 > w0 + 40.0 && h1 > h0 + 20.0, "chart grew from {w0}x{h0} to {w1}x{h1}");
+}
+
+/// Opens Format Chart Area for the chart and expands its Size section; returns the Width field's rect.
+fn open_size_fields(h: &mut Harness, id: u32) -> egui::Rect {
+    h.state_mut().select_object_id(Some(id));
+    h.state_mut().grid.pane = Some("formatChart".into());
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::DisclosureTriangle, "Size").click();
+    h.run_steps(2);
+    h.get_all_by_role(Role::SpinButton).next().unwrap().rect()
+}
+
+#[test]
+fn typing_a_width_in_the_size_field_resizes_the_chart() {
+    let (mut h, id) = fixture();
+    let (_, h0) = size(&h, id);
+    let field = open_size_fields(&mut h, id);
+    h.input_mut().events.push(Event::PointerMoved(field.center()));
+    button(&mut h, field.center(), true);
+    button(&mut h, field.center(), false);
+    // Clicking the field selects its text; each keystroke must survive the next frame.
+    for digit in ["6", "4", "0"] {
+        h.input_mut().events.push(Event::Text(digit.into()));
+        h.run_steps(2);
+    }
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert_eq!(size(&h, id), (640.0, h0));
+}
+
+#[test]
+fn dragging_the_size_field_resizes_the_chart() {
+    let (mut h, id) = fixture();
+    let (w0, _) = size(&h, id);
+    let field = open_size_fields(&mut h, id);
+    h.input_mut().events.push(Event::PointerMoved(field.center()));
+    button(&mut h, field.center(), true);
+    for step in 1..=6 {
+        h.input_mut().events.push(Event::PointerMoved(field.center() + vec2(10.0 * step as f32, 0.0)));
+        h.run_steps(1);
+    }
+    button(&mut h, field.center() + vec2(60.0, 0.0), false);
+    let (w1, _) = size(&h, id);
+    assert!(w1 > w0 + 20.0, "width went from {w0} to {w1}");
+}
+
+/// Makes the chart 12,000 wide and reopens the workbook from its XLSX bytes, the way a file can
+/// carry a chart larger than the 4,000 points the Size fields otherwise reach; returns its id.
+fn imported_oversized_chart(h: &mut Harness, id: u32) -> u32 {
+    {
+        let wb = std::sync::Arc::make_mut(&mut h.state_mut().session.doc_mut().unwrap().wb);
+        wb.sheet_mut(0).unwrap().charts.iter_mut().find(|c| c.id == id).unwrap().anchor.width = 12_000.0;
+    }
+    let saved = h.state_mut().run("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    h.state_mut().run("file.open", json!({"name": "wide.xlsx", "base64": saved["base64"]})).unwrap();
+    h.run_steps(4);
+    let id = h.state().session.doc().unwrap().wb.active().unwrap().charts[0].id;
+    let (w, hh) = size(h, id);
+    assert_eq!((w.round(), hh.round()), (12_000.0, 200.0), "the reader keeps the file's size");
+    id
+}
+
+/// A chart a file made 12,000 wide shows that width in the Size fields, and a new height sends
+/// the height alone, so nothing shrinks the width to the fields' 4,000 reach on the way.
+#[test]
+fn the_size_fields_keep_an_oversized_imported_chart_width_when_the_height_changes() {
+    let (mut h, id) = fixture();
+    let id = imported_oversized_chart(&mut h, id);
+    open_size_fields(&mut h, id);
+    let (width_value, height_field) = {
+        let mut fields = h.get_all_by_role(Role::SpinButton);
+        let width = fields.next().unwrap();
+        let height = fields.next().unwrap();
+        (width.value(), height.rect())
+    };
+    assert!(width_value.as_deref().is_some_and(|v| v.contains("12000")), "the field shows the file's width: {width_value:?}");
+    h.input_mut().events.push(Event::PointerMoved(height_field.center()));
+    button(&mut h, height_field.center(), true);
+    button(&mut h, height_field.center(), false);
+    for digit in ["2", "0", "1"] {
+        h.input_mut().events.push(Event::Text(digit.into()));
+        h.run_steps(2);
+    }
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    let (w, hh) = size(&h, id);
+    assert_eq!((w.round(), hh), (12_000.0, 201.0), "the width stays and the height is the typed one");
+    let (_, p) = h.state().session.journal.iter().rev().find(|(cmd, _)| cmd == "chart.set").unwrap();
+    assert!(p.get("width").is_none(), "a height edit sends no width: {p}");
+}
+
+fn right_click(h: &mut Harness, pos: egui::Pos2, wobble: egui::Vec2) {
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let end = pos + wobble;
+    if wobble != vec2(0.0, 0.0) {
+        h.input_mut().events.push(Event::PointerMoved(end));
+        h.run_steps(2);
+    }
+    h.input_mut().events.push(Event::PointerButton { pos: end, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+#[test]
+/// A right-click selects the chart and opens its menu rather than the cell menu without moving the chart; Delete removes it, and an outside right-click still opens the cell menu.
+fn right_clicking_a_chart_opens_its_menu_not_the_cells() {
+    // #2067: a right-click on a chart opened the menu of the cell under it, or nothing at all.
+    for wobble in [vec2(0.0, 0.0), vec2(20.0, 10.0)] {
+        let (mut h, id) = fixture();
+        let (w0, h0) = size(&h, id);
+        let inside = corner(&h, id) - vec2(100.0, 80.0);
+        right_click(&mut h, inside, wobble);
+        assert_eq!(h.state().selected_chart(), Some(id), "the right-clicked chart is selected ({wobble:?})");
+        assert!(matches!(h.state().grid.object_menu, Some((_, "chart", i)) if i == id), "the chart's menu opens ({wobble:?})");
+        assert!(h.state().grid.context_menu.is_none(), "the cell menu stays closed ({wobble:?})");
+        assert_eq!(size(&h, id), (w0, h0));
+        let a = h.state().session.doc().unwrap().wb.active().unwrap().charts.iter().find(|c| c.id == id).unwrap().anchor;
+        assert_eq!(a.cell, CellRef::parse("D3").unwrap(), "a right-button drag does not move the chart ({wobble:?})");
+    }
+    // Delete from the menu removes the chart.
+    let (mut h, id) = fixture();
+    let inside = corner(&h, id) - vec2(100.0, 80.0);
+    right_click(&mut h, inside, vec2(0.0, 0.0));
+    // Home › Cells has a Delete button too: take the one in the chart's menu, by the click.
+    h.query_all_by_label("Delete")
+        .min_by(|a, b| a.rect().center().distance(inside).total_cmp(&b.rect().center().distance(inside)))
+        .expect("the chart menu has Delete")
+        .click();
+    h.run_steps(3);
+    assert!(h.state().session.doc().unwrap().wb.active().unwrap().charts.is_empty());
+    assert!(h.state().grid.object_menu.is_none());
+    // Outside the chart a right-click still opens the cell menu.
+    let (mut h, _) = fixture();
+    let cell = {
+        let app = h.state();
+        let sh = app.session.doc().unwrap().wb.active().unwrap();
+        Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll).cell_rect(sh, CellRef::parse("A10").unwrap()).center()
+    };
+    right_click(&mut h, cell, vec2(0.0, 0.0));
+    assert!(h.state().grid.context_menu.is_some() && h.state().grid.object_menu.is_none());
+}

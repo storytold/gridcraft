@@ -2,7 +2,7 @@
 //! report. Ticking a field adds it (text → Rows, numbers → Values); each area lists its fields
 //! with move/remove menus. Everything runs `pivot.*` commands.
 
-use egui::{Color32, Ui, vec2};
+use egui::{Ui, vec2};
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
@@ -17,20 +17,26 @@ pub fn active_pivot(app: &SheetApp) -> Option<String> {
     sh.pivots.iter().find(|p| p.last_range.is_some_and(|r| r.contains(a)) || p.anchor == a).map(|p| p.name.clone())
 }
 
+/// Draws the PivotTable Fields pane: add/remove fields, move them between areas, sort/group/value settings, refresh, calculated field and report layout.
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let Some(name) = active_pivot(app) else { return };
     let t = Tokens::get(ui.ctx());
     let lang = i18n::current(ui.ctx());
-    let info = match app.session.run("pivot.fields", json!({"pivot": name})) {
-        Ok(v) => v,
-        Err(_) => return,
-    };
+    let Some(key) = app.session.active().map(|d| (d.uid, d.revision, name.clone())) else { return };
+    if app.grid.pivot_fields.as_ref().is_none_or(|(k, _)| *k != key) {
+        let info = match app.session.run("pivot.fields", json!({"pivot": name})) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        app.grid.pivot_fields = Some((key, info));
+    }
+    let Some((_, info)) = app.grid.pivot_fields.clone() else { return };
     egui::Panel::right("pivot_pane").default_size(280.0).resizable(true).frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(10)).show(ui, |ui| {
         ui.label(egui::RichText::new(lang.tr("PivotTable Fields")).font(theme::ui_bold(15.0)));
         ui.label(egui::RichText::new(lang.tr("Choose fields to add to report:")).small().color(t.text_dim));
         ui.add_space(4.0);
         let fields = info["fields"].as_array().cloned().unwrap_or_default();
-        egui::ScrollArea::vertical().max_height(220.0).id_salt("pv_fields").show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).id_salt("pv_fields").show(ui, |ui| {
             for f in &fields {
                 let fname = f["name"].as_str().unwrap_or("").to_string();
                 let areas: Vec<String> =
@@ -88,7 +94,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         let is_values = f == VALUES_FIELD;
                         let b = ui.add(
                             egui::Button::new(egui::RichText::new(format!("{f} ▾")).font(theme::ui_font(12.0)))
-                                .fill(Color32::WHITE)
+                                .fill(t.ribbon)
                                 .min_size(vec2(ui.available_width(), 20.0)),
                         );
                         egui::Popup::menu(&b).show(|ui| {
@@ -163,13 +169,17 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             if ui.button(lang.tr("Calculated Field…")).clicked() {
                 app.run_or_alert("pivot.calculatedField", json!({"pivot": name}));
             }
-            egui::ComboBox::from_id_salt("pv_layout").selected_text(lang.tr("Report Layout")).show_ui(ui, |ui| {
-                for (l, v) in [("Compact", "compact"), ("Outline", "outline"), ("Tabular", "tabular")] {
-                    if ui.button(lang.tr(l)).clicked() {
-                        app.run_or_alert("pivot.layout", json!({"pivot": name, "layout": v}));
+            craft_ui::ComboBox::from_id_salt("pv_layout")
+                .selected_text(lang.tr("Report Layout"))
+                .show_ui(ui, |ui| {
+                    for (l, v) in [("Compact", "compact"), ("Outline", "outline"), ("Tabular", "tabular")] {
+                        if ui.button(lang.tr(l)).clicked() {
+                            app.run_or_alert("pivot.layout", json!({"pivot": name, "layout": v}));
+                        }
                     }
-                }
-            });
+                })
+                .response
+                .accessible_name(lang.tr("Report Layout"));
         });
         let _: Option<Json> = None;
     });

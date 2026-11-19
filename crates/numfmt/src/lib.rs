@@ -3,7 +3,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod builtin;
+mod calendar;
 mod decimal;
 mod parse;
 mod render;
@@ -12,10 +12,9 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellError, DateSystem, Value};
 
-pub use builtin::{builtin_format, builtin_id};
 pub use decimal::format_general_fit;
 
-use parse::{SecKind, Section, Tok};
+use parse::{DatePart, SecKind, Section, Tok};
 use render::Out;
 
 /// Width (in characters) of General output in a cell.
@@ -36,6 +35,24 @@ pub enum FormatColor {
     Yellow,
     /// `[Color1]`..`[Color56]` (palette index).
     Indexed(u8),
+}
+
+impl FormatColor {
+    /// RGB value used to render this number-format color.
+    pub fn rgb(self) -> Option<[u8; 3]> {
+        use FormatColor as F;
+        Some(match self {
+            F::Black => [0, 0, 0],
+            F::Blue => [0, 0, 255],
+            F::Cyan => [0, 255, 255],
+            F::Green => [0, 255, 0],
+            F::Magenta => [255, 0, 255],
+            F::Red => [255, 0, 0],
+            F::White => [255, 255, 255],
+            F::Yellow => [255, 255, 0],
+            F::Indexed(index) => return gridcraft_core::color::indexed_color(index),
+        })
+    }
 }
 
 /// Best guess at the ribbon's number-format category.
@@ -78,6 +95,9 @@ struct Inner {
     num_sections: usize,
     /// Index of the section that applies to text, if any.
     text_section: Option<usize>,
+    /// A code Excel rejects (a misplaced `B1`/`B2` calendar prefix): shown as General, and
+    /// `TEXT` returns `#VALUE!`, as for a code that is too long.
+    invalid: bool,
 }
 
 /// A parsed number format code. Cheap to clone.
@@ -112,7 +132,8 @@ fn too_long(code: &str) -> bool {
 
 impl NumberFormat {
     /// Parses a format code. Never fails: unknown or malformed parts degrade to literal text, and
-    /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters degrades to General.
+    /// a code longer than [`MAX_FORMAT_CODE_CHARS`] characters, or one Excel rejects for a
+    /// misplaced `B1`/`B2` calendar prefix, degrades to General.
     pub fn parse(code: &str) -> NumberFormat {
         Self::parse_inner(code, false)
     }
@@ -129,12 +150,16 @@ impl NumberFormat {
         let trimmed = code.trim();
         // `checkbox` marks a checkbox cell (Insert › Checkbox): TRUE/FALSE draw as a box, any other
         // value displays as General.
+        let general = |invalid: bool| NumberFormat {
+            inner: Arc::new(Inner { code: code.to_string(), general: true, sections: Vec::new(), num_sections: 0, text_section: None, invalid }),
+        };
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("general") || trimmed == "checkbox" || (!uncapped && too_long(code)) {
-            return NumberFormat {
-                inner: Arc::new(Inner { code: code.to_string(), general: true, sections: Vec::new(), num_sections: 0, text_section: None }),
-            };
+            return general(false);
         }
         let sections = parse::parse_sections(code);
+        if sections.iter().any(|s| s.invalid) {
+            return general(true);
+        }
         let len = sections.len();
         let last_is_text = sections.last().is_some_and(|s| s.kind == SecKind::Text);
         let text_section = if len >= 4 {
@@ -151,7 +176,7 @@ impl NumberFormat {
         } else {
             len
         };
-        NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section }) }
+        NumberFormat { inner: Arc::new(Inner { code: code.to_string(), general: false, sections, num_sections, text_section, invalid: false }) }
     }
 
     pub fn general() -> NumberFormat {
@@ -173,6 +198,18 @@ impl NumberFormat {
     /// True when the code contains date or time tokens.
     pub fn is_date(&self) -> bool {
         self.num_sections().iter().any(|s| s.kind == SecKind::Date)
+    }
+
+    /// For a date or time format, whether the section that formats `value` shows calendar parts (year, month,
+    /// day) and whether it shows time parts, as `(date, time)`. `None` for any other format and for
+    /// elapsed-time codes like `[h]:mm`, whose value is a duration, not a moment.
+    pub fn date_shape(&self, value: f64) -> Option<(bool, bool)> {
+        let s = self.select(value).map(|(s, _)| s).filter(|s| s.kind == SecKind::Date)?;
+        let parts = || s.toks.iter().filter_map(|t| if let Tok::Date(d) = t { Some(*d) } else { None });
+        if parts().any(|d| matches!(d, DatePart::ElapsedH(_) | DatePart::ElapsedM(_) | DatePart::ElapsedS(_))) {
+            return None;
+        }
+        Some((parts().any(DatePart::is_calendar), parts().any(|d| !d.is_calendar())))
     }
 
     pub fn is_percent(&self) -> bool {
@@ -256,23 +293,22 @@ impl NumberFormat {
     }
 
     /// Formats a number. The flag is true when the value cannot be shown (date out of range).
-    fn format_number(&self, n: f64, sys: DateSystem) -> (Formatted, bool) {
-        let general = |n: f64| Formatted {
-            text: format_general_fit(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()),
-            color: None,
-            fill: None,
-            numeric: true,
-        };
+    /// With `full`, General is not narrowed to the cell width but written by [`general_full`].
+    fn format_number(&self, n: f64, sys: DateSystem, full: bool) -> (Formatted, bool) {
+        let general_text = |n: f64, width: usize| if full { Some(general_full(n)) } else { format_general_fit(n, width) };
+        let general =
+            |n: f64| Formatted { text: general_text(n, GENERAL_WIDTH).unwrap_or_else(|| OVERFLOW.into()), color: None, fill: None, numeric: true };
         if self.is_general() {
             return (general(n), false);
         }
         let Some((sec, drop_sign)) = self.select(n) else { return (general(n), false) };
         let minus = n < 0.0 && !drop_sign;
         let out: Option<Out> = match sec.kind {
-            SecKind::Text => Some(render::render_text(sec, &format_general_fit(n, GENERAL_WIDTH).unwrap_or_default())),
+            SecKind::Text => Some(render::render_text(sec, &general_text(n, GENERAL_WIDTH).unwrap_or_default())),
             SecKind::General => {
                 let width = if minus { GENERAL_WIDTH - 1 } else { GENERAL_WIDTH };
-                Some(render::render_general(sec, n.abs(), width))
+                let text = general_text(n.abs(), width).unwrap_or_else(|| "#".repeat(width.clamp(1, 11)));
+                Some(render::render_general(sec, &text))
             }
             SecKind::Date => {
                 if minus {
@@ -293,6 +329,60 @@ impl NumberFormat {
         (Formatted { text: out.text, color: sec.color, fill: out.fill, numeric: true }, false)
     }
 
+    /// The number `n` as this format displays it: what Excel stores when "Set precision as
+    /// displayed" is on. Fixed decimals, percent, thousands scaling (`0.0,,`), scientific and
+    /// fraction sections round to what they show; the section is picked as for display, so
+    /// `0.00;(0.0)` keeps one decimal for negatives. Observed in Excel (COM,
+    /// `Workbook.PrecisionAsDisplayed`), these keep the full value: General, date and time
+    /// formats (`mm:ss.0` included), text formats and sections without digits (`"x"`, `;;;`).
+    /// The section is picked by [`NumberFormat::rounding_section`], which ignores conditions.
+    /// Never returns `-0`.
+    pub fn round_as_displayed(&self, n: f64) -> f64 {
+        if self.is_general() || !n.is_finite() {
+            return n;
+        }
+        let Some(sec) = self.rounding_section(n) else { return n };
+        if sec.kind != SecKind::Number {
+            return n;
+        }
+        let Some(m) = render::shown_value(sec, n) else { return n };
+        if m == 0.0 {
+            0.0
+        } else if n < 0.0 {
+            -m
+        } else {
+            m
+        }
+    }
+
+    /// The section whose digits "Set precision as displayed" rounds `n` by. Observed in Excel
+    /// (COM), this differs from the section that displays `n`:
+    /// - Conditions are ignored; the sign picks the section, the first for positives and the
+    ///   second for negatives. `[<1]0.00;0` shows 2.333 as `2` but stores 2.33, and stores -10/3
+    ///   as -3 although it shows `-3.00`. `[>1]0.0;0.000` stores 1/3 as 0.3.
+    /// - A format with a condition and a single number section keeps negatives at full value
+    ///   (`[<1]0.00`, `[>=-100]0.0`); with an `@` section added (`[<1]0.00;@`) negatives use the
+    ///   first section, as every format without a condition does.
+    /// - A completely empty section (no characters, not even a colour) passes to the next one:
+    ///   `0.0;;0.000` stores -2.333 as -2.333, `;0.0` stores 2.333 as 2.3, `;;0.0` too. A section
+    ///   with only a colour or a literal (`0.0;[Red];0.000`, `0.0;" "`) has no digits and keeps
+    ///   the full value.
+    ///
+    /// `None` keeps the full value.
+    fn rounding_section(&self, n: f64) -> Option<&Section> {
+        let secs = self.num_sections();
+        let conditional = secs.iter().any(|s| s.cond.is_some());
+        let slot = if n < 0.0 && secs.len() >= 2 {
+            1
+        } else if n < 0.0 && conditional && self.inner.text_section.is_none() {
+            return None;
+        } else {
+            0
+        };
+        let empty = |s: &Section| s.toks.is_empty() && s.color.is_none() && s.cond.is_none();
+        secs.get(slot..)?.iter().find(|s| !empty(s))
+    }
+
     fn format_text(&self, t: &str) -> Formatted {
         match self.inner.text_section.and_then(|i| self.inner.sections.get(i)) {
             Some(sec) => {
@@ -302,20 +392,57 @@ impl NumberFormat {
             None => Formatted { text: t.to_string(), color: None, fill: None, numeric: false },
         }
     }
+
+    /// [`Self::format_text`]'s text, or `None` once it passes `max_units` UTF-16 code units.
+    fn format_text_within(&self, t: &str, max_units: usize) -> Option<String> {
+        match self.inner.text_section.and_then(|i| self.inner.sections.get(i)) {
+            Some(sec) => render::render_text_within(sec, t, max_units).map(|out| out.text),
+            None => (t.encode_utf16().count() <= max_units).then(|| t.to_string()),
+        }
+    }
 }
 
 /// Formats a cell value for display.
 pub fn format_value(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_with(v, fmt, sys, false)
+}
+
+/// Formats a cell value as Save As CSV/Text writes it: like [`format_value`], except that a number
+/// shown as General (a General or Text section, with or without colour and literals) is not
+/// narrowed to the cell width but written by `general_full`: `124412140710`, not `1.24412E+11`.
+/// Excel writes the cell display here; GridCraft keeps the digits.
+pub fn format_value_full(v: &Value, fmt: &NumberFormat, sys: DateSystem) -> Formatted {
+    format_value_with(v, fmt, sys, true)
+}
+
+/// General for Save As CSV/Text: the text `&` gives (15 significant digits), but never with an
+/// exponent, because reopening the file would give the cell a scientific format that rounds it
+/// on the next save. Where `&` writes an exponent, a number of 1 or more is written as the
+/// shortest digits that read back as the same value (every integer f64 holds below 1e16 exactly,
+/// so 16-digit card numbers survive), and a smaller one as its 15 significant digits in full.
+fn general_full(n: f64) -> String {
+    let text = gridcraft_core::number_to_text(n);
+    if !text.contains('E') {
+        text
+    } else if n.abs() >= 1.0 {
+        format!("{n}")
+    } else {
+        let mag: i32 = format!("{n:.14e}").split_once('e').and_then(|(_, e)| e.parse().ok()).unwrap_or(0);
+        gridcraft_core::value::trim_decimal(&format!("{:.*}", (14 - mag).max(0) as usize, n))
+    }
+}
+
+fn format_value_with(v: &Value, fmt: &NumberFormat, sys: DateSystem, full: bool) -> Formatted {
     match v {
         Value::Empty => Formatted::default(),
         Value::Number(n) if !n.is_finite() => Formatted { text: CellError::Num.as_str().into(), ..Formatted::default() },
-        Value::Number(n) => fmt.format_number(*n, sys).0,
+        Value::Number(n) => fmt.format_number(*n, sys, full).0,
         Value::Text(t) => fmt.format_text(t),
         Value::Bool(b) => Formatted { text: if *b { "TRUE" } else { "FALSE" }.into(), ..Formatted::default() },
         Value::Error(e) => Formatted { text: e.as_str().into(), ..Formatted::default() },
         Value::Array(a) => match a.data.first() {
             Some(Value::Array(_)) | None => Formatted::default(),
-            Some(first) => format_value(first, fmt, sys),
+            Some(first) => format_value_with(first, fmt, sys, full),
         },
     }
 }
@@ -395,6 +522,10 @@ impl NumberFormat {
 /// The `TEXT()` worksheet function: formats a value with a format code. Numeric text is
 /// converted to a number first; other text and booleans (as `TRUE`/`FALSE`) go through the text
 /// section, or are returned as is.
+/// Longest text a cell holds, in UTF-16 code units (Excel's 32,767 characters, which XLSB also
+/// stores that way), and so the longest `TEXT` result.
+const MAX_CELL_TEXT_CHARS: usize = 32_767;
+
 pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, CellError> {
     if code.is_empty() {
         return Ok(String::new());
@@ -403,6 +534,9 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         return Err(CellError::Value);
     }
     let fmt = NumberFormat::parse_cached(code);
+    if fmt.inner.invalid {
+        return Err(CellError::Value);
+    }
     let n = match v.scalar() {
         Value::Error(e) => return Err(e),
         Value::Empty => 0.0,
@@ -410,14 +544,16 @@ pub fn text_function(v: &Value, code: &str, sys: DateSystem) -> Result<String, C
         Value::Bool(b) => return Ok(fmt.format_text(if b { "TRUE" } else { "FALSE" }).text),
         Value::Text(t) => match gridcraft_core::parse::parse_number_text(&t) {
             Some(n) => n,
-            None => return Ok(fmt.format_text(&t).text),
+            // Every `@` repeats the text: a result past a cell's limit is `#VALUE!`, so nested
+            // TEXT calls can't multiply it further.
+            None => return fmt.format_text_within(&t, MAX_CELL_TEXT_CHARS).ok_or(CellError::Value),
         },
         Value::Array(_) => return Err(CellError::Value),
     };
     if !n.is_finite() {
         return Err(CellError::Num);
     }
-    let (f, overflow) = fmt.format_number(n, sys);
+    let (f, overflow) = fmt.format_number(n, sys, false);
     if overflow { Err(CellError::Value) } else { Ok(f.text) }
 }
 

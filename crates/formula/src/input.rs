@@ -21,6 +21,12 @@ const SPANISH: &[(&str, &str)] = &[
     ("COUNTIF", "CONTAR.SI"),
     ("VLOOKUP", "BUSCARV"),
     ("TODAY", "HOY"),
+    // Financial block (#1986): the loan-schedule and investment staples.
+    ("NPV", "VNA"),
+    ("IRR", "TIR"),
+    ("PMT", "PAGO"),
+    ("PV", "VA"),
+    ("FV", "VF"),
     ("TRUE", "VERDADERO"),
     ("FALSE", "FALSO"),
 ];
@@ -202,6 +208,8 @@ pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -
     let mut expr = parser::parse_syntax(src, locale)?;
     if locale != FormulaLocale::En {
         normalize(&mut expr, locale, &known_name, &mut Vec::new(), 0, false)?;
+    if locale == FormulaLocale::Es {
+        normalize(&mut expr, &known_name, &mut Bindings::default(), 0, false)?;
     }
     Ok(expr)
 }
@@ -209,8 +217,9 @@ pub fn parse_input(src: &str, locale: FormulaLocale, known_name: impl Fn(&str) -
 /// Prints canonical expressions for editing. Name collisions retain the canonical spelling
 /// so displaying then committing a formula never changes a defined-name reference.
 pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str) -> bool) -> Result<String, ParseError> {
-    // Check before cloning/printing: a flat operator chain can produce a deep AST even
-    // though the parser itself did not recurse deeply.
+    // Check before cloning/printing. A flat operator chain such as A1+A2+… nests on its left
+    // without nesting in the text: cloning, printing and `normalize` follow that left spine in
+    // a loop, so it does not count (Excel accepts 4,096 operands, #916). Other nesting does.
     let mut pending = vec![(expr, 0usize)];
     while let Some((node, depth)) = pending.pop() {
         if depth > parser::MAX_DEPTH {
@@ -219,7 +228,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
         match node {
             Expr::Unary(_, child) | Expr::Paren(child) => pending.push((child, depth + 1)),
             Expr::Binary(_, left, right) => {
-                pending.push((left, depth + 1));
+                pending.push((left, depth));
                 pending.push((right, depth + 1));
             }
             Expr::Call(_, args) => pending.extend(args.iter().map(|e| (e, depth + 1))),
@@ -236,6 +245,7 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
     }
     let mut expr = expr.clone();
     normalize(&mut expr, locale, &known_name, &mut Vec::new(), 0, true)?;
+    normalize(&mut expr, &known_name, &mut Bindings::default(), 0, true)?;
     let canonical = crate::print(&expr);
     let tokens = crate::lexer::tokenize(&canonical).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let mut out = String::new();
@@ -296,6 +306,47 @@ fn normalize(
         return Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 });
     }
     let bound = |name: &str, bindings: &[String]| bindings.iter().rev().any(|n| eq_ignore_case(n, name)) || known_name(name);
+/// The LET/LAMBDA names in scope, with how many times each is bound, so a lookup is one probe
+/// instead of a scan of every binding for each call.
+#[derive(Default)]
+struct Bindings {
+    stack: Vec<String>,
+    counts: std::collections::HashMap<String, usize>,
+}
+
+impl Bindings {
+    fn len(&self) -> usize {
+        self.stack.len()
+    }
+
+    fn push(&mut self, name: &str) {
+        let key = crate::fold_name(name);
+        *self.counts.entry(key.clone()).or_default() += 1;
+        self.stack.push(key);
+    }
+
+    fn truncate(&mut self, len: usize) {
+        while self.stack.len() > len {
+            let Some(key) = self.stack.pop() else { break };
+            if let Some(n) = self.counts.get_mut(&key) {
+                *n -= 1;
+                if *n == 0 {
+                    self.counts.remove(&key);
+                }
+            }
+        }
+    }
+
+    fn contains(&self, name: &str) -> bool {
+        self.counts.contains_key(&crate::fold_name(name))
+    }
+}
+
+fn normalize(expr: &mut Expr, known_name: &impl Fn(&str) -> bool, bindings: &mut Bindings, depth: usize, display: bool) -> Result<(), ParseError> {
+    if depth > parser::MAX_DEPTH {
+        return Err(ParseError { msg: "formula is nested too deeply".into(), pos: 0 });
+    }
+    let bound = |name: &str, bindings: &Bindings| bindings.contains(name) || known_name(name);
     match expr {
         Expr::Bool(value) if display => {
             let alias = match locale {
@@ -338,7 +389,7 @@ fn normalize(
                         // The new name is not in scope in its own value expression.
                         normalize(value, locale, known_name, bindings, depth + 1, display)?;
                         if let Expr::Name(name) = declaration {
-                            bindings.push(name.clone());
+                            bindings.push(name);
                         }
                     }
                 }
@@ -351,7 +402,7 @@ fn normalize(
             if let Some((body, params)) = args.split_last_mut() {
                 for param in params {
                     if let Expr::Name(name) = param {
-                        bindings.push(name.clone());
+                        bindings.push(name);
                     }
                 }
                 normalize(body, locale, known_name, bindings, depth + 1, display)?;
@@ -377,6 +428,16 @@ fn normalize(
         Expr::Binary(_, left, right) => {
             normalize(left, locale, known_name, bindings, depth + 1, display)?;
             normalize(right, locale, known_name, bindings, depth + 1, display)?;
+        Expr::Unary(_, child) | Expr::Paren(child) => normalize(child, known_name, bindings, depth + 1, display)?,
+        Expr::Binary(..) => {
+            // Follow the left spine of a flat chain (A1+A2+…) in a loop: it is not nesting.
+            // Each call leaves `bindings` as it found them, so the order does not matter.
+            let mut node = expr;
+            while let Expr::Binary(_, left, right) = node {
+                normalize(right, known_name, bindings, depth + 1, display)?;
+                node = left;
+            }
+            normalize(node, known_name, bindings, depth, display)?;
         }
         Expr::Array(rows) if display => {
             for row in rows {
