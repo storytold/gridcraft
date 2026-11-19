@@ -26,14 +26,14 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
     for (&(row, col), c) in &file.cells {
         let value = match &c.value {
             sylk::Value::Number(n) => Value::Number(*n),
-            sylk::Value::Text(s) => Value::Text(Arc::from(decode_sylk_escapes(s).as_ref())),
+            sylk::Value::Text(s) => Value::Text(Arc::from(decode_sylk_escapes(s, false).as_ref())),
             sylk::Value::Bool(b) => Value::Bool(*b),
             sylk::Value::Error(s) => CellError::parse(s).map_or_else(|| Value::Text(Arc::from(s.as_str())), Value::Error),
             _ => Value::Empty,
         };
         let mut cell = Cell::value(value);
         if let Some(a1) = &c.formula {
-            let decoded = decode_sylk_escapes(a1);
+            let decoded = decode_sylk_escapes(a1, true);
             let f = Formula::new(decoded.as_ref());
             if f.expr.is_some() {
                 cell.formula = Some(Arc::new(f));
@@ -42,7 +42,7 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             }
         }
         if let Some(code) = &c.format {
-            let decoded = decode_sylk_escapes(code);
+            let decoded = decode_sylk_escapes(code, true);
             let id = if let Some(&id) = styles.get(decoded.as_ref()) {
                 id
             } else {
@@ -72,7 +72,11 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
 }
 
 /// Decodes SYLK 7-bit ISO/IEC 6937 escape sequences (`\x1bN<byte>`).
-fn decode_sylk_escapes(s: &str) -> Cow<'_, str> {
+///
+/// `quoted` says the string carries its own quotes as syntax (a formula or a number format)
+/// rather than as text: there a `"` right after `\x1bN` with nothing after it is the quote that
+/// closes the literal, so the incomplete escape is kept.
+fn decode_sylk_escapes(s: &str, quoted: bool) -> Cow<'_, str> {
     if !s.contains('\x1b') {
         return Cow::Borrowed(s);
     }
@@ -87,6 +91,14 @@ fn decode_sylk_escapes(s: &str) -> Cow<'_, str> {
                 break;
             };
             if !code_ch.is_ascii() || (code_ch as u8) < 0x20 {
+                out.push('\x1b');
+                out.push('N');
+                out.push(code_ch);
+                continue;
+            }
+            // A `"` here may be the quote that closes a formula's or format's literal, not the
+            // payload for `¢`: keep the incomplete escape and let the quote close it.
+            if quoted && code_ch == '"' && chars.peek().is_none() {
                 out.push('\x1b');
                 out.push('N');
                 out.push(code_ch);
@@ -308,7 +320,8 @@ fn compose_iso6937(diacritic: u8, base: char) -> Option<char> {
     Some(ch)
 }
 
-/// Maps a single-byte ISO/IEC 6937 GR character (`0xA0..=0xFF`, excluding diacritics).
+/// Maps a single-byte ISO/IEC 6937 GR character (`0xA0..=0xFF`, excluding diacritics). The codes
+/// are the standard's: `0xE2` is `Đ` (U+0110), and `Ð` (U+00D0) has no ISO/IEC 6937 code.
 fn iso6937_single(b: u8) -> Option<char> {
     let ch = match b {
         0xA0 => '\u{00A0}',

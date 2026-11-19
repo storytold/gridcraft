@@ -960,6 +960,8 @@ fn sylk_decodes_escape_n_accented_text() {
         C;Y3;X1;K\"caf\x1bNBe \x1bNAa \x1bNKc \x1bNDn \x1bN!\x1bN? \x1bNq\x1bNy\x1bNJa \x1bNx \x1bNMo \x1bNFg\"\r\n\
         C;Y4;X1;K\"K\x1bNHoln\";E\"K\x1bNHoln\"\r\n\
         C;Y5;X1;K\"tail\x1bN\"\r\n\
+        C;Y6;X1;K\"tail\x1bN\";E\"tail\x1bN\"\r\n\
+        C;Y7;X1;K\"\x1bN\"\";E\"\x1bN\"\"\r\n\
         E\r\n";
     let (wb, warnings) = open_bytes("sample.slk", slk).unwrap();
     assert!(warnings.is_empty(), "{warnings:?}");
@@ -970,6 +972,17 @@ fn sylk_decodes_escape_n_accented_text() {
     assert_eq!(sh.value(CellRef::parse("A4").unwrap()), gridcraft_core::Value::Text("Köln".into()));
     assert_eq!(sh.cell(CellRef::parse("A4").unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("\"Köln\""));
     assert_eq!(sh.value(CellRef::parse("A5").unwrap()), gridcraft_core::Value::Text("tail\x1bN".into()));
+    // An incomplete escape before a formula's closing quote keeps the escape instead of eating
+    // the quote: the formula is read, not dropped.
+    assert_eq!(sh.value(CellRef::parse("A6").unwrap()), gridcraft_core::Value::Text("tail\x1bN".into()));
+    assert_eq!(
+        sh.cell(CellRef::parse("A6").unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()),
+        Some("\"tail\x1bN\""),
+        "the quote closes the literal, so the escape has no payload"
+    );
+    // A cent sign escape has its own closing quote, so it still decodes in text and formulas.
+    assert_eq!(sh.value(CellRef::parse("A7").unwrap()), gridcraft_core::Value::Text("¢".into()));
+    assert_eq!(sh.cell(CellRef::parse("A7").unwrap()).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("\"¢\""));
 }
 
 /// A FIFO with no writer would block an open forever: it is refused before it is opened.
