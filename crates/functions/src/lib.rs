@@ -73,6 +73,7 @@ pub(crate) mod info;
 pub(crate) mod lift;
 pub(crate) mod lookup;
 pub(crate) mod math;
+pub mod params;
 pub(crate) mod special;
 pub(crate) mod stat;
 pub(crate) mod text;

@@ -21,6 +21,7 @@ mod cond_format_rules;
 mod data;
 mod find;
 mod format_cells;
+mod function_arguments;
 mod insert_function;
 mod names;
 mod paste;
@@ -284,6 +285,12 @@ impl Dialog {
         let active = app.session.active().map(|d| d.selection.active.a1()).unwrap_or_default();
         let p = |k: &str| params.get(k).cloned().unwrap_or(Json::Null);
         use Field::*;
+        if name == "insertFunction"
+            && p("category").is_null()
+            && let Some(d) = function_arguments::open(app, &json!({}))
+        {
+            return Some(d);
+        }
         let mut d = match name {
             "insertCells" => Dialog::form(
                 "insertCells",
@@ -946,6 +953,7 @@ impl Dialog {
                 }
                 d
             }
+            "functionArguments" => function_arguments::open(app, &params)?,
             "insertFunction" => {
                 // A Function Library menu opens it on its own category.
                 let category = p("category").as_str().unwrap_or(crate::function_library::MOST_RECENTLY_USED).to_string();

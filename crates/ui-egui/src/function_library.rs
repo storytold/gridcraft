@@ -164,7 +164,7 @@ pub fn auto_sum_menu(app: &mut SheetApp, ui: &mut Ui) {
     ui.separator();
     let label = app.ui.language.tr("More Functions…");
     if ui.add(egui::Button::new(label).frame(false).min_size(vec2(160.0, 22.0))).clicked() {
-        app.open_dialog("insertFunction", json!({}));
+        app.open_dialog("insertFunction", json!({"category": MOST_RECENTLY_USED}));
         ui.close();
     }
 }

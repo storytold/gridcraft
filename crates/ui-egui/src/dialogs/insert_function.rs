@@ -3,7 +3,8 @@ use super::{Dialog, Json, SheetApp, json, vec2};
 
 /// Insert Function: search names (as the formula language spells them) and descriptions, or pick
 /// a category (Most Recently Used, All or one category), then a function; each hit shows its
-/// category and description. OK starts editing `=NAME(` (or appends to the formula).
+/// category and description. OK goes on to Function Arguments for a new call of the function at
+/// the caret of the cell edit (a new edit when none is open).
 pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     use crate::function_library::{self as lib, ALL, MOST_RECENTLY_USED};
     let language = app.ui.language;
@@ -115,12 +116,8 @@ pub(super) fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dia
             .active()
             .map(|doc| crate::formula_locale::completion_name(&f.name, locale, &doc.wb, doc.wb.active_sheet()))
             .unwrap_or(&f.name);
-        let cur = app.editor.as_ref().map(|e| e.text.clone());
-        let text = match cur {
-            Some(t) if t.starts_with('=') => format!("{t}{n}("),
-            _ => format!("={n}("),
-        };
-        app.begin_edit(Some(text), false);
+        let n = n.to_string();
+        app.open_dialog("functionArguments", json!({"name": n}));
     }
     if !open {
         *confirm = true;
