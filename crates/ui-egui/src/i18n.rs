@@ -534,6 +534,44 @@ mod tests {
         }
     }
 
+    /// Data › Get Data (Text/CSV): every label of the Import Text/CSV dialog has a row in each catalog.
+    #[test]
+    fn text_import_strings_are_translated_in_every_catalog() {
+        let keys = [
+            "Import Text/CSV",
+            "Detect automatically",
+            "Comma",
+            "Semicolon",
+            "Tab",
+            "Dot (1.5)",
+            "Comma (1,5)",
+            "Based on first 200 rows",
+            "Based on entire dataset",
+            "Do not detect data types",
+            "General",
+            "Text",
+            "Number",
+            "Date",
+            "Do not import column",
+            "Choose at least one column to import.",
+            "Delimiter",
+            "Decimal separator",
+            "Data Type Detection",
+            "My data has headers",
+            "Rows of data:",
+            "Cancel",
+            "Load",
+        ];
+        for key in keys {
+            assert_eq!(Language::En.tr(key), key);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
+            }
+        }
+    }
+
     #[test]
     fn fill_puts_each_value_in_once() {
         // A value holding a placeholder (a macro named `{steps}`) is shown as it is.

@@ -1135,6 +1135,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "Το \\@char έχει μη αριθμητικό όρισμα {argument}",
         "\\@char with invalid code point {code}" => "\\@char με μη έγκυρο σημείο κώδικα {code}",
         "Invalid environment name character: {character}" => "Μη έγκυρος χαρακτήρας στο όνομα περιβάλλοντος: {character}",
+        // Data › Get Data (Text/CSV): Import Text/CSV (#2109)
+        "Import Text/CSV" => "Εισαγωγή κειμένου/CSV",
+        "Detect automatically" => "Αυτόματος εντοπισμός",
+        "Dot (1.5)" => "Τελεία (1.5)",
+        "Comma (1,5)" => "Κόμμα (1,5)",
+        "Based on first 200 rows" => "Με βάση τις πρώτες 200 γραμμές",
+        "Based on entire dataset" => "Με βάση ολόκληρο το σύνολο δεδομένων",
+        "Do not detect data types" => "Να μην εντοπίζονται τύποι δεδομένων",
+        "Do not import column" => "Να μην εισαχθεί η στήλη",
+        "Choose at least one column to import." => "Επιλέξτε τουλάχιστον μία στήλη για εισαγωγή.",
+        "Delimiter" => "Οριοθέτης",
+        "Decimal separator" => "Διαχωριστικό δεκαδικών",
+        "Data Type Detection" => "Εντοπισμός τύπου δεδομένων",
+        "Rows of data:" => "Γραμμές δεδομένων:",
+        "Load" => "Φόρτωση",
         _ => return None,
     })
 }
