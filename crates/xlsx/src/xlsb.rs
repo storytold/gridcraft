@@ -68,7 +68,8 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         .read("[Content_Types].xml")
         .map_err(|e| IoError::Format(format!("XLSB: {e}")))?
         .ok_or_else(|| IoError::Format("XLSB: missing [Content_Types].xml".into()))?;
-    let ct_el = craft_xml::Options::canonical(&[(craft_opc::NS_CONTENT_TYPES, "ct")]).parse(&ct_bytes).map_err(|e| IoError::Xml(e.to_string()))?;
+    let canonical = craft_xml::Canonical::new(&[("ct", craft_opc::NS_CONTENT_TYPES)]);
+    let ct_el = craft_xml::Options::canonical(&canonical).parse(&ct_bytes).map_err(|e| IoError::Xml(e.to_string()))?;
     if ct_el.name != "ct:Types" {
         return Err(IoError::Format("XLSB: wrong [Content_Types].xml namespace".into()));
     }
