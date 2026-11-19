@@ -61,6 +61,8 @@ fn chart_names_are_written_qualified() {
     let mut wb = Workbook::default();
     let mut s = Sheet::new("Data");
     s.charts.push(Chart {
+        gridline_width: None,
+        gridline_color: None,
         id: 1,
         kind: ChartKind::BarStacked,
         anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },
@@ -149,6 +151,8 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
     let mut wb = Workbook::default();
     let mut s = Sheet::new("Sales");
     s.charts.push(Chart {
+        gridline_width: None,
+        gridline_color: None,
         id: 1,
         kind: ChartKind::BarStacked,
         anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },
