@@ -137,8 +137,9 @@ fn save_with(s: &mut Session, p: &Json, explicit: bool) -> Result<Json> {
     let d = s.doc_mut()?;
     // The document's own file keeps the format its content had when opened; any other path
     // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
+    // Save As (`explicit`) always goes by the extension, so an unknown one is refused (#4351).
     let own = d.path.as_deref() == Some(path.as_str());
-    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| own));
+    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| own && !explicit));
     // An XLSX package's own file keeps the subtype it was opened as: a macro-enabled package
     // named `.xlsx` or with no extension keeps its VBA project. A named destination, and Save As
     // to any path, goes by the extension instead, an explicit choice of format (#4351).

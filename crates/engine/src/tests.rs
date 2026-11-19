@@ -3228,6 +3228,28 @@ fn ordinary_save_refuses_to_strip_a_vba_project_it_cannot_keep() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #4351: Save As goes by the destination's extension even on the document's own path, so an unknown one is refused rather than written as the format the file was opened as.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn save_as_to_an_unknown_extension_is_refused_even_on_the_documents_own_path() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-vba-save-as-dat-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    let path = dir.join("book.dat");
+    std::fs::write(&path, crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+    assert!(s.execute("file.saveAs", json!({"path": path})).is_err(), "Save As to an unknown extension is refused");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the refused Save As leaves the file alone");
+    // An ordinary Save to the same own path still writes the format it was opened as.
+    s.execute("file.save", json!({})).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn validation_formulas_are_relative_and_see_the_new_value() {
     let mut s = s();
