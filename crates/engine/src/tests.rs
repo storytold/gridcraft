@@ -5815,10 +5815,7 @@ fn object_move_rotates_shapes_only() {
 #[test]
 fn object_move_rotation_respects_sheet_protection() {
     let mut s = s();
-    let id = s
-        .execute("insert.shape", json!({"kind": "rectangle", "at": "A1"}))
-        .unwrap()["shape"]
-        .clone();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle", "at": "A1"})).unwrap()["shape"].clone();
     let id_num = id.as_u64().unwrap() as u32;
     let shape_state = |session: &Session| {
         let doc = session.doc().unwrap();
@@ -5827,11 +5824,7 @@ fn object_move_rotation_respects_sheet_protection() {
     };
 
     // Rotation remains available on an unprotected sheet.
-    s.execute(
-        "object.move",
-        json!({"kind": "shape", "id": id_num, "at": "B2", "rotation": 45}),
-    )
-    .unwrap();
+    s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "B2", "rotation": 45})).unwrap();
     let (anchor, rotation) = shape_state(&s);
     assert_eq!(rotation, 45.0);
     assert_eq!(anchor.cell, CellRef::parse("B2").unwrap());
@@ -5841,10 +5834,7 @@ fn object_move_rotation_respects_sheet_protection() {
     let before = shape_state(&s);
     let undo_len = s.doc().unwrap().undo.len();
 
-    let result = s.execute(
-        "object.move",
-        json!({"kind": "shape", "id": id_num, "at": "C3", "rotation": 90}),
-    );
+    let result = s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "C3", "rotation": 90}));
     assert!(result.is_err(), "rotation should be rejected on a protected sheet");
     assert_eq!(shape_state(&s), before, "a rejected rotation leaves the shape unchanged");
     assert_eq!(s.doc().unwrap().undo.len(), undo_len);

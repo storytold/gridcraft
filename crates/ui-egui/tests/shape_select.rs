@@ -257,14 +257,9 @@ fn resizing_a_flat_line_keeps_it_flat() {
 fn resizing_rotated_flat_lines_and_arrows_keeps_them_flat_and_undoes() {
     for kind in ["line", "arrow"] {
         let (mut h, id) = fixture_of(kind);
-        h.state_mut()
-            .run("object.move", json!({"kind": "shape", "id": id, "rotation": 90}))
-            .unwrap();
+        h.state_mut().run("object.move", json!({"kind": "shape", "id": id, "rotation": 90})).unwrap();
         h.run_steps(2);
-        h.state_mut().selected_object = Some(gridcraft_engine::model::ObjRef::new(
-            gridcraft_engine::model::ObjKind::Shape,
-            id,
-        ));
+        h.state_mut().selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Shape, id));
         h.run_steps(2);
 
         let before_anchor = anchor(&h, id);

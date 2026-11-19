@@ -147,14 +147,7 @@ pub fn resized_turned(r: Rect, deg: f32, h: Handle, d: egui::Vec2, min: f32, kee
 }
 
 /// Axis-aware version for objects with a zero-height or zero-width minimum.
-pub(crate) fn resized_turned_by_min(
-    r: Rect,
-    deg: f32,
-    h: Handle,
-    d: egui::Vec2,
-    min: egui::Vec2,
-    keep_aspect: bool,
-) -> Rect {
+pub(crate) fn resized_turned_by_min(r: Rect, deg: f32, h: Handle, d: egui::Vec2, min: egui::Vec2, keep_aspect: bool) -> Rect {
     if deg == 0.0 {
         return resized_by_min(r, h, d, min, keep_aspect);
     }
