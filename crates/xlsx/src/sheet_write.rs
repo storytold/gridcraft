@@ -88,14 +88,21 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         .map(|(a, r)| (*a, *r))
         .collect();
     let mut extra: BTreeMap<CellRef, Value> = BTreeMap::new();
-    // Values inside spills and legacy array ranges.
+    // Walk stored rows and their matching cache entries, not the declared array's area.
+    // Sparse followers past a million positions must survive without expanding empty cells.
+    let spill_rows: BTreeSet<u32> = sheet.spill.keys().map(|c| c.row).collect();
     for (a, r) in sheet.spill_ranges.iter().filter(|(_, r)| !r.is_single()) {
-        for c in r.iter().take(1_000_000) {
-            if c != *a
-                && let Some(v) = sheet.spill.get(&c)
-                && sheet.cells.get(c).is_none_or(|x| x.formula.is_none() && x.value.is_empty())
-            {
-                extra.insert(c, v.clone());
+        // Ordered-map ranges require valid bounds, including for malformed model metadata.
+        if r.start.row > r.end.row || r.start.col > r.end.col {
+            continue;
+        }
+        for &row in spill_rows.range(r.start.row..=r.end.row) {
+            let first = CellRef::new(row, r.start.col);
+            let last = CellRef::new(row, r.end.col);
+            for (&c, v) in sheet.spill.range(first..=last) {
+                if c != *a && sheet.cells.get(c).is_none_or(|x| x.formula.is_none() && x.value.is_empty()) {
+                    extra.insert(c, v.clone());
+                }
             }
         }
     }
@@ -796,6 +803,9 @@ fn write_cell(s: &mut String, input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_
         Value::Array(a) => a.get(0, 0).cloned().unwrap_or(Value::Empty),
         v => v,
     };
+    // A saved #SPILL! formula is cached as #VALUE!, so request calculation to recover its
+    // actual state. Cached-open must not trust that substitute as the original formula result.
+    out.needs_calc |= formula.is_some() && matches!(&value, Value::Error(CellError::Spill));
     let value = match value {
         Value::Error(CellError::Circ) => Value::Number(0.0),
         // #SPILL! and #CALC! are not error codes of the file format (Excel refuses a file that
