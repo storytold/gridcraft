@@ -135,6 +135,9 @@ fn prepare(name: String, bytes: Vec<u8>, p: &Json, progress: &OpenProgress) -> R
     // an unprotected copy.
     let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
     let content_is_xlsx = crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx;
+    // GETPIVOTDATA reads a pivot without cached cells through the indexer, which `DocState::new`
+    // installs: this calculation runs before any document may have been made.
+    let _ = gridcraft_model::PIVOT_INDEXER.set(crate::pivot::index_cells);
     let mut calc = Calc::new();
     progress.calculating.store(true, Ordering::Relaxed);
     if !progress.cancelled.load(Ordering::Relaxed) {
