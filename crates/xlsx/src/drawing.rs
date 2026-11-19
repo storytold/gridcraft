@@ -272,7 +272,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     }
     let fill = sp.child("solidFill").and_then(dml_color).unwrap_or_default();
     let line = ln.and_then(|l| l.child("solidFill")).and_then(dml_color).unwrap_or_default();
-    let text = obj.child("txBody").map(body_text).unwrap_or_default();
+    let text = tb.map(|tb| if has_math { math_body_text(tb) } else { body_text(tb) }).unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
     let rotation = sp
@@ -416,6 +416,55 @@ fn plain_paragraphs(text: &str, rpr: &str) -> String {
 /// The text of a text body: the runs of each paragraph, paragraphs joined with newlines.
 fn body_text(tb: &El) -> String {
     tb.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n")
+}
+
+/// A rejected Office Math box still needs its visible run text. Do not reinterpret
+/// that text as LaTeX. Keep traversal and output bounded independently of conversion.
+fn math_body_text(tb: &El) -> String {
+    const MAX_BYTES: usize = 1 << 20;
+    fn append(text: &str, out: &mut String) {
+        let mut end = text.len().min(MAX_BYTES.saturating_sub(out.len()));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.push_str(&text[..end]);
+    }
+    fn visit(e: &El, depth: usize, left: &mut usize, out: &mut String) {
+        if depth > 64 || *left == 0 || out.len() >= MAX_BYTES {
+            return;
+        }
+        *left -= 1;
+        if e.name.ends_with("Pr") {
+            return;
+        }
+        if e.name == "t" {
+            append(&e.text, out);
+        } else if e.name == "AlternateContent" {
+            // Choice and fallback describe the same content, not two text runs.
+            if let Some(c) = e.child("Fallback").or_else(|| e.child("Choice")) {
+                visit(c, depth + 1, left, out);
+            }
+        } else {
+            for child in &e.children {
+                visit(child, depth + 1, left, out);
+                if *left == 0 || out.len() >= MAX_BYTES {
+                    break;
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    let mut left = 100_000;
+    for (i, p) in tb.kids("p").enumerate() {
+        if left == 0 || out.len() >= MAX_BYTES {
+            break;
+        }
+        if i > 0 {
+            append("\n", &mut out);
+        }
+        visit(p, 0, &mut left, &mut out);
+    }
+    out
 }
 
 /// Whether a body without Office Math still holds the text the writer wrote for `src`: the same
@@ -703,5 +752,25 @@ pub fn image_content_type(ext: &str) -> &'static str {
         "wmf" => "image/x-wmf",
         "webp" => "image/webp",
         _ => "image/png",
+    }
+}
+
+#[cfg(test)]
+mod math_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn fallback_uses_one_alternative_and_ignores_properties() {
+        let tb = crate::xml::parse(br#"<txBody><p><rPr><t>hidden</t></rPr><r><t>before </t></r><AlternateContent><Choice><r><t>choice</t></r></Choice><Fallback><r><t>fallback</t></r></Fallback></AlternateContent><r><t> after</t></r></p><p><r><t>next</t></r></p></txBody>"#).unwrap();
+        assert_eq!(math_body_text(&tb), "before fallback after\nnext");
+    }
+
+    #[test]
+    fn fallback_output_cap_keeps_utf8_intact() {
+        let xml = format!("<txBody><p><r><t>a{}</t></r></p></txBody>", "λ".repeat(1 << 19));
+        let tb = crate::xml::parse(xml.as_bytes()).unwrap();
+        let text = math_body_text(&tb);
+        assert_eq!(text.len(), (1 << 20) - 1);
+        assert!(text.starts_with('a') && text.ends_with('λ'));
     }
 }
