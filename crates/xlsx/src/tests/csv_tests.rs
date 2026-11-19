@@ -432,3 +432,33 @@ fn csv_used_range_limit_is_enforced_while_reading() {
     // No limit by default.
     assert!(read_csv(dense, &CsvOptions::default()).is_ok());
 }
+
+/// #4492: a literal U+FEFF at the start of A1 is quoted on export, so reading the file back does
+/// not take it for the UTF-8 byte-order mark and drop it. Only the file's first field needs it.
+#[test]
+fn a_leading_feff_in_a1_survives_a_round_trip() {
+    let mut s = Sheet::new("S");
+    s.set_value(CellRef::new(0, 0), Value::text("\u{FEFF}FIRST"));
+    s.set_value(CellRef::new(0, 1), Value::text("\u{FEFF}label"));
+    s.set_value(CellRef::new(1, 0), Value::text("\u{FEFF}row2"));
+    s.set_value(CellRef::new(1, 1), Value::text("44"));
+    for delim in *b",\t;" {
+        let d = delim as char;
+        let out = write_csv(&s, delim, text_of(&s)).unwrap();
+        let text = String::from_utf8(out.clone()).unwrap();
+        assert_eq!(text, format!("\"\u{FEFF}FIRST\"{d}\u{FEFF}label\r\n\u{FEFF}row2{d}44\r\n"), "{d:?}");
+        let back = read_csv(&out, &CsvOptions { delimiter: delim, parse_values: false, ..Default::default() }).unwrap();
+        assert_eq!(v(&back, 0, 0), Value::text("\u{FEFF}FIRST"), "{d:?}");
+        assert_eq!(v(&back, 0, 1), Value::text("\u{FEFF}label"), "{d:?}");
+        assert_eq!(v(&back, 1, 0), Value::text("\u{FEFF}row2"), "{d:?}");
+    }
+    // A first field already quoted for another reason is written as before.
+    let mut q = Sheet::new("Q");
+    q.set_value(CellRef::new(0, 0), Value::text("\u{FEFF}a,\"b\""));
+    assert_eq!(String::from_utf8(write_csv(&q, b',', text_of(&q)).unwrap()).unwrap(), "\"\u{FEFF}a,\"\"b\"\"\"\r\n");
+    // The quotes count toward the size cap: 8 bytes of field (3 for U+FEFF) + 2 quotes + CRLF.
+    let mut one = Sheet::new("O");
+    one.set_value(CellRef::new(0, 0), Value::text("\u{FEFF}abcde"));
+    assert_eq!(write_csv_limited(&one, b',', 12, text_of(&one)).unwrap().len(), 12);
+    assert!(write_csv_limited(&one, b',', 11, text_of(&one)).is_err());
+}
