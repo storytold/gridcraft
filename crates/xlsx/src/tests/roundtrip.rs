@@ -1368,7 +1368,8 @@ fn implied_intersection_made_redundant_by_an_edit_saves_legacy() {
 #[test]
 fn single_in_a_legacy_formula_saves_as_read() {
     let body = r#"<sheetData>
-      <row r="5"><c r="F5"><v>1</v></c><c r="O6"><f>_xlfn.SINGLE(SUM(_xlfn.ANCHORARRAY(F5)))</f></c><c r="J6"><f>_xlfn.ANCHORARRAY(F5)%</f></c><c r="K6"><f>_xlfn.ANCHORARRAY($F$5)</f></c></row>
+      <row r="5"><c r="F5"><v>1</v></c></row>
+      <row r="6"><c r="J6"><f>_xlfn.ANCHORARRAY(F5)%</f></c><c r="K6"><f>_xlfn.ANCHORARRAY($F$5)</f></c><c r="O6"><f>_xlfn.SINGLE(SUM(_xlfn.ANCHORARRAY(F5)))</f></c></row>
       <row r="25"><c r="F25"><v>1</v></c><c r="G25"><f>(F25,F26)%</f></c><c r="H25"><f>SUM((F25,F26)%)</f></c></row>
       <row r="83"><c r="F83"><f>_xlfn.SINGLE(5)</f></c><c r="G83"><f>_xlfn.SINGLE(RelativeRow)</f></c><c r="H83"><f>_xlfn.SINGLE(H12)</f></c></row>
       <row r="85"><c r="F85"><f>_xlfn.SINGLE(SUM(F25:F26))</f></c></row>
