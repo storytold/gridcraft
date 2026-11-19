@@ -337,8 +337,11 @@ mod lifecycle_tests {
     fn personal_templates_location_is_set_through_its_ui_command() {
         let mut app = app();
         let result = app.run("options.personalTemplatesLocation", json!({"location": " C:/Templates "})).unwrap();
-        assert_eq!(result["location"], "C:/Templates");
-        assert_eq!(app.ui.personal_templates_location, "C:/Templates");
+        assert_eq!(result["location"], " C:/Templates ");
+        assert_eq!(app.ui.personal_templates_location, " C:/Templates ");
+        let cleared = app.run("options.personalTemplatesLocation", json!({"location": ""})).unwrap();
+        assert_eq!(cleared["location"], "");
+        assert!(app.ui.personal_templates_location.is_empty());
         assert!(app.run("options.personalTemplatesLocation", json!({})).is_err());
     }
 

@@ -248,7 +248,7 @@ impl SheetApp {
                 let Some(location) = p.get("location").and_then(Json::as_str) else {
                     return Some(Err("personal templates location must be text".into()));
                 };
-                self.ui.personal_templates_location = location.trim().to_string();
+                self.ui.personal_templates_location = location.to_string();
                 Ok(json!({"location": self.ui.personal_templates_location}))
             }
             "view.interfaceScale" => {

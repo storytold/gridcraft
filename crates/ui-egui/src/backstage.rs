@@ -361,7 +361,7 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
             }
         }
     });
-    let folder = app.ui.personal_templates_location.trim();
+    let folder = app.ui.personal_templates_location.as_str();
     if !folder.is_empty() {
         ui.add_space(22.0);
         ui.horizontal(|ui| {
