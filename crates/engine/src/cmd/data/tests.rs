@@ -598,3 +598,22 @@ fn remove_duplicates_moved_totals_formula_with_a1_range_shrinks() {
     assert_eq!(f.text.trim_start_matches('='), "COUNTA(A2:A4)");
     assert_eq!(sh.value(CellRef::parse("A5").unwrap()), Value::Number(3.0));
 }
+
+#[test]
+fn remove_duplicates_keeps_totals_formulas_pointing_below_the_table() {
+    // Rows below the table don't move when duplicate rows are compacted away, so a totals formula
+    // reading one must keep reading it.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Key", "Amount"], ["a", 10], ["a", 99], ["b", 20], ["c", 30]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B5", "header": true, "name": "T"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "T", "on": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "A10", "input": 100})).unwrap();
+    s.execute("cell.set", json!({"cell": "B6", "input": "=A10"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"range": "A1:B6", "columns": ["A"], "header": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.tables[0].range.a1(), "A1:B5");
+    let f = sh.cell(CellRef::parse("B5").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(f.text.trim_start_matches('='), "A10");
+    assert_eq!(sh.value(CellRef::parse("B5").unwrap()), Value::Number(100.0));
+}

@@ -140,7 +140,7 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                     let mut cell = shm.cell(src).cloned();
                     if let Some(cell) = cell.as_mut()
                         && let Some(f) = cell.formula.clone()
-                        && let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed(x, &host, &host, &shift)).flatten()
+                        && let Some(new) = f.with_expr(|x| adjust_within_table(x, &host, &shift, old_end)).flatten()
                     {
                         cell.formula = Some(std::sync::Arc::new(gridcraft_model::Formula {
                             array: f.array,
@@ -185,6 +185,28 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     })?;
     let remaining = (dedup_end + 1).saturating_sub(start) as usize - removed;
     Ok(json!({"removed": removed, "remaining": remaining}))
+}
+
+/// Adjusts a moved totals-row formula for the rows compaction removed, leaving references that
+/// reach below the table as they are: those rows don't move, so the shift Delete Cells makes
+/// would point them at the wrong cell.
+fn adjust_within_table(
+    e: &gridcraft_formula::Expr,
+    host: &str,
+    shift: &gridcraft_formula::adjust::Edit,
+    last_table_row: u32,
+) -> Option<gridcraft_formula::Expr> {
+    let mut changed = false;
+    let out = e.clone().map(&mut |x| {
+        let gridcraft_formula::Expr::Ref(r) = &x else { return x };
+        if r.range().end.row > last_table_row {
+            return x;
+        }
+        let adjusted = gridcraft_formula::adjust::adjust(x.clone(), host, host, shift);
+        changed |= adjusted != x;
+        adjusted
+    });
+    changed.then_some(out)
 }
 
 pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
