@@ -16,11 +16,8 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     let width = ui.available_width();
     // The hint goes through the catalog like every other label, so it reads Hebrew under a Hebrew
     // interface (`he.rs` translates it) instead of falling back to the English literal.
-    let r = ui.add(
-        egui::TextEdit::singleline(&mut d.search)
-            .desired_width(width)
-            .hint_text(language.tr("Type a command, e.g. freeze, chart, bold…")),
-    );
+    let r =
+        ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text(language.tr("Type a command, e.g. freeze, chart, bold…")));
 
     if !d.focus_initialized {
         r.request_focus();
@@ -28,16 +25,7 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
     }
 
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-    let q = d.search.to_ascii_lowercase();
-    let cmds: Vec<(String, String, String, Option<String>)> = app
-        .session
-        .commands()
-        .into_iter()
-        .filter(|c| c.enabled)
-        .filter(|c| q.is_empty() || c.label.to_ascii_lowercase().contains(&q) || c.id.to_ascii_lowercase().contains(&q))
-        .map(|c| (c.id.to_string(), c.label.to_string(), c.menu.join(" › "), c.shortcut_for_platform(mac)))
-        .take(40)
-        .collect();
+    let cmds = matching_commands(app, mac, &d.search);
 
     let last = cmds.len().saturating_sub(1);
 
@@ -97,5 +85,44 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
         let id = id.clone();
         app.dialog = None;
         app.run_or_alert(&id, json!({}));
+    }
+}
+
+fn matching_commands(app: &SheetApp, mac: bool, query: &str) -> Vec<(String, String, String, Option<String>)> {
+    let language = app.ui.language;
+    let q = query.to_lowercase();
+    app.session
+        .commands()
+        .into_iter()
+        .filter(|c| c.enabled)
+        .filter(|c| {
+            let tr_label = language.tr(c.label);
+            q.is_empty() || c.label.to_lowercase().contains(&q) || tr_label.to_lowercase().contains(&q) || c.id.to_lowercase().contains(&q)
+        })
+        .map(|c| {
+            let label = language.tr(c.label).to_string();
+            let menu = c.menu.iter().map(|m| language.tr(m)).collect::<Vec<_>>().join(" › ");
+            (c.id.to_string(), label, menu, c.shortcut_for_platform(mac))
+        })
+        .take(40)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matching_commands;
+
+    #[test]
+    fn command_search_matches_hebrew_translations_and_english_names() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = crate::SheetApp::new(session, crate::Services::default());
+        app.ui.language = crate::i18n::Language::He;
+
+        for (query, expected_id) in [("הקפא", "view.freezePanes"), ("תרשים", "insert.chart"), ("מודגש", "home.bold"), ("bold", "home.bold")]
+        {
+            let hits = matching_commands(&app, true, query);
+            assert!(hits.iter().any(|(id, ..)| id == expected_id), "query {query:?} missed {expected_id}: {hits:?}");
+        }
     }
 }

@@ -58,6 +58,31 @@ fn an_overflowing_tab_shows_scroll_arrows_that_scroll() {
 }
 
 #[test]
+fn rtl_overflowing_tab_starts_at_right_edge_and_scrolls_left() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = crate::common::app(session);
+    app.ui.language = gridcraft_ui_egui::i18n::Language::He;
+    app.ui.ribbon_tab = "Home".into();
+    let mut h = crate::common::builder().allow_missing_glyphs().with_size(vec2(700.0, 700.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let o = RibbonOverflow::get(&h.ctx);
+    assert!(o.overflows(), "Home overflows 700 px in Hebrew RTL");
+    let max = (o.content - o.visible).max(0.0);
+    assert!(o.offset > 0.0 && (o.offset - max).abs() <= 1.0, "expected right-edge start offset ~{max}, got {}", o.offset);
+    assert!(h.query_by_label("Scroll ribbon right").is_none(), "already flush at reading-start right edge");
+    h.get_by_label("Scroll ribbon left").click();
+    h.run_steps(3);
+    assert!(RibbonOverflow::get(&h.ctx).offset < o.offset, "Scroll ribbon left moved offset leftward");
+}
+
+#[test]
 fn each_tab_keeps_a_scroll_offset_of_its_own() {
     // Scrolling Home must not hide the first groups of another overflowing tab, and Home keeps
     // its offset while the other tab is used.

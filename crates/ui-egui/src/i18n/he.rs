@@ -253,7 +253,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sheet Name" => "שם גיליון",
         "Sheet\nName" => "שם\nגיליון",
         "Animations" => "הנפשות",
-        "Glide the selection outline to the cell you move to instead of jumping there" => "החלק את מסגרת הבחירה לתא שאליו עוברים במקום לקפוץ אליו בבת אחת",
+        "Glide the selection outline to the cell you move to instead of jumping there" => {
+            "החלק את מסגרת הבחירה לתא שאליו עוברים במקום לקפוץ אליו בבת אחת"
+        }
         "Drag to freeze columns" => "גרור כדי להקפיא עמודות",
         "Drag to freeze rows" => "גרור כדי להקפיא שורות",
         "Select\nData" => "בחר\nנתונים",
@@ -293,8 +295,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Location" => "מיקום",
         "Sheets" => "גיליונות",
         "Protect Workbook" => "הגן על חוברת עבודה",
-        "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => "מבנה הגיליונות נעול: לא ניתן להוסיף, להעביר, לשנות שם או למחוק גיליונות.",
-        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted." => "נעל את מבנה הגיליונות כך שלא ניתן יהיה להוסיף, להעביר, לשנות שם או למחוק גיליונות.",
+        "Sheet structure is locked: sheets can't be added, moved, renamed or deleted." => {
+            "מבנה הגיליונות נעול: לא ניתן להוסיף, להעביר, לשנות שם או למחוק גיליונות."
+        }
+        "Lock the sheet structure so sheets can't be added, moved, renamed or deleted." => {
+            "נעל את מבנה הגיליונות כך שלא ניתן יהיה להוסיף, להעביר, לשנות שם או למחוק גיליונות."
+        }
         "Properties" => "מאפיינים",
         "Title" => "כותרת",
         "Subject" => "נושא",
@@ -309,7 +315,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Web Page (*.html)" => "דף אינטרנט (‎*.html)",
         "PDF (*.pdf)" => "מסמך PDF‏ (‎*.pdf)",
         "Download" => "הורדה",
-        "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => "קובץ CSV, דף אינטרנט או PDF הם עותק: חוברת העבודה שומרת על הקובץ שלה.",
+        "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => {
+            "קובץ CSV, דף אינטרנט או PDF הם עותק: חוברת העבודה שומרת על הקובץ שלה."
+        }
         "Save the workbook under another name or in another folder." => "שמור את חוברת העבודה בשם אחר או בתיקייה אחרת.",
         "Print Active Sheets" => "הדפס גיליונות פעילים",
         "Print Entire Workbook" => "הדפס את כל חוברת העבודה",
@@ -997,11 +1005,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Tabular" => "טבלאי",
         "Use a field's menu to move it between areas:" => "השתמש בתפריט השדה כדי להעבירו בין אזורים:",
         "Values" => "ערכים",
-        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => "כותרת עליונה (&L שמאל, &C מרכז, &R ימין; &P עמוד, &N עמודים, &D תאריך, &A גיליון):",
-        "Forecast start (a date or number in the history; blank: after the last point):" => "התחלת תחזית (תאריך או מספר בהיסטוריה; ריק: אחרי הנקודה האחרונה):",
+        "Header (&L left, &C center, &R right; &P page, &N pages, &D date, &A sheet):" => {
+            "כותרת עליונה (&L שמאל, &C מרכז, &R ימין; &P עמוד, &N עמודים, &D תאריך, &A גיליון):"
+        }
+        "Forecast start (a date or number in the history; blank: after the last point):" => {
+            "התחלת תחזית (תאריך או מספר בהיסטוריה; ריק: אחרי הנקודה האחרונה):"
+        }
         "Source:" => "מקור:",
         "End date:" => "תאריך סיום:",
-        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => "הגן על חוברת עבודה עבור: מבנה (לא ניתן להוסיף, להעביר, לשנות שם, להסתיר או למחוק גיליונות).",
+        "Protect workbook for: Structure (sheets can't be added, moved, renamed, hidden or deleted)." => {
+            "הגן על חוברת עבודה עבור: מבנה (לא ניתן להוסיף, להעביר, לשנות שם, להסתיר או למחוק גיליונות)."
+        }
         "Printer" => "מדפסת",
         "Select a printer" => "בחר מדפסת",
         "Refresh printers" => "רענן מדפסות",
@@ -1312,11 +1326,17 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "{subarray} can contain only one column" => "{subarray} יכול להכיל עמודה אחת בלבד",
         "Scroll ribbon left" => "גלול רצועת כלים שמאלה",
         "Scroll ribbon right" => "גלול רצועת כלים ימינה",
-        "An equation can have at most 2500 matrix cells (rows times the widest row)." => "משוואה יכולה להכיל לכל היותר 2500 תאי מטריצה (מספר השורות כפול השורה הרחבה ביותר).",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "משוואה יכולה להכיל לכל היותר 2500 תאי מטריצה (מספר השורות כפול השורה הרחבה ביותר)."
+        }
         "Close the Sort dialog before switching or changing worksheets." => "סגור את תיבת הדו-שיח מיון לפני מעבר בין גיליונות או שינויים.",
         "Draw a spin button that steps a whole number in a linked cell" => "צייר לחצן ספירה שמעלה או מוריד מספר שלם בתא מקושר",
-        "Too many expansions: infinite loop or need to increase maxExpand setting" => "יותר מדי הרחבות: לולאה אינסופית או צורך להגדיל את ההגדרה maxExpand",
-        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => "ל-prooftree יש \\LeftLabel או \\RightLabel ללא פקודת היסק עוקבת",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "יותר מדי הרחבות: לולאה אינסופית או צורך להגדיל את ההגדרה maxExpand"
+        }
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "ל-prooftree יש \\LeftLabel או \\RightLabel ללא פקודת היסק עוקבת"
+        }
         "{command} needs {count} premise(s), but only {available} available" => "{command} דורשת {count} הנחה/ות, אך זמינות רק {available}",
         "{command} valid only as a supported bussproofs command within prooftree" => "{command} תקפה רק כפקודת bussproofs נתמכת בתוך prooftree",
         _ => return None,
