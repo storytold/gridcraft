@@ -20,6 +20,30 @@ fn blank() -> Session {
 }
 
 #[test]
+fn the_formulas_ribbon_keeps_watch_window_inside_the_ribbon() {
+    // Regression test for #360 (#342): Watch Window was a fourth small button in a column of
+    // three, so it hung below the ribbon and was cut off.
+    fn texts(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+        match shape {
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| texts(s, out)),
+            egui::Shape::Text(t) => out.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+            _ => {}
+        }
+    }
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Formulas".into();
+    h.run_steps(3);
+    // Ribbon button labels are painted text: find them among the frame's shapes.
+    let mut painted = Vec::new();
+    h.output().shapes.iter().for_each(|c| texts(&c.shape, &mut painted));
+    let bottom_of = |word: &str| painted.iter().filter(|(s, _)| s.contains(word)).map(|(_, r)| r.bottom()).fold(f32::NEG_INFINITY, f32::max);
+    // "Calculation Options" is a big button whose second line sits at the foot of the ribbon.
+    let (watch, foot) = (bottom_of("Window"), bottom_of("Options"));
+    assert!(watch.is_finite() && foot.is_finite(), "the Formulas ribbon paints Watch Window and Calculation Options");
+    assert!(watch <= foot + 0.5, "Watch Window's label ends at y={watch}, below the ribbon's last label row (y={foot})");
+}
+
+#[test]
 fn vertical_scrollbar_pages_and_drags_without_changing_selection() {
     let mut h = harness(blank());
     let grid = h.state().grid.rect.unwrap();
@@ -312,6 +336,77 @@ fn arrows_escape_and_undo() {
     assert_eq!(value(&h, "B2"), Value::Empty);
 }
 
+#[test]
+fn undo_and_redo_reach_the_sheet_while_find_and_replace_is_open() {
+    let mut h = harness(blank());
+    for t in ["x1", "x2"] {
+        text(&mut h, t);
+        key(&mut h, Key::Enter, Modifiers::NONE);
+    }
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    if let Some(d) = h.state_mut().dialog.as_mut() {
+        d.values.insert("what".into(), json!("x"));
+        d.values.insert("with".into(), json!("y"));
+    }
+    h.run_steps(2);
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // Keyboard focus on a button must not reserve Undo/Redo for text editing.
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    assert!(h.ctx.egui_wants_keyboard_input());
+    assert!(!h.ctx.text_edit_focused());
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert!(h.state().dialog.is_some(), "the dialog stays open");
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("x1"), Value::from("x2")), "one Undo takes back the whole Replace All");
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    // The Mac Redo shortcut works too, as it does on the sheet.
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("x1"));
+    key(&mut h, Key::Z, Modifiers::COMMAND | Modifiers::SHIFT);
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")));
+    assert!(h.state().dialog.is_some(), "the dialog is still open");
+    h.get_by_label("Find what:").focus();
+    h.run_steps(2);
+    assert!(h.ctx.text_edit_focused());
+    let before = h.state().dialog.as_ref().unwrap().values.get("what").cloned();
+    h.input_mut().events.push(Event::Text("extra".into()));
+    h.run_steps(2);
+    assert_ne!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref());
+    key(&mut h, Key::Z, Modifiers::COMMAND);
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("what"), before.as_ref(), "Undo restores the Find field");
+    assert_eq!((value(&h, "A1"), value(&h, "A2")), (Value::from("y1"), Value::from("y2")), "text-field Undo leaves the sheet alone");
+}
+
+#[test]
+fn find_message_blocks_workbook_undo_and_redo() {
+    let mut session = blank();
+    session.execute("cell.set", json!({"cell": "A1", "input": "first"})).unwrap();
+    session.execute("cell.set", json!({"cell": "A1", "input": "second"})).unwrap();
+    session.execute("edit.undo", json!({})).unwrap();
+    let mut h = harness(session);
+    h.state_mut().open_dialog("find", json!({"replace": true}));
+    h.run_steps(3);
+    // An empty search raises the real modal error over Find and Replace.
+    h.get_by_label("Replace All").click();
+    h.run_steps(3);
+    assert!(h.state().message.is_some());
+    assert!(!h.ctx.text_edit_focused());
+    for (key_code, modifiers) in [(Key::Z, Modifiers::COMMAND), (Key::Y, Modifiers::COMMAND), (Key::Z, Modifiers::COMMAND | Modifiers::SHIFT)] {
+        key(&mut h, key_code, modifiers);
+        assert_eq!(value(&h, "A1"), Value::from("first"), "the message blocks workbook shortcuts");
+        assert!(h.state().message.is_some());
+    }
+    h.state_mut().message = None;
+    h.run_steps(2);
+    h.get_by_label("Replace All").focus();
+    h.run_steps(2);
+    key(&mut h, Key::Y, Modifiers::COMMAND);
+    assert_eq!(value(&h, "A1"), Value::from("second"), "Redo works again after dismissing the message");
+}
 #[test]
 fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
     let mut s = blank();
