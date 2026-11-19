@@ -161,6 +161,10 @@ pub struct Sheet {
     pub print: PrintSettings,
     /// Last selection and scroll position, saved with the file.
     pub view_active: CellRef,
+    /// The selected areas saved with the active cell, the last one holding it; empty when only the
+    /// active cell is selected.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub view_ranges: Vec<gridcraft_core::RangeRef>,
     pub view_top_left: CellRef,
     /// Normal, Page Layout or Page Break Preview.
     #[serde(default)]
@@ -229,6 +233,7 @@ impl Sheet {
             edit_ranges: vec![],
             print: PrintSettings::default(),
             view_active: CellRef::default(),
+            view_ranges: vec![],
             view_top_left: CellRef::default(),
             view: SheetViewMode::Normal,
             preserved: None,
