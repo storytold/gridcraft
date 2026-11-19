@@ -112,6 +112,19 @@ fn ods_repeats_merges_sheet_names_and_empty_tail_remain_sparse() {
 }
 
 #[test]
+fn ods_tables_are_the_only_sheets_with_unique_valid_names() {
+    let cell = r#"<table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row>"#;
+    let bytes = ods(&format!(
+        r#"<table:table table:name="Data">{cell}</table:table><table:table table:name="data">{cell}</table:table><table:table table:name="a/b">{cell}</table:table>"#
+    ));
+    let (wb, report) = read_ods(&bytes).unwrap();
+    let names: Vec<&str> = wb.sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Data", "data (2)", "ab"]);
+    assert!(wb.sheets.iter().all(|s| s.value(CellRef::new(0, 0)) == Value::Number(1.0)));
+    assert!(report.warnings.iter().any(|w| w.contains("renamed")));
+}
+
+#[test]
 fn ods_dates_and_durations_use_formats_and_unsupported_values_stay_text() {
     let bytes = row(r#"
         <table:table-cell office:value-type="date" office:date-value="1900-02-28"/>

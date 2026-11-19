@@ -8,6 +8,7 @@ use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
 use crate::package::MAX_ENTRIES;
+use crate::read::SheetNames;
 use crate::{IoError, ReadReport};
 
 const MIME: &[u8] = b"application/vnd.oasis.opendocument.spreadsheet";
@@ -40,7 +41,10 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         return Err(IoError::TooLarge("ODS contains more than 1024 sheets".into()));
     }
 
+    // `Workbook::new` starts with an empty Sheet1; the ODS tables are the only sheets.
     let mut wb = Workbook::new();
+    wb.sheets.clear();
+    let mut names = SheetNames::default();
     let mut report = ReadReport::default();
     report.warn("ODS data-only import: formulas become their saved results and will not recalculate. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported.");
 
@@ -48,7 +52,12 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     let mut warned_unavailable = false;
 
     for src_sheet in book.sheets {
-        let mut sheet = Sheet::new(&src_sheet.name);
+        let mut name = names.unique(src_sheet.name.trim_matches('\''), wb.sheets.len());
+        if wb.check_sheet_name(&name, None).is_err() {
+            name = wb.next_sheet_name();
+            names.insert(&name);
+        }
+        let mut sheet = Sheet::new(name);
         if !warned_rename && sheet.name != src_sheet.name {
             warned_rename = true;
             report.warn("Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names.");

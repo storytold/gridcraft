@@ -65,6 +65,11 @@ pub(crate) struct SheetNames {
 }
 
 impl SheetNames {
+    /// Records `name` as taken.
+    pub(crate) fn insert(&mut self, name: &str) {
+        self.taken.insert(name.to_ascii_lowercase());
+    }
+
     /// A valid name for the `i`-th sheet based on `name`, not yet taken; it is recorded as taken.
     pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
         let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
