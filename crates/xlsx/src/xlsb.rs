@@ -76,11 +76,19 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     if let Some(root_rels) = package.opc().read("_rels/.rels").map_err(|e| IoError::Format(format!("XLSB: {e}")))? {
         craft_xml::Options::local().strict().parse(&root_rels).map_err(|e| IoError::Xml(e.to_string()))?;
     }
-    let book_part = package.opc().rels("").first("officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.bin".into());
-    if let Some(book_rels) = package.opc().read(&craft_opc::name::rels_path(&book_part)).map_err(|e| IoError::Format(format!("XLSB: {e}")))? {
+    let book_part = package
+        .opc()
+        .rels("")
+        .map_err(|e| IoError::Format(format!("XLSB: {e}")))?
+        .first("officeDocument")
+        .map(|r| r.target.clone())
+        .unwrap_or_else(|| "xl/workbook.bin".into());
+    let book_rels_path =
+        if let Some((dir, file)) = book_part.rsplit_once('/') { format!("{dir}/_rels/{file}.rels") } else { format!("_rels/{book_part}.rels") };
+    if let Some(book_rels) = package.opc().read(&book_rels_path).map_err(|e| IoError::Format(format!("XLSB: {e}")))? {
         craft_xml::Options::local().strict().parse(&book_rels).map_err(|e| IoError::Xml(e.to_string()))?;
     }
-    let ct = package.opc().content_types();
+    let ct = craft_opc::ContentTypes::parse(&ct_bytes);
     let book = package.workbook().map_err(map_error)?;
     let strings = package.shared_strings().map_err(map_error)?;
     let mut wb = Workbook::new();
