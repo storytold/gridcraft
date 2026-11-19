@@ -1954,16 +1954,7 @@ fn save_model_counts_areas_outside_quoted_sheet_names() {
 fn simplex_integer_branch_and_bound_ignores_cancelled_fixed_variable_offset() {
     for opt in [0.0, 0.1, 5.0] {
         let mut s = s();
-        set(
-            &mut s,
-            &[
-                ("A1", "0"),
-                ("A2", "0"),
-                ("A3", "1"),
-                ("B1", "=3*A1+2*A2+1000000000000*(A3-1)"),
-                ("B2", "=A1+A2"),
-            ],
-        );
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("A3", "1"), ("B1", "=3*A1+2*A2+1000000000000*(A3-1)"), ("B2", "=A1+A2")]);
         let r = s
             .execute(
                 "data.solver",
@@ -1983,16 +1974,7 @@ fn simplex_integer_branch_and_bound_ignores_cancelled_fixed_variable_offset() {
 
     // Minimising the negated objective with the same large fixed-variable offset also finds -6.
     let mut s = s();
-    set(
-        &mut s,
-        &[
-            ("A1", "0"),
-            ("A2", "0"),
-            ("A3", "1"),
-            ("B1", "=-3*A1-2*A2+1000000000000*(A3-1)"),
-            ("B2", "=A1+A2"),
-        ],
-    );
+    set(&mut s, &[("A1", "0"), ("A2", "0"), ("A3", "1"), ("B1", "=-3*A1-2*A2+1000000000000*(A3-1)"), ("B2", "=A1+A2")]);
     let r = s
         .execute(
             "data.solver",
@@ -2035,5 +2017,36 @@ fn simplex_integer_branch_and_bound_keeps_tight_tolerance_with_large_objective_c
         let want = if goal == "max" { 1_000_000_000_006.0 } else { 999_999_999_994.0 };
         assert!((r["objective"].as_f64().unwrap() - want).abs() < 1e-3, "{goal}: {r}");
         assert!((n(&s, "A1") - 2.0).abs() < 1e-9 && n(&s, "A2").abs() < 1e-9, "{goal}: {r}");
+    }
+}
+
+/// A large coefficient on a variable that is *not* fixed at the root can still cancel the
+/// objective's constant at the solution. The pruning allowance must not grow with it.
+#[test]
+fn simplex_integer_branch_and_bound_ignores_cancelled_unfixed_variable_offset() {
+    for goal in ["max", "min"] {
+        let sign = if goal == "max" { "+" } else { "-" };
+        // Maximising `3x + 2y - 1e12*(z-1)`, or minimising its negation: linearised at z = 1 the
+        // constant is -1e12, so the z term cancels it only at z = 1, which every relaxation picks.
+        let big = if goal == "max" { "-" } else { "+" };
+        let mut s = s();
+        set(&mut s, &[("A1", "0"), ("A2", "0"), ("A3", "1"), ("B1", &format!("={sign}3*A1{sign}2*A2{big}1000000000000*(A3-1)")), ("B2", "=A1+A2")]);
+        let r = s
+            .execute(
+                "data.solver",
+                json!({
+                    "objective": "B1",
+                    "goal": goal,
+                    "variables": "A1:A3",
+                    "constraints": ["B2 <= 2.5", "A1 int", "A2 bin", "A3 >= 1", "A3 <= 2"],
+                    "method": "simplex",
+                    "integerOptimality": 0,
+                }),
+            )
+            .unwrap();
+        let want = if goal == "max" { 6.0 } else { -6.0 };
+        assert_eq!(r["status"], "optimal", "{goal}: {r}");
+        assert!((r["objective"].as_f64().unwrap() - want).abs() < 1e-9, "{goal}: {r}");
+        assert!((n(&s, "A1") - 2.0).abs() < 1e-9 && n(&s, "A2").abs() < 1e-9 && (n(&s, "A3") - 1.0).abs() < 1e-9, "{goal}: {r}");
     }
 }

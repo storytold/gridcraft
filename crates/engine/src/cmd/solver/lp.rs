@@ -245,7 +245,9 @@ fn phase_one(tableau: &mut Tableau, normalized: &[(Vec<f64>, Sense, f64)], budge
 /// Depth-first branch and bound over a relaxation solver; returns the best integer point.
 /// `fixed` is the part of every relaxation's value that no branch can change (the objective's
 /// constant and the terms of variables fixed at the root). The numerical pruning tolerance is
-/// measured without it, so a large constant cannot prune a better integer point.
+/// measured from whichever of the value and its non-fixed part is smaller, so a large term that
+/// cancels out of the objective — a constant, or a coefficient whose variable every relaxation
+/// happens to set the same way — cannot prune a better integer point.
 pub(super) fn branch_and_bound(
     lo: &[f64],
     hi: &[f64],
@@ -281,7 +283,7 @@ pub(super) fn branch_and_bound(
             limited = true;
         }
         if let Some((_, b)) = &best
-            && obj >= b - gap * b.abs().max(1e-12) - 1e-9 * (1.0 + (b - fixed).abs())
+            && obj >= b - gap * b.abs().max(1e-12) - 1e-9 * (1.0 + b.abs().min((b - fixed).abs()))
         {
             continue;
         }
