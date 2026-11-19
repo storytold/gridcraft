@@ -17,12 +17,14 @@ use gridcraft_model::{
 };
 
 use crate::drawing::{Obj, image_content_type, image_ext};
+use crate::fmla::text_to_file;
 use crate::styles::{color_attrs, dxf_id, dxf_xml};
 use crate::tables::{paper_id, px_to_col_width, px_to_pt};
 use crate::write::{
-    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, x14_cf_rule_guid,
+    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, XML_DECL,
+    x14_cf_rule_guid,
 };
-use crate::xml::esc;
+use crate::xml::{encode_xstring, esc, esc_attr, num};
 
 /// The worksheet extension holding Excel 2010 conditional formats.
 const EXT_X14_CF: &str = "{78C0D931-6437-407d-A8EE-F0AAD7539E65}";
@@ -54,7 +56,7 @@ fn to_craft_error(e: CellError) -> CraftCellError {
         CellError::Ref => CraftCellError::Ref,
         CellError::Name => CraftCellError::Name,
         CellError::Num => CraftCellError::Num,
-        CellError::Na => CraftCellError::Na,
+        CellError::NA => CraftCellError::NA,
         CellError::GettingData => CraftCellError::GettingData,
         CellError::Spill => CraftCellError::Spill,
         CellError::Calc => CraftCellError::Calc,
@@ -63,12 +65,12 @@ fn to_craft_error(e: CellError) -> CraftCellError {
 }
 
 fn parse_craft_fragment(xml: &str) -> Option<craft_xml::El> {
-    let opts = craft_xml::Options {
-        namespaces: &[],
+    let opts = craft_xml::Options::default().with_limits(craft_xml::Limits {
         max_input: crate::package::MAX_PART as usize,
         max_depth: crate::xml::MAX_DEPTH,
         max_nodes: crate::xml::MAX_XML_NODES,
-    };
+        ..craft_xml::Limits::DEFAULT
+    });
     opts.parse(xml.as_bytes()).ok()
 }
 
@@ -272,12 +274,14 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
                 top_left_cell: Some(top_left),
                 active_pane: Some(pane_name.to_string()),
                 state: Some("frozen".to_string()),
+                ..Default::default()
             };
             let sel = CraftSelection {
                 pane: Some(pane_name.to_string()),
                 active_cell: Some(active),
                 active_cell_id: None,
                 sqref: vec![to_craft_range(RangeRef::cell(sheet.view_active))],
+                ..Default::default()
             };
             (Some(pane), vec![sel])
         }
@@ -287,6 +291,7 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
                 active_cell: Some(active),
                 active_cell_id: None,
                 sqref: vec![to_craft_range(RangeRef::cell(sheet.view_active))],
+                ..Default::default()
             };
             (None, vec![sel])
         }
@@ -457,6 +462,7 @@ fn build_sheet_printing<'a>(sheet: &'a Sheet, print: &mut CraftPrint, rels: &mut
             headings: p.headings.then_some(true),
             grid_lines: p.gridlines.then_some(true),
             grid_lines_set: None,
+            ..Default::default()
         });
     }
     let kept = crate::passthrough::SheetKept::write(sheet, rels, out);
@@ -464,8 +470,15 @@ fn build_sheet_printing<'a>(sheet: &'a Sheet, print: &mut CraftPrint, rels: &mut
         let inches = p.margins.get(i).copied().unwrap_or(0.75);
         inches.to_string().parse::<f64>().unwrap_or(f64::from(inches))
     };
-    print.margins =
-        Some(CraftMargins { left: Some(m(0)), right: Some(m(1)), top: Some(m(2)), bottom: Some(m(3)), header: Some(m(4)), footer: Some(m(5)) });
+    print.margins = Some(CraftMargins {
+        left: Some(m(0)),
+        right: Some(m(1)),
+        top: Some(m(2)),
+        bottom: Some(m(3)),
+        header: Some(m(4)),
+        footer: Some(m(5)),
+        ..Default::default()
+    });
     print.setup = Some(CraftPageSetup {
         paper_size: paper_id(&p.paper).filter(|&id| id != 1),
         scale: (p.scale != 100 && (10..=400).contains(&p.scale)).then_some(u32::from(p.scale)),
@@ -491,6 +504,7 @@ fn build_sheet_printing<'a>(sheet: &'a Sheet, print: &mut CraftPrint, rels: &mut
             even_footer: opt(&p.even_footer),
             first_header: opt(&p.first_header),
             first_footer: opt(&p.first_footer),
+            ..Default::default()
         });
     }
     let to_breaks = |list: &[u32], max: u32| {
@@ -604,6 +618,7 @@ fn build_sheet_rules(sheet: &Sheet, features: &mut CraftFeatures, rels: &mut Rel
             display,
             range: to_craft_range(RangeRef::cell(*c)),
             url,
+            ..Default::default()
         });
     }
     (frag, x14_cf)
@@ -744,10 +759,11 @@ fn build_craft_cell(input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::Sty
     } else {
         None
     };
-    let text = formula.map(crate::fmla::to_file).or(py_text);
+    let text = formula.map(|f| crate::fmla::to_file(f)).or(py_text);
     if let Some(text) = text {
         let (kind, range) = match (formula.and_then(|f| f.array), dynamic) {
-            (Some(r), _) | (None, Some(r)) => (CraftFormulaKind::Array, Some(to_craft_range(*r))),
+            (Some(r), _) => (CraftFormulaKind::Array, Some(to_craft_range(r))),
+            (None, Some(r)) => (CraftFormulaKind::Array, Some(to_craft_range(*r))),
             _ => (CraftFormulaKind::Normal, None),
         };
         let craft_val = match &value {

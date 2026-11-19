@@ -87,7 +87,8 @@ fn from_craft_el(e: &craft_xml::El) -> El {
     for node in &e.children {
         match node {
             craft_xml::Node::El(c) => children.push(from_craft_el(c)),
-            craft_xml::Node::Text(t) => text.push_str(t),
+            craft_xml::Node::Text(t) | craft_xml::Node::CData(t) => text.push_str(t),
+            craft_xml::Node::Pi { .. } | craft_xml::Node::Comment(_) => {}
         }
     }
     El { name, attrs, children, text }
@@ -143,12 +144,12 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
         cx.warn(format!("missing part {part}"));
         return Ok(());
     };
-    let opts = craft_xml::Options {
-        namespaces: craft_xlsx::ns::CANONICAL,
+    let opts = craft_xml::Options::canonical(craft_xlsx::ns::CANONICAL).with_limits(craft_xml::Limits {
         max_input: crate::package::MAX_PART as usize,
         max_depth: crate::xml::MAX_DEPTH,
         max_nodes: crate::xml::MAX_XML_NODES,
-    };
+        ..craft_xml::Limits::DEFAULT
+    });
     let root = match opts.parse(&bytes) {
         Ok(r) => r,
         Err(e) if e.is_limit() => return Err(IoError::TooLarge(format!("{part}: {e}"))),
@@ -531,12 +532,12 @@ fn to_placement(sheet: &Sheet, a: &Anchor) -> CraftPlacement {
 }
 
 fn parse_craft_fragment(xml: &str) -> Option<craft_xml::El> {
-    let opts = craft_xml::Options {
-        namespaces: &[],
+    let opts = craft_xml::Options::default().with_limits(craft_xml::Limits {
         max_input: crate::package::MAX_PART as usize,
         max_depth: crate::xml::MAX_DEPTH,
         max_nodes: crate::xml::MAX_XML_NODES,
-    };
+        ..craft_xml::Limits::DEFAULT
+    });
     opts.parse(xml.as_bytes()).ok()
 }
 

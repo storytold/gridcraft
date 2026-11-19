@@ -4,13 +4,13 @@
 use std::fmt::Write as _;
 
 use craft_drawingml::chart::{Chart as DmlChart, ChartType, Trendline as DmlTrendline, TrendlineType};
-use craft_drawingml::color::{Color as DmlColor, SchemeColor};
-use craft_drawingml::style::{Fill as DmlFill, LineDash as DmlDash};
+use craft_drawingml::color::SchemeSlot;
+use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
 use gridcraft_model::{Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
-use crate::drawing::srgb;
+use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
 
 // ---------------------------------------------------------------- reading
@@ -28,34 +28,28 @@ pub(crate) fn to_craft_el(e: &El) -> craft_xml::El {
 }
 
 pub(crate) fn map_dml_color(c: &DmlColor) -> Option<Color> {
-    match c {
-        DmlColor::Srgb(rgb, _) => {
-            let [r, g, b] = rgb.as_bytes();
-            Some(Color::Rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)))
-        }
-        DmlColor::Scheme(s, _) => {
-            let i = match s {
-                SchemeColor::Bg1 | SchemeColor::Lt1 => 0,
-                SchemeColor::Tx1 | SchemeColor::Dk1 => 1,
-                SchemeColor::Bg2 | SchemeColor::Lt2 => 2,
-                SchemeColor::Tx2 | SchemeColor::Dk2 => 3,
-                SchemeColor::Accent1 => 4,
-                SchemeColor::Accent2 => 5,
-                SchemeColor::Accent3 => 6,
-                SchemeColor::Accent4 => 7,
-                SchemeColor::Accent5 => 8,
-                SchemeColor::Accent6 => 9,
-                SchemeColor::Hlink => 10,
-                SchemeColor::FolHlink => 11,
-                SchemeColor::PhClr => return None,
+    match &c.base {
+        ColorBase::Rgb { rgb } => Some(Color::Rgb((u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b))),
+        ColorBase::Scheme { slot } => {
+            let i = match slot {
+                SchemeSlot::Bg1 | SchemeSlot::Lt1 => 0,
+                SchemeSlot::Tx1 | SchemeSlot::Dk1 => 1,
+                SchemeSlot::Bg2 | SchemeSlot::Lt2 => 2,
+                SchemeSlot::Tx2 | SchemeSlot::Dk2 => 3,
+                SchemeSlot::Accent1 => 4,
+                SchemeSlot::Accent2 => 5,
+                SchemeSlot::Accent3 => 6,
+                SchemeSlot::Accent4 => 7,
+                SchemeSlot::Accent5 => 8,
+                SchemeSlot::Accent6 => 9,
+                SchemeSlot::Hlink => 10,
+                SchemeSlot::FolHlink => 11,
+                SchemeSlot::PhClr => return None,
             };
             Some(Color::Theme(i, 0))
         }
-        DmlColor::System(_, last, _) => last.map(|rgb| {
-            let [r, g, b] = rgb.as_bytes();
-            Color::Rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b))
-        }),
-        _ => None,
+        ColorBase::System { last, .. } => Some(Color::Rgb((u32::from(last.r) << 16) | (u32::from(last.g) << 8) | u32::from(last.b))),
+        ColorBase::Preset { .. } => None,
     }
 }
 
@@ -95,45 +89,27 @@ fn map_chart_type(k: ChartType, plot: Option<&El>) -> ChartKind {
     }
 }
 
-fn map_dash(d: DmlDash) -> LineDash {
-    match d {
-        DmlDash::Solid => LineDash::Solid,
-        DmlDash::Dot => LineDash::Dot,
-        DmlDash::Dash => LineDash::Dash,
-        DmlDash::LgDash => LineDash::LgDash,
-        DmlDash::DashDot => LineDash::DashDot,
-        DmlDash::LgDashDot => LineDash::LgDashDot,
-        DmlDash::LgDashDotDot => LineDash::LgDashDotDot,
-        DmlDash::SysDash => LineDash::SysDash,
-        DmlDash::SysDot => LineDash::SysDot,
-        DmlDash::SysDashDot => LineDash::SysDashDot,
-        DmlDash::SysDashDotDot => LineDash::SysDashDotDot,
-    }
-}
-
-fn map_trendline(t: &DmlTrendline) -> Trendline {
+fn map_trendline(t: &DmlTrendline, el: Option<&El>) -> Trendline {
     let kind = match t.kind {
         TrendlineType::Linear => TrendlineKind::Linear,
-        TrendlineType::Exponential => TrendlineKind::Exponential,
-        TrendlineType::Logarithmic => TrendlineKind::Logarithmic,
+        TrendlineType::Exp => TrendlineKind::Exponential,
+        TrendlineType::Log => TrendlineKind::Logarithmic,
         TrendlineType::Power => TrendlineKind::Power,
-        TrendlineType::Polynomial => TrendlineKind::Polynomial(t.order.clamp(2, 6)),
-        TrendlineType::MovingAverage => TrendlineKind::MovingAverage(t.period.clamp(2, 255)),
+        TrendlineType::Poly => TrendlineKind::Polynomial(t.order.unwrap_or(2).clamp(2, 6) as u8),
+        TrendlineType::MovingAvg => TrendlineKind::MovingAverage(t.period.unwrap_or(2).clamp(2, 255)),
     };
+    let ln = el.and_then(|e| e.path(&["spPr", "ln"]));
     Trendline {
         kind,
         name: t.name.clone(),
         forward: Trendline::clamp_forecast(t.forward.unwrap_or(0.0)),
         backward: Trendline::clamp_forecast(t.backward.unwrap_or(0.0)),
         intercept: t.intercept,
-        display_equation: t.display_equation,
-        display_r_squared: t.display_r_squared,
-        color: t.line.as_ref().and_then(|l| l.fill.as_ref()).and_then(|f| match f {
-            DmlFill::Solid { color } => map_dml_color(color),
-            _ => None,
-        }),
-        width: t.line.as_ref().and_then(|l| l.width).map(|w| w as f32).filter(|w| w.is_finite() && *w >= 0.0),
-        dash: t.line.as_ref().and_then(|l| l.dash).map(map_dash),
+        display_equation: t.disp_eq,
+        display_r_squared: t.disp_r_sqr,
+        color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
+        width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0),
+        dash: ln.and_then(|l| l.child("prstDash")).and_then(|d| d.attr("val")).and_then(|v| DASHES.iter().find(|(_, n)| *n == v).map(|(d, _)| *d)),
     }
 }
 
@@ -250,7 +226,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                 kind: if dc.kind == ChartType::Combo { s.kind.map(|k| map_chart_type(k, plot)) } else { None },
                 quartiles: Default::default(),
                 smooth: s.smooth,
-                trendlines: s.trendlines.iter().map(map_trendline).collect(),
+                trendlines: s.trendlines.iter().enumerate().map(|(ti, t)| map_trendline(t, sel.and_then(|e| e.kids("trendline").nth(ti)))).collect(),
             }
         })
         .collect();

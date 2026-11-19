@@ -181,14 +181,15 @@ fn from_craft_el(e: &craft_xml::El) -> El {
     for node in &e.children {
         match node {
             craft_xml::Node::El(c) => children.push(from_craft_el(c)),
-            craft_xml::Node::Text(t) => text.push_str(t),
+            craft_xml::Node::Text(t) | craft_xml::Node::CData(t) => text.push_str(t),
+            craft_xml::Node::Pi { .. } | craft_xml::Node::Comment(_) => {}
         }
     }
     El { name, attrs, children, text }
 }
 
 fn to_range_ref(r: craft_xlsx::Range) -> RangeRef {
-    RangeRef::new(CellRef::new(r.start.row, r.start.col), CellRef::new(r.end.row, r.end.col))
+    RangeRef::new(CellRef::new(r.first.row, r.first.col), CellRef::new(r.last.row, r.last.col))
 }
 
 fn map_craft_error(e: craft_xlsx::CellError) -> CellError {
@@ -199,7 +200,7 @@ fn map_craft_error(e: craft_xlsx::CellError) -> CellError {
         craft_xlsx::CellError::Ref => CellError::Ref,
         craft_xlsx::CellError::Name => CellError::Name,
         craft_xlsx::CellError::Num => CellError::Num,
-        craft_xlsx::CellError::Na => CellError::Na,
+        craft_xlsx::CellError::NA => CellError::NA,
         craft_xlsx::CellError::GettingData => CellError::GettingData,
         craft_xlsx::CellError::Spill => CellError::Spill,
         craft_xlsx::CellError::Calc => CellError::Calc,
@@ -225,7 +226,24 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
         part: Some(part.to_string()),
     };
     let prev_warnings = cx.pkg.craft_mut().warnings().len();
-    let sheet_part = cx.pkg.craft_mut().sheet(&entry, |row| read_craft_row(cx, &mut sheet, &mut st, &row)).map_err(craft_error)?;
+    let mut remaining_cells = MAX_CELLS.saturating_sub(cx.cells);
+    let mut rows = Vec::new();
+    let sheet_part = cx
+        .pkg
+        .craft_mut()
+        .sheet(&entry, |row| {
+            let n = row.cells.len() as u64;
+            if n > remaining_cells {
+                return Err(craft_xlsx::Error::TooLarge(format!("the workbook has more than {MAX_CELLS} cells")));
+            }
+            remaining_cells -= n;
+            rows.push(row);
+            Ok(())
+        })
+        .map_err(craft_error)?;
+    for row in &rows {
+        read_craft_row(cx, &mut sheet, &mut st, row).map_err(craft_error)?;
+    }
     charge_cells(cx, sheet_part.dropped_cells)?;
     let new_warnings: Vec<String> = cx.pkg.craft_mut().warnings().get(prev_warnings..).unwrap_or_default().to_vec();
     for w in new_warnings {
