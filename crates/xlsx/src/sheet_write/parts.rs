@@ -66,7 +66,7 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
     for (col, c) in criteria {
         let _ = write!(s, "<filterColumn colId=\"{col}\">");
         match c {
-            FilterCriterion::Values { values, blanks } => {
+            FilterCriterion::Values { values, blanks, .. } => {
                 let _ = write!(s, "<filters{}>", if *blanks { " blank=\"1\"" } else { "" });
                 for v in values {
                     let _ = write!(s, "<filter val=\"{}\"/>", esc_attr(v));

@@ -690,6 +690,9 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// Degrees clockwise about the anchor rect's centre, in `[0, 360)`.
+    #[serde(default)]
+    pub rotation: f32,
     /// An equation's layout, rebuilt from `text` and never saved.
     #[serde(skip)]
     pub math: EquationCache,
@@ -1067,6 +1070,10 @@ pub enum FilterCriterion {
     Values {
         values: Vec<String>,
         blanks: bool,
+        /// Exact checklist identities from dropdown or selected-cell UI actions so rows whose
+        /// formatted display text collides (for example under Show Formulas) stay distinct.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        identities: Vec<String>,
     },
     /// Custom: one or two comparisons (`op` like `>=`, `=*abc*`), joined by and/or.
     Custom {

@@ -4,12 +4,12 @@ use super::{
     from_file, truncate_chars, xml,
 };
 
-/// `budget` counts the cells and bytes this sheet's hyperlinks have copied so far, across
-/// `<hyperlinks>` blocks.
-pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &[Rel], sheet: &mut Sheet, budget: &mut LinkBudget) {
+/// `rels` maps relationship ids to relationships (the first of duplicate ids). `budget` counts the
+/// cells and bytes this sheet's hyperlinks have copied so far, across `<hyperlinks>` blocks.
+pub(super) fn read_hyperlinks(cx: &mut Ctx<'_>, name: &str, e: &El, rels: &HashMap<&str, &Rel>, sheet: &mut Sheet, budget: &mut LinkBudget) {
     for h in e.kids("hyperlink") {
         let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
-        let rel_target = h.attr("id").and_then(|id| rels.iter().find(|r| r.id == id)).map(|r| r.target.as_str()).unwrap_or("");
+        let rel_target = h.attr("id").and_then(|id| rels.get(id)).map(|r| r.target.as_str()).unwrap_or("");
         let location = h.attr("location").filter(|l| !l.is_empty());
         // Each covered cell gets its own copy of the link: refuse oversized targets before copying.
         if rel_target.len().saturating_add(location.map_or(0, str::len)) > MAX_HYPERLINK_TARGET {
@@ -59,19 +59,18 @@ fn filter_op(s: Option<&str>) -> &'static str {
     }
 }
 
-/// Parses an `<autoFilter>` element into model criteria, migrating legacy whitespace-only value entries to `blanks`.
+/// Parses an `<autoFilter>` element into model criteria.
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
     let mut criteria = vec![];
     for fc in e.kids("filterColumn") {
         let Some(col) = fc.attr_u32("colId") else { continue };
         let crit = if let Some(f) = fc.child("filters") {
-            let mut values: Vec<String> = f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect();
-            let had_whitespace_only = values.iter().any(|v| v.trim().is_empty());
-            if had_whitespace_only {
-                values.retain(|v| !v.trim().is_empty());
+            FilterCriterion::Values {
+                values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
+                blanks: f.flag("blank", false),
+                identities: Vec::new(),
             }
-            FilterCriterion::Values { values, blanks: f.flag("blank", false) || had_whitespace_only }
         } else if let Some(cf) = fc.child("customFilters") {
             let mut it = cf.kids("customFilter").map(|c| (filter_op(c.attr("operator")).to_string(), c.attr("val").unwrap_or("").to_string()));
             let Some(a) = it.next() else { continue };
