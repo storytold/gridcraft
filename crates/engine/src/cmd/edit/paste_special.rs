@@ -382,7 +382,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         if let (Some(a), Some(b)) = (at.offset(tro + dr0, tco + dc0), at.offset(tro + dr1, tco + dc1)) {
                             let nm = RangeRef::new(a, b);
                             // A filter hides the tile's rows: they took no cells, so they take no merge.
-                            if !(nm.start.row..=nm.end.row).any(|r| skip_rows.contains(&r)) {
+                            if skip_rows.range(nm.start.row..=nm.end.row).next().is_none() {
                                 placed.push(nm);
                             }
                         }
