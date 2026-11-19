@@ -322,16 +322,17 @@ mod tests {
 
     #[test]
     fn a_limit_on_the_opposite_side_of_a_brace_keeps_its_placement() {
-        for (properties, brace, opposite, same, script) in [
-            (r#"<m:chr m:val="&#x23DF;"/><m:pos m:val="top"/>"#, "overbrace", "limUpp", "limLow", '^'),
-            (r#"<m:chr m:val="&#x23DE;"/><m:pos m:val="bot"/>"#, "underbrace", "limLow", "limUpp", '_'),
-            (r#"<m:pos m:val="top"/>"#, "overbrace", "limUpp", "limLow", '^'),
-            (r#"<m:chr m:val="?"/><m:pos m:val="top"/>"#, "overbrace", "limLow", "limUpp", '^'),
+        for (properties, brace, opposite, same) in [
+            (r#"<m:chr m:val="&#x23DF;"/><m:pos m:val="top"/>"#, "overbrace", "limUpp", "limLow"),
+            (r#"<m:chr m:val="&#x23DE;"/><m:pos m:val="bot"/>"#, "underbrace", "limLow", "limUpp"),
+            (r#"<m:pos m:val="top"/>"#, "overbrace", "limUpp", "limLow"),
+            (r#"<m:chr m:val="?"/><m:pos m:val="top"/>"#, "overbrace", "limLow", "limUpp"),
         ] {
             let base = format!("<m:groupChr><m:groupChrPr>{properties}</m:groupChrPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:groupChr>");
             let limit = |kind: &str| format!("<m:{kind}><m:e>{base}</m:e><m:lim><m:r><m:t>n</m:t></m:r></m:lim></m:{kind}>");
-            assert_eq!(latex(&limit(opposite)), Some(format!("\\{brace}{{x}}{script}{{n}}")), "{properties}");
-            assert_eq!(latex(&limit(same)), Some(format!("\\{brace}{{x}}{script}{{n}}")), "{properties}");
+            let script = |kind: &str| if kind == "limUpp" { '^' } else { '_' };
+            assert_eq!(latex(&limit(opposite)), Some(format!("\\{brace}{{x}}{}{{n}}", script(opposite))), "{properties}");
+            assert_eq!(latex(&limit(same)), Some(format!("\\{brace}{{x}}{}{{n}}", script(same))), "{properties}");
         }
     }
 
