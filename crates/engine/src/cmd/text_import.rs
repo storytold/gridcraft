@@ -143,7 +143,12 @@ fn read_records(bytes: &[u8], p: &Json) -> Result<Records> {
                 }
             }
         }
-        let rows = (arr.len() as u64).min(MAX_IMPORT_ROWS as u64) + 1;
+        // The header row counts, and the check comes before an empty header ends in
+        // "Nothing to import": `[{}, {}, …]` that is too tall is refused for its rows.
+        let rows = arr.len() as u64 + 1;
+        if rows > MAX_IMPORT_ROWS as u64 {
+            return Err(EngineError::Other("The data has more rows than a sheet has.".into()));
+        }
         if rows.saturating_mul(keys.len().max(1) as u64) > MAX_IMPORT_CELLS {
             return Err(too_many_cells());
         }
