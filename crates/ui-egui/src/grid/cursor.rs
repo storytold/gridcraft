@@ -24,8 +24,9 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
         app.grid.hover_cell = in_cells.then(|| geo.cell_at(sh, p));
     }
     // Draw tools and Insert › Controls placement own the cursor over cells, including while
-    // recording a stroke or drawing the control.
-    if (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
+    // recording a stroke or drawing the control, except while a dialog's RefEdit box is picking.
+    let picking = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+    if !picking && (!app.session.draw_tool.is_empty() || app.grid.placing.is_some()) && in_cells {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         return;
     }
@@ -42,7 +43,7 @@ pub(super) fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Resp
         return;
     }
     let Some(p) = pos else { return };
-    hover_cursor(app, ctx, resp, &pointer, geo, sh, p);
+    hover_cursor(app, ctx, resp, &pointer, geo, sh, p, picking);
 }
 
 /// The cursor a held drag shows, or `None` when the drag leaves it to hover. `rtl` swaps the
@@ -57,13 +58,23 @@ fn drag_cursor(drag: &Drag, rtl: bool) -> Option<CursorIcon> {
         Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
         Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
         Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-        Drag::Object { handle: Some(h), .. } => Some(h.cursor(rtl)),
+        Drag::Rotate { .. } => Some(CursorIcon::Crosshair),
+        Drag::Object { handle: Some(h), .. } | Drag::ChartData { corner: h, .. } => Some(h.cursor(rtl)),
     }
 }
 
 /// The cursor over the grid when no drag owns it: freeze bars, header edges, the fill handle, cells.
-fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2) {
-    let picking = app.dialog.as_ref().is_some_and(|d| d.ref_box_picks());
+#[allow(clippy::too_many_arguments)]
+fn hover_cursor(
+    app: &SheetApp,
+    ctx: &egui::Context,
+    resp: &egui::Response,
+    pointer: &egui::PointerState,
+    geo: &Geo,
+    sh: &Sheet,
+    p: Pos2,
+    picking: bool,
+) {
     let (freeze_cols, freeze_rows) = freeze_handles(geo);
     if !picking && (freeze_cols.contains(p) || freeze_rows.contains(p)) {
         freeze_cursor(app, ctx, resp, pointer, freeze_cols.contains(p));
@@ -82,13 +93,21 @@ fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, poin
     let on_cur_border = !picking && on_border(cur_rect, p) && border_panes.iter().any(|r| r.contains(p));
     // The selected object's handles resize it; any object's body moves it.
     let idle = !picking && app.grid.drag == Drag::None && app.editor.is_none();
-    let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p).map(|(.., h)| h) } else { None };
+    let object_handle = if idle { crate::chartview::selected_handle(app, geo, sh, p) } else { None };
     let hit = if idle { crate::chartview::hit(app, geo, sh, p) } else { None };
     // A form control works on click unless it is selected (or Ctrl or Cmd is held).
     let mods = ctx.input(|i| i.modifiers);
-    let works = !picking && hit.is_some_and(|(o, _)| o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl);
-    let on_object = !picking && hit.is_some();
-    if let Some(h) = object_handle {
+    let works = hit.is_some_and(|(o, _)| o.kind == ObjKind::Control && app.selected_object != Some(o) && !mods.command && !mods.ctrl);
+    let on_object = hit.is_some();
+    // A corner of the selected chart's values outline resizes the chart's data, where no object covers it.
+    let data_handle = if idle && !on_object { crate::chartview::chart_data_handle(app, geo, sh, p).map(|(.., h)| h) } else { None };
+    let on_rotate = idle && crate::chartview::selected_rotate(app, geo, sh, p).is_some();
+    if on_rotate {
+        ctx.set_cursor_icon(CursorIcon::Crosshair);
+    } else if let Some((o, _, h)) = object_handle {
+        let deg = crate::chartview::frame_of(sh, o).0;
+        ctx.set_cursor_icon(if deg == 0.0 { h.cursor(geo.rtl) } else { crate::frame::Handle { x: h.sides().0, y: h.sides().1 }.cursor(deg) });
+    } else if let Some(h) = data_handle {
         ctx.set_cursor_icon(h.cursor(geo.rtl));
     } else if works {
         ctx.set_cursor_icon(CursorIcon::PointingHand);
