@@ -12,8 +12,15 @@ pub(super) fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dial
             i.consume_key(egui::Modifiers::NONE, Key::PageDown),
         )
     });
+    let language = app.ui.language;
     let width = ui.available_width();
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(width).hint_text("Type a command, e.g. freeze, chart, bold…"));
+    // The hint goes through the catalog like every other label, so it reads Hebrew under a Hebrew
+    // interface (`he.rs` translates it) instead of falling back to the English literal.
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut d.search)
+            .desired_width(width)
+            .hint_text(language.tr("Type a command, e.g. freeze, chart, bold…")),
+    );
 
     if !d.focus_initialized {
         r.request_focus();
