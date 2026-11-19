@@ -1272,3 +1272,19 @@ mod tests {
         assert_eq!(empty.execute("formulas.pasteName", json!({})).unwrap()["names"], json!([]));
     }
 }
+
+#[cfg(test)]
+mod argument_help_tests {
+    /// Each described parameter is one the function's signature has, so the Function Arguments
+    /// dialog shows every description it holds.
+    #[test]
+    fn argument_descriptions_match_the_signatures() {
+        use gridcraft_functions::params::{Params, described};
+        let list = super::function_list();
+        for (function, param) in described() {
+            let sig = list.iter().find(|f| f["name"] == function).and_then(|f| f["signature"].as_str()).unwrap_or_default();
+            let params = Params::parse(sig);
+            assert!(params.params.iter().any(|p| p.base() == param), "{function}: {param} is not in {sig:?}");
+        }
+    }
+}

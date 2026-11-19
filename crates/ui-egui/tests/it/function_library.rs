@@ -213,6 +213,7 @@ fn row(name: &str, category: &str) -> String {
 fn insert_function_has_its_title_and_a_working_category_list() {
     let mut h = formulas_tab(1440.0);
     h.state_mut().run("cell.set", json!({"cell": "A1", "input": "=NPV(0.1,1,2)"})).unwrap();
+    h.state_mut().run("selection.set", json!({"cell": "B1"})).unwrap();
     h.run_steps(2);
     click(&mut h, "Insert Function");
     let d = h.state().dialog.as_ref().expect("Insert Function opens");
@@ -238,11 +239,13 @@ fn insert_function_has_its_title_and_a_working_category_list() {
     h.run_steps(2);
     assert_eq!(h.state().dialog.as_ref().unwrap().values.get("category"), Some(&json!("All")));
     assert!(h.query_by_label(&row("XLOOKUP", "Lookup & Reference")).is_some());
-    // OK starts the formula. The function counts as recently used once the formula is entered,
-    // not before (the edit may still be cancelled, or there may be no cell to edit).
+    // OK starts the formula and goes on to Function Arguments. The function counts as recently
+    // used once the formula is entered, not before (the edit may still be cancelled, or there may
+    // be no cell to edit).
     pick(&mut h, &row("XLOOKUP", "Lookup & Reference"));
     click(&mut h, "   OK   ");
-    assert_eq!(editor_text(&h).as_deref(), Some("=XLOOKUP("));
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name().to_string()).as_deref(), Some("functionArguments"));
+    assert_eq!(editor_text(&h).as_deref(), Some("=XLOOKUP()"));
     assert_ne!(h.state().session.prefs.recent_functions[0], "XLOOKUP");
 }
 
@@ -302,7 +305,7 @@ fn enter_on_the_category_list_does_not_confirm_insert_function() {
     h.input_mut().events.extend([key_event(Key::Enter, true), key_event(Key::Enter, false)]);
     h.run_steps(3);
     assert!(!open(&h), "Enter in the search box confirms");
-    assert!(editor_text(&h).is_some_and(|t| t.starts_with('=') && t.ends_with('(')), "{:?}", editor_text(&h));
+    assert!(editor_text(&h).is_some_and(|t| t.starts_with('=') && t.ends_with("()")), "{:?}", editor_text(&h));
 }
 
 /// The text shapes the last frame painted, with their left edge and width.
