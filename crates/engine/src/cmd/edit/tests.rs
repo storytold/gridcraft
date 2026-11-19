@@ -845,3 +845,20 @@ fn paste_special_transpose_skips_filtered_rows_for_merges() {
     assert_eq!(merge_of(&mut s, "D4"), json!("D4:E4"));
     assert_eq!(merge_of(&mut s, "D5"), json!(null));
 }
+
+#[test]
+fn paste_special_merge_blocks_the_spill_it_covers() {
+    let val = |s: &mut Session, c: &str| s.execute("cell.get", json!({"cell": c})).unwrap()["value"].clone();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(val(&mut s, "D2"), json!(2.0));
+    // An empty merged source block: pasting it writes no cell, so only the merge blocks the spill.
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all"})).unwrap();
+    assert_eq!(val(&mut s, "D1"), json!({"error": "#SPILL!"}), "the merge over the spill blocks it");
+    assert_eq!(val(&mut s, "D2"), json!(null), "the spilled values under the merge are gone");
+    assert_eq!(val(&mut s, "D3"), json!(null));
+}

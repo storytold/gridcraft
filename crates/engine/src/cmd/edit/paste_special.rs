@@ -390,9 +390,19 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             if !placed.is_empty() {
-                let sh = cx.sheet_mut(dest_sheet)?;
-                sh.merges.retain(|x| !placed.iter().any(|nm| x.intersects(nm)));
-                sh.merges.extend(placed);
+                let mut touched: Vec<CellRef> = Vec::new();
+                {
+                    let sh = cx.sheet_mut(dest_sheet)?;
+                    sh.merges.retain(|x| !placed.iter().any(|nm| x.intersects(nm)));
+                    sh.merges.extend(placed.iter().copied());
+                    // A merged cell blocks a dynamic array's spill, so an array whose spill the new
+                    // merges cover is evaluated again (formatting a merge does the same). Without
+                    // this the stale spilled values keep showing under the merge.
+                    touched.extend(sh.spill_ranges.iter().filter(|(_, r)| placed.iter().any(|m| m.intersects(r))).map(|(a, _)| *a));
+                }
+                for a in touched {
+                    cx.touch(dest_sheet, a);
+                }
             }
         }
         if cut_move {
