@@ -245,6 +245,21 @@ fn amordegrc_stops_at_the_end_of_the_asset_life() {
 }
 
 #[test]
+fn amordegrc_stops_once_depreciation_passes_salvage() {
+    // Depreciation stops once the cumulative amount is greater than cost less
+    // salvage. With salvage 160 the penultimate charge (145 at period 3) takes the
+    // cumulative amount to 856, past cost - salvage = 840, so period 4 charges
+    // nothing instead of taking another 144.
+    let p = |period: f64| ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2023, 6, 30), n(160.0), n(period), n(0.2), n(1.0)]);
+    close(p(0.0), 197.0);
+    close(p(1.0), 321.0);
+    close(p(2.0), 193.0);
+    close(p(3.0), 145.0);
+    close(p(4.0), 0.0);
+    close(p(5.0), 0.0);
+}
+
+#[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
     close(args("COUPDAYBS"), 71.0);

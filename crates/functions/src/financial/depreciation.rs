@@ -173,7 +173,14 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
                 return num_val(book);
             }
             let half = (book * 0.5).round();
-            return num_val(if period > n { book - half } else { half });
+            if period == n {
+                return num_val(half);
+            }
+            // Depreciation stops once the cumulative amount is greater than cost less
+            // salvage, so when the charge above already took the book below salvage the
+            // last period charges nothing.
+            let tail = book - half;
+            return num_val(if tail < salvage { 0.0 } else { tail });
         }
         dep = (r * book).round();
         rest -= dep;
