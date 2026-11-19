@@ -63,6 +63,15 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     if !package.is_binary() {
         return Err(IoError::Format("XLSB: not a binary workbook".into()));
     }
+    let ct_bytes = package
+        .opc()
+        .read("[Content_Types].xml")
+        .map_err(|e| IoError::Format(format!("XLSB: {e}")))?
+        .ok_or_else(|| IoError::Format("XLSB: missing [Content_Types].xml".into()))?;
+    let ct_el = craft_xml::Options::canonical(&[(craft_opc::NS_CONTENT_TYPES, "ct")]).parse(&ct_bytes).map_err(|e| IoError::Xml(e.to_string()))?;
+    if ct_el.name != "ct:Types" {
+        return Err(IoError::Format("XLSB: wrong [Content_Types].xml namespace".into()));
+    }
     let book = package.workbook().map_err(map_error)?;
     let strings = package.shared_strings().map_err(map_error)?;
     let mut wb = Workbook::new();
