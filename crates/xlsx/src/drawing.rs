@@ -144,7 +144,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
         cx.warn(format!("missing part {part}"));
         return Ok(());
     };
-    let opts = craft_xml::Options::canonical(craft_xlsx::ns::CANONICAL).with_limits(craft_xml::Limits {
+    let opts = craft_xml::Options::canonical(&craft_xlsx::ns::CANONICAL).with_limits(craft_xml::Limits {
         max_input: crate::package::MAX_PART as usize,
         max_depth: crate::xml::MAX_DEPTH,
         max_nodes: crate::xml::MAX_XML_NODES,
