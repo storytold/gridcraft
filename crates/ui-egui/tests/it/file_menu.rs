@@ -528,14 +528,14 @@ fn save_changes_dialog_held_key_repeat_ignored() {
 
 #[test]
 fn save_changes_dialog_button_focus_and_space() {
-    // Focused "Don't Save" button does not hijack Enter key; Enter still answers Save
+    // Focused "Don't Save" button: Enter activates it and discards changes
     let dir = std::env::temp_dir().join(format!("gridcraft-enter-focus-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("FocusTest.xlsx").to_string_lossy().into_owned();
     let mut h = harness(Services::default());
     h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
     h.run_steps(2);
-    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "keep_this"})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "discard_this"})).unwrap();
     h.run_steps(2);
 
     request_window_close(&mut h);
@@ -549,7 +549,28 @@ fn save_changes_dialog_button_focus_and_space() {
     assert!(h.state().dialog.is_none());
 
     let (wb, _) = gridcraft_engine::io::open_bytes("FocusTest.xlsx", &std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("keep_this"));
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Empty, "changes were discarded");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Default Enter without any focused button saves and closes
+    let dir = std::env::temp_dir().join(format!("gridcraft-enter-default-test-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("DefaultEnterTest.xlsx").to_string_lossy().into_owned();
+    let mut h = harness(Services::default());
+    h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
+    h.run_steps(2);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "saved_with_default_enter"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+
+    let sent = press_dialog_key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    assert!(sent.contains(&egui::ViewportCommand::Close));
+    assert!(h.state().dialog.is_none());
+
+    let (wb, _) = gridcraft_engine::io::open_bytes("DefaultEnterTest.xlsx", &std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("saved_with_default_enter"));
     let _ = std::fs::remove_dir_all(&dir);
 
     // Space key on focused "Don't Save" button activates it
@@ -578,7 +599,7 @@ fn save_changes_dialog_button_focus_and_space() {
 }
 
 #[test]
-fn save_changes_dialog_cancel_and_physical_key() {
+fn save_changes_dialog_cancel_and_logical_key() {
     // Escape key cancels the dialog, keeping the workbook and window open
     let mut h = harness(Services::default());
     h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "keep_unsaved"})).unwrap();
@@ -600,33 +621,59 @@ fn save_changes_dialog_cancel_and_physical_key() {
     assert!(h.state().dialog.is_none(), "'C' closes the Save Changes dialog");
     assert_eq!(h.state().session.documents().len(), 1, "workbook stays open");
 
-    // Physical key layout match: physical Key::Y triggers Save even under alternative logical layout
+    // Logical key layout match: logical key is checked, avoiding accidental firing from physical key mappings
     let dir = std::env::temp_dir().join(format!("gridcraft-phys-key-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("PhysLayout.xlsx").to_string_lossy().into_owned();
     let mut h = harness(Services::default());
     h.state_mut().run("file.save", serde_json::json!({"path": &path})).unwrap();
     h.run_steps(2);
-    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "saved_via_physical_key"})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "saved_via_logical_key"})).unwrap();
     h.run_steps(2);
 
     request_window_close(&mut h);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
 
+    // Key::Z with physical Key::Y (e.g. QWERTZ layout) must NOT answer Save
     h.input_mut().events.push(egui::Event::Key {
-        key: egui::Key::Z,                // e.g. QWERTZ logical Z
-        physical_key: Some(egui::Key::Y), // physical Y
+        key: egui::Key::Z,
+        physical_key: Some(egui::Key::Y),
         pressed: true,
         repeat: false,
         modifiers: egui::Modifiers::NONE,
     });
     let sent = step_commands(&mut h);
-    assert!(sent.contains(&egui::ViewportCommand::Close), "physical Y saves and closes");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "logical Z must not trigger Save");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "dialog stays open");
+
+    // Logical Key::Y answers Save
+    let sent = press_dialog_key(&mut h, egui::Key::Y, egui::Modifiers::NONE);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "logical Y saves and closes");
     assert!(h.state().dialog.is_none());
 
     let (wb, _) = gridcraft_engine::io::open_bytes("PhysLayout.xlsx", &std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("saved_via_physical_key"));
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("saved_via_logical_key"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn save_changes_dialog_tab_then_enter_on_cancel() {
+    // Tabbing to Cancel button and pressing Enter activates Cancel (#2572)
+    let mut h = harness(Services::default());
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "keep_unsaved"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+
+    // Focus Cancel button
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").focus();
+    h.run_steps(1);
+
+    let sent = press_dialog_key(&mut h, egui::Key::Enter, egui::Modifiers::NONE);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "Enter on focused Cancel must not close the window");
+    assert!(h.state().dialog.is_none(), "Enter on focused Cancel closes the dialog");
+    assert_eq!(h.state().session.documents().len(), 1, "workbook stays open");
 }
 
 /// Book1 has a cell being typed when File › New runs (the macOS menu runs the command directly).
