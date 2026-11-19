@@ -69,10 +69,18 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         .map_err(|e| IoError::Format(format!("XLSB: {e}")))?
         .ok_or_else(|| IoError::Format("XLSB: missing [Content_Types].xml".into()))?;
     let canonical = craft_xml::Canonical::new(&[("ct", craft_opc::NS_CONTENT_TYPES)]);
-    let ct_el = craft_xml::Options::canonical(&canonical).parse(&ct_bytes).map_err(|e| IoError::Xml(e.to_string()))?;
+    let ct_el = craft_xml::Options::canonical(&canonical).strict().parse(&ct_bytes).map_err(|e| IoError::Xml(e.to_string()))?;
     if ct_el.name != "ct:Types" {
         return Err(IoError::Format("XLSB: wrong [Content_Types].xml namespace".into()));
     }
+    if let Some(root_rels) = package.opc().read("_rels/.rels").map_err(|e| IoError::Format(format!("XLSB: {e}")))? {
+        craft_xml::Options::local().strict().parse(&root_rels).map_err(|e| IoError::Xml(e.to_string()))?;
+    }
+    let book_part = package.opc().rels("").first("officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.bin".into());
+    if let Some(book_rels) = package.opc().read(&craft_opc::name::rels_path(&book_part)).map_err(|e| IoError::Format(format!("XLSB: {e}")))? {
+        craft_xml::Options::local().strict().parse(&book_rels).map_err(|e| IoError::Xml(e.to_string()))?;
+    }
+    let ct = package.opc().content_types();
     let book = package.workbook().map_err(map_error)?;
     let strings = package.shared_strings().map_err(map_error)?;
     let mut wb = Workbook::new();
@@ -89,6 +97,11 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             continue;
         }
         wb.check_sheet_name(&entry.name, None).map_err(|e| IoError::Format(format!("XLSB: {e}")))?;
+        if let Some(ref part_name) = entry.part {
+            if ct.of(part_name) != Some("application/vnd.ms-excel.worksheet") {
+                return Err(IoError::Format("XLSB: wrong worksheet content type".into()));
+            }
+        }
         let mut sheet = Sheet::new(&entry.name);
         sheet.visibility = map_visibility(entry.visibility);
         let part = package
