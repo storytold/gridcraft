@@ -22,11 +22,15 @@ pub struct CfLook {
     pub hide_value: bool,
 }
 
-/// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates), and each
-/// table's visible edges. The grid and print keep one per paint.
+/// Precomputed statistics (min/max/percentiles/top-N thresholds/duplicates), and each table's
+/// visible edges. The grid and print keep one per paint.
 #[derive(Default)]
 pub struct CfCache {
-    stats: HashMap<usize, RuleStats>,
+    /// Statistics by what they are gathered from: rules that read the same cells share them, so a
+    /// sheet with many rules over the same ranges (whole columns or the whole sheet) scans once.
+    stats: HashMap<StatsKey, RuleStats>,
+    /// Each rule's key, worked out once.
+    rule_keys: HashMap<usize, StatsKey>,
     table_edges: HashMap<RangeRef, crate::tables::ShownEdges>,
 }
 
@@ -40,7 +44,7 @@ struct RuleStats {
 
 /// Which statistics a rule reads. Scanning the rule's whole range for them costs O(range), so
 /// rules that read none (cell value, formula, text, blanks, errors, dates) never scan.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum StatsNeed {
     /// Sorted numbers, their mean and deviation (top/bottom N, above average, scales, bars, icons).
     Numbers,
@@ -58,6 +62,17 @@ fn stats_need(rule: &CfRule) -> Option<StatsNeed> {
         }
         _ => None,
     }
+}
+
+/// What a rule's statistics are gathered from: what it reads, and the parts of its ranges inside
+/// the used range, in order and each once, which is all [`numbers_in`] visits.
+type StatsKey = (StatsNeed, Vec<RangeRef>);
+
+fn stats_key(sh: &Sheet, ranges: &[RangeRef], need: StatsNeed) -> StatsKey {
+    let used = sh.used_range();
+    let mut seen = HashSet::new();
+    let clipped = ranges.iter().filter_map(|r| used.and_then(|u| r.intersection(&u))).filter(|r| seen.insert(*r)).collect();
+    (need, clipped)
 }
 
 impl RuleStats {
@@ -300,7 +315,10 @@ impl CfCache {
         for (idx, cf) in rules {
             let first = RangeRef::top_left(&cf.ranges).unwrap_or(c);
             let st: &RuleStats = match stats_need(&cf.rule) {
-                Some(need) => &*self.stats.entry(idx).or_insert_with(|| RuleStats::build(sh, &cf.ranges, need)),
+                Some(need) => {
+                    let key = self.rule_keys.entry(idx).or_insert_with(|| stats_key(sh, &cf.ranges, need));
+                    &*self.stats.entry(key.clone()).or_insert_with(|| RuleStats::build(sh, &key.1, key.0))
+                }
                 None => &no_stats,
             };
             let text = v.display();
@@ -638,6 +656,28 @@ mod tests {
             cache.look(&d.wb, 0, CellRef::parse(&format!("A{r}")).unwrap());
         }
         assert_eq!(SCANNED.with(|n| n.get()), 10_000);
+    }
+
+    /// Many rules over the same cells, as whole-sheet rules are once clipped to the used range,
+    /// gather their statistics once between them.
+    #[test]
+    fn rules_over_the_same_cells_share_one_scan() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let rows: Vec<serde_json::Value> = (1..=1000).map(|i| json!([i])).collect();
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        for range in ["A1:XFD1048576", "A:A", "A1:A1000"] {
+            for _ in 0..20 {
+                s.execute("home.conditionalFormat", json!({"range": range, "rule": {"type": "top10", "preset": "redBorder"}})).unwrap();
+                s.execute("home.conditionalFormat", json!({"range": range, "rule": {"type": "aboveAverage", "preset": "redBorder"}})).unwrap();
+            }
+        }
+        let d = s.doc().unwrap();
+        let mut cache = CfCache::new();
+        SCANNED.with(|n| n.set(0));
+        let look = cache.look(&d.wb, 0, CellRef::parse("A1000").unwrap()).and_then(|l| l.style);
+        assert!(look.is_some(), "the top 10 still matches");
+        assert_eq!(SCANNED.with(|n| n.get()), 1000, "one scan for all 120 rules");
     }
 
     /// A rule listing the same range many times scans it once, and never more than the shared
