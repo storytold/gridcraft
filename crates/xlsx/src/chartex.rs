@@ -8,7 +8,7 @@ use gridcraft_core::RangeRef;
 use gridcraft_formula::{Expr, SheetSel};
 use gridcraft_model::{Chart, ChartKind, LegendPos, QuartileMethod, Series, Workbook};
 
-use crate::drawing::{dml_color, srgb};
+use crate::drawing::srgb;
 use crate::xml::{El, esc, esc_attr};
 
 pub const CT_CHARTEX: &str = "application/vnd.ms-office.chartex+xml";
@@ -43,113 +43,73 @@ pub fn requires(k: ChartKind) -> (&'static str, &'static str) {
 
 // ---------------------------------------------------------------- reading
 
-fn kind_of(layout: &str) -> Option<ChartKind> {
-    Some(match layout {
-        "clusteredColumn" | "paretoLine" => ChartKind::Histogram,
-        "boxWhisker" => ChartKind::BoxWhisker,
-        "waterfall" => ChartKind::Waterfall,
-        "funnel" => ChartKind::Funnel,
-        "treemap" => ChartKind::Treemap,
-        "sunburst" => ChartKind::Sunburst,
+pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart) -> Option<Chart> {
+    use craft_drawingml::chart::ChartType;
+    let kind = match dc.kind {
+        ChartType::Histogram | ChartType::Pareto => ChartKind::Histogram,
+        ChartType::BoxWhisker => ChartKind::BoxWhisker,
+        ChartType::Waterfall => ChartKind::Waterfall,
+        ChartType::Funnel => ChartKind::Funnel,
+        ChartType::Treemap => ChartKind::Treemap,
+        ChartType::Sunburst => ChartKind::Sunburst,
         _ => return None,
-    })
-}
-
-fn formula(dim: &El) -> Option<String> {
-    let f = dim.child("f")?;
-    Some(crate::fmla::from_file(&crate::chart::chart_ref_from_file(&f.text)))
-}
-
-fn text(tx: &El) -> Option<String> {
-    if let Some(d) = tx.child("txData") {
-        if let Some(f) = d.child("f") {
-            return Some(crate::chart::chart_ref_from_file(&f.text));
-        }
-        return d.child("v").map(|v| v.text.clone());
-    }
-    let rich = tx.child("rich")?;
-    let paras: Vec<String> = rich.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect()).collect();
-    let s = paras.join("\n");
-    if s.is_empty() { None } else { Some(s) }
-}
-
-pub fn read_chartex(root: &El) -> Option<Chart> {
-    let chart = root.child("chart")?;
-    let plot = chart.child("plotArea")?;
-    let region = plot.child("plotAreaRegion")?;
-    // Data by id: (categories, values).
-    let data: Vec<(String, Option<String>, Option<String>)> = root
-        .child("chartData")
-        .map(|cd| {
-            cd.kids("data")
-                .map(|d| {
-                    let id = d.attr("id").unwrap_or("").to_string();
-                    let cat = d.kids("strDim").chain(d.kids("numDim")).find(|x| matches!(x.attr("type"), Some("cat" | "x"))).and_then(formula);
-                    let val = d.kids("numDim").find(|x| matches!(x.attr("type"), Some("val" | "size" | "y"))).and_then(formula);
-                    (id, cat, val)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut kind = None;
-    let mut series = vec![];
-    let mut data_labels = false;
-    for s in region.kids("series") {
-        let layout = s.attr("layoutId").unwrap_or("");
-        // A Pareto line belongs to its histogram.
-        if layout == "paretoLine" {
-            continue;
-        }
-        let k = kind_of(layout)?;
-        kind.get_or_insert(k);
-        let id = s.child_val("dataId").unwrap_or("");
-        let (cat, val) = data.iter().find(|(i, _, _)| i == id).map(|(_, c, v)| (c.clone(), v.clone())).unwrap_or_default();
-        data_labels |= s.path(&["dataLabels", "visibility"]).is_some_and(|v| v.flag("value", false));
-        series.push(Series {
-            quartiles: match s.path(&["layoutPr", "statistics"]).and_then(|el| el.attr("quartileMethod")) {
-                Some("inclusive") => QuartileMethod::Inclusive,
-                _ => QuartileMethod::Exclusive,
-            },
-            name: s.child("tx").and_then(text),
-            categories: cat,
-            values: val.unwrap_or_default(),
-            // The default colour (the series' theme accent, which the writer spells out) isn't kept.
-            color: s
-                .path(&["spPr", "solidFill"])
-                .and_then(dml_color)
-                .filter(|c| *c != gridcraft_model::Color::Theme(4 + (series.len() % 6) as u8, 0)),
-            ..Default::default()
-        });
-    }
-    let legend = match chart.child("legend") {
-        None => LegendPos::None,
-        Some(l) => match l.attr("pos").unwrap_or("r") {
-            "b" => LegendPos::Bottom,
-            "t" => LegendPos::Top,
-            "l" => LegendPos::Left,
-            _ => LegendPos::Right,
-        },
     };
-    let axis_title = |id: &str| plot.kids("axis").find(|a| a.attr("id") == Some(id)).and_then(|a| a.path(&["title", "tx"])).and_then(text);
+    let quartiles = if dc.inclusive_quartiles { QuartileMethod::Inclusive } else { QuartileMethod::Exclusive };
+    let series = dc
+        .series
+        .into_iter()
+        .enumerate()
+        .map(|(idx, s)| {
+            let color = s
+                .fill
+                .as_ref()
+                .and_then(|f| match f {
+                    craft_drawingml::style::Fill::Solid { color } => crate::chart::map_dml_color(color),
+                    _ => None,
+                })
+                .filter(|c| *c != gridcraft_model::Color::Theme(4 + (idx % 6) as u8, 0));
+            Series {
+                quartiles,
+                name: s.refs.name.as_deref().map(crate::chart::chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
+                categories: s.refs.categories.as_deref().map(|f| crate::fmla::from_file(&crate::chart::chart_ref_from_file(f))),
+                values: s.refs.values.as_deref().map(|f| crate::fmla::from_file(&crate::chart::chart_ref_from_file(f))).unwrap_or_default(),
+                color,
+                ..Default::default()
+            }
+        })
+        .collect();
+    let legend = match dc.legend.as_deref() {
+        None => LegendPos::None,
+        Some("b") => LegendPos::Bottom,
+        Some("t") => LegendPos::Top,
+        Some("l") => LegendPos::Left,
+        Some(_) => LegendPos::Right,
+    };
     Some(Chart {
         id: 0,
-        kind: kind?,
+        kind,
         anchor: Default::default(),
-        title: chart.path(&["title", "tx"]).and_then(text),
+        title: dc.title,
         series,
         legend,
-        data_labels,
+        data_labels: dc.data_labels,
         data_table: None,
-        gridlines: plot.kids("axis").any(|a| a.child("majorGridlines").is_some()),
+        gridlines: dc.gridlines,
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
-        x_title: axis_title("0"),
-        y_title: axis_title("1"),
+        x_title: dc.axis_titles.0,
+        y_title: dc.axis_titles.1,
         source: None,
         by_rows: false,
         pivot: None,
     })
+}
+
+pub fn read_chartex(root: &El) -> Option<Chart> {
+    let craft = crate::chart::to_craft_el(root);
+    let dc = craft_drawingml::chart::chartex::chartex_from(&craft)?;
+    from_dml_chartex(dc)
 }
 
 // ---------------------------------------------------------------- writing
