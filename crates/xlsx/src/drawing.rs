@@ -227,7 +227,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     // shape (an ellipse, a filled rectangle) it, like any other warp, leaves the shape what its
     // geometry says.
     let word_art = prst == "rect"
-        && (tx_box || (sp.child("noFill").is_some() && !ln.is_some_and(|l| l.child("solidFill").is_some())))
+        && (tx_box || (sp.child("noFill").is_some() && ln.is_none_or(|l| l.child("solidFill").is_none())))
         && obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some_and(|w| w.attr("prst") == Some("textNoShape"));
     let kind = match prst {
         _ if word_art => ShapeKind::WordArt,
@@ -266,15 +266,22 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
             line: ink,
             text,
             format: Default::default(),
+            rotation: 0.0,
             math: Default::default(),
         });
     }
     let fill = sp.child("solidFill").and_then(dml_color).unwrap_or_default();
     let line = ln.and_then(|l| l.child("solidFill")).and_then(dml_color).unwrap_or_default();
-    let text = obj.child("txBody").map(body_text).unwrap_or_default();
+    let text = tb.map(|tb| if has_math { math_body_text(tb) } else { body_text(tb) }).unwrap_or_default();
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
-    Some(Shape { id: 0, kind, anchor, fill, line, text, format, math: Default::default() })
+    let rotation = sp
+        .child("xfrm")
+        .and_then(|x| x.attr("rot"))
+        .and_then(|r| r.parse::<f64>().ok())
+        .filter(|r| r.is_finite())
+        .map_or(0.0, |r| ((r / 60000.0).rem_euclid(360.0)) as f32);
+    Some(Shape { id: 0, kind, anchor, fill, line, text, format, rotation, math: Default::default() })
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
@@ -411,6 +418,55 @@ fn body_text(tb: &El) -> String {
     tb.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n")
 }
 
+/// A rejected Office Math box still needs its visible run text. Do not reinterpret
+/// that text as LaTeX. Keep traversal and output bounded independently of conversion.
+fn math_body_text(tb: &El) -> String {
+    const MAX_BYTES: usize = 1 << 20;
+    fn append(text: &str, out: &mut String) {
+        let mut end = text.len().min(MAX_BYTES.saturating_sub(out.len()));
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        out.push_str(&text[..end]);
+    }
+    fn visit(e: &El, depth: usize, left: &mut usize, out: &mut String) {
+        if depth > 64 || *left == 0 || out.len() >= MAX_BYTES {
+            return;
+        }
+        *left -= 1;
+        if e.name.ends_with("Pr") {
+            return;
+        }
+        if e.name == "t" {
+            append(&e.text, out);
+        } else if e.name == "AlternateContent" {
+            // Choice and fallback describe the same content, not two text runs.
+            if let Some(c) = e.child("Fallback").or_else(|| e.child("Choice")) {
+                visit(c, depth + 1, left, out);
+            }
+        } else {
+            for child in &e.children {
+                visit(child, depth + 1, left, out);
+                if *left == 0 || out.len() >= MAX_BYTES {
+                    break;
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    let mut left = 100_000;
+    for (i, p) in tb.kids("p").enumerate() {
+        if left == 0 || out.len() >= MAX_BYTES {
+            break;
+        }
+        if i > 0 {
+            append("\n", &mut out);
+        }
+        visit(p, 0, &mut left, &mut out);
+    }
+    out
+}
+
 /// Whether a body without Office Math still holds the text the writer wrote for `src`: the same
 /// paragraphs, read back through the same parser. The marker joins run text across paragraphs,
 /// so a paragraph split that changes no character passes it; the text does not.
@@ -452,8 +508,15 @@ fn anchor_open(sheet: &Sheet, a: &Anchor) -> (String, &'static str) {
 }
 
 fn xfrm(a: &Anchor, tag: &str) -> String {
+    xfrm_rot(a, tag, 0.0)
+}
+
+/// `deg` is written as `rot`, in 60000ths of a degree.
+fn xfrm_rot(a: &Anchor, tag: &str, deg: f32) -> String {
     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
-    format!("<{tag}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{}\" cy=\"{}\"/></{tag}>", e(a.width), e(a.height))
+    let rot = (f64::from(deg.rem_euclid(360.0)) * 60000.0).round() as i64;
+    let rot = if rot > 0 { format!(" rot=\"{rot}\"") } else { String::new() };
+    format!("<{tag}{rot}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{}\" cy=\"{}\"/></{tag}>", e(a.width), e(a.height))
 }
 
 pub fn srgb(c: &Color, theme: &Theme) -> Option<String> {
@@ -545,7 +608,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Shape {}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
                     id - 1,
                     if tx { " txBox=\"1\"" } else { "" },
-                    xfrm(&sh.anchor, "a:xfrm")
+                    xfrm_rot(&sh.anchor, "a:xfrm", sh.rotation)
                 );
                 if let Some(c) = srgb(&sh.fill, theme) {
                     let _ = write!(s, "<a:solidFill>{c}</a:solidFill>");
@@ -689,5 +752,25 @@ pub fn image_content_type(ext: &str) -> &'static str {
         "wmf" => "image/x-wmf",
         "webp" => "image/webp",
         _ => "image/png",
+    }
+}
+
+#[cfg(test)]
+mod math_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn fallback_uses_one_alternative_and_ignores_properties() {
+        let tb = crate::xml::parse(br#"<txBody><p><rPr><t>hidden</t></rPr><r><t>before </t></r><AlternateContent><Choice><r><t>choice</t></r></Choice><Fallback><r><t>fallback</t></r></Fallback></AlternateContent><r><t> after</t></r></p><p><r><t>next</t></r></p></txBody>"#).unwrap();
+        assert_eq!(math_body_text(&tb), "before fallback after\nnext");
+    }
+
+    #[test]
+    fn fallback_output_cap_keeps_utf8_intact() {
+        let xml = format!("<txBody><p><r><t>a{}</t></r></p></txBody>", "λ".repeat(1 << 19));
+        let tb = crate::xml::parse(xml.as_bytes()).unwrap();
+        let text = math_body_text(&tb);
+        assert_eq!(text.len(), (1 << 20) - 1);
+        assert!(text.starts_with('a') && text.ends_with('λ'));
     }
 }
