@@ -40,9 +40,8 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
             }
         }
         if let Some(code) = &c.format {
-            cell.style = *styles
-                .entry(code.as_str())
-                .or_insert_with(|| wb.styles.intern(Style { num_fmt: NumFmt(Arc::from(code.as_str())), ..Style::default() }));
+            cell.style =
+                *styles.entry(code.as_str()).or_insert_with(|| wb.styles.intern(Style { num_fmt: NumFmt::custom(code), ..Style::default() }));
         }
         sheet.set_cell(CellRef::new(row, col), cell);
     }

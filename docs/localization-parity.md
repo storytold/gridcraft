@@ -187,3 +187,53 @@ language (none so far) and of localized function names.
 | 2026-10-11 | minor | Czech (cs) ribbon table: 266 labels (~12%), menus only |
 | 2026-10-10 | minor | Re-measured after #31, #104, #82, #38 merged: ribbon translated into ja, zh, ko, pt-BR and ru (266–268 labels, ~12%), system-language default, CJK/Thai/Hebrew font fallback; ~10% ready, 100–165 h |
 | 2026-10-10 | major | Created: English only, no catalog, ~2,200 strings, script-support gaps, open language PRs |
+
+
+## Contribution #2933 — scoped notes
+
+> **Last updated:** 2026-11-15 · These notes describe this contribution. The mainline assessment and progress tables above are retained verbatim from `1d0b311b4a94`. The contribution does not revise the mainline readiness estimates.
+
+The behavior described in these scoped notes applies to this branch and supersedes corresponding older baseline statements above. Dated rows below record the contribution history, rather than adding a new claim of general parity.
+
+The older en-US-only baseline above is superseded for regional display and the explicit interactive entry boundary described here. Formula names, ordinary commands and file syntax remain invariant. PR #163 is closed.
+
+Topic change: regional built-in format identity and Format Cells preview corrections retained.
+
+- **Invariant formulas/commands; regional display and interactive numeric entry.** Function names,
+  the `,` argument separator, files, ordinary commands, CSV and `TEXT()` remain en-US. Explicit
+  front-end entry, F2/formula-bar text, Ctrl+Enter and external text paste use the numeric region;
+  draft validation uses the same canonical value that will be stored. The
+  grid shows numbers and dates in the system's region (`numfmt::Locale`, from the Region setting
+  on macOS, `LC_NUMERIC` / `LC_ALL` / `LANG` on Linux and the user locale on Windows, not the
+  interface language: CH/LI, DE/AT/LU/RO, FR, GB/IE/SG, IT/ES/BR, NL, JP, CN): its decimal and digit-group
+  separators for a format's `.` and `,`, and its short date for the built-in short date format
+  (`m/d/yyyy`, number format 14, and 22 with time). On macOS, supported numeric short-date
+  customizations come from Foundation, including the `dd.MM.y` case in #2869; region overrides
+  (`@rg=…` and `u-rg-…`) take precedence. Explicit custom XLSX short-date codes retain their
+  literal order, including a custom code identical to built-in 14/22. See
+  [regional-display.md](regional-display.md) for provenance, coverage and limits. Users ask for localized function names and
+  `;` separators (#45); German with localized numbers and formulas was PR #163 (closed).
+
+### Percent-prefixed interactive entry
+
+Turkish interactive entry accepts `%15` as 0.15 with a percentage format. The explicit
+numeric-region snapshot carries optional boolean `percentPrefix`; omission means false,
+so older snapshots and Romanian/en-US entry keep their behavior. The invariant CLI and
+file parsers are unchanged. Currency-prefixed `₺46,00` remains a follow-up, and ambiguous
+`1.5` remains text in Turkish. Custom-date separator substitution, localized Long Date
+names and regional Home Currency defaults are outside this change.
+
+**#2933 interactive follow-up (2026-11-03):** Regional scalar entry and editor text share an explicit boundary; commands and imports remain invariant. Synthetic controls cover Romanian decimals/grouping, short dates, both date systems, mixed Text/numeric fills, validation, draft-region changes and XLSX saves. Full language-specific currency/month-name parsing and native Excel/Windows/Linux acceptance remain open.
+
+### Contribution revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-11 | minor | Declared built-in XLSX short-date formats keep regional identity and built-in IDs; custom declarations remain literal. Format Cells samples follow the display region, and calendar clipboard controls retain hidden time fractions in both directions. Conditional date entry follows the section that displays each candidate; unresolved or ambiguous dates remain text. |
+| 2026-11-10 | minor | Keep shared custom number formats and accept percent-prefixed Turkish interactive input; explicit locale snapshots carry the percent-prefix convention without changing Romanian or en-US entry. |
+| 2026-10-31 | trivial | Document the regional-display functions and regression contracts touched by #2933; no executable Rust changes or readiness reassessment. |
+| 2026-10-31 | minor | Read the Windows user format-locale name independently of UI language; add a synthetic language-switch regression and cross-check the Windows boundary. Native Windows locale integration remains unverified; no readiness reassessment. |
+| 2026-10-30 | minor | #2933 review: differential number formats preserve built-in IDs 14/22 and regional display; custom or missing IDs retain literal short-date aliases through repeated XLSX save/reopen |
+| 2026-10-30 | minor | #2933 follow-up: Format Cells only replaces a number format after a number-format edit; standard built-in DXF aliases normalize by ID while custom codes remain literal |
+| 2026-10-29 | minor | Adapt #2263 by @pick2510 to the modular grid and AutoFit; add Romanian separators, region overrides, macOS numeric short-date customizations (#2869), and retention of custom XLSX short-date aliases through save/reopen |
+| 2026-10-24 | minor | The grid shows numbers and dates in the system's region: decimal and digit-group separators (de-CH `1'169.50`, de-DE `1.169,50`, fr-FR narrow no-break space) and the region's short date for the built-in short date format (de-CH `01.01.2024`). The region comes from macOS's Region setting, Linux's `LC_NUMERIC` (or `LC_ALL`, `LANG`) or Windows's user locale, not the interface language, so English (US) with the Region set to Switzerland gets Swiss formats. Input, the editor, files, commands, CSV and `TEXT()` stay en-US |

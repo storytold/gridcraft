@@ -2,15 +2,19 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] out.png`
+//!  [--pane name] [--object id] [--dialog 'name={json}'] [--refedit key=A1:B2] [--hf-edit header|footer] [--locale de-CH] out.png`
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
+//!
+//! Numbers and dates show in the system's region, as in the app, unless `--locale` names one.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
+/// Render an offscreen workbook snapshot, applying the locale override before commands
+/// so AutoFit and the captured grid use the same display conventions.
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut sample = None;
@@ -25,6 +29,7 @@ fn main() {
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut number_locale = gridcraft_ui_egui::grid::system_number_locale();
     let mut refedit: Option<String> = None;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
@@ -80,6 +85,10 @@ fn main() {
                 i += 1;
                 hf_edit = args.get(i).cloned();
             }
+            "--locale" => {
+                i += 1;
+                number_locale = gridcraft_engine::numfmt::Locale::from_tag(args.get(i).map_or("", String::as_str));
+            }
             "--language" => {
                 i += 1;
                 language = args.get(i).cloned();
@@ -92,6 +101,8 @@ fn main() {
     // the workbook's fonts are drawn in their own faces, not a substitute.
     let _ = gridcraft_ui_egui::fonts::catalog();
     let mut session = Session::new();
+    // Before any --cmd: AutoFit measures the text in this region.
+    session.display_locale = number_locale;
     if let Some(p) = &input {
         session.execute("file.open", json!({"path": p})).expect("open");
     } else if let Some(s) = &sample {
