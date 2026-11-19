@@ -12,10 +12,10 @@
 //! - `gridcraft:open` (from the host): `{ name, bytes }`. It opens like a workbook picked with
 //!   File › Open or dropped on the window; a file over [`MAX_OPEN_BYTES`] is refused before it is
 //!   copied.
-//! - `gridcraft:save` (to the host): `{ name, saveAs, bytes }` for every file GridCraft would
-//!   otherwise download: Save and Save As (an .xlsx workbook) and Export as PDF. The host stores
-//!   it and reports failures itself. GridCraft doesn't tell the host which saves make a file the
-//!   document, so `saveAs` is always `false`.
+//! - `gridcraft:save` (to the host): `{ name, saveAs, bytes, export }` for every file GridCraft
+//!   would otherwise download. With `export: false`, the host stores the XLSX workbook; with
+//!   `export: true`, it stores a separate file (such as a PDF) without replacing the workbook.
+//!   `saveAs` remains `false`; it does not distinguish Save from Save As here.
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
@@ -27,15 +27,15 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_web_host::web::{FileData, Host, Message};
+use craft_web_host::{Mode, Outgoing, file_name, message_type};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use wasm_bindgen::JsValue;
 
+use crate::host_save::{SaveMessage, sync_saved};
 use crate::hostmode::open_name;
 
 /// The app id in the host messages (`gridcraft:ready`).
 const APP: &str = "gridcraft";
-
-/// Saved files that count as a workbook: the document is then clean under the name it was saved as.
-const WORKBOOK_EXTS: &[&str] = &["xlsx"];
 
 /// The largest workbook taken from the host page, refused before it is copied.
 const MAX_OPEN_BYTES: u64 = 512 << 20;
@@ -46,6 +46,7 @@ const MAX_AUTHOR_CHARS: usize = 200;
 #[derive(Clone)]
 pub struct Bridge {
     host: Rc<Host>,
+    save_target: Rc<SaveTarget>,
     /// Names of the files handed to the host since the last frame.
     saved: Rc<RefCell<Vec<String>>>,
 }
@@ -55,7 +56,19 @@ impl Bridge {
     /// `data-host="page"` on the canvas, an unframed `?host=parent` page (it stays the normal app
     /// with downloads), or a parent on another origin.
     pub fn detect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
-        Some(Self { host: Rc::new(Host::connect(APP, canvas)?), saved: Rc::default() })
+        let host = Host::connect(APP, canvas)?;
+        let save_target = match host.mode() {
+            Mode::Parent => {
+                // Host::connect already admitted only a same-origin parent. Keep that origin
+                // as the postMessage target so later navigation can't receive workbook bytes.
+                let window = web_sys::window()?;
+                let parent = window.parent().ok().flatten()?;
+                let origin = window.location().origin().ok()?;
+                SaveTarget::Parent { parent, origin }
+            }
+            Mode::Page => SaveTarget::Page(canvas.clone()),
+        };
+        Some(Self { host: Rc::new(host), save_target: Rc::new(save_target), saved: Rc::default() })
     }
 
     /// Send saved and exported files to the host instead of downloading them, and hear files
@@ -91,20 +104,13 @@ impl Bridge {
     /// crate does not repeat a state it already reported).
     pub fn sync(&self, app: &mut SheetApp) {
         let saved = std::mem::take(&mut *self.saved.borrow_mut());
-        if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
-            && let Some(doc) = app.session.active_mut()
-        {
-            doc.saved = doc.wb.clone();
-            if doc.path.is_none() {
-                doc.title = name.clone();
-            }
-        }
+        sync_saved(&saved, app);
         self.host.post_dirty(app.session.documents().iter().any(|d| d.is_dirty()));
     }
 
     fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        let name = file_name(path);
-        self.host.post_save(&name, bytes, None, false)?;
+        let name = file_name(Some(path), "document");
+        self.save_target.post(SaveMessage::new(&name, bytes)).map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))?;
         self.saved.borrow_mut().push(name);
         Ok(())
     }
@@ -115,6 +121,38 @@ impl Bridge {
                 deliver_open(&inbox, &ctx, &name, &data);
             }
         });
+    }
+}
+
+/// A save-only adapter: the pinned host crate's `post_save` cannot add app-specific fields.
+/// All other messages and transport detection still go through `Host`.
+enum SaveTarget {
+    Parent { parent: web_sys::Window, origin: String },
+    Page(web_sys::HtmlCanvasElement),
+}
+
+impl SaveTarget {
+    fn post(&self, save: SaveMessage<'_>) -> Result<(), JsValue> {
+        let buffer = js_sys::Uint8Array::from(save.bytes).buffer();
+        let kind = message_type(APP, Outgoing::Save.kind());
+        let payload = js_sys::Object::new();
+        let set = |key, value: JsValue| js_sys::Reflect::set(&payload, &JsValue::from_str(key), &value);
+        set("name", save.name.into())?;
+        set("bytes", buffer.clone().into())?;
+        set("saveAs", JsValue::FALSE)?;
+        set("export", JsValue::from_bool(save.export))?;
+        match self {
+            Self::Parent { parent, origin } => {
+                set("type", kind.as_str().into())?;
+                parent.post_message_with_transfer(&payload, origin, &js_sys::Array::of1(&buffer))
+            }
+            Self::Page(canvas) => {
+                let init = web_sys::CustomEventInit::new();
+                init.set_detail(&payload.into());
+                let event = web_sys::CustomEvent::new_with_event_init_dict(&kind, &init)?;
+                canvas.dispatch_event(&event).map(|_| ())
+            }
+        }
     }
 }
 
@@ -132,12 +170,4 @@ fn deliver_open(inbox: &Inbox, ctx: &egui::Context, name: &str, data: &FileData)
     }
     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((open_name(name), array.to_vec()));
     ctx.request_repaint();
-}
-
-fn is_workbook(name: &str) -> bool {
-    name.rsplit_once('.').is_some_and(|(_, ext)| WORKBOOK_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
-}
-
-fn file_name(path: &str) -> String {
-    std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string())
 }
