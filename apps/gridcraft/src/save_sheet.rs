@@ -11,9 +11,11 @@ use objc2_foundation::NSString;
 use std::cell::RefCell;
 use std::sync::mpsc::channel;
 
+/// A Save Changes sheet up now: the id it was asked with, its document window and the sheet.
+type Asked = (u64, Retained<NSWindow>, Retained<NSWindow>);
+
 thread_local! {
-    /// The Save Changes sheets up now, with the id they were asked with and their windows.
-    static ASKING: RefCell<Vec<(u64, Retained<NSWindow>, Retained<NSWindow>)>> = const { RefCell::new(Vec::new()) };
+    static ASKING: RefCell<Vec<Asked>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The hook for `Services::end_save_prompt`: the sheet asked with `id` goes, answering Cancel
