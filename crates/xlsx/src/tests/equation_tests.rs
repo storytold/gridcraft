@@ -20,6 +20,7 @@ fn equation(id: u32, cell: &str, latex: &str, ink: Color) -> Shape {
         text: latex.into(),
         format: Default::default(),
         math: Default::default(),
+        rotation: 0.0,
     }
 }
 
@@ -161,6 +162,7 @@ fn a_text_box_stays_a_text_box_and_hostile_sources_survive() {
         text: "plain".into(),
         format: Default::default(),
         math: Default::default(),
+        rotation: 0.0,
     });
     wb.sheets[0] = Arc::new(sh);
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -480,4 +482,45 @@ fn the_plain_text_stand_in_for_an_equation_is_drawn_at_a_normal_size() {
     }
     // The Office Math box keeps the size of the equation.
     assert!(!d.contains("<a:endParaRPr lang=\"en-US\" sz=\"1100\"/>"), "{d}");
+}
+
+#[test]
+fn rejected_office_math_without_a_saved_source_keeps_visible_text() {
+    let wb = book(vec![equation(1, "B2", "x^2", Color::Auto)]);
+    let original = unzip(&write_xlsx(&wb).unwrap());
+    let name = original.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let d = drawing(&original);
+    let c0 = d.find("<mc:Choice").unwrap();
+    let c1 = d.find("</mc:Choice>").unwrap();
+    let choice = &d[c0..c1];
+    let mut sp = choice[choice.find("<xdr:sp ").unwrap()..].to_string();
+    while let Some(a) = sp.find(" descr=\"gridcraft:latex:") {
+        let b = sp[a + 8..].find('"').unwrap() + a + 9;
+        sp.replace_range(a..b, "");
+    }
+    let a0 = d.find("<mc:AlternateContent").unwrap();
+    let a1 = d.find("</mc:AlternateContent>").unwrap() + "</mc:AlternateContent>".len();
+    for (body, expected) in [
+        ("<a:p><a14:m><m:oMath><m:r><m:t>x^2</m:t></m:r></m:oMath></a14:m></a:p>", "x^2"),
+        (
+            "<a:p><a:r><a:t>Solve: </a:t></a:r><a14:m><m:oMath><m:r><m:t>x^2</m:t></m:r></m:oMath></a14:m><a:r><a:t> please</a:t></a:r></a:p><a:p><a:r><a:t>next</a:t></a:r></a:p>",
+            "Solve: x^2 please\nnext",
+        ),
+        ("<a:p><a14:m><m:oMath><m:unknown><m:r><m:t>λ^2</m:t></m:r></m:unknown></m:oMath></a14:m></a:p>", "λ^2"),
+    ] {
+        let mut shape = sp.clone();
+        let start = shape.find("<xdr:txBody>").unwrap();
+        let end = shape.find("</xdr:txBody>").unwrap() + "</xdr:txBody>".len();
+        shape.replace_range(start..end, &format!("<xdr:txBody>{body}</xdr:txBody>"));
+        let mut xml = d.clone();
+        xml.replace_range(a0..a1, &shape);
+        let mut parts = original.clone();
+        parts.insert(name.clone(), xml.into_bytes());
+        let back = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+        assert_eq!(back.len(), 1);
+        assert_ne!(back[0].kind, ShapeKind::Equation);
+        assert_eq!(back[0].text, expected);
+        let again = shapes(&read_xlsx(&write_xlsx(&book(back)).unwrap()).unwrap().0);
+        assert_eq!(again[0].text, expected);
+    }
 }
