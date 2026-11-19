@@ -991,6 +991,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-mcp-server"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=08da5e1486ee640de1d2cccd8fe8dd32b1d3b62c#08da5e1486ee640de1d2cccd8fe8dd32b1d3b62c"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "craft-odf"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=4e0c880f58d745befcf53ee6618414a0b1038544#4e0c880f58d745befcf53ee6618414a0b1038544"
@@ -2344,6 +2352,7 @@ dependencies = [
 name = "gridcraft-mcp"
 version = "0.19.1"
 dependencies = [
+ "craft-mcp-server",
  "gridcraft-engine",
  "log",
  "serde_json",
