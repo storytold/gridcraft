@@ -657,8 +657,8 @@ fn save_changes_dialog_cancel_and_logical_key() {
 }
 
 #[test]
-fn save_changes_dialog_tab_then_enter_on_cancel() {
-    // Tabbing to Cancel button and pressing Enter activates Cancel (#2572)
+fn save_changes_dialog_enter_on_focused_cancel() {
+    // When Cancel button has focus, Enter activates Cancel without saving (#2572)
     let mut h = harness(Services::default());
     h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "keep_unsaved"})).unwrap();
     h.run_steps(2);
