@@ -261,11 +261,10 @@ pub struct SheetApp {
     /// provider behind the connected backend reports it.
     pub sharing: craft_ui::share::ShareDialog,
     /// Who else is in the document, drawn beside the account badge through
-    /// [`craft_ui::cloud::who`]. `CloudApp::presence` exists for a host with a live
-    /// collaboration relay to populate with [`craft_ui::presence::PresenceBar::set`]; GridCraft
-    /// dropped its relay (`craft-collab`) along with CollabCraft, has no other source of peer
-    /// presence, and never calls `set`, so this stays empty and `who` draws nothing for it. See
-    /// `docs/cloud.md`.
+    /// [`craft_ui::cloud::who`]. `CloudApp::presence` exists for a host with a live source of peer
+    /// presence to populate through [`craft_ui::presence::PresenceBar::set`]. That surface is
+    /// RFC-0020's, stated by neither `craft-cloud` nor this contract, so nothing here calls `set`.
+    /// The bar therefore stays empty and `who` draws nothing for it. See `docs/cloud.md`.
     pub presence: craft_ui::presence::PresenceBar,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,

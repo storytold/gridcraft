@@ -28,8 +28,8 @@ An actual dialog still waits for `ShareDialog::open` before it draws.
 
 `craft_ui::presence::PresenceBar` is a third, unrelated thing GridCraft holds. `SheetApp` holds
 one as `presence`, only because `CloudApp::presence` is a required method. Nothing populates it.
-A live multi-person editing session needs its own relay. GridCraft dropped the one the original
-CollabCraft integration used, `craft-collab`. No replacement exists. `craft_ui::cloud::who`
+A live multi-person editing session needs a source of peer presence. That surface belongs to
+RFC-0020. `craft-cloud` states none of it. `craft_ui::cloud::who`
 already draws nothing for an empty presence bar. It is always empty here. The field costs
 nothing beyond its own memory.
 
@@ -77,12 +77,11 @@ say which crates share which revision.
 ## What this does not include
 
 Real-time shared editing is not part of this. Two people editing one workbook at once, with a
-presence bar showing who else is here, is what that means. The original CollabCraft integration
-this track grew out of had it. `craft-collab`, a relay client crate from
-`wdunn001/collab-craft`, carried it. That crate has no storytold-hosted replacement today. It has
-no open craft-libs contract today either. `storytold/craft-libs#123` is where that decision is
-tracked. Shared editing stays out of this branch entirely until it settles. `PresenceBar` stays
-empty for the same reason; see above.
+presence bar showing who else is here, is what that means. RFC-0020 states that surface. It states it
+separately from the documents contract this branch implements. The contracts crate it calls for
+is not open yet. An application therefore has nothing to implement against. Shared
+editing stays out of this branch until there is. `PresenceBar` stays empty for the same reason;
+see above.
 
 ## Where the code is
 
