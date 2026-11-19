@@ -9,8 +9,8 @@ impl SheetApp {
         if let Some(dl) = &self.services.download
             && let Some(b) = result.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
         {
-            let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-            dl(&std::path::Path::new(&title).with_extension("pdf").to_string_lossy(), &b);
+            let stem = self.session.active().map(|d| crate::export_stem(&d.display_title(), d.path.is_some())).unwrap_or_else(|| "Book1".into());
+            dl(&format!("{stem}.pdf"), &b);
         }
     }
 
@@ -20,8 +20,7 @@ impl SheetApp {
         if !self.commit_edit(0, 0, false, false) {
             return;
         }
-        let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-        let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
+        let stem = self.session.active().map(|d| crate::export_stem(&d.display_title(), d.path.is_some())).unwrap_or_else(|| "Book1".into());
         let Some(pick) = &self.services.pick_save else { return };
         let Some(path) = pick(&format!("{stem}.pdf")) else { return };
         // The picker may suggest a workbook extension; the export writes a PDF.

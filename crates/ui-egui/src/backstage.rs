@@ -858,8 +858,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         "html" => "file.exportHtml",
         _ => return false,
     };
-    let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-    let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
+    let stem = app.session.active().map(|d| crate::export_stem(&d.display_title(), d.path.is_some())).unwrap_or_else(|| "Book1".into());
     if let Some(pick) = &app.services.pick_save {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.

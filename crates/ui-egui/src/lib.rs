@@ -360,13 +360,28 @@ pub fn clean_error(e: &str) -> String {
     e.to_string()
 }
 
+/// The file-name stem to suggest for a workbook export. Unsaved titles are already stems, so a
+/// title such as `budget.2026` must keep its last dot segment; saved workbook titles include their
+/// on-disk extension and lose that extension for the new format.
+fn export_stem(title: &str, saved_to_file: bool) -> String {
+    let stem = if saved_to_file { std::path::Path::new(title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or(title) } else { title };
+    if stem.is_empty() { "Book1".to_string() } else { stem.to_string() }
+}
+
 pub fn cell(r: u32, c: u32) -> CellRef {
     CellRef::new(r, c)
 }
 
 #[cfg(test)]
 mod viewport_command_tests {
-    use super::parse_resize_direction;
+    use super::{export_stem, parse_resize_direction};
+
+    #[test]
+    fn export_names_preserve_dots_in_unsaved_titles() {
+        assert_eq!(export_stem("budget.2026", false), "budget.2026");
+        assert_eq!(export_stem("legacy.xlsx", true), "legacy");
+        assert_eq!(export_stem("", false), "Book1");
+    }
 
     #[test]
     fn resize_direction_parser_accepts_all_edges_and_rejects_unknown_values() {
