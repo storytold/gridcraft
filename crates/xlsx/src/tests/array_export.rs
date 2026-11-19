@@ -624,8 +624,8 @@ fn long_flat_chains_are_scalar_formulas() {
     assert_eq!(cell(&sheet, "B1").child("f").unwrap().text, refs);
 }
 
-/// Each name mention finds its definition through an index, so a pass costs names + mentions. It
-/// used to scan the whole name list for every mention, which is names × mentions (#4438).
+/// Each name mention finds its definition through an index built once per pass, so the name-list
+/// scan is gone. It used to scan the whole name list for every mention (#4438).
 #[test]
 #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
 fn legacy_name_lookup_does_not_scale_with_the_name_list() {
@@ -677,4 +677,25 @@ fn name_lookup_matches_workbook_name() {
     }
     check_formula_metadata(wb.clone(), 0, &[("total", false), ("TOTAL*2", false), ("rate", true), ("LOCAL", false)]);
     check_formula_metadata(wb, 1, &[("RATE", false), ("local", true)]);
+}
+
+#[test]
+fn spilled_text_is_written_as_a_cached_string_not_a_shared_string() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let mut anchor = Cell::formula(Formula::new("SORT({\"b\";\"a\";\"c\"})"));
+    anchor.value = Value::text("a");
+    sh.cells.set(at("K4"), anchor);
+    sh.spill_ranges.insert(at("K4"), range("K4:K6"));
+    sh.spill.insert(at("K5"), Value::text("b"));
+    sh.spill.insert(at("K6"), Value::text("c"));
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for (address, text) in [("K4", "a"), ("K5", "b"), ("K6", "c")] {
+        let c = cell(&sheet, address);
+        assert_eq!(c.attr("t"), Some("str"), "{address}");
+        assert_eq!(c.child("v").unwrap().text, text, "{address}");
+    }
 }
