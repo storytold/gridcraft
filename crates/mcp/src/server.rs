@@ -1,26 +1,19 @@
-//! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources / prompts methods.
+//! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources methods, backed by
+//! `craft_mcp_server`.
 
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
 
+use craft_mcp_server::{Contents, Info, Options, Tools};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
 use crate::tools::{call_tool, check_arguments, tool_definitions};
 
-/// The MCP revision we implement.
-pub const PROTOCOL_VERSION: &str = "2025-06-18";
-/// Revisions we can speak; an older client gets its own version echoed back.
-pub const SUPPORTED_VERSIONS: &[&str] = &[PROTOCOL_VERSION, "2025-03-26", "2024-11-05"];
-
-const PARSE_ERROR: i64 = -32700;
-const INVALID_REQUEST: i64 = -32600;
-const METHOD_NOT_FOUND: i64 = -32601;
-const INVALID_PARAMS: i64 = -32602;
-const INTERNAL_ERROR: i64 = -32603;
-const RESOURCE_NOT_FOUND: i64 = -32002;
+/// The MCP revision we implement and the revisions we can speak.
+pub use craft_mcp_server::{PROTOCOL_VERSION, SUPPORTED_VERSIONS};
 
 /// Longest accepted message line (16 MB): bigger payloads belong in files.
-const MAX_LINE: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_LINE: usize = 16 * 1024 * 1024;
 
 const INSTRUCTIONS: &str = "GridCraft is a spreadsheet app (an Excel clone). Cells use A1 notation (\"B2\", \"A1:D10\", \
 \"Sheet2!A1:B3\"). Every action is a command: find ids and parameters with list_commands and run any of them with \
@@ -35,205 +28,130 @@ pub const WORKBOOK_URI: &str = "gridcraft://workbook";
 pub const COMMANDS_URI: &str = "gridcraft://commands";
 pub const FUNCTIONS_URI: &str = "gridcraft://functions";
 
+struct GridcraftTools {
+    backend: Box<dyn Backend>,
+}
+
+impl Tools for GridcraftTools {
+    fn instructions(&self) -> String {
+        format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe())
+    }
+
+    fn list(&mut self) -> Vec<Value> {
+        tool_definitions()
+    }
+
+    fn call(&mut self, name: &str, args: &Value) -> Value {
+        if let Err(e) = check_arguments(name, args) {
+            return craft_mcp_server::text_result(e, true);
+        }
+        call_tool(self.backend.as_mut(), name, args).to_value()
+    }
+
+    fn resources(&self) -> Vec<Value> {
+        vec![
+            json!({"uri": WORKBOOK_URI, "name": "workbook", "title": "Active workbook", "description": "Sheets, used ranges, tables, charts, names, selection and undo history of the active workbook (document.inspect)", "mimeType": "application/json"}),
+            json!({"uri": COMMANDS_URI, "name": "commands", "title": "Commands", "description": "Every command: id, label, ribbon path, shortcut, params, enabled (engine.commands)", "mimeType": "application/json"}),
+            json!({"uri": FUNCTIONS_URI, "name": "functions", "title": "Worksheet functions", "description": "Every worksheet function: name, category, signature, description (formulas.functions)", "mimeType": "application/json"}),
+        ]
+    }
+
+    fn read_resource(&mut self, uri: &str) -> Option<Result<Contents, String>> {
+        let result = match uri {
+            WORKBOOK_URI => self.backend.call("document.inspect", json!({})),
+            COMMANDS_URI => self.backend.call("engine.commands", json!({})),
+            FUNCTIONS_URI => self.backend.call("engine.execute", json!({"command": "formulas.functions", "params": {}})),
+            _ => return None,
+        };
+        Some(result.map(|v| Contents::Text { mime_type: "application/json".into(), text: serde_json::to_string_pretty(&v).unwrap_or_default() }))
+    }
+}
+
 /// An MCP server bound to one backend.
 pub struct Server {
-    backend: Box<dyn Backend>,
-    initialized: bool,
-}
-
-fn response(id: Value, result: Value) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "result": result})
-}
-
-/// Reads the next newline-delimited message into `buf`, keeping at most `MAX_LINE` bytes of it:
-/// a client sending no newline can't make the server allocate more (#2164). `None` at the end of
-/// `input`; `Some(false)` for a line over the limit, whose rest is read and dropped so the next
-/// message is read whole.
-pub(crate) fn read_message(input: &mut impl BufRead, buf: &mut Vec<u8>) -> std::io::Result<Option<bool>> {
-    buf.clear();
-    // One byte past the limit tells an over-long line from one of exactly `MAX_LINE` bytes.
-    let limit = u64::try_from(MAX_LINE).unwrap_or(u64::MAX).saturating_add(1);
-    if input.take(limit).read_until(b'\n', buf)? == 0 {
-        return Ok(None);
-    }
-    if buf.len() > MAX_LINE && buf.last() != Some(&b'\n') {
-        skip_line(input)?;
-        buf.clear();
-        return Ok(Some(false));
-    }
-    Ok(Some(true))
-}
-
-/// Reads up to and including the next newline (or to the end of `input`) without keeping it.
-fn skip_line(input: &mut impl BufRead) -> std::io::Result<()> {
-    loop {
-        let chunk = input.fill_buf()?;
-        if chunk.is_empty() {
-            return Ok(());
-        }
-        match chunk.iter().position(|&b| b == b'\n') {
-            Some(i) => {
-                input.consume(i + 1);
-                return Ok(());
-            }
-            None => {
-                let n = chunk.len();
-                input.consume(n);
-            }
-        }
-    }
-}
-
-fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
-    json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
+    inner: craft_mcp_server::Server<GridcraftTools>,
 }
 
 impl Server {
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        let info = Info { name: "gridcraft", title: "GridCraft", version: env!("CARGO_PKG_VERSION"), max_line: MAX_LINE };
+        let options = Options { website_url: None, tool_errors_as_results: false, strict_request_ids: true };
+        Self { inner: craft_mcp_server::Server::new(info, GridcraftTools { backend }).with_options(options) }
     }
 
     pub fn backend(&mut self) -> &mut dyn Backend {
-        self.backend.as_mut()
+        self.inner.tools().backend.as_mut()
     }
 
     /// Whether the client has sent `notifications/initialized`.
     pub fn is_initialized(&self) -> bool {
-        self.initialized
+        self.inner.is_initialized()
     }
 
     /// Serve newline-delimited JSON-RPC until `input` closes. Logs go to stderr only (stdout is
     /// the protocol stream).
-    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
-        let mut buf = Vec::new();
-        loop {
-            let reply = match read_message(&mut input, &mut buf)? {
-                None => return Ok(()),
-                Some(false) => Some(error(Value::Null, INVALID_REQUEST, "message too large (16 MB max)").to_string()),
-                Some(true) => match std::str::from_utf8(&buf) {
-                    Ok(line) => self.handle_line(line),
-                    Err(_) => Some(error(Value::Null, PARSE_ERROR, "message is not valid UTF-8").to_string()),
-                },
-            };
-            if let Some(reply) = reply {
-                output.write_all(reply.as_bytes())?;
-                output.write_all(b"\n")?;
-                output.flush()?;
-            }
-        }
+    pub fn serve(&mut self, input: impl BufRead, output: impl Write) -> std::io::Result<()> {
+        self.inner.serve(input, output)
     }
 
     /// Handle one line; returns the reply line (None for notifications and blank lines).
     pub fn handle_line(&mut self, line: &str) -> Option<String> {
-        let line = line.trim();
-        if line.is_empty() {
+        if line.len() > MAX_LINE {
+            return self.inner.handle_line(line);
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
             return None;
         }
-        if line.len() > MAX_LINE {
-            return Some(error(Value::Null, INVALID_REQUEST, "message too large (16 MB max)").to_string());
+        if let Ok(Value::Object(o)) = serde_json::from_str::<Value>(trimmed)
+            && let Some(err) = precheck_request(&o)
+        {
+            return Some(err.to_string());
         }
-        let reply = match serde_json::from_str::<Value>(line) {
-            Ok(Value::Array(batch)) => {
-                // Batches were removed in 2025-06-18; still answer older clients sensibly.
-                if batch.is_empty() {
-                    Some(error(Value::Null, INVALID_REQUEST, "empty batch"))
-                } else {
-                    let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
-                    (!replies.is_empty()).then_some(Value::Array(replies))
-                }
-            }
-            Ok(msg) => self.handle(msg),
-            Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: {e}"))),
-        };
-        reply.map(|r| r.to_string())
+        self.inner.handle_line(line)
     }
 
     /// Handle one JSON-RPC message; `None` for notifications and responses.
     pub fn handle(&mut self, msg: Value) -> Option<Value> {
-        let Value::Object(o) = &msg else { return Some(error(Value::Null, INVALID_REQUEST, "message must be an object")) };
-        let id = o.get("id").cloned();
-        let Some(method) = o.get("method").and_then(Value::as_str) else {
-            // A response to a server→client request (we send none): ignore. Anything else is invalid.
-            if o.contains_key("result") || o.contains_key("error") {
-                return None;
-            }
-            return Some(error(id.unwrap_or(Value::Null), INVALID_REQUEST, "missing `method`"));
-        };
-        // A malformed envelope must not execute a tool or change notification state.
-        if o.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return Some(error(Value::Null, INVALID_REQUEST, "`jsonrpc` must be \"2.0\""));
+        if let Value::Object(o) = &msg
+            && let Some(err) = precheck_request(o)
+        {
+            return Some(err);
         }
-        let params = o.get("params").cloned().unwrap_or(Value::Null);
-        let Some(id) = id else {
-            self.notification(method);
-            return None;
-        };
-        if !(id.is_string() || id.is_number()) {
-            return Some(error(Value::Null, INVALID_REQUEST, "`id` must be a string or number"));
-        }
-        if !(params.is_object() || params.is_null()) {
-            return Some(error(id, INVALID_PARAMS, "`params` must be an object"));
-        }
-        Some(match self.request(method, &params) {
-            Ok(r) => response(id, r),
-            Err((code, m)) => error(id, code, m),
-        })
+        self.inner.handle(msg)
     }
+}
 
-    fn notification(&mut self, method: &str) {
-        match method {
-            "notifications/initialized" => self.initialized = true,
-            "notifications/cancelled" | "notifications/progress" | "notifications/roots/list_changed" => {}
-            other => log::debug!("ignoring notification {other}"),
-        }
+fn invalid_params(id: &Value, message: impl Into<String>) -> Value {
+    json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32602, "message": message.into()}})
+}
+
+fn precheck_request(o: &serde_json::Map<String, Value>) -> Option<Value> {
+    // Shared envelope validation takes priority over app-specific argument checks.
+    if o.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return None;
     }
-
-    fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
-        match method {
-            "initialize" => {
-                let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
-                let version = if SUPPORTED_VERSIONS.contains(&asked) { asked } else { PROTOCOL_VERSION };
-                Ok(json!({
-                    "protocolVersion": version,
-                    "capabilities": {"tools": {"listChanged": false}, "resources": {"listChanged": false, "subscribe": false}, "prompts": {"listChanged": false}},
-                    "serverInfo": {"name": "gridcraft", "title": "GridCraft", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": format!("{INSTRUCTIONS} Backend: {}.", self.backend.describe()),
-                }))
-            }
-            "ping" => Ok(json!({})),
-            "tools/list" => Ok(json!({"tools": tool_definitions()})),
-            "tools/call" => {
-                let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
-                let args = match params.get("arguments") {
-                    None | Some(Value::Null) => json!({}),
-                    Some(v @ Value::Object(_)) => v.clone(),
-                    Some(_) => return Err((INVALID_PARAMS, "tool `arguments` must be an object".to_string())),
-                };
-                check_arguments(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
-                Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
-            }
-            "resources/list" => Ok(json!({"resources": [
-                {"uri": WORKBOOK_URI, "name": "workbook", "title": "Active workbook", "description": "Sheets, used ranges, tables, charts, names, selection and undo history of the active workbook (document.inspect)", "mimeType": "application/json"},
-                {"uri": COMMANDS_URI, "name": "commands", "title": "Commands", "description": "Every command: id, label, ribbon path, shortcut, params, enabled (engine.commands)", "mimeType": "application/json"},
-                {"uri": FUNCTIONS_URI, "name": "functions", "title": "Worksheet functions", "description": "Every worksheet function: name, category, signature, description (formulas.functions)", "mimeType": "application/json"},
-            ]})),
-            "resources/templates/list" => Ok(json!({"resourceTemplates": []})),
-            "resources/read" => {
-                let uri = params.get("uri").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing `uri`".to_string()))?;
-                let v = match uri {
-                    WORKBOOK_URI => self.backend.call("document.inspect", json!({})),
-                    COMMANDS_URI => self.backend.call("engine.commands", json!({})),
-                    FUNCTIONS_URI => self.backend.call("engine.execute", json!({"command": "formulas.functions", "params": {}})),
-                    _ => return Err((RESOURCE_NOT_FOUND, format!("resource not found: {uri}"))),
-                }
-                .map_err(|e| (INTERNAL_ERROR, e))?;
-                Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": serde_json::to_string_pretty(&v).unwrap_or_default()}]}))
-            }
-            "prompts/list" => Ok(json!({"prompts": []})),
-            "prompts/get" => Err((INVALID_PARAMS, "no prompts are defined".to_string())),
-            "logging/setLevel" => Ok(json!({})),
-            "completion/complete" => Ok(json!({"completion": {"values": [], "hasMore": false}})),
-            other => Err((METHOD_NOT_FOUND, format!("method not found: {other}"))),
+    let id = o.get("id")?;
+    let method = o.get("method").and_then(Value::as_str)?;
+    if !(id.is_string() || id.is_number()) {
+        return None;
+    }
+    let params = o.get("params");
+    if params.is_some_and(|p| !(p.is_object() || p.is_null())) {
+        return Some(invalid_params(id, "`params` must be an object"));
+    }
+    let params = params.filter(|p| p.is_object());
+    match method {
+        "resources/read" if params.and_then(|p| p.get("uri")).and_then(Value::as_str).is_none() => Some(invalid_params(id, "missing `uri`")),
+        "tools/call" => {
+            let name = params.and_then(|p| p.get("name")).and_then(Value::as_str)?;
+            let args = match params.and_then(|p| p.get("arguments")) {
+                None | Some(Value::Null) => json!({}),
+                Some(v @ Value::Object(_)) => v.clone(),
+                Some(_) => return None,
+            };
+            check_arguments(name, &args).err().map(|e| invalid_params(id, e))
         }
+        _ => None,
     }
 }

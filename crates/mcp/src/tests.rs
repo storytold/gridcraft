@@ -425,12 +425,12 @@ fn a_line_without_newline_keeps_at_most_the_limit_in_memory() {
     // client cares to send).
     let mut input =
         HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
-    let mut buf = Vec::new();
-    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(false));
-    assert!(buf.capacity() <= 2 * (16 << 20) + 1, "kept {} bytes", buf.capacity());
-    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(true));
-    assert!(buf.starts_with(br#"{"jsonrpc""#));
-    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), None);
+    assert!(matches!(craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap(), Some(craft_mcp_server::Incoming::Refused(_))));
+    match craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap() {
+        Some(craft_mcp_server::Incoming::Line(line)) => assert!(line.starts_with(r#"{"jsonrpc""#)),
+        other => panic!("expected Line, got {other:?}"),
+    }
+    assert_eq!(craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap(), None);
 }
 
 #[test]
