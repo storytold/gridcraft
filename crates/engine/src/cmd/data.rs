@@ -24,7 +24,7 @@ mod tools;
 mod validation;
 
 pub use filter::{FilterChoice, filter_by_cell_params, filter_choices, filter_choices_params, filter_values};
-pub(crate) use filter::{apply_filter, grow_autofilter, migrate_loaded_autofilters};
+pub(crate) use filter::{apply_filter, filter_dropdown_blank, grow_autofilter, migrate_loaded_autofilters};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
 pub use sort::sort_context;

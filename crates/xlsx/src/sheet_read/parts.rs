@@ -59,9 +59,26 @@ fn filter_op(s: Option<&str>) -> &'static str {
     }
 }
 
-/// Parses an `<autoFilter>` element into model criteria.
+const GC_FILTER_EXT_URI: &str = "{D7C4E9A1-2943-4B8E-9A11-6F8B2C4D5E01}";
+
+/// Parses an `<autoFilter>` element into model criteria, restoring any GridCraft checklist identity extension.
 pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
     let range = e.attr("ref").and_then(RangeRef::parse)?;
+    let mut ext_identities: HashMap<u32, Vec<String>> = HashMap::new();
+    for col_el in e
+        .kids("extLst")
+        .flat_map(|ext_lst| ext_lst.kids("ext"))
+        .filter(|ext| ext.attr("uri") == Some(GC_FILTER_EXT_URI))
+        .filter_map(|ext| ext.child("identities"))
+        .flat_map(|ids| ids.kids("col"))
+    {
+        if let Some(col_id) = col_el.attr_u32("colId") {
+            let ids: Vec<String> = col_el.kids("i").filter_map(|item| item.attr("v")).map(str::to_string).collect();
+            if !ids.is_empty() {
+                ext_identities.insert(col_id, ids);
+            }
+        }
+    }
     let mut criteria = vec![];
     for fc in e.kids("filterColumn") {
         let Some(col) = fc.attr_u32("colId") else { continue };
@@ -69,7 +86,7 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
             FilterCriterion::Values {
                 values: f.kids("filter").filter_map(|x| x.attr("val")).map(str::to_string).collect(),
                 blanks: f.flag("blank", false),
-                identities: Vec::new(),
+                identities: ext_identities.remove(&col).unwrap_or_default(),
             }
         } else if let Some(cf) = fc.child("customFilters") {
             let mut it = cf.kids("customFilter").map(|c| (filter_op(c.attr("operator")).to_string(), c.attr("val").unwrap_or("").to_string()));

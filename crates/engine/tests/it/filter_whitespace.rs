@@ -474,3 +474,207 @@ fn nonblank_space_formatted_cells_stay_selectable_2943() {
     s3.execute("data.reapply", json!({})).unwrap();
     assert!(!s3.doc().unwrap().wb.active().unwrap().is_row_hidden(3), "1234567890123 stays visible across Show Formulas toggle");
 }
+
+/// Checklist selections survive number-format changes, Show Formulas toggles, and XLSX save/reopen (#2943).
+#[test]
+fn checklist_identity_survives_format_change_show_formulas_and_xlsx_2943() {
+    use gridcraft_engine::cmd::data::{filter_choices, filter_choices_params};
+
+    // 1. Numeric `42` selected under General stays selected after formatting as `" "` and running `data.reapply`,
+    //    without matching literal text `"42"`.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Val"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "42"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A3", "parse": false, "values": [["42"], ["Other"]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+
+    let c1 = filter_choices(&s.doc().unwrap().wb, 0, 0);
+    let only_num: Vec<_> = c1.iter().map(|c| (c, c.label == "42 (number)")).collect();
+    s.execute("data.filterBy", filter_choices_params("A", &only_num)).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2", "format": "\" \""})).unwrap();
+    s.execute("data.reapply", json!({})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.is_row_hidden(1), "numeric 42 must stay visible after formatting as space");
+    assert!(sh.is_row_hidden(2), "literal text '42' must stay hidden");
+    assert!(sh.is_row_hidden(3), "Other row must stay hidden");
+
+    // 2. Show Formulas ON -> select only formula `="Card"` -> turn Show Formulas OFF ->
+    //    checklist keeps `="Card"` checked and `"Card"`/`" Card "` merged & unchecked -> Apply keeps literal hidden.
+    let mut sf = Session::new();
+    sf.new_workbook();
+    sf.execute("cell.set", json!({"cell": "A1", "input": "Name"})).unwrap();
+    sf.execute("cell.set", json!({"cell": "A2", "input": "=\" Card \""})).unwrap();
+    sf.execute("range.setValues", json!({"range": "A3", "parse": false, "values": [["Card"], [" Card "], ["Other"]]})).unwrap();
+    sf.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    sf.execute("data.filter", json!({"range": "A1:A5"})).unwrap();
+
+    let on_choices = filter_choices(&sf.doc().unwrap().wb, 0, 0);
+    let only_formula: Vec<_> = on_choices.iter().map(|c| (c, c.label.starts_with("=\" Card \""))).collect();
+    sf.execute("data.filterBy", filter_choices_params("A", &only_formula)).unwrap();
+
+    // Save + reopen XLSX while formula identity is active, then `data.reapply` must still hide literal `"Card"`.
+    let bytes = gridcraft_xlsx::write_xlsx(&sf.doc().unwrap().wb).unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("formula_identity.xlsx", &bytes).unwrap();
+    sf.active_mut().unwrap().wb = std::sync::Arc::new(reopened);
+    sf.execute("data.reapply", json!({})).unwrap();
+    {
+        let sh = sf.doc().unwrap().wb.active().unwrap();
+        assert!(!sh.is_row_hidden(1), "formula row A2 stays visible after XLSX reopen + reapply");
+        assert!(sh.is_row_hidden(2), "literal Card row A3 stays hidden after XLSX reopen + reapply");
+        assert!(sh.is_row_hidden(3), "whitespace Card row A4 stays hidden after XLSX reopen + reapply");
+    }
+
+    // Turn Show Formulas OFF: dropdown keeps formula `=" Card "` checked and literal `"Card"` + `" Card "` merged & unchecked.
+    sf.execute("formulas.showFormulas", json!({"on": false})).unwrap();
+    let off_choices = filter_choices(&sf.doc().unwrap().wb, 0, 0);
+    assert_eq!(off_choices.len(), 3, "expected formula Card, merged literal Card, and Other: {off_choices:?}");
+    assert_eq!(off_choices.iter().filter(|c| c.checked).count(), 1, "{off_choices:?}");
+
+    let unchanged_off: Vec<_> = off_choices.iter().map(|c| (c, c.checked)).collect();
+    sf.execute("data.filterBy", filter_choices_params("A", &unchanged_off)).unwrap();
+    let sh = sf.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.is_row_hidden(1), "formula row A2 stays visible after Apply with Show Formulas off");
+    assert!(sh.is_row_hidden(2), "literal Card row A3 stays hidden after Apply with Show Formulas off");
+    assert!(sh.is_row_hidden(3), "whitespace Card row A4 stays hidden after Apply with Show Formulas off");
+    assert!(sh.is_row_hidden(4), "Other row A5 stays hidden");
+}
+
+/// Migration preserves manually hidden rows and respects sibling side-by-side table filters (#2943).
+#[test]
+fn migration_preserves_manual_hidden_rows_and_sibling_table_filters_2943() {
+    use gridcraft_core::RangeRef;
+    use gridcraft_model::{AutoFilter, FilterCriterion, Table, TableColumn, TotalsFn};
+
+    // 1. Manually hidden `"Card"` row stays hidden when `["   ", "Card"]` migrates on open,
+    //    while genuinely empty row excluded by old filter becomes visible.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [["Name"], [null], ["Card"], ["Card"], ["Other"]]
+        }),
+    )
+    .unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.autofilter = Some(AutoFilter {
+            range: RangeRef::parse("A1:A5").unwrap(),
+            criteria: vec![(0, FilterCriterion::Values { values: vec!["   ".into(), "Card".into()], blanks: false, identities: vec![] })],
+        });
+        // Row 1 (A2 = null) was hidden by old blank branch; Row 2 (A3 = "Card") was hidden manually;
+        // Row 3 (A4 = "Card") is visible; Row 4 (A5 = "Other") was hidden by filter.
+        sh.rows.entry(1).or_default().hidden = true;
+        sh.rows.entry(2).or_default().hidden = true;
+        sh.rows.entry(4).or_default().hidden = true;
+    }
+    let bytes = gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap();
+    let (reopened, _) = gridcraft_engine::io::open_bytes("manual_hidden.xlsx", &bytes).unwrap();
+    let sh = reopened.sheet(0).unwrap();
+    assert!(!sh.is_row_hidden(1), "empty row A2 excluded by old filter becomes visible");
+    assert!(sh.is_row_hidden(2), "manually hidden matching Card row A3 must remain hidden");
+    assert!(!sh.is_row_hidden(3), "visible Card row A4 remains visible");
+    assert!(sh.is_row_hidden(4), "non-matching Other row A5 remains hidden");
+
+    // 2. Two side-by-side tables sharing worksheet rows: migrating Table1 must not unhide a row excluded by Table2.
+    let mut st = Session::new();
+    st.new_workbook();
+    st.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [
+                ["Item", "Region"],
+                [null, "West"],
+                [null, "East"],
+                ["Card", "East"]
+            ]
+        }),
+    )
+    .unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut st.active_mut().unwrap().wb);
+        let sh = wb.sheet_mut(0).unwrap();
+        let col =
+            |name: &str| TableColumn { name: name.into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+        sh.tables.push(Table {
+            id: 1,
+            name: "LeftTable".into(),
+            range: RangeRef::parse("A1:A4").unwrap(),
+            header_row: true,
+            totals_row: false,
+            columns: vec![col("Item")],
+            style: "TableStyleMedium2".into(),
+            banded_rows: true,
+            banded_cols: false,
+            first_col: false,
+            last_col: false,
+            filter_button: true,
+            filter: vec![(0, FilterCriterion::Values { values: vec!["   ".into()], blanks: false, identities: vec![] })],
+            table_type: None,
+            connection_id: None,
+        });
+        sh.tables.push(Table {
+            id: 2,
+            name: "RightTable".into(),
+            range: RangeRef::parse("B1:B4").unwrap(),
+            header_row: true,
+            totals_row: false,
+            columns: vec![col("Region")],
+            style: "TableStyleMedium2".into(),
+            banded_rows: true,
+            banded_cols: false,
+            first_col: false,
+            last_col: false,
+            filter_button: true,
+            filter: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false, identities: vec![] })],
+            table_type: None,
+            connection_id: None,
+        });
+        sh.rows.entry(1).or_default().hidden = true;
+        sh.rows.entry(2).or_default().hidden = true;
+        sh.rows.entry(3).or_default().hidden = true;
+    }
+    let tbytes = gridcraft_xlsx::write_xlsx(&st.doc().unwrap().wb).unwrap();
+    let (treopened, _) = gridcraft_engine::io::open_bytes("two_tables.xlsx", &tbytes).unwrap();
+    let tsh = treopened.sheet(0).unwrap();
+    assert!(tsh.is_row_hidden(1), "row 1 (West) is still excluded by RightTable and must stay hidden");
+    assert!(!tsh.is_row_hidden(2), "row 2 (empty + East) passes both tables after migration and becomes visible");
+    assert!(tsh.is_row_hidden(3), "row 3 (Card + East) is excluded by LeftTable blanks filter and stays hidden");
+}
+
+/// Table slicers merge surrounding-whitespace variants into a single tile (#2943).
+#[test]
+fn slicer_groups_whitespace_variants_into_single_tile_2943() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [["Name"], [" Card "], ["Card"], ["Other"], ["   "]]
+        }),
+    )
+    .unwrap();
+    s.execute("insert.table", json!({"range": "A1:A5", "name": "Items"})).unwrap();
+    let res = s.execute("insert.slicer", json!({"table": "Items", "column": "Name"})).unwrap();
+    let id = res["slicer"].as_u64().unwrap() as u32;
+
+    let wb = &s.doc().unwrap().wb;
+    let sl = wb.active().unwrap().slicers.iter().find(|x| x.id == id).unwrap();
+    let tiles = gridcraft_engine::cmd::slicer::slicer_items(wb, 0, sl);
+    assert_eq!(tiles, vec![("Card".to_string(), true), ("Other".to_string(), true)]);
+
+    s.execute("slicer.toggle", json!({"slicer": id, "value": "Card"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.is_row_hidden(1), "' Card ' row stays visible");
+    assert!(!sh.is_row_hidden(2), "'Card' row stays visible");
+    assert!(sh.is_row_hidden(3), "'Other' row hidden");
+    assert!(sh.is_row_hidden(4), "whitespace-only row hidden");
+}

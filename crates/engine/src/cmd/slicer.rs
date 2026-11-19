@@ -51,12 +51,18 @@ pub fn column_values(wb: &Workbook, sheet: usize, table: &str, column: &str) -> 
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for row in dr.start.row..=dr.end.row {
-        let text = crate::display::cell_text(wb, sh, CellRef::new(row, col));
-        if text.is_empty() {
+        let c = CellRef::new(row, col);
+        let v = sh.value(c);
+        if super::data::filter_dropdown_blank(&v) {
             continue;
         }
-        if seen.insert(text.to_lowercase()) {
-            out.push(text);
+        let text = crate::display::cell_text(wb, sh, c);
+        let tile = if text.trim().is_empty() { v.display().trim().to_string() } else { text.trim().to_string() };
+        if tile.is_empty() {
+            continue;
+        }
+        if seen.insert(tile.to_lowercase()) {
+            out.push(tile);
         }
     }
     out
@@ -70,7 +76,7 @@ pub fn slicer_items(wb: &Workbook, sheet: usize, sl: &Slicer) -> Vec<(String, bo
         .map(|v| {
             let on = match &sl.selected {
                 None => true,
-                Some(set) => set.iter().any(|x| x.eq_ignore_ascii_case(&v)),
+                Some(set) => set.iter().any(|x| x.trim().eq_ignore_ascii_case(v.trim())),
             };
             (v, on)
         })
@@ -174,24 +180,25 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
         (sl.table.clone(), sl.column.clone(), sl.selected.clone())
     };
     let all = column_values(&s.doc()?.wb, sheet, &table, &column);
-    if !all.iter().any(|v| v.eq_ignore_ascii_case(&value)) {
+    let trimmed_val = value.trim();
+    if !all.iter().any(|v| v.trim().eq_ignore_ascii_case(trimmed_val)) {
         return Err(bad("slicer.toggle", "value is not in the column"));
     }
     let new_selected: Option<Vec<String>> = if multi {
         let mut set: Vec<String> = current.unwrap_or_else(|| all.clone());
-        match set.iter().position(|x| x.eq_ignore_ascii_case(&value)) {
+        match set.iter().position(|x| x.trim().eq_ignore_ascii_case(trimmed_val)) {
             Some(pos) => {
                 set.remove(pos);
             }
-            None => set.push(value.clone()),
+            None => set.push(trimmed_val.to_string()),
         }
         // Everything selected is the same as no filter.
-        if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| x.eq_ignore_ascii_case(a))) { None } else { Some(set) }
+        if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| x.trim().eq_ignore_ascii_case(a.trim()))) { None } else { Some(set) }
     } else {
         // Single click: show only this value; clicking the sole selected value clears the filter.
         match &current {
-            Some(set) if set.len() == 1 && set.iter().any(|x| x.eq_ignore_ascii_case(&value)) => None,
-            _ => Some(vec![value.clone()]),
+            Some(set) if set.len() == 1 && set.iter().any(|x| x.trim().eq_ignore_ascii_case(trimmed_val)) => None,
+            _ => Some(vec![trimmed_val.to_string()]),
         }
     };
     edit(s, |cx| {
