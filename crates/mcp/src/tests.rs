@@ -148,6 +148,17 @@ fn invalid_jsonrpc_versions_do_not_execute_or_initialize() {
 }
 
 #[test]
+fn invalid_envelopes_precede_app_argument_checks() {
+    let message = json!({"jsonrpc": "1.0", "id": 1, "method": "tools/call", "params": []});
+    let mut s = server();
+    assert_eq!(err_code(&s.handle(message.clone()).unwrap()), -32600);
+    let response = s.handle_line(&message.to_string()).unwrap();
+    let response: Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(err_code(&response), -32600);
+    assert_eq!(response["id"], Value::Null);
+}
+
+#[test]
 fn malformed_input_never_panics() {
     let mut s = server();
     assert_eq!(s.handle_line("   "), None);
