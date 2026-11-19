@@ -15,6 +15,39 @@ pub struct ParseError {
     pub pos: usize,
 }
 
+/// An Excel limit a formula is over, which [`parse`] refuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OverLimit {
+    /// The text is longer than [`MAX_FORMULA_LEN`] characters.
+    Length,
+    /// A function call has more than 255 arguments.
+    Arguments,
+}
+
+impl ParseError {
+    /// The limit this error reports, when [`parse`] refused the text for being over one of Excel's
+    /// limits rather than for its syntax. A reader that keeps such text — so a save never loses
+    /// it — can say that it will never be calculated.
+    pub fn over_limit(&self) -> Option<OverLimit> {
+        // The messages are the parser's own; they are matched here so no caller has to know them.
+        if self.msg == TOO_MANY_ARGS {
+            Some(OverLimit::Arguments)
+        } else if self.msg == over_length() {
+            Some(OverLimit::Length)
+        } else {
+            None
+        }
+    }
+}
+
+/// The message [`parse`] gives for a function call with more than Excel's 255 arguments.
+const TOO_MANY_ARGS: &str = "too many arguments";
+
+/// The message [`parse`] gives for text longer than [`MAX_FORMULA_LEN`].
+fn over_length() -> String {
+    format!("formula is longer than {MAX_FORMULA_LEN} characters")
+}
+
 pub(crate) const MAX_DEPTH: usize = 256;
 
 /// Longest formula accepted, in characters: Excel's limit for formula contents. It also bounds
@@ -62,7 +95,7 @@ pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Ex
 fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
-        return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
+        return Err(ParseError { msg: over_length(), pos: 0 });
     }
     let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
@@ -296,7 +329,7 @@ impl Parser {
             }
         }
         if args.len() > 255 {
-            return Err(self.err("too many arguments"));
+            return Err(self.err(TOO_MANY_ARGS));
         }
         Ok(args)
     }

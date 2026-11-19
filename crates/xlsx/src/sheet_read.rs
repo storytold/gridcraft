@@ -60,6 +60,51 @@ struct RowState {
     shared_copy_refused: bool,
     dropped: u64,
     rows: u64,
+    /// Formulas kept as text because the parser refused them for being over Excel's limits.
+    over_limit: OverLimitFormulas,
+}
+
+/// Formulas kept as text because the parser refused them for being over Excel's limits: they keep
+/// the value the file saved and are never calculated, so the open says so.
+#[derive(Default)]
+struct OverLimitFormulas {
+    /// How many, and the first cell, of each kind: longer than
+    /// [`gridcraft_formula::MAX_FORMULA_LEN`], or a function call with more than 255 arguments.
+    length: (u64, Option<CellRef>),
+    arguments: (u64, Option<CellRef>),
+}
+
+impl OverLimitFormulas {
+    fn note(&mut self, at: CellRef, limit: gridcraft_formula::OverLimit) {
+        let (count, first) = match limit {
+            gridcraft_formula::OverLimit::Length => &mut self.length,
+            gridcraft_formula::OverLimit::Arguments => &mut self.arguments,
+        };
+        *count = count.saturating_add(1);
+        if first.is_none() {
+            *first = Some(at);
+        }
+    }
+
+    /// One warning per kind, naming its first cell and counting the others: a file may hold
+    /// thousands, and a warning for each would bury the rest of the open's report.
+    fn report(&self, cx: &mut Ctx<'_>, sheet: &str) {
+        let kinds = [
+            (self.length, format!("is longer than Excel's {}-character formula limit", gridcraft_formula::MAX_FORMULA_LEN)),
+            (self.arguments, "calls a function with more than 255 arguments".to_string()),
+        ];
+        for ((count, first), what) in kinds {
+            let Some(first) = first else { continue };
+            let more = match count {
+                0 | 1 => String::new(),
+                n => format!(" (and {} more cell{})", n - 1, if n == 2 { "" } else { "s" }),
+            };
+            cx.warn(format!(
+                "sheet \"{sheet}\": a formula in {}{more} {what} and will not be calculated; it was kept as text, and its cell keeps the value the file saved",
+                first.a1()
+            ));
+        }
+    }
 }
 
 /// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
@@ -206,6 +251,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     if st.dropped > 0 {
         cx.warn(format!("sheet \"{name}\": {} cells or rows outside the 1,048,576 × 16,384 grid were dropped", st.dropped));
     }
+    st.over_limit.report(cx, name);
     settle_python_spills_past_budget(&st, &mut sheet);
     drop(bytes);
 
@@ -697,6 +743,20 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
     Some(Formula { dynamic, ..fm })
 }
 
+/// A formula from its text. Text the parser refuses for being over Excel's limits is kept as text
+/// — so a save never loses it — but it can never be calculated: note it for the open's warning.
+fn formula_from_text(st: &mut RowState, pos: CellRef, text: &str) -> Formula {
+    match gridcraft_formula::parse(text) {
+        Ok(e) => Formula::from_expr(e),
+        Err(err) => {
+            if let Some(limit) = err.over_limit() {
+                st.over_limit.note(pos, limit);
+            }
+            Formula { text: text.to_string(), expr: None, array: None, dynamic: false }
+        }
+    }
+}
+
 fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool, unwrapped: &mut bool) -> Option<Formula> {
     let mut model = from_file(f.text.trim());
     if let Some(known) = cx.known_function
@@ -713,7 +773,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                 let expr = gridcraft_formula::parse(text).ok();
                 let cost = shared_cost(text, expr.as_ref());
                 st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), unwrapped: *unwrapped, cost });
-                Some(Formula::new(text))
+                Some(formula_from_text(st, pos, text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
@@ -752,9 +812,9 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 return None;
             }
-            let mut fm = Formula::new(text);
+            let mut fm = formula_from_text(st, pos, text);
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
-            if !range.is_single() {
+            if fm.expr.is_some() && !range.is_single() {
                 push_dynamic(st, range);
             }
             if !dynamic {
@@ -770,7 +830,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 None
             } else {
-                Some(Formula::new(text))
+                Some(formula_from_text(st, pos, text))
             }
         }
     }

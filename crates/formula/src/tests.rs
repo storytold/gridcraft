@@ -433,6 +433,17 @@ fn formulas_longer_than_excel_allows_are_refused() -> Result<(), Box<dyn std::er
 }
 
 #[test]
+fn over_limit_errors_name_their_limit() {
+    let long = format!("1{}", "+1".repeat(crate::MAX_FORMULA_LEN.div_ceil(2)));
+    assert!(long.chars().count() > crate::MAX_FORMULA_LEN);
+    assert_eq!(parse(&long).err().and_then(|e| e.over_limit()), Some(crate::OverLimit::Length));
+    let many = format!("SUM({})", vec!["1"; 256].join(","));
+    assert_eq!(parse(&many).err().and_then(|e| e.over_limit()), Some(crate::OverLimit::Arguments));
+    // A formula refused for its syntax reports no limit.
+    assert_eq!(parse("1+").expect_err("incomplete syntax").over_limit(), None);
+}
+
+#[test]
 fn sheet_names_excel_quotes_stay_quoted() {
     // Excel quotes R1C1-looking names, a leading `.`, cells within the sheet and booleans (#1458).
     for name in ["R", "C", "RC", "R1C", "RC1", "R1C1", "r2c3", "R1", "C1", "A1", "XFD1", "AB1048576", ".x", "TRUE", "false"] {
