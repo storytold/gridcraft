@@ -227,7 +227,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     // shape (an ellipse, a filled rectangle) it, like any other warp, leaves the shape what its
     // geometry says.
     let word_art = prst == "rect"
-        && (tx_box || (sp.child("noFill").is_some() && !ln.is_some_and(|l| l.child("solidFill").is_some())))
+        && (tx_box || (sp.child("noFill").is_some() && ln.is_none_or(|l| l.child("solidFill").is_none())))
         && obj.path(&["txBody", "bodyPr", "prstTxWarp"]).is_some_and(|w| w.attr("prst") == Some("textNoShape"));
     let kind = match prst {
         _ if word_art => ShapeKind::WordArt,
