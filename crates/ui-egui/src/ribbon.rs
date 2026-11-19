@@ -174,17 +174,17 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 });
                 if rtl {
                     let over = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
-                    let next_from_right = if (over - last_over).abs() > 0.5 {
+                    let (next_from_right, next_over) = if (over - last_over).abs() > 0.5 {
                         let kept = from_right.min(over);
                         let target_x = (over - kept).max(0.0);
                         let frame = ui.ctx().cumulative_frame_nr();
                         ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab.as_str()), (frame, target_x)));
                         ui.ctx().request_repaint();
-                        kept
+                        (kept, over)
                     } else {
-                        (over - scroll.state.clamped_offset().x).max(0.0)
+                        ((last_over - scroll.state.clamped_offset().x).max(0.0), last_over)
                     };
-                    ui.data_mut(|d| d.insert_temp(row_id, (measured, next_from_right, over)));
+                    ui.data_mut(|d| d.insert_temp(row_id, (measured, next_from_right, next_over)));
                 }
                 scroll_arrows(ui, &t, tab.as_str(), rtl, row_id, measured, scroll);
             });
