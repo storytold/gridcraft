@@ -1,6 +1,6 @@
 //! Reading worksheet parts.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
@@ -169,6 +169,26 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
 
+/// A `rowBreaks` or `colBreaks` list: the breaks (`id`, the line the break sits above, on an
+/// axis of `lines`), and the extent across the other axis (of `across` lines) of each break that
+/// doesn't span the whole sheet. A missing `max` is the whole sheet; `max="0"` is the first
+/// column or row alone (a print area one column or row wide).
+fn read_breaks(e: &El, lines: u32, across: u32) -> (Vec<u32>, BTreeMap<u32, (u32, u32)>) {
+    let mut ids = vec![];
+    let mut extents = BTreeMap::new();
+    for b in e.kids("brk") {
+        let Some(id) = b.attr_u32("id").filter(|&i| i > 0 && i < lines) else { continue };
+        ids.push(id);
+        // Without `max` the break spans the whole sheet, whatever its `min` says.
+        let Some(max) = b.attr_u32("max").map(|m| m.min(across - 1)) else { continue };
+        let min = b.attr_u32("min").unwrap_or(0);
+        if min <= max && (min, max) != (0, across - 1) {
+            extents.insert(id, (min, max));
+        }
+    }
+    (ids, extents)
+}
+
 fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     if let Some(h) = e.attr_f64("defaultRowHeight") {
         let px = pt_to_px(h);
@@ -306,8 +326,8 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                 pr.hf_scale_with_doc = e.flag("scaleWithDoc", true);
                 pr.hf_align_with_margins = e.flag("alignWithMargins", true);
             }
-            "rowBreaks" => sheet.print.row_breaks = e.kids("brk").filter_map(|b| b.attr_u32("id")).filter(|&r| r > 0 && r < MAX_ROWS).collect(),
-            "colBreaks" => sheet.print.col_breaks = e.kids("brk").filter_map(|b| b.attr_u32("id")).filter(|&c| c > 0 && c < MAX_COLS).collect(),
+            "rowBreaks" => (sheet.print.row_breaks, sheet.print.row_break_extents) = read_breaks(e, MAX_ROWS, MAX_COLS),
+            "colBreaks" => (sheet.print.col_breaks, sheet.print.col_break_extents) = read_breaks(e, MAX_COLS, MAX_ROWS),
             "sheetProtection" if e.flag("sheet", false) => {
                 sheet.protection = Some(SheetProtection {
                     password: read_password(e, ""),

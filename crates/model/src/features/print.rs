@@ -1,5 +1,6 @@
 use super::{CellRef, RangeRef};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Orientation {
@@ -30,6 +31,14 @@ pub struct PrintSettings {
     pub footer: String,
     pub row_breaks: Vec<u32>,
     pub col_breaks: Vec<u32>,
+    /// Manual breaks that span only part of the sheet, by break: the first and last column a
+    /// row break spans (`brk min`/`max`), and the first and last row a column break spans. Excel
+    /// limits a break inserted while a print area is set to that area. A break not listed here
+    /// spans the whole sheet.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub row_break_extents: BTreeMap<u32, (u32, u32)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub col_break_extents: BTreeMap<u32, (u32, u32)>,
     /// Different First Page: the sheet's first printed page uses `first_header`/`first_footer`.
     #[serde(default)]
     pub different_first: bool,
@@ -183,6 +192,8 @@ impl Default for PrintSettings {
             footer: String::new(),
             row_breaks: vec![],
             col_breaks: vec![],
+            row_break_extents: BTreeMap::new(),
+            col_break_extents: BTreeMap::new(),
             different_first: false,
             different_odd_even: false,
             first_header: String::new(),

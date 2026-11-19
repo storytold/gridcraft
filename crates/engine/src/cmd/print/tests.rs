@@ -1250,3 +1250,29 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
+
+#[test]
+fn a_removed_break_loses_its_extent() {
+    let mut s = s();
+    s.execute("pageLayout.pageSetup", json!({"rowBreaks": [15, 31], "colBreaks": ["E"]})).unwrap();
+    {
+        let pr = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().print;
+        // As read from a file: each break limited to a print area.
+        pr.row_break_extents = [(14, (0, 2)), (30, (0, 2))].into();
+        pr.col_break_extents = [(4, (0, 9))].into();
+    }
+    let print = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().print.clone();
+    // Page Setup's list without the break before row 31: the other keeps its extent.
+    s.execute("pageLayout.pageSetup", json!({"rowBreaks": [15]})).unwrap();
+    assert_eq!(print(&s).row_break_extents, [(14, (0, 2))].into());
+    // Remove Page Break, then Insert Page Break at the same cell: the new break is whole.
+    s.execute("pageLayout.breaks", json!({"cell": "A15", "remove": true})).unwrap();
+    assert!(print(&s).row_break_extents.is_empty());
+    s.execute("pageLayout.breaks", json!({"cell": "A15", "insert": true})).unwrap();
+    assert_eq!(print(&s).row_breaks, vec![14]);
+    assert!(print(&s).row_break_extents.is_empty());
+    // Reset All Page Breaks.
+    assert_eq!(print(&s).col_break_extents, [(4, (0, 9))].into());
+    s.execute("pageLayout.breaks", json!({"reset": true})).unwrap();
+    assert!(print(&s).col_break_extents.is_empty());
+}

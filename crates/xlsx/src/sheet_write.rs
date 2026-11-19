@@ -442,12 +442,20 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
         }
         s.push_str("</headerFooter>");
     }
-    for (tag, list, max) in [("rowBreaks", &p.row_breaks, 16383u32), ("colBreaks", &p.col_breaks, 1048575)] {
+    // A break spans the whole sheet across the other axis unless it has an extent of its own.
+    for (tag, list, extents, full) in
+        [("rowBreaks", &p.row_breaks, &p.row_break_extents, 16383u32), ("colBreaks", &p.col_breaks, &p.col_break_extents, 1048575)]
+    {
         let list: Vec<u32> = list.iter().copied().filter(|&b| b > 0).collect();
         if !list.is_empty() {
             let _ = write!(s, "<{tag} count=\"{0}\" manualBreakCount=\"{0}\">", list.len());
             for b in list {
-                let _ = write!(s, "<brk id=\"{b}\" max=\"{max}\" man=\"1\"/>");
+                let (min, max) = extents.get(&b).copied().filter(|&(lo, hi)| lo <= hi && hi <= full).unwrap_or((0, full));
+                let _ = write!(s, "<brk id=\"{b}\"");
+                if min > 0 {
+                    let _ = write!(s, " min=\"{min}\"");
+                }
+                let _ = write!(s, " max=\"{max}\" man=\"1\"/>");
             }
             let _ = write!(s, "</{tag}>");
         }
