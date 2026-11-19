@@ -410,7 +410,7 @@ fn split_path(path: &str) -> (String, String) {
 static TEMPLATE_ASKING: AtomicBool = AtomicBool::new(false);
 
 /// Shared slot filled by the background personal-template scan.
-type TemplateScan = Arc<Mutex<Option<Result<Vec<std::path::PathBuf>, String>>>>;
+type TemplateScan = Arc<Mutex<Option<(String, Result<Vec<std::path::PathBuf>, String>)>>>;
 
 /// Cached result of scanning a personal templates folder.
 #[derive(Clone, Debug, Default)]
@@ -427,12 +427,27 @@ impl TemplateFiles {
             *self.found.lock().unwrap_or_else(PoisonError::into_inner) = None;
             if !TEMPLATE_ASKING.swap(true, Ordering::SeqCst) {
                 self.folder = folder.to_string();
-                if !ask_templates(ctx.clone(), self.folder.clone(), self.found.clone()) {
+                if let Err(error) = ask_templates(ctx.clone(), self.folder.clone(), self.found.clone()) {
+                    *self.found.lock().unwrap_or_else(PoisonError::into_inner) = Some((self.folder.clone(), Err(error.to_string())));
                     TEMPLATE_ASKING.store(false, Ordering::SeqCst);
+                    ctx.request_repaint();
                 }
             }
         }
-        self.found.lock().unwrap_or_else(PoisonError::into_inner).clone()
+        self.result_for(folder)
+    }
+
+    /// Returns only a result produced for the folder that is still requested.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn result_for(&self, folder: &str) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        if self.folder != folder {
+            return None;
+        }
+        self.found
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .and_then(|(result_folder, result)| (result_folder == folder).then_some(result))
     }
 
     /// Makes the next frame rescan the configured folder.
@@ -444,7 +459,7 @@ impl TemplateFiles {
 
 /// Reads a personal templates folder on a worker and asks the UI to repaint with the result.
 #[cfg(not(target_arch = "wasm32"))]
-fn ask_templates(ctx: egui::Context, folder: String, found: TemplateScan) -> bool {
+fn ask_templates(ctx: egui::Context, folder: String, found: TemplateScan) -> std::io::Result<()> {
     struct Done;
     impl Drop for Done {
         fn drop(&mut self) {
@@ -456,10 +471,10 @@ fn ask_templates(ctx: egui::Context, folder: String, found: TemplateScan) -> boo
         .spawn(move || {
             let _done = Done;
             let result = scan_templates(&folder);
-            *found.lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
+            *found.lock().unwrap_or_else(PoisonError::into_inner) = Some((folder, result));
             ctx.request_repaint();
         })
-        .is_ok()
+        .map(|_| ())
 }
 
 /// Lists only Excel templates and returns filesystem errors to the caller instead of hiding them.
@@ -1029,6 +1044,18 @@ mod tests {
         let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
         assert_eq!(restored.personal_templates_location, "/templates");
         assert!(serde_json::from_str::<crate::UiState>("{}").unwrap().personal_templates_location.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn personal_template_results_belong_to_the_requested_folder() {
+        let found = Arc::new(Mutex::new(Some(("old".into(), Ok(vec![std::path::PathBuf::from("old/template.xltx")])))));
+        let mut files = TemplateFiles { folder: "old".into(), found };
+        assert_eq!(files.result_for("old").unwrap().unwrap(), [std::path::PathBuf::from("old/template.xltx")]);
+        files.folder = "new".into();
+        assert!(files.result_for("new").is_none());
+        *files.found.lock().unwrap_or_else(PoisonError::into_inner) = Some(("new".into(), Err("worker unavailable".into())));
+        assert_eq!(files.result_for("new").unwrap().unwrap_err(), "worker unavailable");
     }
 
     #[cfg(not(target_arch = "wasm32"))]
