@@ -158,6 +158,8 @@ fn protect_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         delete_rows: b("deleteRows"),
         sort: b("sort"),
         autofilter: b("autofilter"),
+        edit_objects: bool_param(p, "editObjects").unwrap_or_else(|| current.as_ref().is_some_and(|c| c.edit_objects)),
+        edit_scenarios: bool_param(p, "editScenarios").unwrap_or_else(|| current.as_ref().is_some_and(|c| c.edit_scenarios)),
     };
     let d = s.doc()?;
     let what = d.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
