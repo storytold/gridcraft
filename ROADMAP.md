@@ -274,6 +274,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-07 | About window with contributor and model credits; macOS release runner |
 | 2026-10-06 | M0–M13 first pass: engine, 478 functions, XLSX/CSV, egui UI, charts, PivotTables with XLSX round-trip, PDF and printing, what-if, spelling, Draw, task panes, MCP, CLI, web build, release packaging |
 | 2026-10-05 | Repository created |
+| 2026-11-10 | Compiled distribution labels: validate display names, test both startup policies and menu escaping, and reuse the cached identity in window titles. Manual update checks remain available. |
 
 ## Revision history
 
@@ -281,6 +282,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 |---|---|---|
 | 2026-11-16 | minor | Progress log: chart data outline in three colours, dragged from its corners (#4389, #4390) |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
+| 2026-11-05 | trivial | PR #3167: escape literal menu ampersands and place labelled distribution identity before workbook names so truncation retains it; synthetic menu-name and real egui glyph-layout regressions, with no native GUI qualification. |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
@@ -361,3 +363,4 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; progress docs restructured; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+| 2026-11-10 | minor | Compiled distribution labels: validate display names, test both startup policies and menu escaping, and reuse the cached identity in window titles. |

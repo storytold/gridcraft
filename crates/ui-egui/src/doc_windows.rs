@@ -257,7 +257,8 @@ fn visible_windows(app: &SheetApp) -> Vec<u64> {
 fn window_title(app: &SheetApp, window: u64) -> String {
     let title = app.session.window_title(window).unwrap_or_default();
     let dirty = app.session.window(window).and_then(|w| app.session.documents().iter().find(|d| d.uid == w.doc_uid)).is_some_and(|d| d.is_dirty());
-    if dirty { format!("{title} — Edited") } else { title }
+    let title = if dirty { format!("{title} — Edited") } else { title };
+    crate::build_config::window_title(&title).into_owned()
 }
 
 /// Outer rectangles for `n` windows arranged within `bounds` as View › Arrange All's `arrange`
@@ -302,5 +303,22 @@ pub fn arrange_rects(arrange: &str, n: usize, bounds: Rect) -> Vec<Rect> {
                 })
                 .collect()
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod build_label_tests {
+    use super::*;
+
+    #[test]
+    fn native_workbook_windows_use_the_compiled_identity() {
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), crate::Services::default());
+        app.session.new_workbook();
+        let window = app.session.active_window().unwrap();
+        let original = app.session.window_title(window).unwrap();
+        assert_eq!(window_title(&app, window), crate::build_config::window_title(&original));
+        app.run("cell.set", serde_json::json!({"cell":"A1","input":"42"})).unwrap();
+        assert_eq!(window_title(&app, window), crate::build_config::window_title(&format!("{original} — Edited")));
     }
 }

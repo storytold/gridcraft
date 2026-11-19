@@ -270,9 +270,11 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Compiled distribution labels: validate display names, test both startup policies and menu escaping, and reuse the cached identity in window titles. |
+| 2026-11-05 | trivial | PR #3167: escape literal menu ampersands and place labelled distribution identity before workbook names so truncation retains it; synthetic menu-name and real egui glyph-layout regressions, with no native GUI qualification. |
 | 2026-11-05 | minor | Reconcile upstream form-control coverage with the CJK baseline and cell-alignment updates |
-| 2026-11-04 | minor | Keep centered emoji and symbol fallback placement when a row starts with a fallback or contains only fallbacks; use primary or baseline-aligned glyphs to anchor cell alignment |
 | 2026-11-04 | minor | Preserve leading and trailing blank lines in wrapped cells when calculating vertical alignment; regression covers single, multiple and all-empty lines |
+| 2026-11-04 | minor | Keep centered emoji and symbol fallback placement when a row starts with a fallback or contains only fallbacks; use primary or baseline-aligned glyphs to anchor cell alignment |
 | 2026-11-04 | minor | Align wrapped and unwrapped cells with the same vertical margins; regressions compare numbers with mixed CJK/Latin text, including explicit line breaks |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
 | 2026-11-03 | minor | Find and Replace: workbook Undo/Redo works with a keyboard-focused button; focused text fields keep text-editing Undo, and a modal message blocks workbook shortcuts. Regression covers Replace All, both Redo shortcuts, actual text undo, and an error message |
