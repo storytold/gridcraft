@@ -107,7 +107,10 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let wb = &d.wb;
     let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let header_key = |sheet: &gridcraft_model::Sheet, c: CellRef| crate::display::value_text_as(wb, &sheet.value(c), "General").trim().to_lowercase();
+    // The value's General text, not the cell's display text: a format never changes the match, and
+    // General's 11-character width never rounds two numeric headers into one key.
+    let header_key =
+        |sheet: &gridcraft_model::Sheet, c: CellRef| crate::display::value_text_full_as(wb, &sheet.value(c), "General").trim().to_lowercase();
     let headers: Vec<String> = (list.start.col..=list.end.col).map(|c| header_key(sh, CellRef::new(list.start.row, c))).collect();
     let first_data = list.start.row + 1;
     // Criteria rows → conditions.

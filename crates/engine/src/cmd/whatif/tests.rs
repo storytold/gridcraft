@@ -393,4 +393,17 @@ fn advanced_filter_matches_headers_by_value_not_formatted_display() {
     let r = s5.execute("data.advancedFilter", json!({"range": "A1:B2", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
     assert_eq!(r["matched"], 1);
     assert_eq!(n(&s5, "I2"), 102.0);
+
+    // Case 6: numeric headers too long for General's 11-character width stay distinct, though
+    // both show `1.23457E+11` in a cell.
+    let mut s6 = s();
+    s6.execute("cell.set", json!({"cell": "A1", "input": "123456789012"})).unwrap();
+    s6.execute("cell.set", json!({"cell": "B1", "input": "123456789013"})).unwrap();
+    s6.execute("cell.set", json!({"cell": "C1", "input": "ID"})).unwrap();
+    s6.execute("range.setValues", json!({"range": "A2", "values": [[9, 1, 101], [1, 9, 102]]})).unwrap();
+    s6.execute("cell.set", json!({"cell": "E1", "input": "123456789013"})).unwrap();
+    s6.execute("cell.set", json!({"cell": "E2", "input": "'=9"})).unwrap();
+    let r = s6.execute("data.advancedFilter", json!({"range": "A1:C3", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
+    assert_eq!(r["matched"], 1);
+    assert_eq!(n(&s6, "J2"), 102.0);
 }
