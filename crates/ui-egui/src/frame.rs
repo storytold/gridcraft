@@ -143,11 +143,23 @@ pub fn paint(p: &Painter, f: Rect, deg: f32, rotate: bool, resize: bool) {
 /// [`resized`] for a frame turned `deg`: the drag is taken along the frame's own axes, and the
 /// handle opposite the grabbed one stays where it is.
 pub fn resized_turned(r: Rect, deg: f32, h: Handle, d: egui::Vec2, min: f32, keep_aspect: bool) -> Rect {
+    resized_turned_by_min(r, deg, h, d, egui::Vec2::splat(min), keep_aspect)
+}
+
+/// Axis-aware version for objects with a zero-height or zero-width minimum.
+pub(crate) fn resized_turned_by_min(
+    r: Rect,
+    deg: f32,
+    h: Handle,
+    d: egui::Vec2,
+    min: egui::Vec2,
+    keep_aspect: bool,
+) -> Rect {
     if deg == 0.0 {
-        return resized(r, h, d, min, keep_aspect);
+        return resized_by_min(r, h, d, min, keep_aspect);
     }
     let local = turn(pos2(d.x, d.y), Pos2::ZERO, -deg).to_vec2();
-    let n = resized(r, h, local, min, keep_aspect);
+    let n = resized_by_min(r, h, local, min, keep_aspect);
     let opp = Handle { x: -h.x, y: -h.y };
     n.translate(opp.at_turned(r, deg) - opp.at_turned(n, deg))
 }
@@ -155,22 +167,26 @@ pub fn resized_turned(r: Rect, deg: f32, h: Handle, d: egui::Vec2, min: f32, kee
 /// `r` with handle `h` dragged by `d`; the opposite edges stay put. Never smaller than `min`;
 /// `keep_aspect` keeps the proportions when a corner is dragged.
 pub fn resized(r: Rect, h: Handle, d: egui::Vec2, min: f32, keep_aspect: bool) -> Rect {
+    resized_by_min(r, h, d, egui::Vec2::splat(min), keep_aspect)
+}
+
+fn resized_by_min(r: Rect, h: Handle, d: egui::Vec2, min: egui::Vec2, keep_aspect: bool) -> Rect {
     let (mut x0, mut y0, mut x1, mut y1) = (r.min.x, r.min.y, r.max.x, r.max.y);
     match h.x {
-        -1 => x0 = (x0 + d.x).min(x1 - min),
-        1 => x1 = (x1 + d.x).max(x0 + min),
+        -1 => x0 = (x0 + d.x).min(x1 - min.x),
+        1 => x1 = (x1 + d.x).max(x0 + min.x),
         _ => {}
     }
     match h.y {
-        -1 => y0 = (y0 + d.y).min(y1 - min),
-        1 => y1 = (y1 + d.y).max(y0 + min),
+        -1 => y0 = (y0 + d.y).min(y1 - min.y),
+        1 => y1 = (y1 + d.y).max(y0 + min.y),
         _ => {}
     }
     if keep_aspect && h.is_corner() && r.width() > 0.0 && r.height() > 0.0 {
         // Follow whichever side changed more.
         let (kx, ky) = ((x1 - x0) / r.width(), (y1 - y0) / r.height());
         let k = if (kx - 1.0).abs() >= (ky - 1.0).abs() { kx } else { ky };
-        let k = k.max(min / r.width()).max(min / r.height());
+        let k = k.max(min.x / r.width()).max(min.y / r.height());
         let (w, hh) = (r.width() * k, r.height() * k);
         if h.x < 0 {
             x0 = x1 - w;

@@ -244,6 +244,9 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         if o.kind != ObjKind::Shape || ink {
             return Err(bad("object.move", "only shapes other than ink rotate"));
         }
+        if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected()) {
+            return Err(EngineError::Other(PROTECTED.into()));
+        }
     }
     edit(s, |cx| {
         let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };

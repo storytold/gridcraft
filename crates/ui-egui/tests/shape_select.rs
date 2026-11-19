@@ -21,8 +21,8 @@ fn fixture_of(kind: &str) -> (Harness, u32) {
         let sh = session.doc().unwrap().wb.active().unwrap();
         sh.shapes.iter().find(|s| s.kind == gridcraft_engine::model::ShapeKind::Ink).unwrap().id
     } else {
-        let shape =
-            session.execute("insert.shape", json!({"kind": kind, "at": "D3", "width": 160, "height": if kind == "line" { 0 } else { 100 }})).unwrap();
+        let height = if matches!(kind, "line" | "arrow") { 0 } else { 100 };
+        let shape = session.execute("insert.shape", json!({"kind": kind, "at": "D3", "width": 160, "height": height})).unwrap();
         shape["shape"].as_u64().unwrap() as u32
     };
     let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
@@ -251,6 +251,37 @@ fn resizing_a_flat_line_keeps_it_flat() {
     let after = rect(&h, id);
     assert!(after.width() > before.width() + 40.0, "{before:?} -> {after:?}");
     assert_eq!(after.height(), 0.0, "{before:?} -> {after:?}");
+}
+
+#[test]
+fn resizing_rotated_flat_lines_and_arrows_keeps_them_flat_and_undoes() {
+    for kind in ["line", "arrow"] {
+        let (mut h, id) = fixture_of(kind);
+        h.state_mut()
+            .run("object.move", json!({"kind": "shape", "id": id, "rotation": 90}))
+            .unwrap();
+        h.run_steps(2);
+        h.state_mut().selected_object = Some(gridcraft_engine::model::ObjRef::new(
+            gridcraft_engine::model::ObjKind::Shape,
+            id,
+        ));
+        h.run_steps(2);
+
+        let before_anchor = anchor(&h, id);
+        let before = rect(&h, id);
+        assert_eq!(before.height(), 0.0, "{kind} starts flat: {before:?}");
+        let handle = gridcraft_ui_egui::frame::Handle { x: 1, y: 1 }.at_turned(before, 90.0);
+        drag(&mut h, handle, handle + vec2(0.0, 50.0));
+
+        let after = rect(&h, id);
+        assert!(after.width() > before.width() + 40.0, "{kind}: {before:?} -> {after:?}");
+        assert_eq!(after.height(), 0.0, "{kind}: {before:?} -> {after:?}");
+        assert_eq!(rotation(&h, id), 90.0);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(2);
+        assert_eq!(anchor(&h, id), before_anchor, "{kind} undo restores its anchor");
+        assert_eq!(rotation(&h, id), 90.0, "{kind} undo preserves rotation");
+    }
 }
 
 #[test]

@@ -1269,9 +1269,10 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
         Some(hd) if frame_deg != 0.0 => {
             let fh = crate::frame::Handle { x: hd.sides().0, y: hd.sides().1 };
             let r0 = Rect::from_min_max(pos2(x0, y0), pos2(x0 + w, y0 + h));
-            let r = crate::frame::resized_turned(r0, frame_deg, fh, d, 8.0, false);
+            let min = crate::objects::min_size(sh, obj);
+            let r = crate::frame::resized_turned_by_min(r0, frame_deg, fh, d, min, false);
             let (nx, ny) = (r.min.x.max(0.0), r.min.y.max(0.0));
-            [nx, ny, r.max.x.max(nx + 8.0), r.max.y.max(ny + 8.0)]
+            [nx, ny, r.max.x.max(nx + min.x), r.max.y.max(ny + min.y)]
         }
         Some(hd) => crate::objects::resized([x0, y0, x0 + w, y0 + h], hd, d, crate::objects::min_size(sh, obj)),
         None => {
