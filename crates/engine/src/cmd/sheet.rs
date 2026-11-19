@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility};
+use gridcraft_model::{Anchor, AnchorMode, PivotDataCell, PivotLookup, Sheet, Visibility};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -211,22 +211,51 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
             Axis::Rows => CellRef::new(at, pt.anchor.col),
             Axis::Cols => CellRef::new(pt.anchor.row, at),
         });
-        pt.last_range = pt.last_range.and_then(map_range);
+        let old = pt.last_range;
+        pt.last_range = old.and_then(map_range);
+        // GETPIVOTDATA's value cells are stored as offsets from the report's top-left cell, so
+        // lines inserted or deleted inside the report move them as well. The moved cells go into
+        // a new index (the shared one stays with the undo snapshots); a value cell deleted with
+        // its line drops out, so it is #REF! rather than read from whatever took its place.
+        let index = pt.data_index.clone();
+        if let (Some(o), Some(n), Some(cells)) = (old, pt.last_range, index.cells()) {
+            let (lo, hi) = if axis == Axis::Rows { (o.start.row, o.end.row) } else { (o.start.col, o.end.col) };
+            let inside = at <= hi && if insert { at > lo } else { at.saturating_add(count) > lo };
+            if inside {
+                let moved: Vec<PivotDataCell> = cells
+                    .iter()
+                    .filter_map(|c| {
+                        let to = map_cell(CellRef::new(o.start.row.checked_add(c.row)?, o.start.col.checked_add(c.col)?))?;
+                        Some(PivotDataCell { row: to.row.checked_sub(n.start.row)?, col: to.col.checked_sub(n.start.col)?, ..c.clone() })
+                    })
+                    .collect();
+                let lookup = PivotLookup::default();
+                if !moved.is_empty() {
+                    lookup.set_cells(moved);
+                }
+                pt.data_index = lookup;
+            }
+        }
     }
 }
 
 /// Rewrites every formula reference (chart series included), sparkline source and PivotTable
 /// source for a structural edit on `target`.
 pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
-    cx.edits.push((target.to_string(), e.clone()));
+    rewrite_many(cx, target, std::slice::from_ref(e))
+}
+
+/// [`rewrite`] for several edits applied in order, parsing each reference once.
+fn rewrite_many(cx: &mut Ctx, target: &str, edits: &[Edit]) -> Result<()> {
+    cx.edits.extend(edits.iter().map(|e| (target.to_string(), e.clone())));
     let wb = &mut cx.wb;
-    super::edit::rewrite_all_formulas(wb, target, e)?;
+    super::edit::rewrite_all_formulas_many(wb, target, edits)?;
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };
         let fix = |text: &str| -> String {
             match gridcraft_formula::parse(text) {
-                Ok(expr) => gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e)),
+                Ok(expr) => gridcraft_formula::print(&edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, &host, target, e))),
                 Err(_) => text.to_string(),
             }
         };
@@ -239,7 +268,7 @@ pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
             let body = pt.source.trim().trim_start_matches('=');
             if let Ok(expr) = gridcraft_formula::parse(body) {
                 let before = gridcraft_formula::print(&expr);
-                let after = gridcraft_formula::print(&gridcraft_formula::adjust::adjust(expr, &host, target, e));
+                let after = gridcraft_formula::print(&edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, &host, target, e)));
                 if after != before {
                     pt.source = after;
                 }
@@ -354,23 +383,21 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
-        // Last area first, so the earlier ones keep their positions.
-        for (at, count) in areas {
-            {
-                let sh = cx.sheet_mut(sheet)?;
-                let block = match axis {
-                    Axis::Rows => RangeRef::rows(at, (at + count - 1).min(MAX_ROWS - 1)),
-                    Axis::Cols => RangeRef::cols(at, (at + count - 1).min(MAX_COLS - 1)),
-                };
-                sh.take_cells(block);
-                match axis {
-                    Axis::Rows => sh.cells.shift_rows(at + count, -(count as i64)),
-                    Axis::Cols => sh.cells.shift_cols(at + count, -(count as i64)),
-                }
+        {
+            let sh = cx.sheet_mut(sheet)?;
+            // Cells move once, past every deleted area above or left of them.
+            let ascending: Vec<(u32, u32)> = areas.iter().rev().copied().collect();
+            match axis {
+                Axis::Rows => sh.cells.delete_rows(&ascending),
+                Axis::Cols => sh.cells.delete_cols(&ascending),
+            }
+            // Last area first, so the earlier ones keep their positions.
+            for &(at, count) in &areas {
                 shift_sheet_features(sh, axis, at, count, false);
             }
-            rewrite(cx, &name, &Edit::Delete { axis, at, count })?;
         }
+        let edits: Vec<Edit> = areas.iter().map(|&(at, count)| Edit::Delete { axis, at, count }).collect();
+        rewrite_many(cx, &name, &edits)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;

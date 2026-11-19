@@ -36,15 +36,28 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let whole = clip.areas.is_empty() && (clip.selected.is_full_cols() || clip.selected.is_full_rows()) && clip.selected.contains_range(&clip.range);
     let src = if whole { clip.selected } else { clip.range };
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
-    // Tile the copy over a larger destination that is a multiple of its size.
-    let tile = sel.height() % h == 0
-        && sel.width() % w == 0
+    // Tile the copy over a larger destination that is a multiple of its size. A selection
+    // narrower than the copy but a multiple of its height takes it down every row, at the copy's
+    // width (and a shorter one a multiple of its width across), as in Excel.
+    let multiple = sel.height() % h == 0 && sel.width() % w == 0;
+    let down = sel.width() < w && sel.height() > h && sel.height() % h == 0;
+    let across = sel.height() < h && sel.width() > w && sel.width() % w == 0;
+    // The cells the tiles cover: the selection itself, or for `down`/`across` the selection at the
+    // copy's width/height, which can be much larger than what was selected.
+    let area = if down {
+        u64::from(sel.height()) * u64::from(w)
+    } else if across {
+        u64::from(h) * u64::from(sel.width())
+    } else {
+        sel.count()
+    };
+    let tile = (multiple || down || across)
         && !sel.is_single()
         && cell_param_on(s, p, "at", dest_sheet)?.is_none()
         && !sel.is_full_cols()
         && !sel.is_full_rows()
-        && sel.count() <= 4_000_000;
-    let (tiles_r, tiles_c) = if tile { (sel.height() / h, sel.width() / w) } else { (1, 1) };
+        && area <= 4_000_000;
+    let (tiles_r, tiles_c) = if tile { ((sel.height() / h).max(1), (sel.width() / w).max(1)) } else { (1, 1) };
     // A single cell or row repeated down a filtered selection skips the rows the filter hides; a
     // taller block is pasted straight down, hidden rows included, as in Excel.
     let skip_rows = match s.doc()?.wb.sheet(dest_sheet) {
@@ -560,10 +573,15 @@ fn paste_validations(
 
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.
 pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) -> Result<()> {
+    rewrite_all_formulas_many(wb, target, std::slice::from_ref(e))
+}
+
+/// [`rewrite_all_formulas`] for several edits applied in order, visiting each formula once.
+pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, target: &str, edits: &[gridcraft_formula::adjust::Edit]) -> Result<()> {
     use gridcraft_formula::adjust::Edit;
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
-    let moves_arrays = matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
+    let moves_arrays = |e: &Edit| matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =
@@ -571,16 +589,29 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
         if keys.is_empty() {
             continue;
         }
-        let on_target = moves_arrays && host.eq_ignore_ascii_case(target);
+        let on_target = host.eq_ignore_ascii_case(target);
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
-            // Borrows the tree and copies and prints only the formulas the edit changes. A formula
-            // the edit leaves alone keeps its stored text, even if that text is not canonical.
-            let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed(x, &host, target, e)) else { continue };
-            let array = match f.array {
-                Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
-                a => a,
+            // Borrows the tree and copies and prints only the formulas the edits change. A formula
+            // the edits leave alone keeps its stored text, even if that text is not canonical.
+            let Some(new) = f.with_expr(|x| {
+                let mut cur: Option<gridcraft_formula::Expr> = None;
+                for e in edits {
+                    if let Some(n) = gridcraft_formula::adjust::adjust_if_changed(cur.as_ref().unwrap_or(x), &host, target, e) {
+                        cur = Some(n);
+                    }
+                }
+                cur
+            }) else {
+                continue;
             };
+            let mut array = f.array;
+            for e in edits {
+                array = match array {
+                    Some(a) if on_target && moves_arrays(e) => crate::cmd::sheet::map_range(a, e),
+                    a => a,
+                };
+            }
             let nf = match new {
                 Some(new) => Formula { array, dynamic: f.dynamic, ..Formula::from_expr(new) },
                 None if array != f.array => Formula { array, ..(*f).clone() },
@@ -594,12 +625,12 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
-            let new = gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e);
+            let new = edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e));
             n.formula = gridcraft_formula::print(&new);
         }
     }
-    rewrite_cell_links(wb, |host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e));
-    rewrite_python_refs(wb, &|host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e))
+    rewrite_cell_links(wb, |host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e)));
+    rewrite_python_refs(wb, &|host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e)))
 }
 
 /// Runs `f` over every reference a floating object holds (a chart's series values, categories,
