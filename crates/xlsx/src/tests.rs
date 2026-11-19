@@ -12,6 +12,7 @@ mod csv_tests;
 mod encrypted_tests;
 mod equation_tests;
 mod fixtures;
+mod frozen_pane_scroll;
 mod google_sheets_dummy;
 mod ink_roundtrip;
 mod literal_category_roundtrip;
