@@ -1105,6 +1105,25 @@ fn justified_and_distributed_text_prints_folded_like_wrapped_text() {
 }
 
 #[test]
+fn obliquely_rotated_justified_text_keeps_the_text_after_a_line_break() {
+    // At 45° only one line is drawn, so justified text keeps its break as a space, as before.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "alpha\nbeta"})).unwrap();
+    let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+    let st = wb.styles.derive(gridcraft_model::StyleId::DEFAULT, |s| {
+        s.align.h = gridcraft_model::HAlign::Justify;
+        s.align.rotation = 45;
+    });
+    wb.sheet_mut(0).unwrap().set_style(CellRef::new(0, 0), st);
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(
+        contains(&pdf, "(alpha beta) Tj"),
+        "{}",
+        String::from_utf8_lossy(&pdf).lines().filter(|l| l.ends_with("Tj")).collect::<Vec<_>>().join(" | ")
+    );
+}
+
+#[test]
 fn checkbox_cells_print_as_boxes_not_true_false() {
     // #2972: a checkbox cell printed its value as TRUE or FALSE.
     let mut s = s();

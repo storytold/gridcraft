@@ -262,8 +262,11 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         color = rgb_of(st.font.color, wb).unwrap_or(color);
     }
     let is_num = matches!(v, Value::Number(_));
-    // Justified and distributed text folds as wrapped text does.
-    let wrap = st.align.folds();
+    let rot = st.align.rotation;
+    let rotated = rot != 0 && rot != 255;
+    // Justified and distributed text folds as wrapped text does, except at an oblique angle, where
+    // only one line is drawn: there it keeps its line breaks as spaces, so none of its text is lost.
+    let wrap = st.align.wrap || (st.align.folds() && (!rotated || rot.abs() == 90));
     let mut text = if sh.show_formulas {
         crate::display::cell_text(wb, sh, c)
     } else if code == "General"
@@ -294,8 +297,6 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         tw = gridcraft_pdf::text_width_with_direction(font, size, &text, direction);
     }
     let h_align = text_align(st.align.h, &v, direction, sh.right_to_left);
-    let rot = st.align.rotation;
-    let rotated = rot != 0 && rot != 255;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
     let lines: Vec<TextLine> = match (wrap, rotated) {
         (true, false) => wrap_lines(&text, font, size, avail.max(size), direction),
