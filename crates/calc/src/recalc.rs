@@ -38,6 +38,20 @@ pub use graph::{FxHasher, Graph, Key};
 use graph::{HashMap, HashSet, Node, Taken};
 use pass_host::{PassHost, spills_as_before};
 
+/// Whether a calculation may discard imported array caches without a replacement array.
+#[derive(Clone, Copy)]
+enum SpillPolicy {
+    Recalculate,
+    PreserveCachedArrays,
+}
+
+/// A retained range must still belong to an explicitly marked array formula at its anchor.
+fn cached_array_range(sheet: &gridcraft_model::Sheet, anchor: CellRef) -> Option<RangeRef> {
+    let range = *sheet.spill_ranges.get(&anchor)?;
+    let formula = sheet.cell(anchor)?.formula.as_ref()?;
+    (range.start == anchor && (formula.dynamic || formula.array == Some(range))).then_some(range)
+}
+
 /// Calculation state kept beside a workbook.
 #[derive(Clone, Debug)]
 pub struct Calc {
@@ -72,6 +86,8 @@ pub struct Calc {
 /// started, so it agrees with the incremental one; a workbook that is calculated for the first
 /// time has no such layout (rule 3 only). The xlsx reader restores the area each dynamic array
 /// was saved spilling over, so a workbook opened from a file keeps the layout it was saved with.
+/// Cached open retains recorded array areas and followers until a successful replacement;
+/// it does not reconstruct missing cache ranges or make saved values fresh.
 #[derive(Clone, Debug, Default)]
 struct Standing {
     /// `true`: `keys` are the anchors that held a spill (full recalculation, which lays every
@@ -356,8 +372,73 @@ impl Calc {
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
         self.standing = Standing { held: true, keys: held, areas };
-        self.run(wb, all, true);
+        self.run(wb, all, SpillPolicy::Recalculate, true);
         self.standing = Standing::default();
+    }
+
+    /// Calculates formulas whose cached result is [`Value::Empty`], using every other formula's
+    /// cached result as a fixed input, even errors, empty text, volatile functions and unknown UDFs.
+    /// Formula metadata is retained for `ISFORMULA` and `FORMULATEXT`. Existing spills of cached
+    /// anchors are retained. An explicitly marked array with a stored range also keeps its saved
+    /// followers when a missing anchor fails, yields no array, or cannot place its replacement.
+    /// Only a successful replacement array supersedes that cache. Unmarked stale spill metadata
+    /// retains its normal cleanup behavior, as do later full recalculation and content edits.
+    ///
+    /// Intended for read-only consumers that prefer saved results over recalculation. This does
+    /// not validate cache freshness or reconstruct a cached anchor's absent spill values/range.
+    /// Missing formulas have the same function support and bounded recalculation rounds as
+    /// [`Self::recalc_all`]; unparseable missing formulas produce `#NAME?`.
+    ///
+    /// The full dependency graph is rebuilt before returning, so subsequent [`Self::cells_changed`]
+    /// calls work normally (and may then replace cached results). Calling this again preserves the
+    /// results just calculated, including errors.
+    pub fn recalc_missing(&mut self, wb: &mut Workbook) {
+        self.graph = Graph::default();
+        let mut unparsed = Vec::new();
+        for (si, sheet) in wb.sheets.iter().enumerate() {
+            for (c, cell) in sheet.cells.iter() {
+                if cell.py.is_some() {
+                    // Lay out the kept Python output without running Python. Native JSON stores
+                    // that output but not its spill cells; cached ordinary formulas stay excluded.
+                    self.graph.insert((si, c), Node { areas: Vec::new(), dynamic: false });
+                } else if cell.value.is_empty()
+                    && let Some(f) = &cell.formula
+                {
+                    if let Some(e) = f.expr() {
+                        let (areas, dynamic) = precedents(wb, si, &e);
+                        self.graph.insert((si, c), Node { areas, dynamic });
+                    } else {
+                        unparsed.push((si, c));
+                    }
+                }
+            }
+        }
+        // Keep cached formulas out of the graph for every dynamic/spill follow-up round too.
+        self.graph.settle();
+        for &(si, c) in &unparsed {
+            if let Some(sheet) = wb.sheet_mut(si) {
+                if cached_array_range(sheet, c).is_none()
+                    && let Some(range) = sheet.spill_ranges.remove(&c)
+                {
+                    sheet.spill.retain(|at, _| !range.contains(*at));
+                }
+                if let Some(cell) = sheet.cells.get_mut(c) {
+                    cell.value = Value::Error(CellError::Name);
+                }
+            }
+        }
+        let missing: Vec<Key> = self.graph.nodes.keys().copied().collect();
+        self.circular.clear();
+        self.run(wb, missing, SpillPolicy::PreserveCachedArrays, false);
+        self.last_recalc_cells += unparsed.len();
+        let detected = std::mem::take(&mut self.circular);
+        self.rebuild(wb);
+        // Dynamic reads may close loops that the restored static graph cannot rediscover.
+        for key in detected {
+            if !self.circular.contains(&key) {
+                self.circular.push(key);
+            }
+        }
     }
 
     /// Updates the graph for cells whose content changed and recalculates what depends on them.
@@ -399,9 +480,7 @@ impl Calc {
                     if let Some(sh) = wb.sheet_mut(k.0)
                         && let Some(r) = sh.spill_ranges.remove(&k.1)
                     {
-                        for c in r.iter() {
-                            sh.spill.remove(&c);
-                        }
+                        sh.clear_spill(r);
                         cleared.push((k.0, r));
                     }
                     // A formula that doesn't parse evaluates to #NAME?.
@@ -418,7 +497,7 @@ impl Calc {
         if wb.calc.mode == CalcMode::Manual {
             // Only the edited formulas themselves are evaluated.
             let own: Vec<Key> = changed.iter().copied().filter(|k| self.graph.nodes.contains_key(k)).collect();
-            self.run(wb, own, false);
+            self.run(wb, own, SpillPolicy::Recalculate, false);
             return;
         }
         let mut seeds: Vec<Key> = changed.to_vec();
@@ -491,7 +570,7 @@ impl Calc {
         let dirty = self.dirty_closure(wb, &seeds, &areas);
         let t1 = prof_now();
         let n = dirty.len();
-        self.run(wb, dirty, false);
+        self.run(wb, dirty, SpillPolicy::Recalculate, false);
         if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
             eprintln!("recalc: {} seeds, closure {} cells {:.1} ms, run {:.1} ms", seeds.len(), n, t1 - t0, prof_now() - t1);
         }
@@ -553,7 +632,7 @@ impl Calc {
     }
 
     /// Evaluates the dirty set and writes results (and spills) back.
-    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+    fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, policy: SpillPolicy, full: bool) {
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         let mut seen: HashSet<Key> = HashSet::default();
@@ -594,8 +673,9 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
+            let (results, spills, cycles, declared) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
+                host.preserve_cached_arrays = matches!(policy, SpillPolicy::PreserveCachedArrays);
                 host.standing = Some(&self.standing);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
@@ -607,7 +687,7 @@ impl Calc {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                (host.results, host.spills, host.cycles, host.declared_spill_index.into_inner())
             };
             self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
@@ -621,15 +701,12 @@ impl Calc {
                 self.circular.retain(|k| !evaluated.contains(k));
             }
             self.circular.extend(cycles);
-            let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            let mut spill_changes = self.write_back(wb, &dirty, results, &spills, policy, declared);
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
                 dynamic_again = false;
                 spill_changes.extend(self.graph.dynamic.iter().copied());
-            }
-            if full {
-                // Everything was already evaluated once; spill dependents need another pass.
             }
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  write-back {:.1} ms", prof_now() - tw);
@@ -656,9 +733,15 @@ impl Calc {
         dirty: &[Key],
         results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
+        policy: SpillPolicy,
+        declared: Option<SpillIndex>,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
+        // Array placement must also see declared areas whose cached followers have holes.
+        // Reuse the pass's lazy spatial index; scalar-only edits do not index the sheet.
+        let mut declared = declared.unwrap_or_else(|| if spills.is_empty() { SpillIndex::default() } else { stored_spill_index(wb) });
+        let mut owners = Vec::new();
         for (key, value) in results {
             let Some(sheet) = wb.sheet_mut(key.0) else { continue };
             if let Some(cell) = sheet.cells.get_mut(key.1) {
@@ -679,6 +762,31 @@ impl Calc {
             if old.is_none() && new.is_none() {
                 continue;
             }
+            if let Some(array) = new {
+                let end = CellRef::new(key.1.row.saturating_add(array.rows as u32 - 1), key.1.col.saturating_add(array.cols as u32 - 1));
+                declared.meeting(key.0, RangeRef::new(key.1, end), &mut owners);
+            } else {
+                owners.clear();
+            }
+            // A failed/scalar missing anchor cannot supersede its imported follower cache.
+            // Check replacement collisions before removing the old cache as well: the pass
+            // may not have seen another array's final placement.
+            let keep_cached = matches!(policy, SpillPolicy::PreserveCachedArrays) && cached_array_range(sheet, key.1).is_some();
+            if keep_cached {
+                let Some(array) = new else { continue };
+                let end = CellRef::new(key.1.row.saturating_add(array.rows as u32 - 1), key.1.col.saturating_add(array.cols as u32 - 1));
+                let range = RangeRef::new(key.1, end);
+                if cached_spill_replacement_is_blocked(sheet, key.1, range, end, old, &owners) {
+                    if let Some(cell) = sheet.cells.get_mut(key.1) {
+                        cell.value = Value::Error(CellError::Spill);
+                        self.spill_errors.insert(*key);
+                    }
+                    let mut dependents = Vec::new();
+                    self.graph.dependents_of_range(key.0, range, &mut dependents);
+                    spill_changes.extend(dependents.into_iter().filter(|dependent| dependent != key));
+                    continue;
+                }
+            }
             // An unchanged spill does not alter any values its dependents read.
             if let (Some(range), Some(array)) = (old, new)
                 && spills_as_before(sheet, key.1, range, array)
@@ -686,10 +794,9 @@ impl Calc {
                 continue;
             }
             if let Some(range) = old {
-                for cell in range.iter() {
-                    sheet.spill.remove(&cell);
-                }
+                sheet.clear_spill(range);
                 sheet.spill_ranges.remove(&key.1);
+                declared.remove(*key);
             }
             let mut changed_range = old;
             if let Some(array) = new {
@@ -698,33 +805,38 @@ impl Calc {
                 // Two arrays that want the same cells (see [`Standing`]): a spill already laid out
                 // that this anchor outranks on every cell they share is taken over, and recalculated.
                 let standing = &self.standing;
-                // A spill can only be in the way where it has cells besides its anchor, and an
-                // anchor itself blocks the array. When no spilled cell lies in the range, the owners
-                // are not scanned: a full recalculation of many disjoint spills stays linear.
-                let outranked: Vec<(CellRef, RangeRef)> = if range.iter().any(|cell| cell != key.1 && sheet.spill.contains_key(&cell)) {
+                let preserve_cached = matches!(policy, SpillPolicy::PreserveCachedArrays);
+                // Query declared rectangles so sparse holes keep their owner, without walking
+                // every owner for each of many disjoint arrays.
+                let outranked: Vec<(CellRef, RangeRef)> = if !preserve_cached {
                     #[cfg(test)]
-                    OWNER_SCANS.with(|n| n.set(n.get() + 1));
-                    sheet
-                        .spill_ranges
+                    if owners.iter().any(|owner| *owner != key.1) {
+                        OWNER_SCANS.with(|n| n.set(n.get() + 1));
+                    }
+                    owners
                         .iter()
-                        .filter(|(o, r)| {
-                            **o != key.1
-                                && r.intersection(&range).is_some_and(|shared| {
-                                    shared.iter().all(|cell| standing.outranks_at((*key, old), ((key.0, **o), Some(**r)), cell))
-                                })
+                        .filter_map(|owner| {
+                            let area = *sheet.spill_ranges.get(owner)?;
+                            (*owner != key.1
+                                && area.intersection(&range).is_some_and(|shared| {
+                                    shared.iter().all(|cell| standing.outranks_at((*key, old), ((key.0, *owner), Some(area)), cell))
+                                }))
+                            .then_some((*owner, area))
                         })
-                        .map(|(o, r)| (*o, *r))
                         .collect()
                 } else {
                     Vec::new()
                 };
-                let blocked = spill_is_blocked(sheet, (*key, old), range, end, standing);
+                let blocked = if preserve_cached {
+                    cached_spill_replacement_is_blocked(sheet, key.1, range, end, None, &owners)
+                } else {
+                    spill_is_blocked(sheet, (*key, old), range, end, standing, &owners)
+                };
                 if !blocked {
                     for (o, r) in outranked {
-                        for c in r.iter() {
-                            sheet.spill.remove(&c);
-                        }
+                        sheet.clear_spill(r);
                         sheet.spill_ranges.remove(&o);
+                        declared.remove((key.0, o));
                         if let Some(cell) = sheet.cells.get_mut(o) {
                             cell.value = Value::Error(CellError::Spill);
                             self.spill_errors.insert((key.0, o));
@@ -744,6 +856,7 @@ impl Calc {
                     spill_changes.extend(blocked_dependents.into_iter().filter(|dependent| dependent != key));
                 } else {
                     fill_spill(sheet, key.1, range, array);
+                    declared.insert_rect(*key, range, false);
                     changed_range = Some(changed_range.map_or(range, |previous| previous.union(&range)));
                 }
             }
@@ -785,18 +898,79 @@ fn spill_is_blocked(
     range: RangeRef,
     end: CellRef,
     standing: &Standing,
+    owners: &[CellRef],
 ) -> bool {
     let outranked = |cell: CellRef| {
-        sheet
-            .spill_ranges
-            .iter()
-            .any(|(o, r)| *o != anchor.1 && r.contains(cell) && standing.outranks_at((anchor, now), ((anchor.0, *o), Some(*r)), cell))
+        owners.iter().any(|o| {
+            *o != anchor.1
+                && sheet
+                    .spill_ranges
+                    .get(o)
+                    .is_some_and(|r| r.contains(cell) && standing.outranks_at((anchor, now), ((anchor.0, *o), Some(*r)), cell))
+        })
     };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
         || range.iter().any(|cell| cell != anchor.1 && (sheet.cells.has(cell) || (sheet.spill.contains_key(&cell) && !outranked(cell))))
+        || declared_owner_blocks(sheet, (anchor, now), range, standing, owners)
         || sheet.merges.iter().any(|merge| merge.intersects(&range))
         || sheet.tables.iter().any(|table| table.range.contains(anchor.1))
+}
+
+/// Sparse declarations own their missing followers too. Existing per-cell ownership is
+/// retained; reading order breaks a tie only when both declarations already claim a cell.
+fn declared_owner_blocks(
+    sheet: &gridcraft_model::Sheet,
+    (anchor, now): (Key, Option<RangeRef>),
+    range: RangeRef,
+    standing: &Standing,
+    owners: &[CellRef],
+) -> bool {
+    owners.iter().any(|owner| {
+        if *owner == anchor.1 {
+            return false;
+        }
+        let Some(area) = sheet.spill_ranges.get(owner) else { return false };
+        let Some(shared) = area.intersection(&range) else { return false };
+        shared.iter().any(|cell| cell != anchor.1 && !standing.outranks_at((anchor, now), ((anchor.0, *owner), Some(*area)), cell))
+    })
+}
+
+/// Indexes stored declarations, including cached holes; built lazily only when a pass places arrays.
+fn stored_spill_index(wb: &Workbook) -> SpillIndex {
+    let mut index = SpillIndex::default();
+    for (sheet, sh) in wb.sheets.iter().enumerate() {
+        for (anchor, range) in &sh.spill_ranges {
+            index.insert_rect((sheet, *anchor), *range, false);
+        }
+    }
+    index
+}
+
+/// Whether another area covers any candidate cell besides its anchor (ranges start at `anchor`).
+fn spill_area_intersects(area: RangeRef, range: RangeRef, anchor: CellRef) -> bool {
+    area.intersects(&range) && (area.end.row.min(range.end.row) != anchor.row || area.end.col.min(range.end.col) != anchor.col)
+}
+
+/// Missing-only import may replace its own recorded area, but must keep every other saved spill.
+fn cached_spill_replacement_is_blocked(
+    sheet: &gridcraft_model::Sheet,
+    anchor: CellRef,
+    range: RangeRef,
+    end: CellRef,
+    previous: Option<RangeRef>,
+    owners: &[CellRef],
+) -> bool {
+    end.row >= gridcraft_core::MAX_ROWS
+        || end.col >= gridcraft_core::MAX_COLS
+        || range
+            .iter()
+            .any(|cell| cell != anchor && (sheet.cells.has(cell) || (sheet.spill.contains_key(&cell) && !previous.is_some_and(|r| r.contains(cell)))))
+        || sheet.merges.iter().any(|merge| merge.intersects(&range))
+        || owners
+            .iter()
+            .any(|owner| *owner != anchor && sheet.spill_ranges.get(owner).is_some_and(|area| spill_area_intersects(*area, range, anchor)))
+        || sheet.tables.iter().any(|table| table.range.contains(anchor))
 }
 
 fn fill_spill(sheet: &mut gridcraft_model::Sheet, anchor: CellRef, range: RangeRef, array: &Array) {

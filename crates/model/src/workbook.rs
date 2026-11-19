@@ -85,6 +85,10 @@ impl WorkbookView {
 /// File › Options › Formulas › Calculation options, stored per workbook (`<calcPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CalcSettings {
+    /// The source workbook asks for a full recalculation on open. An explicit open parameter
+    /// overrides this hint; the XLSX writer independently flags formulas without saved results.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub full_calc_on_load: bool,
     pub mode: CalcMode,
     /// Enable iterative calculation: circular references are calculated repeatedly instead of
     /// reporting an error.
@@ -104,6 +108,7 @@ pub struct CalcSettings {
 impl Default for CalcSettings {
     fn default() -> Self {
         CalcSettings {
+            full_calc_on_load: false,
             mode: CalcMode::Automatic,
             iterative: false,
             max_iterations: Self::DEFAULT_ITERATIONS,
@@ -675,5 +680,23 @@ mod tests {
         assert!(many.windows(2).all(|w| w[0] < w[1]), "ascending without repeats");
         assert!(!many.contains(&0) && !many.contains(&(u32::MAX - 1)) && !many.contains(&u32::MAX));
         assert_eq!(wb.free_object_ids(0), Vec::<u32>::new());
+    }
+}
+
+/// Older native workbooks omit the inactive calculation hint; keep their saved bytes stable.
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[cfg(test)]
+mod calc_hint_tests {
+    use super::CalcSettings;
+
+    #[test]
+    fn native_json_retains_an_explicit_full_calculation_hint() {
+        let original = CalcSettings { full_calc_on_load: true, ..CalcSettings::default() };
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let restored: CalcSettings = serde_json::from_slice(&bytes).unwrap();
+        assert!(restored.full_calc_on_load, "omitting the false default must not drop an active hint");
     }
 }
