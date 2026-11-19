@@ -136,6 +136,13 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if primary_drag || primary_clicked {
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
         let at = if primary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos };
+        if primary_drag
+            && let Some(p) = at
+            && let Some((obj, rect)) = crate::chartview::selected_rotate(app, geo, sh, p)
+        {
+            app.grid.drag = Drag::Rotate { obj, rect, stepped: false };
+            return;
+        }
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
@@ -153,6 +160,20 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
                 // The first recognised drag frame already holds movement away from the press.
                 if let Some(now) = pos {
                     drag_object(app, geo, sh, now);
+                }
+            }
+            return;
+        }
+        // A corner of the selected chart's values outline drags the block the chart plots
+        // (#4389); a click on it keeps the chart selected.
+        if let Some(p) = at
+            && app.editor.is_none()
+            && let Some((chart, orig, corner)) = crate::chartview::chart_data_handle(app, geo, sh, p)
+        {
+            if primary_drag {
+                app.grid.drag = Drag::ChartData { chart, orig, corner, to: None };
+                if let Some(now) = pos {
+                    drag_chart_data(app, geo, sh, now);
                 }
             }
             return;
@@ -640,22 +661,30 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
     keyboard(app, &ctx, resp, geo, sh);
 }
 
+/// Whether Esc was pressed this frame, with any modifiers; every Esc press is then spent, so the
+/// grid's own Esc doesn't also drop a pending copy or Format Painter.
+fn spend_escape(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|i| {
+        let pressed = i.key_pressed(egui::Key::Escape);
+        if pressed {
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
+        }
+        pressed
+    })
+}
+
 fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, sel, pos) = (input.geo, input.sheet, input.workbook, &input.selection, input.position);
     let resp = input.response;
     // Esc during a header-boundary drag cancels it: undo the preview, ignore the release. egui
     // aborts the drag on Esc, so `resp.dragged()` is already false in this frame. The key is
     // spent on the drag, so the grid's Esc doesn't also drop a pending copy or Format Painter.
-    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. })
-        && input.context.input_mut(|i| {
-            let pressed = i.key_pressed(egui::Key::Escape);
-            if pressed {
-                // With any modifiers, as before: the drag is cancelled and every Esc press spent.
-                i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
-            }
-            pressed
-        })
-    {
+    // Esc during a drag of a chart's values outline drops it: the chart keeps its data, whatever
+    // modifiers are held (egui ends the drag on any Esc, so the release must not apply it).
+    if matches!(app.grid.drag, Drag::ChartData { .. }) && spend_escape(&input.context) {
+        app.grid.drag = Drag::None;
+    }
+    if matches!(app.grid.drag, Drag::ResizeCol { .. } | Drag::ResizeRow { .. }) && spend_escape(&input.context) {
         // Undo back to where the drag began, but never past it into an earlier edit.
         let steps = resize_steps(app);
         if steps > 0 {
@@ -757,6 +786,11 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 scroll_by(app, auto);
             }
             Drag::Object { .. } => drag_object(app, geo, sh, p),
+            Drag::Rotate { obj, rect, .. } => rotate_object(app, obj, rect, p, input.modifiers.shift),
+            Drag::ChartData { .. } => {
+                drag_chart_data(app, geo, sh, p);
+                scroll_by(app, auto);
+            }
             Drag::None => {}
         }
     }
@@ -852,6 +886,23 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 if rows != format!("{}:{}", row + 1, row + 1) {
                     let _ = app.session.run("home.rowHeight", json!({"rows": rows, "height": h.round()}));
                     coalesce_resize_undo(app);
+                }
+            }
+            // The release may be the first frame to report the pointer's last position, so the
+            // block is taken from there. (Esc already dropped a cancelled drag, and so did a
+            // change to the chart's data; one in the release's own frame is caught here.)
+            Drag::ChartData { chart, orig, corner, to } => {
+                let to = if resp.drag_stopped()
+                    && let Some(p) = pos
+                {
+                    Some(chart_data_target(geo, sh, orig, corner, p))
+                } else {
+                    to
+                };
+                if let Some(to) = to.filter(|to| *to != orig)
+                    && chart_still_plots(app, chart, orig)
+                {
+                    app.run_or_alert("chart.setValuesRange", json!({"chart": chart, "range": to.a1()}));
                 }
             }
             Drag::MoveCols { source, before: Some(before) } => {
@@ -1191,6 +1242,52 @@ pub(super) fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
     row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
 }
 
+/// Arrow-key nudge of a selected object, sheet points (Ctrl/Alt: fine).
+const NUDGE: f32 = 6.0;
+
+/// Arrow keys aimed at the selected object rather than the cells: they nudge it.
+pub(super) fn object_key(app: &mut SheetApp, sh: &Sheet, key: egui::Key, m: egui::Modifiers) -> bool {
+    use egui::Key;
+    let Some(o) = app.selected_object else { return false };
+    let step = if m.ctrl || m.alt { 1.0 } else { NUDGE };
+    // Arrows follow the screen: a right-to-left sheet is mirrored.
+    let sx = if sh.right_to_left { -step } else { step };
+    let d = match key {
+        Key::ArrowLeft => vec2(-sx, 0.0),
+        Key::ArrowRight => vec2(sx, 0.0),
+        Key::ArrowUp => vec2(0.0, -step),
+        Key::ArrowDown => vec2(0.0, step),
+        _ => return false,
+    };
+    // On Windows and Linux egui sets `command` with `ctrl`: only the Mac Command key opts out.
+    if m.shift || m.mac_cmd {
+        return false;
+    }
+    let Some(a) = sh.object_anchor(o) else { return false };
+    let x0 = (sh.col_left(a.cell.col) as f32 + a.dx + d.x).max(0.0);
+    let y0 = (sh.row_top(a.cell.row) as f32 + a.dy + d.y).max(0.0);
+    let nc = CellRef::new(sh.row_at(f64::from(y0)), sh.col_at(f64::from(x0)));
+    let params =
+        json!({"kind": o.kind.name(), "id": o.id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
+    app.run_or_alert("object.move", params);
+    true
+}
+
+/// Turns the dragged shape so its rotation handle points at `p`; the drag is one undo step.
+fn rotate_object(app: &mut SheetApp, obj: ObjRef, rect: Rect, p: Pos2, snap: bool) {
+    let deg = crate::frame::angle_to(rect, p, snap);
+    let revision = app.session.active().map(|d| d.revision);
+    let _ = app.session.run("object.move", json!({"kind": obj.kind.name(), "id": obj.id, "rotation": deg}));
+    let Drag::Rotate { stepped, .. } = app.grid.drag else { return };
+    if stepped {
+        coalesce_last_undo(app);
+    } else if app.session.active().map(|d| d.revision) != revision
+        && let Drag::Rotate { stepped, .. } = &mut app.grid.drag
+    {
+        *stepped = true;
+    }
+}
+
 /// Moves the dragged object, or resizes it from the grabbed handle, to follow the pointer at `p`
 /// (logical coordinates). The whole drag coalesces into one undo step of its own.
 fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
@@ -1199,7 +1296,16 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     let (cell, dx, dy, w, h) = orig;
     let x0 = sh.col_left(cell.col) as f32 + dx;
     let y0 = sh.row_top(cell.row) as f32 + dy;
+    let frame_deg = crate::chartview::frame_of(sh, obj).0;
     let [x0, y0, x1, y1] = match handle {
+        Some(hd) if frame_deg != 0.0 => {
+            let fh = crate::frame::Handle { x: hd.sides().0, y: hd.sides().1 };
+            let r0 = Rect::from_min_max(pos2(x0, y0), pos2(x0 + w, y0 + h));
+            let min = crate::objects::min_size(sh, obj);
+            let r = crate::frame::resized_turned_by_min(r0, frame_deg, fh, d, min, false);
+            let (nx, ny) = (r.min.x.max(0.0), r.min.y.max(0.0));
+            [nx, ny, r.max.x.max(nx + min.x), r.max.y.max(ny + min.y)]
+        }
         Some(hd) => crate::objects::resized([x0, y0, x0 + w, y0 + h], hd, d, crate::objects::min_size(sh, obj)),
         None => {
             let (x0, y0) = ((x0 + d.x).max(0.0), (y0 + d.y).max(0.0));
@@ -1231,6 +1337,69 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
         // The first step of this drag stays apart from an earlier drag's step of the same name.
         *stepped = true;
     }
+}
+
+/// Previews the selected chart's values block with the grabbed corner dragged to `p` (logical
+/// coordinates); the opposite corner stays. The release gives the chart the block
+/// (`chart.setValuesRange`).
+fn drag_chart_data(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
+    let Drag::ChartData { chart, orig, corner, .. } = app.grid.drag else { return };
+    // The chart's data changed under the drag: drop it, as Esc does, rather than preview a
+    // block the release would put over that change.
+    if !chart_still_plots(app, chart, orig) {
+        app.grid.drag = Drag::None;
+        return;
+    }
+    app.grid.drag = Drag::ChartData { chart, orig, corner, to: Some(chart_data_target(geo, sh, orig, corner, p)) };
+}
+
+/// Whether chart `chart` on the active sheet still plots the values block `orig` its drag
+/// started from. A command run between frames (the control channel, a macro) may have changed
+/// or removed it, and the dragged block would then overwrite that change. Read from the session,
+/// not the frame's workbook, which predates such a command.
+fn chart_still_plots(app: &SheetApp, chart: u32, orig: RangeRef) -> bool {
+    let Some(wb) = app.session.active().map(|d| &d.wb) else { return false };
+    let si = wb.active_sheet();
+    wb.sheet(si)
+        .and_then(|sh| sh.charts.iter().find(|ch| ch.id == chart))
+        .and_then(|ch| gridcraft_engine::chart_data::chart_data(wb, si, ch))
+        .is_some_and(|data| data.sheet == si && data.values == orig)
+}
+
+/// The values block `orig` with its `corner` dragged to `p`. Each edge the corner moves snaps
+/// to the gridline nearest the pointer, so every row and column changes over at its own middle
+/// whatever its height or width, and a release where the press was (on the corner's own
+/// gridlines) changes nothing. The block may flip past its fixed edges, as a selection does; a
+/// moving edge dropped on its fixed edge keeps one row or column.
+fn chart_data_target(geo: &Geo, sh: &Sheet, orig: RangeRef, corner: crate::objects::Handle, p: Pos2) -> RangeRef {
+    let (sx, sy) = corner.sides();
+    let (x, y) = (p.x.clamp(geo.cells.left() + 1.0, geo.cells.right() - 1.0), p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0));
+    // Gridline `k` is the top (left) edge of row (column) `k`; the last one closes the sheet.
+    let row = geo.row_at(sh, y);
+    let row_line = nearest_line(geo.y(sh, row), sh.row_height(row) * geo.z, row, y, MAX_ROWS);
+    let col = geo.col_at(sh, x);
+    let col_line = nearest_line(geo.x(sh, col), sh.col_width(col) * geo.z, col, x, MAX_COLS);
+    let (r0, r1) = between_lines(if sy < 0 { orig.end.row.saturating_add(1) } else { orig.start.row }, row_line, sy);
+    let (c0, c1) = between_lines(if sx < 0 { orig.end.col.saturating_add(1) } else { orig.start.col }, col_line, sx);
+    RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1))
+}
+
+/// The gridline nearest `v` for line `index`, which starts at `start` and is `size` long: its
+/// own start, or the next line's past its middle (never past `last`).
+fn nearest_line(start: f32, size: f32, index: u32, v: f32, last: u32) -> u32 {
+    if v - start < size / 2.0 { index } else { index.saturating_add(1).min(last) }
+}
+
+/// The rows (columns) from gridline `fixed` to gridline `moving`. A moving edge on the fixed one
+/// keeps one line on its own side: after it for a bottom or right edge (`dir` > 0), before it
+/// for a top or left edge.
+fn between_lines(fixed: u32, moving: u32, dir: i8) -> (u32, u32) {
+    let moving = match (moving == fixed, dir > 0) {
+        (false, _) => moving,
+        (true, true) => fixed.saturating_add(1),
+        (true, false) => fixed.saturating_sub(1),
+    };
+    (fixed.min(moving), fixed.max(moving).saturating_sub(1))
 }
 
 /// A click on a hyperlink. References select; web and e-mail addresses ask first (the dialog's
@@ -1284,6 +1453,28 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
 #[cfg(test)]
 mod resize_tests {
     use super::*;
+
+    #[test]
+    fn a_chart_data_edge_snaps_to_the_nearest_gridline_of_any_size() {
+        // Row 5 starts at 100 and is 20 tall: before its middle the line is its own, past it the next.
+        assert_eq!(nearest_line(100.0, 20.0, 5, 109.0, MAX_ROWS), 5);
+        assert_eq!(nearest_line(100.0, 20.0, 5, 111.0, MAX_ROWS), 6);
+        // A 100-tall row changes over at 50 into it, not at the grabbed row's middle.
+        assert_eq!(nearest_line(100.0, 100.0, 5, 149.0, MAX_ROWS), 5);
+        assert_eq!(nearest_line(100.0, 100.0, 5, 151.0, MAX_ROWS), 6);
+        assert_eq!(nearest_line(0.0, 20.0, MAX_ROWS - 1, 19.0, MAX_ROWS), MAX_ROWS);
+        // A1:A5 (lines 0 and 5) by its bottom edge: on line 5 it stays, on 8 it grows, on 2 it shrinks.
+        assert_eq!(between_lines(0, 5, 1), (0, 4));
+        assert_eq!(between_lines(0, 8, 1), (0, 7));
+        assert_eq!(between_lines(0, 2, 1), (0, 1));
+        // Dropped on its fixed edge it keeps one row; past it the block flips.
+        assert_eq!(between_lines(4, 4, 1), (4, 4));
+        assert_eq!(between_lines(4, 2, 1), (2, 3));
+        // By its top edge (fixed line 5, below A5).
+        assert_eq!(between_lines(5, 0, -1), (0, 4));
+        assert_eq!(between_lines(5, 5, -1), (4, 4));
+        assert_eq!(between_lines(5, 7, -1), (5, 6));
+    }
 
     #[test]
     fn resize_targets_follow_the_selection_only_when_the_dragged_line_is_in_it() {

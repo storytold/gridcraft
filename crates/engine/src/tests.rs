@@ -5793,6 +5793,56 @@ fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
 }
 
 #[test]
+fn object_move_refuses_to_rotate_ink() {
+    let mut s = s();
+    let id = s.execute("draw.stroke", json!({"points": [[0, 0], [30, 20], [60, 5]]})).unwrap()["shape"].clone();
+    assert!(s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": 45})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+}
+
+#[test]
+fn object_move_rotates_shapes_only() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": -30})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 330.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let chart = s.execute("insert.chart", json!({"type": "column"})).unwrap()["chart"].clone();
+    assert!(s.execute("object.move", json!({"kind": "chart", "id": chart, "rotation": 45})).is_err());
+}
+
+#[test]
+fn object_move_rotation_respects_sheet_protection() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle", "at": "A1"})).unwrap()["shape"].clone();
+    let id_num = id.as_u64().unwrap() as u32;
+    let shape_state = |session: &Session| {
+        let doc = session.doc().unwrap();
+        let shape = doc.wb.active().unwrap().shapes.iter().find(|shape| shape.id == id_num).unwrap();
+        (shape.anchor, shape.rotation)
+    };
+
+    // Rotation remains available on an unprotected sheet.
+    s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "B2", "rotation": 45})).unwrap();
+    let (anchor, rotation) = shape_state(&s);
+    assert_eq!(rotation, 45.0);
+    assert_eq!(anchor.cell, CellRef::parse("B2").unwrap());
+    s.execute("edit.undo", json!({})).unwrap();
+
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = shape_state(&s);
+    let undo_len = s.doc().unwrap().undo.len();
+
+    let result = s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "C3", "rotation": 90}));
+    assert!(result.is_err(), "rotation should be rejected on a protected sheet");
+    assert_eq!(shape_state(&s), before, "a rejected rotation leaves the shape unchanged");
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+}
+
+#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {
@@ -6714,6 +6764,7 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod chart_data;
 mod controls;
 mod equation;
 mod json_golden;
