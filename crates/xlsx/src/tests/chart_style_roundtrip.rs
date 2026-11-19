@@ -161,3 +161,38 @@ fn alternate_content_fallback_style_trims_and_validates_range() {
         assert_eq!(chart.style, expected, "raw fallback style {raw_val:?}");
     }
 }
+
+/// Reads `<c:style>` from a later `mc:AlternateContent` wrapper when an earlier wrapper has no style fallback.
+#[test]
+fn later_alternate_content_wrapper_provides_fallback_style() {
+    use crate::chart::read_chart;
+    use crate::xml::parse;
+
+    let xml = r#"<c:chartSpace
+        xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:c14="http://schemas.microsoft.com/office/drawing/2007/8/2/chart">
+        <mc:AlternateContent>
+            <mc:Choice Requires="c14"><c14:sketchOptions/></mc:Choice>
+        </mc:AlternateContent>
+        <mc:AlternateContent>
+            <mc:Choice Requires="c14"><c14:dropZoneFilter val="0"/></mc:Choice>
+            <mc:Fallback><c:roundedCorners val="0"/></mc:Fallback>
+        </mc:AlternateContent>
+        <mc:AlternateContent>
+            <mc:Choice Requires="c14"><c14:style val="100"/></mc:Choice>
+            <mc:Fallback><c:style val="0"/></mc:Fallback>
+        </mc:AlternateContent>
+        <mc:AlternateContent>
+            <mc:Choice Requires="c14"><c14:style val="109"/></mc:Choice>
+            <mc:Fallback><c:style val="9"/></mc:Fallback>
+        </mc:AlternateContent>
+        <c:chart>
+            <c:plotArea>
+                <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/></c:ser></c:barChart>
+            </c:plotArea>
+        </c:chart>
+    </c:chartSpace>"#;
+    let chart = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(chart.style, 9);
+}

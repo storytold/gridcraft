@@ -2000,7 +2000,9 @@ fn explicit_excel_styles_set_line_stroke_width() {
 #[test]
 fn narrow_style_9_bars_retain_visible_fill() {
     let fill_color: Rgba = [0x61, 0x61, 0x61, 0xFF];
-    let count = 240usize;
+    // Stay within MAX_LABELS (200) so data labels remain active on the direct unmerged path,
+    // while keeping each single-series slot <= 0.88 px inside the 220 px chart.
+    let count = 100usize;
     let categories: Vec<String> = (0..count).map(|i| format!("C{i}")).collect();
     let values = vec![50.0; count];
 
@@ -2027,7 +2029,7 @@ fn narrow_style_9_bars_retain_visible_fill() {
             })
             .collect();
 
-        assert!(!narrow_bars.is_empty(), "Expected narrow unmerged bars for {kind:?}");
+        assert_eq!(narrow_bars.len(), count, "Direct unmerged path must emit all {count} bars individually for {kind:?}");
         assert!(narrow_bars.iter().all(Option::is_none), "Narrow style 9 bars must omit the 1 px white outline: {narrow_bars:?}");
     }
 }

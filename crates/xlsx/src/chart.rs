@@ -290,7 +290,11 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         style: root
             .child_val("style")
             .and_then(parse_chart_style)
-            .or_else(|| root.path(&["AlternateContent", "Fallback"]).and_then(|fallback| fallback.child_val("style")).and_then(parse_chart_style))
+            .or_else(|| {
+                root.kids("AlternateContent")
+                    .filter_map(|wrapper| wrapper.child("Fallback"))
+                    .find_map(|fallback| fallback.child_val("style").and_then(parse_chart_style))
+            })
             .unwrap_or(2),
         hole_size,
         first_slice_angle,
