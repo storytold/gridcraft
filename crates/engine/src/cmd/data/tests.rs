@@ -617,3 +617,54 @@ fn remove_duplicates_keeps_totals_formulas_pointing_below_the_table() {
     assert_eq!(f.text.trim_start_matches('='), "A10");
     assert_eq!(sh.value(CellRef::parse("B5").unwrap()), Value::Number(100.0));
 }
+
+#[test]
+fn remove_duplicates_moved_totals_formula_adjusts_for_actual_removed_rows() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Key", "Amount"], ["a", 10], ["a", 99], ["b", 20], ["c", 30]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B5", "header": true, "name": "T"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "T", "on": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "A10", "input": 100})).unwrap();
+    s.execute("cell.set", json!({"cell": "A6", "input": "=A10+B4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B6", "input": "=SUM(B4:B5)"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"range": "A1:B6", "columns": ["A"], "header": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.tables[0].range.a1(), "A1:B5");
+    let fb = sh.cell(CellRef::parse("B5").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(fb.text.trim_start_matches('='), "SUM(B3:B4)");
+    assert_eq!(sh.value(CellRef::parse("B5").unwrap()), Value::Number(50.0));
+    let fa = sh.cell(CellRef::parse("A5").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(fa.text.trim_start_matches('='), "A10+B3");
+    assert_eq!(sh.value(CellRef::parse("A5").unwrap()), Value::Number(120.0));
+}
+
+#[test]
+fn remove_duplicates_moved_totals_formula_handles_multiple_removed_rows_and_ref_error() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({"range": "A1", "values": [["Key", "Amount", "Note"], ["a", 10, "k1"], ["a", 99, "d1"], ["b", 20, "k2"], ["b", 88, "d2"], ["c", 30, "k3"]]}),
+    )
+    .unwrap();
+    s.execute("insert.table", json!({"range": "A1:C6", "header": true, "name": "T"})).unwrap();
+    s.execute("table.totalRow", json!({"table": "T", "on": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "D4", "input": 7})).unwrap();
+    s.execute("cell.set", json!({"cell": "D6", "input": 8})).unwrap();
+    s.execute("cell.set", json!({"cell": "A7", "input": "=B3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B7", "input": "=SUM(B4:B6)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C7", "input": "=SUM(D4:D6)"})).unwrap();
+    s.execute("data.removeDuplicates", json!({"range": "A1:C7", "columns": ["A"], "header": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.tables[0].range.a1(), "A1:C5");
+    let fa = sh.cell(CellRef::parse("A5").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(fa.text.trim_start_matches('='), "#REF!");
+    assert_eq!(sh.value(CellRef::parse("A5").unwrap()), Value::Error(gridcraft_core::CellError::Ref));
+    let fb = sh.cell(CellRef::parse("B5").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(fb.text.trim_start_matches('='), "SUM(B3:B4)");
+    assert_eq!(sh.value(CellRef::parse("B5").unwrap()), Value::Number(50.0));
+    let fc = sh.cell(CellRef::parse("C5").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(fc.text.trim_start_matches('='), "SUM(D4:D6)");
+    assert_eq!(sh.value(CellRef::parse("C5").unwrap()), Value::Number(15.0));
+}

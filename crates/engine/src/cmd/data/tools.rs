@@ -53,6 +53,7 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut seen = std::collections::HashSet::new();
         let mut keep: Vec<u32> = Vec::new();
+        let mut removed_rows: Vec<u32> = Vec::new();
         // Cells are compared by the text they show, as in Excel: the same date in two formats
         // isn't a duplicate, while 1.01 and 1.02 shown as 1.0 are.
         let shown = |c: CellRef| crate::display::format(&sh.value(c), cx.wb.styles.get(sh.style_id(c)).num_fmt.as_str(), &cx.wb).text;
@@ -61,9 +62,10 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
             if seen.insert(key) {
                 keep.push(row);
             } else {
-                removed += 1;
+                removed_rows.push(row);
             }
         }
+        removed = removed_rows.len();
         let pictures: Vec<_> = keep
             .iter()
             .enumerate()
@@ -122,17 +124,12 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         let mut extra_changed = Vec::new();
         if removed > 0
             && let Some((ti, true, _)) = table_match
-            && let Some((totals_row, old_end, c0, c1)) = shm.tables.get(ti).map(|t| (t.totals_row, t.range.end.row, t.range.start.col, t.range.end.col))
+            && let Some((totals_row, old_range)) = shm.tables.get(ti).map(|t| (t.totals_row, t.range))
         {
+            let old_end = old_range.end.row;
+            let (c0, c1) = (old_range.start.col, old_range.end.col);
             let new_end = old_end.saturating_sub(removed as u32);
             if totals_row && new_end < old_end {
-                // The removed rows are the ones between the new and old totals row, so the moved
-                // totals formulas follow them like Delete Cells does: a custom `=SUM(A2:A5)` shrinks
-                // instead of ending up including its own cell.
-                let shift = gridcraft_formula::adjust::Edit::DeleteCells {
-                    axis: gridcraft_formula::adjust::Axis::Rows,
-                    range: RangeRef::new(CellRef::new(new_end, c0), CellRef::new(old_end - 1, c1)),
-                };
                 let host = shm.name.clone();
                 for col in c0..=c1 {
                     let src = CellRef::new(old_end, col);
@@ -140,7 +137,7 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
                     let mut cell = shm.cell(src).cloned();
                     if let Some(cell) = cell.as_mut()
                         && let Some(f) = cell.formula.clone()
-                        && let Some(new) = f.with_expr(|x| adjust_within_table(x, &host, &shift, old_end)).flatten()
+                        && let Some(new) = f.with_expr(|x| adjust_within_table(x, &host, &removed_rows, old_range)).flatten()
                     {
                         cell.formula = Some(std::sync::Arc::new(gridcraft_model::Formula {
                             array: f.array,
@@ -187,26 +184,69 @@ pub(super) fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
     Ok(json!({"removed": removed, "remaining": remaining}))
 }
 
-/// Adjusts a moved totals-row formula for the rows compaction removed, leaving references that
-/// reach below the table as they are: those rows don't move, so the shift Delete Cells makes
-/// would point them at the wrong cell.
-fn adjust_within_table(
-    e: &gridcraft_formula::Expr,
-    host: &str,
-    shift: &gridcraft_formula::adjust::Edit,
-    last_table_row: u32,
-) -> Option<gridcraft_formula::Expr> {
+/// Adjusts a moved totals-row formula for the actual rows compaction removed (`removed_rows`,
+/// strictly increasing), leaving references outside the table's columns or reaching below
+/// `table.end.row` as they are: those cells don't move when table duplicates are compacted away.
+fn adjust_within_table(e: &gridcraft_formula::Expr, host: &str, removed_rows: &[u32], table: RangeRef) -> Option<gridcraft_formula::Expr> {
+    use gridcraft_formula::{Expr, SheetSel};
+
     let mut changed = false;
     let out = e.clone().map(&mut |x| {
-        let gridcraft_formula::Expr::Ref(r) = &x else { return x };
-        if r.range().end.row > last_table_row {
+        let Expr::Ref(r) = &x else { return x };
+        let on_host = match &r.sheet {
+            SheetSel::Current => true,
+            SheetSel::Named(n) => n.eq_ignore_ascii_case(host),
+            SheetSel::Span(..) => false,
+        };
+        let span = r.range();
+        if !on_host || span.end.row > table.end.row || span.start.col < table.start.col || span.end.col > table.end.col {
             return x;
         }
-        let adjusted = gridcraft_formula::adjust::adjust(x.clone(), host, host, shift);
+        let adjusted = match adjust_table_ref(r, removed_rows) {
+            Some(r) => Expr::Ref(r),
+            None => Expr::Error(gridcraft_core::CellError::Ref),
+        };
         changed |= adjusted != x;
         adjusted
     });
     changed.then_some(out)
+}
+
+/// Maps a single in-table reference across the strictly increasing `removed_rows` deleted by
+/// deduplication, matching sequential `DeleteCells` on those rows.
+fn adjust_table_ref(r: &gridcraft_formula::Reference, removed_rows: &[u32]) -> Option<gridcraft_formula::Reference> {
+    use gridcraft_formula::{Anchor, RefKind, Reference};
+
+    let kind = match &r.kind {
+        RefKind::Cell(a) => RefKind::Cell(Anchor { row: map_removed_row(a.row, removed_rows)?, ..*a }),
+        RefKind::Range(a, b) => {
+            let (lo, hi) = map_removed_span(a.row.min(b.row), a.row.max(b.row), removed_rows)?;
+            RefKind::Range(Anchor { row: lo, ..*a }, Anchor { row: hi, ..*b })
+        }
+        RefKind::Rows(r0, a0, r1, a1) => {
+            let (lo, hi) = map_removed_span((*r0).min(*r1), (*r0).max(*r1), removed_rows)?;
+            RefKind::Rows(lo, *a0, hi, *a1)
+        }
+        RefKind::Cols(..) => r.kind.clone(),
+    };
+    Some(Reference { sheet: r.sheet.clone(), kind })
+}
+
+fn map_removed_row(row: u32, removed_rows: &[u32]) -> Option<u32> {
+    match removed_rows.binary_search(&row) {
+        Ok(_) => None,
+        Err(before) => Some(row.saturating_sub(before as u32)),
+    }
+}
+
+fn map_removed_span(lo: u32, hi: u32, removed_rows: &[u32]) -> Option<(u32, u32)> {
+    let before_lo = removed_rows.partition_point(|&r| r < lo);
+    let up_to_hi = removed_rows.partition_point(|&r| r <= hi);
+    let removed_in_span = up_to_hi.saturating_sub(before_lo) as u64;
+    if removed_in_span > hi.saturating_sub(lo) as u64 {
+        return None;
+    }
+    Some((lo.saturating_sub(before_lo as u32), hi.saturating_sub(up_to_hi as u32)))
 }
 
 pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
