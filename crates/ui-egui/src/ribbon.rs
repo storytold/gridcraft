@@ -135,15 +135,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let row_id = ui.scope_id().with(("ribbon_row", tab.as_str()));
                 let (content_w, from_right, last_over) = ui.data(|d| d.get_temp::<(f32, f32, f32)>(row_id)).unwrap_or((0.0, 0.0, 0.0));
                 let row_w = content_w.max(view_w);
-                let set_offset = (last_over - from_right).max(0.0);
                 let mut area = egui::ScrollArea::horizontal()
                     .id_salt(("ribbon_scroll", tab.as_str()))
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
-                // egui 0.37 keeps `ScrollArea`'s offset private; `scroll_offset` is the supported
-                // way to move it. In RTL, distance is tracked from the right reading-start edge.
-                if rtl {
-                    area = area.horizontal_scroll_offset(set_offset);
-                } else if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
+                // egui 0.37 keeps `ScrollArea`'s offset private; apply `scroll_offset` one-shot only
+                // when an arrow button is clicked or RTL overflow changes so native touch dragging stays active.
+                if let Some((frame, x)) = ui.ctx().data_mut(|d| d.remove_temp::<(u64, f32)>(RibbonOverflow::scroll_target_id(tab.as_str())))
                     && ui.ctx().cumulative_frame_nr().saturating_sub(frame) <= 1
                 {
                     area = area.horizontal_scroll_offset(x);
@@ -177,12 +174,17 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 });
                 if rtl {
                     let over = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
-                    let scrolled = (scroll.state.clamped_offset().x - set_offset).abs() > 0.5 && set_offset <= over;
-                    let from_right = if scrolled { (over - scroll.state.clamped_offset().x).max(0.0) } else { from_right.min(over) };
-                    ui.data_mut(|d| d.insert_temp(row_id, (measured, from_right, over)));
-                    if (over - last_over).abs() > 0.5 {
+                    let next_from_right = if (over - last_over).abs() > 0.5 {
+                        let kept = from_right.min(over);
+                        let target_x = (over - kept).max(0.0);
+                        let frame = ui.ctx().cumulative_frame_nr();
+                        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab.as_str()), (frame, target_x)));
                         ui.ctx().request_repaint();
-                    }
+                        kept
+                    } else {
+                        (over - scroll.state.clamped_offset().x).max(0.0)
+                    };
+                    ui.data_mut(|d| d.insert_temp(row_id, (measured, next_from_right, over)));
                 }
                 scroll_arrows(ui, &t, tab.as_str(), rtl, row_id, measured, scroll);
             });
@@ -265,11 +267,10 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, rtl: bool, row_id: egui::Id
     }
     if let Some(x) = target {
         let x = x.clamp(0.0, max);
+        let frame = ui.ctx().cumulative_frame_nr();
+        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab), (frame, x)));
         if rtl {
             ui.data_mut(|d| d.insert_temp(row_id, (measured, (max - x).max(0.0), max)));
-        } else {
-            let frame = ui.ctx().cumulative_frame_nr();
-            ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab), (frame, x)));
         }
         ui.ctx().request_repaint();
     }
