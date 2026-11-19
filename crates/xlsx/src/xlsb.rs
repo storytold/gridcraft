@@ -76,7 +76,9 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     wb.sheets.clear();
     let mut report = ReadReport::default();
     report.warn("XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.");
-    let sheets = workbook(&book, &mut wb, &mut report)?;
+    let (sheets, active_tab) = workbook(&book, &mut wb, &mut report)?;
+    // The imported sheet each entry of the workbook's sheet list became (skipped ones have none).
+    let mut imported = Vec::with_capacity(sheets.len());
     let rels = relationships(&mut package, &root.target)?;
     let mut budget = Budget::default();
     let sst_rels: Vec<_> = rels.iter().filter(|r| r.kind == "sharedStrings").collect();
@@ -93,6 +95,7 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         vec![]
     };
     for info in sheets {
+        imported.push(None);
         let Some(id) = info.rel else {
             if info.visibility != Visibility::VeryHidden {
                 return Err(invalid("worksheet relationship is null"));
@@ -115,12 +118,20 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.check_sheet_name(&info.name, None).map_err(invalid)?;
         let mut sheet = worksheet(&required(&mut package, &rel.target)?, &info.name, &strings, &mut budget, &mut report)?;
         sheet.visibility = info.visibility;
+        if let Some(slot) = imported.last_mut() {
+            *slot = Some(wb.sheets.len());
+        }
         wb.sheets.push(Arc::new(sheet));
     }
     if wb.sheets.is_empty() {
         return Err(invalid("no supported worksheets"));
     }
-    wb.set_active_sheet(wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
+    // The tab the workbook was saved on, when it was imported and is visible; else the first
+    // visible sheet.
+    let saved = active_tab
+        .and_then(|tab| imported.get(tab).copied().flatten())
+        .filter(|&i| wb.sheets.get(i).is_some_and(|s| s.visibility == Visibility::Visible));
+    wb.set_active_sheet(saved.or_else(|| wb.sheets.iter().position(|s| s.visibility == Visibility::Visible)).unwrap_or(0));
     Ok((wb, report))
 }
 
@@ -390,10 +401,13 @@ struct SheetInfo {
     rel: Option<String>,
     visibility: Visibility,
 }
-fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<Vec<SheetInfo>, IoError> {
+/// The workbook's sheet list, and the active tab its first window records ([MS-XLSB] 2.4.304
+/// BrtBookView `itabCur`: a zero-based index into that list), when it has one.
+fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<(Vec<SheetInfo>, Option<usize>), IoError> {
     let mut records = Records::new(bytes);
     records.first(131, report)?;
     let mut sheets = vec![];
+    let mut active = None;
     let mut bundle = false;
     let mut bundle_seen = false;
     while let Some((id, payload)) = records.next(report)? {
@@ -404,7 +418,7 @@ fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<
                     return Err(invalid("incomplete worksheet list"));
                 }
                 records.end(payload, report)?;
-                return Ok(sheets);
+                return Ok((sheets, active));
             }
             143 => {
                 if bundle_seen {
@@ -420,6 +434,14 @@ fn workbook(bytes: &[u8], wb: &mut Workbook, report: &mut ReadReport) -> Result<
                 }
                 bundle = false;
                 b.finish()?;
+            }
+            // BrtBookView: xWn, yWn, dxWn, dyWn, iTabRatio, itabFirst, itabCur (u32 each), then
+            // flags. Only the first window's active tab is used, as Excel opens on it (#4300).
+            158 if active.is_none() => {
+                for _ in 0..6 {
+                    b.u32()?;
+                }
+                active = usize::try_from(b.u32()?).ok();
             }
             153 => {
                 wb.date_system = if b.u32()? & 1 != 0 { DateSystem::D1904 } else { DateSystem::D1900 };
