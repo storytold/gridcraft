@@ -193,10 +193,12 @@ impl XlsxKind {
     }
 
     /// The kind a workbook part's content type declares, or `None` for another content type.
+    /// Media types are case-insensitive (RFC 2045), so a package spelling `macroEnabled`
+    /// differently is the same kind.
     pub fn from_content_type(content_type: &str) -> Option<XlsxKind> {
         [XlsxKind::Workbook, XlsxKind::MacroWorkbook, XlsxKind::Template, XlsxKind::MacroTemplate]
             .into_iter()
-            .find(|kind| kind.main_content_type() == content_type)
+            .find(|kind| kind.main_content_type().eq_ignore_ascii_case(content_type))
     }
 }
 
