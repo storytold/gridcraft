@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartKind, Color, DefinedName, LabelPosition, LegendPos, LineDash, Series, SeriesLabels, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -143,7 +145,54 @@ fn read_series(s: &El) -> Series {
         quartiles: Default::default(),
         smooth: bool_val(s, "smooth"),
         trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
+        labels: s.child("dLbls").map(read_series_labels),
     }
+}
+
+/// A series' `c:dLbls`: deleted, or what its labels show, where and at what angle (`a:bodyPr rot`,
+/// in 60000ths of a degree clockwise).
+fn read_series_labels(d: &El) -> SeriesLabels {
+    if bool_val(d, "delete") {
+        return SeriesLabels::default();
+    }
+    let rot = d
+        .path(&["txPr", "bodyPr"])
+        .and_then(|b| b.attr_f64("rot"))
+        .filter(|r| r.is_finite())
+        .map_or(0.0, |r| (-r / 60000.0).clamp(-90.0, 90.0) as f32);
+    SeriesLabels {
+        value: bool_val(d, "showVal"),
+        series_name: bool_val(d, "showSerName"),
+        category_name: bool_val(d, "showCatName"),
+        position: d.child_val("dLblPos").and_then(LabelPosition::parse),
+        rotation: rot,
+    }
+}
+
+/// A series' own `c:dLbls`.
+fn series_labels_xml(l: &SeriesLabels) -> String {
+    if !l.shows_anything() {
+        return "<c:dLbls><c:delete val=\"1\"/></c:dLbls>".into();
+    }
+    let mut x = String::from("<c:dLbls>");
+    if l.rotation != 0.0 && l.rotation.is_finite() {
+        let rot = (-f64::from(l.rotation.clamp(-90.0, 90.0)) * 60000.0).round() as i64;
+        let _ = write!(
+            x,
+            "<c:txPr><a:bodyPr rot=\"{rot}\" vert=\"horz\"/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>"
+        );
+    }
+    if let Some(p) = l.position {
+        let _ = write!(x, "<c:dLblPos val=\"{}\"/>", p.as_str());
+    }
+    let _ = write!(
+        x,
+        "<c:showLegendKey val=\"0\"/><c:showVal val=\"{}\"/><c:showCatName val=\"{}\"/><c:showSerName val=\"{}\"/><c:showPercent val=\"0\"/><c:showBubbleSize val=\"0\"/></c:dLbls>",
+        u8::from(l.value),
+        u8::from(l.category_name),
+        u8::from(l.series_name)
+    );
+    x
 }
 
 const DASHES: [(LineDash, &str); 11] = [
@@ -239,8 +288,9 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         }
     }
     let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
+    // The chart's own labels are the groups'; a series' dLbls (kept on the series) overrides them.
     let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
-    let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
+    let data_labels = groups.iter().any(|(g, _)| show_val(g));
     let val_axes: Vec<&El> = plot.kids("valAx").collect();
     let cat_ax = plot.child("catAx").or_else(|| plot.child("dateAx"));
     let scatter = matches!(first_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
@@ -569,6 +619,10 @@ fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String 
         G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
         G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         _ => {}
+    }
+    // A series' own labels come after its markers and before its trendlines.
+    if let Some(l) = &s.labels {
+        x.push_str(&series_labels_xml(l));
     }
     // Trendlines sit between dLbls and the data in CT_LineSer, CT_BarSer, CT_AreaSer,
     // CT_ScatterSer and CT_BubbleSer; pie and radar series have none.

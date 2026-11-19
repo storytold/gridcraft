@@ -153,6 +153,9 @@ pub struct SeriesData {
     pub trendlines: Vec<TrendlineData>,
     /// Number format code of the source values ("General" by default).
     pub number_format: String,
+    /// The series' own data labels; `None` follows the chart's.
+    #[serde(default)]
+    pub labels: Option<gridcraft_model::SeriesLabels>,
 }
 
 /// A trendline to draw: the model settings with the line colour resolved against the theme.
@@ -175,6 +178,7 @@ impl Default for SeriesData {
             smooth: false,
             trendlines: vec![],
             number_format: "General".into(),
+            labels: None,
         }
     }
 }

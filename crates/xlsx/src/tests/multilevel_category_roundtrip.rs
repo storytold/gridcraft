@@ -28,6 +28,7 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         anchor: Anchor { cell: CellRef::new(0, 4), width: 480.0, height: 300.0, ..Anchor::default() },
         title: None,
         series: vec![Series {
+            labels: None,
             name: None,
             categories: Some(categories.into()),
             values: values.into(),
