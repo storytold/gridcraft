@@ -211,6 +211,10 @@ pub struct DocState {
     /// kind back even when the file's name says otherwise, so a macro-enabled package named
     /// `.xlsx` or with no extension keeps its VBA project (#4351).
     pub package_kind: Option<gridcraft_xlsx::XlsxKind>,
+    /// Whether the document's current file carries the VBA project in memory: it did when the
+    /// file was opened, and it does after a save that wrote a macro-enabled package. An ordinary
+    /// Save that would write a macro-free package refuses rather than strip the project (#4351).
+    pub vba_in_file: bool,
     /// Whether the scripts stored in this workbook may run (`automate.runScript`). A workbook
     /// that arrives already carrying scripts (opened from a file) starts untrusted until the
     /// user trusts it in this session (`automate.trustScripts`); one with no scripts starts
@@ -363,6 +367,7 @@ impl DocState {
             unlocked_ranges: vec![],
             content_kind: None,
             package_kind: None,
+            vba_in_file: false,
             scripts_trusted,
             trust,
             touched: None,
