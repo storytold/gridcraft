@@ -65,6 +65,44 @@ fn convert_to_range_keeps_array_range_and_rewrites_qualified_names() {
     assert_eq!(read(&mut s, "Sheet1", "F1", false)[0].as_f64(), Some(30.0));
 }
 
+/// A name that a LET or LAMBDA binds locally is not a reference to the table of the same name, so
+/// the rewrite leaves it alone; where the name is not bound it still means the table.
+#[test]
+fn convert_to_range_keeps_local_let_and_lambda_names() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Amount"], ["a", 10], ["b", 20]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "header": true, "name": "Orders"})).unwrap();
+    // D3 reads the table by name in the value of the very binding that then shadows it, and D4's
+    // LAMBDA binding ends with its body, so the `Orders` beside it is still the table.
+    s.execute(
+        "range.setValues",
+        json!({"range": "D1", "values": [
+            ["=LET(Orders,7,Orders)"],
+            ["=LAMBDA(Orders,Orders*2)(21)"],
+            ["=LET(Orders,COUNTA(Orders),Orders)"],
+            ["=SUM(LAMBDA(Orders,Orders)(5),COUNTA(Orders))"],
+        ]}),
+    )
+    .unwrap();
+    assert_eq!(read(&mut s, "Sheet1", "D1:D4", false), vec![json!(7.0), json!(42.0), json!(4.0), json!(9.0)]);
+
+    s.execute("table.convertToRange", json!({"table": "Orders"})).unwrap();
+    let values = read(&mut s, "Sheet1", "D1:D4", false);
+    assert_eq!(values, vec![json!(7.0), json!(42.0), json!(4.0), json!(9.0)]);
+    let formulas = read(&mut s, "Sheet1", "D1:D4", true);
+    let formulas: Vec<&str> = formulas.iter().map(|f| f.as_str().unwrap_or_default()).collect();
+    assert_eq!(
+        formulas,
+        vec![
+            "=LET(Orders,7,Orders)",
+            "=LAMBDA(Orders,Orders*2)(21)",
+            "=LET(Orders,COUNTA($A$2:$B$3),Orders)",
+            "=SUM(LAMBDA(Orders,Orders)(5),COUNTA($A$2:$B$3))",
+        ]
+    );
+}
+
 /// A conversion that would push a formula past the parser's length limit is refused whole.
 #[test]
 fn convert_to_range_refuses_formulas_that_would_not_reparse() {
