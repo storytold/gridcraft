@@ -1098,6 +1098,74 @@ pub struct AutoFilter {
     pub range: RangeRef,
     /// Column offset within `range` → criterion.
     pub criteria: Vec<(u32, FilterCriterion)>,
+    /// Column offsets within `range` whose dropdown arrow is hidden (`filterColumn hiddenButton`,
+    /// Excel's `VisibleDropDown:=False`). Kept whether or not the column has a criterion.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden_buttons: Vec<u32>,
+    /// The sort Excel last applied from the filter's dropdowns (`autoFilter/sortState`), kept
+    /// so Data › Reapply in Excel sorts by it again. GridCraft doesn't apply it itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<SortState>,
+}
+
+impl AutoFilter {
+    /// Moves the criteria and hidden arrows, which are column offsets in the range, with an edit
+    /// that moved the range from `old` to `self.range`: `map` gives a range's place after the edit
+    /// (None when it was deleted). Each column is followed through its cells in the range, so
+    /// deleting the header row keeps it. A column that was deleted, moved out of the range, or
+    /// split (an insert of cells that moved some of its rows and not the others) loses its
+    /// criterion and its hidden arrow.
+    pub fn remap_columns(&mut self, old: RangeRef, mut map: impl FnMut(RangeRef) -> Option<RangeRef>) {
+        let new = self.range;
+        let mut offset = |o: u32| {
+            let col = old.start.col.checked_add(o)?;
+            let mut landed: Option<u32> = None;
+            for row in old.start.row..=old.end.row {
+                let Some(r) = map(RangeRef::cell(CellRef::new(row, col))) else { continue };
+                match landed {
+                    Some(c) if c != r.start.col => return None,
+                    _ => landed = Some(r.start.col),
+                }
+            }
+            landed.filter(|c| (new.start.col..=new.end.col).contains(c)).map(|c| c - new.start.col)
+        };
+        self.criteria = std::mem::take(&mut self.criteria).into_iter().filter_map(|(o, c)| Some((offset(o)?, c))).collect();
+        self.hidden_buttons = std::mem::take(&mut self.hidden_buttons).into_iter().filter_map(&mut offset).collect();
+        self.hidden_buttons.sort_unstable();
+        self.hidden_buttons.dedup();
+    }
+}
+
+/// A saved sort: the rows it sorts and its keys, first key first (`sortState`). Only sorts by
+/// value are kept; a state with a colour or icon key isn't read.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SortState {
+    pub range: RangeRef,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub case_sensitive: bool,
+    pub keys: Vec<SortKey>,
+}
+
+/// One key of a [`SortState`]: the cells sorted by (`sortCondition ref`), and the direction.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SortKey {
+    pub range: RangeRef,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub descending: bool,
+}
+
+impl SortState {
+    /// The state with every range moved by `map`; None when its range or a key goes away, or a
+    /// key ends up outside the range (an insert of cells that moved the key and not the rest).
+    pub fn mapped(&self, mut map: impl FnMut(RangeRef) -> Option<RangeRef>) -> Option<SortState> {
+        let range = map(self.range)?;
+        let keys = self
+            .keys
+            .iter()
+            .map(|k| Some(SortKey { range: map(k.range).filter(|r| range.contains_range(r))?, descending: k.descending }))
+            .collect::<Option<Vec<_>>>()?;
+        Some(SortState { range, case_sensitive: self.case_sensitive, keys })
+    }
 }
 
 /// A slicer: an on-sheet filter widget bound to one column of a table. Clicking its value tiles

@@ -491,7 +491,7 @@ fn write_sheet_rules(s: &mut String, sheet: &Sheet, rels: &mut Rels, out: &mut O
     if let Some(af) = &sheet.autofilter
         && !sheet.tables.iter().any(|t| t.range.intersects(&af.range))
     {
-        s.push_str(&autofilter_xml(af.range, &af.criteria, out));
+        s.push_str(&autofilter_xml(af.range, &af.criteria, &af.hidden_buttons, af.sort.as_ref(), out));
     }
     if !sheet.merges.is_empty() {
         let merges: Vec<&RangeRef> = sheet.merges.iter().filter(|m| !m.is_single()).collect();

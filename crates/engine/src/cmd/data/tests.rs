@@ -557,3 +557,84 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// #4292: the AutoFilter's saved sort moves with its rows, and goes with them.
+#[test]
+fn an_autofilter_sort_moves_with_its_rows() {
+    use gridcraft_model::{AutoFilter, SortKey, SortState};
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Amount"], ["a", 2], ["b", 5], ["c", 3]]})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().autofilter = Some(AutoFilter {
+        range: r("A1:B4"),
+        criteria: vec![],
+        hidden_buttons: vec![],
+        sort: Some(SortState { range: r("A2:B4"), case_sensitive: false, keys: vec![SortKey { range: r("B2:B4"), descending: true }] }),
+    });
+    let sort = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().autofilter.as_ref().and_then(|af| af.sort.clone());
+    s.execute("home.insertRows", json!({"rows": "1:2"})).unwrap();
+    let st = sort(&s).unwrap();
+    assert_eq!((st.range, st.keys[0].range, st.keys[0].descending), (r("A4:B6"), r("B4:B6"), true));
+    s.execute("home.insertColumns", json!({"cols": "A:A"})).unwrap();
+    assert_eq!(sort(&s).unwrap().keys[0].range, r("C4:C6"));
+    // Undo puts it back where it was.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(sort(&s).unwrap().keys[0].range, r("B2:B4"));
+    // Cells inserted in the key's column alone (shifting it down) move the key out of the sort's
+    // rows: the sort is dropped, not kept with its key outside its range (CodeRabbit's review).
+    let mut t = Session::new();
+    t.new_workbook();
+    t.execute("range.setValues", json!({"range": "A1", "values": [["Name", "Amount"], ["a", 2], ["b", 5], ["c", 3]]})).unwrap();
+    std::sync::Arc::make_mut(&mut t.doc_mut().unwrap().wb).sheet_mut(0).unwrap().autofilter = Some(AutoFilter {
+        range: r("A1:B4"),
+        criteria: vec![],
+        hidden_buttons: vec![],
+        sort: Some(SortState { range: r("A2:B4"), case_sensitive: false, keys: vec![SortKey { range: r("B2:B4"), descending: true }] }),
+    });
+    t.execute("home.insertCells", json!({"range": "B2:B3", "shift": "down"})).unwrap();
+    assert!(t.doc().unwrap().wb.sheet(0).unwrap().autofilter.as_ref().is_some_and(|af| af.sort.is_none()), "{:?}", sort(&t));
+    // Deleting the sorted column drops the sort, not the filter.
+    s.execute("home.deleteColumns", json!({"cols": "B:B"})).unwrap();
+    let af = s.doc().unwrap().wb.sheet(0).unwrap().autofilter.clone();
+    assert!(af.is_some_and(|af| af.sort.is_none()));
+}
+
+/// An AutoFilter's criteria and hidden arrows stay on their columns when columns are inserted or
+/// deleted in its range (after CodeRabbit's review of #4412): they are offsets in the range.
+#[test]
+fn autofilter_criteria_and_hidden_arrows_follow_their_columns() {
+    use gridcraft_model::{AutoFilter, FilterCriterion};
+    let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["A", "B", "C"], [1, 2, 3], [4, 5, 6]]})).unwrap();
+    let crit = FilterCriterion::Values { values: vec!["3".into()], blanks: false };
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().autofilter =
+        Some(AutoFilter { range: r("A1:C3"), criteria: vec![(2, crit.clone())], hidden_buttons: vec![0, 2], sort: None });
+    let af = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().autofilter.clone().unwrap();
+    // A column inserted at B: C's criterion and arrow move to D, A's arrow stays.
+    s.execute("home.insertColumns", json!({"cols": "B:B"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:D3"), vec![(3, crit.clone())], vec![0, 3]));
+    // Deleting that column (D, once C) takes its criterion and arrow with it.
+    s.execute("home.deleteColumns", json!({"cols": "D:D"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.is_empty(), a.hidden_buttons.clone()), (r("A1:C3"), true, vec![0]));
+    // Deleting a column before them moves them back.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("home.deleteColumns", json!({"cols": "B:B"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:C3"), vec![(2, crit.clone())], vec![0, 2]));
+    // Deleting the header row keeps each column's criterion and arrow (CodeRabbit's review): the
+    // columns are followed through the rows left, not the header cells deleted.
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    let a = af(&s);
+    assert_eq!((a.range, a.criteria.clone(), a.hidden_buttons.clone()), (r("A1:C2"), vec![(2, crit)], vec![0, 2]));
+    // Cells inserted over part of a column (C1 alone, shifted right) split it: its criterion and
+    // arrow go, as they name no one column any more; A's arrow stays (CodeRabbit's review).
+    s.execute("home.insertCells", json!({"range": "C1", "shift": "right"})).unwrap();
+    let a = af(&s);
+    assert!(a.criteria.is_empty() && a.hidden_buttons == vec![0], "{a:?}");
+}

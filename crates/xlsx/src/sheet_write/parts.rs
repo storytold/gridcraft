@@ -56,15 +56,26 @@ fn filter_operator(op: &str) -> &'static str {
     }
 }
 
-pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mut Out) -> String {
+/// `hidden` lists the columns whose dropdown arrow is hidden: a column with a criterion carries
+/// `hiddenButton` on its own `filterColumn`, and one without gets an empty `filterColumn` for it.
+/// `sort` is the saved sort, written after the columns as CT_AutoFilter orders them.
+pub(super) fn autofilter_xml(
+    range: RangeRef,
+    criteria: &[(u32, FilterCriterion)],
+    hidden: &[u32],
+    sort: Option<&gridcraft_model::SortState>,
+    out: &mut Out,
+) -> String {
     let mut s = format!("<autoFilter ref=\"{}\"", range.a1());
-    if criteria.is_empty() {
+    let hidden_only: Vec<u32> = hidden.iter().copied().filter(|h| !criteria.iter().any(|(c, _)| c == h)).collect();
+    if criteria.is_empty() && hidden_only.is_empty() && sort.is_none() {
         s.push_str("/>");
         return s;
     }
+    let button = |col: &u32| if hidden.contains(col) { " hiddenButton=\"1\"" } else { "" };
     s.push('>');
     for (col, c) in criteria {
-        let _ = write!(s, "<filterColumn colId=\"{col}\">");
+        let _ = write!(s, "<filterColumn colId=\"{col}\"{}>", button(col));
         match c {
             FilterCriterion::Values { values, blanks } => {
                 let _ = write!(s, "<filters{}>", if *blanks { " blank=\"1\"" } else { "" });
@@ -106,6 +117,16 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
         }
         s.push_str("</filterColumn>");
     }
+    for col in &hidden_only {
+        let _ = write!(s, "<filterColumn colId=\"{col}\" hiddenButton=\"1\"/>");
+    }
+    if let Some(st) = sort {
+        let _ = write!(s, "<sortState{} ref=\"{}\">", if st.case_sensitive { " caseSensitive=\"1\"" } else { "" }, st.range.a1());
+        for k in &st.keys {
+            let _ = write!(s, "<sortCondition{} ref=\"{}\"/>", if k.descending { " descending=\"1\"" } else { "" }, k.range.a1());
+        }
+        s.push_str("</sortState>");
+    }
     s.push_str("</autoFilter>");
     s
 }
@@ -131,7 +152,7 @@ pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &m
     if t.header_row && t.filter_button {
         let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
         let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
-        s.push_str(&autofilter_xml(r, &t.filter, out));
+        s.push_str(&autofilter_xml(r, &t.filter, &[], None, out));
     }
     let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
     for (i, name) in cols.iter().enumerate() {

@@ -56,7 +56,7 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range: r, criteria: vec![] });
+        cx.sheet_mut(sheet)?.autofilter = Some(AutoFilter { range: r, criteria: vec![], hidden_buttons: vec![], sort: None });
         Ok(json!({"filter": true, "range": r.a1()}))
     })
 }
