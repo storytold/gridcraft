@@ -299,6 +299,33 @@ fn export_as_pdf_is_delivered_as_a_download() {
 }
 
 #[test]
+fn save_without_a_file_picker_keeps_a_macro_enabled_workbook_and_its_vba() {
+    // A workbook opened from bytes (the web app, a host page) has no file; Save hands it to the
+    // browser or the host. A .xlsm must come back as a .xlsm with its VBA project.
+    let files = Arc::new(Mutex::new(Vec::<(String, Vec<u8>)>::new()));
+    let capture = files.clone();
+    let mut h = harness(Services {
+        download: Some(Box::new(move |name, bytes| capture.lock().unwrap().push((name.to_string(), bytes.to_vec())))),
+        ..Default::default()
+    });
+    let mut src = Session::new();
+    src.new_workbook();
+    Arc::make_mut(&mut src.doc_mut().unwrap().wb).vba_project = Some(Arc::new(b"synthetic vbaProject".to_vec()));
+    let xlsm = gridcraft_engine::io::save_bytes(&src.doc().unwrap().wb, "Macros.xlsm").unwrap();
+    let base64 = gridcraft_engine::io::base64_encode(&xlsm);
+    h.state_mut().run("file.open", serde_json::json!({"name": "Macros.xlsm", "base64": base64})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.save", serde_json::json!({})).unwrap();
+    h.run_steps(2);
+    let got = files.lock().unwrap();
+    assert_eq!(got.len(), 1, "Save hands the workbook over once");
+    assert_eq!(got[0].0, "Macros.xlsm");
+    let (wb, _) = gridcraft_engine::io::open_bytes(&got[0].0, &got[0].1).unwrap();
+    assert_eq!(wb.vba_project.as_deref().map(Vec::as_slice), Some(b"synthetic vbaProject".as_slice()));
+    assert_eq!(wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0));
+}
+
+#[test]
 fn save_as_offers_pdf_and_leaves_the_workbook_file_alone() {
     let dir = std::env::temp_dir().join(format!("gridcraft-save-as-type-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
