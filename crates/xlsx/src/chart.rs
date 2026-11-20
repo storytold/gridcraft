@@ -184,7 +184,17 @@ const EMU_PER_PT: f64 = 12_700.0;
 
 pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
-    let ser_els: Vec<&El> = plot.map(|p| p.children.iter().flat_map(|g| g.kids("ser")).collect()).unwrap_or_default();
+    let groups: Vec<&El> = plot.map(|p| p.children.iter().filter(|g| g.name.ends_with("Chart")).collect()).unwrap_or_default();
+    let ax_ids = |g: &El| -> Vec<&str> { g.kids("axId").filter_map(|a| a.attr("val")).collect() };
+    let first_axes = groups.first().map(|g| ax_ids(g)).unwrap_or_default();
+    let ser_els: Vec<(&El, bool)> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(gi, g)| {
+            let sec = gi > 0 && ax_ids(g) != first_axes;
+            g.kids("ser").map(move |s| (s, sec))
+        })
+        .collect();
     let kind = map_chart_type(dc.kind, plot);
     let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
     let series = dc
@@ -192,7 +202,10 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         .into_iter()
         .enumerate()
         .map(|(i, s)| {
-            let sel = ser_els.get(i).copied();
+            let (sel, fallback_sec) = match ser_els.get(i).copied() {
+                Some((el, sec)) => (Some(el), sec),
+                None => (None, false),
+            };
             let color = s
                 .fill
                 .as_ref()
@@ -223,7 +236,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                     .unwrap_or_default(),
                 bubble_sizes: s.refs.sizes.as_deref().map(chart_ref_from_file).or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")))),
                 color,
-                secondary: s.secondary_axis,
+                secondary: dc.kind == ChartType::Combo && (s.secondary_axis || fallback_sec),
                 kind: if dc.kind == ChartType::Combo { s.kind.map(|k| map_chart_type(k, plot)) } else { None },
                 quartiles: Default::default(),
                 smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
