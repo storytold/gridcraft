@@ -75,6 +75,15 @@ fn store_scenarios(wb: &mut Workbook, list: &[Scenario]) {
     });
 }
 
+/// A protected sheet keeps its scenarios as they are: replacing or deleting one is refused,
+/// as Excel does with "Edit scenarios" off (GridCraft scenarios are all "Prevent changes").
+fn check_scenario_unprotected(wb: &Workbook, sc: &Scenario) -> Result<()> {
+    if wb.sheet_index(&sc.sheet).and_then(|i| wb.sheet(i)).is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(crate::cmd::PROTECTED.into()));
+    }
+    Ok(())
+}
+
 fn scenario_json(sc: &Scenario) -> Json {
     json!({"name": sc.name, "sheet": sc.sheet, "changing": sc.changing, "values": sc.values, "comment": sc.comment})
 }
@@ -115,6 +124,9 @@ pub(super) fn scenario_add(s: &mut Session, p: &Json) -> Result<Json> {
     let mut list = load_scenarios(&d.wb);
     match list.iter().position(|x| x.name.eq_ignore_ascii_case(&name) && x.sheet.eq_ignore_ascii_case(&sc.sheet)) {
         Some(i) if replace => {
+            if let Some(old) = list.get(i) {
+                check_scenario_unprotected(&d.wb, old)?;
+            }
             if let Some(slot) = list.get_mut(i) {
                 *slot = sc.clone();
             }
@@ -181,6 +193,9 @@ pub(super) fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn scenario_delete(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let (mut list, i) = find_scenario(&d.wb, p, "data.scenarioDelete")?;
+    if let Some(sc) = list.get(i) {
+        check_scenario_unprotected(&d.wb, sc)?;
+    }
     let removed = list.remove(i);
     edit(s, |cx| {
         store_scenarios(&mut cx.wb, &list);
