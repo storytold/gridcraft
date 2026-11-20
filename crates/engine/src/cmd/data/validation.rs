@@ -183,9 +183,7 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
 /// Whether a list rule's source is a literal list (`"a,b"`, or `a,b` typed without quotes) rather
 /// than a reference or a name to evaluate.
 fn is_literal_list(f: &str) -> bool {
-    f.starts_with('"')
-        || (!f.contains('!')
-            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
+    f.starts_with('"') || (!f.contains('!') && gridcraft_formula::parse(f).is_err())
 }
 
 /// A list rule's source as a file stores it. A literal list typed without quotes, as in Excel's
@@ -231,7 +229,26 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let text_format = wb.styles.get(sh.style_id(at)).num_fmt.as_str() == "@";
+    let formula_input = super::super::edit::is_formula_input(input) && !text_format;
+    let v = if text_format {
+        Value::text(input)
+    } else if formula_input {
+        let mut candidate = wb.clone();
+        match super::super::edit::input_to_cell(input, sheet, at, &mut candidate) {
+            Ok(Some(cell)) => {
+                if let Some(sh) = candidate.sheet_mut(sheet) {
+                    sh.set_cell(at, cell);
+                }
+                let mut calc = gridcraft_calc::Calc::new();
+                calc.recalc_all(&mut candidate);
+                candidate.sheet(sheet).map_or(Value::Empty, |sh| sh.value(at))
+            }
+            _ => gridcraft_calc::evaluate(wb, sheet, at, input).scalar(),
+        }
+    } else {
+        gridcraft_core::parse::parse_input(input, wb.date_system).value
+    };
     // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
@@ -251,13 +268,33 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        // The list is the one the dropdown showed before the entry, as in Excel: a source that takes
-        // in the cell itself (`=$A1:$A2` on A2:A3 is A2:A3 at A3) doesn't list the value being typed.
-        ValidationKind::List => list_items(original, sheet, at, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => {
+            let value = v.scalar();
+            if is_literal_list(dv.f1.trim()) {
+                // Match the list that was available before this edit, as in Excel.
+                let items = list_items(original, sheet, at, dv);
+                if formula_input {
+                    let candidate = value.display();
+                    !value.is_error() && items.iter().any(|x| x.eq_ignore_ascii_case(&candidate))
+                } else {
+                    items.iter().any(|x| x.eq_ignore_ascii_case(input))
+                }
+            } else {
+                // Keep numbers and text distinct when matching a formula-backed list.
+                match gridcraft_calc::evaluate(original, sheet, at, &formula_at(&dv.f1, first, at)) {
+                    Value::Array(a) => a.data.iter().any(|item| list_value_matches(item, &value)),
+                    item => list_value_matches(&item, &value),
+                }
+            }
+        }
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
-            let n = input.chars().count() as f64;
-            compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
+            if v.is_error() {
+                false
+            } else {
+                let n = (if formula_input { v.display().chars().count() } else { input.chars().count() }) as f64;
+                compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
+            }
         }
         _ => match v.as_f64() {
             Some(n) => {
@@ -279,6 +316,10 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         dv.error_message.clone()
     };
     Some((dv.clone(), msg))
+}
+
+fn list_value_matches(item: &Value, value: &Value) -> bool {
+    !item.is_empty() && !item.is_error() && !value.is_error() && gridcraft_core::compare(item, value) == std::cmp::Ordering::Equal
 }
 
 /// A formula written for `first`, as seen from `at` (relative references shifted).
