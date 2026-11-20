@@ -151,8 +151,12 @@ pub struct SeriesData {
     pub smooth: bool,
     /// Trendlines to fit and draw over this series.
     pub trendlines: Vec<TrendlineData>,
-    /// Number format code of the source values ("General" by default).
+    /// Number format code of the first source cell ("General" by default), which the value axis uses
+    /// even when that cell is empty.
     pub number_format: String,
+    /// Data labels use each point's own cell format. Empty when they all equal `number_format`.
+    #[serde(default)]
+    pub point_formats: Vec<String>,
 }
 
 /// A trendline to draw: the model settings with the line colour resolved against the theme.
@@ -175,6 +179,7 @@ impl Default for SeriesData {
             smooth: false,
             trendlines: vec![],
             number_format: "General".into(),
+            point_formats: Vec::new(),
         }
     }
 }

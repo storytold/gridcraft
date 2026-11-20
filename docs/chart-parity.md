@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-16 · **Change:** minor (a selected chart outlines its series names, category labels and values in Excel's colours, and dragging a corner of the values outline changes the plotted block, #4389, #4390; earlier: chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-16 · **Change:** minor (data labels take each cell's format; earlier: a selected chart outlines its series names, category labels and values in Excel's colours, and dragging a corner of the values outline changes the plotted block, #4389, #4390; earlier: chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -108,6 +108,7 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | patch | Data labels on column, bar, line and area charts with a plain cell reference take each point's own cell format, as observed in Excel on column charts; the value axis keeps the first cell's. Defined names and reference unions keep the first cell's format |
 | 2026-11-16 | minor | A selected chart outlines its series names (red), category labels (purple) and values (one blue block), and the values outline has corner handles: dragging one changes the block the series plot through the new `chart.setValuesRange` command, keeping each series' formatting (#4389, #4390). Engine and real-input UI tests cover growing, shrinking, adding series, undo and Esc. No readiness score change. |
 | 2026-11-07 | minor | Chart-data-table keys use the shared plot-kind helper with their series index after #1150. A focused regression checks the first combo series uses a column key and later series use line keys. No readiness score change. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |

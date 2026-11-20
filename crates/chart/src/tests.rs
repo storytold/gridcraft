@@ -71,6 +71,7 @@ fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesDat
         smooth: false,
         trendlines: Vec::new(),
         number_format: "$#,##0".into(),
+        point_formats: Vec::new(),
     }
 }
 
@@ -973,6 +974,7 @@ fn fuzz_random_data_and_sizes() {
                     })
                     .collect(),
                 number_format: ["General", "$#,##0", "0.00%", "yyyy-mm-dd", "#,##0.0;[Red]-#,##0.0", "@"][(r.next() % 6) as usize].into(),
+                point_formats: Vec::new(),
             })
             .collect();
         let ncat = (r.next() % 50) as usize;
@@ -1679,6 +1681,47 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// As observed in Excel: data labels take each point's own cell format, while the axis keeps the
+/// first cell's, even when that cell is empty.
+#[test]
+fn data_labels_use_each_cells_format_and_the_axis_the_first() {
+    let mut d = sample(ChartKind::ColumnClustered);
+    d.series.truncate(1);
+    d.categories = vec!["a".into(), "b".into(), "c".into()];
+    d.series[0].values = vec![None, Some(158.0), Some(2.5)];
+    d.series[0].number_format = "0%".into();
+    d.series[0].point_formats = vec!["0%".into(), "General".into(), "0%".into()];
+    let c = chart(ChartKind::ColumnClustered);
+    let texts: Vec<String> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+        .into_iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, .. } => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.iter().any(|t| t == "158"), "the General cell's label: {texts:?}");
+    assert!(texts.iter().any(|t| t == "250%"), "the percent cell's label: {texts:?}");
+    assert!(!texts.iter().any(|t| t == "15800%"), "not the first cell's format: {texts:?}");
+    assert!(texts.iter().filter(|t| t.ends_with('%') && t != &"250%").count() >= 2, "the axis keeps percent: {texts:?}");
+}
+
+#[test]
+fn point_formats_are_left_empty_when_every_cell_agrees() {
+    use gridcraft_model::{NumFmt, Workbook};
+    let mut wb = Workbook::new();
+    let percent = wb.styles.intern(gridcraft_model::Style { num_fmt: NumFmt("0%".into()), ..Default::default() });
+    let sheet = wb.sheet_mut(0).expect("a sheet");
+    for (row, column) in [(0, 0), (1, 0), (0, 1)] {
+        sheet.set_style(gridcraft_core::CellRef::new(row, column), percent);
+    }
+    let formats = |formula: &str| crate::resolve::point_formats_for_tests(&wb, 0, formula);
+    assert_eq!(formats("A1:A2"), Vec::<String>::new());
+    assert_eq!(formats("B1:B2"), vec!["0%".to_string(), "General".to_string()]);
+    // A huge reference follows the used range the evaluator trims it to, column by column in a row.
+    assert_eq!(formats("A1:C1048576").len(), 4, "A1, B1, A2, B2");
+    assert_eq!(formats("A:A"), Vec::<String>::new(), "only as many formats as values");
 }
 
 #[test]
