@@ -202,6 +202,10 @@ fn col_letters(c: u32) -> String {
     gridcraft_core::col_to_letters(c)
 }
 
+/// Creates a Forecast Sheet from the selected time series.
+///
+/// Builds the forecast worksheet, supporting table and chart.
+/// Newly created forecast charts use Excel-compatible style 2.
 fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let opts = options(p)?;
     let (si, tcells, vcells) = source(s, p)?;
@@ -451,7 +455,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             data_labels: false,
             data_table: None,
             gridlines: true,
-            style: 1,
+            style: 2,
             hole_size: 75,
             first_slice_angle: 0,
             x_title: None,

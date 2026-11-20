@@ -283,7 +283,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         data_labels: false,
         data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
-        style: 1,
+        style: 2,
         hole_size: 75,
         first_slice_angle: 0,
         x_title: None,
