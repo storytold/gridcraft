@@ -52,7 +52,7 @@ craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "0ffb1a0ab
 craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "0ffb1a0abe8763f9fda3a2fb9ca0edc8fdcb7ec0", version = "0.1.0" }
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "3b8e426a260695af840a2cd79a064d40778f939e", version = "0.1.0" }
 craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "0ffb1a0abe8763f9fda3a2fb9ca0edc8fdcb7ec0", version = "0.1.0" }
-craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "08da5e1486ee640de1d2cccd8fe8dd32b1d3b62c", version = "=0.1.0" }
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "2f02af0f54d8cf617ea90a32ae656f6d755f1754", version = "=0.1.0" }
 
 # foundation
 thiserror = "2"

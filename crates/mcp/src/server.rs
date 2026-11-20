@@ -127,6 +127,10 @@ fn invalid_params(id: &Value, message: impl Into<String>) -> Value {
 }
 
 fn precheck_request(o: &serde_json::Map<String, Value>) -> Option<Value> {
+    // Shared envelope validation takes priority over app-specific argument checks.
+    if o.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
+        return None;
+    }
     let id = o.get("id")?;
     let method = o.get("method").and_then(Value::as_str)?;
     if !(id.is_string() || id.is_number()) {

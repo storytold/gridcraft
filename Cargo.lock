@@ -998,7 +998,7 @@ dependencies = [
 [[package]]
 name = "craft-mcp-server"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=08da5e1486ee640de1d2cccd8fe8dd32b1d3b62c#08da5e1486ee640de1d2cccd8fe8dd32b1d3b62c"
+source = "git+https://github.com/storytold/craft-libs?rev=2f02af0f54d8cf617ea90a32ae656f6d755f1754#2f02af0f54d8cf617ea90a32ae656f6d755f1754"
 dependencies = [
  "serde_json",
 ]
