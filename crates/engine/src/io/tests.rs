@@ -18,6 +18,45 @@ fn copied(wb: &Workbook, range: &str) -> String {
     range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
 }
 
+/// Where a browser's table layout puts each cell: the table row and column it starts at and its
+/// text, with a merged cell's other slots marked as taken.
+fn table_slots(html: &str) -> Vec<(usize, usize, String)> {
+    let body = html.split("<table").nth(1).and_then(|t| t.split("</table>").next()).unwrap();
+    let mut taken: Vec<Vec<bool>> = Vec::new();
+    let mut slots = Vec::new();
+    for (row, tr) in body.split("<tr").skip(1).enumerate() {
+        while taken.len() <= row {
+            taken.push(Vec::new());
+        }
+        let mut col = 0;
+        for cell in tr.split("<td").skip(1) {
+            let attrs = cell.split('>').next().unwrap_or_default();
+            let span = |name: &str| -> usize {
+                attrs.split(&format!(" {name}=\"")).nth(1).and_then(|s| s.split('"').next()).and_then(|s| s.parse().ok()).unwrap_or(1)
+            };
+            let (rowspan, colspan) = (span("rowspan"), span("colspan"));
+            let text = cell.split_once('>').map_or("", |(_, rest)| rest.split("</td>").next().unwrap_or_default()).to_string();
+            while taken.get(row).and_then(|r| r.get(col)).copied().unwrap_or(false) {
+                col += 1;
+            }
+            slots.push((row, col, text));
+            for r in row..row + rowspan {
+                while taken.len() <= r {
+                    taken.push(Vec::new());
+                }
+                for c in col..col + colspan {
+                    if taken[r].len() <= c {
+                        taken[r].resize(c + 1, false);
+                    }
+                    taken[r][c] = true;
+                }
+            }
+            col += colspan;
+        }
+    }
+    slots
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg(unix)]
 #[test]
@@ -207,6 +246,49 @@ fn html_export_places_images_past_hidden_columns_and_rows() {
     assert_eq!(html.matches("<col ").count(), 2, "{html}");
     assert_eq!(html.matches("<tr ").count(), 2, "{html}");
     assert!(html.contains("left:64px;top:20px"), "{html}");
+}
+
+/// #4356: a merge spans the rows the table keeps, so the cells after it stay in their columns.
+#[test]
+fn html_export_spans_a_merge_over_the_rows_the_table_keeps() {
+    let book = |hidden_row: bool| {
+        let mut wb = Workbook::new();
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("label"));
+        for row in 0..3 {
+            sh.set_value(CellRef::new(row, 1), gridcraft_core::Value::Number(f64::from(row + 1)));
+        }
+        sh.set_value(CellRef::new(3, 0), gridcraft_core::Value::text("AFTER_A"));
+        sh.set_value(CellRef::new(3, 1), gridcraft_core::Value::text("AFTER_B"));
+        sh.merges.push(RangeRef::parse("A1:A3").unwrap());
+        if hidden_row {
+            sh.rows.insert(1, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+        }
+        wb
+    };
+    let after = |row: usize| [(row, 0, "AFTER_A".to_string()), (row, 1, "AFTER_B".to_string())];
+
+    // Row 2 hidden: the merge spans rows 1 and 3 of the sheet, the two rows the table keeps.
+    let mut hidden = table_slots(&to_html(&book(true), 0).unwrap());
+    assert_eq!(hidden.split_off(3), after(2), "{hidden:?}");
+    assert_eq!(hidden, [(0, 0, "label".to_string()), (0, 1, "1".to_string()), (1, 1, "3".to_string())]);
+
+    // A sheet with a picture takes the fixed-layout export, which already counted visible rows.
+    let mut wb = book(true);
+    wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
+        id: 1,
+        anchor: gridcraft_model::Anchor { cell: CellRef::new(0, 0), dx: 0.0, dy: 0.0, width: 10.0, height: 10.0, mode: Default::default() },
+        data: vec![1].into(),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    let mut fixed = table_slots(&to_html(&wb, 0).unwrap());
+    assert_eq!(fixed.split_off(3), after(2), "{fixed:?}");
+
+    // Shown rows keep their three-row merge and their sentinels on the fourth row.
+    let mut shown = table_slots(&to_html(&book(false), 0).unwrap());
+    assert_eq!(shown.split_off(4), after(3), "{shown:?}");
+    assert_eq!(shown.len(), 4, "A1:B4 as a browser lays it out: {shown:?}");
 }
 
 #[test]

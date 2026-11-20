@@ -897,14 +897,12 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 let css = html_cell_css(wb, sh, c, dir);
                 let span = merge
                     .map(|m| {
-                        if fixed {
-                            // Spans count the table's visible lines: the merge is clipped to the table.
-                            let rows = visible(&rows_before, r.start.row, m.start.row, m.end.row.min(r.end.row));
-                            let cols = visible(&cols_before, r.start.col, m.start.col, m.end.col.min(r.end.col));
-                            format!(" rowspan=\"{rows}\" colspan=\"{cols}\"")
-                        } else {
-                            format!(" rowspan=\"{}\" colspan=\"{}\"", m.height(), m.width())
-                        }
+                        // Spans count the table's visible lines: the merge is clipped to the table,
+                        // and a hidden row takes no line. The ordinary table keeps hidden columns,
+                        // so its colspan is the merge's width.
+                        let rows = visible(&rows_before, r.start.row, m.start.row, m.end.row.min(r.end.row));
+                        let cols = if fixed { visible(&cols_before, r.start.col, m.start.col, m.end.col.min(r.end.col)) } else { m.width() };
+                        format!(" rowspan=\"{rows}\" colspan=\"{cols}\"")
                     })
                     .unwrap_or_default();
                 // The text is escaped only as far as the page still has room for it.
