@@ -226,15 +226,13 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// The caption of the value field `name` (a caption or the source field of one).
+/// The caption of the value field `name` (a caption or the source field of one). The exact
+/// caption wins first — captions may end in a space — then the trimmed one.
 fn value_field_name(cmd: &str, pt: &PivotTable, name: &str) -> Result<String> {
-    let name = name.trim();
-    pt.values
-        .iter()
-        .find(|v| v.name.eq_ignore_ascii_case(name))
-        .or_else(|| pt.values.iter().find(|v| v.source_col.eq_ignore_ascii_case(name)))
-        .map(|v| v.name.clone())
-        .ok_or_else(|| bad(cmd, format!("`{name}` isn't in the values area")))
+    let find = |n: &str| {
+        pt.values.iter().find(|v| v.name.eq_ignore_ascii_case(n)).or_else(|| pt.values.iter().find(|v| v.source_col.eq_ignore_ascii_case(n)))
+    };
+    find(name).or_else(|| find(name.trim())).map(|v| v.name.clone()).ok_or_else(|| bad(cmd, format!("`{name}` isn't in the values area")))
 }
 
 /// Most labels a custom order lists.

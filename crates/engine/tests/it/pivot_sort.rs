@@ -127,6 +127,35 @@ fn renaming_the_value_field_keeps_the_sort_and_removing_it_drops_it() {
     assert_eq!(labels(&s), ["West", "North", "East"], "descending by label");
 }
 
+#[test]
+fn a_by_caption_with_padding_selects_the_exact_field() {
+    // #3399 review: `by` trimmed the caption first, so "Net " sorted by the field named "Net".
+    let mut s = session_with(&[
+        ("East", "Apples", json!(100.0)),
+        ("East", "Pears", json!(120.0)),
+        ("North", "Apples", json!(30.0)),
+        ("North", "Pears", json!(10.0)),
+        ("North", "Plums", json!(5.0)),
+        ("West", "Apples", json!(7.0)),
+    ]);
+    pivot(
+        &mut s,
+        &["Region"],
+        &[],
+        json!([
+            {"field": "Sales", "name": "Net "},
+            {"field": "Product", "func": "count", "name": "Net"},
+        ]),
+    );
+    sort(&mut s, json!({"field": "Region", "order": "asc", "by": "Net "})).unwrap();
+    // Sum of Sales ascending: West 7, North 45, East 220.
+    assert_eq!(labels(&s), ["West", "North", "East"]);
+    // A caption nobody has exactly still falls back to its trim.
+    sort(&mut s, json!({"field": "Region", "order": "asc", "by": " Net"})).unwrap();
+    // Count of Product ascending: West 1, East 2, North 3.
+    assert_eq!(labels(&s), ["West", "East", "North"]);
+}
+
 // ---------------------------------------------------------------- custom order
 
 #[test]

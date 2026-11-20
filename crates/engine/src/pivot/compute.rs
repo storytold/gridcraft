@@ -166,10 +166,12 @@ fn aggregate_record(
     }
     data.row_set.insert(row_path);
     data.col_set.insert(col_path);
-    if !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
+    // A value-filter pass (collect_paths) sizes the report before filtering: the size checks
+    // run on the final pass, when the kept records are known.
+    if !input.collect_paths && !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
         return Err("The PivotTable report will not fit on the sheet.".into());
     }
-    if data.aggs.len() > 5_000_000 {
+    if !input.collect_paths && data.aggs.len() > 5_000_000 {
         return Err("The PivotTable report is too large.".into());
     }
     Ok(())

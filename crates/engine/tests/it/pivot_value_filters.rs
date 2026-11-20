@@ -79,6 +79,30 @@ fn top_items_keep_the_largest_and_the_totals_follow() {
 }
 
 #[test]
+fn a_value_filter_can_shrink_a_report_that_would_not_fit() {
+    // #3399 review: the value-filter pass ran with the report-size checks on, so a Top-N whose
+    // report fits still errored with "will not fit on the sheet".
+    let mut s = Session::new();
+    s.new_workbook();
+    let n = 16_500;
+    let regions = ["East", "North", "West"];
+    let mut rows = vec![json!(["Region", "Item", "Sales"])];
+    rows.extend((0..n).map(|i| json!([regions[i % 3], format!("i{i:05}"), (i + 1) as f64])));
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({"source": format!("Sheet1!$A$1:$C${}", n + 1), "rows": ["Region", "Item"], "values": ["Sales"], "destination": "Sheet1!E3"}),
+    )
+    .unwrap();
+    vf(&mut s, json!({"field": "Item", "rule": "top", "count": 3})).unwrap();
+    s.execute("pivot.moveField", json!({"field": "Item", "from": "rows", "to": "columns"})).unwrap();
+    let mut header: Vec<String> = grid(&s)[1].iter().skip(1).map(Value::display).collect();
+    assert_eq!(header.pop(), Some("Grand Total".into()));
+    header.sort();
+    assert_eq!(header, ["i16497", "i16498", "i16499"], "the three largest sales");
+}
+
+#[test]
 fn top_percent_and_sum_add_up_from_the_largest() {
     let mut s = sales();
     pivot(&mut s, &["Region"], &[], json!(["Sales"]));
