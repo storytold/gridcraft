@@ -182,10 +182,10 @@ fn aggregate_record(
     }
     // Each entry holds one accumulator per value field and calculated-field source column, so the
     // width counts too: a handful of groups over hundreds of fields is large as well. The
-    // value-filter pass (collect_paths) sizes the report before filtering: the size checks run on
-    // the final pass, when the kept records are known.
-    if !input.collect_paths
-        && (data.aggs.len() > 5_000_000 || data.aggs.len().saturating_mul(input.vals.len() + input.extra.len()) > MAX_ACCUMULATORS)
+    // value-filter pass skips the entry count (it sizes the report before filtering) but keeps
+    // the accumulator cap, so its memory stays bounded.
+    if (!input.collect_paths && data.aggs.len() > 5_000_000)
+        || data.aggs.len().saturating_mul(input.vals.len() + input.extra.len()) > MAX_ACCUMULATORS
     {
         return Err("The PivotTable report is too large.".into());
     }
