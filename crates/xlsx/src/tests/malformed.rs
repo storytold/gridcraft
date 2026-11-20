@@ -315,8 +315,13 @@ fn a_row_wider_than_the_grid_is_refused() {
 
 #[test]
 fn partial_sheet_read_retains_rows_and_pre_damage_layout() {
-    let body = r#"<sheetFormatPr defaultRowHeight="24" customHeight="1"/><cols><col min="1" max="1" width="20" customWidth="1"/></cols><sheetData><row r="1"><c r="A1"><v>5</v></c></row><row r="2"><c r="A2"><v>9</bad></c></row></sheetData>"#;
-    let (wb, rep) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let mut body = String::from(
+        r#"<sheetFormatPr defaultRowHeight="24" customHeight="1"/><cols><col min="1" max="1" width="20" customWidth="1"/></cols><sheetData><row r="1"><c r="A1"><v>5</v></c></row></sheetData><extLst>"#,
+    );
+    for _ in 0..5000 {
+        body.push_str("<x>");
+    }
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
     let s = wb.sheet(0).unwrap();
     assert_eq!(s.value(gridcraft_core::CellRef::new(0, 0)), gridcraft_core::Value::Number(5.0));
     assert!((s.default_row_height - 32.0).abs() < 0.01, "{}", s.default_row_height);
