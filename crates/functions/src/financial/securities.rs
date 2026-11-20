@@ -179,7 +179,14 @@ fn mat_terms(a: &[Arg], sys: DateSystem) -> R<(f64, f64, f64, f64, f64)> {
 
 pub(super) fn pricemat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (dim, dsm, ai, rate, yld) = mat_terms(a, c.date_system())?;
-    num_val((100.0 + dim * rate * 100.0) / (1.0 + dsm * yld) - ai * rate * 100.0)
+    let den = 1.0 + dsm * yld;
+    let direct = (100.0 + dim * rate * 100.0) / den - ai * rate * 100.0;
+    if direct.is_finite() {
+        return num_val(direct);
+    }
+    // A huge coupon can overflow the undiscounted redemption 100 + dim * rate * 100 even though
+    // the discounted price fits (#4095). Discount first (den >= 1), then factor out the rate.
+    num_val(100.0 / den + rate * (100.0 * (dim / den) - 100.0 * ai))
 }
 
 pub(super) fn yieldmat(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
