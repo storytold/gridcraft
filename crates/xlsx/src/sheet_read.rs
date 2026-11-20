@@ -238,7 +238,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
             Ok(())
         })
         .map_err(|e| match e {
-            craft_xlsx::Error::TooLarge(m) if !m.contains("the workbook has more than") => {
+            craft_xlsx::Error::TooLarge(m) if m.contains("XML") || m.contains("node") || m.contains("nested") => {
                 IoError::Format(format!("sheet \"{name}\" is damaged ({m})"))
             }
             other => craft_error(other),
