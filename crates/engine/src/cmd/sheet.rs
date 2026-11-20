@@ -292,11 +292,7 @@ fn rewrite_many(cx: &mut Ctx, target: &str, edits: &[Edit]) -> Result<()> {
         .into_iter()
         .filter_map(|(si, c)| {
             let host = cx.wb.sheet(si).map(|s| s.name.as_str())?;
-            if host.eq_ignore_ascii_case(target) {
-                edits.iter().try_fold(RangeRef::cell(c), map_range).map(|r| (si, r.start))
-            } else {
-                Some((si, c))
-            }
+            if host.eq_ignore_ascii_case(target) { edits.iter().try_fold(RangeRef::cell(c), map_range).map(|r| (si, r.start)) } else { Some((si, c)) }
         })
         .collect();
     let (forgotten, moved, changed) = super::edit::rewrite_all_formulas_many(&mut cx.wb, target, edits)?;
