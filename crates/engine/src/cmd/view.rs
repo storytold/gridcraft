@@ -84,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Size",
             ["Page Layout", "Page Setup"],
             None,
-            "{paper: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes)}",
+            "{paper: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3|Statement|Envelope #10|Envelope DL (B4/B5/B6 are the JIS sizes)}",
             has_doc,
             paper
         ),
@@ -296,7 +296,9 @@ fn orientation(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn paper(s: &mut Session, p: &Json) -> Result<Json> {
-    let paper = str_param(p, "paper").unwrap_or("Letter").to_string();
+    // A known paper is stored under its table name; any other name is kept (it prints on Letter).
+    let name = str_param(p, "paper").unwrap_or("Letter");
+    let paper = gridcraft_model::paper::canonical(name).unwrap_or(name).to_string();
     edit(s, |cx| {
         let si = cx.sheet_index();
         cx.sheet_mut(si)?.print.paper = paper.clone();
