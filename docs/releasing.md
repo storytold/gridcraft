@@ -1,5 +1,7 @@
 # Releasing GridCraft
 
+> **Last updated:** 2026-11-10 · **Change:** Compiled distribution labels: validate display names, test both startup policies and menu escaping, and reuse the cached identity in window titles.
+
 Every push to the `release` branch runs `.github/workflows/release.yml`. The workflow builds
 signed installers for macOS, Windows, Linux, FreeBSD and the web, then creates or updates a
 **draft** GitHub Release named `GridCraft v<version>`. Nobody sees a draft until a maintainer
@@ -36,6 +38,26 @@ The `apps/gridcraft` and `apps/gridcraft-web` crates are workspace members, and
   `assets/app-icon/gridcraft-macos-512.png` (macOS Dock) and
   `hicolor/256x256/apps/ai.storyteller.gridcraft.png` (Windows/Linux) as the window icon, and
   uses `ai.storyteller.gridcraft` as the Wayland app id / `StartupWMClass`.
+
+## Compiled distribution labels
+
+Set `GRIDCRAFT_BUILD_LABEL` while compiling, for example:
+
+```sh
+GRIDCRAFT_BUILD_LABEL=Preview cargo build -p gridcraft
+```
+
+The label is compiled into the application; setting the variable only at launch does not
+change it. Surrounding whitespace is trimmed. Empty or whitespace-only labels, labels
+containing control characters, and labels longer than 32 Unicode characters use the
+ordinary identity and startup policy. Printable punctuation such as `&` and `)` is retained.
+
+A valid label appears in the application identity and before the workbook name in window
+titles, so long workbook names do not hide it. Muda menu strings escape `&` as `&&` to display
+one literal ampersand, including on macOS. Labelled distributions disable automatic startup
+update checks; manual Help > Check for Updates remains available. To verify a labelled build,
+check its title, About and Quit menu entries and that the manual update command still works.
+Unset or empty labels preserve ordinary titles and startup checks.
 
 ## Cutting a release
 
@@ -291,3 +313,10 @@ every push to `main` and every pull request. Release artifacts are built on `rel
 manually; manual runs from other branches are dry runs as described above. `packaging-lint.yml`
 also runs on `main` and PRs.
 - Locally: `cargo xtask ci` (fmt, clippy, tests, assets, layers, wasm, parity check).
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-11-10 | Compiled distribution labels: validate display names, test both startup policies and menu escaping, and reuse the cached identity in window titles. |
+| 2026-11-02 | Labelled distributions use a compiled GRIDCRAFT_BUILD_LABEL in desktop/window titles and disable only automatic startup update checks; manual checks remain available. |

@@ -23,7 +23,12 @@ fn main() {
 
     let bar = nsapp.mainMenu().expect("a main menu");
     let tops: Vec<String> = (0..bar.numberOfItems()).filter_map(|i| bar.itemAtIndex(i)?.submenu()).map(|m| m.title().to_string()).collect();
-    assert_eq!(tops, ["GridCraft", "File", "Edit", "View", "Insert", "Format", "Tools", "Data", "Window", "Help"]);
+    let app_name = gridcraft_ui_egui::build_config::app_name();
+    assert_eq!(tops, [app_name, "File", "Edit", "View", "Insert", "Format", "Tools", "Data", "Window", "Help"]);
+    let app_menu = bar.itemAtIndex(0).and_then(|item| item.submenu()).expect("the application menu");
+    let app_items: Vec<String> = (0..app_menu.numberOfItems()).filter_map(|i| app_menu.itemAtIndex(i)).map(|item| item.title().to_string()).collect();
+    assert!(app_items.contains(&format!("About {app_name}")));
+    assert!(app_items.contains(&format!("Quit {app_name}")));
     let windows_menu = nsapp.windowsMenu().expect("AppKit knows the Window menu");
     assert_eq!(windows_menu.title().to_string(), "Window");
 
