@@ -486,3 +486,21 @@ fn kept_sheet_geometry_and_cf_statistics_follow_every_change() {
     assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
     check_cf(&mut app);
 }
+
+#[test]
+fn cell_text_is_cut_to_the_displayed_characters_on_a_char_boundary() {
+    use super::cell_paint::{MAX_CELL_CHARS, MAX_LINE_CHARS, truncate_display};
+    let mut short = "abc".to_string();
+    truncate_display(&mut short, MAX_LINE_CHARS);
+    assert_eq!(short, "abc");
+    let mut exact = "x".repeat(MAX_LINE_CHARS);
+    truncate_display(&mut exact, MAX_LINE_CHARS);
+    assert_eq!(exact.chars().count(), MAX_LINE_CHARS);
+    // Multi-byte characters: counted as characters, never split.
+    for max in [MAX_LINE_CHARS, MAX_CELL_CHARS] {
+        let mut long = "é漢🙂".repeat(MAX_CELL_CHARS);
+        truncate_display(&mut long, max);
+        assert_eq!(long.chars().count(), max);
+        assert!(long.starts_with("é漢🙂é"));
+    }
+}

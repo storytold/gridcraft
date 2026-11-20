@@ -4,6 +4,23 @@ use super::{
     Stroke, Style, Underline, VAlign, Value, Workbook, pos2, theme, vec2,
 };
 
+// Crash bounds on the text the grid lays out. Clipping hides glyphs but still tessellates them,
+// so a CSV field of a million characters asked wgpu for a vertex buffer past its 256 MiB limit
+// and the app aborted.
+/// Most characters of a cell's text the grid lays out: a cell's 32,767, so text that came in
+/// longer (put in directly, not through an import that cuts it) is bounded too.
+pub(super) const MAX_CELL_CHARS: usize = 32_767;
+/// Most characters of a one-line (not wrapped) cell the grid lays out: far wider than any screen,
+/// so no more of it could show.
+pub(super) const MAX_LINE_CHARS: usize = 1024;
+
+/// Cut `text` to its first `max` characters, on a character boundary.
+pub(super) fn truncate_display(text: &mut String, max: usize) {
+    if let Some((end, _)) = text.char_indices().nth(max) {
+        text.truncate(end);
+    }
+}
+
 /// Resolved look of a cell for painting.
 pub(super) struct Look {
     pub(super) style: Style,
