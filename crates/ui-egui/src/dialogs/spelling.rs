@@ -35,19 +35,23 @@ pub(super) fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, op
     ui.horizontal(|ui| {
         if ui.button("Ignore Once").clicked() {
             d.list_index += 1;
+            d.values.remove("pick");
         }
         if ui.button("Add to Dictionary").clicked() {
             let _ = app.session.run("review.addToDictionary", json!({"word": word}));
             d.list_index += 1;
+            d.values.remove("pick");
         }
         if !pick.is_empty() {
             if ui.button("Change").clicked() {
                 app.run_or_alert("review.changeSpelling", json!({"cell": cell, "word": word, "to": pick}));
                 d.list_index += 1;
+                d.values.remove("pick");
             }
             if ui.button("Change All").clicked() {
                 app.run_or_alert("review.changeSpelling", json!({"word": word, "to": pick, "all": true}));
                 d.list_index += 1;
+                d.values.remove("pick");
             }
         }
     });
