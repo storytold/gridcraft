@@ -127,13 +127,14 @@ fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
 
 pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = match str_param(p, "kind").unwrap_or("rectangle") {
+        "rectangle" => ShapeKind::Rectangle,
         "roundedRectangle" => ShapeKind::RoundedRectangle,
         "ellipse" | "oval" => ShapeKind::Ellipse,
         "triangle" => ShapeKind::Triangle,
         "line" => ShapeKind::Line,
         "arrow" => ShapeKind::Arrow,
         "textBox" => ShapeKind::TextBox,
-        _ => ShapeKind::Rectangle,
+        kind => return Err(bad("insert.shape", format!("unknown shape kind `{kind}`"))),
     };
     let d = s.doc()?;
     let id = d.wb.next_object_id();
