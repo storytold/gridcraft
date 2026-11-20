@@ -1,6 +1,7 @@
 use super::controls::{control_keytip, sep};
 use super::{Icon, SheetApp, Ui, big_button, json};
 use crate::theme::Tokens;
+use crate::widgets::tr;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
 use egui::vec2;
 
@@ -55,7 +56,7 @@ pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
             ui.separator();
         }
         if macros.is_empty() {
-            ui.label(egui::RichText::new("No macros in this workbook").italics().color(t.text_dim));
+            ui.label(egui::RichText::new(tr(ui, "No macros in this workbook")).italics().color(t.text_dim));
         }
         for (n, desc, _) in macros.iter().take(30) {
             let r = ui.add(egui::Button::new(n.as_str()).frame(false).min_size(vec2(200.0, 22.0)));
