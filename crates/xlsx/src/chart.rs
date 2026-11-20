@@ -61,7 +61,18 @@ fn map_chart_type(k: ChartType, plot: Option<&El>) -> ChartKind {
         ChartType::Bar => ChartKind::BarClustered,
         ChartType::StackedBar => ChartKind::BarStacked,
         ChartType::PercentBar => ChartKind::BarStacked100,
-        ChartType::Line => ChartKind::Line,
+        ChartType::Line => {
+            let markers = plot
+                .into_iter()
+                .flat_map(|p| p.kids("lineChart").chain(p.kids("line3DChart")))
+                .filter(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")))
+                .any(|g| {
+                    let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+                    let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
+                    group_markers && !(all_none && g.kids("ser").next().is_some())
+                });
+            if markers { ChartKind::LineMarkers } else { ChartKind::Line }
+        }
         ChartType::LineMarkers => ChartKind::LineMarkers,
         ChartType::StackedLine => ChartKind::LineStacked,
         ChartType::Area => ChartKind::Area,

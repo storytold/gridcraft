@@ -289,6 +289,16 @@ fn apply_craft_sheet_part(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Rel], n
     let mut fit_to_page = false;
     let mut cf_kept_cells = 0u64;
     cx.cf_ext_ids.clear();
+    for cf in &sp.features.conditional_formats {
+        read_cf(cx, &from_craft_el(&cf.to_el()), sheet, &mut cf_kept_cells);
+    }
+    if let Some(vals) = &sp.features.validations {
+        for v in &vals.items {
+            if let Some(val) = read_validation(&from_craft_el(&v.to_el())) {
+                sheet.validations.push(val);
+            }
+        }
+    }
     for node in &sp.root.children {
         let craft_xml::Node::El(child) = node else { continue };
         match child.name.as_str() {
@@ -327,16 +337,6 @@ fn apply_craft_sheet_part(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Rel], n
             "autoFilter" => sheet.autofilter = read_autofilter(cx, &from_craft_el(child)),
             "extLst" => read_ext(cx, &from_craft_el(child), sheet, &mut cf_kept_cells),
             _ => {}
-        }
-    }
-    for cf in &sp.features.conditional_formats {
-        read_cf(cx, &from_craft_el(&cf.to_el()), sheet, &mut cf_kept_cells);
-    }
-    if let Some(vals) = &sp.features.validations {
-        for v in &vals.items {
-            if let Some(val) = read_validation(&from_craft_el(&v.to_el())) {
-                sheet.validations.push(val);
-            }
         }
     }
     let mut link_budget = LinkBudget::default();
