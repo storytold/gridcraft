@@ -117,7 +117,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
             if after.is_none_or(|a| before > a + 0.5)
                 && let Some(sh) = wb.sheet_mut(si)
             {
-                sh.rows.entry(row).or_default().size = Some(before);
+                sh.row_entry(row).size = Some(before);
             }
         }
         left = sweep.left();
