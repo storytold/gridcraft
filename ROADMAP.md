@@ -1,5 +1,12 @@
 # GridCraft roadmap
 
+2026-11-03: Traditional Chinese (`zh-hant`) interface catalog, Taiwan terminology, separate
+Traditional/Simplified locale detection and installed Noto Sans CJK TC preference. No readiness
+estimate change. [Details / 詳細說明](docs/localization-zh-hant.md).
+
+2026-11-03：新增繁體中文（台灣用語）介面翻譯，分開辨識繁簡語系，並優先使用已安裝的
+Noto Sans CJK TC。就緒程度估計維持原樣。
+
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
 > **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (a selected chart outlines its names, categories and values in Excel's colours, and dragging the values outline's corner changes the chart's data, #4389, #4390; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
@@ -102,6 +109,7 @@ Localized German formulas and numbers are in PR #163. Detail: [localization-pari
 | Language | Code | Status | UI strings |
 |---|---|---|---|
 | English | en | full (source language) | 100% |
+| Traditional Chinese (Taiwan) / 繁體中文（台灣） | zh-hant | catalog + native TC font preference / 翻譯檔與桌面繁中字型優先順序 | 1,175 lookup entries / 個查表項目 |
 | Simplified Chinese | zh-Hans | menus only | ~12% |
 | Spanish | es | none | 0% |
 | Hindi | hi | none | 0% |
@@ -282,6 +290,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-11-16 | minor | Progress log: chart data outline in three colours, dragged from its corners (#4389, #4390) |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
+| 2026-11-03 | minor | Traditional Chinese catalog, script-aware locale selection and installed Noto TC preference / 繁中翻譯、繁簡語系分流與已安裝 Noto TC 優先順序 |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |

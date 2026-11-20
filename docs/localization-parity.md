@@ -2,6 +2,18 @@
 
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-15 · **Change:** minor (RaTeX equation parser messages follow the interface language); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Arabic PDF export no longer fails when a character or the Arabic font is missing; Arabic PDF cells keep their reading direction and RTL pages mirror); previously minor (Brazilian Portuguese function help); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
+## Traditional Chinese update / 繁體中文更新（2026-11-03）
+
+Traditional Chinese (`zh-hant`) now has its own catalog using Taiwan terminology. Script-aware
+locale detection keeps Simplified Chinese preferences compatible. Native builds prefer an installed
+Noto Sans CJK TC face for this language; no font binaries are bundled. Missing strings still fall
+back to English; formula and number/date localization are unchanged. See
+[setup and scope / 設定與範圍](localization-zh-hant.md).
+
+繁體中文（`zh-hant`）新增獨立翻譯檔並採用台灣用語，依文字系統辨識語系，保留原有簡中設定。
+桌面版繁中介面優先使用已安裝的 Noto Sans CJK TC，不打包字型檔。未翻譯字串仍顯示英文，
+公式、數值與日期格式的在地化範圍維持原樣。
+
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
 right-to-left sheets and full complex-script support. Part of
@@ -146,10 +158,12 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-15 | minor | Traditional Chinese function help: all 479 descriptions and 283 argument names of the function catalog, plus Maximize/Minimize/Restore Down; the macOS menu bar follows the interface language in every language, with all its labels in zh-Hant / 繁中函數說明：函數目錄全部 479 則說明與 283 個引數名稱；macOS 選單列跟隨介面語言 |
 | 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-11-09 | minor | Arabic PDF export no longer fails on a character the Arabic face lacks (it falls back like other text) or when no Arabic font is available (Arabic is set in the CID font, which has no Arabic glyphs, and a message says so) |
+| 2026-11-03 | minor | Traditional Chinese: 1,196 lookup entries, script-aware locale selection, persistent preferences and native TC font fallback / 繁中：1,196 個查表項目、繁簡語系分流、設定保存與桌面繁中字型回退 |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
 | 2026-11-08 | minor | Strings built with `format!` in English now translate their template first and fill it in once (`Language::tr_fill`): status bar statistics and the circular-reference note, the column width / row height drag tip, the formula bar text for a picture in a cell, the Move or Copy and Unhide notes, the Format Control title, the equation editor's error prefix and its own check messages (macro definitions, `%` with a link, nesting, length, matrix-cell and size limits; RaTeX parser errors stay English), and the Goal Seek and macro recorder/runner toasts (#3600, #3602, #3603, #3605, #3607–#3611). 24 new keys in every catalog; Average, Count, Sum and the three existing templates added to the 11 catalogs that lacked them, and Ukrainian's English placeholders for those six replaced. Numbers in these strings keep the `.` decimal point |
 | 2026-10-26 | minor | Arabic PDF cells inherit explicit or contextual direction; wrapped lines retain paragraph direction, and RTL pages mirror cell and object geometry |
