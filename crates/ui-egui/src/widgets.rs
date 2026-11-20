@@ -583,7 +583,28 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
     let Some((title, msg)) = app.message.clone() else { return };
     let title = app.ui.language.tr(&title).to_owned();
     let msg = app.ui.language.tr_error(&msg);
-    let mut close = false;
+    // Dismissal keys belong to this message, not `Modal` or the dialog underneath; key-repeat and modified
+    // Enter/Escape events are drained up front without dismissing the alert or closing the open dialog.
+    let (enter, escape) = ctx.input_mut(|i| {
+        let (mut enter, mut escape) = (false, false);
+        i.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::Enter, pressed: true, repeat, modifiers, .. } => {
+                if !*repeat && modifiers.is_none() {
+                    enter = true;
+                }
+                false
+            }
+            egui::Event::Key { key: egui::Key::Escape, pressed: true, repeat, modifiers, .. } => {
+                if !*repeat && modifiers.is_none() {
+                    escape = true;
+                }
+                false
+            }
+            _ => true,
+        });
+        (enter, escape)
+    });
+    let mut close = enter || escape;
     egui::Modal::new(egui::Id::unique("message_box")).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.horizontal(|ui| {
@@ -598,7 +619,7 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         });
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("  OK  ").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape)) {
+            if ui.button("  OK  ").clicked() {
                 close = true;
             }
         });
