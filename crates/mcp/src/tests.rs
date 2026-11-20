@@ -656,6 +656,38 @@ fn text_to_columns_destination_follows_its_sheet() {
 }
 
 #[test]
+fn negative_history_steps_are_invalid_params_without_changing_history() {
+    let mut s = server();
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "first"}));
+    ok(&mut s, "set_cell", json!({"cell": "A1", "input": "second"}));
+    for (name, expected) in [("undo", "second"), ("redo", "first")] {
+        let before = ok(&mut s, "inspect_workbook", json!({}));
+        let reply = rpc(&mut s, 1, "tools/call", json!({"name": name, "arguments": {"steps": -1}}));
+        assert_eq!(err_code(&reply), -32602, "{name}: {reply}");
+        let after = ok(&mut s, "inspect_workbook", json!({}));
+        assert_eq!(after["undo"], before["undo"], "invalid {name} must preserve undo history");
+        assert_eq!(after["redo"], before["redo"], "invalid {name} must preserve redo history");
+        assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A1"}))["input"], expected);
+        ok(&mut s, name, json!({"steps": 1}));
+    }
+    assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A1"}))["input"], "second");
+}
+
+#[test]
+fn invalid_font_sizes_are_rejected_before_applying_other_formats() {
+    let mut s = server();
+    for size in [0, 410] {
+        let reply = rpc(&mut s, 1, "tools/call", json!({"name": "format_range", "arguments": {"range": "A1", "bold": true, "fontSize": size}}));
+        assert_eq!(err_code(&reply), -32602, "{size}: {reply}");
+        assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A1"}))["style"]["font"]["bold"], false);
+    }
+    for size in [1, 409] {
+        ok(&mut s, "format_range", json!({"range": "A1", "fontSize": size}));
+        assert_eq!(ok(&mut s, "get_cell", json!({"cell": "A1"}))["style"]["font"]["size"].as_f64(), Some(f64::from(size)));
+    }
+}
+
+#[test]
 fn invalid_borders_are_invalid_params() {
     let mut s = server();
     let bad = |s: &mut Server, id: u64, borders: Value| {
