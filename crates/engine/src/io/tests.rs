@@ -135,6 +135,27 @@ fn html_export_refuses_an_outsized_grid_instead_of_growing_forever() {
 }
 
 #[test]
+fn html_export_keeps_line_breaks_inside_cells() {
+    // #4357: a cell's line feed is a break in the cell, as Excel writes it, not a space.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let text = |s: &str| gridcraft_core::Value::Text(s.into());
+    sh.set_value(CellRef::parse("A1").unwrap(), text("alpha\nbeta"));
+    sh.set_value(CellRef::parse("A2").unwrap(), text("alpha beta"));
+    sh.set_value(CellRef::parse("A3").unwrap(), text("a&b\n<c>\n\nd"));
+    let html = to_html(&wb, 0).unwrap();
+    let br = "<br style=\"mso-data-placement:same-cell\">";
+    assert!(html.contains(&format!(">alpha{br}beta</td>")), "{html}");
+    assert!(html.contains(">alpha beta</td>"), "the single-line control: {html}");
+    assert!(html.contains(&format!(">a&amp;b{br}&lt;c&gt;{br}{br}d</td>")), "{html}");
+    // An image's alt text is an attribute: a line feed there stays a character.
+    assert_eq!(esc_within("a\nb", 10).as_deref(), Some("a\nb"));
+    // The break counts against the page's room like any other text.
+    assert_eq!(esc_cell_within("\n", br.len() - 1), None);
+    assert_eq!(esc_cell_within("\n", br.len()).as_deref(), Some(br));
+}
+
+#[test]
 fn html_export_embeds_images_as_data_uris() {
     let mut wb = Workbook::new();
     wb.sheet_mut(0).unwrap().images.push(gridcraft_model::Image {
