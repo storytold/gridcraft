@@ -406,6 +406,24 @@ impl DocState {
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| self.title.clone())
     }
+
+    /// Whether this unsaved document was created from an Excel template. Its title is already the
+    /// complete stem, even when that stem ends in something that looks like another file type.
+    pub fn is_template_instance(&self) -> bool {
+        self.path.is_none() && self.wb.source_path.as_ref().is_some_and(|path| crate::io::is_template_path(&path.to_string_lossy()))
+    }
+
+    /// File-name stem for exports. A pathless title is treated as a stem unless its source has a
+    /// known file type; this keeps `budget.2026` intact while turning an encrypted `Budget.xlsx`
+    /// or imported workbook title into `Budget`.
+    pub fn export_stem(&self) -> String {
+        let title = self.display_title();
+        let known_source = self.wb.source_path.as_ref().is_some_and(|path| crate::io::FileKind::from_path(&path.to_string_lossy()).is_some());
+        let strip_extension = self.path.is_some() || (!self.is_template_instance() && known_source);
+        let stem =
+            if strip_extension { std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or(&title) } else { &title };
+        if stem.is_empty() { "Book1".to_string() } else { stem.to_string() }
+    }
 }
 
 /// Engine-side preferences.

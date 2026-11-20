@@ -426,7 +426,14 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                let suggested = self
+                    .session
+                    .active()
+                    .map(|d| {
+                        let title = d.display_title();
+                        if d.is_template_instance() { format!("{title}.xlsx") } else { title }
+                    })
+                    .unwrap_or_else(|| "Book1".into());
                 if let Some(pick) = &self.services.pick_save {
                     if let Some(path) = pick(&suggested) {
                         let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };

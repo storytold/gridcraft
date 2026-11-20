@@ -345,6 +345,24 @@ mod lifecycle_tests {
         assert!(app.run("options.personalTemplatesLocation", json!({})).is_err());
     }
 
+    #[test]
+    fn template_save_as_suggests_an_xlsx_even_when_its_stem_looks_like_an_export() {
+        let suggestion = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let captured = suggestion.clone();
+        let mut app = app();
+        app.services.pick_save = Some(Box::new(move |name| {
+            *captured.lock().unwrap() = name.to_string();
+            None
+        }));
+        let doc = app.session.active_mut().unwrap();
+        doc.title = "Report.csv".into();
+        std::sync::Arc::make_mut(&mut doc.wb).source_path = Some("Report.csv.xltx".into());
+
+        app.open_dialog("saveAs", json!({}));
+
+        assert_eq!(*suggestion.lock().unwrap(), "Report.csv.xlsx");
+    }
+
     /// One headless pass; a test has no renderer for the texture atlas delta (0.37 panics when it
     /// is dropped unapplied).
     fn ui_pass(ctx: &egui::Context, raw: egui::RawInput, f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {

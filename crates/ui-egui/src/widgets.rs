@@ -323,10 +323,14 @@ pub fn committed_text_with_hint(ui: &mut Ui, id: egui::Id, current: &str, width:
         ui.data_mut(|d| d.remove::<CommittedTextDraft>(draft));
         return (!ui.input(|i| i.key_pressed(egui::Key::Escape)) && saved_value_unchanged).then_some(text);
     }
-    if r.has_focus() {
+    let memory_has_focus = ui.memory(|memory| memory.has_focus(id));
+    if memory_has_focus {
         ui.data_mut(|d| d.insert_temp(draft, CommittedTextDraft { text, original: original.to_string() }));
     } else {
         ui.data_mut(|d| d.remove::<CommittedTextDraft>(draft));
+        if r.changed() && saved_value_unchanged && !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            return Some(text);
+        }
     }
     None
 }
@@ -787,6 +791,35 @@ mod committed_text_tests {
 
         assert_eq!(committed.as_deref(), Some("edited"));
         assert!(ctx.data_mut(|data| data.get_temp::<CommittedTextDraft>(draft)).is_none());
+    }
+
+    #[test]
+    fn application_focus_loss_keeps_the_active_draft() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("committed-text-app-focus-test");
+        let draft = id.with("draft");
+        ctx.memory_mut(|memory| memory.request_focus(id));
+        assert_eq!(run(&ctx, egui::RawInput::default(), id, "saved"), None);
+        ctx.data_mut(|data| {
+            data.insert_temp(draft, CommittedTextDraft { text: "edited".to_string(), original: "saved".to_string() });
+        });
+
+        assert_eq!(run(&ctx, egui::RawInput { focused: false, ..Default::default() }, id, "saved"), None);
+        assert_eq!(ctx.data_mut(|data| data.get_temp::<CommittedTextDraft>(draft)).map(|state| state.text), Some("edited".into()));
+    }
+
+    #[test]
+    fn an_unfocused_accessibility_edit_commits_immediately() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::unique("committed-text-accessibility-test");
+        let request = egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest {
+            action: egui::accesskit::Action::SetValue,
+            target_node: id.accesskit_id(),
+            target_tree: egui::accesskit::TreeId::ROOT,
+            data: Some(egui::accesskit::ActionData::Value("accessible edit".into())),
+        });
+
+        assert_eq!(run(&ctx, egui::RawInput { events: vec![request], ..Default::default() }, id, "saved").as_deref(), Some("accessible edit"));
     }
 }
 

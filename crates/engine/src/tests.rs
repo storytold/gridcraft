@@ -31,6 +31,8 @@ fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
     assert_eq!(v(&s, "A1"), Value::text("kept"));
     assert!(s.doc().unwrap().path.is_none(), "Save must ask for a destination instead of replacing the template");
     assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "Forecast.v2.xlsx");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "Forecast.v2.csv");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "html"})).unwrap()["name"], "Forecast.v2.html");
     s.doc_mut().unwrap().path = Some("saved-template.xltx".into());
     assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "saved-template.xlsx");
 
@@ -39,6 +41,42 @@ fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
     assert!(s.doc().unwrap().path.is_none());
     s.execute("file.save", json!({})).unwrap();
     assert!(matches!(s.ui_requests.last(), Some(crate::UiRequest::Dialog(name, _)) if name == "saveAs"));
+}
+
+#[test]
+fn export_names_distinguish_pathless_sources_from_complete_stems() {
+    let source = s();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "source.xlsx").unwrap();
+    let mut opened = s();
+    opened.execute("file.open", json!({"name": "budget.2026", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(opened.doc().unwrap().export_stem(), "budget.2026");
+    assert_eq!(opened.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "budget.2026.csv");
+    assert_eq!(opened.execute("file.saveBytes", json!({"format": "html"})).unwrap()["name"], "budget.2026.html");
+
+    let doc = opened.doc_mut().unwrap();
+    doc.title = "Budget.xlsx".into();
+    std::sync::Arc::make_mut(&mut doc.wb).source_path = Some("Budget.xlsx".into());
+    assert_eq!(opened.doc().unwrap().export_stem(), "Budget");
+    assert_eq!(opened.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "Budget.csv");
+
+    let doc = opened.doc_mut().unwrap();
+    doc.title = "Report.csv".into();
+    std::sync::Arc::make_mut(&mut doc.wb).source_path = Some("Report.csv.xltx".into());
+    assert_eq!(opened.doc().unwrap().export_stem(), "Report.csv");
+}
+
+#[test]
+fn opening_another_file_keeps_an_empty_template_instance() {
+    let source = s();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Empty.xltx").unwrap();
+    let encoded = crate::io::base64_encode(&bytes);
+    let mut opened = s();
+    opened.execute("file.open", json!({"name": "Empty.xltx", "base64": encoded})).unwrap();
+    assert_eq!(opened.documents().len(), 1, "the template replaces only the initial blank placeholder");
+    assert!(opened.doc().unwrap().is_template_instance());
+
+    opened.execute("file.open", json!({"name": "Other.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(opened.documents().len(), 2, "an empty template-derived workbook is still a real document");
 }
 
 #[test]
