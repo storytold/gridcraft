@@ -1,6 +1,7 @@
 use super::{
-    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, MAX_COLS, MAX_ROWS, RangeRef, Result, Series, Session, Sheet, anchor_mode_param,
-    bad, block, bool_param, cell_param_on, edit, f64_param, json, size_cap, split_sheet, str_param, target_ranges, target_sheet, u32_param,
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, MAX_COLS, MAX_ROWS, PROTECTED, RangeRef, Result, Series, Session, Sheet,
+    anchor_mode_param, bad, block, bool_param, cell_param_on, edit, f64_param, json, size_cap, split_sheet, str_param, target_ranges, target_sheet,
+    u32_param,
 };
 
 #[cfg(test)]
@@ -234,6 +235,20 @@ pub fn recommend_charts(s: &Session, p: &Json) -> Result<Vec<(&'static str, &'st
     Ok(out)
 }
 
+/// The sheet `insert.chart` puts the chart on, and the anchor cell `at` gives. As in Excel, a
+/// chart goes on the active sheet wherever its data is, so a dashboard sheet can chart another
+/// sheet's data (#3512). A sheet-qualified `at` (`Dashboard!A60`) puts it on that sheet, and an
+/// explicit `sheet` parameter keeps naming the sheet the command works on.
+fn chart_place(s: &Session, p: &Json) -> Result<(usize, Option<CellRef>)> {
+    let d = s.doc()?;
+    let host = match str_param(p, "at").map(split_sheet) {
+        Some((Some(name), _)) => d.wb.sheet_index(&name).ok_or_else(|| bad("at", format!("no sheet named `{name}`")))?,
+        _ if p.get("sheet").is_some() => target_sheet(s, p)?,
+        _ => d.wb.active_sheet(),
+    };
+    Ok((host, cell_param_on(s, p, "at", host)?))
+}
+
 /// The chart `insert.chart` would insert for these params, without inserting it: the sheet it
 /// goes on and the chart (previews in the Recommended Charts dialog).
 pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
@@ -258,7 +273,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
     }
     scatter_x_from_first(kind, &mut series);
     let id = d.wb.next_object_id();
-    let at = cell_param_on(s, p, "at", sheet)?.unwrap_or_else(|| CellRef::new(bounds.start.row, bounds.end.col + 2));
+    let (host, at) = chart_place(s, p)?;
+    let at = at.unwrap_or_else(|| CellRef::new(bounds.start.row, bounds.end.col + 2));
     let title = str_param(p, "title").map(str::to_string).or_else(|| {
         if series.len() == 1 {
             series[0].name.as_ref().map(|n| gridcraft_calc::evaluate(&d.wb, sheet, at, n).display())
@@ -292,11 +308,17 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         by_rows,
         pivot: None,
     };
-    Ok((sheet, chart))
+    Ok((host, chart))
 }
 
+/// Insert › Chart (`insert.chart`): the chart [`build_chart`] makes, on its sheet. Sheet protection
+/// locks drawing objects, as for pictures and shapes, so a protected destination sheet refuses it,
+/// whichever sheet holds the data.
 pub(super) fn insert_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, chart) = build_chart(s, p)?;
+    if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     let id = chart.id;
     edit(s, |cx| {
         cx.sheet_mut(sheet)?.charts.push(chart);
