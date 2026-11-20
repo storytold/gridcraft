@@ -114,7 +114,24 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(kept) = crate::macros::kept_name(&cx.wb, &m.name) {
             return Err(EngineError::Other(taken_by_kept(&kept)));
         }
-        match crate::macros::find(&cx.wb, &m.name) {
+        let at = crate::macros::find(&cx.wb, &m.name);
+        // A new or changed shortcut must be one that runs the macro, as Record Macro and Macro
+        // Options require; a shortcut the macro already has (a file can bring one on a letter
+        // GridCraft uses) is kept as it is, in whichever form it is given (`s`, `Ctrl+Shift+S`).
+        let had = at.and_then(|i| cx.wb.macros.get(i)).and_then(|o| o.shortcut.as_deref());
+        let same = |k: &str| {
+            had.is_some_and(|o| o.trim() == k.trim() || crate::macros::parse_shortcut(o).is_some_and(|l| crate::macros::parse_shortcut(k) == Some(l)))
+        };
+        if let Some(k) = m.shortcut.as_deref().filter(|k| !k.trim().is_empty())
+            && !same(k)
+        {
+            let letter = crate::macros::parse_shortcut(k)
+                .ok_or_else(|| bad("macro.save", "`shortcut` must be one letter from A to Z (used as Ctrl+Shift+letter)"))?;
+            if let Some(why) = crate::macros::shortcut_conflict(&cx.wb, &m.name, letter) {
+                return Err(bad("macro.save", why));
+            }
+        }
+        match at {
             Some(i) if !replace => {
                 let existing = cx.wb.macros.get(i).map_or(m.name.as_str(), |o| o.name.as_str());
                 return Err(EngineError::Other(format!("A macro called '{existing}' already exists. Pass `replace: true` to replace it.")));

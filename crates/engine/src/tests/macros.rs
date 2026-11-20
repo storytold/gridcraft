@@ -2435,6 +2435,46 @@ fn a_shortcut_taken_while_recording_is_reported_when_it_is_left_off() {
     assert_eq!(s.execute("macro.get", json!({"name": "Keep"})).unwrap()["shortcut"], "Ctrl+Shift+Q");
 }
 
+#[test]
+fn save_checks_a_new_or_changed_shortcut_and_keeps_one_the_macro_has() {
+    let mut s = s();
+    s.execute("macro.save", json!({"name": "Taken", "shortcut": "Ctrl+Shift+P", "steps": []})).unwrap();
+    // A shortcut that could never run the macro is refused, as Record Macro and Macro Options
+    // refuse it, instead of being saved and never working.
+    for (shortcut, needle) in
+        [("Ş", "one letter"), ("Ctrl+Alt+M", "one letter"), ("F5", "one letter"), ("Ctrl+Shift+Z", "Redo"), ("p", "already runs macro")]
+    {
+        let e = s.execute("macro.save", json!({"name": "New", "shortcut": shortcut, "steps": []})).unwrap_err().to_string();
+        assert!(e.contains(needle), "{shortcut}: {e}");
+        assert!(s.execute("macro.get", json!({"name": "New"})).is_err(), "{shortcut}");
+    }
+    // A free letter, and the macro's own letter when it is replaced, are saved.
+    s.execute("macro.save", json!({"name": "New", "shortcut": "m", "steps": []})).unwrap();
+    s.execute("macro.save", json!({"name": "taken", "shortcut": "P", "steps": [], "replace": true})).unwrap();
+    // A file can bring a shortcut on a letter GridCraft uses: a save that keeps it keeps it, one
+    // that moves it to another such letter is refused.
+    put(&mut s, json!({"name": "Theirs", "shortcut": "Ctrl+Shift+S", "steps": []}));
+    s.execute("macro.save", json!({"name": "Theirs", "shortcut": "Ctrl+Shift+S", "description": "edited", "steps": [], "replace": true})).unwrap();
+    assert_eq!(s.execute("macro.get", json!({"name": "Theirs"})).unwrap()["description"], "edited");
+    // The same letter written another way is the shortcut the macro has, not a new one.
+    for same in ["s", " S ", "ctrl+shift+s", "Cmd+Shift+S", "⌘⇧S"] {
+        s.execute("macro.save", json!({"name": "Theirs", "shortcut": same, "description": "edited", "steps": [], "replace": true}))
+            .unwrap_or_else(|e| panic!("{same}: {e}"));
+        s.execute("macro.save", json!({"name": "Theirs", "shortcut": "Ctrl+Shift+S", "description": "edited", "steps": [], "replace": true}))
+            .unwrap();
+    }
+    // A refused replace leaves the macro as it was: steps, description and shortcut.
+    let before = s.execute("macro.get", json!({"name": "Theirs"})).unwrap();
+    let moved = json!({
+        "name": "Theirs", "shortcut": "Ctrl+Shift+T", "description": "moved",
+        "steps": [{"command": "home.bold", "params": {"range": "A1"}}], "replace": true
+    });
+    let e = s.execute("macro.save", moved).unwrap_err().to_string();
+    assert!(e.contains("AutoSum"), "{e}");
+    assert_eq!(s.execute("macro.get", json!({"name": "Theirs"})).unwrap(), before);
+    assert_eq!(before["shortcut"], "Ctrl+Shift+S");
+}
+
 /// `output` (a form button's output cell) moves where the macro writes: the footprint, the
 /// conflict rule and `macro.check` protect the data at the cells it names, as at the macro's own
 /// anchor, and a value that names no cell is refused before anything runs.
