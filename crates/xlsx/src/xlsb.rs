@@ -1,10 +1,11 @@
-//! Data-only XLSB import, delegated to `craft_xlsx::Package`.
-//! Formula caches become constants. Styles, macros and other workbook features are not run or imported.
+//! XLSB import, delegated to `craft_xlsx::Package`.
+//! Cell values, formulas, defined names, and merged cells are imported; formatting, charts,
+//! images, macros and other workbook features are not imported.
 
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
-use gridcraft_model::{Cell, Sheet, Visibility, Workbook};
+use gridcraft_model::{Cell, DefinedName, Formula, Sheet, StyleId, Visibility, Workbook};
 
 use crate::{IoError, ReadReport};
 
@@ -61,8 +62,55 @@ pub(super) fn import_limits() -> craft_xlsx::Limits {
     if cfg!(target_arch = "wasm32") { craft_xlsx::Limits { binary_text: 64 << 20, ..limits } } else { limits }
 }
 
-/// Imports worksheet scalar values and saved formula results. Number formats are omitted;
-/// dates remain serial numbers with the workbook's original date system. Inspect warnings.
+fn map_formula(f: &craft_xlsx::CellFormula, at: craft_xlsx::CellRef, report: &mut ReadReport) -> Option<Formula> {
+    let text = crate::fmla::from_file(f.text.trim());
+    if text.is_empty() {
+        return None;
+    }
+    match f.kind {
+        craft_xlsx::FormulaKind::Normal | craft_xlsx::FormulaKind::Shared => Some(Formula::new(&text)),
+        craft_xlsx::FormulaKind::Array => {
+            let pos = CellRef::new(at.row, at.col);
+            let mut fm = Formula::new(&text);
+            fm.array = Some(
+                f.range
+                    .map(|r| RangeRef::new(CellRef::new(r.first.row, r.first.col), CellRef::new(r.last.row, r.last.col)))
+                    .unwrap_or_else(|| RangeRef::cell(pos)),
+            );
+            Some(fm)
+        }
+        craft_xlsx::FormulaKind::DataTable => {
+            report.warn("what-if data tables are not supported; kept their values");
+            None
+        }
+    }
+}
+
+fn import_defined_names(book: &craft_xlsx::Workbook, file_to_model: &[Option<usize>], wb: &mut Workbook) {
+    for d in &book.defined_names {
+        let scope = match d.local_sheet_id {
+            Some(i) => match file_to_model.get(i as usize).copied().flatten() {
+                Some(m) => Some(m),
+                None => continue,
+            },
+            None => None,
+        };
+        let lname = d.name.to_ascii_lowercase();
+        if lname == "_xlnm._filterdatabase" || lname.starts_with("_xlchart.") || lname == "_xlnm.print_area" || lname == "_xlnm.print_titles" {
+            continue;
+        }
+        wb.names.push(DefinedName {
+            name: d.name.clone(),
+            scope,
+            formula: crate::fmla::from_file(d.formula.trim()),
+            comment: d.comment.clone(),
+            hidden: d.hidden,
+        });
+    }
+}
+
+/// Imports worksheet cell values, formulas, defined names, and merged cells. Number formats are
+/// omitted; dates remain serial numbers with the workbook's original date system. Inspect warnings.
 pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     let limits = import_limits();
     let mut package = craft_xlsx::Package::open(bytes, &limits).map_err(map_error)?;
@@ -101,13 +149,15 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     wb.sheets.clear();
     wb.date_system = if book.date_1904 { DateSystem::D1904 } else { DateSystem::D1900 };
     let mut report = ReadReport::default();
-    report.warn("XLSB data-only import: formulas become their saved results and will not recalculate. Formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.");
+    report.warn("XLSB import: formatting, charts, images, macros and other features are not imported; dates, currency and percentages may display as numbers. Save a new .xlsx file; XLSB saving is not supported.");
+    let mut file_to_model = Vec::with_capacity(book.sheets.len());
     for entry in &book.sheets {
         if entry.kind != craft_xlsx::SheetKind::Worksheet {
             if !matches!(entry.kind, craft_xlsx::SheetKind::Chartsheet | craft_xlsx::SheetKind::Dialogsheet | craft_xlsx::SheetKind::Macrosheet) {
                 return Err(IoError::Format("XLSB: unknown sheet relationship type".into()));
             }
             report.warn("XLSB non-worksheet sheets were skipped.");
+            file_to_model.push(None);
             continue;
         }
         wb.check_sheet_name(&entry.name, None).map_err(|e| IoError::Format(format!("XLSB: {e}")))?;
@@ -122,8 +172,12 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             .sheet(entry, |row| {
                 for cell in row.cells {
                     let value = map_value(cell.value.resolve(&strings, book.date_1904));
-                    if !value.is_empty() {
-                        sheet.cells.set(CellRef::new(cell.at.row, cell.at.col), Cell::value(value));
+                    let formula = cell.formula.as_ref().and_then(|f| map_formula(f, cell.at, &mut report));
+                    if !value.is_empty() || formula.is_some() {
+                        sheet.cells.set(
+                            CellRef::new(cell.at.row, cell.at.col),
+                            Cell { value, formula: formula.map(Arc::new), style: StyleId::DEFAULT, py: None },
+                        );
                     }
                 }
                 Ok(())
@@ -131,8 +185,10 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             .map_err(map_error)?;
         sheet.merges =
             part.merges.into_iter().map(|r| RangeRef::new(CellRef::new(r.first.row, r.first.col), CellRef::new(r.last.row, r.last.col))).collect();
+        file_to_model.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
+    import_defined_names(&book, &file_to_model, &mut wb);
     for warning in package.warnings() {
         report.warn(warning);
     }
