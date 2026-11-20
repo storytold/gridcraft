@@ -152,7 +152,7 @@ pub fn resolve(
     cx: &mut Ctx<'_>,
     wb_xml: &El,
     wb_rels: &[Rel],
-    sheet_els: &[El],
+    sheet_els: &[&El],
     file_to_model: &[Option<usize>],
     caches: &crate::pivot::CachesIn,
     wb: &mut Workbook,
