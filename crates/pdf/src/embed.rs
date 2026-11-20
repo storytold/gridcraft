@@ -90,8 +90,9 @@ impl Face {
             return None;
         }
         let num_hmetrics = usize::from(be16(hhea, 34)?).clamp(1, num_glyphs);
-        // Validate the outlines now, so building a subset later cannot find a bad offset.
-        validate_glyph_ranges(loca, glyf.len(), num_glyphs, be16(head, 50)?)?;
+        // Validate the outlines now, so building a subset later cannot find a bad offset or a
+        // truncated composite, which would fail the whole export rather than one glyph.
+        validate_outlines(loca, glyf, num_glyphs, be16(head, 50)?)?;
         let mut advances = Vec::with_capacity(num_glyphs);
         let mut last = 0u16;
         for glyph in 0..num_glyphs {
@@ -103,7 +104,8 @@ impl Face {
         let (mut ascender, mut descender) = (bei16(hhea, 4)?, bei16(hhea, 6)?);
         let mut cap_height = ascender;
         if let Some(os2) = table(b"OS/2") {
-            let fs_type = be16(os2, 8).unwrap_or(0);
+            // A table too short to carry `fsType` is a malformed face, not permission to embed.
+            let fs_type = be16(os2, 8)?;
             // Bit 1: restricted embedding. Bit 8: no subsetting (which this writer does).
             // Bit 9: bitmap embedding only, so no outlines.
             if fs_type & 0x0302 != 0 {
@@ -253,9 +255,14 @@ fn glyph_id(glyph: Option<u32>, num_glyphs: usize) -> Option<u16> {
     (usize::from(glyph) < num_glyphs && glyph != 0).then_some(glyph)
 }
 
-/// Checks that every glyph's `loca` range lies in `glyf` and that the offsets are monotonic, so
-/// building a subset cannot find an out-of-range glyph. A short `loca` stores half-offsets.
-fn validate_glyph_ranges(loca: &[u8], glyf_len: usize, num_glyphs: usize, long: u16) -> Option<()> {
+/// Checks that every glyph's `loca` range lies in `glyf`, that the offsets are monotonic, and that
+/// each composite's records are complete and name glyphs the face has. The subset is built from the
+/// same bytes later, and a truncated record or an unknown id there fails the whole export rather
+/// than one glyph, so the face is refused here. A short `loca` stores half-offsets.
+///
+/// shortcut: a component that names its own glyph is caught here; a cycle spread over two glyphs
+/// (A draws B, B draws A) still passes. Revisit if a real font is ever reported with one.
+fn validate_outlines(loca: &[u8], glyf: &[u8], num_glyphs: usize, long: u16) -> Option<()> {
     if long > 1 {
         return None;
     }
@@ -265,8 +272,13 @@ fn validate_glyph_ranges(loca: &[u8], glyf_len: usize, num_glyphs: usize, long: 
     let mut previous = byte(0)?;
     for glyph in 0..num_glyphs {
         let end = byte((glyph + 1) * stride)?;
-        if end < previous || end > glyf_len {
+        if end < previous || end > glyf.len() {
             return None;
+        }
+        for component in components(glyf.get(previous..end)?)? {
+            if component >= num_glyphs || component == glyph {
+                return None;
+            }
         }
         previous = end;
     }
@@ -413,14 +425,17 @@ fn postscript_name(font: &FontRef<'_>) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-/// A subset tag (`ABCDEF+`) derived from the glyphs used, as PDF requires for subset fonts. Stable
-/// for the same usage, so an unchanged export writes the same bytes.
-fn subset_tag(usage: &Usage) -> String {
+/// A subset tag (`ABCDEF+`) derived from the face and the glyphs used, as PDF requires for subset
+/// fonts. Two faces in one document can hold the same glyph ids for the same letters, and different
+/// subsets need different tags. Stable for the same inputs, so an unchanged export writes the same
+/// bytes.
+fn subset_tag(name: &str, usage: &Usage) -> String {
     let mut hash: u32 = 2_166_136_261;
-    for (glyph, c) in usage {
-        for byte in glyph.to_be_bytes().into_iter().chain(u32::from(*c).to_be_bytes()) {
-            hash = (hash ^ u32::from(byte)).wrapping_mul(16_777_619);
-        }
+    let used = usage
+        .iter()
+        .flat_map(|(glyph, c)| glyph.to_be_bytes().into_iter().chain(u32::from(*c).to_be_bytes()));
+    for byte in name.as_bytes().iter().copied().chain(used) {
+        hash = (hash ^ u32::from(byte)).wrapping_mul(16_777_619);
     }
     (0..6)
         .map(|index| {
@@ -436,7 +451,7 @@ pub(crate) fn write_objects(face: &Face, usage: &Usage, next: &mut u32, out: &mu
     let Some(end) = next.checked_add(5) else { return Err(Error("PDF font object count exceeded".into())) };
     let (type0, descendant, descriptor, file, to_unicode) = (*next, *next + 1, *next + 2, *next + 3, *next + 4);
     *next = end;
-    let tag = subset_tag(usage);
+    let tag = subset_tag(&face.name, usage);
     let base = format!("{tag}+{}", face.name);
     out.object(
         type0,
@@ -756,6 +771,15 @@ pub(crate) mod synthetic {
         build(&[('ạ', 1)], &[Vec::new(), composite, rectangle()])
     }
 
+    /// A font whose glyph 1 composite stops inside its last component record, as a `glyf` entry cut
+    /// by a bad write does. The face has to be refused while parsing: drawing then falls back to
+    /// the CID font instead of failing the whole export when the subset is built.
+    pub(crate) fn broken_composite() -> Vec<u8> {
+        let mut glyph = composite(2);
+        glyph.truncate(glyph.len() - 2);
+        build(&[('ạ', 1)], &[Vec::new(), glyph, rectangle()])
+    }
+
     /// One composite glyph drawing `component` at the same offset.
     fn composite(component: u16) -> Vec<u8> {
         let mut glyph = Vec::new();
@@ -928,11 +952,16 @@ mod tests {
     fn subset_tags_are_letters_and_depend_on_the_glyphs_used() {
         let mut usage = Usage::new();
         usage.insert(1, 'ệ');
-        let tag = subset_tag(&usage);
+        let tag = subset_tag("ArialMT", &usage);
         assert_eq!(tag.len(), 6);
         assert!(tag.chars().all(|c| c.is_ascii_uppercase()), "{tag}");
         usage.insert(2, 'ạ');
-        assert_ne!(subset_tag(&usage), tag);
+        assert_ne!(subset_tag("ArialMT", &usage), tag);
+        assert_ne!(
+            subset_tag("TimesNewRomanPSMT", &usage),
+            tag,
+            "a second face subsetting the same glyphs needs its own tag"
+        );
     }
 
     #[test]

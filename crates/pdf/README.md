@@ -4,8 +4,9 @@ A small PDF 1.7 writer for shaped Arabic text, vector drawing and RGBA images.
 
 ## Text outside WinAnsiEncoding
 
-The 14 standard fonts (Helvetica, Times, Courier, Symbol) are not embedded and can only carry
-`WinAnsiEncoding` (CP1252). Text they cannot encode — Vietnamese `ạ ế ơ đ`, Czech `č ř ě`, Greek,
+The 14 standard fonts are not embedded. Helvetica, Times and Courier can only carry
+`WinAnsiEncoding` (CP1252); Symbol draws its maths glyphs in its own encoding and never takes the
+fallback path. Text the WinAnsi faces cannot encode — Vietnamese `ạ ế ơ đ`, Czech `č ř ě`, Greek,
 Cyrillic, the rest of Latin Extended — is set in an embedded, subset system TrueType face standing
 in for the standard font: a Type0 font with a CIDFontType2 descendant, `Identity-H` encoding and a
 ToUnicode CMap, so the printed text stays searchable and copyable. Marked content carries the

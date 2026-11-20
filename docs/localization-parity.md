@@ -93,7 +93,9 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   accepted as in Excel. Sheet names already counted characters (31).
 - **PDF export** sets text outside WinAnsiEncoding in an embedded, subset system TrueType face
   standing in for the standard font when that face has the glyphs: Vietnamese, Czech, Greek,
-  Cyrillic and the rest of Latin Extended, measured with the embedded advances. Arabic is shaped
+  Cyrillic and the rest of Latin Extended, measured with the embedded advances. Text is not
+  normalized: a base letter followed by combining marks (`a` + U+0303 + U+0301) is drawn as those
+  glyphs, each with its own advance, not as one precomposed glyph. Arabic is shaped
   with embedded Noto Arabic glyph outlines; CJK keeps a predefined, non-embedded Adobe-GB1 CID font
   (#1912); Devanagari and Thai cannot export yet. The web build reads no system fonts, so there
   the faces' characters keep the CID fallback.

@@ -1259,7 +1259,10 @@ fn vietnamese_pdf_face_available() -> bool {
     let embeds = |text: &str, cid_hex: &str| {
         let mut doc = gridcraft_pdf::PdfDoc::new();
         doc.add_page(100.0, 100.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], text);
-        doc.finish().is_ok_and(|pdf| contains(&pdf, "/FontFile2") && !contains(&pdf, cid_hex))
+        // An export that writes but embeds nothing means no usable font; an export that fails is a
+        // bug in the writer, and must fail the test instead of skipping it.
+        let pdf = doc.finish().expect("a two-character export writes a PDF");
+        contains(&pdf, "/FontFile2") && !contains(&pdf, cid_hex)
     };
     embeds("ệ", "<1EC7> Tj") && embeds("ế", "<1EBF> Tj")
 }

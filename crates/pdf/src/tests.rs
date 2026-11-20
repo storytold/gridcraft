@@ -1348,9 +1348,51 @@ fn a_composite_with_many_components_is_not_cut_off() -> Result<(), Box<dyn Error
     check_xref(&pdf)?;
     let font_file = embedded_font_file(&pdf).ok_or_else(|| io::Error::other("no embedded font file"))?;
     let font = skrifa::FontRef::from_index(&font_file, 0).map_err(|e| io::Error::other(e.to_string()))?;
+    // The record count of glyph 1, isolated through `loca`: a total length cannot tell 1,025 records
+    // from 1,024, because the outline they draw is added to the same table.
+    use skrifa::MetadataProvider as _;
     let glyf = font.table_data(skrifa::Tag::new(b"glyf")).ok_or_else(|| io::Error::other("glyf missing"))?;
-    // 1,025 six-byte component records and the rectangle they all draw.
-    assert!(glyf.as_bytes().len() > 6000, "the whole component list is kept: {} bytes", glyf.as_bytes().len());
+    let loca = font.table_data(skrifa::Tag::new(b"loca")).ok_or_else(|| io::Error::other("loca missing"))?;
+    // The subset always rewrites `loca` with long offsets (`head`'s indexToLocFormat is set to 1).
+    let start = |glyph: usize| usize::try_from(u32::from_be_bytes(loca.as_bytes()[glyph * 4..glyph * 4 + 4].try_into().unwrap())).unwrap();
+    let outline = &glyf.as_bytes()[start(1)..start(2)];
+    let mut at = 10usize;
+    let mut records = 0usize;
+    let mut complete = false;
+    while at + 2 <= outline.len() {
+        let flags = u16::from_be_bytes(outline[at..at + 2].try_into().unwrap());
+        records += 1;
+        at += if flags & 0x0001 != 0 { 8 } else { 6 };
+        if flags & 0x0008 != 0 {
+            at += 2;
+        } else if flags & 0x0040 != 0 {
+            at += 4;
+        } else if flags & 0x0080 != 0 {
+            at += 8;
+        }
+        if flags & 0x0020 == 0 {
+            complete = true;
+            break;
+        }
+    }
+    assert!(complete, "the last component record is complete: {records} records in {} bytes", outline.len());
+    assert_eq!(records, 1025, "the whole component list survives the subset");
+    assert_eq!(font.charmap().map('ạ').map(|glyph| glyph.to_u32()), Some(1));
+    Ok(())
+}
+
+#[test]
+fn a_truncated_composite_refuses_the_face_before_it_can_fail_an_export() -> Result<(), Box<dyn Error>> {
+    let bytes = embed::synthetic::broken_composite();
+    assert!(embed::Face::parse(bytes.clone(), 0).is_none(), "the malformed outline is caught while parsing");
+    let mut doc = PdfDoc::new();
+    assert!(!doc.set_unicode_font(Font::Helvetica, bytes, 0), "so the face is never selected for drawing");
+    doc.add_page(200.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "ạ");
+    // Without the parse-time check this face was chosen for drawing and `finish` failed, because the
+    // subset could not be built from the truncated record. Whichever face draws the character now,
+    // the export has to write.
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
     Ok(())
 }
 
@@ -1381,13 +1423,13 @@ fn a_system_face_carries_vietnamese_when_one_is_installed() -> Result<(), Box<dy
         eprintln!("diagnostic: no system fallback font on this machine; the check was not run");
         return Ok(());
     };
-    if face.glyph('ệ').is_none() {
+    let Some(glyph) = face.glyph('ệ') else {
         eprintln!("diagnostic: the system fallback face has no Vietnamese glyphs; the check was not run");
         return Ok(());
-    }
-    // Measuring uses the embedded face's advance, not the CID font's full em.
+    };
+    // Measuring uses the advance of the glyph that draws the character, whatever the face's value.
     let measured = advance(Font::Helvetica, 'ệ');
-    assert!(measured < 1000, "measured as the fallback face's advance, not a CID em: {measured}");
+    assert_eq!(measured, face.width(glyph), "measured with the face that draws the glyph");
     assert!((text_width(Font::Helvetica, 10.0, "ệ") - f32::from(measured) / 100.0).abs() < 1e-5);
     let mut doc = PdfDoc::new();
     doc.add_page(300.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "Tiếng Việt");
