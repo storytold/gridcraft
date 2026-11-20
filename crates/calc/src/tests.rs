@@ -3139,3 +3139,37 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
 }
+
+/// Native Excel (#4270): AGGREGATE's options run 0 to 7. A fraction inside the range truncates
+/// (7.9 is 7), and anything outside it, -0.5 included, is #VALUE!, typed, as text or from a cell.
+#[test]
+fn aggregate_refuses_options_outside_0_to_7() {
+    let mut t = T::new();
+    for (at, v) in [("A1", "10"), ("A2", "20"), ("C1", "-1"), ("C2", "8"), ("C3", "7")] {
+        t.set(at, v);
+    }
+    let value = Value::Error(CellError::Value);
+    let rows: [(&str, Value); 16] = [
+        ("=AGGREGATE(9,8,A1:A2)", value.clone()),
+        ("=AGGREGATE(9,9,A1:A2)", value.clone()),
+        ("=AGGREGATE(9,-1,A1:A2)", value.clone()),
+        ("=AGGREGATE(9,-0.5,A1:A2)", value.clone()),
+        ("=AGGREGATE(9,\"8\",A1:A2)", value.clone()),
+        ("=AGGREGATE(9,C1,A1:A2)", value.clone()),
+        ("=AGGREGATE(9,C2,A1:A2)", value.clone()),
+        ("=AGGREGATE(14,8,A1:A2,1)", value.clone()),
+        ("=AGGREGATE(14,-1,A1:A2,1)", value.clone()),
+        ("=AGGREGATE(9,7,A1:A2)", Value::Number(30.0)),
+        ("=AGGREGATE(9,7.9,A1:A2)", Value::Number(30.0)),
+        ("=AGGREGATE(9,0.5,A1:A2)", Value::Number(30.0)),
+        ("=AGGREGATE(9,6.9,A1:A2)", Value::Number(30.0)),
+        ("=AGGREGATE(9,0,A1:A2)", Value::Number(30.0)),
+        ("=AGGREGATE(9,C3,A1:A2)", Value::Number(30.0)),
+        ("=AGGREGATE(14,7,A1:A2,1)", Value::Number(20.0)),
+    ];
+    for (i, (f, want)) in rows.into_iter().enumerate() {
+        let at = format!("E{}", i + 1);
+        t.set(&at, f);
+        assert_eq!(t.get(&at), want, "{f}");
+    }
+}

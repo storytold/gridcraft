@@ -339,8 +339,11 @@ impl<'h> Evaluator<'h> {
             Err(e) => return err(e),
         };
         let (func, options, rest) = if name == "AGGREGATE" {
+            // Options are 0 to 7; Excel truncates a fraction inside that range (7.9 is 7) but
+            // answers #VALUE! for anything outside it, -0.5 included (#4270).
             let opt = match self.arg_num(args, 1, 0.0) {
-                Ok(n) => n.trunc() as u32,
+                Ok(n) if (0.0..8.0).contains(&n) => n.trunc() as u32,
+                Ok(_) => return err(CellError::Value),
                 Err(e) => return err(e),
             };
             (code, opt, &args[2..])
