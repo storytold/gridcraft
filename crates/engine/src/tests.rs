@@ -2662,6 +2662,31 @@ fn part_of_an_array_blocked_by_a_later_merge_cant_be_changed() {
     assert_eq!(v(&s, "A3"), Value::Number(3.0));
 }
 
+#[test]
+fn a_new_array_on_a_sheet_with_merged_cells_elsewhere_is_entered() {
+    // Merged cells anywhere on a sheet make the guard look for arrays by their formula, in the
+    // workbook after the edit, so it also sees an array the same command creates. Entering one
+    // clears the other cells of its range, so none of them is an edit inside it.
+    let mut s = s();
+    s.execute("home.mergeCells", json!({"range": "Z50:AA51"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
+    s.execute("cell.set", json!({"input": "=5", "array": true})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::Number(5.0));
+    // Over cells that hold values too: the array takes them.
+    s.execute("range.setValues", json!({"range": "C1", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:C3"})).unwrap();
+    s.execute("cell.set", json!({"input": "=7", "array": true})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Number(7.0));
+    // Moving an array with cut and paste makes a new one at the destination.
+    s.execute("edit.cut", json!({"range": "A1:A3"})).unwrap();
+    s.execute("selection.set", json!({"range": "E1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(v(&s, "E3"), Value::Number(5.0));
+    // The arrays are still guarded.
+    let e = s.execute("cell.set", json!({"cell": "E2", "input": "1"})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+}
+
 /// Testing every edit against every array: what `array_holds_edit` must agree with.
 fn array_holds_edit_by_pairs(edits: &[CellRef], arrays: &[(CellRef, gridcraft_core::RangeRef)]) -> bool {
     edits.iter().any(|&c| arrays.iter().any(|&(anchor, a)| anchor != c && a.contains(c)))
