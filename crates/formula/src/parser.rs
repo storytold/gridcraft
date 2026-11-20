@@ -6,7 +6,7 @@ use gridcraft_core::addr::{letters_to_col, parse_a1_prefix};
 use gridcraft_core::{CellError, MAX_ROWS};
 
 use crate::ast::{Anchor, BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, TrimMode, UnOp};
-use crate::lexer::{Tok, Token, tokenize_locale};
+use crate::lexer::{Tok, Token, tokenize_with};
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 #[error("{msg}")]
@@ -25,13 +25,19 @@ pub const MAX_FORMULA_LEN: usize = 8_192;
 /// Parses formula text. A leading `=` (or `+`/`-` as Lotus users type) is accepted and skipped
 /// for `=`.
 pub fn parse(src: &str) -> Result<Expr, ParseError> {
-    parse_syntax(src, crate::FormulaLocale::En)
+    parse_syntax(src, crate::FormulaLocale::En, false)
+}
+
+/// Like [`parse`] for a formula typed into a cell: number literals keep their first 15 significant
+/// digits, as in Excel (`=0.12345678901234567` is entered as `=0.123456789012345`).
+pub fn parse_typed(src: &str) -> Result<Expr, ParseError> {
+    parse_syntax(src, crate::FormulaLocale::En, true)
 }
 
 /// Parses a defined name's formula. Unlike a cell formula, a comma at the top level is the
 /// union operator: Excel stores and shows a name over several ranges as `Sheet1!$A$1,Sheet1!$C$1`.
 pub fn parse_name(src: &str) -> Result<Expr, ParseError> {
-    parse_top(src, crate::FormulaLocale::En, true)
+    parse_top(src, crate::FormulaLocale::En, true, false)
 }
 
 /// Most closing parentheses [`parse_closing_parens`] adds.
@@ -55,16 +61,16 @@ pub fn parse_closing_parens<T>(src: &str, parse: impl Fn(&str) -> Result<T, Pars
     Err(typed)
 }
 
-pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale) -> Result<Expr, ParseError> {
-    parse_top(src, locale, false)
+pub(crate) fn parse_syntax(src: &str, locale: crate::FormulaLocale, typed: bool) -> Result<Expr, ParseError> {
+    parse_top(src, locale, false, typed)
 }
 
-fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool) -> Result<Expr, ParseError> {
+fn parse_top(src: &str, locale: crate::FormulaLocale, allow_union: bool, typed: bool) -> Result<Expr, ParseError> {
     let body = src.strip_prefix('=').unwrap_or(src);
     if body.len() > MAX_FORMULA_LEN && body.chars().count() > MAX_FORMULA_LEN {
         return Err(ParseError { msg: format!("formula is longer than {MAX_FORMULA_LEN} characters"), pos: 0 });
     }
-    let toks = tokenize_locale(body, locale).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
+    let toks = tokenize_with(body, locale, typed).map_err(|e| ParseError { msg: e.msg, pos: e.pos })?;
     let toks = significant_spaces(toks);
     let mut p = Parser { toks, i: 0, depth: 0, input: locale == crate::FormulaLocale::Es };
     let e = p.expr(0, allow_union)?;

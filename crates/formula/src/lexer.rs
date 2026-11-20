@@ -156,7 +156,15 @@ fn structured_ref(src: &str, chars: &[(usize, char)], i: usize, start: usize, ou
     Ok(j)
 }
 
-fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn number(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    typed: bool,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let ch = |index| char_at(chars, index);
     let mut j = i;
     while ch(j).is_some_and(|c| c.is_ascii_digit()) {
@@ -202,8 +210,9 @@ fn number(src: &str, chars: &[(usize, char)], locale: crate::FormulaLocale, i: u
         }
     }
     let text = src.get(start..byte_pos(src, chars, j)).unwrap_or("");
-    let value: f64 =
-        text.replace(locale.decimal_separator(), ".").parse().map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
+    let text_dot = text.replace(locale.decimal_separator(), ".");
+    let parsed = if typed { gridcraft_core::parse::keep_15_digits(&text_dot) } else { text_dot };
+    let value: f64 = parsed.parse().map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
     if !value.is_finite() {
         return Err(LexError { msg: format!("number too large `{text}`"), pos: start });
     }
@@ -266,6 +275,12 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
 
 /// Tokenizes UI syntax while retaining byte spans in the original text.
 pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<Token>, LexError> {
+    tokenize_with(src, locale, false)
+}
+
+/// Like [`tokenize_locale`]; `typed` cuts number literals to 15 significant digits, as Excel does
+/// for a formula typed into a cell (formulas read from files keep every digit).
+pub(crate) fn tokenize_with(src: &str, locale: crate::FormulaLocale, typed: bool) -> Result<Vec<Token>, LexError> {
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let n = chars.len();
     let pos_of = |i: usize| chars.get(i).map(|c| c.0).unwrap_or(src.len());
@@ -309,7 +324,7 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 }
             }
             c if c.is_ascii_digit() || (c == locale.decimal_separator() && ch(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
-                i = number(src, &chars, locale, i, start, &mut out)?;
+                i = number(src, &chars, locale, typed, i, start, &mut out)?;
             }
             '(' => {
                 push(&mut out, Tok::LParen, i + 1);
