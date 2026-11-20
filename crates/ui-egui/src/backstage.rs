@@ -365,27 +365,27 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
     if !folder.is_empty() {
         ui.add_space(22.0);
         ui.horizontal(|ui| {
-            ui.heading("Personal templates");
-            if ui.small_button("Refresh").clicked() {
+            ui.heading(lang.tr("Personal templates"));
+            if ui.small_button(lang.tr("Refresh")).clicked() {
                 bs.templates.refresh();
             }
         });
         #[cfg(target_arch = "wasm32")]
-        dim(ui, "Personal template folders are available in the desktop app.");
+        dim(ui, lang.tr("Personal template folders are available in the desktop app."));
         #[cfg(not(target_arch = "wasm32"))]
         match bs.templates.known(ui.ctx(), folder) {
             None => {
                 if bs.templates.folder != folder {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
                 }
-                dim(ui, "Loading templates…");
+                dim(ui, lang.tr("Loading templates…"));
             }
-            Some(Err(error)) => dim(ui, &format!("Could not read personal templates: {error}")),
-            Some(Ok(templates)) if templates.is_empty() => dim(ui, "No .xltx or .xltm templates found in this folder."),
+            Some(Err(error)) => dim(ui, &lang.tr_fill("Could not read personal templates: {error}", &[("error", &error)])),
+            Some(Ok(templates)) if templates.is_empty() => dim(ui, lang.tr("No .xltx or .xltm templates found in this folder.")),
             Some(Ok(templates)) => {
                 egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
                     for path in templates {
-                        let label = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("Template");
+                        let label = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_else(|| lang.tr("Template"));
                         if ui.button(label).on_hover_text(path.to_string_lossy()).clicked() {
                             app.open_path(&path.to_string_lossy());
                             out.close = true;
