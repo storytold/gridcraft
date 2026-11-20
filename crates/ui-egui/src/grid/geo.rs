@@ -50,7 +50,7 @@ pub struct SheetLines {
 impl SheetLines {
     pub fn of(sh: &Sheet) -> SheetLines {
         SheetLines {
-            ri: Arc::new(LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS)),
+            ri: Arc::new(sh.row_index()),
             ci: Arc::new(LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS)),
             row_outline: Arc::new(crate::outline::Axis::of(sh, true)),
             col_outline: Arc::new(crate::outline::Axis::of(sh, false)),
