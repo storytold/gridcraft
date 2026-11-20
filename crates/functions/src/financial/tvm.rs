@@ -118,26 +118,34 @@ pub(super) fn ppmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 /// The validated (rate, periods, pv, start, end, type) of CUMIPMT/CUMPRINC: every check that
 /// refuses a call before its period loop, shared with the lifted-call work preflight.
+/// CUMIPMT's and CUMPRINC's arguments: rate, nper, pv, the first and last whole period, type.
+///
+/// As in Excel: a logical in any of the six is #VALUE!, typed or in a cell (#4039); nper is not
+/// truncated, and an end period past it is #NUM!, 2.5 of 2 too (#4029); the periods summed are
+/// the whole ones from start to end, so 1.5 to 3.5 is periods 2 and 3 (#4016).
 pub(crate) fn cumulative_args(a: &[Arg]) -> R<(f64, f64, f64, f64, f64, f64)> {
-    let (rate, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
-    let (start, end, typ) = (num(a, 3)?.trunc(), num(a, 4)?.trunc(), num(a, 5)?);
-    let np_i = np.trunc();
-    if rate <= 0.0 || np_i <= 0.0 || pv <= 0.0 || start < 1.0 || end < start || end > np_i || (typ != 0.0 && typ != 1.0) {
+    let arg = |i: usize| match a.get(i).map(|x| &x.value) {
+        Some(Value::Bool(_)) => Err(CellError::Value),
+        _ => num(a, i),
+    };
+    let (rate, np, pv, start, end, typ) = (arg(0)?, arg(1)?, arg(2)?, arg(3)?, arg(4)?, arg(5)?);
+    if rate <= 0.0 || np <= 0.0 || pv <= 0.0 || start < 1.0 || end < start || end > np || (typ != 0.0 && typ != 1.0) {
         return Err(CellError::Num);
     }
-    if end - start > 1e7 || np_i > 1e15 {
+    let (start, end) = (start.ceil(), end.floor());
+    if end - start > 1e7 || np > 1e15 {
         return Err(CellError::Num);
     }
-    Ok((rate, np_i, pv, start, end, typ))
+    Ok((rate, np, pv, start, end, typ))
 }
 
 fn cumulative(a: &[Arg], principal: bool) -> R<Value> {
-    let (rate, np_i, pv, start, end, typ) = cumulative_args(a)?;
-    let p = pmt_calc(rate, np_i, pv, 0.0, typ);
+    let (rate, np, pv, start, end, typ) = cumulative_args(a)?;
+    let p = pmt_calc(rate, np, pv, 0.0, typ);
     let mut sum = 0.0;
     let mut per = start;
     while per <= end {
-        let i = ipmt_calc(rate, per, np_i, pv, 0.0, typ);
+        let i = ipmt_calc(rate, per, np, pv, 0.0, typ);
         sum += if principal { p - i } else { i };
         per += 1.0;
     }
