@@ -2,11 +2,15 @@
 //! Cell values, formulas, defined names, and merged cells are imported; formatting, charts,
 //! images, macros and other workbook features are not imported.
 
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
-use gridcraft_model::{Cell, DefinedName, Formula, Sheet, StyleId, Visibility, Workbook};
+use gridcraft_model::{Cell, DefinedName, Formula, Preserved, PreservedPart, PreservedRel, PreservedXml, Sheet, StyleId, Visibility, Workbook};
 
+use crate::write::{NS_MAIN, NS_REL, XML_DECL};
+use crate::xml::{esc, esc_attr};
 use crate::{IoError, ReadReport};
 
 fn map_error(err: craft_xlsx::Error) -> IoError {
@@ -189,6 +193,10 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.sheets.push(Arc::new(sheet));
     }
     import_defined_names(&book, &file_to_model, &mut wb);
+    let external_links = package.external_links(&book).map_err(map_error)?;
+    if let Some(preserved) = preserve_external_links(&external_links) {
+        wb.preserved = Some(Arc::new(preserved));
+    }
     for warning in package.warnings() {
         report.warn(warning);
     }
@@ -201,4 +209,102 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
 
 pub(crate) fn is_xlsb(bytes: &[u8]) -> bool {
     craft_xlsx::is_xlsb(bytes)
+}
+
+fn preserve_external_links(links: &[(String, Option<craft_xlsx::ExternalLink>)]) -> Option<Preserved> {
+    if links.is_empty() || links.iter().any(|(_, l)| l.is_none()) {
+        return None;
+    }
+    const CT_EXT_LINK: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml";
+    let mut p = Preserved::default();
+    let mut refs_xml = format!("<externalReferences xmlns:r=\"{NS_REL}\">");
+    for (i, (_, link)) in links.iter().enumerate() {
+        let Some(link) = link else { return None };
+        let rid = format!("rId{}", i + 1);
+        let part_name = format!("xl/externalLinks/externalLink{}.xml", i + 1);
+        let (xml, rels) = external_link_part_xml(link);
+        p.rels.push(PreservedRel { id: rid.clone(), rel_type: format!("{NS_REL}/externalLink"), target: part_name.clone(), external: false });
+        p.parts.push(PreservedPart { name: part_name, content_type: CT_EXT_LINK.into(), data: xml.into_bytes().into(), rels });
+        let _ = write!(refs_xml, "<externalReference r:id=\"{rid}\"/>");
+    }
+    refs_xml.push_str("</externalReferences>");
+    p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: refs_xml });
+    Some(p)
+}
+
+fn external_link_part_xml(link: &craft_xlsx::ExternalLink) -> (String, Vec<PreservedRel>) {
+    let mut xml = format!("{XML_DECL}<externalLink xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
+    let mut rels = Vec::new();
+    if let craft_xlsx::ExternalLink::Book(book) = link {
+        xml.push_str("<externalBook");
+        if let Some(target) = &book.target {
+            xml.push_str(" r:id=\"rId1\"");
+            rels.push(PreservedRel { id: "rId1".into(), rel_type: format!("{NS_REL}/externalLinkPath"), target: target.clone(), external: true });
+        }
+        xml.push('>');
+        if !book.sheet_names.is_empty() {
+            xml.push_str("<sheetNames>");
+            for name in &book.sheet_names {
+                let _ = write!(xml, "<sheetName val=\"{}\"/>", esc_attr(name));
+            }
+            xml.push_str("</sheetNames>");
+        }
+        if !book.defined_names.is_empty() {
+            xml.push_str("<definedNames>");
+            for dn in &book.defined_names {
+                let _ = write!(xml, "<definedName name=\"{}\"", esc_attr(&dn.name));
+                if let Some(refers_to) = &dn.refers_to {
+                    let _ = write!(xml, " refersTo=\"{}\"", esc_attr(refers_to));
+                }
+                if let Some(sheet_id) = dn.sheet_id {
+                    let _ = write!(xml, " sheetId=\"{sheet_id}\"");
+                }
+                xml.push_str("/>");
+            }
+            xml.push_str("</definedNames>");
+        }
+        if !book.sheet_data.is_empty() {
+            xml.push_str("<sheetDataSet>");
+            for sd in &book.sheet_data {
+                let _ = write!(xml, "<sheetData sheetId=\"{}\"", sd.sheet_id);
+                if sd.refresh_error {
+                    xml.push_str(" refreshError=\"1\"");
+                }
+                xml.push('>');
+                let mut rows: BTreeMap<u32, Vec<(craft_xlsx::CellRef, &craft_xlsx::Value)>> = BTreeMap::new();
+                for (pos, val) in &sd.cells {
+                    rows.entry(pos.row).or_default().push((*pos, val));
+                }
+                for (r, cells) in rows {
+                    let _ = write!(xml, "<row r=\"{}\">", r + 1);
+                    for (pos, val) in cells {
+                        let r_attr = CellRef::new(pos.row, pos.col).to_a1();
+                        match val {
+                            craft_xlsx::Value::Empty => {
+                                let _ = write!(xml, "<cell r=\"{r_attr}\"/>");
+                            }
+                            craft_xlsx::Value::Number(n) => {
+                                let _ = write!(xml, "<cell r=\"{r_attr}\"><v>{n}</v></cell>");
+                            }
+                            craft_xlsx::Value::Text(t) => {
+                                let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"str\"><v>{}</v></cell>", esc(t));
+                            }
+                            craft_xlsx::Value::Bool(b) => {
+                                let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"b\"><v>{}</v></cell>", if *b { "1" } else { "0" });
+                            }
+                            craft_xlsx::Value::Error(e) => {
+                                let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"e\"><v>{}</v></cell>", esc(map_cell_error(*e).as_str()));
+                            }
+                        }
+                    }
+                    xml.push_str("</row>");
+                }
+                xml.push_str("</sheetData>");
+            }
+            xml.push_str("</sheetDataSet>");
+        }
+        xml.push_str("</externalBook>");
+    }
+    xml.push_str("</externalLink>");
+    (xml, rels)
 }

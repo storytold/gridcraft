@@ -521,9 +521,41 @@ fn xlsb_external_book_formulas_and_names_decode_and_roundtrip_through_xlsx() {
     assert_eq!(c1.value, Value::Number(12.5));
     assert_eq!(c1.formula.as_ref().map(|f| f.text.as_str()), Some("[1]!ExtName"));
 
-    let (rt, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let saved = write_xlsx(&wb).unwrap();
+    let (rt, _) = read_xlsx(&saved).unwrap();
     assert_eq!(rt.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]Data!$A$1"));
     assert_eq!(rt.sheets[0].value(CellRef::new(0, 0)), Value::Number(99.0));
     assert_eq!(rt.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]!ExtName"));
     assert_eq!(rt.sheets[0].value(CellRef::new(0, 1)), Value::Number(12.5));
+
+    // Verify the external workbook target relationship survives XLSB -> XLSX -> read_xlsx -> XLSX.
+    let saved2 = write_xlsx(&rt).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved2)).unwrap();
+    let read_zip = |z: &mut zip::ZipArchive<std::io::Cursor<Vec<u8>>>, name: &str| {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut s).unwrap();
+        s
+    };
+    let wb_xml = read_zip(&mut zip, "xl/workbook.xml");
+    assert!(wb_xml.contains("<externalReferences"), "{wb_xml}");
+    let wb_rels = read_zip(&mut zip, "xl/_rels/workbook.xml.rels");
+    let link_target = wb_rels
+        .split("<Relationship ")
+        .find(|r| r.contains("externalLink\""))
+        .and_then(|r| r.split("Target=\"").nth(1))
+        .and_then(|s| s.split('"').next())
+        .expect("workbook.xml.rels should have an externalLink relationship")
+        .trim_start_matches('/')
+        .to_string();
+    let link_part = if link_target.starts_with("xl/") { link_target } else { format!("xl/{link_target}") };
+    let link_xml = read_zip(&mut zip, &link_part);
+    assert!(link_xml.contains("<sheetName val=\"Data\"/>") && link_xml.contains("name=\"ExtName\""), "{link_xml}");
+    let (dir, file) = link_part.rsplit_once('/').unwrap();
+    let link_rels_xml = read_zip(&mut zip, &format!("{dir}/_rels/{file}.rels"));
+    assert!(
+        link_rels_xml.contains("externalLinkPath")
+            && link_rels_xml.contains("Target=\"Book2.xlsx\"")
+            && link_rels_xml.contains("TargetMode=\"External\""),
+        "{link_rels_xml}"
+    );
 }
