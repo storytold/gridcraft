@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-04 · **Change:** minor (GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-17 · **Change:** minor (MATCH -1 on descending data with equal entries returns the first of them, as Excel does, #4017; earlier: GCD and LCM reject negative fractional arguments before truncation; earlier: GROUPBY total depth 2 or more adds subtotals; earlier: Python cells are edited in the formula bar; earlier: the Python errors `#PYTHON!`, `#BUSY!`, `#TIMEOUT!` and `#BLOCKED!`, and a Python in cells row; earlier: YEARFRAC basis 0 February-end rule, MOD quotient limit, PERCENTRANK significance; earlier: edge cases matched to Excel: base conversions, BITLSHIFT/BITRSHIFT, UNICHAR noncharacters, UPPER/LOWER/PROPER casing, FIXED/DOLLAR output, F/T/GAMMA/WEIBULL/BETA distributions, BINOM trial cap, HARMEAN; earlier: ECMA.CEILING listed with USDOLLAR as not on Microsoft's list; earlier: IMSQRT reproduces the stray real part Excel gives for negative reals) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -140,6 +140,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-17 | minor | MATCH with match_type -1 on descending data with equal entries returns the first of them, as Excel 16 does: `MATCH(1,{2,1,1},-1)` is 2, not 3. Ascending approximate matches (MATCH 1, VLOOKUP, HLOOKUP, LOOKUP) still take the last (#4017) |
 | 2026-11-04 | minor | GCD and LCM reject negative fractional arguments before truncation; scalar and range regressions in the extracted math tests preserve positive truncation and signed-zero behavior; estimates unchanged |
 | 2026-11-03 | minor | GROUPBY: a total depth of 2 or more adds a subtotal line for each group of the leading key columns (after the group, or before it for a negative depth) and labels the last line Grand Total; a depth past the key columns, or above 1 with `field_relationship` 1, is `#VALUE!`, as in Excel (#1456 item 1) |
 | 2026-11-01 | minor | Python in cells row: Python mode in the formula bar |
