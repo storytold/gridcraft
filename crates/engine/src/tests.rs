@@ -2939,6 +2939,45 @@ fn export_csv_values_writes_raw_values_and_the_default_stays_displayed_text() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Serial 60 in the 1900 date system is the fictitious 1900-02-29; `file.exportCsv {values: true}`
+/// must not emit an invalid ISO 8601 calendar date (`1900-02-29` or `1900-01-00`), while keeping
+/// valid neighboring dates, 1904-system dates, time-only formats, and General-formatted serials.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn export_csv_values_serial_60_avoids_invalid_iso_calendar_date() {
+    let mut s = s();
+    for (cell, input, code) in [
+        ("A1", "59", "yyyy-mm-dd"),
+        ("B1", "59.5", "yyyy-mm-dd hh:mm"),
+        ("C1", "60", "yyyy-mm-dd"),
+        ("D1", "60.5", "yyyy-mm-dd hh:mm"),
+        ("E1", "61", "yyyy-mm-dd"),
+        ("F1", "61.5", "yyyy-mm-dd hh:mm"),
+        ("G1", "60.5", "h:mm"),
+        ("H1", "60", "General"),
+        ("I1", "0", "yyyy-mm-dd"),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        s.execute("home.numberFormat", json!({"range": cell, "code": code})).unwrap();
+    }
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-serial60-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let raw = dir.join("raw_1900.csv");
+    s.execute("file.exportCsv", json!({"path": raw, "values": true})).unwrap();
+    assert_eq!(std::fs::read_to_string(&raw).unwrap(), "1900-02-28,1900-02-28T12:00:00,60,60.5,1900-03-01,1900-03-01T12:00:00,12:00:00,60,0\r\n");
+
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = gridcraft_core::DateSystem::D1904;
+    let raw_1904 = dir.join("raw_1904.csv");
+    s.execute("file.exportCsv", json!({"path": raw_1904, "values": true})).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&raw_1904).unwrap(),
+        "1904-02-29,1904-02-29T12:00:00,1904-03-01,1904-03-01T12:00:00,1904-03-02,1904-03-02T12:00:00,12:00:00,60,1904-01-01\r\n"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// A workbook whose B1 is `=[1]Sheet1!A1`, linked to `link` (an external relationship target).
 fn linked_workbook(link: &str) -> Vec<u8> {
     use std::io::{Cursor, Write};

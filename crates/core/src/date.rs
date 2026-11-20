@@ -103,6 +103,12 @@ pub fn is_leap(y: i32) -> bool {
     chrono::NaiveDate::from_ymd_opt(y, 2, 29).is_some()
 }
 
+/// Whether `(y, m, d)` is a valid proleptic Gregorian calendar date.
+pub fn is_valid_gregorian_date(y: i32, m: u32, d: u32) -> bool {
+    let year = i64::from(y).rem_euclid(400) as i32;
+    chrono::NaiveDate::from_ymd_opt(year, m, d).is_some()
+}
+
 /// Number of days in month `m` of year `y` (1–31), or `0` for an invalid month number, for every
 /// `i32` year.
 pub fn days_in_month(y: i32, m: u32) -> u32 {
