@@ -78,6 +78,7 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            recovery_offered: false,
             window_controls: false,
             viewport_commands: Vec::new(),
             bring_forward: false,
@@ -145,6 +146,7 @@ impl SheetApp {
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
         self.autosave(ctx);
+        self.keep_recovery_copies(ctx);
         self.update_title(ctx);
         self.request_hidden_paint(ctx);
         // One window always shows a workbook, unless each workbook has a native window of its own
