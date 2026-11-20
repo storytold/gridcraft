@@ -3071,6 +3071,185 @@ fn an_xlsx_opened_under_an_unknown_extension_saves_back_as_xlsx() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// #4351: an ordinary Save keeps the VBA project of a macro-enabled package opened under `.xlsx`
+/// or an unknown suffix, instead of writing a macro-free workbook over it.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn ordinary_save_keeps_the_vba_project_of_a_macro_enabled_package() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-vba-save-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let vba: Vec<u8> = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 inert vbaProject bytes".to_vec();
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).vba_project = Some(vba.clone().into());
+    // The package's VBA part (or `None`), its content types, and whether the workbook still has
+    // its VBA relationship.
+    let read = |bytes: &[u8]| {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        let mut vba = None;
+        if let Ok(mut part) = zip.by_name("xl/vbaProject.bin") {
+            let mut data = vec![];
+            std::io::Read::read_to_end(&mut part, &mut data).unwrap();
+            vba = Some(data);
+        }
+        let mut types = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut types).unwrap();
+        let mut rels = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("xl/_rels/workbook.xml.rels").unwrap(), &mut rels).unwrap();
+        (vba, types, rels.contains("relationships/vbaProject"))
+    };
+    // Both macro-enabled kinds keep the subtype they were opened as, whatever the file is called.
+    for (seed, content_type, names) in [
+        ("book.xlsm", "sheet.macroEnabled.main+xml", ["control.xlsm", "misnamed.xlsx", "misnamed.dat"]),
+        ("book.xltm", "template.macroEnabled.main+xml", ["control.xltm", "template.xlsx", "template.dat"]),
+    ] {
+        let package = crate::io::save_bytes(&src.doc().unwrap().wb, seed).unwrap();
+        for name in names {
+            let path = dir.join(name);
+            std::fs::write(&path, &package).unwrap();
+            let mut s = s();
+            let opened = s.execute("file.open", json!({"path": path})).unwrap();
+            assert!(opened["warnings"].to_string().contains("were kept but not executed"), "{name}: {}", opened["warnings"]);
+            s.execute("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+            s.execute("file.save", json!({})).unwrap();
+            let saved = std::fs::read(&path).unwrap();
+            let (kept, types, rel) = read(&saved);
+            assert_eq!(kept.as_deref(), Some(vba.as_slice()), "{name}: the VBA project survives an ordinary Save");
+            assert!(types.contains(content_type), "{name}: the {content_type} content type is kept, got {types}");
+            assert!(types.contains("/xl/vbaProject.bin"), "{name}: the VBA part's content type is kept, got {types}");
+            assert!(rel, "{name}: the workbook keeps its VBA relationship");
+            let (wb, _) = crate::io::open_bytes(name, &saved).unwrap();
+            assert_eq!(wb.active().unwrap().value(CellRef::parse("B1").unwrap()), Value::text("edited"), "{name}");
+            assert!(!s.doc().unwrap().is_dirty(), "{name}: the save is the document's own");
+        }
+    }
+    // Save As to a macro-free name is an explicit choice: it writes a macro-free workbook.
+    let copy = dir.join("copy.xlsx");
+    let mut s = s();
+    s.execute("file.open", json!({"path": dir.join("control.xlsm")})).unwrap();
+    s.execute("file.saveAs", json!({"path": copy})).unwrap();
+    let (kept, types, rel) = read(&std::fs::read(&copy).unwrap());
+    assert_eq!(kept, None, "Save As .xlsx writes no VBA project");
+    assert!(!types.contains("macroEnabled") && !rel, "Save As .xlsx writes a macro-free package: {types}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #4351: Save As names the destination format even when that path is the document's own, so an
+/// explicit Save As to the `.xlsx` it was opened from writes a macro-free package.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn save_as_to_the_documents_own_xlsx_path_writes_a_macro_free_package() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-vba-save-as-own-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("book.xlsx");
+    let vba: Vec<u8> = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 inert vbaProject bytes".to_vec();
+    let mut src = s();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).vba_project = Some(vba.into());
+    std::fs::write(&path, crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsm").unwrap()).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    // An ordinary Save keeps the package kind it was opened as.
+    s.execute("file.save", json!({})).unwrap();
+    let saved = std::fs::read(&path).unwrap();
+    let has_vba = |bytes: &[u8]| zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).is_ok_and(|mut z| z.by_name("xl/vbaProject.bin").is_ok());
+    assert!(has_vba(&saved), "the ordinary Save keeps the project");
+    // Save As to the same path is explicit: it goes by the `.xlsx` extension.
+    s.execute("file.saveAs", json!({"path": path})).unwrap();
+    let saved = std::fs::read(&path).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    assert!(zip.by_name("xl/vbaProject.bin").is_err(), "Save As to the own .xlsx path writes no VBA project");
+    let mut types = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("[Content_Types].xml").unwrap(), &mut types).unwrap();
+    assert!(!types.contains("macroEnabled"), "Save As to the own .xlsx path writes a macro-free package: {types}");
+    // The file just written is what an ordinary Save writes back, so it does not refuse.
+    s.execute("file.save", json!({})).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #4351: an ordinary Save never silently strips a VBA project. When the package type cannot be
+/// read, or declares a macro-free workbook part while a project is loaded, it asks for a format
+/// and leaves the file alone; Save As to `.xlsx` is the explicit way to drop the project.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn ordinary_save_refuses_to_strip_a_vba_project_it_cannot_keep() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-vba-conflict-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let vba: Vec<u8> = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 inert vbaProject bytes".to_vec();
+    let mut src = s();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).vba_project = Some(vba.into());
+    let package = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsm").unwrap();
+    // Rewrites the workbook part's declared content type, leaving the VBA part and relationship.
+    let retype = |to: &str| -> Vec<u8> {
+        use std::io::{Cursor, Read, Write};
+        let mut zip = zip::ZipArchive::new(Cursor::new(package.clone())).unwrap();
+        let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        for i in 0..zip.len() {
+            let mut part = zip.by_index(i).unwrap();
+            let name = part.name().to_string();
+            let mut data = Vec::new();
+            part.read_to_end(&mut data).unwrap();
+            if name == "[Content_Types].xml" {
+                let text = String::from_utf8(data).unwrap().replace(gridcraft_xlsx::XlsxKind::MacroWorkbook.main_content_type(), to);
+                data = text.into_bytes();
+            }
+            out.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            out.write_all(&data).unwrap();
+        }
+        out.finish().unwrap().into_inner()
+    };
+    // A package declaring a macro-free workbook part but carrying a readable VBA relationship.
+    let conflict = dir.join("conflict.xlsx");
+    std::fs::write(&conflict, retype(gridcraft_xlsx::XlsxKind::Workbook.main_content_type())).unwrap();
+    // A package whose workbook part declares a type nothing recognises, under an unknown suffix.
+    let unknown = dir.join("book.dat");
+    std::fs::write(&unknown, retype("application/xml")).unwrap();
+    for path in [&conflict, &unknown] {
+        let before = std::fs::read(path).unwrap();
+        let mut s = s();
+        let opened = s.execute("file.open", json!({"path": path})).unwrap();
+        assert!(opened["warnings"].to_string().contains("were kept but not executed"), "{}: {}", path.display(), opened["warnings"]);
+        s.execute("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+        let refused = s.execute("file.save", json!({})).unwrap_err().to_string();
+        assert!(refused.contains("Save As .xlsm"), "{}: {refused}", path.display());
+        assert_eq!(std::fs::read(path).unwrap(), before, "{}: the refused Save leaves the file alone", path.display());
+        assert!(s.doc().unwrap().is_dirty(), "{}: the refused Save keeps the document dirty", path.display());
+        // The explicit choice still works, and drops the project as asked.
+        let plain = path.with_extension("xlsx");
+        s.execute("file.saveAs", json!({"path": plain})).unwrap();
+        let saved = std::fs::read(&plain).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+        assert!(zip.by_name("xl/vbaProject.bin").is_err(), "{}: Save As .xlsx drops the project", path.display());
+        // The file it wrote is now its own, so a later ordinary Save does not refuse.
+        s.execute("file.save", json!({})).unwrap();
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// #4351: Save As goes by the destination's extension even on the document's own path, so an unknown one is refused rather than written as the format the file was opened as.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn save_as_to_an_unknown_extension_is_refused_even_on_the_documents_own_path() {
+    let nonce = unique_nonce();
+    let dir = std::env::temp_dir().join(format!("gridcraft-vba-save-as-dat-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    let path = dir.join("book.dat");
+    std::fs::write(&path, crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap()).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "edited"})).unwrap();
+    assert!(s.execute("file.saveAs", json!({"path": path})).is_err(), "Save As to an unknown extension is refused");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "the refused Save As leaves the file alone");
+    // An ordinary Save to the same own path still writes the format it was opened as.
+    s.execute("file.save", json!({})).unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[test]
 fn validation_formulas_are_relative_and_see_the_new_value() {
     let mut s = s();
