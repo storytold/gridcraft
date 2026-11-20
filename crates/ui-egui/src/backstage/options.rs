@@ -45,7 +45,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
         ) {
             app.run_or_alert("options.personalTemplatesLocation", json!({"location": location}));
         }
-        if ui.button(lang.tr("Browse…")).clicked()
+        if ui.add_enabled(app.services.pick_folder.is_some(), egui::Button::new(lang.tr("Browse…"))).clicked()
             && let Some(chosen) = app.services.pick_folder.as_ref().and_then(|pick| pick())
         {
             app.run_or_alert("options.personalTemplatesLocation", json!({"location": chosen}));
