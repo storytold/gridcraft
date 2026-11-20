@@ -727,3 +727,22 @@ fn rows_hidden_by_default_unhide_and_stay_hidden_otherwise() {
     assert!(!sh.rows_hidden_by_default);
     assert!(!sh.is_row_hidden(50) && !sh.is_row_hidden(20) && !sh.is_row_hidden(1_048_575));
 }
+
+/// #4502: sorting keeps each row's own hidden state on a sheet with rows hidden by default. A row
+/// height moving onto a row without an entry must not make that row show.
+#[test]
+fn sort_keeps_rows_hidden_by_default_hidden() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3], [2], [1]]})).unwrap();
+    {
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.rows_hidden_by_default = true;
+        sh.rows.insert(0, LineInfo { size: Some(40.0), custom: true, ..LineInfo::default() });
+    }
+    s.execute("data.sort", json!({"range": "A1:A3", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(2, 0)).display(), "3");
+    assert!(!sh.is_row_hidden(0), "row 1 keeps its entry and shows");
+    assert!(sh.is_row_hidden(1) && sh.is_row_hidden(2), "rows 2 and 3 stay hidden");
+}
