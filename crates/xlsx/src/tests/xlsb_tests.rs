@@ -559,3 +559,92 @@ fn xlsb_external_book_formulas_and_names_decode_and_roundtrip_through_xlsx() {
         "{link_rels_xml}"
     );
 }
+
+#[test]
+fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
+    let mut wb_records = record(131, &[]);
+    let mut props = 0u32.to_le_bytes().to_vec();
+    props.extend(0u32.to_le_bytes());
+    props.extend(wide(""));
+    wb_records.extend(record(153, &props));
+    wb_records.extend(record(143, &[]));
+    let mut s1 = 0u32.to_le_bytes().to_vec();
+    s1.extend(1u32.to_le_bytes());
+    s1.extend(wide("one"));
+    s1.extend(wide("Data"));
+    wb_records.extend(record(156, &s1));
+    wb_records.extend(record(144, &[]));
+    // Book 0 = self, Book 1 = missing ("missing"), Book 2 = valid ("ext2").
+    wb_records.extend(record(357, &[]));
+    wb_records.extend(record(355, &wide("missing")));
+    wb_records.extend(record(355, &wide("ext2")));
+    let mut xti = 2u32.to_le_bytes().to_vec();
+    for (bk, first, last) in [(1u32, 0i32, 0i32), (2, 0, 0)] {
+        xti.extend(bk.to_le_bytes());
+        xti.extend(first.to_le_bytes());
+        xti.extend(last.to_le_bytes());
+    }
+    wb_records.extend(record(362, &xti));
+    wb_records.extend(record(132, &[]));
+
+    let mut ext_bin = Vec::new();
+    let mut begin_sup = 0u16.to_le_bytes().to_vec();
+    begin_sup.extend(wide("rId1"));
+    begin_sup.extend(u32::MAX.to_le_bytes());
+    ext_bin.extend(record(360, &begin_sup));
+    let mut tabs = 1u32.to_le_bytes().to_vec();
+    tabs.extend(wide("SheetA"));
+    ext_bin.extend(record(359, &tabs));
+    ext_bin.extend(record(588, &[]));
+
+    let fmla_num = |col: u32, cached: f64, rgce: &[u8]| {
+        let mut data = col.to_le_bytes().to_vec();
+        data.extend([0; 4]);
+        data.extend(cached.to_le_bytes());
+        data.extend([0; 2]);
+        data.extend((rgce.len() as u32).to_le_bytes());
+        data.extend(rgce);
+        data.extend(0u32.to_le_bytes());
+        record(9, &data)
+    };
+    let ptg_1 = {
+        let mut v = vec![0x3A, 0, 0];
+        v.extend(0u32.to_le_bytes());
+        v.extend(0u16.to_le_bytes());
+        v
+    };
+    let ptg_2 = {
+        let mut v = vec![0x3A, 1, 0];
+        v.extend(0u32.to_le_bytes());
+        v.extend(0u16.to_le_bytes());
+        v
+    };
+    let mut data = row(0);
+    data.extend(fmla_num(0, 11.0, &ptg_1));
+    data.extend(fmla_num(1, 22.0, &ptg_2));
+
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/><Relationship Id="ext2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="../links/externalLink2.bin"/></Relationships>"#;
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/records/book.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/data/one.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/text/strings.bin" ContentType="application/vnd.ms-excel.sharedStrings"/><Override PartName="/links/externalLink2.bin" ContentType="application/vnd.ms-excel.externalLink"/></Types>"#;
+    let link_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath" Target="SecondBook.xlsx" TargetMode="External"/></Relationships>"#;
+    let bytes = make_zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT.as_bytes()),
+        ("records/book.bin", &wb_records),
+        ("records/_rels/book.bin.rels", rels.as_bytes()),
+        ("data/one.bin", &worksheet(&data, &[])),
+        ("text/strings.bin", &sst()),
+        ("links/externalLink2.bin", &ext_bin),
+        ("links/_rels/externalLink2.bin.rels", link_rels.as_bytes()),
+    ]);
+
+    let (wb, report) = read_xlsb(&bytes).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("external link")), "{:?}", report.warnings);
+    assert!(wb.sheets[0].cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(11.0)));
+    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[2]SheetA!$A$1"));
+
+    let saved = write_xlsx(&wb).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
+    let mut wb_xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("xl/workbook.xml").unwrap(), &mut wb_xml).unwrap();
+    assert!(wb_xml.contains("<externalReference/><externalReference r:id="), "{wb_xml}");
+}
