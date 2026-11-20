@@ -61,10 +61,13 @@ pub struct Chrome {
     /// The ribbon's File tab and the Backstage view it opens (also reached by keyboard and
     /// commands such as `ui.backstage`).
     pub file_tab: bool,
+    /// The ribbon: its tabs, groups and keytips. A host with commands of its own can leave it out;
+    /// the formula bar, the grid, keyboard shortcuts and Backstage (`ui.backstage`) stay.
+    pub ribbon: bool,
 }
 
 impl Default for Chrome {
     fn default() -> Self {
-        Chrome { title_bar: true, file_tab: true }
+        Chrome { title_bar: true, file_tab: true, ribbon: true }
     }
 }
