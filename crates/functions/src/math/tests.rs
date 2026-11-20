@@ -140,6 +140,26 @@ fn rounding() {
 }
 
 #[test]
+fn even_and_odd_round_the_stored_value_without_cleanup() {
+    // Native Excel (#4290): a value one or two ulps above an integer is above it.
+    close(ev1("EVEN", 4.0 + 2f64.powi(-50)), 6.0);
+    close(ev1("ODD", 3.0 + 2f64.powi(-51)), 5.0);
+    close(ev1("ODD", -3.0 - 2f64.powi(-51)), -5.0);
+    close(ev1("EVEN", -4.0 - 2f64.powi(-50)), -6.0);
+    // The integer itself, and the value just below it, are unchanged.
+    close(ev1("EVEN", 4.0), 4.0);
+    close(ev1("EVEN", 4.0 - 2f64.powi(-51)), 4.0);
+    close(ev1("ODD", 3.0), 3.0);
+    close(ev1("ODD", 3.0 - 2f64.powi(-51)), 3.0);
+    // From 2^53, where ODD has no exact answer, the results are as before.
+    // (exact comparisons: `close` would accept any of these neighbours)
+    assert_eq!(ev1("ODD", 2f64.powi(53)), Value::Number(9_007_199_254_740_991.0));
+    assert_eq!(ev1("EVEN", 2f64.powi(53)), Value::Number(9_007_199_254_740_990.0));
+    assert_eq!(ev1("ODD", 2f64.powi(53) - 1.0), Value::Number(9_007_199_254_740_991.0));
+    assert_eq!(ev1("EVEN", 2f64.powi(53) - 2.0), Value::Number(9_007_199_254_740_990.0));
+}
+
+#[test]
 fn mod_quotient_limit() {
     // Excel 16: #NUM! whenever |number / divisor| >= 1.1259E12.
     for (x, d) in [
