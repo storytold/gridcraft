@@ -103,3 +103,49 @@ fn review_has_a_single_show_comments_button() {
     assert_eq!(buttons_with_tip(&mut h, "New Comment"), 1);
     assert_eq!(buttons_with_tip(&mut h, "Comments pane"), 1);
 }
+
+/// The sole reply input lies inside the Comments pane, to the right of the grid.
+fn reply_text(h: &Harness) -> String {
+    h.get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|field| field.rect().left() > grid_right(h))
+        .expect("reply field in the Comments pane")
+        .value()
+        .unwrap_or_default()
+}
+
+fn type_reply(h: &mut Harness, text: &str) {
+    h.get_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|field| field.rect().left() > grid_right(h))
+        .expect("reply field in the Comments pane")
+        .click();
+    h.run_steps(2);
+    h.input_mut().events.push(Event::Text(text.into()));
+    h.run_steps(2);
+}
+
+#[test]
+fn unsent_replies_stay_with_their_sheet_and_workbook() {
+    let mut h = harness();
+    h.state_mut().run("review.newComment", json!({"cell": "A1", "text": "First thread"})).unwrap();
+    h.state_mut().run("review.showComments", json!({"on": true})).unwrap();
+    h.run_steps(3);
+    type_reply(&mut h, "Draft for the first sheet");
+    assert_eq!(reply_text(&h), "Draft for the first sheet");
+
+    h.state_mut().run("home.insertSheet", json!({"name": "Other"})).unwrap();
+    h.state_mut().run("review.newComment", json!({"cell": "A1", "text": "Second thread"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(reply_text(&h), "", "the same cell on another sheet starts with an empty reply");
+    type_reply(&mut h, "Draft for the other sheet");
+    assert_eq!(reply_text(&h), "Draft for the other sheet");
+
+    h.state_mut().run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    h.run_steps(3);
+    assert_eq!(reply_text(&h), "Draft for the first sheet", "switching back restores that sheet's draft");
+
+    h.state_mut().run("file.new", json!({})).unwrap();
+    h.state_mut().run("review.newComment", json!({"cell": "A1", "text": "Another workbook"})).unwrap();
+    h.state_mut().run("review.showComments", json!({"on": true})).unwrap();
+    h.run_steps(3);
+    assert_eq!(reply_text(&h), "", "another workbook must not inherit a reply for Sheet1!A1");
+}
