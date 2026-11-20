@@ -2,6 +2,7 @@
 
 mod array_export;
 mod cellmetadata;
+mod chart_bar_spacing;
 mod chart_book_names;
 mod chart_bool_default;
 mod chart_combo_kinds;
