@@ -521,6 +521,7 @@ fn base_item_param(
     base_field: Option<&str>,
     text: &str,
 ) -> Result<(PivotBaseItem, Option<String>)> {
+    let raw = text;
     let text = text.trim();
     if text.eq_ignore_ascii_case(BASE_ITEM_PREVIOUS) {
         return Ok((PivotBaseItem::Previous, None));
@@ -535,10 +536,13 @@ fn base_item_param(
     }
     .ok_or_else(|| bad(cmd, "the PivotTable has no row or column field to take the base item from"))?;
     let column = src.col(&field.source_col).ok_or_else(|| bad(cmd, format!("no field `{}` in the source data", field.source_col)))?;
-    pv::distinct_labels(wb, src, column, field.date_group, usize::MAX)
-        .into_iter()
-        .find(|label| label.eq_ignore_ascii_case(text))
-        .map(|label| (PivotBaseItem::Named(label), Some(field.source_col.clone())))
+    let labels = pv::distinct_labels(wb, src, column, field.date_group, usize::MAX);
+    labels
+        .iter()
+        // The exact label first (a source label can end in a space), then the trimmed name.
+        .find(|label| label.eq_ignore_ascii_case(raw))
+        .or_else(|| labels.iter().find(|label| label.eq_ignore_ascii_case(text)))
+        .map(|label| (PivotBaseItem::Named(label.clone()), Some(field.source_col.clone())))
         .ok_or_else(|| bad(cmd, format!("`{text}` isn't an item of `{}`", field.source_col)))
 }
 
