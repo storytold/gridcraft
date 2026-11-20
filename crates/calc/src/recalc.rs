@@ -55,6 +55,8 @@ pub struct Calc {
     /// `rebuild`, kept up to date by `cells_changed` and by the write-back of a run; an entry is
     /// always checked against the workbook before it is used.
     spill_errors: SpillErrors,
+    /// The only sheet the current calculation may evaluate (Calculate Sheet), or `None` for all.
+    scope: Option<usize>,
 }
 
 /// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
@@ -163,6 +165,7 @@ impl Default for Calc {
             last_recalc_cells: 0,
             standing: Standing::default(),
             spill_errors: SpillErrors::default(),
+            scope: None,
         }
     }
 }
@@ -329,11 +332,25 @@ impl Calc {
 
     /// Recalculates every formula (F9 / Ctrl+Alt+F9, and after loading).
     pub fn recalc_all(&mut self, wb: &mut Workbook) {
+        self.recalc_every(wb, None);
+    }
+
+    /// Recalculates every formula on `sheet`, volatile ones included (Shift+F9, Calculate Sheet).
+    /// As in Excel, no other sheet is calculated: a formula here reads the values the other sheets
+    /// hold, and a formula on another sheet that reads this one keeps its value until it is
+    /// calculated itself.
+    pub fn recalc_sheet(&mut self, wb: &mut Workbook, sheet: usize) {
+        self.recalc_every(wb, Some(sheet));
+    }
+
+    /// Recalculates every formula on `only`, or on every sheet when it is `None`.
+    fn recalc_every(&mut self, wb: &mut Workbook, only: Option<usize>) {
+        let in_scope = |sheet: usize| only.is_none_or(|s| s == sheet);
         self.rebuild(wb);
         // The layout the sheets hold now decides who keeps cells two arrays both want.
         // (A Python cell that holds a spill counts too, as it does in the incremental pass.)
         let mut areas: HashMap<Key, RangeRef> = HashMap::default();
-        for i in 0..wb.sheets.len() {
+        for i in (0..wb.sheets.len()).filter(|&i| in_scope(i)) {
             if let Some(sh) = wb.sheet(i) {
                 areas.extend(
                     sh.spill_ranges
@@ -346,7 +363,7 @@ impl Calc {
         let held = areas.keys().copied().collect();
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
-        for i in 0..wb.sheets.len() {
+        for i in (0..wb.sheets.len()).filter(|&i| in_scope(i)) {
             if wb.sheet(i).is_some_and(|s| !s.spill_ranges.is_empty() || !s.spill.is_empty())
                 && let Some(sh) = wb.sheet_mut(i)
             {
@@ -354,9 +371,11 @@ impl Calc {
                 sh.spill_ranges.clear();
             }
         }
-        let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
+        let all: Vec<Key> = self.graph.nodes.keys().copied().filter(|k| in_scope(k.0)).collect();
         self.standing = Standing { held: true, keys: held, areas };
+        self.scope = only;
         self.run(wb, all, true);
+        self.scope = None;
         self.standing = Standing::default();
     }
 
@@ -640,6 +659,10 @@ impl Calc {
                 break;
             }
             dirty = self.dirty_closure(wb, &spill_changes, &[]);
+            if let Some(sheet) = self.scope {
+                // Calculate Sheet: a spill's dependents on other sheets wait for their own calculation.
+                dirty.retain(|k| k.0 == sheet);
+            }
         }
         // Loops among formulas the run did not evaluate stay listed while they are still formulas.
         // Iterative calculation reports none.
