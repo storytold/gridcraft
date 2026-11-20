@@ -105,10 +105,10 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             continue;
         }
         wb.check_sheet_name(&entry.name, None).map_err(|e| IoError::Format(format!("XLSB: {e}")))?;
-        if let Some(ref part_name) = entry.part {
-            if ct.of(part_name) != Some("application/vnd.ms-excel.worksheet") {
-                return Err(IoError::Format("XLSB: wrong worksheet content type".into()));
-            }
+        if let Some(ref part_name) = entry.part
+            && ct.of(part_name) != Some("application/vnd.ms-excel.worksheet")
+        {
+            return Err(IoError::Format("XLSB: wrong worksheet content type".into()));
         }
         let mut sheet = Sheet::new(&entry.name);
         sheet.visibility = map_visibility(entry.visibility);
