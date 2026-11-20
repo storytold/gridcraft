@@ -5,7 +5,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::date::{days_in_month_in, serial_from_ymd};
-use gridcraft_core::parse::{Parsed, parse_input};
+use gridcraft_core::parse::{DataConversion, Parsed, parse_input, parse_input_with};
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Value, col_to_letters};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
@@ -237,11 +237,12 @@ fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) 
     }
 }
 
-/// Reads one field with the column's date rule; other values go through typed input.
-fn read_field(field: &str, sys: DateSystem, rule: DateRule) -> Parsed {
+/// Reads one field with the column's date rule; other values go through typed input under the
+/// Automatic Data Conversion options.
+fn read_field(field: &str, sys: DateSystem, rule: DateRule, conv: &DataConversion) -> Parsed {
     match numeric_date(field, sys) {
         Some(date) if rule != DateRule::NoDates => date.read(field, rule),
-        _ => parse_input(field, sys),
+        _ => parse_input_with(field, sys, conv),
     }
 }
 
@@ -288,7 +289,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
-                let p = read_field(&f, opts.date_system, rule);
+                let p = read_field(&f, opts.date_system, rule, &opts.conversion);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
