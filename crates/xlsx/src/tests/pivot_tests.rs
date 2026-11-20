@@ -545,6 +545,68 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
 }
 
+/// #2159: a field repeated on the axes or as a page field is used once (each use walks the
+/// field's items and copied its labels), and the lists are capped.
+#[test]
+fn repeated_pivot_fields_are_used_once() {
+    let items: String = (0..2_000).map(|_| r#"<item x="0" sd="0"/>"#).collect();
+    let rows = r#"<field x="0"/>"#.repeat(20_000);
+    let pages = r#"<pageField fld="0"/>"#.repeat(20_000);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField axis="axisRow"><items>{items}</items></pivotField></pivotFields><rowFields>{rows}<field x="-2"/></rowFields><colFields>{rows}</colFields><pageFields>{pages}</pageFields></pivotTableDefinition>"#
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!(pt.rows.len(), 1, "{:?}", report.warnings);
+    assert!(pt.columns.is_empty());
+    assert_eq!(pt.rows[0].collapsed_items.len(), 2_000);
+    assert_eq!(pt.filters.iter().filter(|f| f.source_col == "K").count(), 1);
+    // One page field: the table's range starts two rows above its location.
+    assert_eq!(pt.last_range, Some(rr("D3:F9")));
+}
+
+/// #2159: a field list cut at the 16,384-entry cap is reported, so an incomplete PivotTable can be
+/// told apart from a complete one.
+#[test]
+fn capped_pivot_field_lists_warn() {
+    let fields = r#"<pivotField/>"#.repeat(16_385);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="16385">{fields}</pivotFields></pivotTableDefinition>"#
+    );
+    let (_, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("field lists past 16384 entries")), "{:?}", report.warnings);
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("field lists past")), "{:?}", report.warnings);
+}
+
+/// #2159: a cache cut at 16,384 fields is reported too, as the table field lists are.
+#[test]
+fn capped_cache_fields_warn() {
+    let fields = r#"<cacheField name="F"><sharedItems/></cacheField>"#.repeat(16_385);
+    let cache = format!(
+        r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="16385">{fields}</cacheFields></pivotCacheDefinition>"#
+    );
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(&cache))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("cache fields past 16384")), "{:?}", report.warnings);
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("cache fields past")), "{:?}", report.warnings);
+}
+
+/// #2159: axis filters and calculated fields are deduplicated through a set of lower-cased names;
+/// the first of names equal but for case still wins, as with the scan it replaced.
+#[test]
+fn axis_filters_and_calculated_fields_dedupe_ignoring_case() {
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="4"><cacheField name="K"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="k"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="Price" formula="1" databaseField="0"/><cacheField name="PRICE" formula="2" databaseField="0"/></cacheFields></pivotCacheDefinition>"#;
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item x="1" h="1"/></items></pivotField><pivotField axis="axisCol"><items><item x="0" h="1"/><item x="1"/></items></pivotField></pivotFields><rowFields><field x="0"/></rowFields><colFields><field x="1"/></colFields></pivotTableDefinition>"#;
+    let (wb, report) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!((pt.rows.len(), pt.columns.len()), (1, 1), "{:?}", report.warnings);
+    assert_eq!(pt.filters, vec![PivotFilter { source_col: "K".into(), selected: Some(vec!["a".into()]) }]);
+    assert_eq!(pt.calculated_fields, vec![PivotCalcField { name: "Price".into(), formula: "=1".into() }]);
+}
+
 #[test]
 fn cache_found_by_workbook_cache_id() {
     let rels_extra = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/>"#;
