@@ -361,3 +361,23 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-10 | minor | Checked against the alpha gate (six core workflows pass): stays alpha |
 | 2026-10-10 | major | Re-measured against Excel for Mac 16.113.4: stage alpha, breadth ~75%, ready ~50%, ~160–240 h to beta, ~700–1,100 h to full parity; progress docs restructured; detail moved to `docs/` |
 | 2026-10-07 | major | First estimates: catalog 89%, functions ~93%, depth ~65%, ~35 h to alpha, ~215 h to full parity |
+
+
+## Contribution #2739 — scoped notes
+
+> **Last updated:** 2026-11-15 · These notes describe this contribution. The mainline assessment and progress tables above are retained verbatim from `1d0b311b4a94`. The contribution does not revise the mainline readiness estimates.
+
+The behavior described in these scoped notes applies to this branch and supersedes corresponding older baseline statements above. Dated rows below record the contribution history, rather than adding a new claim of general parity.
+
+### Contribution progress
+
+| Date | What changed |
+|---|---|
+| 2026-11-05 | Native file-I/O confinement: a new save uses the standard Unix creation permissions after the process umask, rather than forcing owner-only access; existing-file mode selection and the directory-handle confinement policy are unchanged. |
+| 2026-10-27 | MCP can confine file I/O to operator-selected read/write folders; initial `--in`, generic commands and atomic-save paths are covered (#445, #2172) |
+
+### Contribution revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-05 | trivial | new native saves use the ordinary Unix creation mode before umask; existing destination modes remain selected as before; synthetic regression, no readiness change |

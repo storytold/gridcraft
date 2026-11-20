@@ -240,3 +240,35 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-10-11 | minor | XLSX: Allow Edit Ranges (`protectedRanges`) read and written with their password hashes (#307) |
 | 2026-10-10 | minor | Encrypted and `.xls` files are now recognised and refused with a message (#17) |
 | 2026-10-10 | major | Created: every Excel format with our read/write support; XLSB and ODS values-only imports recorded; `.xls`, encryption and large files flagged as beta gates |
+
+
+## Contribution #2739 — scoped notes
+
+> **Last updated:** 2026-11-15 · These notes describe this contribution. The mainline assessment and progress tables above are retained verbatim from `1d0b311b4a94`. The contribution does not revise the mainline readiness estimates.
+
+The behavior described in these scoped notes applies to this branch and supersedes corresponding older baseline statements above. Dated rows below record the contribution history, rather than adding a new claim of general parity.
+
+Topic change: MCP file confinement retained with upstream Arabic PDF progress.
+
+> **Automation confinement update:** 2026-10-30 · Headless MCP accepts operator-selected read/write roots, applied before `--in` and at file I/O. Native reads and atomic saves bind their operations to open authorized directory handles; exclusive random temporary names prevent stale `.sctmp` files from blocking saves. Desktop `--connect` confinement and process-wide OS sandboxing remain outside this change. Readiness estimates unchanged. See [MCP file access](mcp.md#restrict-file-access-to-a-folder).
+
+#### Filesystem integration — 2026-11-15
+
+Capability-relative reads retain the upstream regular-file precheck, including for confined
+FIFO paths. Atomic saves keep unpredictable exclusive temporary names and restore an existing
+file's group before its permission bits; a lost group retains the restrictive temporary mode.
+The ordinary new-file creation mode still passes through the process umask. Both command-line
+sandbox and folder-confinement regressions remain, with an additional confined-FIFO control.
+
+Only an absent destination leaf permits ordinary new-file permissions. A failed metadata lookup
+for an existing or dangling symlink refuses the save; losing the old group never copies its
+other-class rights to a replacement with a different group. Synthetic controls retain both links
+and the private target bytes and permissions when these saves are refused.
+
+### Contribution revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-11-05 | trivial | new native saves use the ordinary Unix creation mode before umask; existing destination modes remain selected as before; synthetic regression, no readiness change |
+| 2026-10-29 | minor | Align root flags with DeckCraft, cover nested write roots and macOS case aliases; desktop scope and readiness estimates unchanged |
+| 2026-10-27 | minor | Headless MCP filesystem roots, initial `--in` confinement and regression tests; desktop control scope and readiness estimates unchanged |
