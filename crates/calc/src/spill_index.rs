@@ -76,8 +76,7 @@ pub(crate) fn indexing_pays<'a>(areas: impl ExactSizeIterator<Item = &'a RangeRe
 }
 
 impl SpillIndex {
-    /// Whether any area is indexed on `sheet`.
-    #[cfg(test)]
+    /// Whether any area is indexed on `sheet`: one look-up, whatever the areas on other sheets.
     pub(crate) fn has_sheet(&self, sheet: usize) -> bool {
         self.sheets.get(&sheet).is_some_and(|s| !s.entries.is_empty())
     }
@@ -168,11 +167,6 @@ impl SpillIndex {
         }
         out.sort_unstable();
         out.dedup();
-    }
-
-    /// The rectangle indexed for `anchor` and whether it covers no cells.
-    pub(crate) fn area(&self, sheet: usize, anchor: CellRef) -> Option<(RangeRef, bool)> {
-        self.sheets.get(&sheet)?.entries.get(&anchor).map(|e| (e.rect, e.empty))
     }
 }
 

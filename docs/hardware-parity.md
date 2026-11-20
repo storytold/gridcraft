@@ -1,13 +1,13 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** trivial (Intel Mac start-up) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-18 · **Change:** minor (multi-core recalculation on native builds; earlier: Intel Mac start-up) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 The hardware Excel uses, per platform, against GridCraft. Part of
-[target-app-parity.md](target-app-parity.md). **Hardware: ~40% ready, 25–40 h** (estimated).
+[target-app-parity.md](target-app-parity.md). **Hardware: ~45% ready, 17–30 h** (estimated).
 
 | Hardware feature | Excel | GridCraft (macOS · Windows · Linux · BSD · web) | Gap and estimate |
 |---|---|---|---|
-| Multi-core recalculation | Multi-threaded recalculation on all cores (Windows and Mac), configurable thread count | Single-threaded everywhere (no threading in `crates/calc`) | Parallel recalc of independent dependency chains on native builds; WASM stays single-threaded or uses workers later: 12–18 h |
+| Multi-core recalculation | Multi-threaded recalculation on all cores (Windows and Mac), configurable thread count | Levels of 512 or more independent formulas without random draws on worker threads on native builds (2026-11-18), each worker keeping copies of the blocks it reads twice within a 256 MiB budget shared by the workers; two real workbooks, opened with the release CLI on a four-core 2011 iMac (i5-2500S, Linux): a LAMBDA-heavy one of 51,014 formulas in ~18 s on four threads and ~74 s on one; a lookup-heavy one of 41,232 formulas in ~7 s on four threads and ~19 s on one (measured 2026-11-18); `calcPr concurrentCalc`/`concurrentManualCount` round-trip and `formulas.calculationOptions` sets them; WASM single-threaded | An Options control for the setting (command-only today); WASM workers later: 4–8 h |
 | GPU rendering of the grid and charts | DirectX / Metal accelerated drawing | wgpu: Metal (Intel Macs skip wgpu's indirect-call validation shaders, which Metal's Intel compiler aborts on, #2812) · DirectX 12 (default since 10-08; OpenGL when DirectX 12 has no GPU driver or fails to start; Vulkan only on request, so the Intel UHD `igvk64.dll` crash (#120) can't happen; shaders compiled with FXC, so no DXC runtime is needed, #339) · Vulkan/GL · Vulkan/GL · WebGPU or WebGL2 | At parity in kind. Driver problems: screen flashing on Windows 11 (#76): 2–4 h |
 | Pen and touch (Draw tab) | Pen pressure and tilt, eraser end, touch mode, Ink to Shape, ink replay | Pen, highlighter, eraser, Ink to Shape with mouse/pen input; **no pressure or tilt**, no touch mode | Pressure-sensitive strokes where winit reports force; touch-friendly ribbon spacing: 4–6 h |
 | Trackpad and mouse | Smooth scrolling, pinch zoom, horizontal scroll, Magic Mouse | Smooth scrolling and zoom via egui | Verify pinch zoom on each platform: 1–2 h |
@@ -20,6 +20,7 @@ The hardware Excel uses, per platform, against GridCraft. Part of
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Multi-core recalculation: levels of independent formulas on worker threads (native); settings round-trip and command; open times of two workbooks |
 | 2026-10-31 | trivial | macOS: Intel Macs skip wgpu's indirect-call validation shaders, so they no longer exit on Metal's compiler error there (#2812). Macs run with OpenCore Legacy Patcher on macOS 15 can still fail earlier, on the MSL version (#1116). |
 | 2026-10-22 | minor | View › Arrange All over the main window's monitor. |
 | 2026-10-22 | minor | Multiple windows: each workbook window is a native window of its own (desktop). |

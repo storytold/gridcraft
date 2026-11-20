@@ -81,15 +81,26 @@ impl<'h> Evaluator<'h> {
                 let v = self.arg_val(args, 0).unwrap_or_default();
                 let f = self.arg_val(args, 1).unwrap_or_default();
                 let sys = self.host.workbook().date_system;
+                // One format code for a whole range of values is the usual shape
+                // (`TEXT(A2:A2000, "0")`): convert the code to text once, not per element.
+                let scalar_code: Option<Result<String, CellError>> = if matches!(f, Value::Array(_)) { None } else { Some(f.to_text()) };
                 let one = |v: &Value, f: &Value| -> Value {
                     if let Value::Error(e) = v {
                         return Value::Error(*e);
                     }
-                    let code = match f.to_text() {
-                        Ok(c) => c,
-                        Err(e) => return Value::Error(e),
+                    let owned;
+                    let code: &str = match &scalar_code {
+                        Some(Ok(c)) => c.as_str(),
+                        Some(Err(e)) => return Value::Error(*e),
+                        None => match f.to_text() {
+                            Ok(c) => {
+                                owned = c;
+                                owned.as_str()
+                            }
+                            Err(e) => return Value::Error(e),
+                        },
                     };
-                    match gridcraft_numfmt::text_function(v, &code, sys) {
+                    match gridcraft_numfmt::text_function(v, code, sys) {
                         Ok(s) => Value::text(s),
                         Err(e) => Value::Error(e),
                     }
@@ -290,7 +301,8 @@ impl<'h> Evaluator<'h> {
 
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
         let Some(spec) = gridcraft_functions::lookup(name) else {
-            // A defined name holding a LAMBDA, or a LET-bound lambda.
+            // A defined name holding a LAMBDA, or a LET-bound lambda. `Walk::collect` in
+            // `eval/special.rs` follows such a call as a name lookup by the same rule.
             return match self.name(name) {
                 Ev::L(l) => self.apply_lambda(&l, args),
                 Ev::V(Value::Error(x)) => err(x),

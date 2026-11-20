@@ -21,6 +21,11 @@ mod special;
 use array::map_unary;
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
+#[cfg(test)]
+pub(crate) use special::{
+    AREAS_SIFTED, BOUND_NAMES_COMPARED, BOXES_LOOKED_AT, FOLD_BUDGET, FREE_NAMES_COPIED, NAME_INDEXES_BUILT, NAME_LOOKUPS_SCANNED, SCANNED_UP_TO,
+};
+pub(crate) use special::{NameCache, NameLookup, precedents_with};
 pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
 
 /// Largest array a reference may expand to.
@@ -33,6 +38,31 @@ const FULL_SIZE_CELLS: u64 = 16_384;
 /// of the sheet (`A:A`, `A2:A1048576`, several whole rows) and larger blocks stop at the sheet's used
 /// range, so that formulas over them stay fast.
 const FULL_SIZE_BOUNDED_CELLS: u64 = 1_048_576;
+
+/// Whether reading `range` as a block ([`Evaluator::read_range`]: every function argument and
+/// operator) cuts it to the sheet's used range: over `FULL_SIZE_CELLS` cells and running to the
+/// sheet's edge, or over `FULL_SIZE_BOUNDED_CELLS` cells.
+pub(crate) fn read_is_cut(range: &RangeRef) -> bool {
+    let cells = u64::from(range.height()) * u64::from(range.width());
+    // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
+    // the column", not for a block of a chosen size.
+    let to_edge = range.end.row == MAX_ROWS - 1 || range.end.col == MAX_COLS - 1;
+    cells > FULL_SIZE_CELLS && (to_edge || cells > FULL_SIZE_BOUNDED_CELLS)
+}
+
+/// Whether ROW and COLUMN cut `range` to the sheet's used range (`Evaluator::trim_lines`): whole
+/// columns or whole rows.
+pub(crate) fn lines_are_cut(range: &RangeRef) -> bool {
+    range.is_full_cols() || range.is_full_rows()
+}
+
+/// Whether `read_range` or `trim_lines` may cut `range` to the sheet's used range, by either rule
+/// above: what they read then depends on cells outside `range`. The precedent walk asks this
+/// (`eval/special.rs`), and the two evaluator functions call the rule each follows. TRIMRANGE,
+/// SUBTOTAL and AGGREGATE cut by their own rules (see the walk's list of dynamic cases).
+pub(crate) fn may_be_cut(range: &RangeRef) -> bool {
+    read_is_cut(range) || lines_are_cut(range)
+}
 const MAX_DEPTH: usize = 400;
 /// Lambda invocations one cell may make. A semantically bounded formula in Excel can invoke
 /// its lambda at most once per cell of an array (capped here by `MAX_CELLS`), so this covers
@@ -114,6 +144,20 @@ pub trait Host {
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         range.iter().map(|c| self.cell_value(sheet, c)).collect()
     }
+    /// Where in the workbook's names the defined name visible from `scope_sheet` is, as
+    /// [`Workbook::name_position`] finds it, or `None` for no such name. The evaluator charges the
+    /// definition's text before it asks [`Host::name_expr`] for its parse.
+    fn name_position(&mut self, name: &str, scope_sheet: usize) -> Option<usize> {
+        self.workbook().name_position(name, scope_sheet)
+    }
+    /// The parsed definition of the name at `position` in the workbook's names, `None` when it
+    /// doesn't parse (the name evaluates to `#NAME?`). The default parses on every call; a recalc
+    /// pass caches per name, since a formula column calling a LAMBDA name re-parses that name once
+    /// per cell otherwise.
+    fn name_expr(&mut self, position: usize) -> Option<Arc<Expr>> {
+        let def = self.workbook().names.get(position)?;
+        gridcraft_formula::parse_name(&def.formula).ok().map(Arc::new)
+    }
     /// The sheet's used range (`Sheet::used_range`, which walks every stored row). Hosts that
     /// keep the workbook unchanged while evaluating can remember it.
     fn used_range(&mut self, sheet: usize) -> Option<RangeRef> {
@@ -186,10 +230,13 @@ impl Ctx for FnCtx<'_, '_> {
     }
     /// Excel's "formula as criteria": the formula is written for the first record, so its relative
     /// references move down to `record`'s row, and the database's labels name its fields.
-    /// Known gap: the shifted references are not dependencies of the calling cell. One that lands
-    /// outside both the database and the criteria cell's own precedents (say `=G2<H2` with column H
-    /// outside the database) is read here but not tracked, so editing that cell doesn't recalculate
-    /// the D-function until something else does.
+    /// The shifted references are not dependencies of the calling cell, so the precedent walk in
+    /// `eval/special.rs` (`precedents_with`) makes every formula calling a D-function, or reading
+    /// a name whose definition holds one, dynamic: it is evaluated at every recalculation, so a
+    /// shifted reference that lands outside both the database and the criteria cell's own
+    /// precedents (say `=G2<H2` with column H outside the database) is read afresh after any edit,
+    /// as a full recalculation reads it. The graph still doesn't list the shifted cells, so Trace
+    /// Precedents and Trace Dependents don't show them.
     fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<bool> {
         let area = self.criteria?;
         let at = area.range.start.offset(row as i64, col as i64).filter(|c| area.range.contains(*c))?;
@@ -350,12 +397,7 @@ impl<'h> Evaluator<'h> {
     /// The block that reading `a` gives: `a` itself, or when it is large (or runs to the sheet's
     /// edge) the part inside the sheet's used range.
     pub(crate) fn read_range(&mut self, a: &Area) -> RangeRef {
-        let cells = u64::from(a.range.height()) * u64::from(a.range.width());
-        // `A:A`, `1:1` and `A2:A1048576` run to the edge of the sheet: they stand for "the rest of
-        // the column", not for a block of a chosen size.
-        let to_edge = a.range.end.row == MAX_ROWS - 1 || a.range.end.col == MAX_COLS - 1;
-        let full_size = cells <= FULL_SIZE_CELLS || (!to_edge && cells <= FULL_SIZE_BOUNDED_CELLS);
-        if full_size { a.range } else { self.trim(a) }
+        if read_is_cut(&a.range) { self.trim(a) } else { a.range }
     }
 
     /// Trims the bottom/right of an area to the sheet's used range (keeps the top-left so
@@ -447,47 +489,51 @@ impl<'h> Evaluator<'h> {
     }
 
     fn name(&mut self, n: &str) -> Ev {
+        // The precedent walk resolves names by the same rules (`Walk::name` and `Walk::collect` in
+        // `eval/special.rs`): LET/LAMBDA bindings before defined names, the split at the last `!`,
+        // a name scoped to the sheet before a workbook-wide one. A change here changes it there.
         if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)) {
             return v.clone();
         }
-        let wb = self.host.workbook();
         // Sheet-qualified `Sheet1!Name`. The parser stores the sheet unquoted, so it is used as
         // is (`' Sales '` keeps its spaces) and split at the last `!` (`'a!b'!Name`).
         let (scope_sheet, bare) = match n.rsplit_once('!') {
-            Some((s, b)) => match wb.sheet_index(s) {
+            Some((s, b)) => match self.host.workbook().sheet_index(s) {
                 Some(i) => (i, b),
                 None => return err(CellError::Name),
             },
             None => (self.sheet, n),
         };
-        if let Some(def) = wb.name(bare, scope_sheet) {
-            let text = def.formula.clone();
-            let scope = def.scope.unwrap_or(self.sheet);
-            // Each use parses and evaluates the definition again: names that each use the one
-            // before twice double the work per name, so it is charged.
-            if !self.spend(text.len() as u64) {
+        if let Some(position) = self.host.name_position(bare, scope_sheet)
+            && let Some((text_len, def_scope)) = self.host.workbook().names.get(position).map(|d| (d.formula.len(), d.scope))
+        {
+            let scope = def_scope.unwrap_or(self.sheet);
+            // Each use evaluates the definition again: names that each use the one before twice
+            // double the work per name, so it is charged, by its text as if parsed again, whether
+            // or not the host keeps the parse (the result can't depend on the host). The charge
+            // comes first: a cell without the work left doesn't get the definition parsed.
+            if !self.spend(text_len as u64) {
                 return err(CellError::Calc);
             }
-            return match gridcraft_formula::parse_name(&text) {
-                Ok(expr) => {
-                    // Relative references in a name are relative to A1: used here, they move by
-                    // this cell's offset from it.
-                    let expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
-                        gridcraft_formula::adjust::shift_relative_wrapping(expr, self.at.row as i64, self.at.col as i64)
-                    } else {
-                        expr
-                    };
-                    let saved = self.sheet;
-                    // Unqualified references in a name refer to the scope sheet.
-                    self.sheet = scope;
-                    let r = self.eval(&expr);
-                    self.sheet = saved;
-                    r
-                }
-                Err(_) => err(CellError::Name),
+            let Some(expr) = self.host.name_expr(position) else { return err(CellError::Name) };
+            // Relative references in a name are relative to A1: used here, they move by this
+            // cell's offset from it. Only then is the shared parse copied.
+            let shifted;
+            let expr: &Expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
+                shifted = gridcraft_formula::adjust::shift_relative_wrapping((*expr).clone(), self.at.row as i64, self.at.col as i64);
+                &shifted
+            } else {
+                &expr
             };
+            let saved = self.sheet;
+            // Unqualified references in a name refer to the scope sheet.
+            self.sheet = scope;
+            let r = self.eval(expr);
+            self.sheet = saved;
+            return r;
         }
         // A table name alone means its data body.
+        let wb = self.host.workbook();
         if let Some((si, ti)) = wb.table(bare)
             && let Some(t) = wb.sheet(si).and_then(|s| s.tables.get(ti))
             && let Some(d) = t.data_range()

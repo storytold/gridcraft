@@ -3,6 +3,9 @@ use gridcraft_model::{Cell, Formula, Workbook};
 
 use crate::Calc;
 
+mod levels;
+mod names;
+
 fn c(s: &str) -> CellRef {
     CellRef::parse(s).unwrap()
 }
@@ -1340,6 +1343,15 @@ fn text_function() {
     let mut t = T::new();
     t.set("A1", "=TEXT(1234.5,\"#,##0.00\")");
     assert_eq!(t.get("A1"), Value::from("1,234.50"));
+}
+
+#[test]
+fn text_with_an_array_of_codes_formats_the_value_by_each() {
+    // TEXT converts a single format code once per call; an array of codes still formats by each.
+    let mut t = T::new();
+    t.set("A1", "=TEXT(1234.5,{\"0\",\"0.0\"})");
+    assert_eq!(t.get("A1"), Value::text("1235"));
+    assert_eq!(t.get("B1"), Value::text("1234.5"));
 }
 
 #[test]
