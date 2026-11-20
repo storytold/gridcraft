@@ -342,7 +342,11 @@ impl DocState {
         wb.refresh_equations();
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
-        let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        let mut sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
+        // A merged active cell is selected whole, as a click on it selects it (#1348).
+        if let Some(sh) = wb.active() {
+            sel.expand_merges(sh);
+        }
         DocState {
             saved: wb.clone(),
             wb,
