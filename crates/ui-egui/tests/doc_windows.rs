@@ -575,3 +575,60 @@ fn quit_with_a_draft_in_one_window_and_unsaved_cells_in_another_asks_in_order_an
     assert_eq!(desk.app.session.documents().len(), 2);
     assert_eq!(desk.windows.shown_windows(), [w1, w2]);
 }
+
+#[test]
+fn closing_a_window_with_a_bad_formula_asks_and_exit_anyway_closes_without_a_save_question() {
+    let mut desk = Desk::new(true);
+    desk.app.begin_edit(Some("=1*/2".into()), false);
+    desk.frames(2);
+    let w = desk.window_of(0);
+    let sent = desk.close(w);
+    assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::CancelClose), "{sent:?}");
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("refusedDraft"));
+    assert!(desk.app.message.is_none());
+    assert_eq!(desk.app.session.documents().len(), 1);
+
+    // Only the draft was touched: the workbook has nothing to save.
+    desk.app.run("ui.exitAnyway", json!({})).unwrap();
+    let sent = desk.frames(2);
+    assert!(desk.app.dialog.is_none(), "no Save Changes question");
+    assert!(desk.app.session.documents().is_empty());
+    assert!(sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "the last window closed: the app quits: {sent:?}");
+}
+
+#[test]
+fn exit_anyway_on_a_window_with_other_changes_still_asks_about_them() {
+    let mut desk = Desk::new(true);
+    desk.app.run("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    desk.app.begin_edit(Some("=1*/2".into()), false);
+    desk.frames(2);
+    let w = desk.window_of(0);
+    desk.close(w);
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("refusedDraft"));
+    desk.app.run("ui.exitAnyway", json!({})).unwrap();
+    desk.frames(2);
+    assert_eq!(desk.app.dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
+    assert_eq!(desk.app.session.documents().len(), 1);
+}
+
+#[test]
+fn exit_anyway_followed_by_a_window_switch_keeps_the_other_windows_draft() {
+    let mut desk = Desk::new(true);
+    desk.app.run("file.new", json!({})).unwrap();
+    desk.frames(3);
+    let (w1, w2) = (desk.window_of(0), desk.window_of(1));
+    desk.app.enter_window(w2);
+    desk.app.begin_edit(Some("keep".into()), false);
+    desk.frames(2);
+    desk.app.enter_window(w1);
+    desk.app.begin_edit(Some("=1*/2".into()), false);
+    desk.frames(2);
+
+    // Quitting's answer and a switch to the other window arrive together.
+    desk.app.run("ui.exitAnyway", json!({})).unwrap();
+    desk.app.enter_window(w2);
+    let sent = desk.frames(2);
+    assert!(!sent_to(&sent, ViewportId::ROOT, &ViewportCommand::Close), "{sent:?}");
+    desk.app.enter_window(w2);
+    assert_eq!(desk.app.editor.as_ref().map(|ed| ed.text.as_str()), Some("keep"));
+}
