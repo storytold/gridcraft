@@ -130,8 +130,8 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
     let dest = cell_param_on(s, p, "destination", sheet)?.unwrap_or(r.start);
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
-        let mut out: Vec<(CellRef, String)> = Vec::new();
-        for (i, row) in (r.start.row..=r.end.row).enumerate() {
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        for row in r.start.row..=r.end.row {
             let text = sh.value(CellRef::new(row, r.start.col)).display();
             let parts: Vec<String> = match &fixed {
                 Some(w) => {
@@ -148,6 +148,15 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 }
                 None => split_delimited(&text, &delims, consecutive, quote),
             };
+            rows.push(parts);
+        }
+        // The output is as wide as the row with the most fields: a row with fewer clears the
+        // rest of that width, as an empty field (`c,`) does, rather than keeping what was there
+        // (Excel clears them too). Cells right of the widest row are left alone.
+        let width = rows.iter().map(Vec::len).max().unwrap_or(0);
+        let mut out: Vec<(CellRef, String)> = Vec::new();
+        for (i, mut parts) in rows.into_iter().enumerate() {
+            parts.resize(width, String::new());
             for (j, part) in parts.into_iter().enumerate() {
                 out.push((CellRef::new(dest.row + i as u32, dest.col + j as u32), part));
             }
