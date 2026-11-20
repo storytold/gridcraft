@@ -467,10 +467,35 @@ fn xlsb_external_book_formulas_and_names_decode_and_roundtrip_through_xlsx() {
     tabs.extend(wide("Other Sheet"));
     ext_bin.extend(record(359, &tabs));
     ext_bin.extend(record(577, &wide("ExtName")));
+    // BrtSupNameFmla (585): ExtPtgRef3D (0x3A, sheet 0..0, r=0, c=0)
+    let mut fmla_payload = 9u32.to_le_bytes().to_vec();
+    fmla_payload.push(0x3A);
+    fmla_payload.extend(0u16.to_le_bytes());
+    fmla_payload.extend(0u16.to_le_bytes());
+    fmla_payload.extend(0u16.to_le_bytes());
+    fmla_payload.extend(0u16.to_le_bytes());
+    ext_bin.extend(record(585, &fmla_payload));
     let mut bits = vec![0u8; 7];
     bits[2..6].copy_from_slice(&0u32.to_le_bytes());
     ext_bin.extend(record(586, &bits));
     ext_bin.extend(record(587, &[]));
+    // Sheet-scoped external name ("LocalExt" on sheet 1 -> sheetId="0")
+    ext_bin.extend(record(577, &wide("LocalExt")));
+    let mut local_bits = vec![0u8; 7];
+    local_bits[2..6].copy_from_slice(&1u32.to_le_bytes());
+    ext_bin.extend(record(586, &local_bits));
+    ext_bin.extend(record(587, &[]));
+    // BrtExternTableStart (363) with refreshError=1, row 0, and all 5 cell types.
+    let mut t_start = 0u32.to_le_bytes().to_vec();
+    t_start.push(1);
+    ext_bin.extend(record(363, &t_start));
+    ext_bin.extend(record(366, &0u32.to_le_bytes()));
+    ext_bin.extend(record(367, &0u32.to_le_bytes()));
+    ext_bin.extend(record(368, &[&1u32.to_le_bytes()[..], &4.5f64.to_le_bytes()[..]].concat()));
+    ext_bin.extend(record(369, &[&2u32.to_le_bytes()[..], &[1u8]].concat()));
+    ext_bin.extend(record(370, &[&3u32.to_le_bytes()[..], &[0x07u8]].concat()));
+    ext_bin.extend(record(371, &[&4u32.to_le_bytes()[..], &wide("hi")[..]].concat()));
+    ext_bin.extend(record(364, &[]));
     ext_bin.extend(record(588, &[]));
 
     let fmla_num = |col: u32, cached: f64, rgce: &[u8]| {
