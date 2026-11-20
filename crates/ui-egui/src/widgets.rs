@@ -27,6 +27,7 @@ const TOOLTIP_SHORTCUTS: &[(&str, &str, &str)] = &[
     ("Bold", "⌘B", "Ctrl+B"),
     ("Italic", "⌘I", "Ctrl+I"),
     ("Underline", "⌘U", "Ctrl+U"),
+    ("Strikethrough", "⌘⇧X", "Ctrl+5"),
     ("AutoSum", "⌘⇧T", "Alt+="),
     ("Table", "⌘T", "Ctrl+T"),
     ("Insert Link", "⌘K", "Ctrl+K"),
@@ -747,6 +748,9 @@ mod tooltip_shortcut_tests {
         assert_eq!(tooltip_shortcut("Filter", false), Some("Ctrl+Shift+L"));
         assert_eq!(tooltip_shortcut("Bold", true), Some("⌘B"));
         assert_eq!(tooltip_shortcut("Filter", true), Some("⌘⇧F"));
+        // #4401: Strikethrough is Ctrl+5 in Excel for Windows and ⌘⇧X in Excel for Mac.
+        assert_eq!(tooltip_shortcut("Strikethrough", false), Some("Ctrl+5"));
+        assert_eq!(tooltip_shortcut("Strikethrough", true), Some("⌘⇧X"));
         // Search commands has no shortcut of its own (Ctrl+Shift+Space selects all).
         assert_eq!(tooltip_shortcut("Search commands", false), None);
         for (name, mac, other) in super::TOOLTIP_SHORTCUTS {

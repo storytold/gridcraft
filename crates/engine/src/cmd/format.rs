@@ -37,12 +37,16 @@ pub fn specs() -> Vec<CommandSpec> {
             s,
             &with(p, "style", json!("double"))
         )),
-        cmd!("home.strikethrough", "Strikethrough", ["Home", "Font"], Some("Cmd+Shift+X"), "{range?, on?}", has_doc, |s, p| toggle(
-            s,
-            p,
-            |st| st.font.strike,
-            |st, v| st.font.strike = v
-        )),
+        // Ctrl+5 in Excel for Windows, Cmd+Shift+X in Excel for Mac (#4401).
+        CommandSpec {
+            shortcut_mac: Some("Cmd+Shift+X"),
+            ..cmd!("home.strikethrough", "Strikethrough", ["Home", "Font"], Some("Ctrl+5"), "{range?, on?}", has_doc, |s, p| toggle(
+                s,
+                p,
+                |st| st.font.strike,
+                |st, v| st.font.strike = v
+            ))
+        },
         cmd!("home.superscript", "Superscript", ["Home", "Font"], None, "{range?, on?}", has_doc, |s, p| toggle(
             s,
             p,

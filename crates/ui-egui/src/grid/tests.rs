@@ -486,3 +486,55 @@ fn kept_sheet_geometry_and_cf_statistics_follow_every_change() {
     assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
     check_cf(&mut app);
 }
+
+/// #4401: decorations hang off the glyph baseline, whatever the font's line gap. Calibri's line
+/// box is about 1.22 em for a 0.75 em ascent, so a fixed fraction of it put the strike line on the
+/// baseline; the same galley with a taller box below the baseline must draw the same lines.
+#[test]
+fn text_decorations_follow_the_baseline_not_the_line_height() {
+    use gridcraft_engine::model::{Font, Underline};
+    use std::sync::Arc;
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |_| {});
+    output.textures_delta.clear();
+    let size = 44.0;
+    let galley = ctx.fonts_mut(|fonts| fonts.layout_no_wrap("Struck".to_string(), egui::FontId::proportional(size), Color32::BLACK));
+    // The same text in a font with a larger line gap: the line box grows below the baseline.
+    let mut gapped = (*galley).clone();
+    for placed in &mut gapped.rows {
+        let row = Arc::make_mut(&mut placed.row);
+        row.size.y *= 1.5;
+        for glyph in &mut row.glyphs {
+            glyph.font_height *= 1.5;
+            glyph.font_face_height *= 1.5;
+            glyph.line_height *= 1.5;
+        }
+    }
+    let origin = pos2(10.0, 20.0);
+    let row = galley.rows.first().expect("one row");
+    let baseline = origin.y + row.pos.y + row.glyphs.first().expect("a glyph").pos.y;
+    for (underline, strike) in [(Underline::Single, false), (Underline::None, true), (Underline::Double, true)] {
+        let font = Font { underline, strike, ..Font::default() };
+        let (width, lines) = super::quadrant::text_decorations(&galley, origin, size, &font);
+        assert_eq!(super::quadrant::text_decorations(&gapped, origin, size, &font).1, lines, "{underline:?} {strike}: the line gap moves nothing");
+        assert!((1.0..=0.1 * size).contains(&width), "width {width} scales with the font");
+        let ys: Vec<f32> = lines
+            .iter()
+            .map(|[a, b]| {
+                assert_eq!(a.y, b.y, "horizontal");
+                assert_eq!((a.x, b.x), (origin.x + row.rect().left(), origin.x + row.rect().right()), "as long as the text");
+                a.y
+            })
+            .collect();
+        let under: Vec<f32> = ys.iter().filter(|y| **y > baseline).map(|y| y - baseline).collect();
+        let over: Vec<f32> = ys.iter().filter(|y| **y < baseline).map(|y| baseline - y).collect();
+        let expect_under = match underline {
+            Underline::None => 0,
+            Underline::Double | Underline::DoubleAccounting => 2,
+            _ => 1,
+        };
+        assert_eq!((under.len(), over.len()), (expect_under, usize::from(strike)), "{underline:?} {strike}: {ys:?}");
+        assert!(under.iter().all(|d| *d <= 0.3 * size), "underlines just under the baseline: {under:?}");
+        assert!(over.iter().all(|d| (0.15 * size..=0.45 * size).contains(d)), "the strike crosses the lowercase letters: {over:?}");
+    }
+}
