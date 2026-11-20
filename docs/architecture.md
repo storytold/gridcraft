@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-06 · **Last updated:** 2026-11-06 · **Change:** minor (PDF Thai shaping, deterministic font selection and permitted embedding; shared CJK fallback baselines; earlier: Python mode in the formula bar; Python cells as data; equations; recently used functions; Function Library; accent icons; hidden macro names) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -20,7 +20,7 @@ including tests, 2026-10-10.
 | L2 | `model` | ~2.2k | Workbook, sheets, copy-on-write cell store (64-row bands behind `Arc`), interned styles, names, tables, CF, validation, comments, charts, shapes, images, sparklines, print settings, protection |
 | L2 | `calc` | ~2.9k | Evaluator (references, names, tables, LET/LAMBDA, special forms like OFFSET/INDIRECT/SUBTOTAL) and dependency-graph recalculation with dynamic arrays, spills and cycle detection; single-threaded |
 | L2 | `xlsx` | ~10.7k | XLSX read/write (transitional and strict read), CSV/TSV, XLSB and ODS data import, PivotTable caches, DrawingML charts and drawings; byte slices only (WASM-safe); lenient reader that reports warnings |
-| L2 | `pdf` | ~1k | Small PDF 1.7 writer (14 standard fonts, vectors, images) for print and export |
+| L2 | `pdf` | ~1k | PDF 1.7 writer (standard fonts, permitted TrueType embedding, HarfRust shaping and Unicode extraction, vectors, images) for print and export |
 | L3 | `chart` | ~2.9k | Toolkit-free chart layout to drawing primitives, a rasterizer, sparklines |
 | L5 | `engine` | ~17.7k | `Session`: open workbooks, selection, history (COW snapshots), clipboard, fill, sort, filter, PivotTables, what-if, print, file I/O (`io.rs`), and the command registry (`cmd/*`, 313 commands) with the Excel ribbon catalog (`catalog.rs`) |
 | L6 | `ui-egui` | ~11.6k | Excel-style UI (title bar, QAT, ribbon, formula bar, virtualised grid, editor, tabs, status bar, dialogs, task panes, chart view) and the control channel |
@@ -49,6 +49,15 @@ including tests, 2026-10-10.
    for the visible window only; charts render through `crates/chart` primitives.
 5. **Files**: `engine/io.rs` sniffs content (XLSX, XLSB, ODS) before trusting the extension and
    dispatches to `crates/xlsx`; imports that lose data return warnings shown to the user.
+6. **PDF and Print**: `engine/cmd/print.rs` sends workbook text to the L2 `pdf` crate, which uses
+   HarfRust for Thai shaping and embeds permitted TrueType faces. It resolves only fonts from the
+   pinned `CRAFT_FONTS_DIR` bundle or explicitly supplied `pdfFonts` bytes; it never scans host
+   system fonts, so identical inputs select the same face across machines. The PDF writer rejects
+   faces whose OS/2 fsType forbids embedding. Subsetting is attempted on native
+   targets and falls back to whole-face embedding when prohibited or unsupported; WASM embeds the
+   whole validated face without calling the panic-aborting subsetter. Explicit `pdfFonts` bytes
+   supply fonts on WASM. When no face covers a cluster, standard or CID fallback preserves Unicode
+   extraction. This does not add Arabic or Devanagari shaping or bidi.
 
 ## UI building blocks
 

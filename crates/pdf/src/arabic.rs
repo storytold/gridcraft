@@ -459,9 +459,9 @@ impl Subset {
         Ok(index)
     }
 
-    pub(crate) fn text(&mut self, font: Font, text: &str, size: f32, direction: TextDirection) -> Result<String, Error> {
+    pub(crate) fn text(&mut self, font: Font, text: &str, size: f32, direction: TextDirection, actual_text: bool) -> Result<String, Error> {
         let layout = layout(font, text, direction)?;
-        let mut out = format!("/Span << /ActualText {} >> BDC\nBT\n", unicode_string(text, true));
+        let mut out = if actual_text { format!("/Span << /ActualText {} >> BDC\nBT\n", unicode_string(text, true)) } else { "BT\n".to_string() };
         for item in layout.items {
             match item {
                 Item::Glyph { id, x, y, source } => {
@@ -485,7 +485,10 @@ impl Subset {
                 }
             }
         }
-        out.push_str("ET\nEMC");
+        out.push_str("ET\n");
+        if actual_text {
+            out.push_str("EMC");
+        }
         Ok(out)
     }
 
