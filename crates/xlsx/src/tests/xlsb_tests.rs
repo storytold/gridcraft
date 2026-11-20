@@ -663,14 +663,14 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     ]);
 
     let (wb, report) = read_xlsb(&bytes).unwrap();
-    assert!(report.warnings.iter().any(|w| w.contains("external link")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("unresolved external link")), "{:?}", report.warnings);
     assert!(wb.sheets[0].cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(11.0)));
-    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[2]SheetA!$A$1"));
+    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]SheetA!$A$1"));
 
     let saved = write_xlsx(&wb).unwrap();
     let (reopened, rep2) = read_xlsx(&saved).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
-    assert_eq!(reopened.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[2]SheetA!$A$1"));
+    assert_eq!(reopened.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]SheetA!$A$1"));
 
     let saved2 = write_xlsx(&reopened).unwrap();
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved2)).unwrap();
@@ -682,25 +682,22 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     let wb_xml = read_zip(&mut zip, "xl/workbook.xml");
     let ref_ids: Vec<&str> =
         wb_xml.split("<externalReference ").skip(1).filter_map(|s| s.split("r:id=\"").nth(1).and_then(|t| t.split('"').next())).collect();
-    assert_eq!(ref_ids.len(), 2, "{wb_xml}");
+    assert_eq!(ref_ids.len(), 1, "only the surviving external link should be emitted: {wb_xml}");
     let wb_rels = read_zip(&mut zip, "xl/_rels/workbook.xml.rels");
-    let second_target = wb_rels
+    let link_target = wb_rels
         .split("<Relationship ")
-        .find(|r| r.contains(&format!("Id=\"{}\"", ref_ids[1])))
+        .find(|r| r.contains(&format!("Id=\"{}\"", ref_ids[0])))
         .and_then(|r| r.split("Target=\"").nth(1))
         .and_then(|s| s.split('"').next())
-        .expect("second externalReference r:id should resolve in workbook.xml.rels")
-        .trim_start_matches('/')
-        .to_string();
-    let second_part = if second_target.starts_with("xl/") { second_target } else { format!("xl/{second_target}") };
-    let second_xml = read_zip(&mut zip, &second_part);
-    assert!(second_xml.contains("<sheetName val=\"SheetA\"/>"), "{second_xml}");
-    let (dir, file) = second_part.rsplit_once('/').unwrap();
-    let second_rels = read_zip(&mut zip, &format!("{dir}/_rels/{file}.rels"));
+        .expect("externalReference r:id should resolve in workbook.xml.rels")
+        .trim_start_matches('/');
+    let link_part = if link_target.starts_with("xl/") { link_target.to_string() } else { format!("xl/{link_target}") };
+    let link_xml = read_zip(&mut zip, &link_part);
+    assert!(link_xml.contains("<externalBook ") && link_xml.contains("<sheetName val=\"SheetA\"/>"), "{link_xml}");
+    let (dir, file) = link_part.rsplit_once('/').unwrap();
+    let link_rels = read_zip(&mut zip, &format!("{dir}/_rels/{file}.rels"));
     assert!(
-        second_rels.contains("externalLinkPath")
-            && second_rels.contains("Target=\"SecondBook.xlsx\"")
-            && second_rels.contains("TargetMode=\"External\""),
-        "{second_rels}"
+        link_rels.contains("externalLinkPath") && link_rels.contains("Target=\"SecondBook.xlsx\"") && link_rels.contains("TargetMode=\"External\""),
+        "{link_rels}"
     );
 }
