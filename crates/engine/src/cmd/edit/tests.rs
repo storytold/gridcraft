@@ -743,3 +743,93 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+#[test]
+fn paste_all_clears_destination_note_and_hyperlink_when_source_has_none() {
+    let setup = || {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "D1", "input": "old record"})).unwrap();
+        s.execute("review.newNote", json!({"cell": "D1", "text": "Note for OLD RECORD"})).unwrap();
+        s.execute("insert.link", json!({"cell": "D1", "target": "https://example.com/old", "text": "old record"})).unwrap();
+        s
+    };
+
+    // Copy unannotated nonblank cell -> ordinary paste clears old note and hyperlink.
+    let mut s = setup();
+    s.execute("cell.set", json!({"cell": "A1", "input": "new value"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert_eq!(d1["value"], "new value");
+    assert!(d1["comment"].is_null(), "expected D1 note cleared, got {d1}");
+    assert!(d1["hyperlink"].is_null(), "expected D1 hyperlink cleared, got {d1}");
+
+    // Copy unannotated nonblank cell -> Paste Special All clears old note and hyperlink.
+    let mut s = setup();
+    s.execute("cell.set", json!({"cell": "A1", "input": "new value"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert_eq!(d1["value"], "new value");
+    assert!(d1["comment"].is_null(), "expected D1 note cleared, got {d1}");
+    assert!(d1["hyperlink"].is_null(), "expected D1 hyperlink cleared, got {d1}");
+
+    // Cut unannotated cell -> ordinary paste clears old note and hyperlink.
+    let mut s = setup();
+    s.execute("cell.set", json!({"cell": "A1", "input": "new value"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert_eq!(d1["value"], "new value");
+    assert!(d1["comment"].is_null(), "expected D1 note cleared, got {d1}");
+    assert!(d1["hyperlink"].is_null(), "expected D1 hyperlink cleared, got {d1}");
+
+    // Copy blank cell -> Paste Special All clears old value, note and hyperlink.
+    let mut s = setup();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert!(d1["value"].is_null(), "expected D1 value cleared, got {d1}");
+    assert!(d1["comment"].is_null(), "expected D1 note cleared, got {d1}");
+    assert!(d1["hyperlink"].is_null(), "expected D1 hyperlink cleared, got {d1}");
+
+    // Copy blank cell -> Paste Special All clears a destination cell that only holds a note.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("review.newNote", json!({"cell": "D1", "text": "Only a note"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert!(d1["comment"].is_null(), "expected D1 note cleared, got {d1}");
+
+    // Copy annotated cell -> Paste All replaces both note and hyperlink.
+    let mut s = setup();
+    s.execute("cell.set", json!({"cell": "A1", "input": "new value"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "Note for NEW"})).unwrap();
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.com/new", "text": "new value"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert_eq!(d1["comment"]["text"], "Note for NEW");
+    assert_eq!(d1["hyperlink"]["target"], "https://example.com/new");
+
+    // Paste Special Values retains old note and hyperlink.
+    let mut s = setup();
+    s.execute("cell.set", json!({"cell": "A1", "input": "new value"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert_eq!(d1["value"], "new value");
+    assert_eq!(d1["comment"]["text"], "Note for OLD RECORD");
+    assert_eq!(d1["hyperlink"]["target"], "https://example.com/old");
+
+    // Blank source with All + Skip Blanks retains old value, note and hyperlink.
+    let mut s = setup();
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "D1"})).unwrap();
+    let d1 = s.execute("cell.get", json!({"cell": "D1"})).unwrap();
+    assert_eq!(d1["value"], "old record");
+    assert_eq!(d1["comment"]["text"], "Note for OLD RECORD");
+    assert_eq!(d1["hyperlink"]["target"], "https://example.com/old");
+}
