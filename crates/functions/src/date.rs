@@ -263,8 +263,16 @@ fn days(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val((day_arg(a, 0, sys)? - day_arg(a, 1, sys)?) as f64)
 }
 
+/// Excel's last day of February. In the 1900 date system February 1900 carries the fictitious
+/// 29th (serial 60), so the 28th is not a month end and the 29th is (#4012).
 fn last_of_feb(d: &DateTime) -> bool {
-    d.month == 2 && d.day == days_in_month(d.year, 2)
+    if d.month != 2 {
+        return false;
+    }
+    if d.year == 1900 {
+        return d.day == 29;
+    }
+    d.day == days_in_month(d.year, 2)
 }
 
 fn days360(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
@@ -786,6 +794,17 @@ mod tests {
         close(ev("DAYS360", vec![n(d(2011.0, 1.0, 30.0)), n(d(2011.0, 12.0, 31.0)), b(true)]), 330.0);
         close(ev("DAYS360", vec![n(d(2011.0, 2.0, 28.0)), n(d(2011.0, 3.0, 31.0))]), 30.0);
         close(ev("DAYS360", vec![n(d(2011.0, 1.0, 1.0)), n(d(2011.0, 1.0, 31.0))]), 30.0);
+    }
+
+    /// Excel's 1900 calendar has 29 February 1900 (serial 60), so in the US method the 28th is not
+    /// a month end and the 29th is. The European method is unaffected (#4012).
+    #[test]
+    fn days360_across_the_fictitious_1900_02_29() {
+        close(ev("DAYS360", vec![n(59.0), n(61.0)]), 3.0);
+        close(ev("DAYS360", vec![n(60.0), n(61.0)]), 1.0);
+        close(ev("DAYS360", vec![n(59.0), n(61.0), b(true)]), 3.0);
+        close(ev("DAYS360", vec![n(60.0), n(61.0), b(true)]), 2.0);
+        close(ev("DAYS360", vec![n(61.0), n(62.0)]), 1.0);
     }
 
     #[test]
