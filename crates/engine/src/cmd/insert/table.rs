@@ -323,9 +323,27 @@ pub(super) fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ti) = find_table(s, p)?;
     edit(s, |cx| {
+        let Some(t) = cx.wb.sheet(si).and_then(|sh| sh.tables.get(ti)).cloned() else { return Ok(Json::Null) };
+        // Structured references to the table become ordinary cell references, as in Excel.
+        let rewrites = plain_table_refs(&cx.wb, si, &t);
+        let rewrites: Vec<_> = rewrites.into_iter().map(|(i, c, e)| (i, c, Formula::from_expr(e))).collect();
+        // Qualified references are longer than structured ones. Text past the parser's limit would
+        // not parse after saving and reopening, leaving a formula that never recalculates.
+        if rewrites.iter().any(|(_, _, f)| f.text.chars().count() > gridcraft_formula::MAX_FORMULA_LEN) {
+            return Err(EngineError::Other(format!(
+                "Converting to a range would make a formula longer than {} characters.",
+                gridcraft_formula::MAX_FORMULA_LEN
+            )));
+        }
+        for (i, c, f) in rewrites {
+            if let Some(cell) = cx.wb.sheet_mut(i).and_then(|sh| sh.cells.get_mut(c)) {
+                // Keep a legacy array's entered range and a dynamic-array mark.
+                let (array, dynamic) = cell.formula.as_ref().map_or((None, false), |old| (old.array, old.dynamic));
+                cell.formula = Some(std::sync::Arc::new(Formula { array, dynamic, ..f }));
+            }
+        }
         // Apply the table look as plain formatting, then drop the table.
         let wb = &mut cx.wb;
-        let Some(t) = wb.sheet(si).and_then(|sh| sh.tables.get(ti)).cloned() else { return Ok(Json::Null) };
         let looks: Vec<(CellRef, Style)> = t.range.iter().map(|c| (c, crate::tables::table_cell_style(wb, si, &t, c))).collect();
         for (c, st) in looks {
             let id = wb.styles.intern(st);
@@ -339,4 +357,136 @@ pub(super) fn table_convert(s: &mut Session, p: &Json) -> Result<Json> {
         cx.structural = true;
         Ok(Json::Null)
     })
+}
+
+/// Every formula that refers to table `t` on sheet `si`, rewritten with ordinary references to the
+/// cells it reads: absolute, except that a this-row reference keeps a relative row.
+fn plain_table_refs(wb: &gridcraft_model::Workbook, si: usize, t: &Table) -> Vec<(usize, CellRef, gridcraft_formula::Expr)> {
+    use gridcraft_formula::{Expr, RefKind, Reference, SheetSel, StructItem};
+    let plain = |from: usize, a: gridcraft_calc::Area, relative_row: bool| {
+        let sheet = match wb.sheet(a.sheet) {
+            Some(sh) if a.sheet != from => SheetSel::Named(sh.name.clone()),
+            _ => SheetSel::Current,
+        };
+        let end = |c: CellRef| gridcraft_formula::Anchor { row: c.row, col: c.col, row_abs: !relative_row, col_abs: true };
+        let kind = if a.range.is_single() { RefKind::Cell(end(a.range.start)) } else { RefKind::Range(end(a.range.start), end(a.range.end)) };
+        Expr::Ref(Reference { sheet, kind })
+    };
+    let mut out = Vec::new();
+    for (i, sh) in wb.sheets.iter().enumerate() {
+        for (c, x) in sh.cells.iter() {
+            let Some(e) = x.formula.as_ref().and_then(|f| f.expr()) else { continue };
+            let mut hit = false;
+            let ne = map_scoped(e, &mut Vec::new(), &mut |x, bound| match x {
+                Expr::Struct(st) if st.table.eq_ignore_ascii_case(&t.name) || (st.table.is_empty() && i == si && t.range.contains(c)) => {
+                    hit = true;
+                    match gridcraft_calc::eval::resolve_struct(wb, i, c, &st) {
+                        Ok(a) => plain(i, a, st.specifiers.contains(&StructItem::ThisRow)),
+                        Err(e) => Expr::Error(e),
+                    }
+                }
+                // A name an enclosing LET or LAMBDA binds is that local variable, not the table.
+                Expr::Name(n) if !bound.iter().any(|b| gridcraft_formula::same_name(b, &n)) && names_table(wb, i, &n, &t.name) => {
+                    hit = true;
+                    match t.data_range() {
+                        Some(range) => plain(i, gridcraft_calc::Area { sheet: si, range }, false),
+                        None => Expr::Error(gridcraft_core::CellError::Ref),
+                    }
+                }
+                o => o,
+            });
+            if hit {
+                out.push((i, c, ne));
+            }
+        }
+    }
+    out
+}
+
+/// Rewrites every node of `e` with `f`, bottom-up as [`gridcraft_formula::Expr::map`] does, and
+/// tells `f` which names an enclosing `LET` or `LAMBDA` binds: such a name is a local variable,
+/// not a reference to the table of the same name.
+fn map_scoped(
+    e: gridcraft_formula::Expr,
+    bound: &mut Vec<String>,
+    f: &mut dyn FnMut(gridcraft_formula::Expr, &[String]) -> gridcraft_formula::Expr,
+) -> gridcraft_formula::Expr {
+    use gridcraft_formula::Expr;
+    // A long operator chain nests one `Binary` per operator, thousands deep, so the left spine is
+    // followed in a loop and only real nesting recurses, which the parser bounds.
+    let mut spine = Vec::new();
+    let mut node = e;
+    while let Expr::Binary(op, a, b) = node {
+        spine.push((op, b));
+        node = *a;
+    }
+    let e = match node {
+        Expr::Array(rows) => Expr::Array(rows.into_iter().map(|r| r.into_iter().map(|e| map_scoped(e, bound, f)).collect()).collect()),
+        Expr::Unary(op, e) => Expr::Unary(op, Box::new(map_scoped(*e, bound, f))),
+        Expr::Paren(e) => Expr::Paren(Box::new(map_scoped(*e, bound, f))),
+        Expr::Invoke(callee, args) => {
+            Expr::Invoke(Box::new(map_scoped(*callee, bound, f)), args.into_iter().map(|a| map_scoped(a, bound, f)).collect())
+        }
+        // A LET's declarations are not references, and a value sees only the bindings before it:
+        // in `LET(x, x, x)` the first value is the outer `x`.
+        Expr::Call(name, args) if name == "LET" && args.len() >= 3 && !args.len().is_multiple_of(2) => {
+            let mut out = Vec::with_capacity(args.len());
+            let outer = bound.len();
+            let mut it = args.into_iter();
+            while let Some(first) = it.next() {
+                let Some(value) = it.next() else {
+                    // The last argument is the body, with every binding in scope.
+                    out.push(map_scoped(first, bound, f));
+                    break;
+                };
+                let value = map_scoped(value, bound, f);
+                if let Expr::Name(x) = &first {
+                    bound.push(x.clone());
+                }
+                out.push(first);
+                out.push(value);
+            }
+            bound.truncate(outer);
+            Expr::Call(name, out)
+        }
+        // A LAMBDA's parameters, every argument but its body, are in scope in the body.
+        Expr::Call(name, args) if name == "LAMBDA" && !args.is_empty() => {
+            let mut args = args;
+            let body = args.pop().unwrap_or(Expr::Missing);
+            let outer = bound.len();
+            let mut out = Vec::with_capacity(args.len() + 1);
+            for p in args {
+                if let Expr::Name(x) = &p {
+                    bound.push(x.clone());
+                }
+                out.push(p);
+            }
+            out.push(map_scoped(body, bound, f));
+            bound.truncate(outer);
+            Expr::Call(name, out)
+        }
+        Expr::Call(name, args) => Expr::Call(name, args.into_iter().map(|a| map_scoped(a, bound, f)).collect()),
+        other => other,
+    };
+    // Rebuild the chain innermost first, so every parent sees its rewritten children.
+    let mut e = f(e, bound);
+    while let Some((op, b)) = spine.pop() {
+        let b = map_scoped(*b, bound, f);
+        e = f(Expr::Binary(op, Box::new(e), Box::new(b)), bound);
+    }
+    e
+}
+
+/// Whether the name `n`, used on sheet `from`, denotes the table `table`. A sheet-qualified
+/// `Sheet1!Orders` is split at its last `!` as the calculator does. A defined name of the same
+/// name in scope wins over the table, so it is not the table.
+fn names_table(wb: &gridcraft_model::Workbook, from: usize, n: &str, table: &str) -> bool {
+    let (scope, bare) = match n.rsplit_once('!') {
+        Some((s, b)) => match wb.sheet_index(s) {
+            Some(i) => (i, b),
+            None => return false,
+        },
+        None => (from, n),
+    };
+    bare.eq_ignore_ascii_case(table) && wb.name(bare, scope).is_none()
 }
