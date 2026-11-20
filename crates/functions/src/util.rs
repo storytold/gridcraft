@@ -19,12 +19,17 @@ pub(crate) const S: &[bool] = &[true];
 /// No lifting (all positions take arrays / ranges).
 pub(crate) const A: &[bool] = &[false];
 
+/// Length of `t` in UTF-16 units, the way Excel counts its 32,767 limit (an emoji takes two).
+pub(crate) fn utf16_len(t: &str) -> usize {
+    t.chars().map(char::len_utf16).sum()
+}
+
 /// Turns an implementation result into a cell value: errors become error values, non-finite
-/// numbers become `#NUM!`, text longer than 32,767 characters becomes `#VALUE!`.
+/// numbers become `#NUM!`, text longer than 32,767 UTF-16 units becomes `#VALUE!`.
 pub(crate) fn finish(r: R<Value>) -> Value {
     match r {
         Ok(Value::Number(n)) => Value::number(n),
-        Ok(Value::Text(t)) if t.len() > MAX_TEXT && t.chars().count() > MAX_TEXT => Value::Error(CellError::Value),
+        Ok(Value::Text(t)) if t.len() > MAX_TEXT && utf16_len(&t) > MAX_TEXT => Value::Error(CellError::Value),
         Ok(v) => v,
         Err(e) => Value::Error(e),
     }
