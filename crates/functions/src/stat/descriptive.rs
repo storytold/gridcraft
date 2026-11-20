@@ -502,9 +502,16 @@ pub(super) fn avedev(v: &[f64]) -> R<f64> {
 
 pub(super) fn frequency(a: &[Arg], _: C) -> R<Value> {
     let data = arg_nums(a, 0)?;
-    let bins = arg_nums(a, 1)?;
+    // Excel leaves an error out of the bins, as it does text and blanks (#4283); an error in the
+    // data still propagates.
+    let mut bins = match &arg(a, 1)?.value {
+        Value::Array(arr) => arr.iter().filter_map(|x| if let Value::Number(n) = x { Some(*n) } else { None }).collect(),
+        other => array_numbers(other)?,
+    };
+    // With no number among the bins, Excel counts against a single bin of 0: the values at or
+    // below 0, then the rest (#4282).
     if bins.is_empty() {
-        return col_value(vec![data.len() as f64]);
+        bins.push(0.0);
     }
     // a NaN bin equals no value (and would break the ascending order searched below)
     let mut order: Vec<usize> = (0..bins.len()).filter(|&i| bins.get(i).is_some_and(|b| !b.is_nan())).collect();
