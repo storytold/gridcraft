@@ -832,14 +832,17 @@ fn write_pivot_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivot
 }
 
 /// `<filters>`: the value filters of the row and column fields, each naming the field's cache
-/// field and the data field it measures by.
+/// field and the data field it measures by. Captions compare as the engine does — ASCII case
+/// only — so `É` and `é` stay distinct and the file names the measure the filter targets.
 fn write_value_filters(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotTableLayout<'_>) {
     let mut written: Vec<String> = Vec::new();
     for f in &pt.filters {
         let Some(vf) = &f.value else { continue };
-        let Some(position) = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col)) else { continue };
+        let Some(position) = pt.rows.iter().chain(pt.columns.iter()).position(|a| a.source_col.eq_ignore_ascii_case(&f.source_col)) else {
+            continue;
+        };
         let Some(field) = c.axis_map.get(position).copied().flatten() else { continue };
-        let Some(measure) = layout.values.iter().position(|(_, v)| same(&v.name, &vf.by)) else { continue };
+        let Some(measure) = layout.values.iter().position(|(_, v)| v.name.eq_ignore_ascii_case(&vf.by)) else { continue };
         let (kind, content) = value_filter_xml(vf.rule);
         written.push(format!(
             "<filter fld=\"{field}\" type=\"{kind}\" evalOrder=\"-1\" id=\"{}\" iMeasureFld=\"{measure}\"><autoFilter ref=\"A1\"><filterColumn colId=\"0\">{content}</filterColumn></autoFilter></filter>",
@@ -852,12 +855,13 @@ fn write_value_filters(s: &mut String, pt: &PivotTable, c: &Cache, layout: &Pivo
 }
 
 /// The position among the written data fields of the value field `field`'s items are sorted by.
+/// The caption compares as the engine does — ASCII case only.
 fn sort_value_index(field: &PivotField, layout: &PivotTableLayout<'_>) -> Option<usize> {
     if field.sort == PivotSort::None {
         return None;
     }
     let name = field.sort_by.as_deref()?;
-    layout.values.iter().position(|(_, v)| same(&v.name, name))
+    layout.values.iter().position(|(_, v)| v.name.eq_ignore_ascii_case(name))
 }
 
 /// The order of a field's `<item>`s: its custom order (listed labels first, the rest ascending as
@@ -959,7 +963,9 @@ fn write_data_fields(s: &mut String, pt: &PivotTable, c: &Cache, layout: &PivotT
         };
         let mut name = base.clone();
         let mut suffix = 2;
-        while used.iter().any(|existing| same(existing, &name)) {
+        // The engine uniques captions with ASCII case (`unique_value_name`); match it, so "É"
+        // and "é" stay distinct here too and the file keeps every caption as the engine set it.
+        while used.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
             name = format!("{base}{suffix}");
             suffix += 1;
         }

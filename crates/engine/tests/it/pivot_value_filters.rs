@@ -316,6 +316,21 @@ fn every_rule_survives_an_xlsx_round_trip() {
     }
 }
 
+#[test]
+fn a_value_filter_by_caption_keeps_its_exact_measure() {
+    // #3399 review: the writer folded captions with Unicode case, so "É" and "é" collapsed and
+    // the file could name the other measure.
+    let mut s = sales();
+    pivot(&mut s, &["Region"], &[], json!([{"field": "Sales", "name": "É"}, {"field": "Sales", "func": "count", "name": "é"}]));
+    vf(&mut s, json!({"field": "Region", "rule": "top", "count": 1, "by": "é"})).unwrap();
+    assert_eq!(filters(&mut s)[0]["valueFilter"]["by"], "é");
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut back = Session::new();
+    back.execute("file.open", json!({"name": "e.xlsx", "base64": saved["base64"]})).unwrap();
+    back.execute("pivot.refresh", json!({"pivot": "PivotTable1", "replace": true})).unwrap();
+    assert_eq!(filters(&mut back)[0]["valueFilter"]["by"], "é", "the saved filter measures by é, not É");
+}
+
 // ---------------------------------------------------------------- every combination
 
 /// Every rule on an outer, inner or column field in every layout: the grand total is the sum of
