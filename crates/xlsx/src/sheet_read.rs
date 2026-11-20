@@ -744,8 +744,17 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                         let dc = pos.col as i64 - sh.anchor.col as i64;
                         let shifted = gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc);
                         let printed = gridcraft_formula::print(&shifted);
-                        drop(shifted);
-                        Formula::from_file_text(&printed)
+                        // Shifting can push the text past the parser's limit (A1 grows toward
+                        // XFD1048576 in a far dependent), where a later re-parse would fail; such
+                        // a dependent keeps its tree, as before.
+                        if printed.len() > gridcraft_formula::MAX_FORMULA_LEN
+                            && printed.chars().count() > gridcraft_formula::MAX_FORMULA_LEN
+                        {
+                            Formula::from_expr(shifted)
+                        } else {
+                            drop(shifted);
+                            Formula::from_file_text(&printed)
+                        }
                     }
                     None => Formula::from_file_text(&sh.text),
                 })
