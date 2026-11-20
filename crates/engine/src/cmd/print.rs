@@ -169,7 +169,9 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     doc.info.author = wb.props.author.clone();
     let total: usize = layouts.iter().map(|l| l.pages.len()).sum();
     let (date, time) = hf_date_time(wb);
-    let mut page_no = 0usize;
+    // The number `&P` prints on the next page: it restarts at a sheet's First page number and
+    // otherwise carries on from the previous sheet (#4448).
+    let mut next_page_no = 1usize;
     let mut pending_links = Vec::new();
     let mut printed_blocks = Vec::new();
     // Decoded pictures are reused across the pages their anchor covers: a floating picture
@@ -177,11 +179,15 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
     let mut pics = PicCache::default();
     for lay in layouts {
         let Some(sh) = wb.sheet(lay.sheet) else { continue };
+        if let Some(first) = lay.settings.first_page_number {
+            next_page_no = first as usize;
+        }
         let mut cf = crate::cf::CfCache::new();
         let k = lay.k();
         let (aw, ah) = lay.avail();
         for (pi, (ri, ci)) in lay.pages.iter().enumerate() {
-            page_no += 1;
+            let page_no = next_page_no;
+            next_page_no = next_page_no.saturating_add(1);
             let (Some(rband), Some(cband)) = (lay.row_bands.get(*ri).copied(), lay.col_bands.get(*ci).copied()) else { continue };
             let rsegs = segments(lay.title_rows, rband);
             let csegs = segments(lay.title_cols, cband);
