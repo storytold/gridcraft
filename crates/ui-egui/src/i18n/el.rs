@@ -198,6 +198,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Μέγεθος γραμματοσειράς",
         "Gridlines" => "Γραμμές πλέγματος",
         "Headings" => "Επικεφαλίδες",
+        "Focus Cell" => "Εστίαση κελιού",
         "Zoom" => "Μεγέθυνση",
         "Forecast\nSheet" => "Φύλλο\nπρόβλεψης",
         "Add footer" => "Προσθήκη υποσέλιδου",

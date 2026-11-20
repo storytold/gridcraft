@@ -455,16 +455,16 @@ pub fn read_x14_dxf(x: &El, palette: &[u32], fmts: &HashMap<u32, String>) -> Sty
 // ---------------------------------------------------------------- writing
 
 pub fn color_attrs(c: &Color) -> String {
+    color_attr_pairs(c).iter().map(|(k, v)| format!("{k}=\"{v}\"")).collect::<Vec<_>>().join(" ")
+}
+
+/// The attributes of [`color_attrs`], as name and value pairs.
+pub fn color_attr_pairs(c: &Color) -> Vec<(&'static str, String)> {
     match *c {
-        Color::Auto => "auto=\"1\"".into(),
-        Color::Rgb(v) => format!("rgb=\"FF{:06X}\"", v & 0xFFFFFF),
-        Color::Theme(i, t) => {
-            if t == 0 {
-                format!("theme=\"{i}\"")
-            } else {
-                format!("theme=\"{i}\" tint=\"{}\"", num(t as f64 / 1000.0))
-            }
-        }
+        Color::Auto => vec![("auto", "1".into())],
+        Color::Rgb(v) => vec![("rgb", format!("FF{:06X}", v & 0xFFFFFF))],
+        Color::Theme(i, 0) => vec![("theme", i.to_string())],
+        Color::Theme(i, t) => vec![("theme", i.to_string()), ("tint", num(t as f64 / 1000.0))],
     }
 }
 

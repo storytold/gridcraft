@@ -201,6 +201,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Yazı tipi boyutu",
         "Gridlines" => "Kılavuz Çizgileri",
         "Headings" => "Başlıklar",
+        "Focus Cell" => "Hücre Odağı",
         "Zoom" => "Yakınlaştır",
         "Forecast\nSheet" => "Tahmin\nSayfası",
         "Add footer" => "Altbilgi ekle",

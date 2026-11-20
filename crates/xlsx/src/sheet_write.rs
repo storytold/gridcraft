@@ -18,7 +18,7 @@ use gridcraft_model::{
 
 use crate::drawing::{Obj, image_content_type, image_ext};
 use crate::fmla::text_to_file;
-use crate::styles::{color_attrs, dxf_id, dxf_xml};
+use crate::styles::{color_attr_pairs, color_attrs, dxf_id, dxf_xml};
 use crate::tables::{paper_id, px_to_col_width, px_to_pt};
 use crate::write::{
     CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, XML_DECL,
@@ -323,8 +323,31 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
         workbook_view_id: Some(0),
         pane,
         selections,
+        other: focus_cell_ext(sheet).into_iter().collect(),
         ..Default::default()
     }
+}
+
+/// Focus Cell is not an ISO/IEC 29500 sheet-view attribute, so it rides in the view's extension
+/// list under GridCraft's own namespace. Excel does not read it, and keeps its own extensions
+/// beside it.
+pub(crate) const FOCUS_CELL_NS: &str = "https://github.com/storytold/gridcraft/xlsx/2026/focuscell";
+
+/// The Focus Cell extension inside `<sheetView>`. Written whenever the sheet carries either
+/// half of the setting, so a color chosen while the tint is off stays remembered.
+fn focus_cell_ext(sheet: &Sheet) -> Option<craft_xml::El> {
+    if !sheet.focus_cell && sheet.focus_cell_color.is_none() {
+        return None;
+    }
+    let mut focus = craft_xml::El::new("gcf:focusCell").with_attr("on", u8::from(sheet.focus_cell));
+    for (name, value) in sheet.focus_cell_color.as_ref().map(color_attr_pairs).unwrap_or_default() {
+        focus.set_attr(name, value);
+    }
+    let mut ext = craft_xml::El::new("ext").with_attr("uri", FOCUS_CELL_NS).with_attr("xmlns:gcf", FOCUS_CELL_NS);
+    ext.push(focus);
+    let mut list = craft_xml::El::new("extLst");
+    list.push(ext);
+    Some(list)
 }
 
 struct CellWriteInput<'a> {

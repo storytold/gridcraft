@@ -20,6 +20,7 @@ use crate::IoError;
 use crate::fmla::{from_file, unwrap_google_sheets};
 use crate::package::{Rel, craft_error};
 use crate::read::Ctx;
+use crate::sheet_write::FOCUS_CELL_NS;
 use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
 use crate::xml::{self, El};
@@ -313,6 +314,7 @@ fn apply_craft_sheet_part(
     }
     if let Some(v) = sp.features.views.first() {
         apply_craft_view(v, sheet);
+        read_focus_cell(cx, v, sheet);
     }
     let mut fit_to_page = false;
     let mut cf_kept_cells = 0u64;
@@ -507,6 +509,21 @@ fn apply_xml_cols(cx: &Ctx<'_>, sp: &CraftSheetPart, sheet: &mut Sheet) -> Resul
         }
     }
     Ok(())
+}
+
+/// Focus Cell: GridCraft's own sheet-view extension (see `focus_cell_ext` in `sheet_write.rs`).
+/// The shared reader keeps the view's `extLst` as it was written. Only the extension with
+/// GridCraft's URI counts: another one may use the same child name for its own setting.
+fn read_focus_cell(cx: &Ctx<'_>, v: &craft_xlsx::SheetView, sheet: &mut Sheet) {
+    for list in v.other.iter().map(from_craft_el).filter(|e| e.name == "extLst") {
+        for ext in list.kids("ext").filter(|e| e.attr("uri") == Some(FOCUS_CELL_NS)) {
+            for c in ext.children.iter().filter(|c| c.name == "focusCell") {
+                sheet.focus_cell = c.flag("on", false);
+                let has_color = c.attr("rgb").is_some() || c.attr("theme").is_some() || c.attr("indexed").is_some();
+                sheet.focus_cell_color = has_color.then(|| read_color(c, &cx.palette));
+            }
+        }
+    }
 }
 
 fn apply_craft_view(v: &craft_xlsx::SheetView, sheet: &mut Sheet) {
