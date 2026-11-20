@@ -393,7 +393,12 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
             out.push(c);
         }
     }
-    let mut n = parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)?;
+    // Text that is empty once the percent signs and group separators are gone reads as zero, and
+    // currency notation is not a number here (observed in Excel).
+    if out.contains('$') {
+        return Err(CellError::Value);
+    }
+    let mut n = if out.is_empty() { 0.0 } else { parse_number_text_in(&out, c.date_system()).ok_or(CellError::Value)? };
     for _ in 0..pct {
         n /= 100.0;
     }
@@ -1162,6 +1167,16 @@ mod tests {
         close(ev("NUMBERVALUE", vec![t("1,5%"), t(","), t(".")]), 0.015);
         let many = format!("1{}", "%".repeat(32_000));
         close(ev("NUMBERVALUE", vec![t(&many)]), 0.0);
+    }
+
+    /// Separator-only text reads as zero and currency text is rejected, as in Excel (#3960).
+    #[test]
+    fn numbervalue_separator_only_and_currency() {
+        close(ev("NUMBERVALUE", vec![t("%"), t("."), t(",")]), 0.0);
+        close(ev("NUMBERVALUE", vec![t(","), t("."), t(",")]), 0.0);
+        close(ev("NUMBERVALUE", vec![t("123"), t("."), t(",")]), 123.0);
+        close(ev("NUMBERVALUE", vec![t("1%"), t("."), t(",")]), 0.01);
+        is_err(ev("NUMBERVALUE", vec![t("$123"), t("."), t(",")]), CellError::Value);
     }
 
     #[test]
