@@ -11,3 +11,4 @@ workspace = true
 [dependencies]
 gridcraft-core = { workspace = true }
 regex = { workspace = true }
+libm = { workspace = true }
