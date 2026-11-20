@@ -40,23 +40,28 @@ pub(crate) fn sep_line(text: &str, quote: char) -> Option<(Option<char>, usize)>
     }
 }
 
-/// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields. Without a
-/// delimiter each line is one field; without a quote character nothing is quoted.
-fn parse_records(text: &str, delim: Option<char>, quote: Option<char>, on_record: impl FnMut(Vec<String>) -> bool) {
-    // craft-csv always splits and unquotes, so a character the text doesn't hold stands in.
-    let (delim, quote) = match (delim, quote) {
-        (Some(d), Some(q)) => (d, q),
-        _ => {
-            let [d, q] = unused_chars(text);
-            (delim.unwrap_or(d), quote.unwrap_or(q))
-        }
-    };
+/// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
+fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {
     craft_csv::parse_records(text, delim, quote, MAX_COLS as usize, on_record);
 }
 
-/// Two Unicode noncharacters (U+FDD0 to U+FDEF, which exchanged text doesn't use) that `text`
-/// doesn't hold. A text that holds them all is hostile: it gets the first two, and is split there.
-fn unused_chars(text: &str) -> [char; 2] {
+/// The delimiter and quote character to read `text` with. craft-csv always splits and unquotes, so
+/// for a `sep=` line that names no delimiter (each line is one field) or names the quote (nothing is
+/// quoted), a character `text` doesn't hold stands in: a Unicode noncharacter (U+FDD0 to U+FDEF,
+/// which exchanged text doesn't use), else any other. A text that holds every character leaves
+/// none, and is refused rather than split at one of its own.
+fn stand_ins(text: &str, delim: Option<char>, quote: Option<char>) -> Result<(char, char), IoError> {
+    if let (Some(d), Some(q)) = (delim, quote) {
+        return Ok((d, q));
+    }
+    let [d, q] = unused_chars(text)
+        .ok_or_else(|| IoError::Format("the file holds every character, so its fields can't be read without a delimiter".into()))?;
+    Ok((delim.unwrap_or(d), quote.unwrap_or(q)))
+}
+
+/// Two characters `text` doesn't hold: noncharacters when it leaves two of them free, else the
+/// first two free scalar values (a 136 KiB bitset, only for a text holding all 32 noncharacters).
+fn unused_chars(text: &str) -> Option<[char; 2]> {
     const FIRST: u32 = 0xFDD0;
     let mut used = 0u32;
     for c in text.chars() {
@@ -65,7 +70,17 @@ fn unused_chars(text: &str) -> [char; 2] {
         }
     }
     let mut free = (0..32).filter(|i| used & (1 << i) == 0).filter_map(|i| char::from_u32(FIRST + i));
-    [free.next().unwrap_or('\u{FDD0}'), free.next().unwrap_or('\u{FDD1}')]
+    if let (Some(d), Some(q)) = (free.next(), free.next()) {
+        return Some([d, q]);
+    }
+    let mut all = vec![0u64; 0x11_0000 / 64];
+    for c in text.chars() {
+        if let Some(w) = all.get_mut(c as usize / 64) {
+            *w |= 1 << (c as u32 % 64);
+        }
+    }
+    let mut free = (0..0x11_0000u32).filter(|&u| all.get(u as usize / 64).is_some_and(|w| w & (1 << (u % 64)) == 0)).filter_map(char::from_u32);
+    Some([free.next()?, free.next()?])
 }
 
 /// How many rows and bytes of a text file are read to decide each column's date order.
@@ -215,7 +230,7 @@ fn valid_date(sys: DateSystem, year: i64, month: i64, day: i64) -> Option<f64> {
 }
 
 /// The first records of the file, bounded by rows and bytes, for date-order inference.
-fn sample_records(text: &str, delim: Option<char>, quote: Option<char>) -> Vec<Vec<String>> {
+fn sample_records(text: &str, delim: char, quote: char) -> Vec<Vec<String>> {
     let mut cut = text.len().min(DATE_SAMPLE_BYTES);
     while !text.is_char_boundary(cut) {
         cut -= 1;
@@ -325,6 +340,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             (text.as_str(), Some(delim), Some(quote))
         }
     };
+    let (delim, quote) = stand_ins(body, delim, quote)?;
     let date_columns = if opts.parse_values { infer_date_rules(&sample_records(body, delim, quote), opts.date_system) } else { vec![] };
     let mut report = ReadReport::default();
     date_warnings(&date_columns, &mut report);

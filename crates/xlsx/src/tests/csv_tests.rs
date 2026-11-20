@@ -493,11 +493,25 @@ fn csv_used_range_limit_is_enforced_while_reading() {
 }
 
 /// `sep=` naming nothing reads through craft-csv with a stand-in delimiter the text doesn't hold
-/// (`sep_line_names_the_delimiter` has the usual cases). A text holding every stand-in still opens.
+/// (`sep_line_names_the_delimiter` has the usual cases). A text holding every noncharacter still
+/// opens whole: another character stands in. Review of #2270: it was split at U+FDD0.
 #[test]
 fn sep_line_stand_in_survives_a_text_holding_every_stand_in() {
     let all: String = (0xFDD0..=0xFDEF).filter_map(char::from_u32).collect();
-    let text = format!("sep=\r\nx{all}y\r\n");
-    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
-    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), Value::text("x"), "split at the first stand-in");
+    let text = format!("sep=\r\nx{all}y\r\n\0z\r\n");
+    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, parse_values: false, ..Default::default() }).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::text(format!("x{all}y")), "the whole line is one field");
+    assert_eq!(sh.value(CellRef::new(0, 1)), Value::Empty);
+    assert_eq!(sh.value(CellRef::new(1, 0)), Value::text("\0z"));
+}
+
+/// A text that holds every character leaves nothing to stand in for the missing delimiter: it's
+/// refused, not split at one of its own characters.
+#[test]
+fn sep_line_without_a_free_stand_in_is_refused() {
+    let all: String = (0..=0x10_FFFF).filter_map(char::from_u32).filter(|c| !matches!(c, '\r' | '\n')).collect();
+    let text = format!("sep=\r\n{all}\r\n");
+    let opts = CsvOptions { delimiter: 0, parse_values: false, ..Default::default() };
+    assert!(matches!(read_csv(text.as_bytes(), &opts), Err(IoError::Format(_))));
 }
