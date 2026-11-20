@@ -291,7 +291,12 @@ fn apply_craft_sheet_part(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Rel], n
             sheet.default_col_width = px as f32;
         }
     }
-    apply_craft_cols(cx, &sp.columns, sheet)?;
+    let cols_blocks = sp.root.children.iter().filter(|n| matches!(n, craft_xml::Node::El(e) if e.name == "cols")).count();
+    if cols_blocks > 1 {
+        apply_xml_cols(cx, sp, sheet)?;
+    } else {
+        apply_craft_cols(cx, &sp.columns, sheet)?;
+    }
     for m in &sp.merges {
         if !m.is_single() {
             sheet.merges.push(to_range_ref(*m));
@@ -407,38 +412,89 @@ fn read_sheet_notes_and_tables(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Re
     Ok(())
 }
 
+struct RawCol {
+    min: u32,
+    max: u32,
+    width: Option<f64>,
+    custom_width: bool,
+    hidden: bool,
+    outline_level: u8,
+    collapsed: bool,
+    style: Option<u32>,
+}
+
+fn apply_col_entry(cx: &Ctx<'_>, c: RawCol, remaining: &mut u64, sheet: &mut Sheet) -> Result<(), IoError> {
+    let min = c.min;
+    let max = c.max.min(MAX_COLS);
+    if min == 0 || min > MAX_COLS || max < min {
+        return Ok(());
+    }
+    let mut info = LineInfo::default();
+    if let Some(w) = c.width {
+        let px = col_width_to_px(w);
+        if c.custom_width || px != sheet.default_col_width {
+            info.size = Some(px);
+        }
+    }
+    info.hidden = c.hidden;
+    info.outline = c.outline_level.min(7);
+    info.collapsed = c.collapsed;
+    if let Some(s) = c.style {
+        let id = cx.style(Some(s));
+        if id != gridcraft_model::StyleId::DEFAULT {
+            info.style = Some(id);
+        }
+    }
+    if info == LineInfo::default() {
+        return Ok(());
+    }
+    *remaining = remaining
+        .checked_sub(u64::from(max - min + 1))
+        .ok_or_else(|| IoError::TooLarge(format!("sheet \"{}\": more than {MAX_COLUMN_ASSIGNMENTS} expanded column assignments", sheet.name)))?;
+    for col in (min - 1)..max {
+        sheet.cols.insert(col, info);
+    }
+    Ok(())
+}
+
 fn apply_craft_cols(cx: &Ctx<'_>, cols: &[craft_xlsx::Column], sheet: &mut Sheet) -> Result<(), IoError> {
     let mut remaining = MAX_COLUMN_ASSIGNMENTS;
     for c in cols {
-        let min = c.first + 1;
-        let max = (c.last + 1).min(MAX_COLS);
-        if min == 0 || min > MAX_COLS || max < min {
-            continue;
-        }
-        let mut info = LineInfo::default();
-        if let Some(w) = c.width {
-            let px = col_width_to_px(w);
-            if c.custom_width || px != sheet.default_col_width {
-                info.size = Some(px);
+        let raw = RawCol {
+            min: c.first + 1,
+            max: c.last + 1,
+            width: c.width,
+            custom_width: c.custom_width,
+            hidden: c.hidden,
+            outline_level: c.outline_level,
+            collapsed: c.collapsed,
+            style: c.style,
+        };
+        apply_col_entry(cx, raw, &mut remaining, sheet)?;
+    }
+    Ok(())
+}
+
+fn apply_xml_cols(cx: &Ctx<'_>, sp: &CraftSheetPart, sheet: &mut Sheet) -> Result<(), IoError> {
+    let mut remaining = MAX_COLUMN_ASSIGNMENTS;
+    for node in &sp.root.children {
+        if let craft_xml::Node::El(cols_el) = node
+            && cols_el.name == "cols"
+        {
+            let cols = from_craft_el(cols_el);
+            for c in cols.kids("col") {
+                let raw = RawCol {
+                    min: c.attr_u32("min").unwrap_or(0),
+                    max: c.attr_u32("max").unwrap_or(0),
+                    width: c.attr_f64("width"),
+                    custom_width: c.flag("customWidth", false),
+                    hidden: c.flag("hidden", false),
+                    outline_level: c.attr_u32("outlineLevel").unwrap_or(0).min(7) as u8,
+                    collapsed: c.flag("collapsed", false),
+                    style: c.attr_u32("style"),
+                };
+                apply_col_entry(cx, raw, &mut remaining, sheet)?;
             }
-        }
-        info.hidden = c.hidden;
-        info.outline = c.outline_level.min(7);
-        info.collapsed = c.collapsed;
-        if let Some(s) = c.style {
-            let id = cx.style(Some(s));
-            if id != gridcraft_model::StyleId::DEFAULT {
-                info.style = Some(id);
-            }
-        }
-        if info == LineInfo::default() {
-            continue;
-        }
-        remaining = remaining
-            .checked_sub(u64::from(max - min + 1))
-            .ok_or_else(|| IoError::TooLarge(format!("sheet \"{}\": more than {MAX_COLUMN_ASSIGNMENTS} expanded column assignments", sheet.name)))?;
-        for col in (min - 1)..max {
-            sheet.cols.insert(col, info);
         }
     }
     Ok(())
