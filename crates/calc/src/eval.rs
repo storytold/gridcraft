@@ -581,7 +581,11 @@ impl<'h> Evaluator<'h> {
                 Ev::R(areas) => match areas.as_slice() {
                     [a] if a.range.is_single() => match self.host.spill_range(a.sheet, a.range.start) {
                         Some(range) => Ev::R(vec![Area { sheet: a.sheet, range }]),
-                        None => err(CellError::Ref),
+                        None => match self.host.cell_value(a.sheet, a.range.start) {
+                            // An anchor holding an error (including a blocked spill's #SPILL!) passes it on.
+                            Value::Error(e) => err(e),
+                            _ => err(CellError::Ref),
+                        },
                     },
                     _ => err(CellError::Ref),
                 },
