@@ -13,6 +13,10 @@ impl SheetApp {
         // The system clipboard gets this copy, so its text decides what Paste pastes.
         self.clipboard_text_at_copy = None;
         self.cut_text = (command == "edit.cut").then(|| text.replace("\r\n", "\n"));
+        #[cfg(windows)]
+        let text_crlf = Self::tsv_to_crlf(text);
+        #[cfg(windows)]
+        let text = text_crlf.as_str();
         if let Some(html) = result.get("html").and_then(Json::as_str)
             && let Some(copy_html) = &mut self.services.copy_html
         {
@@ -39,6 +43,12 @@ impl SheetApp {
         } else {
             self.cut_text = None;
         }
+        // The engine compares text exactly apart from trailing line breaks. Use its original
+        // text for an LF/CRLF match and keep the payload untouched for an external paste.
+        let text = match &self.session.clipboard {
+            Some(clipboard) if Self::same_clipboard_text(Some(&text), Some(&clipboard.text)) => clipboard.text.as_str(),
+            _ => text.as_str(),
+        };
         let html = self.services.paste_html.as_mut().and_then(|read| read());
         let params = match html {
             Some(html) => json!({"text": text, "html": html}),
@@ -95,13 +105,23 @@ impl SheetApp {
     /// Whether two clipboard texts are the same copy: trailing line breaks don't count, as in the
     /// engine's `edit.paste`, and CRLF matches LF (egui's `Event::Paste` text may keep the host's).
     fn same_clipboard_text(a: Option<&str>, b: Option<&str>) -> bool {
-        fn chars(t: &str) -> impl Iterator<Item = char> + '_ {
-            t.trim_end_matches(['\r', '\n']).chars().filter(|c| *c != '\r')
+        fn normalized_bytes(t: &str) -> impl Iterator<Item = u8> + '_ {
+            let mut bytes = t.trim_end_matches(['\r', '\n']).bytes().peekable();
+            std::iter::from_fn(move || match bytes.next()? {
+                b'\r' if bytes.peek() == Some(&b'\n') => bytes.next(),
+                byte => Some(byte),
+            })
         }
         match (a, b) {
-            (Some(a), Some(b)) => chars(a).eq(chars(b)),
+            (Some(a), Some(b)) => normalized_bytes(a).eq(normalized_bytes(b)),
             _ => false,
         }
+    }
+
+    /// Converts record separators (row endings) in TSV text to CRLF for the Windows
+    /// clipboard, leaving newlines inside quoted cells untouched.
+    pub fn tsv_to_crlf(tsv: &str) -> String {
+        tsv_to_crlf(tsv)
     }
 }
 
@@ -129,4 +149,76 @@ fn encode_png(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
         .map_err(|e| format!("The picture on the clipboard can't be pasted: {e}"))?;
     Ok(png)
+}
+
+/// Converts record separators (row endings) in TSV text to CRLF for the Windows clipboard,
+/// while leaving newlines inside quoted cells unchanged.
+#[allow(clippy::collapsible_if)]
+pub(crate) fn tsv_to_crlf(tsv: &str) -> String {
+    let mut out = String::with_capacity(tsv.len().saturating_add(16));
+    let mut rest = tsv;
+    let mut at_field_start = true;
+
+    while !rest.is_empty() {
+        if at_field_start && rest.starts_with('"') {
+            if let Some(quoted_len) = scan_quoted_field(rest) {
+                out.push_str(&rest[..quoted_len]);
+                rest = &rest[quoted_len..];
+                at_field_start = false;
+                continue;
+            }
+        }
+
+        if rest.starts_with("\r\n") {
+            out.push_str("\r\n");
+            rest = &rest[2..];
+            at_field_start = true;
+        } else if rest.starts_with('\n') {
+            out.push_str("\r\n");
+            rest = &rest[1..];
+            at_field_start = true;
+        } else if rest.starts_with('\r') {
+            out.push('\r');
+            rest = &rest[1..];
+            at_field_start = false;
+        } else if rest.starts_with('\t') {
+            out.push('\t');
+            rest = &rest[1..];
+            at_field_start = true;
+        } else if let Some(ch) = rest.chars().next() {
+            out.push(ch);
+            rest = &rest[ch.len_utf8()..];
+            at_field_start = false;
+        } else {
+            break;
+        }
+    }
+
+    out
+}
+
+/// If `s` starts with a properly quoted TSV field (`"..."`), returns its byte length
+/// including the closing quote.
+fn scan_quoted_field(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    if bytes.first() != Some(&b'"') {
+        return None;
+    }
+    let mut i = 1;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+                i += 2;
+            } else {
+                let next = bytes.get(i + 1).copied();
+                if matches!(next, None | Some(b'\t' | b'\r' | b'\n')) {
+                    return Some(i + 1);
+                }
+                return None;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
 }
