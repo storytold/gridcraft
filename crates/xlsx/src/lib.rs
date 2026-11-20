@@ -44,6 +44,7 @@ mod xml;
 mod tests;
 
 use gridcraft_core::DateSystem;
+use gridcraft_core::parse::DataConversion;
 use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
@@ -230,6 +231,9 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// Which number-like fields become numbers when `parse_values` is on (Excel's Automatic Data
+    /// Conversion options; the default converts everything).
+    pub conversion: DataConversion,
     /// Refuse (with [`IoError::TooLarge`], while reading) a file whose used range, from its first to
     /// its last non-empty cell, would pass this many cells; `None` for no limit.
     pub max_used_cells: Option<u64>,
@@ -237,7 +241,14 @@ pub struct CsvOptions {
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None }
+        CsvOptions {
+            delimiter: b',',
+            quote: b'"',
+            date_system: DateSystem::D1900,
+            parse_values: true,
+            conversion: DataConversion::default(),
+            max_used_cells: None,
+        }
     }
 }
 
