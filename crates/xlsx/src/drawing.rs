@@ -283,15 +283,19 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let descr = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("");
     let tb = obj.child("txBody");
     let has_math = tb.is_some_and(|tb| crate::omml::find_math(tb, 0).is_some());
+    // The description's source is GridCraft's own only while its marker matches; the saved frame
+    // ink belongs to that body alone, not to Office Math another application rewrote.
+    let mut own = false;
     let source = match (has_math, described_source(descr)) {
         (_, Some((marker, src))) if tb.is_some_and(|tb| crate::omml::body_marker(tb) == marker && (has_math || holds_written_text(tb, src))) => {
+            own = true;
             Some(src.to_string())
         }
         (true, _) => tb.and_then(crate::omml::equation_source),
         (false, _) => None,
     };
     if let Some(text) = source {
-        let ink = obj.child("txBody").and_then(|tb| first_run_color(tb, 0)).unwrap_or_default();
+        let ink = equation_ink(tb, &text, own, has_math);
         return Some(Shape {
             id: 0,
             kind: ShapeKind::Equation,
@@ -368,6 +372,26 @@ fn described_source(descr: &str) -> Option<(&str, &str)> {
     (rest.as_bytes().get(16) == Some(&b':') && marker.bytes().all(|b| b.is_ascii_hexdigit()) && !src.trim().is_empty()).then_some((marker, src))
 }
 
+/// The colour an equation's frame carries (its "ink": the colour of everything the source does
+/// not colour itself). GridCraft saves it on its own Office Math paragraph's `a:endParaRPr`;
+/// another writer's paragraph-end formatting is not that convention, so its first run's colour
+/// stands in, as do the runs of a body without Office Math (one colour throughout: the plain-text
+/// box of an equation outside the subset). The runs of GridCraft's own Office Math cannot stand
+/// in when the source colours some of them (`{\color{green}a}+d` would read back green), so such
+/// a source with no saved ink reads as Automatic.
+fn equation_ink(tb: Option<&El>, source: &str, own: bool, has_math: bool) -> Color {
+    let Some(tb) = tb else { return Color::default() };
+    if own && has_math {
+        if let Some(c) = tb.kids("p").find_map(|p| p.child("endParaRPr")).and_then(|e| e.child("solidFill")).and_then(dml_color) {
+            return c;
+        }
+        if source.contains("\\color") || source.contains("\\textcolor") {
+            return Color::default();
+        }
+    }
+    first_run_color(tb, 0).unwrap_or_default()
+}
+
 /// The colour of the first run (DrawingML `rPr` with a fill) under `e`.
 fn first_run_color(e: &El, depth: usize) -> Option<Color> {
     if depth > 12 {
@@ -428,7 +452,7 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
     match gridcraft_math::to_omml(&sh.text, size_pt, sh.line.resolve(theme)) {
         Ok(omml) => {
             let math = format!(
-                "<a:p><a:pPr algn=\"ctr\"/><a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMathParaPr><m:jc m:val=\"centerGroup\"/></m:oMathParaPr>{omml}</m:oMathPara></a14:m><a:endParaRPr lang=\"en-US\" sz=\"{sz}\"/></a:p>"
+                "<a:p><a:pPr algn=\"ctr\"/><a14:m><m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMathParaPr><m:jc m:val=\"centerGroup\"/></m:oMathParaPr>{omml}</m:oMathPara></a14:m><a:endParaRPr lang=\"en-US\" sz=\"{sz}\">{fill}</a:endParaRPr></a:p>"
             );
             let _ = write!(
                 s,
