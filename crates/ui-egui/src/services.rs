@@ -37,6 +37,10 @@ pub struct Services {
     pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Download>,
+    /// Web: tells which `download` calls have finished writing. A saved workbook counts as
+    /// saved once its own download is reported here, not before the browser has written it.
+    /// Leave it `None` when `download` never reports (the embedding host).
+    pub delivered: Option<Delivered>,
     /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
@@ -45,6 +49,38 @@ pub struct Services {
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<PrintPdf>,
 }
+
+/// Numbers each `download` call and collects the numbers whose file is written, so a finished
+/// download is matched to the save that started it even when two saves share a file name.
+#[derive(Default)]
+pub struct DeliveryLog {
+    started: std::sync::atomic::AtomicU64,
+    done: std::sync::Mutex<Vec<u64>>,
+}
+
+impl DeliveryLog {
+    /// Call at the start of each `download`; returns the number that download will report.
+    pub fn begin(&self) -> u64 {
+        self.started.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    }
+
+    /// The number of the most recent `download` call (0 before the first).
+    pub fn last_started(&self) -> u64 {
+        self.started.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Reports that the file of download `id` is written.
+    pub fn finish(&self, id: u64) {
+        self.done.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(id);
+    }
+
+    pub(crate) fn take(&self) -> Vec<u64> {
+        std::mem::take(&mut *self.done.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+    }
+}
+
+/// Shared handle to a [`DeliveryLog`] (see [`Services::delivered`]).
+pub type Delivered = std::sync::Arc<DeliveryLog>;
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;

@@ -75,6 +75,19 @@ impl SheetApp {
             .collect()
     }
 
+    /// Downloads the browser finished writing: the workbook saved then is clean (unless edited since).
+    pub(super) fn poll_delivered(&mut self) {
+        let delivered: Vec<u64> = self.services.delivered.as_ref().map(|log| log.take()).unwrap_or_default();
+        for id in delivered {
+            if let Some(i) = self.pending_saves.iter().position(|(n, ..)| *n == id) {
+                let (_, uid, wb) = self.pending_saves.remove(i);
+                // Earlier saves of this document that never reported (cancelled) are out of date now.
+                self.pending_saves.retain(|(n, u, _)| *u != uid || *n > id);
+                self.session.mark_saved(uid, wb);
+            }
+        }
+    }
+
     /// Opens files that arrived asynchronously (web file picker, dropped files).
     pub(super) fn poll_async_opens(&mut self) {
         let arrived: Vec<(String, Vec<u8>)> = self
