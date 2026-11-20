@@ -341,3 +341,69 @@ fn scenario_summary_counts_result_rows_in_its_cell_limit() {
     let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
     assert!(err.contains("too many cells"), "{err}");
 }
+
+#[test]
+fn advanced_filter_matches_headers_by_value_not_formatted_display() {
+    // Case 1: source text header `Code` formatted `0;0;0;"X"@` displays `XCode`, alongside literal `XCode`.
+    let mut s1 = s();
+    s1.execute("range.setValues", json!({"range": "A1", "values": [["Code", "XCode", "ID"], [1, 9, 101], [9, 1, 102]]})).unwrap();
+    s1.execute("home.numberFormat", json!({"range": "A1", "code": "0;0;0;\"X\"@"})).unwrap();
+    s1.execute("cell.set", json!({"cell": "E1", "input": "XCode"})).unwrap();
+    s1.execute("cell.set", json!({"cell": "E2", "input": "'=9"})).unwrap();
+    let r = s1.execute("data.advancedFilter", json!({"range": "A1:C3", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
+    assert_eq!(r["matched"], 1);
+    assert_eq!(n(&s1, "J2"), 101.0);
+
+    // Case 2: source numeric header `7` formatted `00` displays `07`, alongside literal `07`.
+    let mut s2 = s();
+    s2.execute("range.setValues", json!({"range": "A1", "values": [[7, "'07", "ID"], [1, 9, 101], [9, 1, 102]]})).unwrap();
+    s2.execute("home.numberFormat", json!({"range": "A1", "code": "00"})).unwrap();
+    s2.execute("cell.set", json!({"cell": "E1", "input": "'07"})).unwrap();
+    s2.execute("cell.set", json!({"cell": "E2", "input": "'=9"})).unwrap();
+    let r = s2.execute("data.advancedFilter", json!({"range": "A1:C3", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
+    assert_eq!(r["matched"], 1);
+    assert_eq!(n(&s2, "J2"), 101.0);
+
+    // Case 3: criterion text header `Code` formatted `0;0;0;"X"@` displays `XCode`.
+    let mut s3 = s();
+    s3.execute("range.setValues", json!({"range": "A1", "values": [["Code", "XCode", "ID"], [1, 9, 101], [9, 1, 102]]})).unwrap();
+    s3.execute("cell.set", json!({"cell": "E1", "input": "Code"})).unwrap();
+    s3.execute("home.numberFormat", json!({"range": "E1", "code": "0;0;0;\"X\"@"})).unwrap();
+    s3.execute("cell.set", json!({"cell": "E2", "input": "'=9"})).unwrap();
+    let r = s3.execute("data.advancedFilter", json!({"range": "A1:C3", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
+    assert_eq!(r["matched"], 1);
+    assert_eq!(n(&s3, "J2"), 102.0);
+
+    // Case 4: criterion numeric header `7` formatted `00` displays `07`, alongside source `7` and `07`.
+    let mut s4 = s();
+    s4.execute("range.setValues", json!({"range": "A1", "values": [[7, "'07", "ID"], [1, 9, 101], [9, 1, 102]]})).unwrap();
+    s4.execute("cell.set", json!({"cell": "E1", "input": "7"})).unwrap();
+    s4.execute("home.numberFormat", json!({"range": "E1", "code": "00"})).unwrap();
+    s4.execute("cell.set", json!({"cell": "E2", "input": "'=9"})).unwrap();
+    let r = s4.execute("data.advancedFilter", json!({"range": "A1:C3", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
+    assert_eq!(r["matched"], 1);
+    assert_eq!(n(&s4, "J2"), 102.0);
+
+    // Case 5: source header `Code` hidden by format `;;;` still matches criterion `Code`.
+    let mut s5 = s();
+    s5.execute("range.setValues", json!({"range": "A1", "values": [["Code", "ID"], [9, 102]]})).unwrap();
+    s5.execute("home.numberFormat", json!({"range": "A1", "code": ";;;"})).unwrap();
+    s5.execute("cell.set", json!({"cell": "E1", "input": "Code"})).unwrap();
+    s5.execute("cell.set", json!({"cell": "E2", "input": "'=9"})).unwrap();
+    let r = s5.execute("data.advancedFilter", json!({"range": "A1:B2", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
+    assert_eq!(r["matched"], 1);
+    assert_eq!(n(&s5, "I2"), 102.0);
+
+    // Case 6: numeric headers too long for General's 11-character width stay distinct, though
+    // both show `1.23457E+11` in a cell.
+    let mut s6 = s();
+    s6.execute("cell.set", json!({"cell": "A1", "input": "123456789012"})).unwrap();
+    s6.execute("cell.set", json!({"cell": "B1", "input": "123456789013"})).unwrap();
+    s6.execute("cell.set", json!({"cell": "C1", "input": "ID"})).unwrap();
+    s6.execute("range.setValues", json!({"range": "A2", "values": [[9, 1, 101], [1, 9, 102]]})).unwrap();
+    s6.execute("cell.set", json!({"cell": "E1", "input": "123456789013"})).unwrap();
+    s6.execute("cell.set", json!({"cell": "E2", "input": "'=9"})).unwrap();
+    let r = s6.execute("data.advancedFilter", json!({"range": "A1:C3", "criteria": "E1:E2", "copyTo": "H1", "unique": false})).unwrap();
+    assert_eq!(r["matched"], 1);
+    assert_eq!(n(&s6, "J2"), 102.0);
+}

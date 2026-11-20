@@ -107,8 +107,11 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let wb = &d.wb;
     let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
-    let headers: Vec<String> =
-        (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(list.start.row, c)).trim().to_lowercase()).collect();
+    // The value's General text, not the cell's display text: a format never changes the match, and
+    // General's 11-character width never rounds two numeric headers into one key.
+    let header_key =
+        |sheet: &gridcraft_model::Sheet, c: CellRef| crate::display::value_text_full_as(wb, &sheet.value(c), "General").trim().to_lowercase();
+    let headers: Vec<String> = (list.start.col..=list.end.col).map(|c| header_key(sh, CellRef::new(list.start.row, c))).collect();
     let first_data = list.start.row + 1;
     // Criteria rows → conditions.
     let mut rows: Vec<Vec<Cond>> = Vec::new();
@@ -124,7 +127,7 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
                 if v.is_empty() && formula.is_none() {
                     continue;
                 }
-                let head = crate::display::cell_text(wb, csh, CellRef::new(crit.start.row, cc)).trim().to_lowercase();
+                let head = header_key(csh, CellRef::new(crit.start.row, cc));
                 match headers.iter().position(|h| !head.is_empty() && *h == head) {
                     Some(off) => conds.push(Cond::Compare(off as u32, v)),
                     None => match formula.and_then(|f| f.expr()) {
