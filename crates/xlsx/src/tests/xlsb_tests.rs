@@ -668,8 +668,39 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[2]SheetA!$A$1"));
 
     let saved = write_xlsx(&wb).unwrap();
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved)).unwrap();
-    let mut wb_xml = String::new();
-    std::io::Read::read_to_string(&mut zip.by_name("xl/workbook.xml").unwrap(), &mut wb_xml).unwrap();
-    assert!(wb_xml.contains("<externalReference/><externalReference r:id="), "{wb_xml}");
+    let (reopened, rep2) = read_xlsx(&saved).unwrap();
+    assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
+    assert_eq!(reopened.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[2]SheetA!$A$1"));
+
+    let saved2 = write_xlsx(&reopened).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved2)).unwrap();
+    let read_zip = |z: &mut zip::ZipArchive<std::io::Cursor<Vec<u8>>>, name: &str| {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut s).unwrap();
+        s
+    };
+    let wb_xml = read_zip(&mut zip, "xl/workbook.xml");
+    let ref_ids: Vec<&str> =
+        wb_xml.split("<externalReference ").skip(1).filter_map(|s| s.split("r:id=\"").nth(1).and_then(|t| t.split('"').next())).collect();
+    assert_eq!(ref_ids.len(), 2, "{wb_xml}");
+    let wb_rels = read_zip(&mut zip, "xl/_rels/workbook.xml.rels");
+    let second_target = wb_rels
+        .split("<Relationship ")
+        .find(|r| r.contains(&format!("Id=\"{}\"", ref_ids[1])))
+        .and_then(|r| r.split("Target=\"").nth(1))
+        .and_then(|s| s.split('"').next())
+        .expect("second externalReference r:id should resolve in workbook.xml.rels")
+        .trim_start_matches('/')
+        .to_string();
+    let second_part = if second_target.starts_with("xl/") { second_target } else { format!("xl/{second_target}") };
+    let second_xml = read_zip(&mut zip, &second_part);
+    assert!(second_xml.contains("<sheetName val=\"SheetA\"/>"), "{second_xml}");
+    let (dir, file) = second_part.rsplit_once('/').unwrap();
+    let second_rels = read_zip(&mut zip, &format!("{dir}/_rels/{file}.rels"));
+    assert!(
+        second_rels.contains("externalLinkPath")
+            && second_rels.contains("Target=\"SecondBook.xlsx\"")
+            && second_rels.contains("TargetMode=\"External\""),
+        "{second_rels}"
+    );
 }
