@@ -308,6 +308,12 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
                 for c in &model.vars {
                     cx.touch(sheet + count, *c);
                 }
+                // Manual calculation evaluates only the edited cells; a kept solution brings its
+                // objective and what depends on it up to date, as Excel's Solver does, and the
+                // mode stays Manual (#3856).
+                if cx.wb.calc.mode == gridcraft_model::CalcMode::Manual {
+                    cx.recalc_all = true;
+                }
             }
             if save {
                 save_model(&mut cx.wb, &model);
