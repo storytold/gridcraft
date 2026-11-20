@@ -212,6 +212,13 @@ fn depreciation() {
     is_err(ev("VDB", vec![n(2400.0), n(300.0), n(10.0), n(5.0), n(4.0)]), CellError::Num);
     close_tol(ev("AMORLINC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(0.15), n(1.0)]), 360.0, 1e-9);
     close(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(0.15), n(1.0)]), 776.0);
+    // Excel 16: an asset life of two periods or less (rate 0.5 and up) is #NUM!.
+    let amor = |rate: f64| ev("AMORDEGRC", vec![n(1000.0), n(40000.0), n(40365.0), n(100.0), n(1.0), n(rate)]);
+    close(amor(0.1), 188.0);
+    for rate in [0.5, 0.6, 1.0, 2.0] {
+        is_err(amor(rate), CellError::Num);
+    }
+    is_err(ev("AMORDEGRC", vec![n(1.0), n(1.0), n(1.0), n(1.0), n(1.0), n(1.0)]), CellError::Num);
 }
 
 #[test]
