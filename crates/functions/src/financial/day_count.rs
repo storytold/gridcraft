@@ -39,13 +39,22 @@ pub(super) fn freq_arg(a: &[Arg], i: usize) -> R<f64> {
     Ok(f)
 }
 
+/// Year, month and day for a 30/360 count. Unlike [`ymd`], serial 0 keeps Excel's day 0
+/// (1900-01-00), so it counts one day before serial 1, as in Excel.
+fn ymd_360(sys: DateSystem, s: f64) -> R<(i32, u32, u32)> {
+    let dt = datetime_from_serial(sys, s.trunc()).ok_or(CellError::Num)?;
+    Ok((dt.year, dt.month, dt.day))
+}
+
 /// 30/360 day count (US/NASD when `us`, European otherwise).
 fn days360(sys: DateSystem, s1: f64, s2: f64, us: bool) -> R<f64> {
-    let (y1, m1, mut d1) = ymd(sys, s1)?;
-    let (y2, m2, mut d2) = ymd(sys, s2)?;
+    let (y1, m1, mut d1) = ymd_360(sys, s1)?;
+    let (y2, m2, mut d2) = ymd_360(sys, s2)?;
     if us {
-        let feb_end1 = m1 == 2 && d1 >= days_in_month(y1, 2);
-        let feb_end2 = m2 == 2 && d2 >= days_in_month(y2, 2);
+        // February ends on its real last day: Excel does not treat the fictitious 1900-02-29
+        // (serial 60) as the end of February here, but it does treat 1900-02-28 (serial 59) that way.
+        let feb_end1 = m1 == 2 && d1 == days_in_month(y1, 2);
+        let feb_end2 = m2 == 2 && d2 == days_in_month(y2, 2);
         if feb_end1 && feb_end2 {
             d2 = 30;
         }
