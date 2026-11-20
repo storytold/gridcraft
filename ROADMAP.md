@@ -133,6 +133,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+- 2026-11-02: macOS packaging prefers native stapler, falls back to rcodesign staple with bounded retries, and warns when neither exists while retaining Gatekeeper assessment.
+
 | Date | What landed |
 |---|---|
 | 2026-11-16 | A selected chart outlines its data as Excel does (series names red, category labels purple, values one blue block), and dragging a corner of the values outline changes the cells the chart plots: series keep their formatting, a wider block adds series, aligned names and labels follow, one undo step, Esc cancels; `chart.setValuesRange` does the same for scripts, the CLI and MCP (#4389, #4390) |
@@ -282,6 +284,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-11-16 | minor | Progress log: chart data outline in three colours, dragged from its corners (#4389, #4390) |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
+| 2026-11-05 | trivial | PR #3169: require native ticket stapling and validation in GitHub Actions; retain rcodesign and missing-tool warnings only for local packaging. Synthetic app/DMG controls mask host tools and cover release rejection; no new Apple notarization run. |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
