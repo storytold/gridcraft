@@ -434,6 +434,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Μετακίνηση στις τιμές",
         "Summarize by Sum" => "Σύνοψη με άθροισμα",
         "Summarize by Count" => "Σύνοψη με πλήθος",
+        "Summarize by Distinct Count" => "Σύνοψη με πλήθος διακριτών",
         "Summarize by Average" => "Σύνοψη με μέσο όρο",
         "Summarize by Max" => "Σύνοψη με μέγιστο",
         "Summarize by Min" => "Σύνοψη με ελάχιστο",
@@ -1029,6 +1030,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+        "Distinct Count" => "Πλήθος διακριτών",
+        "A calculated field can't use Distinct Count." => "Ένα υπολογιζόμενο πεδίο δεν μπορεί να χρησιμοποιήσει πλήθος διακριτών.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Αυτό το βιβλίο εργασίας έχει μια συγκεντρωτική λίστα με πεδίο τιμών «Πλήθος διακριτών». Στο αρχείο .xlsx αποθηκεύεται ως απλό Πλήθος μαζί με έναν δείκτη που διαβάζει μόνο το GridCraft, οπότε η Ανανέωση στο Excel το μετατρέπει σε απλό πλήθος."
+        }
         "Numerical Count" => "Αριθμητικό πλήθος",
         "Minimum" => "Ελάχιστο",
         "Maximum" => "Μέγιστο",
