@@ -529,8 +529,10 @@ pub(super) fn prob(a: &[Arg], _: C) -> R<Value> {
     if ps.iter().any(|&p| p <= 0.0 || p > 1.0) {
         return Err(CellError::Num);
     }
+    // The weights must total 1 as Excel compares numbers, to 15 significant digits: binary noise
+    // (ten weights of 0.1) passes, a total of 1.00000001 or 0.99999999 is #NUM! (#4284).
     let total: f64 = ps.iter().sum();
-    if (total - 1.0).abs() > 1e-7 {
+    if gridcraft_core::compare_numbers(total, 1.0) != std::cmp::Ordering::Equal {
         return Err(CellError::Num);
     }
     num_val(xs.iter().zip(&ps).filter(|(x, _)| **x >= lo && **x <= hi).map(|(_, p)| p).sum())
