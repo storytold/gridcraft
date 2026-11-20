@@ -153,16 +153,24 @@ pub(super) fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
     let sc = list.get(i).cloned().ok_or_else(|| bad(CMD, "no such scenario"))?;
     let si = d.wb.sheet_index(&sc.sheet).ok_or_else(|| bad(CMD, format!("the scenario's sheet `{}` no longer exists", sc.sheet)))?;
     let (_, cells) = cell_list(&d.wb, &sc.changing, CMD, MAX_SCENARIO_CELLS)?;
+    let conv = s.prefs.data_conversion;
     edit(s, |cx| {
         for (c, v) in cells.iter().zip(sc.values.iter()) {
             // Stored numbers are values, not typed text: entering them through the parser would
-            // apply percent entry (9 -> 9%) to a Percentage-formatted cell.
+            // apply percent entry (9 -> 9%) to a Percentage-formatted cell. Stored text follows the
+            // conversion options like typing.
             let cell = match v.as_f64() {
                 Some(n) => {
                     let style = cx.wb.sheet(si).map(|sh| sh.style_id(*c)).unwrap_or_default();
                     Some(Cell { value: Value::Number(n), formula: None, style, py: None })
                 }
-                None => crate::cmd::edit::input_to_cell(&crate::cmd::edit::json_to_input(v), si, *c, &mut cx.wb)?,
+                None => crate::cmd::edit::input_to_cell(
+                    &crate::cmd::edit::json_to_input(v),
+                    si,
+                    *c,
+                    &mut cx.wb,
+                    &crate::cmd::edit::conversion_for(v, &conv),
+                )?,
             };
             let sh = cx.sheet_mut(si)?;
             match cell {

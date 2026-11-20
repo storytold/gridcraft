@@ -910,4 +910,39 @@ mod tests {
         assert_eq!(split_path("/home/me/Budget.xlsx"), ("Budget.xlsx".into(), "/home/me".into()));
         assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
     }
+
+    /// Every label in Options › Data has a Japanese entry, and the i18n tests require every Japanese
+    /// key in each of the other catalogs. The labels are read from the function's source, so one
+    /// added there later is checked too.
+    #[test]
+    fn data_conversion_options_are_translated() {
+        let src = include_str!("backstage/options.rs");
+        let start = src.find("\nfn data_conversion_options(").unwrap();
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let mut labels = Vec::new();
+        for opener in ["tr(", "section(ui, lang, "] {
+            for (at, _) in body.match_indices(opener) {
+                let rest = body[at + opener.len()..].trim_start();
+                let Some(rest) = rest.strip_prefix('"') else { continue };
+                let mut label = String::new();
+                let mut chars = rest.chars();
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => label.extend(chars.next()),
+                        c => label.push(c),
+                    }
+                }
+                labels.push(label);
+            }
+        }
+        assert!(labels.len() >= 10, "found only {labels:?}");
+        // Every language, so one added later fails here until it has these labels too. A catalog
+        // entry, not a text that differs from English: Czech "Data" is "Data".
+        for label in &labels {
+            for lang in Language::ALL.into_iter().filter(|&l| l != Language::En) {
+                assert!(lang.translated(label).is_some(), "no {lang:?} translation for {label:?}");
+            }
+        }
+    }
 }
