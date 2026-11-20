@@ -2,6 +2,7 @@ use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
+use crate::rtl::UiRtlExt;
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -11,6 +12,9 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let si = wb.active_sheet();
     let Some(sh) = wb.sheet(si) else { return };
     let _ = geo;
+    let lang = crate::i18n::current(ui.ctx());
+    let is_rtl = lang.is_rtl();
+
     // Tables get an autofilter on demand.
     let table_range = filter_table_range(sh, col, row);
     if sh.autofilter.is_none()
@@ -45,31 +49,53 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let response = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
-            let ascending = ui.button("↑  Sort Ascending");
+
+            let ascending = ui.add(
+                egui::Button::new(lang.tr("Sort Ascending"))
+                    .frame(false)
+                    .min_size(vec2(220.0, 22.0)),
+            );
             if ascending.clicked() {
                 let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
-            let descending = ui.button("↓  Sort Descending");
+            let descending = ui.add(
+                egui::Button::new(lang.tr("Sort Descending"))
+                    .frame(false)
+                    .min_size(vec2(220.0, 22.0)),
+            );
             if descending.clicked() {
                 let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
             ui.separator();
-            ui.label(egui::RichText::new("Filter").strong());
+            if is_rtl {
+                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                    ui.label(egui::RichText::new(lang.tr("Filter")).strong());
+                });
+            } else {
+                ui.label(egui::RichText::new(lang.tr("Filter")).strong());
+            }
+
             let mut checks: Vec<(String, bool)> = ui.ctx().data_mut(|d| d.get_temp::<Vec<(String, bool)>>(key)).unwrap_or(values.clone());
             // A search narrows the list; Select All and Apply then only cover the matches.
             let mut search: String = ui.ctx().data_mut(|d| d.get_temp(search_key)).unwrap_or_default();
-            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text("Search").desired_width(f32::INFINITY));
+            let field = ui.add(egui::TextEdit::singleline(&mut search).hint_text(lang.tr("Search")).desired_width(f32::INFINITY));
             if !was_open {
                 field.request_focus();
             }
             let needle = search.trim().to_lowercase();
-            let matches = |v: &str| needle.is_empty() || v.to_lowercase().contains(&needle);
+            let matches = |v: &str| {
+                if needle.is_empty() {
+                    return true;
+                }
+                let display = if v == "(Blanks)" { lang.tr("(Blanks)") } else { v };
+                v.to_lowercase().contains(&needle) || display.to_lowercase().contains(&needle)
+            };
             let all = checks.iter().filter(|(v, _)| matches(v)).all(|(_, b)| *b);
             let mut all_new = all;
-            let label = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
-            if ui.checkbox(&mut all_new, label).changed() {
+            let label_key = if needle.is_empty() { "(Select All)" } else { "(Select All Search Results)" };
+            if ui.checkbox(&mut all_new, lang.tr(label_key)).changed() {
                 for c in checks.iter_mut().filter(|(v, _)| matches(v)) {
                     c.1 = all_new;
                 }
@@ -78,7 +104,8 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // worked over the values themselves (#432).
             egui::ScrollArea::vertical().max_height(220.0).auto_shrink([false, true]).show(ui, |ui| {
                 for (v, on) in checks.iter_mut().filter(|(v, _)| matches(v)) {
-                    ui.checkbox(on, v.as_str());
+                    let display_val = if v == "(Blanks)" { lang.tr("(Blanks)") } else { v.as_str() };
+                    ui.checkbox(on, display_val);
                 }
             });
             ui.ctx().data_mut(|d| {
@@ -87,15 +114,21 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             });
             let checks: Vec<(String, bool)> = checks.iter().map(|(v, on)| (v.clone(), *on && matches(v))).collect();
             ui.separator();
-            ui.horizontal(|ui| {
-                let clear = ui.button("Clear Filter");
+            
+            let btn_layout = if is_rtl {
+                egui::Layout::right_to_left(egui::Align::Center)
+            } else {
+                egui::Layout::left_to_right(egui::Align::Center)
+            };
+            ui.with_layout(btn_layout, |ui| {
+                let clear = ui.button(lang.tr("Clear Filter"));
                 if clear.clicked() {
                     let _ = app.run("data.filterBy", json!({"column": col_to_letters(col), "clear": true}));
                     close = true;
                 }
                 // Nothing checked would hide every row, so Enter (unlike a click on Apply) does nothing then.
                 let any = checks.iter().any(|(_, on)| *on);
-                let apply = ui.button("Apply");
+                let apply = ui.button(lang.tr("Apply"));
                 ui.ctx().data_mut(|d| d.insert_temp(buttons_key, vec![ascending.id, descending.id, clear.id, apply.id]));
                 if apply.clicked() || (enter && any) {
                     let blanks = checks.iter().any(|(v, on)| v == "(Blanks)" && *on);
@@ -172,53 +205,54 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 items.insert(i + 2, ("Show Details", "pivot.showDetails"));
             }
             let lang = crate::i18n::current(ui.ctx());
-            for (label, id) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
-                }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0))).clicked() {
-                    close = true;
-                    match id {
-                        "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
-                        "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
-                        "ui:insertCells" => app.open_dialog("insertCells", json!({})),
-                        "ui:deleteCells" => app.open_dialog("deleteCells", json!({})),
-                        "ui:formatCells" => app.open_dialog("formatCells", json!({})),
-                        "ui:newComment" => app.open_dialog("comment", json!({"threaded": true})),
-                        "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
-                        "ui:defineName" => app.open_dialog("defineName", json!({})),
-                        "ui:insertLink" => app.open_dialog("insertLink", json!({})),
-                        "ui:openLink" => {
-                            if let Some(target) = &link {
-                                super::interact::follow_link(app, target);
-                            }
-                        }
-                        "ui:pickList" => app.open_dialog("pickList", json!({})),
-                        "ui:filterValue" => {
-                            if let Some(d) = app.session.active() {
-                                let a = d.selection.active;
-                                let text = d.wb.active().map(|sh| gridcraft_engine::display::cell_text(&d.wb, sh, a)).unwrap_or_default();
-                                let has = d.wb.active().is_some_and(|sh| sh.autofilter.is_some());
-                                if !has {
-                                    let _ = app.run("data.filter", json!({}));
+            let is_rtl = lang.is_rtl();
+
+            ui.with_layout(ui.menu_layout(is_rtl), |ui| {
+                for (label, id) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(190.0, 20.0))).clicked() {
+                        close = true;
+                        match id {
+                            "ui:pasteSpecial" => app.open_dialog("pasteSpecial", json!({})),
+                            "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
+                            "ui:insertCells" => app.open_dialog("insertCells", json!({})),
+                            "ui:deleteCells" => app.open_dialog("deleteCells", json!({})),
+                            "ui:formatCells" => app.open_dialog("formatCells", json!({})),
+                            "ui:newComment" => app.open_dialog("comment", json!({"threaded": true})),
+                            "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
+                            "ui:defineName" => app.open_dialog("defineName", json!({})),
+                            "ui:insertLink" => app.open_dialog("insertLink", json!({})),
+                            "ui:openLink" => {
+                                if let Some(target) = &link {
+                                    super::interact::follow_link(app, target);
                                 }
-                                app.run_or_alert("data.filterBy", json!({"column": col_to_letters(a.col), "values": [text]}));
                             }
+                            "ui:pickList" => app.open_dialog("pickList", json!({})),
+                            "ui:filterValue" => {
+                                if let Some(d) = app.session.active() {
+                                    let a = d.selection.active;
+                                    let text = d.wb.active().map(|sh| gridcraft_engine::display::cell_text(&d.wb, sh, a)).unwrap_or_default();
+                                    let has = d.wb.active().is_some_and(|sh| sh.autofilter.is_some());
+                                    if !has {
+                                        let _ = app.run("data.filter", json!({}));
+                                    }
+                                    app.run_or_alert("data.filterBy", json!({"column": col_to_letters(a.col), "values": [text]}));
+                                }
+                            }
+                            "edit.copy" | "edit.cut" => {
+                                app.copy_to_clipboard(ui.ctx(), id);
+                            }
+                            "edit.paste" => app.paste_from_clipboard(),
+                            other => app.run_or_alert(other, json!({})),
                         }
-                        "edit.copy" | "edit.cut" => {
-                            app.copy_to_clipboard(ui.ctx(), id);
-                        }
-                        "edit.paste" => app.paste_from_clipboard(),
-                        other => app.run_or_alert(other, json!({})),
                     }
                 }
-            }
+            });
         });
     });
-    // A quick right-click presses and releases in one frame, and the menu's corner snaps to the
-    // nearest physical pixel, which can put the pointer just outside it: that press opened the
-    // menu, so it doesn't count as a click elsewhere.
     let opened_now = app.grid.context_menu_frame == ui.ctx().cumulative_frame_nr();
     if close
         || ui.input(|i| i.key_pressed(egui::Key::Escape))
@@ -310,6 +344,7 @@ pub(super) fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo,
         return;
     }
     let lang = crate::i18n::current(ui.ctx());
+    let is_rtl = lang.is_rtl();
     let resp = ui.interact(button, egui::Id::unique("gridcraft.fill_options_tag"), Sense::click()).on_hover_text(lang.tr("Auto Fill Options"));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, lang.tr("Auto Fill Options")));
     let t = Tokens::get(ui.ctx());
@@ -329,12 +364,14 @@ pub(super) fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo,
     let modes = fill_modes(app, tag.src);
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(190.0);
-        for (label, mode) in modes {
-            if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
-                chosen = Some(mode);
-                ui.close();
+        ui.with_layout(ui.menu_layout(is_rtl), |ui| {
+            for (label, mode) in modes {
+                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                    chosen = Some(mode);
+                    ui.close();
+                }
             }
-        }
+        });
     });
     if let Some(mode) = chosen {
         if let Err(e) = app.run("edit.undo", json!({})) {
@@ -362,22 +399,26 @@ pub(super) fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(190.0);
             let lang = crate::i18n::current(ui.ctx());
-            for (label, mode) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
-                }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
-                    close = true;
-                    if mode == "ui:series" {
-                        let _ = app.session.run("selection.set", json!({"range": target.union(&src).a1(), "active": src.start.a1()}));
-                        let direction = if target.width() != src.width() { "rows" } else { "columns" };
-                        app.open_dialog("series", json!({"direction": direction}));
-                    } else if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1(), "mode": mode})) {
-                        app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+            let is_rtl = lang.is_rtl();
+
+            ui.with_layout(ui.menu_layout(is_rtl), |ui| {
+                for (label, mode) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
+                        close = true;
+                        if mode == "ui:series" {
+                            let _ = app.session.run("selection.set", json!({"range": target.union(&src).a1(), "active": src.start.a1()}));
+                            let direction = if target.width() != src.width() { "rows" } else { "columns" };
+                            app.open_dialog("series", json!({"direction": direction}));
+                        } else if let Err(e) = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1(), "mode": mode})) {
+                            app.message = Some(("GridCraft".into(), crate::clean_error(&e)));
+                        }
                     }
                 }
-            }
+            });
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
@@ -405,26 +446,30 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 items.extend([("-", ""), ("Select Data…", "ui:selectData"), ("Format Chart Area…", "ui:formatChart")]);
             }
             let lang = crate::i18n::current(ui.ctx());
-            for (label, action) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
-                }
-                if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
-                    close = true;
-                    match action {
-                        "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
-                        "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
-                        "ui:editText" => app.open_dialog("formatControl", json!({"id": id, "textOnly": true})),
-                        "ui:assignAction" => app.open_dialog("assignAction", json!({"id": id})),
-                        "ui:formatControl" => app.open_dialog("formatControl", json!({"id": id})),
-                        _ => {
-                            app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
-                            app.selected_object = None;
+            let is_rtl = lang.is_rtl();
+
+            ui.with_layout(ui.menu_layout(is_rtl), |ui| {
+                for (label, action) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(190.0, 20.0))).clicked() {
+                        close = true;
+                        match action {
+                            "ui:selectData" => app.open_dialog("selectData", json!({"chart": id})),
+                            "ui:formatChart" => app.grid.pane = Some("formatChart".into()),
+                            "ui:editText" => app.open_dialog("formatControl", json!({"id": id, "textOnly": true})),
+                            "ui:assignAction" => app.open_dialog("assignAction", json!({"id": id})),
+                            "ui:formatControl" => app.open_dialog("formatControl", json!({"id": id})),
+                            _ => {
+                                app.run_or_alert("object.delete", json!({"kind": kind, "id": id}));
+                                app.selected_object = None;
+                            }
                         }
                     }
                 }
-            }
+            });
         });
     });
     if close
@@ -530,26 +575,30 @@ pub(super) fn header_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool)
                 items.insert(5, item);
             }
             let lang = crate::i18n::current(ui.ctx());
-            for (label, id) in items {
-                if label == "-" {
-                    ui.separator();
-                    continue;
-                }
-                if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(180.0, 20.0))).clicked() {
-                    close = true;
-                    match id {
-                        "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
-                        "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
-                        "ui:formatCells" => app.open_dialog("formatCells", json!({})),
-                        "ui:columnWidth" => app.open_dialog("columnWidth", json!({})),
-                        "edit.copy" | "edit.cut" => {
-                            app.copy_to_clipboard(ui.ctx(), id);
+            let is_rtl = lang.is_rtl();
+
+            ui.with_layout(ui.menu_layout(is_rtl), |ui| {
+                for (label, id) in items {
+                    if label == "-" {
+                        ui.separator();
+                        continue;
+                    }
+                    if ui.add(egui::Button::new(lang.tr(label)).frame_when_inactive(false).min_size(vec2(180.0, 20.0))).clicked() {
+                        close = true;
+                        match id {
+                            "ui:insertPaste" => app.open_dialog("insertPaste", json!({})),
+                            "ui:rowHeight" => app.open_dialog("rowHeight", json!({})),
+                            "ui:formatCells" => app.open_dialog("formatCells", json!({})),
+                            "ui:columnWidth" => app.open_dialog("columnWidth", json!({})),
+                            "edit.copy" | "edit.cut" => {
+                                app.copy_to_clipboard(ui.ctx(), id);
+                            }
+                            "edit.paste" => app.paste_from_clipboard(),
+                            other => app.run_or_alert(other, json!({})),
                         }
-                        "edit.paste" => app.paste_from_clipboard(),
-                        other => app.run_or_alert(other, json!({})),
                     }
                 }
-            }
+            });
         });
     });
     if close || popup_dismissed(&response.response, was_open) {

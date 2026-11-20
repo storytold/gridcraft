@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+mod he;
 mod cs;
 mod de;
 mod el;
@@ -35,6 +36,7 @@ mod zh;
 pub enum Language {
     #[default]
     En,
+    He,
     Es,
     El,
     Zh,
@@ -57,8 +59,9 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
+        Self::He,
         Self::Es,
         Self::El,
         Self::Zh,
@@ -92,6 +95,7 @@ impl Language {
     pub fn name(self) -> &'static str {
         match self {
             Self::En => "English",
+            Self::He => "עברית",
             Self::Es => "Español",
             Self::El => "Ελληνικά",
             Self::Zh => "简体中文",
@@ -117,6 +121,7 @@ impl Language {
     pub const fn code(self) -> &'static str {
         match self {
             Self::En => "en",
+            Self::He => "he",
             Self::Es => "es",
             Self::El => "el",
             Self::Zh => "zh",
@@ -148,9 +153,17 @@ impl Language {
         Self::ALL.iter().map(|l| format!("\"{}\"", l.code())).collect::<Vec<_>>().join(separator)
     }
 
+    pub fn is_rtl(self) -> bool {
+        match self {
+            Self::He => true,
+            _ => false,
+        }
+    }
+
     fn from_tag(tag: &str) -> Option<Self> {
         match tag.trim().split(['-', '_']).next()?.to_ascii_lowercase().as_str() {
             "en" => Some(Self::En),
+            "he" => Some(Self::He),
             "es" => Some(Self::Es),
             "el" => Some(Self::El),
             "zh" => Some(Self::Zh),
@@ -203,6 +216,7 @@ impl Language {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
+            Self::He => he::translate(text),
             Self::El => el::translate(text),
             Self::Ja => ja::translate(text),
             Self::Zh => zh::translate(text),
@@ -402,8 +416,6 @@ fn name_sort_key(name: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Every shipped catalog names GridCraft's own Diagram and Decorative Text features, and
-    /// Diagram never repeats that catalog's chart word (both sit on the Insert tab).
     #[test]
     fn every_catalog_has_distinct_diagram_and_decorative_text() {
         for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
@@ -419,7 +431,6 @@ mod tests {
         }
     }
 
-    /// Ukrainian Chart uses the shared craft-i18n term, which is not the Diagram word.
     #[test]
     fn ukrainian_chart_uses_the_shared_term() {
         assert_eq!(Language::Uk.translated("Chart"), Some("Діаграма"));
@@ -427,7 +438,6 @@ mod tests {
         assert_eq!(Language::Uk.translated("Diagram"), Some("Схема"));
     }
 
-    /// Help tables are sorted and unique: lookups binary-search them.
     #[test]
     fn function_help_tables_are_sorted_and_unique() {
         for language in Language::ALL {
@@ -451,18 +461,13 @@ mod tests {
             assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
             assert_eq!(language.tr("Not in any catalog|Untranslated"), "Untranslated");
         }
-        // A `context|label` key shows only its label in English.
         assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
-        // Errors drop the `command `id`:` prefix before translating; an untranslated one stays whole.
         assert_eq!(Language::PtBr.tr_error("command `chart`: Select a chart first."), Language::PtBr.tr("Select a chart first."));
         assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
         assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::parse("xx"), None);
     }
 
-    /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
-    /// check the shape of each translation against its English: placeholders survive, and a
-    /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.
     #[test]
     fn translations_keep_the_shape_of_their_english() {
         let placeholders =
@@ -472,7 +477,6 @@ mod tests {
                 let label = english.rsplit_once('|').map_or(*english, |(_, label)| label);
                 let text = language.tr(english);
                 assert_eq!(placeholders(text), placeholders(label), "{language:?}: {english:?} => {text:?}");
-                // Big ribbon buttons whose English fits on one line may still need two.
                 if !label.contains('\n') && !["AutoSum", "PivotTable"].contains(english) {
                     assert!(!text.contains('\n'), "{language:?}: one-line {english:?} => {text:?}");
                 }
@@ -480,8 +484,6 @@ mod tests {
         }
     }
 
-    /// The screen-reader names for the formula-bar controls must be translated in every catalog
-    /// (no silent English fallback) and stay single-line labels.
     #[test]
     fn accessible_control_names_are_translated_in_every_catalog() {
         for key in ["Name Box", "Cell Editor", "Font Size", "Sheet Name", "Text Box"] {
@@ -597,8 +599,6 @@ mod tests {
 
     #[test]
     fn translations_never_show_the_context_prefix() {
-        // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
-        // value shows it on screen (File › Options read "Options|Général" in French).
         let keys = ja::CORE.iter().map(|(english, _)| *english).chain(["Options|General", "Options|Save", "Sheet Options|View"]);
         for english in keys {
             for language in Language::ALL {
@@ -683,8 +683,6 @@ mod tests {
     }
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
-        // Deserializing never reads the host locale (tests stay deterministic); the desktop app
-        // applies `Language::system()` itself when `ui.json` names no usable language.
         let restored: crate::UiState = serde_json::from_str("{}").unwrap();
         assert_eq!(restored.language, Language::En);
         assert_eq!(saved_language(&serde_json::json!({"language": "zh"})), Some(Language::Zh));

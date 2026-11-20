@@ -46,6 +46,7 @@ pub mod keytips;
 pub mod macro_editor;
 pub mod macro_ui;
 pub mod objects;
+pub mod rtl;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
