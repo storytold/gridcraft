@@ -834,7 +834,9 @@ pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
     let s = num(a, 1)?.trunc();
     let p = num(a, 2)?;
     let cum = if a.len() > 3 { boolean(a, 3)? } else { false };
-    if f < 0.0 || s < 1.0 || !(0.0..=1.0).contains(&p) {
+    // A probability of 1 is #NUM! in native Excel, for the density and the cumulative
+    // distribution alike (#4010).
+    if f < 0.0 || s < 1.0 || !(0.0..1.0).contains(&p) {
         return Err(CellError::Num);
     }
     if cum {
@@ -843,8 +845,8 @@ pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
         }
         return num_val(reg_inc_beta(p, s, f + 1.0));
     }
-    if p == 0.0 || p == 1.0 {
-        return num_val(if p == 1.0 && f == 0.0 { 1.0 } else { 0.0 });
+    if p == 0.0 {
+        return num_val(0.0);
     }
     num_val((ln_comb(f + s - 1.0, s - 1.0) + s * p.ln() + f * (1.0 - p).ln()).exp())
 }

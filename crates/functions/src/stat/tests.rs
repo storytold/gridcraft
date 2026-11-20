@@ -819,6 +819,12 @@ fn discrete() {
     close_tol(ev("NEGBINOM.DIST", vec![n(10.0), n(5.0), n(0.25), b(true)]), 0.3135141, D7);
     close_tol(ev("NEGBINOM.DIST", vec![n(10.0), n(5.0), n(0.25), b(false)]), 0.0550487, D7);
     close_tol(ev("NEGBINOMDIST", vec![n(10.0), n(5.0), n(0.25)]), 0.0550487, D7);
+    // A probability of 1 is #NUM!, as in native Excel (#4010).
+    is_err(ev("NEGBINOM.DIST", vec![n(0.0), n(1.0), n(1.0), b(false)]), CellError::Num);
+    is_err(ev("NEGBINOM.DIST", vec![n(0.0), n(1.0), n(1.0), b(true)]), CellError::Num);
+    is_err(ev("NEGBINOMDIST", vec![n(0.0), n(1.0), n(1.0)]), CellError::Num);
+    close(ev("NEGBINOM.DIST", vec![n(0.0), n(1.0), n(0.5), b(false)]), 0.5);
+    close_tol(ev("NEGBINOM.DIST", vec![n(1.0), n(2.0), n(0.5), b(true)]), 0.5, 1e-12);
 }
 
 #[test]
