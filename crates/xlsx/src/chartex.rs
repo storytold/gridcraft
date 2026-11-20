@@ -133,6 +133,21 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         Some("l") => LegendPos::Left,
         Some(_) => LegendPos::Right,
     };
+    let axis_title = |is_val: bool| -> Option<String> {
+        let pa = root?.path(&["chart", "plotArea"])?;
+        let ax = pa.kids("axis").find(|a| if is_val { a.child("valScaling").is_some() } else { a.child("catScaling").is_some() })?;
+        let title = ax.child("title")?;
+        if let Some(v) = title.path(&["tx", "txData", "v"]).map(|v| v.text.trim()).filter(|t| !t.is_empty()) {
+            return Some(v.to_string());
+        }
+        let rich = title.path(&["tx", "rich"])?;
+        let text: String = rich
+            .kids("p")
+            .map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.trim().is_empty()).then_some(text)
+    };
     Some(Chart {
         id: 0,
         kind,
@@ -146,8 +161,8 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
-        x_title: dc.axis_titles.0,
-        y_title: dc.axis_titles.1,
+        x_title: dc.axis_titles.0.or_else(|| axis_title(false)),
+        y_title: dc.axis_titles.1.or_else(|| axis_title(true)),
         source: None,
         by_rows: false,
         pivot: None,
