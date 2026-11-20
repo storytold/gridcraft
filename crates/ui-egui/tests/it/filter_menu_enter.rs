@@ -85,3 +85,30 @@ fn enter_with_nothing_checked_keeps_the_menu_open() {
     assert!(h.state().grid.filter_menu.is_some(), "the menu stays open");
     assert_eq!(active(&h), "A1");
 }
+
+/// The search covers the blank entry by the name the list shows in the interface language.
+#[test]
+fn search_finds_blanks_by_their_translated_name() {
+    use gridcraft_ui_egui::i18n::Language;
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "A1", "values": [["Fruit"], ["Apple"], [""], ["Cherry"]]})).unwrap();
+    session.execute("data.filter", json!({"range": "A1:A4"})).unwrap();
+    session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        crate::common::app(session),
+    );
+    h.state_mut().run("app.language.set", json!({"language": Language::Fr.code()})).unwrap();
+    h.run_steps(4);
+    key(&mut h, Key::ArrowDown, Modifiers::ALT);
+    let blanks = Language::Fr.tr("(Blanks)");
+    assert_ne!(blanks, "(Blanks)", "French names the blank entry");
+    h.input_mut().events.push(Event::Text(blanks.trim_matches(['(', ')']).to_lowercase()));
+    h.run_steps(2);
+    assert!(h.query_by_label(blanks).is_some(), "searching {blanks} keeps it listed");
+    assert!(h.query_by_label("Apple").is_none(), "the search hides the other values");
+}

@@ -145,11 +145,28 @@ fn conditional_number_format_reaches_the_cell_text() {
     let text = |row: u32, cf: &mut CfCache| {
         let c = CellRef::new(row, 0);
         let (lk, _) = look(&wb, 0, sh, c, cf);
-        display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0).0
+        display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0, gridcraft_engine::formula::FormulaLocale::En).0
     };
     assert_eq!(text(0, &mut cf), "1");
     assert_eq!(text(1, &mut cf), "3.00");
     assert_eq!(text(2, &mut cf), "4.00");
+}
+
+#[test]
+fn booleans_and_errors_show_in_the_formula_language() {
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "A1", "values": [["=1=1"], ["=1=2"], ["=1/0"], ["=\"a\"+1"]]})).unwrap();
+    let wb = session.active().unwrap().wb.clone();
+    let sh = wb.sheet(0).unwrap();
+    let mut cf = CfCache::new();
+    let mut text = |row: u32, locale| {
+        let c = CellRef::new(row, 0);
+        let (lk, _) = look(&wb, 0, sh, c, &mut cf);
+        display_text(&wb, sh, c, &sh.value(c), &lk.style, 200.0, 7.0, locale).0
+    };
+    assert_eq!([0, 1, 2, 3].map(|r| text(r, gridcraft_engine::formula::FormulaLocale::Fr)), ["VRAI", "FAUX", "#DIV/0!", "#VALEUR!"]);
+    assert_eq!([0, 1, 2, 3].map(|r| text(r, gridcraft_engine::formula::FormulaLocale::En)), ["TRUE", "FALSE", "#DIV/0!", "#VALUE!"]);
 }
 
 #[test]
