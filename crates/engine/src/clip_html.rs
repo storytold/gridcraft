@@ -38,6 +38,9 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
     }
     let mut cell: Option<OpenCell> = None;
     let mut in_table = false;
+    // The row group open (`thead`, `tbody`, `tfoot`): a row outside one opens a `tbody`, as the
+    // HTML parser does, and only that group's closing tag ends it.
+    let mut group: Option<String> = None;
     let mut rest = html;
     while !rest.is_empty() && !grid.full {
         let Some(lt) = rest.find('<') else {
@@ -84,12 +87,33 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
             ("tr", false) if in_table => {
                 grid.finish(&mut cell);
                 grid.start_row();
+                group.get_or_insert_with(|| "tbody".to_string());
+            }
+            // A row group (`thead`, `tbody`, `tfoot`) starting, or the open one ending, ends every
+            // `rowspan` in it: a span never reaches into the next group. A closing tag for a group
+            // that isn't open is ignored, as the HTML parser ignores it.
+            ("thead" | "tbody" | "tfoot", false) if in_table => {
+                grid.finish(&mut cell);
+                grid.covered_until.clear();
+                group = Some(name.clone());
+            }
+            ("thead" | "tbody" | "tfoot", true) if in_table && group.as_deref() == Some(name.as_str()) => {
+                grid.finish(&mut cell);
+                grid.covered_until.clear();
+                group = None;
             }
             ("td" | "th", false) if in_table => {
                 grid.finish(&mut cell);
+                // A cell outside any row is in an implicit row and `tbody`, as the HTML parser
+                // reads it (after CodeRabbit's review).
+                group.get_or_insert_with(|| "tbody".to_string());
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
-                let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
+                // `rowspan="0"` spans the rest of the row group, which a group's end cuts short.
+                let rowspan = match attr(attrs, "rowspan").and_then(|v| v.trim().parse::<usize>().ok()) {
+                    Some(0) => MAX_ROW_SPAN,
+                    _ => span(attrs, "rowspan", MAX_ROW_SPAN),
+                };
                 cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
@@ -444,6 +468,57 @@ mod tests {
         assert_eq!(rows[0][0].num, Some(1.0));
         assert!(table_cells(&html, 0, 5).is_empty());
         assert!(table_cells(&html, 4, 0).iter().all(Vec::is_empty));
+    }
+
+    /// The texts of `rows`, row by row.
+    fn texts(rows: &[Vec<HtmlCell>]) -> Vec<Vec<&str>> {
+        rows.iter().map(|r| r.iter().map(|c| c.text.as_str()).collect()).collect()
+    }
+
+    /// #4330: `rowspan="0"` spans the rest of its row group, as the HTML table model reads it, and
+    /// no span reaches past its group.
+    #[test]
+    fn a_zero_rowspan_covers_the_rest_of_its_row_group() {
+        // The issue's table: `22` sits in B2 under the span, and the next group starts at A3.
+        let group = |span: &str| {
+            format!(
+                "<table><tbody><tr><td rowspan=\"{span}\">Group</td><td>11</td></tr><tr><td>22</td></tr></tbody>\
+                 <tbody><tr><td>Reset</td><td>33</td></tr></tbody></table>"
+            )
+        };
+        for span in ["0", "2", " 0 "] {
+            assert_eq!(texts(&table_cells(&group(span), 3, 2)), [vec!["Group", "11"], vec!["", "22"], vec!["Reset", "33"]], "rowspan={span}");
+        }
+        assert_eq!(texts(&table_cells(&group("1"), 3, 2)), [vec!["Group", "11"], vec!["22"], vec!["Reset", "33"]], "the rowspan=1 control");
+
+        // Without row groups the whole table is one: a zero span reaches its last row.
+        let html = "<table><tr><td rowspan=0>A</td><td>1</td></tr><tr><td>2</td></tr><tr><td>3</td></tr></table>";
+        assert_eq!(texts(&table_cells(html, 3, 2)), [vec!["A", "1"], vec!["", "2"], vec!["", "3"]]);
+
+        // A span longer than its group stops at the group's end, with or without the closing tag,
+        // and a group's header and footer rows are groups of their own.
+        for html in [
+            // A closing tag for the implicit `tbody` rows outside a group are in ends it too.
+            "<table><tr><td rowspan=5>A</td><td>1</td></tr></tbody><tr><td>2</td><td>3</td></tr></table>",
+            "<table><tbody><tr><td rowspan=5>A</td><td>1</td></tr></tbody><tbody><tr><td>2</td><td>3</td></tr></tbody></table>",
+            "<table><tbody><tr><td rowspan=5>A</td><td>1</td><tbody><tr><td>2</td><td>3</td></table>",
+            "<table><thead><tr><th rowspan=0>A</th><th>1</th></tr></thead><tfoot><tr><td>2</td><td>3</td></tr></tfoot></table>",
+        ] {
+            assert_eq!(texts(&table_cells(html, 2, 2)), [vec!["A", "1"], vec!["2", "3"]], "{html}");
+        }
+
+        // A closing tag for a group that isn't open is ignored, and the span goes on (after
+        // CodeRabbit's review): `</thead>` inside a `tbody`, and `</tfoot>` with no group at all.
+        for html in [
+            "<table><tbody><tr><td rowspan=2>A</td><td>1</td></tr></thead><tr><td>2</td></tr></tbody></table>",
+            "<table><thead><tr><td rowspan=2>A</td><td>1</td></tr></tfoot><tr><td>2</td></tr></thead></table>",
+            "<table></tfoot><tr><td rowspan=2>A</td><td>1</td></tr></thead><tr><td>2</td></tr></table>",
+        ] {
+            assert_eq!(texts(&table_cells(html, 2, 2)), [vec!["A", "1"], vec!["", "2"]], "{html}");
+        }
+        // A table that starts with a cell, no `tr`: the implicit `tbody` it opens ends at `</tbody>`.
+        let html = "<table><td rowspan=0>A</td><td>1</td></tbody><tr><td>2</td><td>3</td></tr></table>";
+        assert_eq!(texts(&table_cells(html, 2, 2)), [vec!["A", "1"], vec!["2", "3"]], "{html}");
     }
 
     #[test]
