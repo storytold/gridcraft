@@ -2505,6 +2505,7 @@ dependencies = [
  "craft-xls",
  "craft-xlsx",
  "craft-xml 0.1.0 (git+https://github.com/storytold/craft-libs?rev=0ffb1a0abe8763f9fda3a2fb9ca0edc8fdcb7ec0)",
+ "encoding_rs",
  "gridcraft-core",
  "gridcraft-formula",
  "gridcraft-functions",

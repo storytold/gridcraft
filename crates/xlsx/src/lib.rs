@@ -44,10 +44,13 @@ mod xml;
 mod tests;
 
 use gridcraft_core::DateSystem;
-use gridcraft_model::Workbook;
+use gridcraft_model::{CsvEncoding, Workbook};
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
-pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited};
+pub use csv::{
+    CsvWritten, MAX_CSV_BYTES, decode_text, decode_text_as, read_csv, read_csv_with_report, write_csv, write_csv_encoded, write_csv_encoded_report,
+    write_csv_limited,
+};
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
@@ -230,6 +233,10 @@ pub struct CsvOptions {
     pub date_system: DateSystem,
     /// Interpret fields like typed input (numbers, dates, booleans…); otherwise keep text.
     pub parse_values: bool,
+    /// Code page of the bytes; [`CsvEncoding::Auto`] detects it (BOM, UTF-8, Shift-JIS when a clean
+    /// CP932 decode holds kana or two consecutive double-byte characters and no private-use
+    /// characters, else Windows-1252). An explicit value forces that code page.
+    pub encoding: CsvEncoding,
     /// Refuse (with [`IoError::TooLarge`], while reading) a file whose used range, from its first to
     /// its last non-empty cell, would pass this many cells; `None` for no limit.
     pub max_used_cells: Option<u64>,
@@ -237,7 +244,14 @@ pub struct CsvOptions {
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None }
+        CsvOptions {
+            delimiter: b',',
+            quote: b'"',
+            date_system: DateSystem::D1900,
+            parse_values: true,
+            encoding: CsvEncoding::Auto,
+            max_used_cells: None,
+        }
     }
 }
 
