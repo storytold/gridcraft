@@ -81,7 +81,9 @@ pub(super) fn draw(ctx: &mut Ctx, chart: &Chart, data: &ChartData, plot: Bx, lay
         ctx.text(name_x, y, &name, LABEL_SIZE, TEXT, (HAlign::Left, VAlign::Middle));
         let fmt = Fmt::new(&series.number_format);
         for j in 0..layout.columns {
-            let value = series.values.get(j).copied().flatten().map(|v| fmt.format(v, None)).unwrap_or_default();
+            // A cell empty in the source stays empty here, though the chart draws it as zero.
+            let shown = if ctx.zero_filled.binary_search(&(i, j)).is_ok() { None } else { series.values.get(j).copied().flatten() };
+            let value = shown.map(|v| fmt.format(v, None)).unwrap_or_default();
             let text = ctx.fit(&value, LABEL_SIZE, cw - 4.0);
             ctx.text(plot.x + (j as f32 + 0.5) * cw, y, &text, LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Middle));
         }

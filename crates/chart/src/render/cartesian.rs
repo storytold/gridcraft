@@ -2,6 +2,8 @@ use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, plot_kind};
 use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
+use gridcraft_model::ChartEmptyCells;
+
 use super::{
     Chart, ChartData, ChartKind, Ctx, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_LINE_PTS, MAX_MARKERS, MIN_BAR_PX, Prim, Rgba, Scale,
     SeriesData, TEXT, VAlign, WHITE, clean, nice_scale,
@@ -422,7 +424,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                 }
                 _ => {
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
-                    draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
+                    draw_runs(ctx, &line_runs(chart, &pts), s.color, 2.25, s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
                     if k == ChartKind::LineMarkers && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
@@ -530,7 +532,8 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         } else {
             let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
             if lines {
-                draw_runs(ctx, &px, s.color, 2.0, s.smooth.then_some(plot));
+                // Spanned, a scatter line joins the points around an empty Y too.
+                draw_runs(ctx, &line_runs(chart, &px), s.color, 2.0, s.smooth.then_some(plot));
             }
             if !lines || px.len() <= 500 {
                 draw_markers(ctx, px.iter().flatten().copied(), 3.5, s.color);
@@ -555,6 +558,12 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+}
+
+/// A line's points as its runs are drawn: spanned, empty cells are left out so a line joins the
+/// points on either side of them; otherwise they break it.
+fn line_runs(chart: &Chart, pts: &[Option<[f32; 2]>]) -> Vec<Option<[f32; 2]>> {
+    if chart.empty_cells == ChartEmptyCells::Span { pts.iter().filter(|p| p.is_some()).copied().collect() } else { pts.to_vec() }
 }
 
 #[cfg(test)]
