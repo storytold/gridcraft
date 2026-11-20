@@ -431,9 +431,7 @@ fn postscript_name(font: &FontRef<'_>) -> Option<String> {
 /// bytes.
 fn subset_tag(name: &str, usage: &Usage) -> String {
     let mut hash: u32 = 2_166_136_261;
-    let used = usage
-        .iter()
-        .flat_map(|(glyph, c)| glyph.to_be_bytes().into_iter().chain(u32::from(*c).to_be_bytes()));
+    let used = usage.iter().flat_map(|(glyph, c)| glyph.to_be_bytes().into_iter().chain(u32::from(*c).to_be_bytes()));
     for byte in name.as_bytes().iter().copied().chain(used) {
         hash = (hash ^ u32::from(byte)).wrapping_mul(16_777_619);
     }
@@ -957,11 +955,7 @@ mod tests {
         assert!(tag.chars().all(|c| c.is_ascii_uppercase()), "{tag}");
         usage.insert(2, 'ạ');
         assert_ne!(subset_tag("ArialMT", &usage), tag);
-        assert_ne!(
-            subset_tag("TimesNewRomanPSMT", &usage),
-            tag,
-            "a second face subsetting the same glyphs needs its own tag"
-        );
+        assert_ne!(subset_tag("TimesNewRomanPSMT", &usage), tag, "a second face subsetting the same glyphs needs its own tag");
     }
 
     #[test]
