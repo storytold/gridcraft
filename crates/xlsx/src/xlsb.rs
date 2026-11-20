@@ -212,29 +212,24 @@ pub(crate) fn is_xlsb(bytes: &[u8]) -> bool {
 }
 
 fn preserve_external_links(links: &[(String, Option<craft_xlsx::ExternalLink>)]) -> Option<Preserved> {
-    if links.is_empty() {
+    if links.is_empty() || links.iter().all(|(_, l)| l.is_none()) {
         return None;
     }
     const CT_EXT_LINK: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml";
     let mut p = Preserved::default();
     let mut refs_xml = format!("<externalReferences xmlns:r=\"{NS_REL}\">");
-    let mut has_any = false;
     for (i, (_, link)) in links.iter().enumerate() {
-        let Some(link) = link else {
-            // Preserve the 1-based `[n]` ordinal for later links when an earlier slot is missing.
-            refs_xml.push_str("<externalReference/>");
-            continue;
-        };
-        has_any = true;
         let rid = format!("rId{}", i + 1);
         let part_name = format!("xl/externalLinks/externalLink{}.xml", i + 1);
-        let (xml, rels) = external_link_part_xml(link);
+        // Missing slots still need a valid r:id and part so ECMA-376 <externalReferences> and
+        // XLSX reopen keep the 1-based `[n]` ordinals for later links.
+        let (xml, rels) = match link {
+            Some(link) => external_link_part_xml(link),
+            None => (format!("{XML_DECL}<externalLink xmlns=\"{NS_MAIN}\"/>"), Vec::new()),
+        };
         p.rels.push(PreservedRel { id: rid.clone(), rel_type: format!("{NS_REL}/externalLink"), target: part_name.clone(), external: false });
         p.parts.push(PreservedPart { name: part_name, content_type: CT_EXT_LINK.into(), data: xml.into_bytes().into(), rels });
         let _ = write!(refs_xml, "<externalReference r:id=\"{rid}\"/>");
-    }
-    if !has_any {
-        return None;
     }
     refs_xml.push_str("</externalReferences>");
     p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: refs_xml });
