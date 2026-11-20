@@ -459,9 +459,8 @@ fn xlsb_external_book_formulas_and_names_decode_and_roundtrip_through_xlsx() {
     // BrtSupNameStart/Bits/End (577/586/587), BrtEndSupBook (588).
     let mut ext_bin = Vec::new();
     let mut begin_sup = 0u16.to_le_bytes().to_vec();
-    begin_sup.push(1);
     begin_sup.extend(wide("rId1"));
-    begin_sup.push(0);
+    begin_sup.extend(u32::MAX.to_le_bytes());
     ext_bin.extend(record(360, &begin_sup));
     let mut tabs = 2u32.to_le_bytes().to_vec();
     tabs.extend(wide("Data"));
