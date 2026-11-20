@@ -293,7 +293,7 @@ fn rewrite_many(cx: &mut Ctx, target: &str, edits: &[Edit]) -> Result<()> {
         .filter_map(|(si, c)| {
             let host = cx.wb.sheet(si).map(|s| s.name.as_str())?;
             if host.eq_ignore_ascii_case(target) {
-                edits.iter().try_fold(RangeRef::cell(c), |r, e| map_range(r, e)).map(|r| (si, r.start))
+                edits.iter().try_fold(RangeRef::cell(c), map_range).map(|r| (si, r.start))
             } else {
                 Some((si, c))
             }
