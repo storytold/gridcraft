@@ -19,6 +19,11 @@ fn tvm() {
     close_tol(ev("NPER", vec![n(0.01), n(-100.0), n(-1000.0), n(10000.0), n(1.0)]), 59.6738657, 1e-8);
     close_tol(ev("NPER", vec![n(0.01), n(-100.0), n(-1000.0), n(10000.0)]), 60.0821229, 1e-8);
     close_tol(ev("NPER", vec![n(0.01), n(-100.0), n(-1000.0)]), -9.57859404, 1e-8);
+    // #3968: a nonzero rate so small that 1 + rate rounds to 1 divides by zero, as in Excel.
+    is_err(ev("NPER", vec![n(1e-16), n(-100.0), n(1200.0), n(0.0), n(0.0)]), CellError::Div0);
+    is_err(ev("NPER", vec![n(1e-20), n(-100.0), n(1200.0), n(0.0), n(0.0)]), CellError::Div0);
+    close(ev("NPER", vec![n(0.0), n(-100.0), n(1200.0), n(0.0), n(0.0)]), 12.0);
+    close_tol(ev("NPER", vec![n(0.01), n(-100.0), n(1200.0), n(0.0), n(0.0)]), 12.847147838223293, 1e-12);
     close_tol(ev("IPMT", vec![n(0.1 / 12.0), n(1.0), n(36.0), n(8000.0)]), -66.66666667, 1e-9);
     close_tol(ev("IPMT", vec![n(0.1), n(3.0), n(3.0), n(8000.0)]), -292.4471299, 1e-9);
     is_err(ev("IPMT", vec![n(0.1), n(4.0), n(3.0), n(8000.0)]), CellError::Num);
