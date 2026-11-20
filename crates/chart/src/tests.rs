@@ -51,6 +51,8 @@ fn chart(kind: ChartKind) -> Chart {
         style: 0,
         hole_size: 75,
         first_slice_angle: 0,
+        gap_width: None,
+        overlap: None,
         x_title: Some("Quarter".into()),
         y_title: Some("Revenue".into()),
         source: None,
@@ -1679,6 +1681,76 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+/// Measured in Excel: four clustered series, width and step of the bars as shares of a category.
+#[test]
+fn gap_width_and_overlap_place_the_bars_as_excel_does() {
+    let mut d = sample(ChartKind::ColumnClustered);
+    let first = d.series[0].clone();
+    d.series = [[10, 0, 0, 255], [0, 10, 0, 255], [0, 0, 10, 255], [90, 90, 0, 255]]
+        .into_iter()
+        .map(|color| {
+            let mut s = first.clone();
+            s.color = color;
+            s
+        })
+        .collect();
+    for (gap, overlap, width, step) in [
+        (219, -27, 37.86, 48.08),
+        (150, 0, 48.19, 48.19),
+        (50, 50, 88.34, 44.17),
+        (0, 0, 66.25, 66.25),
+        (100, -100, 33.13, 66.25),
+        (300, 100, 66.25, 0.0),
+    ] {
+        let mut c = chart(ChartKind::ColumnClustered);
+        c.data_labels = false;
+        c.gap_width = Some(gap);
+        c.overlap = Some(overlap);
+        let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        let bars = |color: [u8; 4]| -> Vec<(f32, f32)> {
+            prims
+                .iter()
+                .filter_map(|p| match p {
+                    Prim::Rect { x, w, fill: Some(f), .. } if *f == color && *w > 8.0 => Some((*x, *w)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (a, b) = (bars(d.series[0].color), bars(d.series[1].color));
+        let category = a[1].0 - a[0].0;
+        let excel_category = 265.02;
+        assert!((a[0].1 / category - width / excel_category).abs() < 0.001, "width at {gap}/{overlap}: {a:?}");
+        assert!(((b[0].0 - a[0].0) / category - step / excel_category).abs() < 0.001, "step at {gap}/{overlap}: {a:?} {b:?}");
+    }
+}
+
+/// A chart without its own values keeps the look charts always had here.
+#[test]
+fn bars_without_gap_or_overlap_keep_the_file_format_defaults() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.data_labels = false;
+    let before = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    c.gap_width = Some(150);
+    c.overlap = Some(0);
+    let after = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    assert_eq!(format!("{before:?}"), format!("{after:?}"));
+}
+
+/// With a positive overlap a later bar lies over an earlier one: labels go on top of all of them.
+#[test]
+fn bar_labels_are_drawn_after_every_bar() {
+    let d = sample(ChartKind::ColumnClustered);
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.overlap = Some(100);
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let colors: Vec<_> = d.series.iter().map(|s| s.color).collect();
+    let last_bar = prims.iter().rposition(|p| matches!(p, Prim::Rect { w, fill: Some(f), .. } if colors.contains(f) && *w > 8.0)).unwrap_or(0);
+    let labels = prims[last_bar..].iter().filter(|p| matches!(p, Prim::Text { text, .. } if text.chars().any(|c| c.is_ascii_digit()))).count();
+    let values: usize = d.series.iter().map(|s| s.values.iter().flatten().count()).sum();
+    assert!(labels >= values, "{labels} labels after the last bar, of {values}");
 }
 
 #[test]
