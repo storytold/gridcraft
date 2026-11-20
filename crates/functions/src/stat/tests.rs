@@ -179,6 +179,35 @@ fn spread() {
 }
 
 #[test]
+fn large_and_small_check_the_rank_before_rounding_it() {
+    // Native Excel (#4275): the rank must be 1..=n as given; then SMALL rounds a fraction down
+    // and LARGE rounds it up, so both move toward the smaller values.
+    let d = || c(&[10.0, 20.0, 30.0, 40.0]);
+    let vals = [nv(10.0), nv(20.0), nv(30.0), nv(40.0)];
+    let rows: [(f64, Option<f64>, Option<f64>); 9] = [
+        (0.1, None, None),
+        (0.9999, None, None),
+        (1.0, Some(10.0), Some(40.0)),
+        (1.0001, Some(10.0), Some(30.0)),
+        (1.1, Some(10.0), Some(30.0)),
+        (2.5, Some(20.0), Some(20.0)),
+        (3.9, Some(30.0), Some(10.0)),
+        (4.0, Some(40.0), Some(10.0)),
+        (4.1, None, None),
+    ];
+    for (k, small, large) in rows {
+        for (f, want, code) in [("SMALL", small, 15), ("LARGE", large, 14)] {
+            for got in [ev(f, vec![d(), n(k)]), aggregate_values_k(code, &vals, &nv(k))] {
+                match want {
+                    Some(w) => close(got, w),
+                    None => is_err(got, CellError::Num),
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn min_max_order() {
     close(ev("MIN", vec![c(&[3.0, -1.0, 2.0]), n(0.0)]), -1.0);
     close(ev("MAX", vec![c(&[3.0, -1.0, 2.0]), n(10.0)]), 10.0);
@@ -225,10 +254,10 @@ fn old_median(v: Vec<f64>) -> R<f64> {
 }
 
 fn old_kth(v: Vec<f64>, k: f64, largest: bool) -> R<f64> {
-    let k = k.ceil();
     if k.is_nan() || k < 1.0 || k > v.len() as f64 {
         return Err(CellError::Num);
     }
+    let k = if largest { k.ceil() } else { k.floor() };
     let s = sorted(v);
     let k = k as usize;
     let idx = if largest { s.len() - k } else { k - 1 };

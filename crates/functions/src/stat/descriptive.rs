@@ -146,12 +146,13 @@ pub(super) fn max_of(v: &[f64]) -> f64 {
     if v.is_empty() { 0.0 } else { v.iter().copied().fold(f64::NEG_INFINITY, f64::max) }
 }
 
-/// k-th largest (k is rounded up like Excel).
+/// k-th largest or smallest. Like Excel, the rank is checked as given (`1 <= k <= n`), then a
+/// fractional rank moves toward the smaller values: LARGE rounds it up and SMALL down (#4275).
 pub(super) fn kth(v: Vec<f64>, k: f64, largest: bool) -> R<f64> {
-    let k = k.ceil();
     if k.is_nan() || k < 1.0 || k > v.len() as f64 {
         return Err(CellError::Num);
     }
+    let k = if largest { k.ceil() } else { k.floor() };
     let mut v = v;
     let k = k as usize;
     let idx = if largest { v.len() - k } else { k - 1 };
