@@ -197,7 +197,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             let ctx = ctx.clone();
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = rfd::AsyncFileDialog::new()
-                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
+                    .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "numbers", "csv", "tsv", "txt", "slk", "json"])
                     .pick_file()
                     .await
                 else {
@@ -352,6 +352,7 @@ fn mime_for(name: &str) -> &'static str {
         Some("xlsm") => "application/vnd.ms-excel.sheet.macroEnabled.12",
         Some("xlsb") => "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
         Some("ods") => "application/vnd.oasis.opendocument.spreadsheet",
+        Some("numbers") => "application/vnd.apple.numbers",
         Some("csv") => "text/csv",
         Some("tsv" | "txt") => "text/plain",
         Some("pdf") => "application/pdf",
