@@ -213,10 +213,11 @@ fn dialog_cancel(app: &mut SheetApp) -> Outcome {
 /// Replies with the object and its rect in window points, for `ui.click` and `ui.drag`.
 fn select_object(app: &mut SheetApp, p: &Json) -> Outcome {
     use gridcraft_engine::model::{ObjKind, ObjRef};
-    let Some(id) = p.get("id").and_then(Json::as_u64) else {
+    let Some(id) = p.get("id") else {
         app.selected_object = None;
         return ok(Json::Null);
     };
+    let Some(id) = id.as_u64() else { return err("id must be a non-negative integer") };
     let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return err("no document") };
     let found = u32::try_from(id).ok().and_then(|id| match p.get("kind").and_then(Json::as_str) {
         Some(k) => ObjKind::parse(k).map(|k| ObjRef::new(k, id)).filter(|o| sh.has_object(*o)),
