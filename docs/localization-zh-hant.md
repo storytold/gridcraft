@@ -1,6 +1,6 @@
 # 繁體中文（台灣）介面 / Traditional Chinese (Taiwan) interface
 
-更新日期 / Updated: 2026-11-15
+更新日期 / Updated: 2026-11-20
 
 ## 繁體中文
 
@@ -30,6 +30,24 @@ macOS 原生選單列（檔案、編輯、檢視、插入、格式、工具、�
 跟隨介面語言；在「檢視」切換語言後，選單標題與項目會立即改為新語言，所有語言皆適用。
 選單標籤集中於 `apps/gridcraft/src/native_menu_tree.rs`，測試確認每個標籤都有繁中譯文。
 系統提供的項目（服務、隱藏等）由 macOS 依系統語言顯示。
+
+### 共用 craft-i18n 的交付計畫
+
+目前繁中字表放在應用程式內（`crates/ui-egui/src/i18n/zh_hant.rs` 與 `zh_hant_functions.rs`），
+因為 GridCraft 尚未接上共用字表機制。依 craft-contrib #72 的方向，繁中譯文之後改由
+`storytold/craft-i18n` 交付，搬移方式如下：
+
+- **介面字表**：`locales/zh-hant/gridcraft.tsv`，三欄格式與現有 TSV 相同（context、英文原文、
+  譯文）。英文鍵不變，1,341 筆對應關係原樣搬移，不需要重新翻譯或重新審閱用語。
+- **共用詞彙**：沿用 `locales/zh-hant/common.tsv` 既有的詞；應用程式自己的列優先於共用列。
+- **函數說明**：craft-i18n 目前沒有應用程式交付函數說明，這 762 列（479 則說明與 283 個
+  引數名稱）先留在應用程式內，等共用格式定義了位置再一起搬。
+- **依賴**：GridCraft 需先接上 craft-i18n 的建置選項（`CRAFT_I18N_DIR`，見 craft-i18n 的
+  `docs/integration.md`），那是另一個變更。接上之後，本 PR 的應用程式內字表會在同一個
+  遷移提交中刪除，避免兩份字表並存；順序由維護者決定。
+
+在共用機制接上之前，本 PR 讓繁中介面不必等待就能使用；缺字仍顯示英文，不影響建置、
+測試或發布。
 
 ### Noto CJK 繁中字型
 
@@ -72,6 +90,29 @@ On macOS the native menu bar follows the interface language: choosing another la
 relabels every menu title and item at once, for every language. The labels live in
 `apps/gridcraft/src/native_menu_tree.rs`, and a test checks each has a Traditional Chinese
 translation. System-provided items (Services, Hide…) follow the macOS system language.
+
+### Delivery through craft-i18n
+
+The catalog currently lives in the app (`crates/ui-egui/src/i18n/zh_hant.rs` and
+`zh_hant_functions.rs`) because GridCraft has not adopted the shared catalog mechanism yet. Under
+the direction in craft-contrib #72 the Traditional Chinese data moves to `storytold/craft-i18n`:
+
+- **Interface rows**: `locales/zh-hant/gridcraft.tsv`, in the same three-column format as the
+  existing TSV (context, English source, translation). The English keys do not change, so the
+  1,341 pairs move across as they are; no wording is re-translated or re-reviewed.
+- **Shared terms**: the existing `locales/zh-hant/common.tsv` rows apply, and this app's rows win
+  over the shared ones in the same locale.
+- **Function help**: no app delivers function descriptions to craft-i18n today, so these 762 rows
+  (479 descriptions and 283 argument names) stay in the app until the shared format has a place
+  for them.
+- **Dependency**: GridCraft first needs the craft-i18n build option (`CRAFT_I18N_DIR`, see
+  craft-i18n's `docs/integration.md`), which is a separate change. After that, the in-app catalogs
+  added here are removed in the same migration commit, so the two never coexist. The order is the
+  maintainers' call.
+
+Until the shared route lands, this PR makes the Traditional Chinese interface usable without
+waiting for it. Missing strings still fall back to English and block neither the build, the tests
+nor a release.
 
 ### Noto CJK fonts
 
