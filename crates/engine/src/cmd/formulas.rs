@@ -95,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "formulas.evaluateFormula", "Evaluate Formula", ["Formulas", "Formula Auditing"], None, "{cell?, formula?} → steps", has_doc, evaluate_formula),
         cmd!(query "formulas.evaluate", "Evaluate", [], None, "{formula: \"=SUM(A1:A3)\", cell?} → value without changing the sheet; a formula that couldn't be entered in a cell is an error", has_doc, evaluate),
         cmd!(noundo "formulas.calculateNow", "Calculate Now", ["Formulas", "Calculation"], Some("F9"), "{}", has_doc, calc_now),
-        cmd!(noundo "formulas.calculateSheet", "Calculate Sheet", ["Formulas", "Calculation"], Some("Shift+F9"), "{}", has_doc, calc_now),
+        cmd!(noundo "formulas.calculateSheet", "Calculate Sheet", ["Formulas", "Calculation"], Some("Shift+F9"), "{}", has_doc, calc_sheet),
         cmd!(
             "formulas.calculationOptions",
             "Calculation Options",
@@ -932,6 +932,17 @@ fn calc_now(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let mut wb = (*d.wb).clone();
     d.calc.recalc_all(&mut wb);
+    d.wb = std::sync::Arc::new(wb);
+    Ok(json!({"cells": d.calc.last_recalc_cells}))
+}
+
+/// Shift+F9: recalculates the formulas of the active sheet only. Other sheets keep their values,
+/// even a formula there that reads this sheet (Excel's Active Worksheet Calculation).
+fn calc_sheet(s: &mut Session, _: &Json) -> Result<Json> {
+    let d = s.doc_mut()?;
+    let mut wb = (*d.wb).clone();
+    let sheet = wb.active_sheet();
+    d.calc.recalc_sheet(&mut wb, sheet);
     d.wb = std::sync::Arc::new(wb);
     Ok(json!({"cells": d.calc.last_recalc_cells}))
 }
