@@ -46,6 +46,8 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("bar", _) => ChartKind::BarClustered,
         ("line", "markers") => ChartKind::LineMarkers,
         ("line", "stacked") => ChartKind::LineStacked,
+        ("line", "stacked100") => ChartKind::LineStacked100,
+        ("line", "stacked100Markers") => ChartKind::LineStacked100Markers,
         ("line", _) => ChartKind::Line,
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
