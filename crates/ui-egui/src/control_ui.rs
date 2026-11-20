@@ -455,7 +455,7 @@ pub fn open_format(app: &SheetApp, params: &Json) -> Option<Dialog> {
         "print": c.print,
         "locked": c.locked,
     });
-    let title = if text_only { "Edit Text".to_string() } else { format!("Format Control: {}", c.display_name()) };
+    let title = if text_only { "Edit Text".to_string() } else { app.ui.language.tr_fill("Format Control: {name}", &[("name", &c.display_name())]) };
     Some(Dialog::custom("formatControl", &title, v))
 }
 
@@ -565,5 +565,27 @@ pub fn format_dialog(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut
             Ok(_) => *open = false,
             Err(e) => app.message = Some(("Format Control".into(), crate::clean_error(&e))),
         }
+    }
+}
+
+#[cfg(test)]
+mod format_title_tests {
+    use super::*;
+    use crate::i18n::Language;
+    use gridcraft_engine::Session;
+
+    #[test]
+    fn the_format_control_title_follows_the_interface_language() {
+        let mut session = Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        let v = app.run("insert.button", json!({"at": "B2", "text": "Go"})).unwrap();
+        let id = v["control"].as_u64().unwrap();
+        let name = control(&app, id as u32).unwrap().display_name();
+        assert_eq!(open_format(&app, &json!({"id": id})).unwrap().title, format!("Format Control: {name}"));
+        app.ui.language = Language::It;
+        let want = Language::It.tr("Format Control: {name}").replace("{name}", &name);
+        assert_eq!(open_format(&app, &json!({"id": id})).unwrap().title, want);
+        assert!(!want.starts_with("Format Control"));
     }
 }
