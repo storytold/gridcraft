@@ -299,7 +299,7 @@ fn remap_workbook_external_ordinals(wb: &mut Workbook, remap: &[Option<usize>], 
     }
 }
 
-fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Result<Option<String>, ()> {
+pub(crate) fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Result<Option<String>, ()> {
     let bytes = text.as_bytes();
     let mut out: Option<String> = None;
     let mut i = 0;
@@ -319,6 +319,7 @@ fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Result<Option<
             if j > i + 1
                 && j < bytes.len()
                 && bytes[j] == b']'
+                && is_external_ordinal(text, i, j)
                 && let Ok(old) = text[i + 1..j].parse::<usize>()
             {
                 let Some(&Some(new_n)) = remap.get(old) else {
@@ -342,6 +343,41 @@ fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Result<Option<
     } else {
         Ok(None)
     }
+}
+
+/// True when `[digits]` at `open..=close` is an external-book ordinal (`[1]Sheet!A1`,
+/// `'[1]Other Sheet'!A1`, `[1]!Name`) rather than a numeric structured-table column (`Sales[2024]`,
+/// `Sales[[#Headers],[2024]]`).
+fn is_external_ordinal(text: &str, open: usize, close: usize) -> bool {
+    let bytes = text.as_bytes();
+    let prev = open.checked_sub(1).map(|k| bytes[k]);
+    if let Some(b) = prev
+        && (b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'\\' | b']' | b'['))
+    {
+        return false;
+    }
+    let mut k = close + 1;
+    if prev == Some(b'\'') {
+        while k < bytes.len() {
+            if bytes[k] == b'\'' {
+                if bytes.get(k + 1) == Some(&b'\'') {
+                    k += 2;
+                    continue;
+                }
+                return bytes.get(k + 1) == Some(&b'!');
+            }
+            k += 1;
+        }
+        return false;
+    }
+    if bytes.get(k) == Some(&b'!') {
+        return true;
+    }
+    let start = k;
+    while k < bytes.len() && (bytes[k].is_ascii_alphanumeric() || matches!(bytes[k], b'_' | b'.') || bytes[k] >= 0x80) {
+        k += 1;
+    }
+    k > start && bytes.get(k) == Some(&b'!')
 }
 
 fn external_link_part_xml(book: &craft_xlsx::ExternalBook) -> (String, Vec<PreservedRel>) {

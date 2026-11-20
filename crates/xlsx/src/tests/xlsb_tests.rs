@@ -675,6 +675,16 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     assert!(wb.sheets[0].cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(11.0)));
     assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]SheetA!$A$1"));
 
+    // Also verify numeric structured-table headers like `SUM(Sales[2024])` are not mistaken for
+    // external ordinals when an omitted DDE link triggers ordinal remapping.
+    assert_eq!(crate::xlsb::remap_external_formula("SUM(Sales[2024])", &[None, None, Some(1)]), Ok(None));
+    assert_eq!(crate::xlsb::remap_external_formula("Sales[[#Headers],[2024]]", &[None, None, Some(1)]), Ok(None));
+    assert_eq!(
+        crate::xlsb::remap_external_formula("'[2]Other Sheet'!A1+SUM(Sales[2024])", &[None, None, Some(1)]),
+        Ok(Some("'[1]Other Sheet'!A1+SUM(Sales[2024])".into()))
+    );
+    assert_eq!(crate::xlsb::remap_external_formula("[1]!'R1C1'+SUM(Sales[2024])", &[None, None, Some(1)]), Err(()));
+
     let saved = write_xlsx(&wb).unwrap();
     let (reopened, rep2) = read_xlsx(&saved).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
