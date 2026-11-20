@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-02 · **Change:** minor (doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-16 · **Change:** minor (a selected chart outlines its series names, category labels and values in Excel's colours, and dragging a corner of the values outline changes the plotted block, #4389, #4390; earlier: chart-data-table keys pass the series index to the shared combo plot-kind rule, restoring compilation after #1150; earlier: doughnut charts: every series is a concentric ring, the first series innermost; hole size and first slice angle kept; rotated slices cover their own sweep; legend names categories; earlier: charts resize from eight handles, chart data tables, legend keys and borders, native XLSX round-trip and print/PDF; earlier: selected chart source outlines stay beneath floating objects) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -40,7 +40,8 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Element | Excel | GridCraft |
 |---|---|---|
 | Move and resize the chart object | yes | yes (eight handles, each moving only its own edges; Format Chart Area Size fields) (#190) |
-| Selected chart source-data outline | visible on uncovered cells, beneath floating objects | painted above cells and below charts, shapes, pictures and slicers; retains pane clipping and right-to-left cell geometry (#2861) |
+| Selected chart source-data outline | visible on uncovered cells, beneath floating objects | painted above cells and below charts, shapes, pictures and slicers; retains pane clipping and right-to-left cell geometry (#2861); series names red, category labels purple, values one blue block (#4390); series that are not one block keep a blue outline per series |
+| Drag the source-data outline to change the chart's data | corner handles on the outline resize the plotted range | the values outline's four corners show resize cursors; a drag previews the block and the release runs `chart.setValuesRange` as one undo step: series keep their formatting, a wider block adds series and a narrower one drops them, aligned names and category labels follow; Esc cancels (#4389). Moving the block by its edge and dragging the name or category outlines are not done |
 | Chart title, axis titles | text, linked to cells, full formatting | text only |
 | Legend | position, overlay, formatting, per-entry delete | position only |
 | Data labels | value, category, series, percentage, from cells, callouts, position | one on/off flag |
@@ -107,6 +108,8 @@ are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-16 | minor | A selected chart outlines its series names (red), category labels (purple) and values (one blue block), and the values outline has corner handles: dragging one changes the block the series plot through the new `chart.setValuesRange` command, keeping each series' formatting (#4389, #4390). Engine and real-input UI tests cover growing, shrinking, adding series, undo and Esc. No readiness score change. |
+| 2026-11-07 | minor | Chart-data-table keys use the shared plot-kind helper with their series index after #1150. A focused regression checks the first combo series uses a column key and later series use line keys. No readiness score change. |
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
