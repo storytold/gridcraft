@@ -112,6 +112,11 @@ pub enum Drag {
         source: RangeRef,
         before: Option<u32>,
     },
+    /// Reordering one contiguous whole-row selection by its header.
+    MoveRows {
+        source: RangeRef,
+        before: Option<u32>,
+    },
     /// `to`: the previewed size once the pointer moved. Only the dragged line changes while the
     /// button is held; the release applies the size to every selected line (Excel).
     ResizeCol {

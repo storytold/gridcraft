@@ -1,5 +1,6 @@
 //! `adjust`, `adjust_if_changed` and `shift_relative` against a verbatim copy of the previous
-//! implementation, which cloned and rebuilt every formula. The rewrite must give the same tree
+//! implementation, which cloned and rebuilt every formula. Reorder postdates that oracle and
+//! is tested separately against explicit expectations below. The rewrite must give the same tree
 //! (and so the same text) for every formula and edit, and `adjust_if_changed` must say
 //! "unchanged" exactly when the old code returned the formula as it was.
 
@@ -123,6 +124,7 @@ mod old {
 
     fn adjust_ref(r: &Reference, edit: &Edit) -> Option<Reference> {
         match edit {
+            Edit::Reorder { .. } => panic!("Reorder postdates this legacy oracle; use its explicit expectation tests"),
             Edit::Insert { axis, at, count } | Edit::Delete { axis, at, count } => {
                 let insert = matches!(edit, Edit::Insert { .. });
                 let kind = match (&r.kind, axis) {
@@ -342,7 +344,7 @@ fn check(src: &str, edits: &[Edit]) -> usize {
 }
 
 #[test]
-fn adjust_matches_the_previous_implementation_for_every_edit_kind() {
+fn adjust_matches_the_previous_implementation_for_every_legacy_edit_kind() {
     let edits = edits();
     let mut cases = 0;
     for src in FORMULAS {
@@ -491,4 +493,49 @@ fn unaffected_formula_is_returned_as_is() {
     // A cut that moves a block onto the same place still qualifies its references with the sheet.
     let same_place = Edit::MoveToSheet { from: range(0, 0, 2, 0), to_sheet: "S".into(), to_row: 0, to_col: 0 };
     assert_eq!(adjust_if_changed(&e, "S", "S", &same_place).map(|x| print(&x)).as_deref(), Some("Other!B2+SUM(S!A1:A3)"));
+}
+
+/// Reorder participates in the borrowed-change check without changing its mapping semantics.
+#[test]
+fn borrowed_reorder_reports_changes_and_preserves_unchanged_references() {
+    for axis in [Axis::Rows, Axis::Cols] {
+        let rows = axis == Axis::Rows;
+        let edit = Edit::Reorder { axis, from: 1, count: 2, before: 5 };
+        let cases = if rows {
+            [
+                ("A2", "A4"),
+                ("A4", "A2"),
+                ("$A$3:A2", "$A$5:A4"),
+                ("SUM(A1:A5)", "SUM(A1:A5)"),
+                ("A1", "A1"),
+                ("A1048576", "A1048576"),
+                ("Other!A2", "Other!A2"),
+            ]
+        } else {
+            [
+                ("B1", "D1"),
+                ("D1", "B1"),
+                ("$C$1:B1", "$E$1:D1"),
+                ("SUM(A1:E1)", "SUM(A1:E1)"),
+                ("A1", "A1"),
+                ("XFD1", "XFD1"),
+                ("Other!B1", "Other!B1"),
+            ]
+        };
+        for (src, expected) in cases {
+            let expr = parse(src).unwrap();
+            let got = adjust_if_changed(&expr, "S", "S", &edit);
+            assert_eq!(got.is_some(), src != expected, "{axis:?}: {src}");
+            assert_eq!(print(&got.unwrap_or_else(|| expr.clone())), expected);
+            assert_eq!(print(&adjust(expr, "S", "S", &edit)), expected);
+        }
+        // Moving the last line exercises the direct source mapping, not an overflowing insert.
+        let limit = if rows { MAX_ROWS } else { MAX_COLS };
+        let edge = Edit::Reorder { axis, from: limit - 1, count: 1, before: 0 };
+        let expr = parse(if rows { "A1048576" } else { "XFD1" }).unwrap();
+        assert_eq!(print(&adjust_if_changed(&expr, "S", "S", &edge).unwrap()), "A1");
+        assert!(adjust_if_changed(&expr, "Other", "S", &edge).is_none());
+        let named = parse(if rows { "S!A1048576" } else { "S!XFD1" }).unwrap();
+        assert_eq!(print(&adjust_if_changed(&named, "Other", "S", &edge).unwrap()), "S!A1");
+    }
 }

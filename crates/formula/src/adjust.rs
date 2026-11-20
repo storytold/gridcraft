@@ -83,6 +83,8 @@ pub enum Edit {
     Insert { axis: Axis, at: u32, count: u32 },
     /// Delete `count` rows/cols starting at `at`.
     Delete { axis: Axis, at: u32, count: u32 },
+    /// Reorder whole lines as one reference edit. Ranges enclosing the affected interval stay intact.
+    Reorder { axis: Axis, from: u32, count: u32, before: u32 },
     /// Cut-paste of a block: references into `from` now point into the block at `to` (top-left).
     Move { from: RangeRef, to_row: u32, to_col: u32 },
     /// Insert Cells shifting down (`Rows`) or right (`Cols`): the cells of `range` and those
@@ -195,8 +197,95 @@ fn map_span(lo: u32, hi: u32, at: u32, count: u32, insert: bool, max: u32) -> Op
     }
 }
 
+/// A reference wholly inside the moved lines follows those lines directly. This also covers a
+/// source block at the sheet edge, which cannot be represented by the intermediate Insert.
+fn move_reorder_source_ref(r: &Reference, axis: Axis, from: u32, end: u32, to: u32) -> Option<Reference> {
+    let mut moved = r.clone();
+    let line = |v: u32| to + (v - from);
+    match (&mut moved.kind, axis) {
+        (RefKind::Cell(a), Axis::Rows) if (from..end).contains(&a.row) => a.row = line(a.row),
+        (RefKind::Cell(a), Axis::Cols) if (from..end).contains(&a.col) => a.col = line(a.col),
+        (RefKind::Range(a, b), Axis::Rows) if a.row.min(b.row) >= from && a.row.max(b.row) < end => {
+            a.row = line(a.row);
+            b.row = line(b.row);
+        }
+        (RefKind::Range(a, b), Axis::Cols) if a.col.min(b.col) >= from && a.col.max(b.col) < end => {
+            a.col = line(a.col);
+            b.col = line(b.col);
+        }
+        (RefKind::Rows(a, _, b, _), Axis::Rows) if (*a).min(*b) >= from && (*a).max(*b) < end => {
+            *a = line(*a);
+            *b = line(*b);
+        }
+        (RefKind::Cols(a, _, b, _), Axis::Cols) if (*a).min(*b) >= from && (*a).max(*b) < end => {
+            *a = line(*a);
+            *b = line(*b);
+        }
+        _ => return None,
+    }
+    Some(moved)
+}
+
 fn adjust_ref(r: Reference, edit: &Edit) -> Option<Reference> {
     match edit {
+        Edit::Reorder { axis, from, count, before } => {
+            let limit = if *axis == Axis::Rows { MAX_ROWS } else { MAX_COLS };
+            let end = from.checked_add(*count).filter(|end| *end <= limit)?;
+            if *before >= limit || before.checked_add(*count).is_none_or(|end| end > limit) {
+                return None;
+            }
+            if *count == 0 || (*from..=end).contains(before) {
+                return Some(r);
+            }
+            let span = r.range();
+            let (lo, hi) = if *axis == Axis::Rows { (span.start.row, span.end.row) } else { (span.start.col, span.end.col) };
+            // Reordering inside a referenced interval changes no member of that interval.
+            // Applying delete separately would wrongly shrink a range ending at the drop boundary.
+            if lo <= (*from).min(*before) && hi >= end.max(*before) - 1 {
+                return Some(r);
+            }
+            let final_start = if before < from { *before } else { *before - *count };
+            if let Some(moved) = move_reorder_source_ref(&r, *axis, *from, end, final_start) {
+                return Some(moved);
+            }
+            // Fully contained references followed their source above. All remaining references
+            // use the existing partial-overlap Insert/Delete semantics, with enough temporary
+            // capacity for the Insert. Do not clamp or relocate sheet-edge endpoints before the
+            // Delete restores the real sheet extent: that could change range containment.
+            let moved_from = if before <= from { from.checked_add(*count)? } else { *from };
+            let temporary_limit = limit.checked_add(*count)?;
+            let line = |v| {
+                let inserted = map_index(v, *before, *count, true, temporary_limit)?;
+                map_index(inserted, moved_from, *count, false, limit)
+            };
+            let span = |a: u32, b: u32| {
+                let (lo, hi) = map_span(a.min(b), a.max(b), *before, *count, true, temporary_limit)?;
+                let (lo, hi) = map_span(lo, hi, moved_from, *count, false, limit)?;
+                Some(if a <= b { (lo, hi) } else { (hi, lo) })
+            };
+            let kind = match (&r.kind, axis) {
+                (RefKind::Cell(a), Axis::Rows) => RefKind::Cell(Anchor { row: line(a.row)?, ..*a }),
+                (RefKind::Cell(a), Axis::Cols) => RefKind::Cell(Anchor { col: line(a.col)?, ..*a }),
+                (RefKind::Range(a, b), Axis::Rows) => {
+                    let (first, last) = span(a.row, b.row)?;
+                    RefKind::Range(Anchor { row: first, ..*a }, Anchor { row: last, ..*b })
+                }
+                (RefKind::Range(a, b), Axis::Cols) => {
+                    let (first, last) = span(a.col, b.col)?;
+                    RefKind::Range(Anchor { col: first, ..*a }, Anchor { col: last, ..*b })
+                }
+                (RefKind::Rows(a, a_abs, b, b_abs), Axis::Rows) => {
+                    let (first, last) = span(*a, *b)?;
+                    RefKind::Rows(first, *a_abs, last, *b_abs)
+                }
+                (RefKind::Cols(a, a_abs, b, b_abs), Axis::Cols) => {
+                    let (first, last) = span(*a, *b)?;
+                    RefKind::Cols(first, *a_abs, last, *b_abs)
+                }
+                (kind, _) => kind.clone(),
+            };
+            Some(Reference { sheet: r.sheet, kind })
+        }
         Edit::Insert { axis, at, count } | Edit::Delete { axis, at, count } => {
             let insert = matches!(edit, Edit::Insert { .. });
             let kind = match (&r.kind, axis) {
