@@ -743,3 +743,47 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+#[test]
+fn paste_special_skip_blanks_copies_notes_from_empty_cells() {
+    // #3893: Skip Blanks must still copy a source note when the source cell has no value,
+    // while preserving the destination cell's existing value.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "SOURCE NOTE"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "777"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "888"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "D2", "text": "OLD NOTE"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D3", "input": "999"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "D3", "text": "OLD NOTE"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D4", "input": "555"})).unwrap();
+    s.execute("review.newNote", json!({"cell": "D4", "text": "KEEP NOTE"})).unwrap();
+
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+
+    // Comments + Skip Blanks onto unnoted destination.
+    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "comments", "skipBlanks": true})).unwrap();
+    assert_eq!(get(&mut s, "D1")["value"], json!(777.0));
+    assert_eq!(get(&mut s, "D1")["comment"]["text"], "SOURCE NOTE");
+
+    // Comments + Skip Blanks onto noted destination replaces the old note.
+    s.execute("selection.set", json!({"range": "D2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "comments", "skipBlanks": true})).unwrap();
+    assert_eq!(get(&mut s, "D2")["value"], json!(888.0));
+    assert_eq!(get(&mut s, "D2")["comment"]["text"], "SOURCE NOTE");
+
+    // All + Skip Blanks copies the note while preserving the destination value.
+    s.execute("selection.set", json!({"range": "D3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).unwrap();
+    assert_eq!(get(&mut s, "D3")["value"], json!(999.0));
+    assert_eq!(get(&mut s, "D3")["comment"]["text"], "SOURCE NOTE");
+
+    // Truly blank source without a note leaves the destination note intact.
+    s.execute("edit.copy", json!({"range": "B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D4"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "comments", "skipBlanks": true})).unwrap();
+    assert_eq!(get(&mut s, "D4")["value"], json!(555.0));
+    assert_eq!(get(&mut s, "D4")["comment"]["text"], "KEEP NOTE");
+}
