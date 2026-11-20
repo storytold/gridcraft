@@ -350,7 +350,13 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, ..Default::default() };
             let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
-            Ok((wb, report.warnings))
+            let mut warnings = report.warnings;
+            // Text under an Excel package name is a truncated, unsynced or misnamed file far more
+            // often than a CSV; it still opens as text, but says so (#3975).
+            if kind == Some(FileKind::Xlsx) {
+                warnings.insert(0, format!("'{name}' isn't a valid .xlsx package (it is not a ZIP file), so it was read as plain text."));
+            }
+            Ok((wb, warnings))
         }
     }
 }
