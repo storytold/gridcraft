@@ -964,6 +964,9 @@ fn show_values_as_modes_round_trip_with_their_base() {
     });
     let (back, report) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(report.warnings.iter().all(|w| !w.contains("show-values-as")), "{:?}", report.warnings);
+    // The XLSX baseItem index cannot name an item the cache doesn't have: the loss of the named
+    // item is reported, not silent.
+    assert!(report.warnings.iter().any(|w| w.contains("base item")), "the substitution of `Stale`'s named item is reported: {:?}", report.warnings);
     let got = &back.sheets.iter().find_map(|sh| sh.pivots.first()).unwrap().values;
     let mut want = show_as_values();
     for v in &mut want {

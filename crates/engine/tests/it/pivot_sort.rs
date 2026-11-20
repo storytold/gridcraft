@@ -288,6 +288,40 @@ fn error_items_keep_the_engines_order_over_a_round_trip() {
     assert_eq!(labels(&back), before, "the saved order preserves it");
 }
 
+#[test]
+fn a_custom_order_follows_unicode_case_variants() {
+    // #3399 review: items merge case variants, but the order's rank keys were ASCII-only, so an
+    // item whose label re-cased after a filter lost its place.
+    let mut s = session_with(&[("Ä", "drop", json!(1.0)), ("ä", "keep", json!(2.0)), ("B", "keep", json!(3.0))]);
+    pivot(&mut s, &["Region"], &[], json!(["Sales"]));
+    sort(&mut s, json!({"field": "Region", "order": "custom", "items": ["Ä", "B"]})).unwrap();
+    assert_eq!(labels(&s), ["Ä", "B"]);
+    s.execute("pivot.filter", json!({"field": "Product", "selected": ["keep"]})).unwrap();
+    let g = grid(&s);
+    let at = g.iter().position(|r| r[0].display() == "Row Labels").map_or(1, |at| at + 1);
+    let got: Vec<String> = g[at..].iter().map(|r| r[0].display()).filter(|l| l != "Grand Total").collect();
+    assert_eq!(got, ["ä", "B"], "the first surviving record re-cases the item");
+}
+
+#[test]
+fn a_custom_order_names_an_item_beyond_the_sample_cap() {
+    // #3399 review: validation read a capped sample of the field's items, so an item past the
+    // cap couldn't be ordered.
+    let mut s = Session::new();
+    s.new_workbook();
+    let n = 100_002;
+    let mut rows = vec![json!(["Key", "Sales"])];
+    rows.extend((0..n).map(|i| json!([format!("k{i:06}"), i])));
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({"source": format!("Sheet1!$A$1:$B${}", n + 1), "rows": ["Key"], "values": ["Sales"], "destination": "Sheet1!D3"}),
+    )
+    .unwrap();
+    sort(&mut s, json!({"field": "Key", "order": "custom", "items": ["k100001"]})).unwrap();
+    assert_eq!(grid(&s)[1][0].display(), "k100001");
+}
+
 // ---------------------------------------------------------------- every combination
 
 /// Every way of sorting, on a row or a column field, in every layout: the grand total holds and,

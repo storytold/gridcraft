@@ -172,9 +172,12 @@ fn aggregate_record(
     }
     data.row_set.insert(row_path);
     data.col_set.insert(col_path);
-    // A value-filter pass (collect_paths) sizes the report before filtering: the size checks
-    // run on the final pass, when the kept records are known.
-    if !input.collect_paths && !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
+    // With the values on rows each column item is one data column (the measures stack as rows);
+    // on columns each item is one per value field. A value-filter pass (collect_paths) sizes the
+    // report before filtering: the column check runs on the final pass, when the kept records
+    // are known.
+    let cols_per_item = if input.pt.values_on_rows { 1 } else { input.vals.len() };
+    if !input.collect_paths && !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, cols_per_item) {
         return Err("The PivotTable report will not fit on the sheet.".into());
     }
     // Each entry holds one accumulator per value field and calculated-field source column, so the

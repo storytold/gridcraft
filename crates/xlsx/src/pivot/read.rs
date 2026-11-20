@@ -446,7 +446,14 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                 _ if !show_as.uses_base_item() => PivotBaseItem::default(),
                 (_, Some(BASE_ITEM_NEXT)) => PivotBaseItem::Next,
                 (Some((i, _)), Some(k)) => {
-                    cache.fields.get(*i).and_then(|f| f.labels().get(k as usize)).cloned().map_or(PivotBaseItem::Previous, PivotBaseItem::Named)
+                    cache.fields.get(*i).and_then(|f| f.labels().get(k as usize)).cloned().map_or_else(
+                        || {
+                            // The XLSX baseItem index cannot name an item the cache doesn't have.
+                            cx.warn("PivotTable base item is gone; using (previous)");
+                            PivotBaseItem::Previous
+                        },
+                        PivotBaseItem::Named,
+                    )
                 }
                 _ => PivotBaseItem::Previous,
             };
