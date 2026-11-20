@@ -215,6 +215,51 @@ fn depreciation() {
 }
 
 #[test]
+fn amordegrc_stops_at_the_end_of_the_asset_life() {
+    // Issue #3965: a five-year asset (rate 0.2) with no salvage.
+    let p = |period: f64| ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2023, 6, 30), n(0.0), n(period), n(0.2), n(1.0)]);
+    close(p(0.0), 197.0);
+    close(p(1.0), 321.0);
+    // The rate grows to 50% in the period before the last and to 100% in the last,
+    // so the final two periods charge the rest of the book value between them.
+    close(p(2.0), 193.0);
+    close(p(3.0), 145.0);
+    close(p(4.0), 144.0);
+    close(p(5.0), 0.0);
+    close(p(6.0), 0.0);
+    // Nothing of the cost is left uncharged over the scheduled periods.
+    let mut total = 0.0;
+    for period in 0..=4 {
+        match p(f64::from(period)) {
+            Value::Number(x) => total += x,
+            other => panic!("period {period}: {other:?}"),
+        }
+    }
+    close_tol(Value::Number(total), 1000.0, 1e-9);
+    // A two-year asset (rate 0.5) ends at period 1; period 2 is past the schedule.
+    let short = |period: f64| ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2023, 1, 1), n(0.0), n(period), n(0.5), n(1.0)]);
+    close(short(0.0), 0.0);
+    // Period 1 is the last, so it takes the whole remaining book value.
+    close(short(1.0), 1000.0);
+    close(short(2.0), 0.0);
+}
+
+#[test]
+fn amordegrc_stops_once_depreciation_passes_salvage() {
+    // Depreciation stops once the cumulative amount is greater than cost less
+    // salvage. With salvage 160 the penultimate charge (145 at period 3) takes the
+    // cumulative amount to 856, past cost - salvage = 840, so period 4 charges
+    // nothing instead of taking another 144.
+    let p = |period: f64| ev("AMORDEGRC", vec![n(1000.0), d(2023, 1, 1), d(2023, 6, 30), n(160.0), n(period), n(0.2), n(1.0)]);
+    close(p(0.0), 197.0);
+    close(p(1.0), 321.0);
+    close(p(2.0), 193.0);
+    close(p(3.0), 145.0);
+    close(p(4.0), 0.0);
+    close(p(5.0), 0.0);
+}
+
+#[test]
 fn coupons() {
     let args = |f: &str| ev(f, vec![d(2011, 1, 25), d(2011, 11, 15), n(2.0), n(1.0)]);
     close(args("COUPDAYBS"), 71.0);
