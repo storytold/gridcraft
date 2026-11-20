@@ -1,3 +1,5 @@
+use gridcraft_engine::core::RangeRef;
+
 use super::cell_paint::ink_on;
 use super::geo::Geo;
 use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
@@ -62,8 +64,7 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     // but neither the cell nor its helper may paint. Test the cell's own visible quadrant and
     // give the shared editor an empty clip when the cell is hidden: a one-line cell editor's
     // field can be larger than the cell (egui 0.37 gives text fields a minimum height), so its
-    // own max_rect is not a reliable "is the cell on screen" test at the frozen boundary. The
-    // pre-wrap cell rect must also be positive: a hidden row/column has zero height/width, but
+    // own max_rect is not a reliable "is the cell on screen" test at the frozen boundary. The pre-wrap cell rect must also be positive: a hidden row/column has zero height/width, but
     // Wrap Text can expand the editor below/right of it, which must not paint over the next line.
     let cell_visible = rect.width() > 0.0 && rect.height() > 0.0;
     // `erect` and `ui.clip_rect()` are in screen coordinates; `quadrant` is logical until mirrored.
@@ -95,7 +96,7 @@ pub fn validation_arrow(sh: &Sheet, geo: &Geo, c: CellRef) -> Option<Rect> {
     if dv.kind != gridcraft_engine::model::ValidationKind::List || !dv.in_cell_dropdown || geo.hidden_under_frozen(sh, c) {
         return None;
     }
-    let r = geo.cell_rect(sh, c);
+    let r = geo.range_rect(sh, sh.merge_at(c).unwrap_or(RangeRef::cell(c)));
     let s = r.height().clamp(14.0, 22.0);
     Some(Rect::from_min_size(pos2(r.right() + 1.0, r.bottom() - s), vec2(s, s)))
 }
@@ -126,7 +127,10 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         return;
     };
     let items = gridcraft_engine::cmd::data::list_items(&wb, si, c, &dv);
-    let r = geo.cell_rect(sh, c);
+
+    let anchor = sh.merge_at(c).map(|m| m.start).unwrap_or(c);
+    let r = geo.range_rect(sh, sh.merge_at(c).unwrap_or(RangeRef::cell(c)));
+    
     // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
     let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
     // Open below the cell, or above it when the rows would run past the bottom of the window (as Excel does).
@@ -148,7 +152,7 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                         .add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
                         .clicked()
                     {
-                        app.run_or_alert("cell.set", json!({"cell": c.a1(), "input": it}));
+                        app.run_or_alert("cell.set", json!({"cell": anchor.a1(), "input": it}));
                         close = true;
                     }
                 }
