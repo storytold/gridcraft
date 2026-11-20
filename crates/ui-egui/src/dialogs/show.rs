@@ -341,15 +341,52 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "saveChanges" => {
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
+                    let mut chosen = None;
+                    let mut any_button_focused = false;
                     ui.horizontal(|ui| {
                         for (label, answer) in
                             [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
                         {
-                            if ui.button(label).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
-                                open = false;
+                            let resp = ui.button(label);
+                            if resp.has_focus() {
+                                any_button_focused = true;
+                            }
+                            if resp.clicked() && chosen.is_none() {
+                                chosen = Some(answer);
                             }
                         }
                     });
+
+                    if chosen.is_none() {
+                        chosen = ui.input_mut(|i| {
+                            if i.modifiers.is_none() {
+                                if consume_fresh_key(i, egui::Key::Y) || consume_fresh_key(i, egui::Key::S) {
+                                    Some(crate::SaveAnswer::Save)
+                                } else if consume_fresh_key(i, egui::Key::N) || consume_fresh_key(i, egui::Key::D) {
+                                    Some(crate::SaveAnswer::DontSave)
+                                } else if consume_fresh_key(i, egui::Key::Escape) || consume_fresh_key(i, egui::Key::C) {
+                                    Some(crate::SaveAnswer::Cancel)
+                                } else if !any_button_focused && consume_fresh_key(i, egui::Key::Enter) {
+                                    Some(crate::SaveAnswer::Save)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        });
+                    }
+
+                    if chosen.is_some() {
+                        // Discard any remaining Enter events so they don't linger
+                        ui.input_mut(|i| {
+                            i.events.retain(|event| !matches!(event, egui::Event::Key { key: egui::Key::Enter, pressed: true, .. }));
+                        });
+                    }
+
+                    if let Some(answer) = chosen && app.answer_save_changes(answer, quitting, ui.ctx()) {
+                        open = false;
+                    }
                 }
                 "start" => {
                     ui.heading("Start a new workbook");
@@ -540,6 +577,19 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
             }
         })
     });
+}
+
+/// Consumes one fresh, unmodified press of `key` (matching logical key). Held-key repeats stay queued.
+fn consume_fresh_key(input: &mut egui::InputState, key: egui::Key) -> bool {
+    let before = input.events.len();
+    input.events.retain(|event| {
+        !matches!(
+            event,
+            egui::Event::Key { key: ev_key, modifiers, pressed: true, repeat: false, .. }
+                if *ev_key == key && modifiers.is_none()
+        )
+    });
+    input.events.len() != before
 }
 
 fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {
