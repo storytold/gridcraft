@@ -42,3 +42,25 @@ fn text_that_is_not_a_number_gets_no_button() {
     let h = harness("B3");
     assert!(h.query_by_label("Error checking options").is_none());
 }
+
+/// A formula that evaluates to an error gets the same button, naming the error, with Show
+/// Calculation Steps; `#N/A` is not flagged, as in Excel.
+#[test]
+fn a_formula_that_evaluates_to_an_error_gets_the_button() {
+    let mut h = harness("B2");
+    h.state_mut().session.execute("cell.set", json!({"cell": "B5", "input": "=1/0"})).unwrap();
+    h.state_mut().session.execute("cell.set", json!({"cell": "B6", "input": "=NA()"})).unwrap();
+    h.state_mut().session.execute("selection.set", json!({"cell": "B6"})).unwrap();
+    h.run_steps(3);
+    assert!(h.query_by_label("Error checking options").is_none(), "#N/A is not flagged");
+    h.state_mut().session.execute("selection.set", json!({"cell": "B5"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Error checking options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Division by Zero (#DIV/0!)").is_some());
+    assert!(h.query_by_label("Convert to Number").is_none());
+    h.get_by_label("Show Calculation Steps…").click();
+    h.run_steps(3);
+    let dialog = h.state().dialog.as_ref().map(|d| d.name.clone());
+    assert_eq!(dialog.as_deref(), Some("evaluateFormula"));
+}
