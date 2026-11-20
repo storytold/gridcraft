@@ -252,7 +252,7 @@ impl<'a> AxisOrder<'a> {
             .map(|f| {
                 let mut ranks = HashMap::new();
                 for (i, label) in f.custom_order.iter().enumerate() {
-                    ranks.entry(label.to_ascii_lowercase()).or_insert(i);
+                    ranks.entry(label.to_lowercase()).or_insert(i);
                 }
                 ranks
             })
@@ -291,7 +291,7 @@ impl<'a> AxisOrder<'a> {
             (PivotSort::None, _) => match self.custom.get(depth).filter(|ranks| !ranks.is_empty()) {
                 Some(ranks) => {
                     nodes.sort_by(by_label);
-                    nodes.sort_by_cached_key(|n| ranks.get(&fi.label(n.item).to_ascii_lowercase()).copied().unwrap_or(usize::MAX));
+                    nodes.sort_by_cached_key(|n| ranks.get(&fi.label(n.item).to_lowercase()).copied().unwrap_or(usize::MAX));
                 }
                 None => nodes.sort_by_key(|n| fi.get(n.item).map_or(usize::MAX, |item| item.first)),
             },

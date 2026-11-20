@@ -139,14 +139,14 @@ fn item_labels(cmd: &str, pt: &PivotTable, src: &pv::Source, wb: &gridcraft_mode
     let column = src.col(&axis.source_col).ok_or_else(|| bad(cmd, format!("no field `{field}` in the source data")))?;
     let mut known: HashMap<String, String> = HashMap::new();
     for label in pv::distinct_labels(wb, src, column, axis.date_group, usize::MAX) {
-        known.entry(label.to_ascii_lowercase()).or_insert(label);
+        known.entry(label.to_lowercase()).or_insert(label);
     }
     let mut seen: HashSet<String> = HashSet::new();
     let mut out: Vec<String> = Vec::new();
     for label in labels {
         // The exact label first (a source label can end in a space), then without padding.
-        let exact = label.to_ascii_lowercase();
-        let key = if known.contains_key(&exact) { exact } else { label.trim().to_ascii_lowercase() };
+        let exact = label.to_lowercase();
+        let key = if known.contains_key(&exact) { exact } else { label.trim().to_lowercase() };
         let canonical = known.get(&key).ok_or_else(|| bad(cmd, format!("`{label}` isn't an item of `{field}`")))?;
         if seen.insert(key) {
             out.push(canonical.clone());
