@@ -344,7 +344,10 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
                     }
                 }
             }
-            "extLst" => read_ext(cx, e, &mut sheet, &mut cf_kept_cells),
+            "extLst" => {
+                read_ext(cx, e, &mut sheet, &mut cf_kept_cells);
+                crate::slicer::read_sheet_ext(cx, e, &rels, name);
+            }
             "protectedRanges" => read_protected_ranges(e, &mut sheet),
             _ => {}
         }
@@ -954,6 +957,7 @@ mod tests {
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],
+            slicers: Default::default(),
         }
     }
 

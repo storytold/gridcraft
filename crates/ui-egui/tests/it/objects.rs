@@ -160,15 +160,15 @@ fn a_control_over_a_slicer_tile_keeps_the_generic_path_on_a_selecting_click() {
     let slicer = rect(&h, o.slicer);
     // A button exactly over the slicer's first value tile: the tile in screen units at the
     // grid's scale, then the button's anchor in sheet units from the slicer's own.
-    let (z, anchor, n, columns) = {
+    let (z, anchor, n, columns, row_height) = {
         let app = h.state();
         let d = app.session.doc().unwrap();
         let sh = d.wb.active().unwrap();
         let sl = sh.slicers.iter().find(|s| s.id == o.slicer.id).unwrap();
         let geo = Geo::new(sh, app.grid.rect.unwrap(), app.view().scroll);
-        (geo.z, sl.anchor, gridcraft_engine::cmd::slicer::slicer_items(&d.wb, d.wb.active_sheet(), sl).len(), sl.columns)
+        (geo.z, sl.anchor, gridcraft_engine::cmd::slicer::slicer_items(&d.wb, d.wb.active_sheet(), sl).len(), sl.columns, sl.row_height)
     };
-    let layout = chartview::slicer_layout(slicer, z, n, columns);
+    let layout = chartview::slicer_layout(slicer, z, n, columns, row_height);
     let tile = layout.tiles[0];
     let params = json!({
         "at": anchor.cell.a1(),
@@ -182,7 +182,10 @@ fn a_control_over_a_slicer_tile_keeps_the_generic_path_on_a_selecting_click() {
     h.run_steps(2);
     assert!(rect(&h, button).contains(tile.center()), "the button covers the tile: {:?} vs {tile:?}", rect(&h, button));
     let filter =
-        |h: &Harness| h.state().session.doc().unwrap().wb.active().unwrap().slicers.iter().find(|s| s.id == o.slicer.id).unwrap().selected.clone();
+        |h: &Harness| match &h.state().session.doc().unwrap().wb.active().unwrap().slicers.iter().find(|s| s.id == o.slicer.id).unwrap().source {
+            gridcraft_engine::model::SlicerSource::Table { selected, .. } => selected.clone(),
+            gridcraft_engine::model::SlicerSource::Pivot { .. } => None,
+        };
     assert_eq!(filter(&h), None);
     // Cmd+click selects the control without working it, and the tile beneath stays as it was.
     click_with(&mut h, tile.center(), Modifiers::COMMAND);

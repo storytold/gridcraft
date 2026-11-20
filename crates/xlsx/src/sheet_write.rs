@@ -218,7 +218,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         }
         let _ = write!(s, "<tableParts count=\"{}\">{parts}</tableParts>", tables.len());
     }
-    write_sheet_extensions(&mut s, sheet, &x14_cf);
+    write_sheet_extensions(&mut s, sheet, &x14_cf, &out.slicers.on_sheet(si), out, &mut rels);
     s.push_str("</worksheet>");
     (s, rels)
 }
@@ -232,9 +232,10 @@ struct CellWriteInput<'a> {
     dynamic_range: Option<&'a RangeRef>,
 }
 
-fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str) {
-    // Excel 2010 extensions: conditional formats, then sparklines.
-    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() {
+fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str, slicers: &[crate::slicer::SheetSlicer], out: &mut Out, rels: &mut Rels) {
+    // Excel 2010 extensions: conditional formats, sparklines and PivotTable slicers.
+    let slicer_ext = crate::slicer::SlicerWriter::sheet_part(sheet, slicers, out, rels);
+    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() || !slicer_ext.is_empty() {
         s.push_str("<extLst>");
     }
     if !x14_cf.is_empty() {
@@ -261,7 +262,8 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str) {
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() {
+    s.push_str(&slicer_ext);
+    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() || !slicer_ext.is_empty() {
         s.push_str("</extLst>");
     }
 }
@@ -315,8 +317,9 @@ fn write_sheet_notes(s: &mut String, sheet: &Sheet, si: usize, kept: &crate::pas
 }
 
 fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, rels: &mut Rels, out: &mut Out) {
-    // Drawing: pictures, charts, shapes.
-    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() {
+    // Drawing: pictures, charts, shapes, slicers.
+    let slicers = out.slicers.on_sheet(si);
+    if !sheet.images.is_empty() || !sheet.charts.is_empty() || !sheet.shapes.is_empty() || !slicers.is_empty() {
         out.drawings += 1;
         let dn = out.drawings;
         let mut drels = Rels::default();
@@ -354,6 +357,11 @@ fn write_sheet_drawing(s: &mut String, wb: &Workbook, si: usize, sheet: &Sheet, 
         }
         for sh in &sheet.shapes {
             objs.push(Obj::Shape(sh));
+        }
+        for p in &slicers {
+            if let Some(sl) = sheet.slicers.get(p.slicer) {
+                objs.push(Obj::Slicer(sl, p.name.clone()));
+            }
         }
         out.part(&format!("xl/drawings/drawing{dn}.xml"), Some(CT_DRAWING), crate::drawing::write_drawing(sheet, &wb.theme, &objs).into_bytes());
         if !drels.is_empty() {
