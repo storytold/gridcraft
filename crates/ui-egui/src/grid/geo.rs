@@ -165,6 +165,11 @@ impl Geo {
     pub fn mirror_x(&self, x: f32) -> f32 {
         if self.rtl { self.rect.left() + self.rect.right() - x } else { x }
     }
+    /// The line a right-to-left sheet is reflected across, as the `axis` of `mirror_painted`
+    /// (`x` becomes `axis - x`); `None` when the sheet is left-to-right.
+    pub fn mirror_axis(&self) -> Option<f32> {
+        self.rtl.then_some(self.rect.left() + self.rect.right())
+    }
     pub fn mirror_pos(&self, p: Pos2) -> Pos2 {
         pos2(self.mirror_x(p.x), p.y)
     }
