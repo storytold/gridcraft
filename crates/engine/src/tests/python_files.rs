@@ -598,7 +598,7 @@ fn hostile_python_content_in_files_is_capped() {
     Arc::make_mut(b1.py.as_mut().unwrap()).code = "y".repeat(9_000);
     let c1 = sh.cells.get_mut(CellRef::parse("C1").unwrap()).unwrap();
     let out = Arc::make_mut(c1.py.as_mut().unwrap()).output.as_mut().unwrap();
-    out.value = Value::Array(Arc::new(Array { rows: 100_000, cols: 100_000, data: vec![Value::Number(1.0)] }));
+    out.value = Value::Array(Arc::new(Array { rows: 100_000, cols: 100_000, data: vec![Value::Number(1.0)], ..Default::default() }));
     let bytes = serde_json::to_vec(&wb).unwrap();
     let (wb, warnings) = crate::io::open_bytes("evil.json", &bytes).unwrap();
     let sh = wb.sheet(0).unwrap();
@@ -631,7 +631,7 @@ fn hostile_python_content_in_files_is_capped() {
 fn a_malformed_result_never_spills() {
     let mut s = s();
     py(&mut s, "A1", "x");
-    let bad = Array { rows: 4_000_000_000, cols: 4_000_000_000, data: vec![] };
+    let bad = Array { rows: 4_000_000_000, cols: 4_000_000_000, data: vec![], ..Default::default() };
     cache(&mut s, "A1", Value::Array(Arc::new(bad)), "list");
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert_eq!(v(&s, "A1"), Value::Error(CellError::Spill));
@@ -671,7 +671,7 @@ fn a_dropped_python_result_keeps_its_spill_as_values() {
     let sh = wb.sheet_mut(0).unwrap();
     let out = |value: Value| Some(PyOutput { value, type_name: "list".into(), preview: String::new(), convertible: true });
     let col = array(3, 1, vec![Value::Number(7.0), Value::Number(8.0), Value::Number(9.0)]);
-    let bad = Value::Array(Arc::new(Array { rows: 3, cols: 1, data: vec![Value::Number(7.0)] }));
+    let bad = Value::Array(Arc::new(Array { rows: 3, cols: 1, data: vec![Value::Number(7.0)], ..Default::default() }));
     for (at, code, value) in [("A1", "y".repeat(9_000), col.clone()), ("B1", "b".into(), bad), ("C1", "c".into(), col)] {
         let at = CellRef::parse(at).unwrap();
         let py = PyCode { output: out(value), ..PyCode::new(&code) };

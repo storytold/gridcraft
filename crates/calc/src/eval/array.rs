@@ -55,7 +55,8 @@ impl Acc {
 
 pub(super) fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: gridcraft_core::DateSystem) -> Value {
     match v {
-        Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys)).collect() }),
+        Value::Array(a) => Array::new(a.rows, a.cols, a.data.iter().map(|x| map_unary(x, f, plus, sys)).collect())
+            .map_or(Value::Error(CellError::Value), Value::from),
         Value::Error(e) => Value::Error(*e),
         Value::Text(_) if plus => v.clone(),
         other => match other.to_number_in(sys) {
@@ -78,10 +79,14 @@ pub fn zip2(a: &Value, b: &Value, f: impl Fn(&Value, &Value) -> Value) -> Value 
                     data.push(f(&x.get_broadcast(r, c), &y.get_broadcast(r, c)));
                 }
             }
-            Value::from(Array { rows, cols, data })
+            Array::new(rows, cols, data).map_or(Value::Error(CellError::Value), Value::from)
         }
-        (Value::Array(x), s) => Value::from(Array { rows: x.rows, cols: x.cols, data: x.data.iter().map(|v| f(v, s)).collect() }),
-        (s, Value::Array(y)) => Value::from(Array { rows: y.rows, cols: y.cols, data: y.data.iter().map(|v| f(s, v)).collect() }),
+        (Value::Array(x), s) => {
+            Array::new(x.rows, x.cols, x.data.iter().map(|v| f(v, s)).collect()).map_or(Value::Error(CellError::Value), Value::from)
+        }
+        (s, Value::Array(y)) => {
+            Array::new(y.rows, y.cols, y.data.iter().map(|v| f(s, v)).collect()).map_or(Value::Error(CellError::Value), Value::from)
+        }
         (x, y) => f(x, y),
     }
 }
@@ -102,10 +107,10 @@ fn try_zip2(a: &Value, b: &Value, mut f: impl FnMut(&Value, &Value) -> Option<Va
                     data.push(f(&x.get_broadcast(r, c), &y.get_broadcast(r, c))?);
                 }
             }
-            Value::from(Array { rows, cols, data })
+            Value::from(Array::new(rows, cols, data)?)
         }
-        (Value::Array(x), s) => Value::from(Array { rows: x.rows, cols: x.cols, data: x.data.iter().map(|v| f(v, s)).collect::<Option<_>>()? }),
-        (s, Value::Array(y)) => Value::from(Array { rows: y.rows, cols: y.cols, data: y.data.iter().map(|v| f(s, v)).collect::<Option<_>>()? }),
+        (Value::Array(x), s) => Value::from(Array::new(x.rows, x.cols, x.data.iter().map(|v| f(v, s)).collect::<Option<_>>()?)?),
+        (s, Value::Array(y)) => Value::from(Array::new(y.rows, y.cols, y.data.iter().map(|v| f(s, v)).collect::<Option<_>>()?)?),
         (x, y) => f(x, y)?,
     })
 }
@@ -147,7 +152,7 @@ pub(super) fn zip3(c: &Array, t: &Value, f: &Value, g: impl Fn(&Value, &Value, &
             data.push(g(&c.get_broadcast(r, col), &get(t, r, col), &get(f, r, col)));
         }
     }
-    Value::from(Array { rows, cols, data })
+    Array::new(rows, cols, data).map_or(Value::Error(CellError::Value), Value::from)
 }
 
 /// One cell of a LAMBDA helper's result, or `None` for an array of more than one value: arrays
@@ -243,7 +248,7 @@ mod tests {
     #[test]
     fn a_refused_cell_stops_the_broadcast() {
         let col = Value::from(Array::column((0..4_000).map(|i| Value::number(i as f64)).collect()));
-        let row = Value::from(Array { rows: 1, cols: 4_000, data: (0..4_000).map(|i| Value::number(i as f64)).collect() });
+        let row = Value::from(Array::new(1, 4_000, (0..4_000).map(|i| Value::number(i as f64)).collect()).unwrap());
         let mut calls = 0;
         let r = try_zip2(&col, &row, |a, _| {
             calls += 1;
