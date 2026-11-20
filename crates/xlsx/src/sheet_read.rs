@@ -776,7 +776,8 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
     }
 }
 
-/// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial.
+/// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial. A time-zone offset (`Z`,
+/// `+05:30`, `-00:00`, `-0800`) is dropped and the wall time kept; a malformed one is `None`.
 pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
     let s = s.trim_end_matches('Z');
     let (date, time) = match s.split_once('T') {
@@ -796,8 +797,7 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
         serial = serial_from_ymd(sys, y, m, d)?;
     }
     if let Some(t) = time {
-        // Drop a time-zone offset.
-        let t = t.split(['+']).next().unwrap_or(t);
+        let t = strip_utc_offset(t)?;
         let mut it = t.split(':');
         let h: f64 = it.next()?.parse().ok()?;
         let mi: f64 = it.next().unwrap_or("0").parse().ok()?;
@@ -808,6 +808,27 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
         serial += time_fraction(h, mi, se);
     }
     Some(serial)
+}
+
+/// The time without a trailing `+hh:mm`, `-hh:mm`, `+hhmm` or `+hh` offset; `None` when the
+/// offset is malformed.
+fn strip_utc_offset(t: &str) -> Option<&str> {
+    let Some(at) = t.rfind(['+', '-']) else { return Some(t) };
+    let off = &t[at + 1..];
+    // ASCII only: `split_at(2)` below must not land inside a multi-byte character (`-€0`).
+    if !off.is_ascii() {
+        return None;
+    }
+    let (h, m) = match off.split_once(':') {
+        Some((h, m)) => (h, m),
+        None if off.len() == 4 => off.split_at(2),
+        None => (off, "00"),
+    };
+    let two_digits = |p: &str| p.len() == 2 && p.bytes().all(|b| b.is_ascii_digit());
+    if !two_digits(h) || !two_digits(m) || h > "23" || m > "59" {
+        return None;
+    }
+    Some(&t[..at])
 }
 
 /// What one dependent of a shared formula costs: its printed text plus its expression tree.
@@ -931,6 +952,26 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+    }
+
+    /// #4455: negative offsets read like positive ones (wall time kept); bad offsets are refused.
+    #[test]
+    fn iso_dates_drop_any_utc_offset() {
+        let want = Some(45659.0 + time_fraction(10.0, 34.0, 56.0));
+        for s in [
+            "2025-01-02T10:34:56Z",
+            "2025-01-02T10:34:56+00:00",
+            "2025-01-02T10:34:56-00:00",
+            "2025-01-02T10:34:56-08:00",
+            "2025-01-02T10:34:56+0530",
+            "2025-01-02T10:34:56-03",
+        ] {
+            assert_eq!(parse_iso_datetime(s, DateSystem::D1900), want, "{s}");
+        }
+        assert_eq!(parse_iso_datetime("06:00:00-05:00", DateSystem::D1900), Some(0.25));
+        for s in ["2025-01-02T10:34:56-8", "2025-01-02T10:34:56+24:00", "2025-01-02T10:34:56-0a:00", "2025-01-02T10:34:56-€0", "10:34-é1"] {
+            assert_eq!(parse_iso_datetime(s, DateSystem::D1900), None, "{s}");
+        }
     }
 
     fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
