@@ -208,7 +208,10 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
             g.kids("ser").map(move |s| (s, sec))
         })
         .collect();
-    let kind = map_chart_type(dc.kind, plot);
+    let multi_axis = ser_els.iter().any(|(_, sec)| *sec);
+    let is_combo = dc.kind == ChartType::Combo || multi_axis;
+    let base_kind = map_chart_type(dc.kind, plot);
+    let kind = if is_combo { ChartKind::Combo } else { base_kind };
     let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
     let series = dc
         .series
@@ -249,8 +252,14 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                     .unwrap_or_default(),
                 bubble_sizes: s.refs.sizes.as_deref().map(chart_ref_from_file).or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")))),
                 color,
-                secondary: dc.kind == ChartType::Combo && (s.secondary_axis || fallback_sec),
-                kind: if dc.kind == ChartType::Combo { s.kind.map(|k| map_chart_type(k, plot)) } else { None },
+                secondary: is_combo && (s.secondary_axis || fallback_sec),
+                kind: if dc.kind == ChartType::Combo {
+                    s.kind.map(|k| map_chart_type(k, plot))
+                } else if multi_axis {
+                    Some(s.kind.map(|k| map_chart_type(k, plot)).unwrap_or(base_kind))
+                } else {
+                    None
+                },
                 quartiles: Default::default(),
                 smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
                 trendlines: s.trendlines.iter().enumerate().map(|(ti, t)| map_trendline(t, sel.and_then(|e| e.kids("trendline").nth(ti)))).collect(),

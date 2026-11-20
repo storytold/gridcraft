@@ -237,7 +237,17 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
             rows.push(row);
             Ok(())
         })
-        .map_err(craft_error)?;
+        .map_err(|e| match e {
+            craft_xlsx::Error::TooLarge(m) if !m.contains("the workbook has more than") => {
+                IoError::Format(format!("sheet \"{name}\" is damaged ({m})"))
+            }
+            other => craft_error(other),
+        })?;
+    let total_cells: u64 = rows.iter().map(|r| r.cells.len() as u64).sum();
+    if sheet_part.dropped_cells > 0 && sheet_part.dropped_cells.saturating_add(total_cells) > crate::xml::MAX_XML_NODES as u64 {
+        cx.warn(format!("sheet \"{name}\" is damaged: more than {} cells", crate::xml::MAX_XML_NODES));
+        return Ok((Sheet::new(name), Default::default()));
+    }
     for row in &rows {
         read_craft_row(cx, &mut sheet, &mut st, row).map_err(craft_error)?;
     }
@@ -367,8 +377,10 @@ fn read_sheet_notes_and_tables(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Re
         }
     }
     if !sheet.comments.is_empty() {
-        let shapes = cx.pkg.craft_mut().note_shapes(sp).map_err(craft_error)?;
-        parts::apply_craft_note_shapes(&shapes, sheet);
+        match cx.pkg.craft_mut().note_shapes(sp) {
+            Ok(shapes) => parts::apply_craft_note_shapes(&shapes, sheet),
+            Err(e) => cx.warn(format!("sheet \"{}\": note drawing could not be read ({e})", sheet.name)),
+        }
     }
     Ok(())
 }
