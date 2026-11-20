@@ -313,6 +313,36 @@ fn odd_periods() {
 }
 
 #[test]
+fn odd_last_rejects_a_last_interest_before_the_first_maturity_anniversary_of_1900() {
+    // #4074: Excel returns #NUM! when the maturity-anchored coupon date on or before
+    // last_interest would fall before 1900 (serials 1 and 61 here); serial 180 still prices.
+    let price = |last: f64| ev("ODDLPRICE", vec![d(2023, 2, 1), d(2023, 4, 1), n(last), n(0.05), n(0.04), n(100.0), n(1.0), n(0.0)]);
+    let yld = |last: f64| ev("ODDLYIELD", vec![d(2023, 2, 1), d(2023, 4, 1), n(last), n(0.05), n(100.0), n(100.0), n(1.0), n(0.0)]);
+    for last in [1.0, 61.0] {
+        is_err(price(last), CellError::Num);
+        is_err(yld(last), CellError::Num);
+    }
+    close_tol(price(180.0), 96.10623620309059, 1e-10);
+    close_tol(yld(180.0), 0.007013032552159747, 1e-10);
+}
+
+/// The #4074 coupon-date rule was observed in the 1900 date system only. In the 1904 system the
+/// maturity-anchored probe can reach a year the calendar cannot represent, so a last_interest
+/// early in 1904 still prices instead of returning #NUM!.
+#[test]
+fn odd_last_keeps_its_1904_results() {
+    let d4 = |y, m, dd| n(serial_from_ymd(DateSystem::D1904, y, m, dd).unwrap());
+    let ev4 = |name: &str, args: Vec<Arg>| {
+        let mut ctx = TestCtx { sys: DateSystem::D1904, ..TestCtx::default() };
+        crate::call(crate::lookup(name).unwrap(), &args, &mut ctx)
+    };
+    let price = vec![d4(1904, 2, 1), d4(1905, 4, 1), d4(1904, 1, 15), n(0.05), n(0.04), n(100.0), n(1.0), n(0.0)];
+    let yld = vec![d4(1904, 2, 1), d4(1905, 4, 1), d4(1904, 1, 15), n(0.05), n(100.0), n(100.0), n(1.0), n(0.0)];
+    close_tol(ev4("ODDLPRICE", price), 101.10474168435951, 1e-10);
+    close_tol(ev4("ODDLYIELD", yld), 0.04988913525498887, 1e-10);
+}
+
+#[test]
 fn odd_periods_survive_hostile_input() {
     // Quarterly quasi-periods across the whole date range, huge rates and yields: a value or
     // an error, never a panic or a hang.
