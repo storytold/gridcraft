@@ -400,7 +400,8 @@ pub(super) fn tdist_legacy(a: &[Arg], _: C) -> R<Value> {
 pub(super) fn t_inv(a: &[Arg], _: C) -> R<Value> {
     let p = num(a, 0)?;
     let v = df_arg(a, 1)?;
-    if p == 0.0 {
+    // Excel divides by zero at probability 0 only for one degree of freedom; above that it is #NUM! (#4021).
+    if p == 0.0 && v == 1.0 {
         return Err(CellError::Div0);
     }
     if !(p > 0.0 && p < 1.0) {
