@@ -225,7 +225,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                 secondary: s.secondary_axis,
                 kind: if dc.kind == ChartType::Combo { s.kind.map(|k| map_chart_type(k, plot)) } else { None },
                 quartiles: Default::default(),
-                smooth: s.smooth,
+                smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
                 trendlines: s.trendlines.iter().enumerate().map(|(ti, t)| map_trendline(t, sel.and_then(|e| e.kids("trendline").nth(ti)))).collect(),
             }
         })
