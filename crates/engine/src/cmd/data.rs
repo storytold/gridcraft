@@ -159,7 +159,7 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{range?, groupBy: \"A\", function?: sum|count|average|max|min|product, columns: [\"C\"], header?: true}",
             has_doc,
-            subtotal
+            |s, p| s.grouped("Subtotal", |s| subtotal(s, p))
         ),
         cmd!("data.flashFill", "Flash Fill", ["Data", "Data Tools"], None, "{range?}", has_doc, |s, p| s.execute("edit.flashFill", p.clone())),
     ]
