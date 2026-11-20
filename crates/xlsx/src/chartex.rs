@@ -43,7 +43,7 @@ pub fn requires(k: ChartKind) -> (&'static str, &'static str) {
 
 // ---------------------------------------------------------------- reading
 
-pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart) -> Option<Chart> {
+pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&El>) -> Option<Chart> {
     use craft_drawingml::chart::ChartType;
     let kind = match dc.kind {
         ChartType::Histogram | ChartType::Pareto => ChartKind::Histogram,
@@ -54,7 +54,11 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart) -> Option<Char
         ChartType::Sunburst => ChartKind::Sunburst,
         _ => return None,
     };
-    let quartiles = if dc.inclusive_quartiles { QuartileMethod::Inclusive } else { QuartileMethod::Exclusive };
+    let default_quartiles = if dc.inclusive_quartiles { QuartileMethod::Inclusive } else { QuartileMethod::Exclusive };
+    let series_els: Vec<&El> = root
+        .and_then(|r| r.path(&["chart", "plotArea", "plotAreaRegion"]))
+        .map(|region| region.kids("series").filter(|s| s.attr("layoutId") != Some("paretoLine")).collect())
+        .unwrap_or_default();
     let series = dc
         .series
         .into_iter()
@@ -68,6 +72,12 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart) -> Option<Char
                     _ => None,
                 })
                 .filter(|c| *c != gridcraft_model::Color::Theme(4 + (idx % 6) as u8, 0));
+            let quartiles = series_els
+                .get(idx)
+                .and_then(|el| el.path(&["layoutPr", "statistics"]))
+                .and_then(|st| st.attr("quartileMethod"))
+                .map(|m| if m == "inclusive" { QuartileMethod::Inclusive } else { QuartileMethod::Exclusive })
+                .unwrap_or(default_quartiles);
             Series {
                 quartiles,
                 name: s.refs.name.as_deref().map(crate::chart::chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
@@ -109,7 +119,7 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart) -> Option<Char
 pub fn read_chartex(root: &El) -> Option<Chart> {
     let craft = crate::chart::to_craft_el(root);
     let dc = craft_drawingml::chart::chartex::chartex_from(&craft)?;
-    from_dml_chartex(dc)
+    from_dml_chartex(dc, Some(root))
 }
 
 // ---------------------------------------------------------------- writing
