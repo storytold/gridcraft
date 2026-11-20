@@ -1,6 +1,7 @@
 use gridcraft_engine::model::{ObjKind, ObjRef};
 
-use super::editor::validation_arrow;
+use super::list_picker::ListPicker;
+use super::list_picker::validation_arrow;
 use super::geo::Geo;
 use super::keyboard::keyboard;
 use super::menus::set_fill_tag;
@@ -422,10 +423,11 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     }
     let c = geo.cell_at(sh, p);
     // Data validation list arrow next to the active cell.
+    // El scan de validations + list_items + merge_at ocurre una vez aquí, no por frame
     if let Some(r) = validation_arrow(sh, geo, sel.active)
         && r.contains(p)
     {
-        app.grid.list_picker = Some(sel.active);
+        app.grid.list_picker = app.session.active().and_then(|d| ListPicker::open(d, sel.active));
         return;
     }
     // Filter dropdown buttons.

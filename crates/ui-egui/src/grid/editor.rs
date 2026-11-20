@@ -1,8 +1,8 @@
-use gridcraft_engine::core::RangeRef;
+
 
 use super::cell_paint::ink_on;
 use super::geo::Geo;
-use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
+use super::{Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, pos2, theme, vec2};
 
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
@@ -24,10 +24,12 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
         return;
     }
     let cell = ed.cell;
+
     let rect = match sh.merge_at(cell) {
         Some(m) => geo.range_rect(sh, m),
         None => geo.cell_rect(sh, cell),
     };
+
     let st = wb.styles.get(sh.style_id(cell)).clone();
     let size = st.font.size * 96.0 / 72.0 * geo.z;
     let font = FontId::new(size, theme::cell_family(&st.font.name, st.font.bold, st.font.italic));
@@ -90,76 +92,3 @@ pub(super) fn popup_dismissed(response: &egui::Response, was_open: bool) -> bool
     response.ctx.input(|i| !i.focused || i.key_pressed(egui::Key::Escape)) || (was_open && response.clicked_elsewhere())
 }
 
-/// The dropdown arrow beside a cell with an in-cell list validation.
-pub fn validation_arrow(sh: &Sheet, geo: &Geo, c: CellRef) -> Option<Rect> {
-    let dv = sh.validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c)))?;
-    if dv.kind != gridcraft_engine::model::ValidationKind::List || !dv.in_cell_dropdown || geo.hidden_under_frozen(sh, c) {
-        return None;
-    }
-    let r = geo.range_rect(sh, sh.merge_at(c).unwrap_or(RangeRef::cell(c)));
-    let s = r.height().clamp(14.0, 22.0);
-    Some(Rect::from_min_size(pos2(r.right() + 1.0, r.bottom() - s), vec2(s, s)))
-}
-
-/// Rows the list-validation dropdown shows before it scrolls (Excel shows 8).
-const LIST_PICKER_MAX_ROWS: usize = 8;
-
-const LIST_PICKER_ROW_H: f32 = 18.0;
-
-/// Popup frame around the rows: 2 px inner margin and the window stroke on each side, rounded up.
-const LIST_PICKER_CHROME: f32 = 8.0;
-
-/// Popup height for `n` items: every item up to `LIST_PICKER_MAX_ROWS`, then a scrollbar.
-pub(super) fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
-    let rows = n.clamp(1, LIST_PICKER_MAX_ROWS) as f32;
-    rows * row_h + (rows - 1.0) * gap
-}
-
-/// Draws the validation list popup, choosing above/below and left/right placement for RTL, and applies the clicked item with `cell.set`.
-pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
-    let Some(c) = app.grid.list_picker else { return };
-    let Some(d) = app.session.active() else { return };
-    let wb = d.wb.clone();
-    let si = wb.active_sheet();
-    let Some(sh) = wb.sheet(si) else { return };
-    let Some(dv) = sh.validations.iter().find(|x| x.ranges.iter().any(|r| r.contains(c))).cloned() else {
-        app.grid.list_picker = None;
-        return;
-    };
-    let items = gridcraft_engine::cmd::data::list_items(&wb, si, c, &dv);
-
-    let anchor = sh.merge_at(c).map(|m| m.start).unwrap_or(c);
-    let r = geo.range_rect(sh, sh.merge_at(c).unwrap_or(RangeRef::cell(c)));
-    
-    // Fit the popup to its rows (up to LIST_PICKER_MAX_ROWS); without a minimum the scroll area collapses to its 64 px default.
-    let height = list_picker_height(items.len(), LIST_PICKER_ROW_H, ui.spacing().item_spacing.y);
-    // Open below the cell, or above it when the rows would run past the bottom of the window (as Excel does).
-    let screen = ui.ctx().content_rect();
-    let above = r.bottom() + height + LIST_PICKER_CHROME > screen.bottom() && r.top() - height - LIST_PICKER_CHROME >= screen.top();
-    let (at, pivot) = match (above, geo.rtl) {
-        (false, false) => (geo.mirror_pos(r.left_bottom()), Align2::LEFT_TOP),
-        (false, true) => (geo.mirror_pos(r.left_bottom()), Align2::RIGHT_TOP),
-        (true, false) => (geo.mirror_pos(r.left_top()), Align2::LEFT_BOTTOM),
-        (true, true) => (geo.mirror_pos(r.left_top()), Align2::RIGHT_BOTTOM),
-    };
-    let mut close = false;
-    let response = egui::Area::new(egui::Id::unique("dv_list")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
-            ui.set_min_width(r.width().max(100.0));
-            egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
-                for it in &items {
-                    if ui
-                        .add(egui::Button::new(it.as_str()).frame_when_inactive(false).min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)))
-                        .clicked()
-                    {
-                        app.run_or_alert("cell.set", json!({"cell": anchor.a1(), "input": it}));
-                        close = true;
-                    }
-                }
-            });
-        });
-    });
-    if close || popup_dismissed(&response.response, was_open) {
-        app.grid.list_picker = None;
-    }
-}

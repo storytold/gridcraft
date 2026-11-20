@@ -9,7 +9,7 @@ use gridcraft_engine::model::Sheet;
 use serde_json::{Value as Json, json};
 
 use crate::SheetApp;
-use crate::grid::Geo;
+use crate::grid::{Geo, ListPicker};
 
 /// What a shortcut does.
 #[derive(Clone, Debug, PartialEq)]
@@ -352,7 +352,7 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
         Shortcut::ContextMenu => app.grid.context_menu = Some(geo.cell_rect(sh, active).center()),
         Shortcut::DropDown => {
             if sh.validations.iter().any(|d| d.in_cell_dropdown && d.ranges.iter().any(|r| r.contains(active))) {
-                app.grid.list_picker = Some(active);
+                app.grid.list_picker = app.session.active().and_then(|d| ListPicker::open(d, active));
             } else if sh.has_filter_button(active) {
                 let at = geo.mirror_pos(crate::grid::filter_button_rect(geo, sh, active).center());
                 app.grid.filter_menu = Some((active.col, active.row, at));

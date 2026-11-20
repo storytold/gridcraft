@@ -22,6 +22,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
         || app.macros.question.is_some()
+        // To take control of the list validation of dropdown to select some item with `Alt + down`
+        || app.grid.list_picker.is_some()
     {
         return;
     }

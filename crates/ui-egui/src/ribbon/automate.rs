@@ -2,8 +2,8 @@ use super::controls::{control_keytip, sep};
 use super::{Icon, SheetApp, Ui, big_button, json};
 use crate::theme::Tokens;
 use crate::widgets::{big_split_button, small_button, small_toggle_button};
-use egui::vec2;
 
+use egui::vec2;
 pub(super) fn automate(app: &mut SheetApp, ui: &mut Ui) {
     // Macros: the Macros dialog; Record Macro (Stop Recording while recording), Use Relative
     // References; Run Macro, whose main part runs the last macro and whose menu lists them all.
