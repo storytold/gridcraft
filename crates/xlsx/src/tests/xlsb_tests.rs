@@ -684,17 +684,21 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
         wb_xml.split("<externalReference ").skip(1).filter_map(|s| s.split("r:id=\"").nth(1).and_then(|t| t.split('"').next())).collect();
     assert_eq!(ref_ids.len(), 2, "{wb_xml}");
     let wb_rels = read_zip(&mut zip, "xl/_rels/workbook.xml.rels");
-    let second_target = wb_rels
-        .split("<Relationship ")
-        .find(|r| r.contains(&format!("Id=\"{}\"", ref_ids[1])))
-        .and_then(|r| r.split("Target=\"").nth(1))
-        .and_then(|s| s.split('"').next())
-        .expect("second externalReference r:id should resolve in workbook.xml.rels")
-        .trim_start_matches('/')
-        .to_string();
-    let second_part = if second_target.starts_with("xl/") { second_target } else { format!("xl/{second_target}") };
+    let target_for = |rid: &str| {
+        let t = wb_rels
+            .split("<Relationship ")
+            .find(|r| r.contains(&format!("Id=\"{rid}\"")))
+            .and_then(|r| r.split("Target=\"").nth(1))
+            .and_then(|s| s.split('"').next())
+            .expect("externalReference r:id should resolve in workbook.xml.rels")
+            .trim_start_matches('/');
+        if t.starts_with("xl/") { t.to_string() } else { format!("xl/{t}") }
+    };
+    let first_xml = read_zip(&mut zip, &target_for(ref_ids[0]));
+    assert!(first_xml.contains("<ddeLink "), "{first_xml}");
+    let second_part = target_for(ref_ids[1]);
     let second_xml = read_zip(&mut zip, &second_part);
-    assert!(second_xml.contains("<sheetName val=\"SheetA\"/>"), "{second_xml}");
+    assert!(second_xml.contains("<externalBook ") && second_xml.contains("<sheetName val=\"SheetA\"/>"), "{second_xml}");
     let (dir, file) = second_part.rsplit_once('/').unwrap();
     let second_rels = read_zip(&mut zip, &format!("{dir}/_rels/{file}.rels"));
     assert!(

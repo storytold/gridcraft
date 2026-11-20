@@ -221,11 +221,14 @@ fn preserve_external_links(links: &[(String, Option<craft_xlsx::ExternalLink>)])
     for (i, (_, link)) in links.iter().enumerate() {
         let rid = format!("rId{}", i + 1);
         let part_name = format!("xl/externalLinks/externalLink{}.xml", i + 1);
-        // Missing slots still need a valid r:id and part so ECMA-376 <externalReferences> and
-        // XLSX reopen keep the 1-based `[n]` ordinals for later links.
+        // Missing slots still need a schema-valid <externalLink> part and r:id so ECMA-376
+        // <externalReferences> and XLSX reopen keep the 1-based `[n]` ordinals for later links.
         let (xml, rels) = match link {
             Some(link) => external_link_part_xml(link),
-            None => (format!("{XML_DECL}<externalLink xmlns=\"{NS_MAIN}\"/>"), Vec::new()),
+            None => (
+                format!("{XML_DECL}<externalLink xmlns=\"{NS_MAIN}\"><ddeLink ddeService=\"missing\" ddeTopic=\"missing\"/></externalLink>"),
+                Vec::new(),
+            ),
         };
         p.rels.push(PreservedRel { id: rid.clone(), rel_type: format!("{NS_REL}/externalLink"), target: part_name.clone(), external: false });
         p.parts.push(PreservedPart { name: part_name, content_type: CT_EXT_LINK.into(), data: xml.into_bytes().into(), rels });
@@ -308,6 +311,8 @@ fn external_link_part_xml(link: &craft_xlsx::ExternalLink) -> (String, Vec<Prese
             xml.push_str("</sheetDataSet>");
         }
         xml.push_str("</externalBook>");
+    } else {
+        xml.push_str("<ddeLink ddeService=\"external\" ddeTopic=\"external\"/>");
     }
     xml.push_str("</externalLink>");
     (xml, rels)
