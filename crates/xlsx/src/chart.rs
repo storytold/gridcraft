@@ -234,7 +234,8 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                         DmlFill::Solid { color } => map_dml_color(color),
                         _ => None,
                     })
-                });
+                })
+                .or_else(|| sel.and_then(|e| e.path(&["marker", "spPr", "solidFill"])).and_then(dml_color));
             Series {
                 name: s.refs.name.as_deref().map(chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
                 categories: s
