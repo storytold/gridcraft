@@ -50,7 +50,6 @@ struct LinkBudget {
 
 #[derive(Default)]
 struct RowState {
-    next_row: u32,
     shared: HashMap<u32, Shared>,
     /// Dynamic-array spill ranges and legacy array ranges: cached values inside them (other than
     /// the anchor) are not stored, so the formula can fill them again.
@@ -62,8 +61,6 @@ struct RowState {
     /// The cell being read lost its shared formula to a copy limit: its cached value is kept, even
     /// inside an array range (where a formula's cached values otherwise give way to the spill).
     shared_copy_refused: bool,
-    dropped: u64,
-    rows: u64,
 }
 
 /// The known dynamic range `pos` lies in, when it isn't the range's anchor: the cell's cached
@@ -609,7 +606,6 @@ fn charge_cells(cx: &mut Ctx<'_>, n: u64) -> Result<(), IoError> {
 }
 
 fn read_craft_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &CraftRow) -> Result<(), craft_xlsx::Error> {
-    st.rows += 1;
     let r = row.index;
     let mut info = LineInfo::default();
     if let Some(ht) = row.height {
