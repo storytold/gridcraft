@@ -372,6 +372,15 @@ pub struct Alignment {
     pub reading_order: Option<ReadingOrder>,
 }
 
+impl Alignment {
+    /// Whether the text folds onto lines at the column width. Excel folds justified and
+    /// distributed text, horizontal or vertical, as it folds wrapped text, without Wrap Text set:
+    /// row AutoFit gives each the height of the wrapped text.
+    pub fn folds(&self) -> bool {
+        self.wrap || matches!(self.h, HAlign::Justify | HAlign::Distributed) || matches!(self.v, VAlign::Justify | VAlign::Distributed)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Protection {
     pub locked: bool,

@@ -35,7 +35,8 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     let shown = lines;
     // Wrap Text: the editor keeps the column's width and wraps, growing down as Excel's does.
     // Otherwise it widens to the text's one-line width.
-    let wrap = st.align.wrap;
+    // Justified and distributed text wraps too, as Excel's editor does.
+    let wrap = st.align.folds();
     let (w, h) = if wrap {
         // The field wraps at the width it is given (the editor's less its 2 px inset a side): its
         // frame is `Frame::NONE`, so no text margin is taken off.
