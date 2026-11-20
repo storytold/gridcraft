@@ -20,7 +20,7 @@
 //! This is the desktop app's logger only; `gridcraft-cli` and `gridcraft-web` set up their own.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
@@ -176,22 +176,33 @@ impl Sink {
             }
             return;
         }
-        self.append(line);
+        let _ = self.append(line);
     }
 
     /// Start writing to `file` (a fresh one: the size cap starts over), first the lines kept so far.
-    pub fn attach(&mut self, file: File) {
+    pub fn attach(&mut self, mut file: File) -> std::io::Result<()> {
+        // `write_all` may accept an empty buffer without touching the file. Probe a real write,
+        // then restore the fresh file to empty before accepting the attachment.
+        file.write_all(&[0])?;
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
         self.file = Some(file);
         self.written = 0;
         self.capped = false;
-        for line in std::mem::take(&mut self.pending) {
-            self.append(&line);
+        let mut pending = std::mem::take(&mut self.pending).into_iter();
+        while let Some(line) = pending.next() {
+            if let Err(error) = self.append(&line) {
+                self.pending.push(line);
+                self.pending.extend(pending);
+                return Err(error);
+            }
         }
         if self.dropped > 0 {
             let note = format!("{} earlier log lines were dropped before the log file was opened\n", self.dropped);
+            self.append(&note)?;
             self.dropped = 0;
-            self.append(&note);
         }
+        Ok(())
     }
 
     /// There will be no log file: forget the lines kept for it and keep no more.
@@ -201,11 +212,11 @@ impl Sink {
         self.capped = true;
     }
 
-    fn append(&mut self, line: &str) {
+    fn append(&mut self, line: &str) -> std::io::Result<()> {
         if self.capped {
-            return;
+            return Ok(());
         }
-        let Some(file) = self.file.as_mut() else { return };
+        let Some(file) = self.file.as_mut() else { return Ok(()) };
         let len = u64::try_from(line.len()).unwrap_or(u64::MAX);
         let text = if self.written.saturating_add(len) > self.max_bytes {
             self.capped = true;
@@ -215,10 +226,12 @@ impl Sink {
             line.to_owned()
         };
         // A full disk or a vanished file must not take the app down: drop the file sink.
-        if file.write_all(text.as_bytes()).is_err() {
+        if let Err(error) = file.write_all(text.as_bytes()) {
             self.file = None;
             self.capped = true;
+            return Err(error);
         }
+        Ok(())
     }
 }
 
@@ -240,14 +253,11 @@ impl AppLogger {
         // A thread that panicked while logging leaves the sink usable: take it back.
         let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
         match rotate(dir) {
-            Ok((path, file)) => {
-                sink.attach(file);
-                Ok(path)
-            }
-            Err(e) => {
-                sink.no_file();
-                Err(format!("{}: {e}", dir.display()))
-            }
+            Ok((path, file)) => match sink.attach(file) {
+                Ok(()) => Ok(path),
+                Err(e) => Err(format!("{}: {e}", dir.display())),
+            },
+            Err(e) => Err(format!("{}: {e}", dir.display())),
         }
     }
 
@@ -268,10 +278,9 @@ impl log::Log for AppLogger {
         }
         // Formatted before the sink is locked, so a message that logs while it is formatted can't deadlock.
         let thread = std::thread::current();
-        let logged_at = gridcraft_engine::core::date::unix_now_ms()
-            .and_then(|milliseconds| SystemTime::UNIX_EPOCH.checked_add(std::time::Duration::from_millis(milliseconds.max(0.0) as u64)))
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-        let line = format_line(&timestamp(logged_at), record.level(), thread.name().unwrap_or("?"), record.target(), &record.args().to_string());
+        #[allow(clippy::disallowed_methods)] // the desktop app (native only): wasm never runs it
+        let line =
+            format_line(&timestamp(SystemTime::now()), record.level(), thread.name().unwrap_or("?"), record.target(), &record.args().to_string());
         if self.stderr {
             // No terminal (a Windows GUI build, a closed pipe) is not an error worth reporting.
             let _ = std::io::stderr().write_all(line.as_bytes());
