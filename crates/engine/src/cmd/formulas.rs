@@ -1096,6 +1096,26 @@ mod tests {
     }
 
     #[test]
+    fn long_numeric_literal_survives_defined_name_reference_rewrites() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.insertSheet", json!({"name": "Source"})).unwrap();
+        s.execute("cell.set", json!({"sheet": "Source", "cell": "A1", "input": "5"})).unwrap();
+        s.execute("formulas.defineName", json!({"name": "LongRef", "refersTo": "=Source!$A$1+1234567890123456"})).unwrap();
+        s.execute("cell.set", json!({"sheet": "Sheet1", "cell": "A1", "input": "=LongRef"})).unwrap();
+        for (command, params) in
+            [("sheet.rename", json!({"sheet": "Source", "name": "Renamed"})), ("home.insertRows", json!({"sheet": "Renamed", "rows": "1:1"}))]
+        {
+            s.execute(command, params).unwrap();
+            let result = s.execute("cell.get", json!({"sheet": "Sheet1", "cell": "A1"})).unwrap();
+            assert_eq!(result["value"], json!(1234567890123461.0), "{command}");
+        }
+        s.execute("cell.set", json!({"sheet": "Renamed", "cell": "A2", "input": "7"})).unwrap();
+        let result = s.execute("cell.get", json!({"sheet": "Sheet1", "cell": "A1"})).unwrap();
+        assert_eq!(result["value"], json!(1234567890123463.0));
+    }
+
+    #[test]
     fn name_manager_previews_a_name_over_several_ranges() {
         let mut s = Session::new();
         s.new_workbook();

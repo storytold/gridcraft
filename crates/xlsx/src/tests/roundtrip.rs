@@ -17,6 +17,27 @@ fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+#[test]
+fn long_numeric_literal_survives_xlsx_import_and_export() {
+    let bytes = super::minimal(
+        r#"<sheetData><row r="1"><c r="A1"><f>1234567890123456</f></c>
+        <c r="B1"><f>_xlfn.SINGLE(_xlfn.SEQUENCE(1,1,0.6666666666666666))</f></c></row></sheetData>"#,
+        &[],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let written = write_xlsx(&wb).unwrap();
+    let (reopened, _) = read_xlsx(&written).unwrap();
+    for workbook in [&wb, &reopened] {
+        let sheet = workbook.sheet(0).unwrap();
+        for (address, input) in [("A1", "1234567890123456"), ("B1", "@SEQUENCE(1,1,0.6666666666666666)")] {
+            let formula = sheet.cells.get(at(address)).unwrap().formula.as_ref().unwrap();
+            assert_eq!(formula.expr(), Some(gridcraft_formula::parse(input).unwrap()), "{address}");
+        }
+    }
+}
+
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
