@@ -372,7 +372,10 @@ impl Calc {
             return;
         }
         let seeds: Vec<Key> = self.graph.nodes.iter().filter(|(_, n)| n.filter_aware).map(|(k, _)| *k).collect();
-        if seeds.is_empty() {
+        // Dynamic formulas (names, INDIRECT/OFFSET) join the closure inside `dirty_closure` and
+        // may reach a visibility-sensitive formula without naming SUBTOTAL literally, so they
+        // keep this pass alive even when no static seed exists.
+        if seeds.is_empty() && self.graph.dynamic.is_empty() {
             return;
         }
         let dirty = self.dirty_closure(wb, &seeds, &[]);
