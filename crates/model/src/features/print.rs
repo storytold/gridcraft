@@ -53,6 +53,10 @@ pub struct PrintSettings {
     /// sheet is more than one page wide and tall.
     #[serde(default)]
     pub page_order: PageOrder,
+    /// Left out when the whole workbook prints or exports to PDF, unless every visible sheet is
+    /// (an OpenDocument sheet's `table:print="false"`; Excel has no such flag).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub excluded: bool,
     /// Page Setup › Page › First page number: the number the sheet's first printed page takes,
     /// or `None` for Automatic (XLSX `pageSetup firstPageNumber` with `useFirstPageNumber`). Left
     /// out of a JSON workbook when Automatic, so files without it are written as before.
@@ -192,6 +196,7 @@ impl Default for PrintSettings {
             hf_scale_with_doc: true,
             hf_align_with_margins: true,
             page_order: PageOrder::DownThenOver,
+            excluded: false,
             first_page_number: None,
         }
     }
@@ -286,6 +291,16 @@ mod tests {
         assert!(saved.as_object_mut().unwrap().remove("page_order").is_some());
         p = serde_json::from_value(saved).unwrap();
         assert_eq!(p, PrintSettings::default());
+    }
+
+    #[test]
+    fn excluded_is_saved_only_when_set_and_old_settings_load_included() {
+        let saved = serde_json::to_value(PrintSettings::default()).unwrap();
+        assert!(saved.get("excluded").is_none());
+        let p = PrintSettings { excluded: true, ..Default::default() };
+        let saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["excluded"], true);
+        assert_eq!(serde_json::from_value::<PrintSettings>(saved).unwrap(), p);
     }
 
     #[test]
