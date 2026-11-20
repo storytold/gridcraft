@@ -110,15 +110,23 @@ impl Params {
     /// out (before the parameters after a repeating run, and at the very end), blank fields
     /// between given ones stay as empty arguments.
     pub fn written<'a>(&self, values: &'a [String]) -> Vec<&'a str> {
+        self.written_keeping(values, 0)
+    }
+
+    /// As `written`, for a call that was given `given` arguments: blank ones among them stay
+    /// (`IF(FALSE,1,)`, `LET(x,,x)`), only the spare fields after them are left out.
+    pub fn written_keeping<'a>(&self, values: &'a [String], given: usize) -> Vec<&'a str> {
         let tail = match self.repeat {
             Some((start, len)) if values.len() >= self.params.len() => self.params.len().saturating_sub(start + len),
             _ => 0,
         };
         let split = values.len() - tail;
+        let full = given >= self.params.len();
+        let (keep_head, keep_tail) = if tail > 0 && full { (given.saturating_sub(tail), tail) } else { (given, 0) };
         let mut out: Vec<&str> = values.iter().take(split).map(|v| v.trim()).collect();
-        trim_blank_end(&mut out);
+        trim_blank_end(&mut out, keep_head.min(split));
         let mut last: Vec<&str> = values.iter().skip(split).map(|v| v.trim()).collect();
-        trim_blank_end(&mut last);
+        trim_blank_end(&mut last, keep_tail.min(tail));
         if !last.is_empty() {
             out.extend(last);
         }
@@ -126,8 +134,8 @@ impl Params {
     }
 }
 
-fn trim_blank_end(args: &mut Vec<&str>) {
-    while args.last().is_some_and(|a| a.is_empty()) {
+fn trim_blank_end(args: &mut Vec<&str>, keep: usize) {
+    while args.len() > keep && args.last().is_some_and(|a| a.is_empty()) {
         args.pop();
     }
 }
@@ -378,6 +386,25 @@ mod tests {
 
     fn strings(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn explicit_blank_arguments_of_a_given_call_are_written_back() {
+        let blank = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let iff = Params::parse("IF(logical_test, [value_if_true], [value_if_false])");
+        let mut v = blank(&["FALSE", "1", ""]);
+        iff.arrange(&mut v);
+        assert_eq!(iff.written(&v), ["FALSE", "1"]);
+        assert_eq!(iff.written_keeping(&v, 3), ["FALSE", "1", ""]);
+        assert_eq!(iff.written_keeping(&v, 2), ["FALSE", "1"]);
+        let let_ = Params::parse("LET(name1, value1, ..., calculation)");
+        let mut v = blank(&["x", "", "x"]);
+        let_.arrange(&mut v);
+        assert_eq!(let_.written(&v), ["x", "x"]);
+        assert_eq!(let_.written_keeping(&v, 3), ["x", "", "x"]);
+        let mut v = blank(&["x", "1", "x"]);
+        let_.arrange(&mut v);
+        assert_eq!(let_.written_keeping(&v, 3), ["x", "1", "x"]);
     }
 
     #[test]

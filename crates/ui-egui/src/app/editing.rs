@@ -121,6 +121,11 @@ impl SheetApp {
         true
     }
 
+    /// Function Arguments is open: it mirrors its draft into the cell edit, and only its OK enters it.
+    pub(crate) fn function_arguments_open(&self) -> bool {
+        self.dialog.as_ref().is_some_and(|d| d.name == "functionArguments")
+    }
+
     /// The cell draft belongs to a window or workbook other than the one showing.
     pub(super) fn draft_elsewhere(&self) -> bool {
         self.editor.as_ref().is_some_and(|ed| {

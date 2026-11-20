@@ -31,6 +31,9 @@ fn edge_sheet(sheets: &[Arc<Sheet>], last: bool) -> Option<usize> {
 /// Switch to sheet `i` from the tab strip or the navigator. In point mode the formula being typed keeps going on the
 /// other sheet; otherwise the edit is committed first.
 fn activate_sheet(app: &mut SheetApp, i: usize) {
+    if app.editor.is_some() && app.function_arguments_open() {
+        return;
+    }
     if app.editor.as_ref().is_some_and(|e| e.can_point()) {
         let _ = app.session.run("sheet.activate", json!({"sheet": i}));
     } else {
