@@ -1,8 +1,9 @@
 # Formula language
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
-English and the other interface languages currently use the English formula table and separators.
+for Spanish or **Deutsch** for German formula entry and display. On first run the preference
+follows the system language. English and the other interface languages currently use the English
+formula table and separators.
 
 | Spanish | Canonical English |
 | --- | --- |
@@ -20,6 +21,17 @@ Names are case-insensitive. Spanish formulas use decimal commas (`1,5`), semicol
 and reference unions, and backslashes between array columns (`{1\2;3\4}`). For example,
 `=SI(VERDADERO;SUMA(1,5;2,25);0)` evaluates to 3.75. English mode retains comma arguments,
 decimal points and comma array columns; it does not silently translate Spanish aliases.
+
+German uses the function names German Excel 365 shows, all 420 that differ from English
+(`SUMME`, `WENN`, `SVERWEIS`, `MITTELWERTWENNS`, `BETA.VERT` …), as observed for PR #1201
+(`crates/formula/src/input_de.rs`); the 99 others, such as `MAX`, `INDEX` and `FILTER`, keep their
+English name. `WAHR` and `FALSCH` are the booleans. German formulas use decimal commas, semicolon
+arguments and points between array columns (`{1.2;3.4}`): `=WENN(WAHR;SUMME(1,5;2,25);0)` is 3.75.
+Error values in formulas are German too: `#WERT!`, `#BEZUG!`, `#ZAHL!`, `#NV`, `#DATEN_ABRUFEN` and
+`#ÜBERLAUF!`; `#NULL!`, `#DIV/0!`, `#NAME?` and `#CALC!` are the same in both. The English spelling
+is still understood when typed. Error values shown as cell results, and table specifiers (`#Alle`,
+`#Daten`), are not translated yet. Typed cell numbers take the decimal comma (`1,5`) but not yet the
+German thousands point: `1.234` is 1.234, and `1.234,5` stays text (Spanish behaves the same).
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
 use the selected formula language. Common Spanish function help is translated; functions

@@ -19,6 +19,9 @@ for display. API, clipboard and XLSX syntax remain stable. Existing names overri
 
 The revision is based directly on main after #31/#104 and Portuguese interface support (#82)
 merged. Those locales retain their existing formula fallback; this change adds only Spanish.
+German followed on 2026-10-31 through the same preference: Deutsch selects the German function
+table, separators and error values, and the separators, booleans and tables are read per language
+instead of Spanish-only branches.
 
 ## Preserve array evaluation when exporting formulas (#64)
 
