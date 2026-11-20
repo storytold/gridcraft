@@ -172,11 +172,13 @@ fn xlsb_scalar_caches_rk_unicode_visibility_and_epochs_survive_xlsx_save() {
         assert_eq!(wb.sheets[1].visibility, Visibility::Hidden);
         assert_eq!(wb.sheets[0].cells.len(), 14);
         assert_eq!(wb.sheets[0].merges, vec![RangeRef::new(CellRef::new(5, 0), CellRef::new(6, 1))]);
-        assert!(report.warnings.iter().any(|w| w.contains("will not recalculate") && w.contains("may display as numbers")));
+        assert!(report.warnings.iter().any(|w| w.contains("may display as numbers") && w.contains("XLSB saving is not supported")));
         for (col, expected) in expected.iter().enumerate() {
             assert_eq!(&wb.sheets[0].value(CellRef::new(2, col as u32)), expected);
         }
-        assert!(wb.sheets[0].cells.iter().all(|(_, c)| c.formula.is_none()));
+        for col in 10..=13 {
+            assert_eq!(wb.sheets[0].cell(CellRef::new(2, col)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("1"));
+        }
         let (roundtrip, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
         assert_eq!(roundtrip.date_system, wb.date_system);
         for (col, expected) in expected.iter().enumerate() {
@@ -342,4 +344,84 @@ fn xlsb_phonetic_runs_use_documented_size_and_tolerate_padding() {
         assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), text("ruby"));
     }
     assert!(read_xlsb(&file(&worksheet(&[row(0), cell(62, 0, &phonetic(2, 12))].concat(), &[]))).is_err());
+}
+
+#[test]
+fn xlsb_formulas_defined_names_and_external_links_delegate_to_craft_xlsx() {
+    let mut wb_records = record(131, &[]);
+    let mut props = 0u32.to_le_bytes().to_vec();
+    props.extend(0u32.to_le_bytes());
+    props.extend(wide(""));
+    wb_records.extend(record(153, &props));
+    wb_records.extend(record(143, &[]));
+    for (id, rel, name, state) in [(1u32, "one", "Data", 0u32), (2, "two", "Hidden", 1)] {
+        let mut data = state.to_le_bytes().to_vec();
+        data.extend(id.to_le_bytes());
+        data.extend(wide(rel));
+        data.extend(wide(name));
+        wb_records.extend(record(156, &data));
+    }
+    wb_records.extend(record(144, &[]));
+    // Supporting books: book 0 = BrtSupSelf (357), book 1 = BrtSupBookSrc (355).
+    wb_records.extend(record(357, &[]));
+    wb_records.extend(record(355, &[]));
+    // BrtExternSheet (362): 2 XTIs: ixti 0 -> (book=0, sheet=1..1), ixti 1 -> (book=1, sheet=0..0).
+    let mut xti = 2u32.to_le_bytes().to_vec();
+    for (bk, first, last) in [(0u32, 1i32, 1i32), (1, 0, 0)] {
+        xti.extend(bk.to_le_bytes());
+        xti.extend(first.to_le_bytes());
+        xti.extend(last.to_le_bytes());
+    }
+    wb_records.extend(record(362, &xti));
+    // BrtName (39): "Rate" = Hidden!$A$1 (PtgRef3d ixti=0, r=0, c=0).
+    let mut ptg_ref3d_hidden = vec![0x3A, 0, 0];
+    ptg_ref3d_hidden.extend(0u32.to_le_bytes());
+    ptg_ref3d_hidden.extend(0u16.to_le_bytes());
+    let mut brt_name = 0u32.to_le_bytes().to_vec();
+    brt_name.push(0);
+    brt_name.extend(u32::MAX.to_le_bytes());
+    brt_name.extend(wide("Rate"));
+    brt_name.extend((ptg_ref3d_hidden.len() as u32).to_le_bytes());
+    brt_name.extend(&ptg_ref3d_hidden);
+    brt_name.extend(0u32.to_le_bytes());
+    brt_name.extend(u32::MAX.to_le_bytes()); // null comment
+    wb_records.extend(record(39, &brt_name));
+    wb_records.extend(record(132, &[]));
+
+    let fmla_num = |col: u32, cached: f64, rgce: &[u8]| {
+        let mut data = col.to_le_bytes().to_vec();
+        data.extend([0; 4]);
+        data.extend(cached.to_le_bytes());
+        data.extend([0; 2]);
+        data.extend((rgce.len() as u32).to_le_bytes());
+        data.extend(rgce);
+        data.extend(0u32.to_le_bytes());
+        record(9, &data)
+    };
+    let ptg_name = [0x23, 1, 0, 0, 0];
+    let ptg_ext = {
+        let mut v = vec![0x3A, 1, 0];
+        v.extend(0u32.to_le_bytes());
+        v.extend(0u16.to_le_bytes());
+        v
+    };
+    let mut data = row(0);
+    data.extend(fmla_num(0, 42.0, &ptg_ref3d_hidden));
+    data.extend(fmla_num(1, 7.0, &ptg_name));
+    data.extend(fmla_num(2, 99.0, &ptg_ext));
+
+    let bytes = package(&wb_records, &worksheet(&data, &[]), &sst(), ROOT, RELS, TYPES);
+    let (wb, report) = read_xlsb(&bytes).unwrap();
+    assert_eq!(wb.names.len(), 1);
+    assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str(), wb.names[0].scope), ("Rate", "Hidden!$A$1", None));
+    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Hidden!$A$1"));
+    assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Rate"));
+    assert!(wb.sheets[0].cell(CellRef::new(0, 2)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(99.0)));
+    assert!(report.warnings.iter().any(|w| w.contains("external links")), "{:?}", report.warnings);
+
+    let (rt, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(rt.names.len(), 1);
+    assert_eq!(rt.sheets[0].cell(CellRef::new(0, 0)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Hidden!$A$1"));
+    assert_eq!(rt.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("Rate"));
+    assert_eq!(rt.sheets[0].value(CellRef::new(0, 2)), Value::Number(99.0));
 }

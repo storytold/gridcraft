@@ -248,9 +248,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
         cx.warn(format!("sheet \"{name}\" is damaged: more than {} cells", crate::xml::MAX_XML_NODES));
         return Ok((Sheet::new(name), Default::default()));
     }
-    if sheet_part.merges.len() > crate::xml::MAX_XML_NODES {
+    let too_many_merges = sheet_part.merges.len() > crate::xml::MAX_XML_NODES;
+    if too_many_merges {
         cx.warn(format!("sheet \"{name}\" is damaged: more than {} merge cells", crate::xml::MAX_XML_NODES));
-        return Ok((Sheet::new(name), Default::default()));
     }
     for row in &rows {
         read_craft_row(cx, &mut sheet, &mut st, row).map_err(craft_error)?;
@@ -262,14 +262,21 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     }
     settle_python_spills_past_budget(&st, &mut sheet);
 
-    apply_craft_sheet_part(cx, &sheet_part, &rels, name, &mut sheet)?;
+    apply_craft_sheet_part(cx, &sheet_part, &rels, name, too_many_merges, &mut sheet)?;
     let root = from_craft_el(&sheet_part.root);
     let read_controls = read_form_controls(cx, &root, &rels, &mut sheet);
     read_sheet_notes_and_tables(cx, &sheet_part, &rels, &mut sheet)?;
     Ok((sheet, read_controls))
 }
 
-fn apply_craft_sheet_part(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Rel], name: &str, sheet: &mut Sheet) -> Result<(), IoError> {
+fn apply_craft_sheet_part(
+    cx: &mut Ctx<'_>,
+    sp: &CraftSheetPart,
+    rels: &[Rel],
+    name: &str,
+    skip_merges: bool,
+    sheet: &mut Sheet,
+) -> Result<(), IoError> {
     let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(rels.len());
     for r in rels {
         rel_by_id.entry(r.id.as_str()).or_insert(r);
@@ -297,9 +304,11 @@ fn apply_craft_sheet_part(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Rel], n
     } else {
         apply_craft_cols(cx, &sp.columns, sheet)?;
     }
-    for m in &sp.merges {
-        if !m.is_single() {
-            sheet.merges.push(to_range_ref(*m));
+    if !skip_merges {
+        for m in &sp.merges {
+            if !m.is_single() {
+                sheet.merges.push(to_range_ref(*m));
+            }
         }
     }
     if let Some(v) = sp.features.views.first() {
