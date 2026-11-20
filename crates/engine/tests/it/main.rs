@@ -20,6 +20,7 @@ mod line_count_overflow;
 mod long_operator_chains;
 mod merged_selection_keys;
 mod offset_overflow;
+mod paste_google_sheets;
 mod percent_entry;
 mod pivot_unknown_func;
 mod pivotchart_link;

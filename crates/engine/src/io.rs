@@ -414,8 +414,9 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
             .iter()
             .map(|cell| {
                 // The number the page recorded (`x:num`) only when values are read; as text, the
-                // cell keeps the text it shows.
-                let field = match cell.num.filter(|_| !csv_as_text) {
+                // cell keeps the text it shows. A Google Sheets typed number is left to paste,
+                // which gives it its format; here it would open as a bare serial, not the date shown.
+                let field = match cell.num.filter(|_| !csv_as_text && !cell.typed) {
                     Some(n) => gridcraft_core::number_to_text(n),
                     // Whitespace is already collapsed; non-breaking spaces stay, as in Excel.
                     None => cell.text.clone(),
