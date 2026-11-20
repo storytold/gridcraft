@@ -719,6 +719,51 @@ fn borders_respect_sheet_formatting_protection() {
     assert_eq!(s.execute("cell.get", json!({"cell": "B1"})).unwrap()["style"]["borders"]["left"]["style"], "None");
 }
 
+/// Pasting an unmerged block over a fully covered destination merge removes that merge.
+#[test]
+fn paste_unmerged_cells_removes_fully_covered_destination_merge() {
+    let mut special = s();
+    special.execute("range.setValues", json!({"range": "A1", "values": [[10, 20]]})).unwrap();
+    special.execute("cell.set", json!({"cell": "D1", "input": "777"})).unwrap();
+    special.execute("home.mergeCells", json!({"range": "D1:E1"})).unwrap();
+    special.execute("cell.set", json!({"cell": "F1", "input": "999"})).unwrap();
+
+    special.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    special.execute("edit.paste", json!({"at": "D1"})).unwrap();
+
+    let d = special.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(sh.merges.is_empty(), "the covered destination merge must be removed");
+    assert_eq!(v(&special, "D1"), Value::number(10.0));
+    assert_eq!(v(&special, "E1"), Value::number(20.0));
+    assert_eq!(v(&special, "F1"), Value::number(999.0));
+
+    special.execute("edit.undo", json!({})).unwrap();
+    let sh = special.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.merges, vec![gridcraft_core::RangeRef::parse("D1:E1").unwrap()]);
+    assert_eq!(v(&special, "D1"), Value::number(777.0));
+    special.execute("edit.redo", json!({})).unwrap();
+
+    let wb = &special.doc().unwrap().wb;
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+    let sh = reopened.active().unwrap();
+    assert!(sh.merges.is_empty(), "the removed merge must stay removed after XLSX round trip");
+    assert_eq!(sh.value(CellRef::parse("D1").unwrap()), Value::number(10.0));
+    assert_eq!(sh.value(CellRef::parse("E1").unwrap()), Value::number(20.0));
+    assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::number(999.0));
+
+    let mut special = s();
+    special.execute("range.setValues", json!({"range": "A1", "values": [[10, 20]]})).unwrap();
+    special.execute("home.mergeCells", json!({"range": "D1:E1"})).unwrap();
+    special.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    special.execute("edit.pasteSpecial", json!({"at": "D1", "what": "allExceptBorders"})).unwrap();
+
+    let sh = special.doc().unwrap().wb.active().unwrap();
+    assert!(sh.merges.is_empty(), "Paste Special All must remove the covered destination merge");
+    assert_eq!(v(&special, "D1"), Value::number(10.0));
+    assert_eq!(v(&special, "E1"), Value::number(20.0));
+}
+
 #[test]
 fn copy_paste_shifts_formulas() {
     let mut s = s();
