@@ -25,6 +25,7 @@ mod pt_functions;
 mod ro;
 mod ru;
 mod sr;
+mod sv;
 mod tr;
 mod uk;
 mod vi;
@@ -47,6 +48,7 @@ pub enum Language {
     Cs,
     Fr,
     Sr,
+    Sv,
     Tr,
     Pl,
     It,
@@ -57,7 +59,7 @@ pub enum Language {
 }
 
 impl Language {
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::En,
         Self::Es,
         Self::El,
@@ -70,6 +72,7 @@ impl Language {
         Self::Cs,
         Self::Fr,
         Self::Sr,
+        Self::Sv,
         Self::Pl,
         Self::It,
         Self::Uk,
@@ -103,6 +106,7 @@ impl Language {
             Self::Cs => "Čeština",
             Self::Fr => "Français",
             Self::Sr => "Srpski",
+            Self::Sv => "Svenska",
             Self::Tr => "Türkçe",
             Self::Pl => "Polski",
             Self::It => "Italiano",
@@ -128,6 +132,7 @@ impl Language {
             Self::Cs => "cs",
             Self::Fr => "fr",
             Self::Sr => "sr",
+            Self::Sv => "sv",
             Self::Tr => "tr",
             Self::Pl => "pl",
             Self::It => "it",
@@ -162,6 +167,7 @@ impl Language {
             "cs" => Some(Self::Cs),
             "fr" => Some(Self::Fr),
             "sr" => Some(Self::Sr),
+            "sv" => Some(Self::Sv),
             "tr" => Some(Self::Tr),
             "pl" => Some(Self::Pl),
             "it" => Some(Self::It),
@@ -213,6 +219,7 @@ impl Language {
             Self::Cs => cs::translate(text),
             Self::Fr => fr::translate(text),
             Self::Sr => sr::translate(text),
+            Self::Sv => sv::translate(text),
             Self::Tr => tr::translate(text),
             Self::Pl => pl::translate(text),
             Self::It => it::translate(text),
@@ -670,6 +677,9 @@ mod tests {
 
     #[test]
     fn tags_reduce_to_remaining_supported_languages() {
+        assert_eq!(Language::from_tag("sv-SE"), Some(Language::Sv));
+        assert_eq!(Language::from_tag("sv_FI.UTF-8"), Some(Language::Sv));
+        assert_eq!(Language::parse("sv"), Some(Language::Sv));
         assert_eq!(Language::from_tag("uk-XX"), Some(Language::Uk));
         assert_eq!(Language::parse("uk"), Some(Language::Uk));
         assert_eq!(Language::from_tag("vi-VN"), Some(Language::Vi));
