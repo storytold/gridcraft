@@ -333,6 +333,7 @@ impl DocState {
     /// evaluated, so every value is the one the file holds until an edit reaches it. `trust`
     /// is as for [`DocState::new`].
     pub fn from_saved(wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let _ = gridcraft_model::PIVOT_INDEXER.set(pivot::index_cells);
         let mut calc = Calc::new();
         calc.rebuild(&wb);
         Self::with_calc(wb, calc, path, title, trust)
