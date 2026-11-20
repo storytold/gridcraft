@@ -154,13 +154,9 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             // The copy is a sheet of its own, not the one it was copied from.
             sh.uid = gridcraft_model::SheetUid::fresh();
             let base = sh.name.clone();
-            // `Name (2)`: the name is shortened so the suffix fits in Excel's 31 characters.
+            // `Name (2)`: the name is shortened so the suffix fits in Excel's 31 UTF-16 units.
             let name = (2..)
-                .map(|k| {
-                    let suffix = format!(" ({k})");
-                    let keep = 31usize.saturating_sub(suffix.chars().count());
-                    format!("{}{suffix}", base.chars().take(keep).collect::<String>().trim_end())
-                })
+                .map(|k| gridcraft_model::sheet_name_with_suffix(&base, &format!(" ({k})")))
                 .find(|nm| cx.wb.sheet_index(nm).is_none())
                 .unwrap_or(base.clone());
             sh.name = name;

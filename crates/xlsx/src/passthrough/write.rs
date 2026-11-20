@@ -1,5 +1,12 @@
 use super::read::{map_rel_ids, vml_block_max};
 use super::*;
+use gridcraft_model::sheet_name_from;
+
+/// The name a kept chart sheet is written with: the cut, character and apostrophe rules a
+/// worksheet name follows (#4454). Its clash and series checks compare this name.
+fn written_name(name: &str) -> String {
+    sheet_name_from(name)
+}
 
 // ---------------------------------------------------------------- writing
 
@@ -180,7 +187,7 @@ impl WorkbookKept {
                 Visibility::Hidden => " state=\"hidden\"",
                 Visibility::VeryHidden => " state=\"veryHidden\"",
             };
-            let name: String = s.name.chars().take(31).collect();
+            let name = written_name(&s.name);
             let id = ids.take(s.sheet_id);
             let _ = write!(x, "<sheet name=\"{}\" sheetId=\"{id}\"{state} r:id=\"{}\"/>", esc_attr(&name), esc_attr(&s.rid));
         }
@@ -260,14 +267,19 @@ pub(crate) fn sheet_names_in(formula: &str) -> Vec<String> {
 /// Whether a kept chart sheet can be written back: its chart's series must still refer to sheets
 /// that exist under the same names (the chart is kept as it was, so a series on a deleted or
 /// renamed sheet would be left pointing at nothing), and no worksheet may have taken its name.
+/// Names are compared as they are written, cut to [`MAX_SHEET_NAME_UNITS`]; a series must name a
+/// worksheet exactly, as a longer name sharing its first 31 units names no sheet in the output.
 ///
 /// `usable` caches, by the normalized target of the chart sheet's relationship, whether its graph
 /// refers only to sheets that exist (`false` when the relationship is missing): entries sharing one
 /// graph, under the same or different relationship ids, are analysed once, and only the verdict is
 /// kept, not the references it came from.
 fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet, usable: &mut HashMap<String, bool>) -> bool {
-    let same = |a: &str, b: &str| a.chars().take(31).collect::<String>().eq_ignore_ascii_case(&b.chars().take(31).collect::<String>());
-    if wb.sheets.iter().any(|w| same(&w.name, &s.name)) {
+    let written = written_name;
+    if written(&s.name).is_empty() {
+        return false;
+    }
+    if wb.sheets.iter().any(|w| written(&w.name).eq_ignore_ascii_case(&written(&s.name))) {
         return false;
     }
     let Some(root) = p.rels.iter().find(|r| r.id == s.rel_id) else { return false };
@@ -279,7 +291,7 @@ fn chart_sheet_usable(wb: &Workbook, p: &Preserved, s: &PreservedSheet, usable: 
                 chart_formulas(&x, &mut formulas);
             }
         }
-        formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| same(&w.name, &n)))
+        formulas.iter().flat_map(|f| sheet_names_in(f)).all(|n| wb.sheets.iter().any(|w| written(&w.name).eq_ignore_ascii_case(&n)))
     })
 }
 
@@ -289,14 +301,20 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
     let Some(p) = wb.preserved.as_deref() else { return WorkbookKept::default() };
     let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = {
         let mut refs = HashMap::new();
-        p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s, &mut refs))
+        // Two chart sheets whose names differ only past the cut would be written with one name, which
+        // Excel refuses: the later one is dropped, as when a worksheet takes a chart sheet's name.
+        let mut names = HashSet::new();
+        p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s, &mut refs) && names.insert(written_name(&s.name).to_ascii_lowercase()))
     };
-    let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
-    let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
+    // A relationship that a kept chart sheet still uses stays with it, even if a dropped entry
+    // names it too.
+    let live_ids: HashSet<&str> = live.iter().map(|s| s.rel_id.as_str()).collect();
+    let dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).filter(|id| !live_ids.contains(id)).collect();
     // Parts reached only by dropped chart sheets go with them.
-    let mut gone: HashSet<String> = dropped.iter().filter_map(|s| root_of(s)).flat_map(|r| reachable(p, r)).collect();
+    let mut gone: HashSet<String> = p.rels.iter().filter(|r| dropped_ids.contains(r.id.as_str())).flat_map(|r| reachable(p, r)).collect();
     if !gone.is_empty() {
-        let others = p.rels.iter().filter(|r| !dropped_ids.contains(r.id.as_str())).flat_map(|r| reachable(p, r));
+        // Parts that kept relationships, the package root's included, still reach stay.
+        let others = p.rels.iter().filter(|r| !dropped_ids.contains(r.id.as_str())).chain(&p.package_rels).flat_map(|r| reachable(p, r));
         for n in others {
             gone.remove(&n);
         }
