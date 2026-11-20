@@ -812,6 +812,28 @@ fn html_too_big() -> EngineError {
 
 /// A sheet as a standalone HTML table (Save as Web Page). A sheet with pictures gets the sheet's
 /// own column widths and row heights so each picture and chart (inline SVG) can sit at its anchor.
+/// Where a cell's hyperlink points on the page: an `http`, `https` or `mailto` address as it is, or
+/// a cell of this sheet as `#RANGE!A5`, the anchor Excel's Web Page export names it with (#4323).
+/// The cell for that anchor comes along. Links the app wouldn't open, and places the page doesn't
+/// hold (another sheet, a defined name), stay plain text.
+fn html_link(sh: &Sheet, link: &gridcraft_model::Hyperlink) -> Option<(String, Option<CellRef>)> {
+    match crate::links::classify(&link.target) {
+        crate::links::LinkKind::External(url) => Some((url, None)),
+        // A link out of the workbook (a relationship in the file) whose target reads like a cell,
+        // such as a file named `FY24` or `A1`, is a file, not a place on this sheet.
+        crate::links::LinkKind::Internal(_) if link.external => None,
+        crate::links::LinkKind::Internal(place) => {
+            let (on, body) = gridcraft_core::addr::split_sheet(place.trim_start_matches('#'));
+            if on.is_some_and(|name| !name.eq_ignore_ascii_case(&sh.name)) {
+                return None;
+            }
+            let at = RangeRef::parse(body)?.start;
+            Some((format!("#RANGE!{}", at.a1()), Some(at)))
+        }
+        crate::links::LinkKind::Refused(_) => None,
+    }
+}
+
 pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     let Some(sh) = wb.sheet(sheet) else { return Ok(String::new()) };
     let fixed = !(sh.images.is_empty() && sh.charts.is_empty());
@@ -864,6 +886,17 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             }
             v
         };
+        // A cell the table draws: in the used range, on a visible row (and column, when hidden
+        // columns are left out) and not covered by a merge. A link to any other cell would point at
+        // nothing on the page, so it stays text.
+        let drawn = |c: CellRef| {
+            r.contains(c) && !sh.is_row_hidden(c.row) && !(fixed && sh.is_col_hidden(c.col)) && merges.get(&c).is_none_or(|m| m.start == c)
+        };
+        // Where a cell's link points, when the page can hold it.
+        let page_link = |link: &gridcraft_model::Hyperlink| html_link(sh, link).filter(|(_, at)| at.is_none_or(drawn));
+        // Cells a link on this sheet points at get the anchor it names.
+        let link_targets: std::collections::HashSet<CellRef> =
+            sh.hyperlinks.iter().filter(|(at, _)| drawn(**at)).filter_map(|(_, link)| page_link(link)?.1).collect();
         let rows_before = visible_before(&|y| sh.is_row_hidden(y), r.start.row, r.end.row);
         let cols_before = visible_before(&|x| sh.is_col_hidden(x), r.start.col, r.end.col);
         let visible = |before: &[u32], from: u32, a: u32, b: u32| {
@@ -909,7 +942,21 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                     .unwrap_or_default();
                 // The text is escaped only as far as the page still has room for it.
                 let Some(escaped) = esc_within(&text, HTML_EXPORT_MAX_BYTES.saturating_sub(out.len())) else { return Err(html_too_big()) };
-                let _ = write!(out, "<td style=\"{css}\"{}{span}>{escaped}</td>", dir.attr());
+                let anchor = if link_targets.contains(&c) { format!(" id=\"RANGE!{}\"", c.a1()) } else { String::new() };
+                let content = match sh.hyperlinks.get(&c).and_then(|link| Some((page_link(link)?.0, link.tooltip.as_deref()))) {
+                    Some((href, tip)) => {
+                        // The address and tooltip come from the file: escaped within the page's room.
+                        let room = HTML_EXPORT_MAX_BYTES.saturating_sub(out.len());
+                        let Some(href) = esc_within(&href, room) else { return Err(html_too_big()) };
+                        let title = match tip {
+                            Some(t) => format!(" title=\"{}\"", esc_within(t, room).ok_or_else(html_too_big)?),
+                            None => String::new(),
+                        };
+                        format!("<a href=\"{href}\"{title}>{escaped}</a>")
+                    }
+                    None => escaped,
+                };
+                let _ = write!(out, "<td style=\"{css}\"{}{span}{anchor}>{content}</td>", dir.attr());
                 if out.len() > HTML_EXPORT_MAX_BYTES {
                     return Err(html_too_big());
                 }
