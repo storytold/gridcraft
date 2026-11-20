@@ -36,6 +36,7 @@ pub const CHINESE_FACES: &[(&str, &str, &[&str])] = &[("LXGW WenKai Lite", "Regu
 /// The explicit web allowlist. Browser builds embed only these faces; the Noto CJK collection and
 /// the document-only faces stay off the wasm bundle. `Noto Sans Symbols` supplies `⌃`, and
 /// `Noto Sans Symbols 2` supplies `✕`, `◀` and `✓`; `📋` still comes from egui's bundled emoji.
+/// `Noto Sans Arabic` (about 845 KB) draws Arabic cell text, which a browser has no other face for.
 pub const WEB_ALLOWED: &[(&str, &str)] = &[
     ("BIZ UDPGothic", "Regular"),
     ("BIZ UDPGothic", "Bold"),
