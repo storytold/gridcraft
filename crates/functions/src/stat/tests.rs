@@ -822,6 +822,24 @@ fn discrete() {
 }
 
 #[test]
+fn hypgeom_dist_out_of_support_clamps() {
+    // Support is [max(0, n - nn + kk), min(n, kk)].
+    // Above support: k=2, n=1, kk=1, nn=3 -> high = min(1, 1) = 1, so 2 is above.
+    assert_eq!(ev("HYPGEOM.DIST", vec![n(2.0), n(1.0), n(1.0), n(3.0), b(false)]), Value::Number(0.0));
+    assert_eq!(ev("HYPGEOM.DIST", vec![n(2.0), n(1.0), n(1.0), n(3.0), b(true)]), Value::Number(1.0));
+    // Controls inside the support (low = max(0, 1 - 3 + 1) = 0, high = 1).
+    close(ev("HYPGEOM.DIST", vec![n(1.0), n(1.0), n(1.0), n(3.0), b(false)]), 1.0 / 3.0);
+    close(ev("HYPGEOM.DIST", vec![n(1.0), n(1.0), n(1.0), n(3.0), b(true)]), 1.0);
+    // Below support: k=0, n=4, kk=8, nn=10 -> low = max(0, 4 - 10 + 8) = 2, so 0 is below.
+    assert_eq!(ev("HYPGEOM.DIST", vec![n(0.0), n(4.0), n(8.0), n(10.0), b(false)]), Value::Number(0.0));
+    assert_eq!(ev("HYPGEOM.DIST", vec![n(0.0), n(4.0), n(8.0), n(10.0), b(true)]), Value::Number(0.0));
+    // Legacy compatibility form stays strict outside the support.
+    is_err(ev("HYPGEOMDIST", vec![n(5.0), n(4.0), n(8.0), n(20.0)]), CellError::Num);
+    // Invalid population arguments stay #NUM! (number_sample > number_pop here).
+    is_err(ev("HYPGEOM.DIST", vec![n(1.0), n(5.0), n(2.0), n(3.0), b(false)]), CellError::Num);
+}
+
+#[test]
 fn continuous() {
     close_tol(ev("EXPON.DIST", vec![n(0.2), n(10.0), b(true)]), 0.86466472, D7);
     close_tol(ev("EXPON.DIST", vec![n(0.2), n(10.0), b(false)]), 1.35335283, D7);
