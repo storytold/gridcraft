@@ -16,7 +16,8 @@ pub(super) fn about(ui: &mut egui::Ui, d: &mut Dialog) {
         "Models" => crate::credits::models_ui(ui),
         _ => {
             ui.heading("GridCraft");
-            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            let lang = crate::i18n::current(ui.ctx());
+            ui.label(lang.tr_fill("Version {version}", &[("version", env!("CARGO_PKG_VERSION"))]));
             ui.add_space(4.0);
             ui.label("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.");
             ui.hyperlink_to("getartcraft.com/apps/gridcraft", "https://getartcraft.com/apps/gridcraft");

@@ -141,11 +141,12 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
         d.values.get("remove").and_then(Json::as_array).map(|a| a.iter().filter_map(Json::as_u64).collect()).unwrap_or_default();
     let kept = names.len().saturating_sub(remove.len());
     egui::ScrollArea::vertical().id_salt("series").max_height(160.0).show(ui, |ui| {
+        let lang = crate::i18n::current(ui.ctx());
         for (i, name) in names.iter().enumerate() {
             let i = i as u64;
             let removed = remove.contains(&i);
             ui.horizontal(|ui| {
-                let label = if name.is_empty() { format!("Series{}", i + 1) } else { name.clone() };
+                let label = if name.is_empty() { lang.tr_fill("Series{n}", &[("n", &(i + 1).to_string())]) } else { name.clone() };
                 ui.label(if removed { egui::RichText::new(label).strikethrough().weak() } else { egui::RichText::new(label) });
                 if removed {
                     if ui.small_button("Keep").clicked() {
