@@ -4968,6 +4968,8 @@ fn icon_set_thresholds_set_to_greater_than_leave_the_value_on_them_below() {
     // Without the lower bound the flags line up with the cuts themselves; a short list is ">=".
     assert_eq!(icons(vec![CfValueKind::Number(3.0), CfValueKind::Number(6.0)], vec![true, true]), [Some(0), Some(1), Some(1), Some(2)]);
     assert_eq!(icons(num(3.0, 6.0), vec![false, true]), [Some(0), Some(1), Some(2), Some(2)]);
+    // Two cuts on one value, ">" then ">=": 6 meets only the upper one and takes its icon.
+    assert_eq!(icons(num(6.0, 6.0), vec![false, true, false]), [Some(0), Some(0), Some(2), Some(2)]);
 }
 
 /// `home.conditionalFormat` styles take colours the way the other formatting commands do, refuse

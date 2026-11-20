@@ -389,8 +389,13 @@ impl CfCache {
                             }
                         };
                         let cuts: Vec<f64> = lower.iter().map(|t| threshold(wb, sheet, c, st, t)).collect();
-                        let mut idx =
-                            cuts.iter().enumerate().filter(|&(i, cut)| if above.get(i) == Some(&true) { n > *cut } else { n >= *cut }).count();
+                        // The highest icon whose threshold the value meets (not how many it meets:
+                        // with ">" and ">=" on one value, only the upper one may be met).
+                        let mut idx = cuts
+                            .iter()
+                            .enumerate()
+                            .rposition(|(i, cut)| if above.get(i) == Some(&true) { n > *cut } else { n >= *cut })
+                            .map_or(0, |i| i + 1);
                         if *reverse {
                             idx = k - 1 - idx.min(k - 1);
                         }
