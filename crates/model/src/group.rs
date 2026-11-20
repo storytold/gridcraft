@@ -333,6 +333,7 @@ mod tests {
             line: Color::Auto,
             text: String::new(),
             format: ShapeFormat::default(),
+            rotation: 0.0,
             math: crate::EquationCache::default(),
         }
     }
