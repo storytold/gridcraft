@@ -743,3 +743,122 @@ fn find_and_replace_within_the_selection() {
     let all = s.execute("edit.find", json!({"what": "pear", "all": true})).unwrap();
     assert_eq!(all["count"], 3, "A1, A3 and A4 on the whole sheet");
 }
+
+#[test]
+fn paste_special_transpose_preserves_merged_cells() {
+    let merge_of = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["merge"].clone();
+    let val_of = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["value"].clone();
+
+    // Horizontal A1:B1 merge, All + Transpose -> D1:D2 merged, value 10.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(10.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "D2"), json!("D1:D2"));
+
+    // Vertical A1:A2 merge, All + Transpose -> D1:E1 merged, value 10.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(10.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:E1"));
+    assert_eq!(merge_of(&mut s, "E1"), json!("D1:E1"));
+
+    // Horizontal merge, Formats + Transpose over destination value 777 -> D1:D2 merged, value 777 preserved.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "777"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(777.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "D2"), json!("D1:D2"));
+
+    // 2x2 source with A1:B1 merged (10) and A2=30, B2=40 -> D1:D2 merged, E1=30, E2=40.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "30"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "40"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(val_of(&mut s, "D1"), json!(10.0));
+    assert_eq!(val_of(&mut s, "E1"), json!(30.0));
+    assert_eq!(val_of(&mut s, "E2"), json!(40.0));
+    assert_eq!(merge_of(&mut s, "D1"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "D2"), json!("D1:D2"));
+    assert_eq!(merge_of(&mut s, "E1"), json!(null));
+    assert_eq!(merge_of(&mut s, "E2"), json!(null));
+
+    // Tiled: a vertical A1:A2 merge pasted transposed over D1:G1 merges both tiles.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:G1"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(merge_of(&mut s, "E1"), json!("D1:E1"));
+    assert_eq!(merge_of(&mut s, "F1"), json!("F1:G1"));
+    assert_eq!(merge_of(&mut s, "G1"), json!("F1:G1"));
+}
+
+/// A filter hides destination rows: the tiles that land on them take no cells, so they take no
+/// merged area either.
+#[test]
+fn paste_special_transpose_skips_filtered_rows_for_merges() {
+    let merge_of = |s: &mut Session, cell: &str| s.execute("cell.get", json!({"cell": cell})).unwrap()["merge"].clone();
+    let mut s = Session::new();
+    s.new_workbook();
+    // A filter over A1:B11 hides rows 3, 5, 7 and 9.
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=11 {
+        rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    assert_eq!(s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap()["hiddenRows"], 4);
+    // A vertical G1:G2 merge pasted transposed tiles down one row at a time over D2:E5, so the
+    // tiles on rows 3 and 5 are the hidden ones.
+    s.execute("cell.set", json!({"cell": "G1", "input": "10"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "G1:G2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "G1:G2"})).unwrap();
+    s.execute("selection.set", json!({"range": "D2:E5"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true})).unwrap();
+    assert_eq!(merge_of(&mut s, "D2"), json!("D2:E2"));
+    assert_eq!(merge_of(&mut s, "D3"), json!(null));
+    assert_eq!(merge_of(&mut s, "D4"), json!("D4:E4"));
+    assert_eq!(merge_of(&mut s, "D5"), json!(null));
+}
+
+#[test]
+fn paste_special_merge_blocks_the_spill_it_covers() {
+    let val = |s: &mut Session, c: &str| s.execute("cell.get", json!({"cell": c})).unwrap()["value"].clone();
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(val(&mut s, "D2"), json!(2.0));
+    // An empty merged source block: pasting it writes no cell, so only the merge blocks the spill.
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "D2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all"})).unwrap();
+    assert_eq!(val(&mut s, "D1"), json!({"error": "#SPILL!"}), "the merge over the spill blocks it");
+    assert_eq!(val(&mut s, "D2"), json!(null), "the spilled values under the merge are gone");
+    assert_eq!(val(&mut s, "D3"), json!(null));
+}
