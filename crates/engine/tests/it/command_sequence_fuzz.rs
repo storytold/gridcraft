@@ -228,6 +228,10 @@ struct Harness {
     /// The workbook of the oldest undo step when the history was last looked at, to notice the
     /// history dropping it.
     oldest: Option<Arc<Workbook>>,
+    /// The workbook of every undo step when the history was last looked at, oldest first, to
+    /// tell an eviction (the oldest dropped, a step the history already held becoming the
+    /// base) from a replacement (a snapshot that was never in the history becoming the base).
+    history: Vec<Arc<Workbook>>,
 }
 
 /// Where redoing the `n` steps just undone ends. The first of them went onto the redo history
@@ -262,7 +266,7 @@ impl Harness {
         let mut s = Session::new();
         s.execute("file.new", json!({"sample": sample})).expect("sample opens");
         let floor = s.doc().expect("document").wb.clone();
-        Harness { s, floor, oldest: None }
+        Harness { s, floor, oldest: None, history: Vec::new() }
     }
 
     fn wb(&self) -> Arc<Workbook> {
@@ -368,6 +372,7 @@ impl Harness {
         d.redo.clear();
         self.floor = d.wb.clone();
         self.oldest = None;
+        self.history = Vec::new();
         Ok(())
     }
 
@@ -375,13 +380,19 @@ impl Harness {
     /// history emptying in between. From then on undoing everything stops at the new oldest entry,
     /// including after an `edit.undo` in the sequence has already used up what is left.
     fn track_history(&mut self) {
-        let oldest = self.s.doc().expect("document").undo.first().map(|e| e.wb.clone());
-        if let (Some(was), Some(now)) = (&self.oldest, &oldest)
+        let history: Vec<Arc<Workbook>> = self.s.doc().expect("document").undo.iter().map(|e| e.wb.clone()).collect();
+        // Only an eviction advances the floor: the new oldest is a step the history already
+        // held behind the dropped one. Any other identity change leaves the floor where it
+        // was, so check_history_base reports the step that replaced the base instead of
+        // comparing the replacement with itself.
+        if let (Some(was), Some(now)) = (&self.oldest, history.first())
             && !Arc::ptr_eq(was, now)
+            && self.history.get(1..).unwrap_or(&[]).iter().any(|wb| Arc::ptr_eq(wb, now))
         {
             self.floor = now.clone();
         }
-        self.oldest = oldest;
+        self.oldest = history.first().cloned();
+        self.history = history;
     }
 
     fn finish(&mut self, steps: usize) -> Result<(), Failure> {
@@ -1248,6 +1259,23 @@ fn a_trimmed_history_undone_in_the_sequence_stops_at_its_oldest_step() {
     if let Err(f) = h.end_episode(0) {
         panic!("{f:?}");
     }
+}
+
+/// Review on #3490: `track_history` must not follow a *replaced* history base. Advancing
+/// `floor` to a snapshot that was never in the history makes `check_history_base` compare
+/// the replacement with itself, so the step that replaced the start would pass unnamed.
+/// Only an eviction — the previous oldest dropped, a kept step becoming the base — may
+/// advance `floor`.
+#[test]
+fn a_replaced_history_base_is_reported_not_followed() {
+    let mut h = Harness::new("sales");
+    h.s.execute("cell.set", json!({"cell": "Z1", "input": "1"})).expect("cell.set");
+    h.track_history();
+    // Replace the oldest snapshot with the live workbook, which differs from the start.
+    let live = h.wb();
+    h.s.active_mut().expect("document").undo[0].wb = live;
+    h.track_history();
+    assert!(h.check_history_base(0, "cell.set").is_err(), "a replaced history base must be reported, not adopted as the new floor");
 }
 
 /// Review of #2332: the redo history is bounded too, so undoing `n` steps may leave fewer than
