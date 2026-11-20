@@ -83,6 +83,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         Geo::with_lines(sh, rect, scroll, &lines)
     };
     // Scrolling.
+    let wheel_rows = wheel_rows_per_point(app, ui);
     let (scroll_delta, zoom_delta, modifiers, now) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.time));
     if (resp.hovered() || resp.contains_pointer()) && !crate::text_box::contains_pointer(app, ui.ctx()) {
         if zoom_delta != 1.0 {
@@ -122,6 +123,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             if sh.right_to_left {
                 d.x = -d.x;
             }
+            d.y *= wheel_scale(wheel_rows, sh, z, modifiers.shift);
             if modifiers.shift && d.x == 0.0 {
                 d = vec2(d.y, 0.0);
             }
@@ -467,6 +469,26 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     quads
 }
 
+/// When the option for the mouse wheel applies, its rows per point of wheel movement. A wheel's events
+/// come in lines and a trackpad's in points, which keep following the fingers.
+fn wheel_rows_per_point(app: &mut SheetApp, ui: &egui::Ui) -> Option<f32> {
+    ui.input(|i| {
+        for event in &i.events {
+            if let egui::Event::MouseWheel { unit, .. } = event {
+                app.grid.wheel_by_line = *unit == egui::MouseWheelUnit::Line;
+            }
+        }
+    });
+    let speed = ui.ctx().options(|o| o.input_options.line_scroll_speed);
+    (app.ui.wheel_rows > 0 && app.grid.wheel_by_line && speed > 0.0).then(|| app.ui.wheel_rows as f32 / speed)
+}
+
+/// What a vertical wheel movement is multiplied by. Rows are counted at the sheet's default height,
+/// and Shift's sideways scrolling keeps its speed.
+fn wheel_scale(rows_per_point: Option<f32>, sh: &Sheet, z: f32, shift: bool) -> f32 {
+    rows_per_point.filter(|_| !shift).map_or(1.0, |r| r * sh.default_row_height * z)
+}
+
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
@@ -509,7 +531,8 @@ fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &G
         }
     }
     if resp.hovered() {
-        next -= ui.input(|i| i.smooth_scroll_delta.y) / geo.z;
+        let scale = wheel_scale(wheel_rows_per_point(app, ui), sh, geo.z, false);
+        next -= ui.input(|i| i.smooth_scroll_delta.y) * scale / geo.z;
     }
     next = next.clamp(0.0, limit);
     if next != scroll {
