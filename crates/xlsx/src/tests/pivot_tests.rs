@@ -906,6 +906,22 @@ fn number_ranges_are_written_on_the_field_itself() {
 }
 
 #[test]
+fn a_grouping_at_the_rounding_edge_still_widens() {
+    // #3395 review: 2^53 + 1 rounds back to 2^53, so the widened end must step to the next
+    // representable number.
+    let cols = [
+        ("Age", vec![Value::number(9007199254740992.0), Value::number(9007199254740992.0)]),
+        ("Sales", vec![Value::number(10.0), Value::number(20.0)]),
+    ];
+    let parts = small_pivot(&cols, |p| {
+        p.rows = vec![PivotField { number_group: PivotNumberGroup::new(9007199254740992.0, 9007199254740992.0, 1.0), ..field("Age") }];
+        p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+    });
+    let cache = &parts["xl/pivotCache/pivotCacheDefinition1.xml"];
+    assert!(cache.contains(r#"startNum="9007199254740992.0" endNum="9007199254740994.0""#), "the widened end is strictly greater: {cache}");
+}
+
+#[test]
 fn a_grouping_of_one_value_writes_expandable_bounds() {
     // #3395 review: a source of one distinct number groups to start == end; Office requires
     // startNum < endNum, so the export widens the end by one interval, keeping the labels.

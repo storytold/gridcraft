@@ -674,11 +674,14 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
                     // Office requires startNum < endNum; a grouping of one distinct value has
                     // start == end, so the export widens the end by one interval. The bucket
                     // labels stay the model's (`items` above).
+                    let widened = g.start + interval;
+                    let next = if widened.is_finite() && widened > g.start { widened } else { g.start.next_up() };
                     let end = if g.end > g.start && (g.end - g.start).is_finite() {
                         g.end
-                    } else if (g.start + interval).is_finite() {
-                        g.start + interval
+                    } else if next.is_finite() && next > g.start {
+                        next
                     } else {
+                        // No representable larger bound exists; write the model's own.
                         g.end
                     };
                     let _ = write!(
