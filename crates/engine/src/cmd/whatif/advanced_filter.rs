@@ -106,9 +106,31 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(bad(CMD, "the criteria range is too large"));
     }
     let wb = &d.wb;
+    let copy_to = str_param(p, "copyTo").map(|t| parse_range(wb, t, CMD)).transpose()?;
     let sh = wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let headers: Vec<String> =
         (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(list.start.row, c)).trim().to_lowercase()).collect();
+    let output_cols = if let Some((dsi, header_range)) = copy_to {
+        let dsh = wb.sheet(dsi).ok_or(EngineError::NoDocument)?;
+        let requested: Vec<String> = (0..header_range.width().min(list.width()))
+            .map(|offset| {
+                crate::display::cell_text(wb, dsh, CellRef::new(header_range.start.row, header_range.start.col + offset)).trim().to_lowercase()
+            })
+            .filter(|header| !header.is_empty())
+            .collect();
+        if requested.is_empty() {
+            (0..list.width()).collect()
+        } else {
+            let selected: Vec<u32> =
+                requested.iter().filter_map(|header| headers.iter().position(|source| source == header).map(|offset| offset as u32)).collect();
+            if selected.is_empty() {
+                return Err(EngineError::Other("The extract headers don't match any column of the list.".into()));
+            }
+            selected
+        }
+    } else {
+        (0..list.width()).collect()
+    };
     let first_data = list.start.row + 1;
     // Criteria rows → conditions.
     let mut rows: Vec<Vec<Cond>> = Vec::new();
@@ -166,20 +188,22 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
     for row in first_data..=list.end.row {
         let mut ok = matches_row(row);
         if ok && unique {
-            let key: Vec<String> =
-                (list.start.col..=list.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(row, c)).to_lowercase()).collect();
+            let key: Vec<String> = output_cols
+                .iter()
+                .map(|offset| crate::display::cell_text(wb, sh, CellRef::new(row, list.start.col + *offset)).to_lowercase())
+                .collect();
             ok = seen.insert(key);
         }
         keep.push((row, ok));
     }
     let matched = keep.iter().filter(|(_, k)| *k).count();
-    if let Some(t) = str_param(p, "copyTo") {
-        let (dsi, dest) = parse_range(wb, t, CMD)?;
-        let dest = dest.start;
+    if let Some((dsi, destination)) = copy_to {
+        let dest = destination.start;
         let mut rows_out: Vec<u32> = vec![list.start.row];
         rows_out.extend(keep.iter().filter(|(_, k)| *k).map(|(r, _)| *r));
-        let end =
-            dest.offset(rows_out.len() as i64 - 1, list.width() as i64 - 1).ok_or_else(|| bad(CMD, "the extract range exceeds the worksheet"))?;
+        let end = dest
+            .offset(rows_out.len() as i64 - 1, output_cols.len() as i64 - 1)
+            .ok_or_else(|| bad(CMD, "the extract range exceeds the worksheet"))?;
         let out_range = RangeRef::new(dest, end);
         if dsi == si && out_range.intersects(&list) {
             return Err(EngineError::Other("The extract range can't overlap the list range.".into()));
@@ -188,10 +212,10 @@ pub(super) fn advanced_filter(s: &mut Session, p: &Json) -> Result<Json> {
             .iter()
             .enumerate()
             .flat_map(|(i, row)| {
-                (list.start.col..=list.end.col).map(move |c| {
-                    let src = CellRef::new(*row, c);
+                output_cols.iter().enumerate().map(move |(j, offset)| {
+                    let src = CellRef::new(*row, list.start.col + *offset);
                     // The full output footprint was checked above.
-                    let to = CellRef::new(dest.row + i as u32, dest.col + c - list.start.col);
+                    let to = CellRef::new(dest.row + i as u32, dest.col + j as u32);
                     let style = sh.style_id(src);
                     (to, Cell { value: sh.value(src), formula: None, style, py: None })
                 })
