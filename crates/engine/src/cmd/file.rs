@@ -86,7 +86,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     // Someone else may have made the file: its active content asks before it runs.
-    let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
+    // Open with the file's cached values (like Excel): the graph is built, but nothing is
+    // evaluated until an edit or a manual recalculation reaches it.
+    let mut doc = DocState::from_saved(wb, path, title, crate::Trust::FromFile);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
