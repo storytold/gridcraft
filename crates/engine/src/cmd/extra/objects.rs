@@ -2,8 +2,8 @@ use gridcraft_model::ObjKind;
 
 use super::chart::format_series;
 use super::{
-    Anchor, CellRef, Color, EngineError, Json, Result, Session, Shape, ShapeKind, Sheet, anchor_mode_name, bad, bool_param, edit, json, str_param,
-    u32_param,
+    Anchor, CellRef, Color, DrawingRef, EngineError, Json, Result, Session, Shape, ShapeKind, Sheet, anchor_mode_name, bad, bool_param, edit, json,
+    str_param, u32_param,
 };
 
 /// The kind of object a `kind` parameter names: `shape` when the parameter is absent; one that
@@ -13,7 +13,7 @@ fn kind_param(p: &Json, cmd: &str) -> Result<ObjKind> {
     let err = || bad(cmd, "kind must be chart, image, shape, slicer or equation");
     match p.get("kind") {
         None => Ok(ObjKind::Shape),
-        Some(Json::String(k)) => ObjKind::parse(k).ok_or_else(err),
+        Some(Json::String(k)) => ObjKind::parse(k).filter(|&k| k != ObjKind::Group).ok_or_else(err),
         Some(_) => Err(err()),
     }
 }
@@ -82,6 +82,7 @@ pub(super) fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> 
             ObjKind::Shape | ObjKind::Equation => {
                 sh.shapes.iter().position(|c| c.id == id && shape_is(kind, c)).map(|i| reorder(&mut sh.shapes, i, forward, extreme))
             }
+            ObjKind::Group => None,
             ObjKind::Control => sh.controls.iter().position(|c| c.id == id).map(|i| reorder(&mut sh.controls, i, forward, extreme)),
         };
         found.ok_or_else(|| bad("arrange", "no such object"))?;
@@ -125,6 +126,7 @@ fn anchors_of(sh: &mut Sheet, kind: ObjKind) -> Vec<(u32, &mut Anchor)> {
         ObjKind::Slicer => sh.slicers.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         ObjKind::Control => sh.controls.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         ObjKind::Shape | ObjKind::Equation => sh.shapes.iter_mut().filter(|c| shape_is(kind, c)).map(|c| (c.id, &mut c.anchor)).collect(),
+        ObjKind::Group => Vec::new(),
     }
 }
 
@@ -145,6 +147,17 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
     crate::cmd::controls::check_objects_unlocked(s, si, kind, &ids)?;
     edit(s, |cx| {
         let sheet = cx.sheet_mut(si)?;
+        let grouped = match kind {
+            ObjKind::Chart => sheet.charts.iter().any(|o| ids.contains(&o.id) && sheet.outer_group(DrawingRef::Chart(o.id)).is_some()),
+            ObjKind::Image => sheet.images.iter().any(|o| ids.contains(&o.id) && sheet.outer_group(DrawingRef::Image(o.id)).is_some()),
+            ObjKind::Slicer | ObjKind::Group | ObjKind::Control => false,
+            ObjKind::Shape | ObjKind::Equation => {
+                sheet.shapes.iter().any(|o| ids.contains(&o.id) && shape_is(kind, o) && sheet.outer_group(DrawingRef::Shape(o.id)).is_some())
+            }
+        };
+        if grouped {
+            return Err(bad("arrange.align", "objects in a group can't be aligned yet"));
+        }
         let geo: Vec<(u32, f64, f64, f32, f32)> = {
             let shc = sheet.clone();
             anchors_of(sheet, kind)
