@@ -155,7 +155,10 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
 }
 
 pub fn read_chartex(root: &El) -> Option<Chart> {
-    let craft = crate::chart::to_craft_el(root);
+    let mut craft = crate::chart::to_craft_el(root);
+    if craft.child(craft_xml::Local("chartData")).is_none() {
+        craft.push(craft_xml::El::new("chartData").with_child(craft_xml::El::new("data").with_attr("id", "0")));
+    }
     let dc = craft_drawingml::chart::chartex::chartex_from(&craft)?;
     from_dml_chartex(dc, Some(root))
 }
