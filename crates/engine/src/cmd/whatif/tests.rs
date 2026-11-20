@@ -169,6 +169,25 @@ fn data_tables() {
 }
 
 #[test]
+fn data_table_refuses_merged_result_cells() {
+    for merge in ["D4:E4", "E4:F4"] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[10, 20]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "C3", "values": [["=$A$1+10*$B$1", 1, 2], [3, 777, null], [4, 999, 111]]})).unwrap();
+        s.execute("home.mergeCells", json!({"range": merge})).unwrap();
+        let before = s.execute("sheet.read", json!({"range": "C3:F5"})).unwrap();
+        assert!(s.execute("data.dataTable", json!({"range": "C3:E5", "rowInput": "A1", "columnInput": "B1"})).is_err(), "{merge}");
+        assert_eq!(s.execute("sheet.read", json!({"range": "C3:F5"})).unwrap(), before, "{merge}");
+    }
+    // A merge outside the table is fine.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[10, 20]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "C3", "values": [["=$A$1+10*$B$1", 1, 2], [3, 0, 0], [4, 0, 0]]})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "G4:H4"})).unwrap();
+    s.execute("data.dataTable", json!({"range": "C3:E5", "rowInput": "A1", "columnInput": "B1"})).unwrap();
+}
+
+#[test]
 fn advanced_filter_in_place_and_copy() {
     let mut s = s();
     s.execute(
