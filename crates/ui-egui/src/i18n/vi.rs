@@ -4,6 +4,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Xu hướng tuyến tính",
+        "Growth Trend" => "Xu hướng tăng trưởng",
         "Diagram" => "Sơ đồ",
         "Decorative Text" => "Chữ trang trí",
         "Paste" => "Dán",

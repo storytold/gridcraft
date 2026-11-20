@@ -3,6 +3,8 @@
 /// Returns the Ukrainian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Лінійне наближення",
+        "Growth Trend" => "Експоненційне наближення",
         "Diagram" => "Схема",
         "Decorative Text" => "Декоративний текст",
         "Paste" => "Вставити",
