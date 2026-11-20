@@ -639,8 +639,15 @@ pub(crate) fn paint_headers(
                             paint_filter_button(&pc, b, h.filtered);
                         }
                     }
+                    // Cut at the column's edges, so a narrow column's letters don't run over its neighbours'.
                     None => {
-                        pc.text(cr.center(), Align2::CENTER_CENTER, col_to_letters(c), font.clone(), color);
+                        pc.with_clip_rect(cr.intersect(pc.clip_rect())).text(
+                            cr.center(),
+                            Align2::CENTER_CENTER,
+                            col_to_letters(c),
+                            font.clone(),
+                            color,
+                        );
                     }
                 }
             }
@@ -669,7 +676,14 @@ pub(crate) fn paint_headers(
                     }
                 }
                 let color = if row_sel(rr) { t.header_sel_text } else { t.header_text };
-                pr.text(cr.center(), Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
+                // Cut at the row's edges, as the column letters are.
+                pr.with_clip_rect(cr.intersect(pr.clip_rect())).text(
+                    cr.center(),
+                    Align2::CENTER_CENTER,
+                    (rr as u64 + 1).to_string(),
+                    font.clone(),
+                    color,
+                );
             }
         }
     }
