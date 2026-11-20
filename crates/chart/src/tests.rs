@@ -1681,6 +1681,59 @@ fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
     assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
 
+/// Category labels too wide for their slot wrap at spaces, as Excel draws them (a real workbook's
+/// four long names, each on two lines), instead of every other one being left out.
+#[test]
+fn long_category_labels_wrap_in_their_slot() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.title = None;
+    c.x_title = None;
+    c.y_title = None;
+    let mut d = sample(ChartKind::ColumnClustered);
+    d.series.truncate(1);
+    d.categories =
+        vec!["First insurer adopted".into(), "Second insurance company".into(), "Third regional division".into(), "Fourth national company".into()];
+    for s in &mut d.series {
+        s.values.truncate(4);
+    }
+    let prims = render(&c, &d, 420.0, 300.0, &ApproxMeasure);
+    let words: Vec<String> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Text { text, .. } if text.chars().any(|ch| ch.is_ascii_alphabetic()) => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    for name in &d.categories {
+        // Every word of every category is drawn, none cut short.
+        for w in name.split(' ') {
+            assert!(words.iter().any(|t| t.split(' ').any(|x| x == w)), "{w} of {name}: {words:?}");
+        }
+    }
+    assert!(!words.iter().any(|t| t.contains('\u{2026}')), "{words:?}");
+    assert!(words.len() > d.categories.len(), "wrapped onto more than one line each: {words:?}");
+}
+
+/// A chart too short for wrapped category labels keeps its plot and thins the labels instead.
+#[test]
+fn a_short_chart_thins_long_labels_instead_of_losing_its_plot() {
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.title = None;
+    c.x_title = None;
+    c.y_title = None;
+    let mut d = sample(ChartKind::ColumnClustered);
+    d.series.truncate(1);
+    d.categories =
+        vec!["First insurer adopted".into(), "Second insurance company".into(), "Third regional division".into(), "Fourth national company".into()];
+    d.series[0].values.truncate(4);
+    let prims = render(&c, &d, 420.0, 48.0, &ApproxMeasure);
+    assert!(prims.iter().any(|p| matches!(p, Prim::Rect { fill: Some(f), .. } if *f == d.series[0].color)), "the bars are drawn: {prims:?}");
+}
+
 #[test]
 fn volatile_series_formulas_are_detected() {
     let wb = Workbook::new();
