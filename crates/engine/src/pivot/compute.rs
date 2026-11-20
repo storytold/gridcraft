@@ -1,10 +1,12 @@
 use super::items::{Acc, AxisOrder, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
-use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
+use super::output::{
+    AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, caption, data_cols_exceed_sheet, flatten_cols,
+};
 use super::show_as::{Axis, AxisItems, CellAt, ShowAs, Siblings, ValueLookup, display_format, resolve_base_field};
 use super::value_filter;
 use super::{
-    CalcSet, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotLayout,
-    PivotTable, PivotValue, PivotValueFilter, Source, Value, Workbook, read_source,
+    CalcSet, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_INDEXED_CELLS, MAX_VALUE_FIELDS, PivotDataCell, PivotDateGroup, PivotField,
+    PivotFilter, PivotItemRef, PivotLayout, PivotTable, PivotValue, PivotValueFilter, Source, Value, Workbook, read_source,
 };
 
 /// Why Show Details turns a cell down when it isn't a value cell of a PivotTable (the front end
@@ -103,6 +105,10 @@ struct AggregateData {
     paths: Vec<ProbePath>,
 }
 
+/// Most accumulators (groups times value columns) one report may hold: twice what the 5 million
+/// group limit allowed at one value field.
+const MAX_ACCUMULATORS: usize = 16_000_000;
+
 /// Counts one source record: skips it when a value filter dropped it or a label filter hides it,
 /// interns its row and column items and adds its values to every subtotal it belongs to.
 fn aggregate_record(
@@ -171,7 +177,13 @@ fn aggregate_record(
     if !input.collect_paths && !input.cols.is_empty() && data_cols_exceed_sheet(data.col_leaves.len(), input.pt.grand_totals_rows, input.vals.len()) {
         return Err("The PivotTable report will not fit on the sheet.".into());
     }
-    if !input.collect_paths && data.aggs.len() > 5_000_000 {
+    // Each entry holds one accumulator per value field and calculated-field source column, so the
+    // width counts too: a handful of groups over hundreds of fields is large as well. The
+    // value-filter pass (collect_paths) sizes the report before filtering: the size checks run on
+    // the final pass, when the kept records are known.
+    if !input.collect_paths
+        && (data.aggs.len() > 5_000_000 || data.aggs.len().saturating_mul(input.vals.len() + input.extra.len()) > MAX_ACCUMULATORS)
+    {
         return Err("The PivotTable report is too large.".into());
     }
     Ok(())
@@ -348,8 +360,8 @@ fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
                     let lv = spec.path.len().saturating_sub(1);
                     let label = spec.path.last().and_then(|it| col_items.get(lv).map(|fi| fi.label(*it))).unwrap_or_default();
                     let text = match vi {
-                        Some(vi) if k > 1 => format!("{label} {}", val_name(*vi)),
-                        _ => format!("{label} Total"),
+                        Some(vi) if k > 1 => caption(&label, &val_name(*vi)),
+                        _ => caption(&label, "Total"),
                     };
                     g.set(first_level + lv, c, Value::text(text), CellKind::ColLabel, 0, None);
                 }
@@ -597,6 +609,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             chart_rows: vec![],
             chart_cols: vec![],
             label_col: None,
+            data: vec![],
         });
     }
 
@@ -663,6 +676,16 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     } else {
         Some(row_levels.saturating_sub(1) as u32)
     };
+    let item_refs = |fields: &[&PivotField], items: &[FieldItems], path: &[u32]| -> Vec<PivotItemRef> {
+        path.iter()
+            .enumerate()
+            .filter_map(|(d, it)| {
+                let (f, item) = (fields.get(d)?, items.get(d)?.get(*it)?);
+                Some(PivotItemRef { field: f.source_col.clone(), label: item.label.clone(), value: item.value.clone() })
+            })
+            .collect()
+    };
+    let mut data: Vec<PivotDataCell> = Vec::new();
     for line in &lines {
         let rk = match line.kind {
             LineKind::Item(b) => RowKind::Item(b),
@@ -692,6 +715,21 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             let cp = spec.path.as_slice();
             let Some(raw) = lookup.get(rp, cp, *vi) else { continue };
             let shown = show.value(vdef, bases.get(*vi).copied().flatten(), raw, CellAt { row: rp, col: cp, value_index: *vi });
+            // Every value cell of the report is indexed, so a report that needs more cells than
+            // the index cap is rejected outright — never written with a truncated index that
+            // would answer #REF! for the values the sheet shows.
+            if data.len() >= MAX_INDEXED_CELLS {
+                return Err(format!("A PivotTable report can have at most {MAX_INDEXED_CELLS} value cells."));
+            }
+            let mut items = item_refs(&ctx.rows, &ctx.row_items, rp);
+            items.extend(item_refs(&col_fields, &col_items, cp));
+            data.push(PivotDataCell {
+                data_field: vdef.name.clone(),
+                source_col: vdef.source_col.clone(),
+                items,
+                row: u32::try_from(r).unwrap_or(u32::MAX),
+                col: u32::try_from(l + j).unwrap_or(u32::MAX),
+            });
             if let Some(pr) = probe.as_deref_mut() {
                 if pr.at == Some((r, l + j)) {
                     pr.hit = Some((rp.to_vec(), cp.to_vec()));
@@ -703,5 +741,5 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
 }

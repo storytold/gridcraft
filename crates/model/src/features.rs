@@ -10,8 +10,8 @@ mod pivot;
 mod print;
 
 pub use pivot::{
-    PivotBaseItem, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotTopOf,
-    PivotValue, PivotValueFilter, PivotValueRule,
+    PIVOT_INDEXER, PivotBaseItem, PivotCalcField, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotIndexer, PivotItemRef,
+    PivotLayout, PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotTopOf, PivotValue, PivotValueFilter, PivotValueRule, pivot_key,
 };
 pub use print::{EditRange, HfPage, LineInfo, Orientation, PageOrder, PrintSettings, SheetProtection, password_hash};
 
@@ -231,6 +231,30 @@ pub enum CfRule {
         reverse: bool,
         show_value: bool,
     },
+}
+
+impl CfRule {
+    /// The differential style a matching rule applies; colour scales, data bars and icon sets have none.
+    pub fn style(&self) -> Option<&Style> {
+        match self {
+            CfRule::CellIs { style, .. }
+            | CfRule::Expression { style, .. }
+            | CfRule::ContainsText { style, .. }
+            | CfRule::NotContainsText { style, .. }
+            | CfRule::BeginsWith { style, .. }
+            | CfRule::EndsWith { style, .. }
+            | CfRule::Blanks { style }
+            | CfRule::NoBlanks { style }
+            | CfRule::Errors { style }
+            | CfRule::NoErrors { style }
+            | CfRule::Duplicate { style }
+            | CfRule::Unique { style }
+            | CfRule::Top10 { style, .. }
+            | CfRule::AboveAverage { style, .. }
+            | CfRule::TimePeriod { style, .. } => Some(style),
+            CfRule::ColorScale { .. } | CfRule::DataBar { .. } | CfRule::IconSet { .. } => None,
+        }
+    }
 }
 
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.
@@ -647,6 +671,9 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// Decorative text (`insert.wordArt`): a transparent shape whose `Shape::text` is drawn with
+    /// the large, filled/outlined/shadowed text properties of `Shape::format`.
+    WordArt,
     /// An equation: `Shape::text` holds its LaTeX source, `Shape::line` its ink colour
     /// (`Color::Auto` for the sheet's text colour) and `Shape::math` its cached layout.
     Equation,
@@ -663,6 +690,9 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// Degrees clockwise about the anchor rect's centre, in `[0, 360)`.
+    #[serde(default)]
+    pub rotation: f32,
     /// An equation's layout, rebuilt from `text` and never saved.
     #[serde(skip)]
     pub math: EquationCache,
@@ -1005,6 +1035,8 @@ pub struct ShapeFormat {
     pub text_color: Option<Color>,
     /// Text outline (`a:rPr/a:ln`): colour and width in points.
     pub text_outline: Option<(Color, f32)>,
+    /// Text drop shadow colour (`a:rPr/a:effectLst/a:outerShdw`); `None` is no shadow.
+    pub text_shadow: Option<Color>,
     /// `None`: the shape's default (left for text boxes, centred for other shapes).
     pub align: Option<ShapeTextAlign>,
     /// `None`: the shape's default (top for text boxes, middle for other shapes).
