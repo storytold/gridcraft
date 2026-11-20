@@ -194,7 +194,8 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
     let measure = s.text_width.clone();
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(si) else { return Ok(Json::Null) };
-        let mut measured: std::collections::HashMap<StyleId, std::collections::HashMap<String, f32>> = Default::default();
+        // Keyed by style and boldness: a table's style can make a cell bold (its header row).
+        let mut measured: std::collections::HashMap<(StyleId, bool), std::collections::HashMap<String, f32>> = Default::default();
         let mut distinct = 0usize;
         // Selected columns, then one pass over the populated cells (the store is row-oriented, so a
         // scan per column would revisit every row for each selected column, empty or not).
@@ -228,22 +229,26 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     }
                     let id = sh.style_id(cell);
                     let st = cx.wb.styles.get(id);
+                    // The font as the grid draws the cell: in a table, the table style's (a bold
+                    // header row), not only the cell's own.
+                    let table_font = sh.table_at(cell).map(|t| crate::tables::table_cell_style(&cx.wb, si, t, cell).font);
+                    let font = table_font.as_ref().unwrap_or(&st.font);
                     let text = crate::display::cell_text(&cx.wb, sh, cell);
                     for line in text.lines() {
                         let w = match &measure {
                             Some(m) => {
-                                let known = measured.entry(id).or_default();
+                                let known = measured.entry((id, font.bold)).or_default();
                                 match known.get(line) {
                                     Some(w) => *w,
                                     None => {
-                                        let w = m(line, &st.font, distinct < EXACT_TEXT_WIDTHS);
+                                        let w = m(line, font, distinct < EXACT_TEXT_WIDTHS);
                                         known.insert(line.to_owned(), w);
                                         distinct += 1;
                                         w
                                     }
                                 }
                             }
-                            None => approx_text_width(line, st.font.size, st.font.bold),
+                            None => approx_text_width(line, font.size, font.bold),
                         };
                         let w = w + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(cell);
                         let max = maxes.entry(cell.col).or_insert(0.0);
