@@ -95,7 +95,7 @@ impl Evaluator<'_> {
                 if (h as u64) * (w as u64) > MAX_CELLS {
                     return Err(CellError::Num);
                 }
-                let values = self.host.range_values(a.sheet, part);
+                let values = self.block_values(a.sheet, part);
                 let ((r0, r1), (c0, c1)) = bounds(&values, w).ok_or(CellError::Calc)?;
                 let (h_all, w_all) = (a.range.height() as usize, a.range.width() as usize);
                 let (kr0, kr1) = keep(h_all, (r0, r1), rows);
