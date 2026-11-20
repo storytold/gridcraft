@@ -423,15 +423,13 @@ impl TemplateFiles {
     /// Starts a scan when `folder` changes and returns its result once the worker finishes.
     #[cfg(not(target_arch = "wasm32"))]
     fn known(&mut self, ctx: &egui::Context, folder: &str) -> Option<Result<Vec<std::path::PathBuf>, String>> {
-        if self.folder != folder {
+        if self.folder != folder && !TEMPLATE_ASKING.swap(true, Ordering::SeqCst) {
             *self.found.lock().unwrap_or_else(PoisonError::into_inner) = None;
-            if !TEMPLATE_ASKING.swap(true, Ordering::SeqCst) {
-                self.folder = folder.to_string();
-                if let Err(error) = ask_templates(ctx.clone(), self.folder.clone(), self.found.clone()) {
-                    *self.found.lock().unwrap_or_else(PoisonError::into_inner) = Some((self.folder.clone(), Err(error.to_string())));
-                    TEMPLATE_ASKING.store(false, Ordering::SeqCst);
-                    ctx.request_repaint();
-                }
+            self.folder = folder.to_string();
+            if let Err(error) = ask_templates(ctx.clone(), self.folder.clone(), self.found.clone()) {
+                *self.found.lock().unwrap_or_else(PoisonError::into_inner) = Some((self.folder.clone(), Err(error.to_string())));
+                TEMPLATE_ASKING.store(false, Ordering::SeqCst);
+                ctx.request_repaint();
             }
         }
         self.result_for(folder)
@@ -1060,26 +1058,54 @@ mod tests {
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn personal_template_scan_filters_and_reports_errors() {
-        let dir = std::env::temp_dir().join(format!("gridcraft-personal-templates-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("Budget.xltx"), b"template").unwrap();
-        std::fs::write(dir.join("Macro.xltm"), b"template").unwrap();
-        std::fs::write(dir.join("Upper.XLTX"), b"template").unwrap();
-        std::fs::write(dir.join("Ignore.xlsx"), b"workbook").unwrap();
-        std::fs::create_dir(dir.join("Folder.xltx")).unwrap();
+    fn rejected_template_scan_keeps_the_previous_cached_result() {
+        struct ResetAsking;
+        impl Drop for ResetAsking {
+            fn drop(&mut self) {
+                TEMPLATE_ASKING.store(false, Ordering::SeqCst);
+            }
+        }
 
-        let names: Vec<_> = scan_templates(&dir.to_string_lossy())
+        let found = Arc::new(Mutex::new(Some(("old".into(), Ok(vec![std::path::PathBuf::from("old/template.xltx")])))));
+        let mut files = TemplateFiles { folder: "old".into(), found };
+        TEMPLATE_ASKING.store(true, Ordering::SeqCst);
+        let _reset = ResetAsking;
+
+        assert!(files.known(&egui::Context::default(), "new").is_none());
+        assert_eq!(files.folder, "old");
+        assert_eq!(files.result_for("old").unwrap().unwrap(), [std::path::PathBuf::from("old/template.xltx")]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn personal_template_scan_filters_and_reports_errors() {
+        static NEXT_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let unique = NEXT_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = TempDir(std::env::temp_dir().join(format!("gridcraft-personal-templates-{}-{unique}", std::process::id())));
+        std::fs::create_dir(&dir.0).unwrap();
+        std::fs::write(dir.0.join("Budget.xltx"), b"template").unwrap();
+        std::fs::write(dir.0.join("Macro.xltm"), b"template").unwrap();
+        std::fs::write(dir.0.join("Upper.XLTX"), b"template").unwrap();
+        std::fs::write(dir.0.join("Ignore.xlsx"), b"workbook").unwrap();
+        std::fs::create_dir(dir.0.join("Folder.xltx")).unwrap();
+
+        let names: Vec<_> = scan_templates(&dir.0.to_string_lossy())
             .unwrap()
             .into_iter()
             .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
             .collect();
         assert_eq!(names, ["Budget.xltx", "Macro.xltm", "Upper.XLTX"]);
-        let empty = dir.join("empty");
+        let empty = dir.0.join("empty");
         std::fs::create_dir(&empty).unwrap();
         assert!(scan_templates(&empty.to_string_lossy()).unwrap().is_empty());
-        assert!(scan_templates(&dir.join("missing").to_string_lossy()).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(scan_templates(&dir.0.join("missing").to_string_lossy()).is_err());
     }
 }

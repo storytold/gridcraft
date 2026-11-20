@@ -3,6 +3,8 @@ use serde_json::json;
 
 use crate::Session;
 
+static TEST_PATH_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 thread_local! {
     /// Copies of a document's undo and redo history `execute` has taken on this thread.
     pub(crate) static HISTORY_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -39,6 +41,8 @@ fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
     let result = s.execute("file.open", json!({"name": "Starter.xlsx", "base64": crate::io::base64_encode(&bytes), "template": true})).unwrap();
     assert_eq!(result["title"], "Starter");
     assert!(s.doc().unwrap().path.is_none());
+    assert!(s.doc().unwrap().is_template_instance(), "the explicit template decision survives a non-template source name");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "Starter.xlsx");
     s.execute("file.save", json!({})).unwrap();
     assert!(matches!(s.ui_requests.last(), Some(crate::UiRequest::Dialog(name, _)) if name == "saveAs"));
 }
@@ -91,9 +95,11 @@ fn opening_a_template_path_twice_creates_two_unsaved_workbooks() {
     let mut source = s();
     source.execute("cell.set", json!({"cell": "A1", "input": "from template"})).unwrap();
     let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Template.XLTX").unwrap();
-    let path = std::env::temp_dir().join(format!("gridcraft-personal-template-{}.XLTX", std::process::id()));
+    let unique = TEST_PATH_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("gridcraft-personal-template-{}-{unique}.XLTX", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
     let _cleanup = RemoveFileOnDrop(path.clone());
-    std::fs::write(&path, bytes).unwrap();
+    std::io::Write::write_all(&mut file, &bytes).unwrap();
 
     let mut s = s();
     let path = path.to_string_lossy().into_owned();

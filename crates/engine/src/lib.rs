@@ -199,6 +199,9 @@ pub struct DocState {
     /// workbook is open (saving, renaming, reordering) and is never reused for another one.
     pub uid: u64,
     pub title: String,
+    /// `file.open` explicitly treated the source as a template. Kept separately from its name:
+    /// callers may pass `template: true` for a source named `.xlsx`.
+    template_source: bool,
     /// Per-sheet selection memory.
     pub sheet_selections: Vec<Selection>,
     /// Allow Edit Ranges unlocked with their password in this session: (sheet name, title).
@@ -354,6 +357,7 @@ impl DocState {
             revision: 1,
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title,
+            template_source: false,
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
@@ -410,7 +414,12 @@ impl DocState {
     /// Whether this unsaved document was created from an Excel template. Its title is already the
     /// complete stem, even when that stem ends in something that looks like another file type.
     pub fn is_template_instance(&self) -> bool {
-        self.path.is_none() && self.wb.source_path.as_ref().is_some_and(|path| crate::io::is_template_path(&path.to_string_lossy()))
+        self.path.is_none()
+            && (self.template_source || self.wb.source_path.as_ref().is_some_and(|path| crate::io::is_template_path(&path.to_string_lossy())))
+    }
+
+    pub(crate) fn set_template_source(&mut self, template: bool) {
+        self.template_source = template;
     }
 
     /// File-name stem for exports. A pathless title is treated as a stem unless its source has a
