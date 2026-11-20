@@ -19,7 +19,8 @@ impl SheetApp {
 
     /// The font names the open workbooks use: every style's font plus the theme's heading/body
     /// fonts. These are the families [`fonts`] binds an installed file for. Every workbook's, as
-    /// each may be showing in a window of its own.
+    /// each may be showing in a window of its own. The names are sorted with no repeats, so a new
+    /// style in a font already used leaves the list as it is (no font rebind, no row refit).
     pub fn used_fonts(&self) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         for d in self.session.documents() {
@@ -29,6 +30,8 @@ impl SheetApp {
             // Text boxes and shapes name their own typefaces.
             names.extend(d.wb.sheets.iter().flat_map(|sh| sh.shapes.iter().filter_map(|s| s.format.font.clone())));
         }
+        names.sort_unstable();
+        names.dedup();
         names
     }
 

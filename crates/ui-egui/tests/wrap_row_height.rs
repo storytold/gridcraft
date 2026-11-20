@@ -63,3 +63,24 @@ fn a_wrapped_row_fits_the_text_as_the_grid_draws_it() {
         }
     }
 }
+
+#[test]
+fn a_new_style_in_a_font_already_used_leaves_the_used_fonts_alone() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = SheetApp::new(session, Default::default());
+    app.use_prepared_fonts();
+    app.run("range.setValues", json!({"range": "A1", "values": [["x"]]})).unwrap();
+    let before = app.used_fonts();
+    let mut unique = before.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(before, unique, "the names are sorted with no repeats");
+    // A new style in the same font must not rebind fonts and refit every wrapped row.
+    app.run("home.bold", json!({"range": "A1"})).unwrap();
+    app.run("home.wrapText", json!({"range": "B2", "on": true})).unwrap();
+    assert_eq!(app.used_fonts(), before);
+    // A new family does change the list.
+    app.run("home.fontName", json!({"range": "A1", "name": "Georgia"})).unwrap();
+    assert_ne!(app.used_fonts(), before);
+}

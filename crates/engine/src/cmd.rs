@@ -803,22 +803,26 @@ pub(crate) struct WordWidths {
     measure: TextWidth,
     /// [`Session::text_pixels_per_point`](crate::Session::text_pixels_per_point), if usable.
     pixels_per_point: Option<f32>,
-    known: std::collections::HashMap<(gridcraft_model::StyleId, String), f32>,
+    /// Widths by style, then by word, so a lookup never allocates a key.
+    known: std::collections::HashMap<gridcraft_model::StyleId, std::collections::HashMap<String, f32>>,
+    /// How many words are in `known` (all styles): decides exact or quick measuring.
+    measured: usize,
 }
 
 impl WordWidths {
     pub(crate) fn new(measure: TextWidth, pixels_per_point: Option<f32>) -> Self {
-        WordWidths { measure, pixels_per_point: pixels_per_point.filter(|p| p.is_finite() && *p > 0.0), known: Default::default() }
+        WordWidths { measure, pixels_per_point: pixels_per_point.filter(|p| p.is_finite() && *p > 0.0), known: Default::default(), measured: 0 }
     }
 
     fn width(&mut self, style: gridcraft_model::StyleId, font: &gridcraft_model::Font, word: &str) -> f32 {
-        if let Some(w) = self.known.get(&(style, word.to_owned())) {
+        if let Some(w) = self.known.get(&style).and_then(|words| words.get(word)) {
             return *w;
         }
-        let w = (self.measure)(word, font, self.known.len() < EXACT_WORD_WIDTHS);
+        let w = (self.measure)(word, font, self.measured < EXACT_WORD_WIDTHS);
         // A front end's answer is input like any other: never let it shrink or poison the row.
         let w = if w.is_finite() && w >= 0.0 { w } else { crate::cmd::format::approx_text_width(word, font.size, font.bold) };
-        self.known.insert((style, word.to_owned()), w);
+        self.known.entry(style).or_default().insert(word.to_owned(), w);
+        self.measured += 1;
         w
     }
 }
