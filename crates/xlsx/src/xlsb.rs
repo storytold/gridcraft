@@ -199,7 +199,7 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         wb.preserved = Some(Arc::new(preserved));
     }
     if let Some(remap) = ordinal_map {
-        remap_workbook_external_ordinals(&mut wb, &remap);
+        remap_workbook_external_ordinals(&mut wb, &remap, &mut report);
     }
     for warning in package.warnings() {
         report.warn(warning);
@@ -227,59 +227,79 @@ fn preserve_external_links(
     let mut refs_xml = format!("<externalReferences xmlns:r=\"{NS_REL}\">");
     let mut remap = vec![None; links.len() + 1];
     let mut next_ordinal = 0usize;
-    let mut had_missing = false;
-    let mut shifted = false;
+    let mut had_unpreserved = false;
     for (i, (_, link)) in links.iter().enumerate() {
-        let Some(link) = link else {
-            had_missing = true;
+        let Some(craft_xlsx::ExternalLink::Book(book)) = link else {
+            had_unpreserved = true;
             continue;
         };
+        if book.target.is_none() {
+            had_unpreserved = true;
+            continue;
+        }
         next_ordinal += 1;
         let old_ordinal = i + 1;
         remap[old_ordinal] = Some(next_ordinal);
-        if next_ordinal != old_ordinal {
-            shifted = true;
-        }
         let rid = format!("rId{next_ordinal}");
         let part_name = format!("xl/externalLinks/externalLink{next_ordinal}.xml");
-        let (xml, rels) = external_link_part_xml(link);
+        let (xml, rels) = external_link_part_xml(book);
         p.rels.push(PreservedRel { id: rid.clone(), rel_type: format!("{NS_REL}/externalLink"), target: part_name.clone(), external: false });
         p.parts.push(PreservedPart { name: part_name, content_type: CT_EXT_LINK.into(), data: xml.into_bytes().into(), rels });
         let _ = write!(refs_xml, "<externalReference r:id=\"{rid}\"/>");
     }
-    if had_missing {
-        report.warn("XLSB: unresolved external link kept its cached values; its target could not be preserved");
+    if had_unpreserved {
+        report.warn("XLSB: unresolved or non-workbook external links kept their cached values; their targets could not be preserved");
     }
-    if next_ordinal == 0 {
-        return (None, None);
-    }
-    refs_xml.push_str("</externalReferences>");
-    p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: refs_xml });
-    (Some(p), shifted.then_some(remap))
+    let preserved = if next_ordinal == 0 {
+        None
+    } else {
+        refs_xml.push_str("</externalReferences>");
+        p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: refs_xml });
+        Some(p)
+    };
+    (preserved, had_unpreserved.then_some(remap))
 }
 
-fn remap_workbook_external_ordinals(wb: &mut Workbook, remap: &[Option<usize>]) {
+fn remap_workbook_external_ordinals(wb: &mut Workbook, remap: &[Option<usize>], report: &mut ReadReport) {
+    let mut dropped = false;
     for sheet_arc in &mut wb.sheets {
         let sheet = Arc::make_mut(sheet_arc);
         let coords: Vec<CellRef> = sheet.cells.iter().filter(|(_, c)| c.formula.is_some()).map(|(pos, _)| pos).collect();
         for pos in coords {
             let Some(cell) = sheet.cells.get_mut(pos) else { continue };
             let Some(fm) = &cell.formula else { continue };
-            if let Some(rewritten) = remap_external_formula(&fm.text, remap) {
-                let mut updated = (**fm).clone();
-                updated.text = rewritten;
-                cell.formula = Some(Arc::new(updated));
+            match remap_external_formula(&fm.text, remap) {
+                Ok(Some(rewritten)) => {
+                    let mut updated = (**fm).clone();
+                    updated.text = rewritten;
+                    cell.formula = Some(Arc::new(updated));
+                }
+                Ok(None) => {}
+                Err(()) => {
+                    cell.formula = None;
+                    dropped = true;
+                }
             }
         }
     }
-    for name in &mut wb.names {
-        if let Some(rewritten) = remap_external_formula(&name.formula, remap) {
-            name.formula = rewritten;
+    let mut kept_names = Vec::with_capacity(wb.names.len());
+    for mut name in std::mem::take(&mut wb.names) {
+        match remap_external_formula(&name.formula, remap) {
+            Ok(Some(rewritten)) => {
+                name.formula = rewritten;
+                kept_names.push(name);
+            }
+            Ok(None) => kept_names.push(name),
+            Err(()) => dropped = true,
         }
+    }
+    wb.names = kept_names;
+    if dropped {
+        report.warn("XLSB: formulas referencing unresolved external links were replaced with their cached values");
     }
 }
 
-fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Option<String> {
+fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Result<Option<String>, ()> {
     let bytes = text.as_bytes();
     let mut out: Option<String> = None;
     let mut i = 0;
@@ -300,102 +320,100 @@ fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Option<String>
                 && j < bytes.len()
                 && bytes[j] == b']'
                 && let Ok(old) = text[i + 1..j].parse::<usize>()
-                && let Some(&Some(new_n)) = remap.get(old)
-                && new_n != old
             {
-                let buf = out.get_or_insert_with(|| String::with_capacity(text.len()));
-                buf.push_str(&text[copied..=i]);
-                let _ = write!(buf, "{new_n}]");
-                i = j + 1;
-                copied = i;
-                continue;
+                let Some(&Some(new_n)) = remap.get(old) else {
+                    return Err(());
+                };
+                if new_n != old {
+                    let buf = out.get_or_insert_with(|| String::with_capacity(text.len()));
+                    buf.push_str(&text[copied..=i]);
+                    let _ = write!(buf, "{new_n}]");
+                    i = j + 1;
+                    copied = i;
+                    continue;
+                }
             }
         }
         i += 1;
     }
     if let Some(mut buf) = out {
         buf.push_str(&text[copied..]);
-        Some(buf)
+        Ok(Some(buf))
     } else {
-        None
+        Ok(None)
     }
 }
 
-fn external_link_part_xml(link: &craft_xlsx::ExternalLink) -> (String, Vec<PreservedRel>) {
+fn external_link_part_xml(book: &craft_xlsx::ExternalBook) -> (String, Vec<PreservedRel>) {
     let mut xml = format!("{XML_DECL}<externalLink xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
     let mut rels = Vec::new();
-    if let craft_xlsx::ExternalLink::Book(book) = link {
-        xml.push_str("<externalBook");
-        if let Some(target) = &book.target {
-            xml.push_str(" r:id=\"rId1\"");
-            rels.push(PreservedRel { id: "rId1".into(), rel_type: format!("{NS_REL}/externalLinkPath"), target: target.clone(), external: true });
+    xml.push_str("<externalBook");
+    if let Some(target) = &book.target {
+        xml.push_str(" r:id=\"rId1\"");
+        rels.push(PreservedRel { id: "rId1".into(), rel_type: format!("{NS_REL}/externalLinkPath"), target: target.clone(), external: true });
+    }
+    xml.push('>');
+    if !book.sheet_names.is_empty() {
+        xml.push_str("<sheetNames>");
+        for name in &book.sheet_names {
+            let _ = write!(xml, "<sheetName val=\"{}\"/>", esc_attr(name));
         }
-        xml.push('>');
-        if !book.sheet_names.is_empty() {
-            xml.push_str("<sheetNames>");
-            for name in &book.sheet_names {
-                let _ = write!(xml, "<sheetName val=\"{}\"/>", esc_attr(name));
+        xml.push_str("</sheetNames>");
+    }
+    if !book.defined_names.is_empty() {
+        xml.push_str("<definedNames>");
+        for dn in &book.defined_names {
+            let _ = write!(xml, "<definedName name=\"{}\"", esc_attr(&dn.name));
+            if let Some(refers_to) = &dn.refers_to {
+                let _ = write!(xml, " refersTo=\"{}\"", esc_attr(refers_to));
             }
-            xml.push_str("</sheetNames>");
-        }
-        if !book.defined_names.is_empty() {
-            xml.push_str("<definedNames>");
-            for dn in &book.defined_names {
-                let _ = write!(xml, "<definedName name=\"{}\"", esc_attr(&dn.name));
-                if let Some(refers_to) = &dn.refers_to {
-                    let _ = write!(xml, " refersTo=\"{}\"", esc_attr(refers_to));
-                }
-                if let Some(sheet_id) = dn.sheet_id {
-                    let _ = write!(xml, " sheetId=\"{sheet_id}\"");
-                }
-                xml.push_str("/>");
+            if let Some(sheet_id) = dn.sheet_id {
+                let _ = write!(xml, " sheetId=\"{sheet_id}\"");
             }
-            xml.push_str("</definedNames>");
+            xml.push_str("/>");
         }
-        if !book.sheet_data.is_empty() {
-            xml.push_str("<sheetDataSet>");
-            for sd in &book.sheet_data {
-                let _ = write!(xml, "<sheetData sheetId=\"{}\"", sd.sheet_id);
-                if sd.refresh_error {
-                    xml.push_str(" refreshError=\"1\"");
-                }
-                xml.push('>');
-                let mut rows: BTreeMap<u32, Vec<(craft_xlsx::CellRef, &craft_xlsx::Value)>> = BTreeMap::new();
-                for (pos, val) in &sd.cells {
-                    rows.entry(pos.row).or_default().push((*pos, val));
-                }
-                for (r, cells) in rows {
-                    let _ = write!(xml, "<row r=\"{}\">", r + 1);
-                    for (pos, val) in cells {
-                        let r_attr = CellRef::new(pos.row, pos.col);
-                        match val {
-                            craft_xlsx::Value::Empty => {
-                                let _ = write!(xml, "<cell r=\"{r_attr}\"/>");
-                            }
-                            craft_xlsx::Value::Number(n) => {
-                                let _ = write!(xml, "<cell r=\"{r_attr}\"><v>{n}</v></cell>");
-                            }
-                            craft_xlsx::Value::Text(t) => {
-                                let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"str\"><v>{}</v></cell>", esc(t));
-                            }
-                            craft_xlsx::Value::Bool(b) => {
-                                let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"b\"><v>{}</v></cell>", if *b { "1" } else { "0" });
-                            }
-                            craft_xlsx::Value::Error(e) => {
-                                let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"e\"><v>{}</v></cell>", esc(map_cell_error(*e).as_str()));
-                            }
+        xml.push_str("</definedNames>");
+    }
+    if !book.sheet_data.is_empty() {
+        xml.push_str("<sheetDataSet>");
+        for sd in &book.sheet_data {
+            let _ = write!(xml, "<sheetData sheetId=\"{}\"", sd.sheet_id);
+            if sd.refresh_error {
+                xml.push_str(" refreshError=\"1\"");
+            }
+            xml.push('>');
+            let mut rows: BTreeMap<u32, Vec<(craft_xlsx::CellRef, &craft_xlsx::Value)>> = BTreeMap::new();
+            for (pos, val) in &sd.cells {
+                rows.entry(pos.row).or_default().push((*pos, val));
+            }
+            for (r, cells) in rows {
+                let _ = write!(xml, "<row r=\"{}\">", r + 1);
+                for (pos, val) in cells {
+                    let r_attr = CellRef::new(pos.row, pos.col);
+                    match val {
+                        craft_xlsx::Value::Empty => {
+                            let _ = write!(xml, "<cell r=\"{r_attr}\"/>");
+                        }
+                        craft_xlsx::Value::Number(n) => {
+                            let _ = write!(xml, "<cell r=\"{r_attr}\"><v>{n}</v></cell>");
+                        }
+                        craft_xlsx::Value::Text(t) => {
+                            let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"str\"><v>{}</v></cell>", esc(t));
+                        }
+                        craft_xlsx::Value::Bool(b) => {
+                            let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"b\"><v>{}</v></cell>", if *b { "1" } else { "0" });
+                        }
+                        craft_xlsx::Value::Error(e) => {
+                            let _ = write!(xml, "<cell r=\"{r_attr}\" t=\"e\"><v>{}</v></cell>", esc(map_cell_error(*e).as_str()));
                         }
                     }
-                    xml.push_str("</row>");
                 }
-                xml.push_str("</sheetData>");
+                xml.push_str("</row>");
             }
-            xml.push_str("</sheetDataSet>");
+            xml.push_str("</sheetData>");
         }
-        xml.push_str("</externalBook>");
-    } else {
-        xml.push_str("<ddeLink ddeService=\"external\" ddeTopic=\"external\"/>");
+        xml.push_str("</sheetDataSet>");
     }
-    xml.push_str("</externalLink>");
+    xml.push_str("</externalBook></externalLink>");
     (xml, rels)
 }

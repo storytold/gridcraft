@@ -599,18 +599,29 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     s1.extend(wide("Data"));
     wb_records.extend(record(156, &s1));
     wb_records.extend(record(144, &[]));
-    // Book 0 = self, Book 1 = missing ("missing"), Book 2 = valid ("ext2").
+    // Book 0 = self, Book 1 = non-workbook DDE ("ext1"), Book 2 = valid workbook ("ext2").
     wb_records.extend(record(357, &[]));
-    wb_records.extend(record(355, &wide("missing")));
+    wb_records.extend(record(355, &wide("ext1")));
     wb_records.extend(record(355, &wide("ext2")));
     let mut xti = 2u32.to_le_bytes().to_vec();
-    for (bk, first, last) in [(1u32, 0i32, 0i32), (2, 0, 0)] {
+    for (bk, first, last) in [(1u32, -2i32, -2i32), (2, 0, 0)] {
         xti.extend(bk.to_le_bytes());
         xti.extend(first.to_le_bytes());
         xti.extend(last.to_le_bytes());
     }
     wb_records.extend(record(362, &xti));
     wb_records.extend(record(132, &[]));
+
+    // DDE link part (links/dde1.bin): sbt=1 ("Excel", "topic") with item "R1C1".
+    let mut dde_bin = Vec::new();
+    let mut dde_begin = 1u16.to_le_bytes().to_vec();
+    dde_begin.extend(wide("Excel"));
+    dde_begin.extend(wide("topic"));
+    dde_bin.extend(record(360, &dde_begin));
+    dde_bin.extend(record(577, &wide("R1C1")));
+    dde_bin.extend(record(586, &[0u8; 7]));
+    dde_bin.extend(record(587, &[]));
+    dde_bin.extend(record(588, &[]));
 
     let mut ext_bin = Vec::new();
     let mut begin_sup = 0u16.to_le_bytes().to_vec();
@@ -632,12 +643,7 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
         data.extend(0u32.to_le_bytes());
         record(9, &data)
     };
-    let ptg_1 = {
-        let mut v = vec![0x3A, 0, 0];
-        v.extend(0u32.to_le_bytes());
-        v.extend(0u16.to_le_bytes());
-        v
-    };
+    let ptg_1 = [0x39, 0, 0, 1, 0, 0, 0];
     let ptg_2 = {
         let mut v = vec![0x3A, 1, 0];
         v.extend(0u32.to_le_bytes());
@@ -648,8 +654,8 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
     data.extend(fmla_num(0, 11.0, &ptg_1));
     data.extend(fmla_num(1, 22.0, &ptg_2));
 
-    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/><Relationship Id="ext2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="../links/externalLink2.bin"/></Relationships>"#;
-    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/records/book.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/data/one.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/text/strings.bin" ContentType="application/vnd.ms-excel.sharedStrings"/><Override PartName="/links/externalLink2.bin" ContentType="application/vnd.ms-excel.externalLink"/></Types>"#;
+    let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="one" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="../data/one.bin"/><Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="../text/strings.bin"/><Relationship Id="ext1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="../links/dde1.bin"/><Relationship Id="ext2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLink" Target="../links/externalLink2.bin"/></Relationships>"#;
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/records/book.bin" ContentType="application/vnd.ms-excel.sheet.binary.macroEnabled.main"/><Override PartName="/data/one.bin" ContentType="application/vnd.ms-excel.worksheet"/><Override PartName="/text/strings.bin" ContentType="application/vnd.ms-excel.sharedStrings"/><Override PartName="/links/dde1.bin" ContentType="application/vnd.ms-excel.externalLink"/><Override PartName="/links/externalLink2.bin" ContentType="application/vnd.ms-excel.externalLink"/></Types>"#;
     let link_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath" Target="SecondBook.xlsx" TargetMode="External"/></Relationships>"#;
     let bytes = make_zip(&[
         ("[Content_Types].xml", types.as_bytes()),
@@ -658,18 +664,21 @@ fn xlsb_external_link_ordinals_preserve_missing_slots_on_xlsx_save() {
         ("records/_rels/book.bin.rels", rels.as_bytes()),
         ("data/one.bin", &worksheet(&data, &[])),
         ("text/strings.bin", &sst()),
+        ("links/dde1.bin", &dde_bin),
         ("links/externalLink2.bin", &ext_bin),
         ("links/_rels/externalLink2.bin.rels", link_rels.as_bytes()),
     ]);
 
     let (wb, report) = read_xlsb(&bytes).unwrap();
-    assert!(report.warnings.iter().any(|w| w.contains("unresolved external link")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("unresolved or non-workbook external links")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("replaced with their cached values")), "{:?}", report.warnings);
     assert!(wb.sheets[0].cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(11.0)));
     assert_eq!(wb.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]SheetA!$A$1"));
 
     let saved = write_xlsx(&wb).unwrap();
     let (reopened, rep2) = read_xlsx(&saved).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
+    assert!(reopened.sheets[0].cell(CellRef::new(0, 0)).is_some_and(|c| c.formula.is_none() && c.value == Value::Number(11.0)));
     assert_eq!(reopened.sheets[0].cell(CellRef::new(0, 1)).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("[1]SheetA!$A$1"));
 
     let saved2 = write_xlsx(&reopened).unwrap();
