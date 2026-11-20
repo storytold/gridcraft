@@ -237,6 +237,18 @@ fn delimiter_sniffing() {
 }
 
 #[test]
+fn a_tie_between_tab_and_comma_reads_as_tab_separated() {
+    // Every line holds one tab and one comma, so both split each line into the same number of fields.
+    let text = "name\tnote,extra\n1\tx,y\n2\tz,w\n";
+    assert_eq!(sniff_delimiter(text, '"'), b'\t');
+    let wb = read_csv(text.as_bytes(), &CsvOptions { delimiter: 0, ..Default::default() }).unwrap();
+    assert_eq!(wb.csv_delimiter, Some(b'\t'));
+    assert_eq!(v(&wb, 0, 1), Value::text("note,extra"));
+    assert_eq!(v(&wb, 1, 0), Value::Number(1.0));
+    assert_eq!(v(&wb, 2, 1), Value::text("z,w"));
+}
+
+#[test]
 fn a_first_record_wider_than_the_sniff_sample_keeps_its_delimiter() {
     // A header row of about 105 KiB: longer than the sample delimiter detection reads.
     let header: Vec<String> = (0..12_000).map(|i| format!("col{i:05}")).collect();
