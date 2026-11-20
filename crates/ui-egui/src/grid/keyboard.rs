@@ -21,6 +21,7 @@ fn keyboard_elsewhere(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response
         || app.dialog.is_some()
         || other_focus
         || app.message.is_some()
+        || app.is_opening()
         || app.grid.filter_menu.is_some()
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
