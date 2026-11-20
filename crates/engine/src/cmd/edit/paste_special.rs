@@ -81,6 +81,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
     edit(s, |cx| {
+        // Notes and column widths write no cell, formats and validation none unless linked (a linked
+        // paste writes a formula into every cell): only the rest is an entry that grows a table.
+        cx.entry = !(matches!(what, What::Comments | What::ColumnWidths) || (!link && matches!(what, What::Formats | What::Validation)));
         // Styles from another workbook must be re-interned.
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         let mut style_map = std::collections::HashMap::new();

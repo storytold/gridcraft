@@ -79,12 +79,12 @@ fn autofit_leaves_longer_body_cells_and_unfiltered_columns_unchanged() {
     let filtered = fit(&mut s);
     sheet_mut(&mut s).tables[0].filter_button = false;
     assert_eq!(fit(&mut s), filtered);
-    s.execute("cell.set", json!({"cell":"B1", "input":"Quarterly Revenue"})).unwrap();
-    s.execute("home.autofitColumnWidth", json!({"cols":"B:B"})).unwrap();
-    let plain = s.doc().unwrap().wb.active().unwrap().col_width(1);
+    s.execute("cell.set", json!({"cell":"C1", "input":"Quarterly Revenue"})).unwrap();
+    s.execute("home.autofitColumnWidth", json!({"cols":"C:C"})).unwrap();
+    let plain = s.doc().unwrap().wb.active().unwrap().col_width(2);
     sheet_mut(&mut s).tables[0].filter_button = true;
-    s.execute("home.autofitColumnWidth", json!({"cols":"B:B"})).unwrap();
-    assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(1), plain);
+    s.execute("home.autofitColumnWidth", json!({"cols":"C:C"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(2), plain);
 }
 
 #[test]

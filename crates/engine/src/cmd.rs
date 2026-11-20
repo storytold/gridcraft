@@ -378,6 +378,18 @@ pub struct Ctx<'a> {
     /// The command applied sheet protection itself (row/column inserts and deletes the
     /// protection allows), so cells it shifts aren't refused as edits of locked cells.
     pub protection_checked: bool,
+    /// A table grew, so its structured references cover more cells: the dependency graph is built
+    /// again before the usual recalculation of what the changed cells feed (only the edited
+    /// formulas in manual mode). The edit isn't structural, so legacy arrays are still checked.
+    pub rebuild_deps: bool,
+    /// Cells a growing table took in without editing them: formulas reading the table (ROWS,
+    /// COUNTBLANK, SUM…) recalculate through them in automatic mode, but a formula already in one
+    /// is not an edit, so manual mode leaves it for F9.
+    pub grown: Vec<gridcraft_calc::Key>,
+    /// The command enters data (typing, setValues, fill, paste): the cells it filled next to a
+    /// table grow it. Other commands that rewrite or move cells (sort, Format Painter, checkboxes)
+    /// leave tables as they are.
+    pub entry: bool,
     /// The structural edits the command made, in order (the sheet's name, the edit), as
     /// references were rewritten for them.
     pub edits: Vec<(String, gridcraft_formula::adjust::Edit)>,
@@ -387,6 +399,7 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     let d = s.doc_mut()?;
     commit(d, |cx| {
         let r = f(cx)?;
+        crate::tables::auto_expand_tables(cx);
         crate::tables::sync_headers(cx);
         Ok(r)
     })
@@ -411,9 +424,12 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         fit_rows: Vec::new(),
         protection_checked: false,
         edits: Vec::new(),
+        rebuild_deps: false,
+        grown: Vec::new(),
+        entry: false,
     };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, mut changed, structural, recalc_all, mut fit_rows, protection_checked, edits, .. } = ctx;
+    let Ctx { mut wb, mut changed, structural, recalc_all, mut fit_rows, protection_checked, edits, rebuild_deps, grown, .. } = ctx;
     // Equations whose source changed (or that arrived without a layout, as from a paste) are
     // laid out here, so painting only ever reads the cache.
     wb.refresh_equations();
@@ -444,6 +460,15 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     }
     if structural || recalc_all {
         d.calc.recalc_all(&mut wb);
+    } else if rebuild_deps {
+        d.calc.rebuild(&wb);
+        if wb.calc.mode == gridcraft_model::CalcMode::Manual || grown.is_empty() {
+            d.calc.cells_changed(&mut wb, &changed);
+        } else {
+            let mut seeds = changed.clone();
+            seeds.extend(grown);
+            d.calc.cells_changed(&mut wb, &seeds);
+        }
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
