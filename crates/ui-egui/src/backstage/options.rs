@@ -1,6 +1,7 @@
 use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, vec2};
 
-/// Excel's File › Options page: General (display theme, interface language and Show formula bar),
+/// Excel's File › Options page: General (display theme, interface language, interface size and
+/// Show formula bar),
 /// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
 /// (calculation mode and iterative calculation) and the display options for this workbook (sheet
 /// tabs and scroll bars) when a document is active. Theme, language, formula
@@ -53,7 +54,9 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
 
-/// The display theme and interface language controls of the General section.
+/// The display theme, interface language and interface size controls of the General section. The
+/// interface size is also in the View tab (#230); it is here too, beside the theme and language, where
+/// application settings are looked for.
 fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         let label = ui.label(lang.tr("Display theme"));
@@ -84,6 +87,22 @@ fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
                 for l in i18n::Language::for_picker() {
                     if ui.selectable_label(l == lang, l.name()).clicked() {
                         app.run_or_alert("app.language.set", json!({"language": l.code()}));
+                    }
+                }
+            })
+            .response
+            .labelled_by(label.id);
+        ui.end_row();
+        let label = ui.label(lang.tr("Interface size"));
+        let current = app.ui.interface_scale;
+        let text = |v: u16| if v == 100 { lang.tr("Auto").to_string() } else { format!("{v}%") };
+        craft_ui::ComboBox::from_id_salt("backstage_interface_size")
+            .width(160.0)
+            .selected_text(text(current))
+            .show_ui(ui, |ui| {
+                for v in crate::INTERFACE_SCALE_CHOICES {
+                    if ui.selectable_label(v == current, text(v)).clicked() {
+                        app.run_or_alert("view.interfaceScale", json!({"percent": v}));
                     }
                 }
             })
