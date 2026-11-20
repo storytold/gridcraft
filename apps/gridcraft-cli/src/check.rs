@@ -285,6 +285,13 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 /// shallower path (its depth-limited subtree may now fit), where already collected files are skipped.
 #[cfg_attr(not(unix), allow(unused_mut))]
 fn walk(dir: &Path, depth: usize, mut rescan: bool, out: &mut Discovery, seen: &mut std::collections::HashMap<(u64, u64), usize>) -> bool {
+    // Directory identities are only available on Unix; elsewhere these arguments
+    // are forwarded unchanged while the depth and file limits bound traversal.
+    #[cfg(not(unix))]
+    {
+        let _ = seen;
+        let _ = rescan;
+    }
     // A directory is visited once by identity (dev+inode on unix) unless reached from a shallower
     // path: several links to the same directory are aliases, not exponential branches of the scan
     // (each directory is scanned at most MAX_DEPTH + 1 times). Other platforms keep the depth cap only.

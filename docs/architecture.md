@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-11 · **Change:** minor (unique save temporary files and group preservation; shared CJK fallback baselines; earlier: Python mode in the formula bar; Python cells as data; equations; recently used functions; Function Library module; accent icons; hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -238,10 +238,19 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 - XLSX reader builds the whole workbook in memory; no streaming (#175).
 - Unmodelled XLSX parts are not carried through a save.
 
+Workbook saves exclusively create a unique sibling temporary file before writing and replacing
+the destination. Stale temporary files and pre-existing symlinks remain untouched and cannot block
+later saves. Automatic cleanup applies only to the temporary file this save owns; native regular-file
+and Unix symlink collision regressions cover that ownership boundary. Filesystem tests use isolated
+temporary directories with automatic cleanup on both success and assertion failure.
+On Windows, replacement retries briefly when another process holds a conflicting file lock.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | minor | Unique save temporary files retain the original group when possible, or drop group access when it cannot be restored |
+| 2026-11-06 | minor | Bounded Windows save retries and concurrent and denied-directory save regressions |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |
@@ -249,6 +258,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | 2026-10-31 | minor | Recently used functions (`recent.rs`, `Prefs::recent_functions`) behind `formulas.recentlyUsed` |
 | 2026-10-31 | minor | Function Library module (`function_library.rs`); accent icons (`icons::paint_accent`, `widgets::small_button_accent`) |
 | 2026-10-31 | minor | System and embedded CJK fallback faces share the Latin baseline without changing other script, symbol or emoji alignment |
+| 2026-10-30 | minor | Unique save temporary files, preserved stale paths and isolated portable filesystem regressions |
 | 2026-10-25 | trivial | The hidden names that hold macros are `_gc_macro_<n>_<k>` |
 | 2026-10-24 | minor | Macro engine on the building blocks (`macros/`, `cmd/macros.rs`) |
 | 2026-10-24 | minor | Engine building blocks for multi-command actions: undo groups, recording buffer, document trust, chunked hidden-name storage |
