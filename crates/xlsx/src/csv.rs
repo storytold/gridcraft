@@ -1,4 +1,6 @@
-//! CSV import and export (RFC 4180 with the usual real-world leniency).
+//! CSV import and export (RFC 4180 with the usual real-world leniency). Decoding, delimiter
+//! sniffing, the record parser and field quoting are `craft-csv`'s; this module turns records into
+//! typed cells (with each column's date order) and writes a sheet.
 
 use std::sync::Arc;
 
@@ -291,12 +293,14 @@ pub fn decode_text_as(bytes: &[u8], encoding: CsvEncoding) -> (String, Option<Cs
 
 /// Encodes CSV text in a legacy code page: a character the code page cannot map becomes `?`, as
 /// Word and Excel write it when saving to a legacy code page — never encoding_rs' default HTML
-/// numeric character reference (`&#128512;`), which would corrupt the CSV fields.
-fn encode_legacy(text: &str, encoding: &'static encoding_rs::Encoding) -> Vec<u8> {
+/// numeric character reference (`&#128512;`), which would corrupt the CSV fields. Also returns how
+/// many characters were replaced, so the caller can report them instead of losing them silently.
+fn encode_legacy(text: &str, encoding: &'static encoding_rs::Encoding) -> (Vec<u8>, usize) {
     let mut encoder = encoding.new_encoder();
     let mut out = Vec::with_capacity(text.len());
     let mut buf = vec![0u8; ENCODE_CHUNK];
     let mut rest = text;
+    let mut replaced = 0usize;
     loop {
         let (result, read, written) = encoder.encode_from_utf8_without_replacement(rest, &mut buf, true);
         if let Some(bytes) = buf.get(..written) {
@@ -307,10 +311,13 @@ fn encode_legacy(text: &str, encoding: &'static encoding_rs::Encoding) -> Vec<u8
             encoding_rs::EncoderResult::InputEmpty => break,
             // The chunk was filled: the next step encodes the rest.
             encoding_rs::EncoderResult::OutputFull => {}
-            encoding_rs::EncoderResult::Unmappable(_) => out.push(b'?'),
+            encoding_rs::EncoderResult::Unmappable(_) => {
+                out.push(b'?');
+                replaced += 1;
+            }
         }
     }
-    out
+    (out, replaced)
 }
 
 /// Microsoft CP932 has a byte for the wave dash and the double vertical line that WHATWG
@@ -335,118 +342,27 @@ fn cp932_text(text: &str) -> std::borrow::Cow<'_, str> {
 /// Encodes CSV text in `encoding`. `Auto` writes UTF-8: it applies to reading only. The text is
 /// taken by value so the UTF-8 paths reuse its buffer instead of copying it (`into_bytes`): a
 /// near-limit export would otherwise hold the CSV twice.
-pub(crate) fn encode_text(text: String, encoding: CsvEncoding) -> Vec<u8> {
+pub(crate) fn encode_text(text: String, encoding: CsvEncoding) -> (Vec<u8>, usize) {
     match encoding {
-        CsvEncoding::Auto | CsvEncoding::Utf8 => text.into_bytes(),
+        CsvEncoding::Auto | CsvEncoding::Utf8 => (text.into_bytes(), 0),
         CsvEncoding::Utf8Bom => {
             // The BOM goes into the buffer's own spare capacity (reserved first, so it does not
             // grow): one allocation and one shift, not a second copy of the whole text.
             let mut text = text;
             text.reserve(3);
             text.insert(0, '\u{FEFF}');
-            text.into_bytes()
+            (text.into_bytes(), 0)
         }
         CsvEncoding::ShiftJis => encode_legacy(&cp932_text(&text), encoding_rs::SHIFT_JIS),
         CsvEncoding::Windows1252 => encode_legacy(&text, encoding_rs::WINDOWS_1252),
     }
 }
 
-/// Picks comma, semicolon or tab: the candidate with the most consistent count per line
-/// (outside quotes) over the first non-blank lines. A candidate must appear on every such line, otherwise comma wins.
-pub fn sniff_delimiter(text: &str, quote: char) -> u8 {
-    let mut best = (b',', 0usize, 0usize);
-    for d in [',', ';', '\t'] {
-        let mut counts = vec![];
-        let mut n = 0usize;
-        let mut in_q = false;
-        let mut blank = true;
-        for ch in text.chars().take(64 * 1024) {
-            if !in_q && ch == '\n' {
-                // Blank lines carry no delimiter evidence.
-                if !blank {
-                    counts.push(n);
-                }
-                n = 0;
-                blank = true;
-                if counts.len() >= 20 {
-                    break;
-                }
-                continue;
-            }
-            if ch != '\r' {
-                blank = false;
-            }
-            if ch == quote {
-                in_q = !in_q;
-            } else if !in_q && ch == d {
-                n += 1;
-            }
-        }
-        if !blank {
-            counts.push(n);
-        }
-        let min = counts.iter().copied().min().unwrap_or(0);
-        let total: usize = counts.iter().sum();
-        if min > 0 && (min, total) > (best.1, best.2) {
-            best = (d as u8, min, total);
-        }
-    }
-    best.0
-}
+pub use craft_csv::sniff_delimiter;
 
-/// Splits CSV text into records of fields. A record keeps at most [`MAX_COLS`] fields; the rest are
-/// dropped as they are read, so a row of endless delimiters cannot allocate a string per field.
-pub(crate) fn parse_records(text: &str, delim: char, quote: char, mut on_record: impl FnMut(Vec<String>) -> bool) {
-    let mut field = String::new();
-    let mut record: Vec<String> = vec![];
-    let mut in_q = false;
-    let mut chars = text.chars().peekable();
-    let mut field_started_quoted = false;
-    while let Some(c) = chars.next() {
-        if in_q {
-            if c == quote {
-                if chars.peek() == Some(&quote) {
-                    field.push(quote);
-                    chars.next();
-                } else {
-                    in_q = false;
-                }
-            } else {
-                field.push(c);
-            }
-            continue;
-        }
-        if c == quote && field.is_empty() && !field_started_quoted {
-            in_q = true;
-            field_started_quoted = true;
-        } else if c == delim {
-            let f = std::mem::take(&mut field);
-            if record.len() < MAX_COLS as usize {
-                record.push(f);
-            }
-            field_started_quoted = false;
-        } else if c == '\r' || c == '\n' {
-            if c == '\r' && chars.peek() == Some(&'\n') {
-                chars.next();
-            }
-            let f = std::mem::take(&mut field);
-            if record.len() < MAX_COLS as usize {
-                record.push(f);
-            }
-            field_started_quoted = false;
-            if !on_record(std::mem::take(&mut record)) {
-                return;
-            }
-        } else {
-            field.push(c);
-        }
-    }
-    if !field.is_empty() || !record.is_empty() || field_started_quoted {
-        if record.len() < MAX_COLS as usize {
-            record.push(field);
-        }
-        on_record(record);
-    }
+/// [`craft_csv::parse_records`] with a record kept to the grid's [`MAX_COLS`] fields.
+fn parse_records(text: &str, delim: char, quote: char, on_record: impl FnMut(Vec<String>) -> bool) {
+    craft_csv::parse_records(text, delim, quote, MAX_COLS as usize, on_record);
 }
 
 /// How many rows and bytes of a text file are read to decide each column's date order.
@@ -698,6 +614,9 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     let mut styles = std::mem::take(&mut wb.styles);
     let mut fmt_cache: Vec<(&'static str, StyleId)> = vec![];
     let mut row: u32 = 0;
+    // The bounding box of the non-empty cells, which is the sheet's used range.
+    let mut used: Option<(u32, u32, u32, u32)> = None;
+    let mut too_many = false;
     parse_records(&text, delim, quote, |rec| {
         if row >= MAX_ROWS {
             return false;
@@ -711,6 +630,8 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
                 continue;
             }
             let pos = CellRef::new(row, col as u32);
+            let (r0, c0, c1) = used.map_or((row, col as u32, col as u32), |(r0, c0, _, c1)| (r0, c0.min(col as u32), c1.max(col as u32)));
+            used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
                 let p = read_field(&f, opts.date_system, rule);
@@ -731,12 +652,29 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             };
             sheet.cells.set(pos, cell);
         }
+        // Stop at the first record that takes the used range past the limit, before more is stored.
+        if let (Some(max), Some((r0, c0, r1, c1))) = (opts.max_used_cells, used)
+            && u64::from(r1 - r0 + 1) * u64::from(c1 - c0 + 1) > max
+        {
+            too_many = true;
+            return false;
+        }
         row += 1;
         true
     });
+    if too_many {
+        return Err(IoError::TooLarge(format!("the CSV's used range is over the limit of {} cells", opts.max_used_cells.unwrap_or(0))));
+    }
     wb.styles = styles;
     wb.sheets = vec![Arc::new(sheet)];
     Ok((wb, report))
+}
+
+/// CSV/TSV bytes, and how many characters the code page could not spell (each became `?`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CsvWritten {
+    pub bytes: Vec<u8>,
+    pub replaced: usize,
 }
 
 /// Writes the sheet as CSV from A1 to the end of its used range, so leading empty columns and rows
@@ -750,18 +688,30 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
 /// field or line end that takes it past the cap (a field is measured before it is written), with
 /// [`IoError::TooLarge`]; accepted exports keep every field in its place.
 pub fn write_csv(sheet: &Sheet, delimiter: u8, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
-    write_csv_in(sheet, delimiter, CsvEncoding::Utf8, MAX_CSV_BYTES, cell_text)
+    write_csv_in(sheet, delimiter, CsvEncoding::Utf8, MAX_CSV_BYTES, cell_text).map(|w| w.bytes)
 }
 
 /// [`write_csv`] with the output cap `limit` (bytes) given.
 pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
-    write_csv_in(sheet, delimiter, CsvEncoding::Utf8, limit, cell_text)
+    write_csv_in(sheet, delimiter, CsvEncoding::Utf8, limit, cell_text).map(|w| w.bytes)
 }
 
 /// [`write_csv`] in `encoding`: [`CsvEncoding::Utf8Bom`] writes `EF BB BF` before the UTF-8 bytes,
 /// [`CsvEncoding::ShiftJis`] and [`CsvEncoding::Windows1252`] encode in that code page (a character
 /// it cannot map becomes `?`), and [`CsvEncoding::Auto`] writes UTF-8 without a BOM.
 pub fn write_csv_encoded(sheet: &Sheet, delimiter: u8, encoding: CsvEncoding, cell_text: impl FnMut(CellRef) -> String) -> Result<Vec<u8>, IoError> {
+    write_csv_encoded_report(sheet, delimiter, encoding, cell_text).map(|w| w.bytes)
+}
+
+/// [`write_csv_encoded`], reporting how many characters the code page replaced with `?`
+/// ([`CsvWritten::replaced`]): a caller that named the code page can report them, and one that only
+/// remembered it can write the sheet again as UTF-8 instead of losing them.
+pub fn write_csv_encoded_report(
+    sheet: &Sheet,
+    delimiter: u8,
+    encoding: CsvEncoding,
+    cell_text: impl FnMut(CellRef) -> String,
+) -> Result<CsvWritten, IoError> {
     write_csv_in(sheet, delimiter, encoding, MAX_CSV_BYTES, cell_text)
 }
 
@@ -771,10 +721,10 @@ fn write_csv_in(
     encoding: CsvEncoding,
     limit: usize,
     mut cell_text: impl FnMut(CellRef) -> String,
-) -> Result<Vec<u8>, IoError> {
+) -> Result<CsvWritten, IoError> {
     let delim = if delimiter == 0 { ',' } else { delimiter as char };
     let mut out = String::new();
-    let Some(r) = sheet.used_range() else { return Ok(Vec::new()) };
+    let Some(r) = sheet.used_range() else { return Ok(CsvWritten { bytes: Vec::new(), replaced: 0 }) };
     let too_large =
         |what: String| IoError::TooLarge(format!("the CSV would be {what}, over the limit of {} MiB; export a smaller range", limit >> 20));
     // Every row has a delimiter between its fields and a CRLF, whatever the cells hold: a lower
@@ -791,25 +741,12 @@ fn write_csv_in(
                 out.push(delim);
             }
             let t = cell_text(CellRef::new(row, col));
-            let quoted = t.contains(delim) || t.contains('"') || t.contains('\n') || t.contains('\r');
             // The exact size of the field as written (the delimiter was pushed above), so a row
-            // never grows past the cap unseen and no doubled-quote copy of the text is built.
-            let field_len = if quoted { t.len() + t.matches('"').count() + 2 } else { t.len() };
-            if out.len().saturating_add(field_len) > limit {
+            // never grows past the cap unseen.
+            if out.len().saturating_add(craft_csv::field_len(&t, delim)) > limit {
                 return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
             }
-            if quoted {
-                out.push('"');
-                for ch in t.chars() {
-                    if ch == '"' {
-                        out.push('"');
-                    }
-                    out.push(ch);
-                }
-                out.push('"');
-            } else {
-                out.push_str(&t);
-            }
+            craft_csv::push_field(&mut out, &t, delim);
         }
         out.push_str("\r\n");
         if out.len() > limit {
@@ -819,9 +756,9 @@ fn write_csv_in(
     // UTF-8 is the widest of the encodings here, so the check above is the conservative one; this
     // exact check catches the BOM pushing a just-under-the-limit export over it. `out` is moved in:
     // the UTF-8 path reuses its buffer, so an accepted export is not held twice.
-    let bytes = encode_text(out, encoding);
+    let (bytes, replaced) = encode_text(out, encoding);
     if bytes.len() > limit {
         return Err(too_large(format!("more than {} MiB when encoded as {}", limit >> 20, encoding.as_str())));
     }
-    Ok(bytes)
+    Ok(CsvWritten { bytes, replaced })
 }

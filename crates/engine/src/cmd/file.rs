@@ -22,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save",
             ["File"],
             Some("Cmd+S"),
-            "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension), {encoding?} for a CSV/TSV save (default: the encoding it was opened with, else UTF-8 without a BOM)",
+            "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension), {encoding?} for a CSV/TSV save (default: the encoding it was opened with, else UTF-8 without a BOM; a remembered encoding that cannot spell the text is given up for UTF-8, and a named one writes `?` and reports how many characters it replaced)",
             has_doc,
             save
         ),
@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save As…",
             ["File"],
             Some("Cmd+Shift+S"),
-            "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet), {encoding?} for a CSV/TSV save",
+            "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet), {encoding?} for a CSV/TSV save (a remembered encoding that cannot spell the text is given up for UTF-8; a named one writes `?` and reports how many characters it replaced)",
             has_doc,
             save_as
         ),
@@ -40,12 +40,12 @@ pub fn specs() -> Vec<CommandSpec> {
             "Encode Workbook",
             [],
             None,
-            "{format?: xlsx|csv|tsv|json|html, encoding? for csv/tsv} → {base64}",
+            "{format?: xlsx|csv|tsv|json|html, encoding? for csv/tsv} → {base64, warnings} (a remembered encoding that cannot spell the text is given up for UTF-8; a named one writes `?` and reports how many characters it replaced)",
             has_doc,
             save_bytes
         ),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool, encoding?} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE); `encoding` names the code page for this CSV/TSV write", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool, encoding?} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE); `encoding` names the code page for this CSV/TSV write (a remembered encoding that cannot spell the text is given up for UTF-8; a named one writes `?` and reports how many characters it replaced)", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -53,7 +53,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Options",
             ["File"],
             None,
-            "{} → {calculation: {mode, iterative, maxIterations, maxChange}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
+            "{} → {calculation: {mode, iterative, maxIterations, maxChange, precisionAsDisplayed}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
             always,
             options
         ),
@@ -83,6 +83,13 @@ fn csv_encoding_param(cmd: &str, p: &Json) -> Result<Option<gridcraft_model::Csv
         None => Ok(None),
         Some(s) => s.parse().map(Some).map_err(|e: String| bad(cmd, e)),
     }
+}
+
+/// The warning a CSV/TSV write returns when it could not spell every character: a code page the
+/// caller named replaced some with `?`, or a remembered one was given up for UTF-8 so nothing was
+/// lost. Empty when the write kept everything.
+fn csv_loss_warnings(loss: Option<crate::io::CsvLoss>) -> Vec<String> {
+    loss.map(|loss| vec![loss.message()]).unwrap_or_default()
 }
 
 fn open(s: &mut Session, p: &Json) -> Result<Json> {
@@ -171,9 +178,9 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let wb = rebased.as_ref().unwrap_or(&d.wb);
     // `encoding` is this write's code page; without it a CSV keeps the one it was opened with.
     let encoding = csv_encoding_param("file.save", p)?;
-    let bytes = match kind {
-        Some(kind) => crate::io::save_bytes_as_encoded(wb, &path, kind, encoding)?,
-        None => crate::io::save_bytes_encoded(wb, &path, encoding)?,
+    let (bytes, loss) = match kind {
+        Some(kind) => crate::io::save_bytes_as_encoded_report(wb, &path, kind, encoding)?,
+        None => crate::io::save_bytes_encoded_report(wb, &path, encoding)?,
     };
     crate::io::write_file(&path, &bytes)?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
@@ -188,7 +195,13 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }
-    Ok(json!({"path": path, "bytes": bytes.len()}))
+    // A save that had to drop characters, or changed the file's encoding to keep them, says so:
+    // never a silent `?`.
+    let warnings = csv_loss_warnings(loss);
+    if let Some(message) = warnings.first() {
+        s.ui_requests.push(crate::UiRequest::Message(message.clone()));
+    }
+    Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
@@ -205,8 +218,10 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     // The file name goes into a PivotChart's link to its PivotTable.
-    let bytes = crate::io::save_bytes_encoded(&d.wb, &name, encoding)?;
-    Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
+    let (bytes, loss) = crate::io::save_bytes_encoded_report(&d.wb, &name, encoding)?;
+    // A query reports the loss in its result rather than opening a message box.
+    let warnings = csv_loss_warnings(loss);
+    Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len(), "warnings": warnings}))
 }
 
 /// File › Close closes the active window; the workbook closes with its last window.
@@ -241,13 +256,18 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
-        crate::io::csv_values_bytes(&wb)?
+    let (bytes, loss) = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+        // The raw-values export takes the encoding too (the caller's, else the workbook's).
+        crate::io::csv_values_bytes_report(&wb, encoding)?
     } else {
-        crate::io::save_bytes_encoded(&wb, &target, encoding)?
+        crate::io::save_bytes_encoded_report(&wb, &target, encoding)?
     };
     crate::io::write_file(&target, &bytes)?;
-    Ok(json!({"path": target, "bytes": bytes.len()}))
+    let warnings = csv_loss_warnings(loss);
+    if let Some(message) = warnings.first() {
+        s.ui_requests.push(crate::UiRequest::Message(message.clone()));
+    }
+    Ok(json!({"path": target, "bytes": bytes.len(), "warnings": warnings}))
 }
 
 fn properties(s: &mut Session, p: &Json) -> Result<Json> {
@@ -280,7 +300,7 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
             gridcraft_model::CalcMode::AutomaticExceptTables => "automaticExceptTables",
             gridcraft_model::CalcMode::Manual => "manual",
         };
-        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change})
+        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "precisionAsDisplayed": c.precision_as_displayed})
     });
     Ok(json!({"calculation": calculation}))
 }
