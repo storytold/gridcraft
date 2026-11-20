@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, days_in_month, serial_from_ymd};
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, Formula, Workbook};
+use gridcraft_model::{Cell, Formula, Sheet, Workbook};
 use gridcraft_numfmt::{FormatKind, NumberFormat};
 
 use crate::Result;
@@ -85,6 +85,98 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
         && (target.start.col == src.start.col || target.end.col == src.end.col)
 }
 
+/// One numeric AutoFill prediction, in fill order (nearest the source first).
+#[derive(Clone, Debug, PartialEq)]
+pub struct NumericFillPreview {
+    /// Source cell whose number format will be copied to the destination.
+    pub source: CellRef,
+    pub target: CellRef,
+    pub value: Value,
+}
+
+/// Predicts at most five values of an ordinary or Ctrl/Cmd-alternate numeric fill, read-only.
+///
+/// Scans at most 1,000 source cells and never walks the full destination. Only a single row or
+/// column extended along its axis is supported. Protected sheets, formulas, Python cells,
+/// nonnumeric sources and ordinary date/time series omit the preview. Alternate mode may copy
+/// numeric dates/times. This is feedback, not validation of every destination constraint.
+pub fn numeric_preview(wb: &Workbook, sh: &Sheet, src: RangeRef, target: RangeRef, alternate: bool) -> Option<Vec<NumericFillPreview>> {
+    // RangeRef has public fields: validate before dimensions or allocation, including callers
+    // constructing unnormalised or out-of-grid ranges directly.
+    if sh.is_protected()
+        || [src, target].iter().any(|r| !r.start.is_valid() || !r.end.is_valid() || r.start.row > r.end.row || r.start.col > r.end.col)
+        || src.count() > 1_000
+        || target.count() > MAX_FILL_CELLS
+        || !holds_source_in_corner(src, target)
+    {
+        return None;
+    }
+    let extent = FillExtent::new(src, target);
+    if extent.lane_count != 1
+        || extent.steps == 0
+        || (extent.vertical && target.width() != src.width())
+        || (!extent.vertical && target.height() != src.height())
+    {
+        return None;
+    }
+    let cells: Vec<(CellRef, Option<Cell>)> = src.iter().map(|c| (c, sh.cell(c).cloned())).collect();
+    if cells.iter().any(|(_, c)| c.as_ref().is_none_or(|c| c.formula.is_some() || c.py.is_some() || !c.value.is_number())) {
+        return None;
+    }
+    let first = cells.first()?.1.as_ref()?;
+    let fmt = wb.styles.get(first.style).num_fmt.as_str();
+    if !alternate && matches!(NumberFormat::parse(fmt).kind(), FormatKind::Date | FormatKind::Time) {
+        return None;
+    }
+    let mode = if alternate { FillMode::Alternate } else { FillMode::Series };
+    let pattern = Pattern::for_mode(&cells, &wb.custom_lists, wb.date_system, fmt, mode);
+    (0..extent.steps.min(5))
+        .map(|k| {
+            let (source, cell) = cells.get(extent.source_index(k as usize, cells.len())?)?;
+            let cell = cell.as_ref()?;
+            let step = i64::from(k) + 1;
+            let offset = if extent.forward { step } else { -step };
+            let edge = if extent.forward { src.end } else { src.start };
+            let target = if extent.vertical { edge.offset(offset, 0)? } else { edge.offset(0, offset)? };
+            let value = pattern.value(step, extent.forward, cells.len()).unwrap_or_else(|| cell.value.clone());
+            Some(NumericFillPreview { source: *source, target, value })
+        })
+        .collect()
+}
+
+/// Direction and extent shared by the writer and the bounded preview.
+struct FillExtent {
+    vertical: bool,
+    forward: bool,
+    lane_count: u32,
+    steps: u32,
+}
+
+impl FillExtent {
+    fn new(src: RangeRef, target: RangeRef) -> Self {
+        // Direction: down/up if target extends rows, else right/left.
+        let vertical = target.height() != src.height() || target.width() == src.width();
+        let forward = if vertical {
+            target.end.row > src.end.row || target.start.row == src.start.row
+        } else {
+            target.end.col > src.end.col || target.start.col == src.start.col
+        };
+        let (lane_count, steps) = if vertical {
+            let steps = if forward { target.end.row.saturating_sub(src.end.row) } else { src.start.row.saturating_sub(target.start.row) };
+            (src.width(), steps)
+        } else {
+            let steps = if forward { target.end.col.saturating_sub(src.end.col) } else { src.start.col.saturating_sub(target.start.col) };
+            (src.height(), steps)
+        };
+        Self { vertical, forward, lane_count, steps }
+    }
+
+    fn source_index(&self, k: usize, len: usize) -> Option<usize> {
+        let idx = k.checked_rem(len)?;
+        if self.forward { Some(idx) } else { len.checked_sub(1)?.checked_sub(idx) }
+    }
+}
+
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
     fill_except(cx, sheet, src, target, mode, &std::collections::BTreeSet::new())
@@ -101,22 +193,10 @@ pub fn fill_except(
 ) -> Result<()> {
     let custom = cx.wb.custom_lists.clone();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
-    // Direction: down/up if target extends rows, else right/left.
-    let vertical = target.height() != src.height() || target.width() == src.width();
-    let forward = if vertical {
-        target.end.row > src.end.row || target.start.row == src.start.row
-    } else {
-        target.end.col > src.end.col || target.start.col == src.start.col
-    };
+    let extent = FillExtent::new(src, target);
+    let FillExtent { vertical, forward, lane_count, steps } = extent;
     // Every source lane writes one cell per step past the source: bound that product, not the
     // source and target separately (whole rows into whole columns was ~17 billion writes).
-    let (lane_count, steps) = if vertical {
-        let steps = if forward { target.end.row.saturating_sub(src.end.row) } else { src.start.row.saturating_sub(target.start.row) };
-        (src.width(), steps)
-    } else {
-        let steps = if forward { target.end.col.saturating_sub(src.end.col) } else { src.start.col.saturating_sub(target.start.col) };
-        (src.height(), steps)
-    };
     if u64::from(lane_count).saturating_mul(u64::from(steps)) > MAX_FILL_CELLS {
         return Err(crate::EngineError::Other("The fill is too large.".into()));
     }
@@ -142,20 +222,7 @@ pub fn fill_except(
         };
         targets.retain(|t| !skip_rows.contains(&t.row));
         let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
-            let first_fmt = src_cells.first().map(fmt).unwrap_or_default();
-            let dates = match mode {
-                FillMode::Dates(unit) => Pattern::dates(&src_cells, unit, cx.wb.date_system, first_fmt),
-                _ => None,
-            };
-            let detected = dates.unwrap_or_else(|| Pattern::detect(&src_cells, &custom, cx.wb.date_system, first_fmt));
-            match (mode, detected) {
-                (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
-                (_, p) => p,
-            }
-        } else {
-            Pattern::Copy
-        };
+        let pattern = Pattern::for_mode(&src_cells, &custom, cx.wb.date_system, src_cells.first().map(fmt).unwrap_or_default(), mode);
         // A source with no common pattern (`Product 1`, `On backorder`): each cell continues its
         // own series, one step per repeat of the source.
         let per_cell: Vec<Pattern> = if mode.extends_series() && matches!(pattern, Pattern::Copy) && src_cells.len() > 1 {
@@ -165,8 +232,7 @@ pub fn fill_except(
         };
         for (k, t) in targets.iter().enumerate() {
             let step = k as i64 + 1;
-            let idx = k % src_cells.len().max(1);
-            let src_i = if forward { idx } else { src_cells.len() - 1 - idx };
+            let Some(src_i) = extent.source_index(k, src_cells.len()) else { continue };
             let (sc, scell) = src_cells.get(src_i).cloned().unwrap_or((src.start, None));
             let mut cell = scell.clone().unwrap_or_default();
             match mode {
@@ -262,6 +328,21 @@ enum Pattern {
 }
 
 impl Pattern {
+    fn for_mode(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str, mode: FillMode) -> Pattern {
+        if !mode.extends_series() && mode != FillMode::Alternate {
+            return Pattern::Copy;
+        }
+        let dates = match mode {
+            FillMode::Dates(unit) => Pattern::dates(cells, unit, sys, fmt),
+            _ => None,
+        };
+        let detected = dates.unwrap_or_else(|| Pattern::detect(cells, custom, sys, fmt));
+        match (mode, detected) {
+            (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(cells),
+            (_, p) => p,
+        }
+    }
+
     /// The pattern of Fill Days, Fill Weekdays, Fill Months or Fill Years, or `None` when the
     /// source isn't all dates (numbers, not formulas, under a date format in its first cell).
     fn dates(cells: &[(CellRef, Option<Cell>)], unit: DateUnit, sys: gridcraft_core::DateSystem, fmt: &str) -> Option<Pattern> {
@@ -798,6 +879,120 @@ fn synthesize(src: &str, dst: &str) -> Vec<Program> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Exercise the public command as the oracle, including backwards source/format cycling.
+    #[test]
+    fn numeric_preview_matches_autofill_without_mutating_the_document() {
+        let cases: &[&[f64]] = &[&[5.0], &[1.0, 2.0, 3.0], &[7.0, 7.0, 7.0], &[1.0, 2.0, 4.0], &[0.1, 0.2, 0.4], &[1.2345678901234567]];
+        for &numbers in cases {
+            for vertical in [true, false] {
+                for forward in [true, false] {
+                    for alternate in [false, true] {
+                        let mut s = crate::Session::new();
+                        s.new_workbook();
+                        let start = CellRef::new(10, 10);
+                        let len = numbers.len() as i64;
+                        let end = start.offset(if vertical { len - 1 } else { 0 }, if vertical { 0 } else { len - 1 }).unwrap();
+                        let src = RangeRef::new(start, end);
+                        let edge = if forward { end } else { start };
+                        let delta = if forward { 7 } else { -7 };
+                        let far = edge.offset(if vertical { delta } else { 0 }, if vertical { 0 } else { delta }).unwrap();
+                        let target = src.union(&RangeRef::cell(far));
+                        {
+                            let wb = Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+                            let percent =
+                                wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new("0.00%"), ..Default::default() });
+                            let sh = wb.sheet_mut(0).unwrap();
+                            for (i, c) in src.iter().enumerate() {
+                                sh.set_value(c, Value::number(numbers[i]));
+                                if i % 2 == 1 {
+                                    sh.set_style(c, percent);
+                                }
+                            }
+                        }
+                        let d = s.doc().unwrap();
+                        let before = (d.wb.clone(), d.selection.clone(), d.revision, d.undo.len());
+                        let preview = numeric_preview(&d.wb, d.wb.active().unwrap(), src, target, alternate).unwrap();
+                        assert_eq!(preview.len(), 5);
+                        assert_eq!((d.wb.clone(), d.selection.clone(), d.revision, d.undo.len()), before, "preview is read-only");
+                        // Check destination order independently of the preview's returned addresses.
+                        let sign = if forward { 1 } else { -1 };
+                        for (k, p) in preview.iter().enumerate() {
+                            let step = (k as i64 + 1) * sign;
+                            assert_eq!(p.target, edge.offset(if vertical { step } else { 0 }, if vertical { 0 } else { step }).unwrap());
+                            let i = if forward { k % numbers.len() } else { numbers.len() - 1 - k % numbers.len() };
+                            assert_eq!(p.source, src.iter().nth(i).unwrap());
+                        }
+                        s.execute(
+                            "edit.autoFill",
+                            serde_json::json!({"source": src.a1(), "target": target.a1(), "mode": if alternate { "alternate" } else { "series" }}),
+                        )
+                        .unwrap();
+                        let d = s.doc().unwrap();
+                        let sh = d.wb.active().unwrap();
+                        for p in preview {
+                            assert_eq!(p.value, sh.value(p.target), "{numbers:?}, vertical={vertical}, forward={forward}, alternate={alternate}");
+                            assert_eq!(sh.style_id(p.source), sh.style_id(p.target));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_preview_bounds_and_unsupported_sources() {
+        let mut wb = Workbook::default();
+        let mut sh = Sheet::new("Preview");
+        for row in 0..=1_000 {
+            sh.set_value(CellRef::new(row, 0), Value::number(f64::from(row)));
+        }
+        let src = RangeRef::parse("A1:A1000").unwrap();
+        let target = RangeRef::cols(0, 0);
+        assert_eq!(numeric_preview(&wb, &sh, src, target, false).unwrap().len(), 5, "1,000 cells accepted, whole-column destination bounded");
+        for alternate in [false, true] {
+            assert!(numeric_preview(&wb, &sh, RangeRef::parse("A1:A1001").unwrap(), target, alternate).is_none());
+            assert!(numeric_preview(&wb, &sh, target, target, alternate).is_none());
+            for (source, target) in [("A1", "A1"), ("A2:A3", "A1:A4"), ("A1:B2", "A1:B4"), ("A1", "A1:B4"), ("A1:A3", "B1:B4")] {
+                assert!(numeric_preview(&wb, &sh, RangeRef::parse(source).unwrap(), RangeRef::parse(target).unwrap(), alternate).is_none());
+            }
+            for invalid in [RangeRef { start: CellRef::new(2, 0), end: CellRef::new(0, 0) }, RangeRef::cell(CellRef::new(u32::MAX, 0))] {
+                assert!(numeric_preview(&wb, &sh, invalid, target, alternate).is_none());
+                assert!(numeric_preview(&wb, &sh, src, invalid, alternate).is_none());
+            }
+        }
+        let cell = CellRef::new(0, 1);
+        let src = RangeRef::cell(cell);
+        let target = RangeRef::new(cell, CellRef::new(2, 1));
+        for value in [Value::Empty, Value::text("Item 1"), Value::text("Monday"), Value::Bool(true)] {
+            sh.set_value(cell, value);
+            for alternate in [false, true] {
+                assert!(numeric_preview(&wb, &sh, src, target, alternate).is_none());
+            }
+        }
+        for code in ["yyyy-mm-dd", "hh:mm"] {
+            let style = wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new(code), ..Default::default() });
+            sh.set_cell(cell, Cell::styled(Value::number(45_292.5), style));
+            assert!(numeric_preview(&wb, &sh, src, target, false).is_none());
+            let preview = numeric_preview(&wb, &sh, src, target, true).unwrap();
+            assert_eq!(preview.len(), 2);
+            assert!(preview.iter().all(|p| p.value == Value::number(45_292.5)), "alternate copies temporal values");
+        }
+        for stored in [
+            Cell { formula: Some(Arc::new(Formula::new("1+1"))), value: Value::number(2.0), ..Default::default() },
+            Cell { py: Some(Arc::new(gridcraft_model::PyCode::new("1+1"))), value: Value::number(2.0), ..Default::default() },
+        ] {
+            sh.set_cell(cell, stored);
+            for alternate in [false, true] {
+                assert!(numeric_preview(&wb, &sh, src, target, alternate).is_none());
+            }
+        }
+        sh.set_value(cell, Value::number(1.0));
+        sh.protection = Some(Default::default());
+        for alternate in [false, true] {
+            assert!(numeric_preview(&wb, &sh, src, target, alternate).is_none());
+        }
+    }
 
     #[test]
     fn flash_fill_reads_shown_text() {
