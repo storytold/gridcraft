@@ -266,6 +266,26 @@ fn securities() {
     close_tol(ev("YIELD", vec![d(2008, 2, 15), d(2008, 6, 15), n(0.05), n(pv), n(100.0), n(2.0)]), 0.04, 1e-9);
 }
 
+/// #4076: Excel solves YIELD and ODDFYIELD with Newton's method. Where a step lands at or next to
+/// a yield of -frequency, Excel returns #NUM! even though a negative root exists. Nearby negative
+/// and positive yields still solve (values observed in Excel 16.0, as reported in the issue).
+#[test]
+fn yield_is_num_where_newton_cannot_reach_a_negative_root() {
+    let y = |red: f64| vec![d(2024, 1, 15), d(2025, 6, 30), n(0.05), n(100.0), n(red), n(2.0), n(0.0)];
+    is_err(ev("YIELD", y(1.0)), CellError::Num);
+    is_err(ev("YIELD", y(20.0)), CellError::Num);
+    close_tol(ev("YIELD", y(50.0)), -0.3593997503048532, 1e-10);
+    close_tol(ev("YIELD", y(100.0)), 0.04998309857274827, 1e-10);
+    let of = |red: f64| vec![d(2023, 2, 1), d(2025, 7, 1), d(2022, 1, 1), d(2023, 7, 1), n(0.05), n(100.0), n(red), n(2.0), n(0.0)];
+    is_err(ev("ODDFYIELD", of(1.0)), CellError::Num);
+    is_err(ev("ODDFYIELD", of(5.0)), CellError::Num);
+    close_tol(ev("ODDFYIELD", of(50.0)), -0.19890043031234195, 1e-10);
+    close_tol(ev("ODDFYIELD", of(100.0)), 0.04953301837965257, 1e-10);
+    // A first step to -1.999984 leaves the next slope overflowing to -infinity; the step then
+    // moves nowhere and must not be read as convergence.
+    is_err(ev("YIELD", vec![d(2024, 1, 1), d(2054, 1, 1), n(0.0002), n(100.0), n(1.32952106), n(2.0), n(0.0)]), CellError::Num);
+}
+
 fn number(v: Value) -> f64 {
     match v {
         Value::Number(x) => x,
