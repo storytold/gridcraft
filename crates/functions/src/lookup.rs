@@ -135,6 +135,42 @@ fn row(a: &Array, r: usize) -> Vec<Value> {
 // ---------------------------------------------------------------------------------------------
 // VLOOKUP / HLOOKUP / LOOKUP / MATCH
 
+/// Resolves the 0-based `(row_or_col_pos, col_or_row_index)` of a `VLOOKUP` or `HLOOKUP` against a
+/// 1-D key array, without requiring the caller to materialize the rest of `table_array`.
+pub fn vh_lookup_pos(needle_val: &Value, keys_val: &Value, idx_val: &Value, approx_val: Option<&Value>, max_len: usize) -> R<(usize, usize)> {
+    let x = match needle_val.scalar() {
+        Value::Error(e) => return Err(e),
+        Value::Empty => Value::Number(0.0),
+        v => v,
+    };
+    let idx = idx_val.to_number()?;
+    if idx.is_nan() || idx < 1.0 {
+        return Err(CellError::Value);
+    }
+    let idx = (idx.trunc() as usize).saturating_sub(1);
+    let approx = match approx_val {
+        Some(v) => v.to_bool()?,
+        None => true,
+    };
+    if idx >= max_len {
+        return Err(CellError::Ref);
+    }
+    let keys = as_array(keys_val);
+    let pos = if approx { bsearch_last(&x, &keys.data, false) } else { find_exact(&x, &keys.data, true, false) };
+    Ok((pos.ok_or(CellError::NA)?, idx))
+}
+
+/// Resolves the 0-based match position of `LOOKUP` against a 1-D key array.
+pub fn lookup_vec_pos(needle_val: &Value, keys_val: &Value) -> R<usize> {
+    let x = match needle_val.scalar() {
+        Value::Error(e) => return Err(e),
+        Value::Empty => Value::Number(0.0),
+        v => v,
+    };
+    let keys = as_array(keys_val);
+    bsearch_last(&x, &keys.data, false).ok_or(CellError::NA)
+}
+
 fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
     let x = needle(args, 0)?;
     let table = as_array(&arg(args, 1)?.value);
@@ -469,6 +505,18 @@ fn address(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     text_val(cell)
 }
 
+fn getpivotdata(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+    if args.len() < 2 || !args.len().is_multiple_of(2) {
+        return Err(CellError::Value);
+    }
+    for a in args {
+        if let Value::Error(e) = a.value.scalar() {
+            return Err(e);
+        }
+    }
+    Err(CellError::Ref)
+}
+
 const XL: &[bool] = &[true, false, false, false, false, false];
 const VL: &[bool] = &[true, false, true, true];
 const ML: &[bool] = &[true, false, true, true];
@@ -559,6 +607,16 @@ pub(crate) fn specs() -> Vec<FnSpec> {
             "ADDRESS(row_num, column_num, [abs_num], [a1], [sheet_text])",
             "Builds a cell address as text from row and column numbers.",
             address
+        ),
+        f!(
+            "GETPIVOTDATA",
+            2,
+            254,
+            Lookup,
+            S,
+            "GETPIVOTDATA(data_field, pivot_table, [field1, item1], ...)",
+            "Returns data stored in a PivotTable report.",
+            getpivotdata
         ),
     ]
 }

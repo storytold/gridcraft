@@ -15,13 +15,14 @@ mod array;
 mod call;
 mod format;
 mod lambda;
+mod pivot_fn;
 mod reference_fns;
 mod special;
 
 use array::map_unary;
 pub use array::{binary_values, zip2};
 pub use format::r1c1_to_a1;
-pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, resized_sum_range};
+pub use special::{SPECIAL_FUNCTIONS, is_known_function, precedents, precedents_at, resized_sum_range};
 
 /// Largest array a reference may expand to.
 pub const MAX_CELLS: u64 = 16_000_000;
@@ -137,6 +138,17 @@ pub trait Host {
     }
     /// Called when a formula's evaluation runs past the stack budget.
     fn stack_exhausted(&mut self) {}
+    /// Whether `(sheet, c)` is non-empty for table boundary probing, without evaluating
+    /// uncomputed formulas that could depend on the active cell.
+    fn is_cell_occupied(&self, sheet: usize, c: CellRef) -> bool {
+        self.workbook()
+            .sheet(sheet)
+            .is_some_and(|s| s.cell(c).is_some_and(|cell| cell.formula.is_some() || cell.py.is_some()) || !s.value(c).is_empty())
+    }
+    /// Whether `(sheet, c)` is currently being evaluated or waiting on a precedent in this pass.
+    fn is_cell_active(&self, _sheet: usize, _c: CellRef) -> bool {
+        false
+    }
 }
 
 pub struct Evaluator<'h> {
@@ -329,6 +341,10 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    pub(super) fn cell(&mut self, sheet: usize, c: CellRef) -> Value {
+        self.host.cell_value(sheet, c)
+    }
+
     pub fn area_value(&mut self, a: &Area) -> Value {
         if a.range.is_single() {
             return self.host.cell_value(a.sheet, a.range.start);
@@ -498,78 +514,10 @@ impl<'h> Evaluator<'h> {
     }
 
     fn structured(&mut self, s: &StructRef) -> Ev {
-        let wb = self.host.workbook();
-        let found = if s.table.is_empty() {
-            wb.sheet(self.sheet).and_then(|sh| sh.tables.iter().position(|t| t.range.contains(self.at)).map(|ti| (self.sheet, ti)))
-        } else {
-            wb.table(&s.table)
-        };
-        let Some((si, ti)) = found else { return err(CellError::Ref) };
-        let Some(t) = wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { return err(CellError::Ref) };
-        let mut r0 = t.range.start.row;
-        let mut r1 = t.range.end.row;
-        let data = t.data_range();
-        let items = &s.specifiers;
-        if items.is_empty() || items == &[StructItem::Data] {
-            match data {
-                Some(d) => {
-                    r0 = d.start.row;
-                    r1 = d.end.row;
-                }
-                None => return err(CellError::Ref),
-            }
-        } else if items.contains(&StructItem::ThisRow) {
-            if self.at.row < t.range.start.row || self.at.row > t.range.end.row {
-                return err(CellError::Value);
-            }
-            r0 = self.at.row;
-            r1 = self.at.row;
-        } else if !items.contains(&StructItem::All) {
-            let has = |i: StructItem| items.contains(&i);
-            let hdr = t.header_row.then_some(t.range.start.row);
-            let tot = t.totals_row.then_some(t.range.end.row);
-            let mut lo = u32::MAX;
-            let mut hi = 0;
-            let mut add = |a: u32, b: u32| {
-                lo = lo.min(a);
-                hi = hi.max(b);
-            };
-            if has(StructItem::Headers) {
-                match hdr {
-                    Some(h) => add(h, h),
-                    None => return err(CellError::Ref),
-                }
-            }
-            if has(StructItem::Data)
-                && let Some(d) = data
-            {
-                add(d.start.row, d.end.row);
-            }
-            if has(StructItem::Totals) {
-                match tot {
-                    Some(h) => add(h, h),
-                    None => return err(CellError::Ref),
-                }
-            }
-            if lo > hi {
-                return err(CellError::Ref);
-            }
-            r0 = lo;
-            r1 = hi;
+        match resolve_structured(self.host.workbook(), self.sheet, self.at, s) {
+            Ok(area) => Ev::R(vec![area]),
+            Err(e) => err(e),
         }
-        let (mut c0, mut c1) = (t.range.start.col, t.range.end.col);
-        if let Some(a) = &s.col_start {
-            let Some(i) = t.column_index(a) else { return err(CellError::Ref) };
-            c0 = t.range.start.col + i as u32;
-            c1 = c0;
-            if let Some(b) = &s.col_end {
-                let Some(j) = t.column_index(b) else { return err(CellError::Ref) };
-                let cj = t.range.start.col + j as u32;
-                c0 = c0.min(cj);
-                c1 = c1.max(cj);
-            }
-        }
-        Ev::R(vec![Area { sheet: si, range: RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1)) }])
     }
 
     fn unary(&mut self, op: UnOp, x: &Expr) -> Ev {
@@ -739,6 +687,86 @@ impl<'h> Evaluator<'h> {
             }
         }
     }
+}
+
+/// Resolves a structured table reference (`Table1[Col]`, `[@Col]`, `Table1[]`, `Table1[#All]`)
+/// against `wb` from a formula at `(sheet, at)`.
+pub fn resolve_structured(wb: &Workbook, sheet: usize, at: CellRef, s: &StructRef) -> Result<Area, CellError> {
+    let found = if s.table.is_empty() {
+        wb.sheet(sheet).and_then(|sh| sh.tables.iter().position(|t| t.range.contains(at)).map(|ti| (sheet, ti)))
+    } else {
+        wb.table(&s.table)
+    };
+    let Some((si, ti)) = found else { return Err(CellError::Ref) };
+    let Some(t) = wb.sheet(si).and_then(|sh| sh.tables.get(ti)) else { return Err(CellError::Ref) };
+    let mut r0 = t.range.start.row;
+    let mut r1 = t.range.end.row;
+    let data = t.data_range();
+    let items = &s.specifiers;
+    if items.is_empty() || items == &[StructItem::Data] {
+        match data {
+            Some(d) => {
+                r0 = d.start.row;
+                r1 = d.end.row;
+            }
+            None => return Err(CellError::Ref),
+        }
+    } else if items.contains(&StructItem::ThisRow) {
+        let Some(d) = data else { return Err(CellError::Value) };
+        if at.row < d.start.row || at.row > d.end.row {
+            return Err(CellError::Value);
+        }
+        r0 = at.row;
+        r1 = at.row;
+    } else if !items.contains(&StructItem::All) {
+        let has = |i: StructItem| items.contains(&i);
+        if has(StructItem::Headers) && has(StructItem::Totals) && !has(StructItem::Data) {
+            return Err(CellError::Ref);
+        }
+        let hdr = t.header_row.then_some(t.range.start.row);
+        let tot = t.totals_row.then_some(t.range.end.row);
+        let mut lo = u32::MAX;
+        let mut hi = 0;
+        let mut add = |a: u32, b: u32| {
+            lo = lo.min(a);
+            hi = hi.max(b);
+        };
+        if has(StructItem::Headers) {
+            match hdr {
+                Some(h) => add(h, h),
+                None => return Err(CellError::Ref),
+            }
+        }
+        if has(StructItem::Data)
+            && let Some(d) = data
+        {
+            add(d.start.row, d.end.row);
+        }
+        if has(StructItem::Totals) {
+            match tot {
+                Some(h) => add(h, h),
+                None => return Err(CellError::Ref),
+            }
+        }
+        if lo > hi {
+            return Err(CellError::Ref);
+        }
+        r0 = lo;
+        r1 = hi;
+    }
+    let (mut c0, mut c1) = (t.range.start.col, t.range.end.col);
+    if let Some(a) = &s.col_start {
+        let Some(i) = t.column_index(a) else { return Err(CellError::Ref) };
+        c0 = t.range.start.col + i as u32;
+        c1 = c0;
+        if let Some(b) = &s.col_end {
+            let Some(j) = t.column_index(b) else { return Err(CellError::Ref) };
+            let cj = t.range.start.col + j as u32;
+            c0 = c0.min(cj);
+            c1 = c1.max(cj);
+        }
+    }
+    Ok(Area { sheet: si, range: RangeRef::new(CellRef::new(r0, c0), CellRef::new(r1, c1)) })
 }
 
 trait Pipe: Sized {
