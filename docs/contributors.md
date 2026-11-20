@@ -35,5 +35,21 @@ display_name = "Nickname"
 sync_github_name = true   # use the name on your public GitHub profile as display name
 ```
 
-Names show for entries committed by their own user (or by a maintainer with a `consent_source`).
-Delete your entry to remove your names. Git author names and emails are never recorded.
+or, with craftrules checked out next to `craft-apps/`:
+
+```sh
+python3 ../../craftrules/scripts/contributors.py --add-me . --real-name "Your Name" --sync-github-name
+```
+
+Names show after the next refresh: the script checks that each entry was committed by its own
+user (or by a maintainer with a `consent_source`). Delete your entry to remove your names.
+
+## Refreshing (maintainers)
+
+```sh
+python3 ../../craftrules/scripts/contributors.py .           # regenerate + verify; needs git, Python 3.11+, gh
+python3 ../../craftrules/scripts/contributors.py --check .   # verify people.toml only
+```
+
+Commit the updated `contributors/contributors.json`. Do this in every release's version-bump commit
+([releasing.md](releasing.md)); `cargo xtask contributors` fails when the snapshot is over 100 commits behind HEAD. Git author names and emails are never recorded.
