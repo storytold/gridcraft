@@ -31,6 +31,26 @@ fn median_finite_midpoint_does_not_overflow() {
 }
 
 #[test]
+fn subtotal_counts_pass_over_or_count_errors() {
+    // Native Excel (#4271): SUBTOTAL/AGGREGATE 2 (COUNT) passes over an error in the cells and
+    // 3 (COUNTA) counts it, as COUNT and COUNTA do; the other functions still return it.
+    for e in [CellError::NA, CellError::Div0] {
+        let cells = [nv(10.0), Value::Error(e)];
+        for (count, counta) in [(2, 3), (102, 103)] {
+            close(aggregate_values(count, &cells), 1.0);
+            close(aggregate_values(counta, &cells), 2.0);
+        }
+        for code in [1, 4, 5, 9, 12, 109] {
+            is_err(aggregate_values(code, &cells), e);
+        }
+        is_err(aggregate_values_k(14, &cells, &nv(1.0)), e);
+    }
+    let mixed = [nv(1.0), tv("x"), Value::Empty, Value::Error(CellError::Value), Value::Bool(true)];
+    close(aggregate_values(2, &mixed), 1.0);
+    close(aggregate_values(3, &mixed), 4.0);
+}
+
+#[test]
 fn median_midpoint_keeps_small_values_and_argument_semantics() {
     // Halving each operand unconditionally can lose the smallest numbers. Use exact
     // equality here: the usual aggregate-test tolerance would accept zero.
