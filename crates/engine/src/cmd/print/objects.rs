@@ -10,17 +10,8 @@ pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32
     if w <= 0.0 || h <= 0.0 || data.len() > 16 * 1024 * 1024 {
         return;
     }
-    let Some((iw, ih)) = crate::io::image_size(data) else { return };
-    if iw == 0 || ih == 0 || iw > 8192 || ih > 8192 || u64::from(iw) * u64::from(ih) > 16_000_000 {
-        return;
-    }
-    let Ok(mut reader) = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format() else { return };
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    let Ok(image) = reader.decode() else { return };
+    let Some(image) = decode_limited(data, CELL_PICTURE_CAPS) else { return };
+    let (iw, ih) = (image.width(), image.height());
     let image =
         image.thumbnail(((w / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32, ((h / 72.0) * 150.0).ceil().clamp(1.0, 4000.0) as u32).to_rgba8();
     let fit = (w / iw as f32).min(h / ih as f32);
@@ -53,15 +44,71 @@ fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
     (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
 }
 
-/// Decodes an embedded picture to RGBA, downscaled to at most `max_w`×`max_h` pixels.
-fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u32)> {
-    let (w, h) = crate::io::image_size(data)?;
-    if w == 0 || h == 0 || w as u64 * h as u64 > 60_000_000 {
+/// How large a picture the print path decodes: longest side, pixels, and bytes the decoder
+/// may allocate (which counts the bit depth and channels the header declares).
+#[derive(Clone, Copy)]
+pub(super) struct DecodeCaps {
+    pub(super) max_side: u32,
+    pub(super) max_pixels: u64,
+    pub(super) max_alloc: u64,
+}
+
+impl DecodeCaps {
+    /// Whether a `w`×`h` picture is within the side and pixel limits.
+    fn fits(self, (w, h): (u32, u32)) -> bool {
+        w > 0 && h > 0 && w <= self.max_side && h <= self.max_side && u64::from(w) * u64::from(h) <= self.max_pixels
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many header probes `decode_limited` has started on this thread.
+    pub(super) static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// In-cell pictures: the same limits `insert.picture` accepts.
+const CELL_PICTURE_CAPS: DecodeCaps = DecodeCaps { max_side: 8192, max_pixels: 16_000_000, max_alloc: 64 * 1024 * 1024 };
+/// Floating pictures come from any opened file. 256 MiB holds a 60-megapixel 8-bit RGBA
+/// picture, but not a header declaring as many 16-bit pixels (twice that, before conversion).
+pub(super) const FLOATING_PICTURE_CAPS: DecodeCaps = DecodeCaps { max_side: 16_384, max_pixels: 60_000_000, max_alloc: 256 * 1024 * 1024 };
+
+/// Decodes a picture within `caps`. The size that admits a picture comes from the decoder's own
+/// header reader (a separate sniffer only refuses early, so a crafted file that fools it gains
+/// nothing), and the decoder is given the same limits, so a picture over them is refused before
+/// its pixels are allocated.
+pub(super) fn decode_limited(data: &[u8], caps: DecodeCaps) -> Option<image::DynamicImage> {
+    let format = image::guess_format(data).ok()?;
+    let limits = || {
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(caps.max_side);
+        limits.max_image_height = Some(caps.max_side);
+        limits.max_alloc = Some(caps.max_alloc);
+        limits
+    };
+    // The PNG probe checks only the side limit from IHDR, then reads every chunk before the
+    // pixels (spending CPU and the byte budget) before it reports the size. IHDR must come first,
+    // so a PNG whose IHDR is over the caps is refused here; one that passes still goes to the probe.
+    if format == image::ImageFormat::Png && !crate::io::image_size(data).is_some_and(|size| caps.fits(size)) {
         return None;
     }
-    let img = image::load_from_memory(data).ok()?;
+    #[cfg(test)]
+    PROBES.with(|n| n.set(n.get() + 1));
+    // Both readers carry the limits, so even the header probe refuses an oversized picture.
+    let mut probe = image::ImageReader::with_format(std::io::Cursor::new(data), format);
+    probe.limits(limits());
+    if !caps.fits(probe.into_dimensions().ok()?) {
+        return None;
+    }
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
+    reader.limits(limits());
+    reader.decode().ok()
+}
+
+/// Decodes an embedded picture to RGBA, downscaled to at most `max_w`×`max_h` pixels.
+pub(super) fn decode_image(data: &[u8], max_w: u32, max_h: u32) -> Option<(Vec<u8>, u32, u32)> {
+    let img = decode_limited(data, FLOATING_PICTURE_CAPS)?;
     let img = if img.width() > max_w.max(1) || img.height() > max_h.max(1) { img.thumbnail(max_w.max(1), max_h.max(1)) } else { img };
-    let rgba = img.to_rgba8();
+    let rgba = img.into_rgba8();
     let (pw, ph) = (rgba.width(), rgba.height());
     Some((rgba.into_raw(), pw, ph))
 }
