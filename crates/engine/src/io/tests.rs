@@ -937,6 +937,43 @@ fn sylk_rejects_other_files_and_survives_damage() {
     assert_eq!(warnings.len(), 1, "skipped records are reported: {warnings:?}");
 }
 
+/// #4360: Excel marks a SYLK file written with the 1904 date system in the options record's `V`
+/// field (`V4`; `V0` is the 1900 system). Reading that field keeps the dates the file shows, and
+/// saving as XLSX keeps the calendar, instead of moving every date back 1,462 days.
+#[test]
+fn sylk_options_record_keeps_the_1904_calendar() {
+    // A1 is 2020-02-29 12:00 in the 1904 system; B1 is a plain number beside it.
+    let text = b"ID;P\r\nO;L;D;V4;K47;G100 0.001\r\nB;Y1;X5\r\nP;Pyyyy\\-mm\\-dd hh:mm\r\nF;P0;Y1;X1\r\n\
+C;Y1;X1;K42428.5\r\nC;X2;K17.5\r\nC;X3;EYEAR(RC[-2])\r\nC;X4;EMONTH(RC[-3])\r\nC;X5;EDAY(RC[-4])\r\nE\r\n";
+    let (mut wb, warnings) = open_bytes("1904.slk", text).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(wb.date_system, gridcraft_core::DateSystem::D1904);
+    gridcraft_calc::Calc::new().recalc_all(&mut wb);
+    let sh = wb.sheet(0).unwrap();
+    let at = |a: &str| CellRef::parse(a).unwrap();
+    assert_eq!(sh.value(at("A1")), gridcraft_core::Value::Number(42428.5), "the serial is kept");
+    let fmt = wb.styles.get(sh.style_id(at("A1"))).num_fmt.0.to_string();
+    assert_eq!(crate::display::format(&sh.value(at("A1")), &fmt, &wb).text, "2020-02-29 12:00");
+    assert_eq!(sh.value(at("C1")), gridcraft_core::Value::Number(2020.0));
+    assert_eq!(sh.value(at("D1")), gridcraft_core::Value::Number(2.0));
+    assert_eq!(sh.value(at("E1")), gridcraft_core::Value::Number(29.0));
+    // Saving as XLSX keeps the calendar, so Excel reopens the represented date.
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    assert_eq!(back.date_system, gridcraft_core::DateSystem::D1904);
+
+    // A UTF-8 BOM before the ID record doesn't hide the option.
+    let mut bom = b"\xEF\xBB\xBF".to_vec();
+    bom.extend_from_slice(text);
+    let (wb, _) = open_bytes("bom.slk", &bom).unwrap();
+    assert_eq!(wb.date_system, gridcraft_core::DateSystem::D1904);
+
+    // The 1900 control record (`V0`) keeps the default calendar.
+    let text_1900 = String::from_utf8_lossy(text).replace("V4", "V0");
+    let (wb, _) = open_bytes("1900.slk", text_1900.as_bytes()).unwrap();
+    assert_eq!(wb.date_system, gridcraft_core::DateSystem::D1900);
+}
+
 #[test]
 fn sylk_survives_huge_relative_offsets_and_width_floods() {
     // Relative offsets at the edge of i64 fall off the sheet instead of overflowing.
