@@ -179,6 +179,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
         custom_height: ((sheet.default_row_height - gridcraft_model::DEFAULT_ROW_HEIGHT).abs() > 0.01).then_some(true),
         outline_level_row: (max_row_outline > 0).then_some(u32::from(max_row_outline)),
         outline_level_col: (max_col_outline > 0).then_some(u32::from(max_col_outline)),
+        zero_height: sheet.rows_hidden_by_default.then_some(true),
         ..Default::default()
     });
 
@@ -668,16 +669,18 @@ fn build_craft_rows(data: SheetCellData<'_>, sid: &dyn Fn(gridcraft_model::Style
             (None, Some(b)) => b,
             (None, None) => break,
         };
-        let info = match row_infos.next_if(|(entry_row, _)| **entry_row == row) {
-            Some((_, info)) => *info,
-            None => LineInfo::default(),
+        // With rows hidden by default, a row without an entry is hidden and one with an entry is
+        // written even when it has nothing else on it, so it still shows on reopening (#4502).
+        let (info, listed) = match row_infos.next_if(|(entry_row, _)| **entry_row == row) {
+            Some((_, info)) => (*info, true),
+            None => (sheet.blank_row_info(), false),
         };
         let first = next;
         while keys.get(next).is_some_and(|(cell, _)| cell.row == row) {
             next += 1;
         }
         let cells = keys.get(first..next).unwrap_or_default();
-        if cells.is_empty() && info == LineInfo::default() {
+        if cells.is_empty() && info == LineInfo::default() && !(listed && sheet.rows_hidden_by_default) {
             continue;
         }
         let mut craft_cells = Vec::with_capacity(cells.len());

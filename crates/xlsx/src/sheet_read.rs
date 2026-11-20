@@ -252,6 +252,9 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     if too_many_merges {
         cx.warn(format!("sheet \"{name}\" is damaged: more than {} merge cells", crate::xml::MAX_XML_NODES));
     }
+    // Rows hidden by default (#4502): set before the rows, so a row element with nothing on it
+    // still gets an entry and shows.
+    sheet.rows_hidden_by_default = sheet_part.features.format.as_ref().and_then(|f| f.zero_height).unwrap_or(false);
     for row in &rows {
         read_craft_row(cx, &mut sheet, &mut st, row).map_err(craft_error)?;
     }
@@ -739,7 +742,7 @@ fn read_craft_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &
     if let Some(s) = row.style {
         info.style = Some(cx.style(Some(s)));
     }
-    if info != LineInfo::default() {
+    if info != LineInfo::default() || sheet.rows_hidden_by_default {
         sheet.rows.insert(r, info);
     }
     for c in &row.cells {

@@ -300,6 +300,17 @@ pub(super) fn hide(s: &mut Session, p: &Json, rows: bool, on: bool) -> Result<Js
             // Unhiding a single selected line also reveals hidden neighbours (Excel needs the
             // lines on both sides selected; we're forgiving).
             let (a, b) = if !on && a == b { (a.saturating_sub(1), b + 1) } else { (a, b) };
+            // Rows hidden by default: unhiding every row ends that; unhiding some gives each an
+            // entry of its own, since a row without one stays hidden.
+            if rows && !on && sh.rows_hidden_by_default {
+                if a == 0 && b >= gridcraft_core::MAX_ROWS - 1 {
+                    sh.rows_hidden_by_default = false;
+                } else {
+                    for i in a..=b.min(gridcraft_core::MAX_ROWS - 1) {
+                        sh.row_entry(i);
+                    }
+                }
+            }
             for i in a..=b.min(a.saturating_add(1_048_575)) {
                 let map = if rows { &mut sh.rows } else { &mut sh.cols };
                 if on {

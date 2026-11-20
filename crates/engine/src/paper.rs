@@ -99,7 +99,7 @@ impl PageGrid {
             data_rows,
             data_cols,
             page_order: printed.settings.page_order,
-            ri: LineIndex::new(&sh.rows, sh.default_row_height, MAX_ROWS),
+            ri: sh.row_index(),
             ci: LineIndex::new(&sh.cols, sh.default_col_width, MAX_COLS),
         })
     }

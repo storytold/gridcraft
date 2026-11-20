@@ -557,3 +557,32 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+/// #4502: on a sheet with rows hidden by default, Unhide Rows shows rows that have no entry (it
+/// gives them one), Unhide Rows over the whole sheet ends the setting, and grouping, AutoFit or
+/// typing into a hidden row does not show it.
+#[test]
+fn rows_hidden_by_default_unhide_and_stay_hidden_otherwise() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    {
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.rows_hidden_by_default = true;
+        sh.rows.insert(0, LineInfo::default());
+    }
+    let hidden = |s: &Session, r: u32| s.doc().unwrap().wb.active().unwrap().is_row_hidden(r);
+    assert!(!hidden(&s, 0) && hidden(&s, 1) && hidden(&s, 2) && hidden(&s, 50));
+    s.execute("data.group", json!({"rows": "20:22"})).unwrap();
+    s.execute("home.autofitRowHeight", json!({"rows": "2:3"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A21", "values": [["x"]]})).unwrap();
+    assert!(hidden(&s, 1) && hidden(&s, 2) && hidden(&s, 20), "grouping, AutoFit and typing keep rows hidden");
+    s.execute("home.unhideRows", json!({"rows": "2:2"})).unwrap();
+    assert!(!hidden(&s, 1), "row 2 shows");
+    assert!(hidden(&s, 30), "rows outside the selection stay hidden");
+    assert!(s.doc().unwrap().wb.active().unwrap().rows_hidden_by_default);
+    s.execute("home.unhideRows", json!({"rows": "1:1048576"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.rows_hidden_by_default);
+    assert!(!sh.is_row_hidden(50) && !sh.is_row_hidden(20) && !sh.is_row_hidden(1_048_575));
+}
