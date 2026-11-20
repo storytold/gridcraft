@@ -87,3 +87,18 @@ fn a_reference_entered_is_listed_and_a_double_click_returns_to_it() {
     assert!(h.state().dialog.is_none(), "the dialog closed");
     assert_eq!(place(&h), (0, "B14:C22,F19:G30".to_string()));
 }
+
+#[test]
+fn tab_leaves_the_reference_field_and_opens_special_from_the_keyboard() {
+    use egui::accesskit::Role;
+
+    let mut h = harness();
+    control(&mut h, "ui.dialog", json!({"name": "goTo"}));
+    assert!(h.get_by_role_and_label(Role::TextInput, "Reference:").is_focused());
+    h.key_press(Key::Tab);
+    h.run_steps(4);
+    assert!(h.get_by_label("Special…").is_focused(), "Reference must not take the focus back after Tab");
+    h.key_press(Key::Space);
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|dialog| dialog.name.as_str()), Some("goToSpecial"));
+}
