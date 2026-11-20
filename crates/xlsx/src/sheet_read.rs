@@ -248,6 +248,10 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
         cx.warn(format!("sheet \"{name}\" is damaged: more than {} cells", crate::xml::MAX_XML_NODES));
         return Ok((Sheet::new(name), Default::default()));
     }
+    if sheet_part.features.merges.len() > crate::xml::MAX_XML_NODES {
+        cx.warn(format!("sheet \"{name}\" is damaged: more than {} merge cells", crate::xml::MAX_XML_NODES));
+        return Ok((Sheet::new(name), Default::default()));
+    }
     for row in &rows {
         read_craft_row(cx, &mut sheet, &mut st, row).map_err(craft_error)?;
     }
@@ -350,7 +354,25 @@ fn apply_craft_sheet_part(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Rel], n
         }
     }
     let mut link_budget = LinkBudget::default();
-    read_craft_hyperlinks(cx, name, &sp.features.hyperlinks, &rel_by_id, sheet, &mut link_budget);
+    let hyperlink_blocks = sp.root.children.iter().filter(|n| matches!(n, craft_xml::Node::El(e) if e.name == "hyperlinks")).count();
+    if hyperlink_blocks > 1 {
+        for node in &sp.root.children {
+            if let craft_xml::Node::El(hl) = node
+                && hl.name == "hyperlinks"
+            {
+                let hl_el = from_craft_el(hl);
+                for h in hl_el.kids("hyperlink") {
+                    let Some(range) = h.attr("ref").and_then(RangeRef::parse) else { continue };
+                    let raw = RawHyperlink { range, rel_id: h.attr("id"), location: h.attr("location"), tooltip: h.attr("tooltip") };
+                    if !push_hyperlink(cx, name, raw, &rel_by_id, sheet, &mut link_budget) {
+                        break;
+                    }
+                }
+            }
+        }
+    } else {
+        read_craft_hyperlinks(cx, name, &sp.features.hyperlinks, &rel_by_id, sheet, &mut link_budget);
+    }
     apply_craft_print(&sp.features.print, fit_to_page, sheet);
     if let Some(id) = &sp.features.drawing
         && let Some(rel) = rel_by_id.get(id.as_str()).copied()
@@ -509,6 +531,51 @@ fn apply_craft_print(print: &craft_xlsx::Print, fit_to_page: bool, sheet: &mut S
     sheet.print.col_breaks = print.col_breaks.iter().filter_map(|b| b.id).filter(|&c| c > 0 && c < MAX_COLS).collect();
 }
 
+struct RawHyperlink<'a> {
+    range: RangeRef,
+    rel_id: Option<&'a str>,
+    location: Option<&'a str>,
+    tooltip: Option<&'a str>,
+}
+
+fn push_hyperlink(cx: &mut Ctx<'_>, name: &str, h: RawHyperlink<'_>, rels: &HashMap<&str, &Rel>, sheet: &mut Sheet, budget: &mut LinkBudget) -> bool {
+    let rel_target = h.rel_id.and_then(|id| rels.get(id)).map(|r| r.target.as_str()).unwrap_or("");
+    let location = h.location.filter(|l| !l.is_empty());
+    if rel_target.len().saturating_add(location.map_or(0, str::len)) > MAX_HYPERLINK_TARGET {
+        cx.warn(format!("sheet \"{name}\": hyperlinks longer than {MAX_HYPERLINK_TARGET} characters were dropped"));
+        return true;
+    }
+    let mut target = rel_target.to_string();
+    let external = !target.is_empty();
+    if let Some(loc) = location {
+        if target.is_empty() {
+            target = loc.trim_start_matches('#').to_string();
+        } else {
+            target = format!("{target}#{loc}");
+        }
+    }
+    if target.is_empty() {
+        return true;
+    }
+    let tooltip = h.tooltip.map(|t| truncate_chars(t, MAX_TOOLTIP_CHARS));
+    let link_bytes = (target.len() + tooltip.as_ref().map_or(0, String::len)) as u64;
+    let link = Hyperlink { target, tooltip, external };
+    for c in h.range.iter() {
+        if budget.cells >= MAX_HYPERLINK_CELLS {
+            cx.warn(format!("sheet \"{name}\": hyperlinks past the first {MAX_HYPERLINK_CELLS} cells were dropped"));
+            return false;
+        }
+        if budget.bytes.saturating_add(link_bytes) > MAX_HYPERLINK_BYTES {
+            cx.warn(format!("sheet \"{name}\": hyperlink targets past {MAX_HYPERLINK_BYTES} bytes were dropped"));
+            return false;
+        }
+        budget.cells += 1;
+        budget.bytes += link_bytes;
+        sheet.hyperlinks.insert(c, link.clone());
+    }
+    true
+}
+
 fn read_craft_hyperlinks(
     cx: &mut Ctx<'_>,
     name: &str,
@@ -518,39 +585,14 @@ fn read_craft_hyperlinks(
     budget: &mut LinkBudget,
 ) {
     for h in links {
-        let rel_target = h.rel_id.as_deref().and_then(|id| rels.get(id)).map(|r| r.target.as_str()).unwrap_or("");
-        let location = h.location.as_deref().filter(|l| !l.is_empty());
-        if rel_target.len().saturating_add(location.map_or(0, str::len)) > MAX_HYPERLINK_TARGET {
-            cx.warn(format!("sheet \"{name}\": hyperlinks longer than {MAX_HYPERLINK_TARGET} characters were dropped"));
-            continue;
-        }
-        let mut target = rel_target.to_string();
-        let external = !target.is_empty();
-        if let Some(loc) = location {
-            if target.is_empty() {
-                target = loc.trim_start_matches('#').to_string();
-            } else {
-                target = format!("{target}#{loc}");
-            }
-        }
-        if target.is_empty() {
-            continue;
-        }
-        let tooltip = h.tooltip.as_deref().map(|t| truncate_chars(t, MAX_TOOLTIP_CHARS));
-        let link_bytes = (target.len() + tooltip.as_ref().map_or(0, String::len)) as u64;
-        let link = Hyperlink { target, tooltip, external };
-        for c in to_range_ref(h.range).iter() {
-            if budget.cells >= MAX_HYPERLINK_CELLS {
-                cx.warn(format!("sheet \"{name}\": hyperlinks past the first {MAX_HYPERLINK_CELLS} cells were dropped"));
-                return;
-            }
-            if budget.bytes.saturating_add(link_bytes) > MAX_HYPERLINK_BYTES {
-                cx.warn(format!("sheet \"{name}\": hyperlink targets past {MAX_HYPERLINK_BYTES} bytes were dropped"));
-                return;
-            }
-            budget.cells += 1;
-            budget.bytes += link_bytes;
-            sheet.hyperlinks.insert(c, link.clone());
+        let raw = RawHyperlink {
+            range: to_range_ref(h.range),
+            rel_id: h.rel_id.as_deref(),
+            location: h.location.as_deref(),
+            tooltip: h.tooltip.as_deref(),
+        };
+        if !push_hyperlink(cx, name, raw, rels, sheet, budget) {
+            return;
         }
     }
 }
