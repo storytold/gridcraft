@@ -534,7 +534,11 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
     let categories = categories.unwrap_or_else(|| (1..=n).map(|i| i.to_string()).collect());
     let palette = default_palette(&wb.theme, n.min(PALETTE_CYCLE));
-    ChartData { categories, category_levels, series, palette }
+    let series_lines = chart.series_lines.as_ref().map(|lines| {
+        let color = lines.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map_or([0, 0, 0, 0xFF], |[r, g, b]| [r, g, b, 0xFF]);
+        (color, lines.width.unwrap_or(0.75))
+    });
+    ChartData { categories, category_levels, series, palette, series_lines }
 }
 
 #[cfg(test)]
