@@ -212,7 +212,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         let last = if src.end.row < cap { sh.last_contiguous_nonempty(neighbour, src.end.row + 1, cap) } else { src.end.row };
         if last > src.end.row {
             let target = RangeRef::new(src.start, CellRef::new(last, src.end.col));
-            let _ = app.run("edit.autoFill", json!({"source": src.a1(), "target": target.a1()}));
+            app.run_or_alert("edit.autoFill", json!({"source": src.a1(), "target": target.a1()}));
         }
         app.grid.drag = Drag::None;
         app.grid.drag_select = false;
