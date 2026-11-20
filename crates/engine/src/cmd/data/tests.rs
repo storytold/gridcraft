@@ -32,6 +32,38 @@ fn subtotal_honours_header_false() {
 }
 
 #[test]
+fn subtotal_of_a_header_alone_changes_nothing() {
+    // #4263: a header row with no data under it was subtotalled as one group: two rows inserted,
+    // a SUBTOTAL that took in its own cell, and every formula below moved down.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "H9", "input": "=2+3"})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().clone();
+    let undo = s.doc().unwrap().undo.len();
+    let e = s.execute("data.subtotal", json!({"range": "A1:B1", "groupBy": "A", "columns": ["B"], "function": "sum", "header": true}));
+    assert!(e.is_err(), "{e:?}");
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.cells, before.cells, "no cell changed or moved");
+    assert_eq!(sh.value(CellRef::new(8, 7)), Value::Number(5.0), "H9 stays where it was");
+    assert_eq!(sh.summary_below, before.summary_below);
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "nothing to undo");
+    // One data row is enough: one group and a grand total, as in Excel.
+    s.execute("range.setValues", json!({"range": "A2", "values": [["A", 10]]})).unwrap();
+    let r = s.execute("data.subtotal", json!({"range": "A1:B2", "groupBy": "A", "columns": ["B"], "function": "sum", "header": true})).unwrap();
+    assert_eq!(r["groups"], json!(1));
+    let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+    assert_eq!(get(&mut s, "B3")["value"], json!(10.0));
+    assert_eq!(get(&mut s, "B4")["value"], json!(10.0));
+    // Without a header, a single row is data, not a header.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["A", 10]]})).unwrap();
+    let r = s.execute("data.subtotal", json!({"range": "A1:B1", "groupBy": "A", "columns": ["B"], "header": false})).unwrap();
+    assert_eq!(r["groups"], json!(1));
+}
+
+#[test]
 fn subtotal_puts_summary_rows_below_their_detail() {
     let mut s = Session::new();
     s.new_workbook();
