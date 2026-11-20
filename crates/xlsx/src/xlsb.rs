@@ -278,7 +278,7 @@ fn external_link_part_xml(link: &craft_xlsx::ExternalLink) -> (String, Vec<Prese
                 for (r, cells) in rows {
                     let _ = write!(xml, "<row r=\"{}\">", r + 1);
                     for (pos, val) in cells {
-                        let r_attr = CellRef::new(pos.row, pos.col).to_a1();
+                        let r_attr = CellRef::new(pos.row, pos.col);
                         match val {
                             craft_xlsx::Value::Empty => {
                                 let _ = write!(xml, "<cell r=\"{r_attr}\"/>");
