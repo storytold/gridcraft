@@ -1,7 +1,7 @@
 //! Date and time functions.
 
 use gridcraft_core::date::{DateTime, datetime_from_serial, days_in_month, is_leap, serial_from_ymd, serial_in_system};
-use gridcraft_core::parse::parse_input;
+use gridcraft_core::parse::{parse_date_argument_text_in, parse_input_in};
 use gridcraft_core::{CellError, DateSystem, Value};
 
 use crate::util::{R, S, arg, as_array, has, num, num_val, opt_bool, opt_num, scalar, text, to_int};
@@ -12,17 +12,25 @@ const MAX_SERIAL: f64 = 2_958_465.0;
 const ND: &[bool] = &[true, true, false];
 const NDI: &[bool] = &[true, true, true, false];
 
-/// A date serial argument (truncated to whole days when `whole`). Out of range → `#NUM!`.
-fn serial_arg(a: &[Arg], i: usize, sys: DateSystem) -> R<f64> {
-    let n = scalar(arg(a, i)?).to_number_in(sys)?;
+/// Date/time text uses the workbook's region and calendar; numeric serial coercion is unchanged.
+fn serial_value(v: &Value, c: &dyn Ctx) -> R<f64> {
+    let n = match v {
+        Value::Text(t) => parse_date_argument_text_in(t, c.date_system(), c.region()).ok_or(CellError::Value)?,
+        other => other.to_number_in(c.date_system())?,
+    };
     if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
         return Err(CellError::Num);
     }
     Ok(n)
 }
 
-fn day_arg(a: &[Arg], i: usize, sys: DateSystem) -> R<i64> {
-    Ok(serial_arg(a, i, sys)?.floor() as i64)
+/// A date serial argument; invalid text is `#VALUE!`, out-of-range serials are `#NUM!`.
+fn serial_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<f64> {
+    serial_value(&scalar(arg(a, i)?), c)
+}
+
+fn day_arg(a: &[Arg], i: usize, c: &dyn Ctx) -> R<i64> {
+    Ok(serial_arg(a, i, c)?.floor() as i64)
 }
 
 fn dt(sys: DateSystem, serial: f64) -> R<DateTime> {
@@ -67,7 +75,7 @@ fn time(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 
 fn part(a: &[Arg], c: &mut dyn Ctx, f: fn(&DateTime) -> f64) -> R<Value> {
     let sys = c.date_system();
-    let s = serial_arg(a, 0, sys)?;
+    let s = serial_arg(a, 0, c)?;
     num_val(f(&dt(sys, s.floor())?))
 }
 
@@ -82,20 +90,20 @@ fn day(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Seconds into the day, rounded to the nearest second.
-fn day_seconds(a: &[Arg], sys: DateSystem) -> R<i64> {
-    let s = serial_arg(a, 0, sys)?;
+fn day_seconds(a: &[Arg], c: &dyn Ctx) -> R<i64> {
+    let s = serial_arg(a, 0, c)?;
     let secs = ((s - s.floor()) * 86400.0).round() as i64;
     Ok(if secs >= 86400 { 0 } else { secs })
 }
 
 fn hour(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a, c.date_system())? / 3600) as f64)
+    num_val((day_seconds(a, c)? / 3600) as f64)
 }
 fn minute(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a, c.date_system())? / 60 % 60) as f64)
+    num_val((day_seconds(a, c)? / 60 % 60) as f64)
 }
 fn second(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    num_val((day_seconds(a, c.date_system())? % 60) as f64)
+    num_val((day_seconds(a, c)? % 60) as f64)
 }
 
 fn now(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
@@ -107,7 +115,7 @@ fn today(_a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 fn weekday(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0, sys)?;
+    let s = day_arg(a, 0, c)?;
     let t = to_int(opt_num(a, 1, 1.0)?)?;
     let wd = weekday0(sys, s) as i64;
     let r = match t {
@@ -138,7 +146,7 @@ fn isoweek(sys: DateSystem, s: i64) -> R<i64> {
 
 fn weeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0, sys)?;
+    let s = day_arg(a, 0, c)?;
     let t = to_int(opt_num(a, 1, 1.0)?)?;
     let start = match t {
         1 | 17 => 0,
@@ -155,7 +163,7 @@ fn weeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 fn isoweeknum(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    num_val(isoweek(sys, day_arg(a, 0, sys)?)? as f64)
+    num_val(isoweek(sys, day_arg(a, 0, c)?)? as f64)
 }
 
 fn months_arg(a: &[Arg], i: usize) -> R<i64> {
@@ -168,7 +176,7 @@ fn months_arg(a: &[Arg], i: usize) -> R<i64> {
 
 fn edate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d = dt(sys, day_arg(a, 0, sys)? as f64)?;
+    let d = dt(sys, day_arg(a, 0, c)? as f64)?;
     let m = months_arg(a, 1)?;
     let total = d.year as i64 * 12 + d.month as i64 - 1 + m;
     let (y, mo) = (total.div_euclid(12), total.rem_euclid(12) + 1);
@@ -183,7 +191,7 @@ fn edate(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 fn eomonth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d = dt(sys, day_arg(a, 0, sys)? as f64)?;
+    let d = dt(sys, day_arg(a, 0, c)? as f64)?;
     let m = months_arg(a, 1)?;
     let total = d.year as i64 * 12 + d.month as i64 - 1 + m;
     let (y, mo) = (total.div_euclid(12), total.rem_euclid(12) + 1);
@@ -196,8 +204,8 @@ fn eomonth(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 fn datedif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0, sys)?;
-    let e = day_arg(a, 1, sys)?;
+    let s = day_arg(a, 0, c)?;
+    let e = day_arg(a, 1, c)?;
     let unit = text(a, 2)?.to_ascii_uppercase();
     if s > e {
         return Err(CellError::Num);
@@ -230,6 +238,7 @@ fn datedif(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(r as f64)
 }
 
+/// Reads date or time text with the same parser and region as regional cell entry.
 fn parsed_text(a: &[Arg], c: &mut dyn Ctx) -> R<(f64, &'static str)> {
     let v = scalar(arg(a, 0)?);
     let Value::Text(t) = v else {
@@ -238,13 +247,14 @@ fn parsed_text(a: &[Arg], c: &mut dyn Ctx) -> R<(f64, &'static str)> {
             _ => CellError::Value,
         });
     };
-    let p = parse_input(&t, c.date_system());
+    let p = parse_input_in(&t, c.date_system(), c.region());
     match (p.value, p.format) {
         (Value::Number(n), Some(f)) if f.contains(['d', 'y', 'h']) => Ok((n, f)),
         _ => Err(CellError::Value),
     }
 }
 
+/// Return the whole-day serial of regional date text, rejecting time-only input.
 fn datevalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (n, f) = parsed_text(a, c)?;
     if !f.contains(['d', 'y']) {
@@ -253,14 +263,14 @@ fn datevalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     num_val(n.floor())
 }
 
+/// Return the fractional-day serial of regional time text, discarding any date component.
 fn timevalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (n, _) = parsed_text(a, c)?;
     num_val(n - n.floor())
 }
 
 fn days(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
-    let sys = c.date_system();
-    num_val((day_arg(a, 0, sys)? - day_arg(a, 1, sys)?) as f64)
+    num_val((day_arg(a, 0, c)? - day_arg(a, 1, c)?) as f64)
 }
 
 fn last_of_feb(d: &DateTime) -> bool {
@@ -269,8 +279,8 @@ fn last_of_feb(d: &DateTime) -> bool {
 
 fn days360(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let d1 = dt(sys, day_arg(a, 0, sys)? as f64)?;
-    let d2 = dt(sys, day_arg(a, 1, sys)? as f64)?;
+    let d1 = dt(sys, day_arg(a, 0, c)? as f64)?;
+    let d2 = dt(sys, day_arg(a, 1, c)? as f64)?;
     let european = opt_bool(a, 2, false)?;
     num_val(days360_core(&d1, &d2, european) as f64)
 }
@@ -328,7 +338,7 @@ fn weekend_mask(v: Option<&Arg>) -> R<[bool; 7]> {
     }
 }
 
-fn holidays(v: Option<&Arg>, sys: DateSystem) -> R<Vec<i64>> {
+fn holidays(v: Option<&Arg>, c: &dyn Ctx) -> R<Vec<i64>> {
     let mut out = Vec::new();
     if let Some(a) = v {
         for x in as_array(&a.value).iter() {
@@ -336,10 +346,7 @@ fn holidays(v: Option<&Arg>, sys: DateSystem) -> R<Vec<i64>> {
                 Value::Empty => {}
                 Value::Error(e) => return Err(*e),
                 other => {
-                    let n = other.to_number_in(sys)?;
-                    if !(0.0..MAX_SERIAL + 1.0).contains(&n) {
-                        return Err(CellError::Num);
-                    }
+                    let n = serial_value(other, c)?;
                     out.push(n.floor() as i64);
                 }
             }
@@ -368,9 +375,9 @@ fn count_workdays(sys: DateSystem, a: i64, b: i64, mask: &[bool; 7]) -> i64 {
 
 fn networkdays_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0, sys)?;
-    let e = day_arg(a, 1, sys)?;
-    let hs = holidays(hol, sys)?;
+    let s = day_arg(a, 0, c)?;
+    let e = day_arg(a, 1, c)?;
+    let hs = holidays(hol, c)?;
     let (lo, hi, sign) = if s <= e { (s, e, 1) } else { (e, s, -1) };
     let mut n = count_workdays(sys, lo, hi, &mask);
     n -= hs.iter().filter(|&&h| h >= lo && h <= hi && !mask[weekday0(sys, h)]).count() as i64;
@@ -402,13 +409,13 @@ fn advance(sys: DateSystem, start: i64, n: i64, dir: i64, mask: &[bool; 7], per_
 
 fn workday_core(a: &[Arg], c: &mut dyn Ctx, mask: [bool; 7], hol: Option<&Arg>) -> R<Value> {
     let sys = c.date_system();
-    let start = day_arg(a, 0, sys)?;
+    let start = day_arg(a, 0, c)?;
     let days = num(a, 1)?.trunc();
     if days.abs() > 1e7 {
         return Err(CellError::Num);
     }
     let days = days as i64;
-    let hs = holidays(hol, sys)?;
+    let hs = holidays(hol, c)?;
     let per_week = mask.iter().filter(|w| !**w).count() as i64;
     if per_week == 0 {
         return Err(CellError::Value);
@@ -494,8 +501,8 @@ fn feb29_between(sys: DateSystem, s: i64, e: i64, d1: &DateTime, d2: &DateTime) 
 
 fn yearfrac(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
-    let s = day_arg(a, 0, sys)?;
-    let e = day_arg(a, 1, sys)?;
+    let s = day_arg(a, 0, c)?;
+    let e = day_arg(a, 1, c)?;
     let basis = if has(a, 2) { to_int(num(a, 2)?)? } else { 0 };
     num_val(yearfrac_core(sys, s, e, basis)?)
 }
@@ -856,6 +863,82 @@ mod tests {
         assert_eq!(rows_of(&v), vec![vec![nv(2020.0), nv(2026.0)]]);
     }
 
+    /// Date arguments use the selected region for literals and referenced text in both calendars.
+    #[test]
+    fn implicit_date_parts_use_the_context_region() {
+        for sys in [gridcraft_core::DateSystem::D1900, gridcraft_core::DateSystem::D1904] {
+            for (region, input, month, day) in [
+                ("it-IT", "31/01/2026", 1.0, 31.0),
+                ("it-IT", "03/02/2026", 2.0, 3.0),
+                ("it-IT", "13 gennaio 2026", 1.0, 13.0),
+                ("en-GB", "03/02/2026", 2.0, 3.0),
+                ("en-US", "03/02/2026", 3.0, 2.0),
+                ("ja-JP", "2026/02/03", 2.0, 3.0),
+            ] {
+                let mut ctx = TestCtx { sys, region: gridcraft_core::region::find(region).unwrap(), ..TestCtx::default() };
+                for arg in [crate::Arg::val(Value::text(input)), crate::Arg::reference(Value::text(input))] {
+                    for (name, expected) in [("YEAR", 2026.0), ("MONTH", month), ("DAY", day)] {
+                        let result = crate::call(crate::lookup(name).unwrap(), std::slice::from_ref(&arg), &mut ctx);
+                        assert_eq!(result, nv(expected), "{name}({input}) in {region}, {sys:?}, ref={}", arg.from_ref);
+                    }
+                }
+                for (name, expected) in [("HOUR", 18.0), ("MINUTE", 25.0), ("SECOND", 30.0)] {
+                    close(crate::call(crate::lookup(name).unwrap(), &[t(&format!("{input} 18:25:30"))], &mut ctx), expected);
+                }
+            }
+        }
+    }
+
+    /// Regional date coercion rejects invalid dates without falling back to MDY.
+    #[test]
+    fn implicit_regional_dates_preserve_numeric_and_error_arguments() {
+        let mut ctx = TestCtx { region: gridcraft_core::region::find("it-IT").unwrap(), ..TestCtx::default() };
+        for name in ["YEAR", "MONTH", "DAY"] {
+            let spec = crate::lookup(name).unwrap();
+            for bad in ["01/13/2026", "31/04/2026", "29/02/2025", "", "TRUE", "not a date"] {
+                is_err(crate::call(spec, &[t(bad)], &mut ctx), CellError::Value);
+            }
+            is_err(crate::call(spec, &[e(CellError::Ref)], &mut ctx), CellError::Ref);
+            is_err(crate::call(spec, &[n(-1.0)], &mut ctx), CellError::Num);
+            assert_eq!(crate::call(spec, &[n(46035.0)], &mut ctx), ev(name, vec![n(46035.0)]));
+        }
+        close(crate::call(crate::lookup("DAY").unwrap(), &[t("29/02/1900")], &mut ctx), 29.0);
+        close(crate::call(crate::lookup("DAY").unwrap(), &[n(0.0)], &mut ctx), 0.0);
+    }
+
+    /// The regional date path does not change canonical numeric serial text or parse cell input.
+    #[test]
+    fn regional_date_arguments_keep_canonical_numeric_text() {
+        for sys in [gridcraft_core::DateSystem::D1900, gridcraft_core::DateSystem::D1904] {
+            let mut ctx = TestCtx { sys, region: gridcraft_core::region::find("it-IT").unwrap(), ..TestCtx::default() };
+            for (text, serial) in [
+                ("46035.5", 46035.5),
+                ("1,234", 1234.0),
+                ("1.234", 1.234),
+                ("$46035", 46035.0),
+                ("50%", 0.5),
+                ("1 1/2", 1.5),
+                ("4.6035E4", 46035.0),
+                ("  +46035  ", 46035.0),
+            ] {
+                for name in ["YEAR", "MONTH", "DAY", "HOUR", "MINUTE", "SECOND"] {
+                    let spec = crate::lookup(name).unwrap();
+                    let expected = crate::call(spec, &[n(serial)], &mut ctx);
+                    assert_eq!(crate::call(spec, &[t(text)], &mut ctx), expected, "{name}({text}), {sys:?}");
+                    let reference = crate::Arg::reference(Value::text(text));
+                    assert_eq!(crate::call(spec, &[reference], &mut ctx), expected, "referenced {name}({text}), {sys:?}");
+                }
+            }
+            let day = crate::lookup("DAY").unwrap();
+            for text in ["(5)", "$(5)", "$ (5)", "(5)%"] {
+                is_err(crate::call(day, &[t(text)], &mut ctx), CellError::Num);
+            }
+            for text in ["((5))", "(-5)", "($-5)", "$5%", "$(5)%", "'46035", "=46035", "TRUE", "#REF!", "46035 €"] {
+                is_err(crate::call(day, &[t(text)], &mut ctx), CellError::Value);
+            }
+        }
+    }
+
     #[test]
     fn system_1904() {
         let mut ctx = TestCtx { sys: gridcraft_core::DateSystem::D1904, ..TestCtx::default() };
@@ -884,6 +967,136 @@ mod tests {
     }
 
     #[test]
+    /// Read DATEVALUE text in the context region while preserving canonical numeric coercion.
+    fn datevalue_uses_the_context_region() {
+        let spec = crate::lookup("DATEVALUE").unwrap();
+        let mut ctx = TestCtx { region: gridcraft_core::region::find("en-GB").unwrap(), ..TestCtx::default() };
+        close(crate::call(spec, &[t("13/01/2026")], &mut ctx), d(2026.0, 1.0, 13.0));
+        close(crate::call(spec, &[t("02/01/2026")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(spec, &[t("02/01/26 18:00")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(spec, &[t("2026-01-13")], &mut ctx), d(2026.0, 1.0, 13.0));
+        close(crate::call(spec, &[t("13-Jan-2026")], &mut ctx), d(2026.0, 1.0, 13.0));
+        close(crate::call(spec, &[t("29/02/1900")], &mut ctx), 60.0);
+        for invalid in ["01/13/2026", "31/04/2026", "29/02/2025", "123", "£3"] {
+            is_err(crate::call(spec, &[t(invalid)], &mut ctx), CellError::Value);
+        }
+        is_err(crate::call(spec, &[n(46035.0)], &mut ctx), CellError::Value);
+        is_err(crate::call(spec, &[e(CellError::Ref)], &mut ctx), CellError::Ref);
+
+        // Contexts that do not select a region retain the existing en-US interpretation.
+        close(ev("DATEVALUE", vec![t("02/01/2026")]), d(2026.0, 2.0, 1.0));
+        is_err(ev("DATEVALUE", vec![t("13/01/2026")]), CellError::Value);
+    }
+
+    #[test]
+    /// Apply regional date order under both 1900 and 1904 workbook calendars.
+    fn regional_datevalue_and_timevalue_respect_the_date_system() {
+        let date = crate::lookup("DATEVALUE").unwrap();
+        let time = crate::lookup("TIMEVALUE").unwrap();
+        for sys in [gridcraft_core::DateSystem::D1900, gridcraft_core::DateSystem::D1904] {
+            for (region, leap_day, january, invalid) in [
+                ("en-US", "02/29/1904", "01/13/2026", "04/31/2026"),
+                ("en-GB", "29/02/1904", "13/01/2026", "31/04/2026"),
+                ("ja-JP", "1904/02/29", "2026/01/13", "2026/04/31"),
+            ] {
+                let mut ctx = TestCtx { sys, region: gridcraft_core::region::find(region).unwrap(), ..TestCtx::default() };
+                close(crate::call(date, &[t(leap_day)], &mut ctx), gridcraft_core::date::serial_from_ymd(sys, 1904, 2, 29).unwrap());
+                close(crate::call(time, &[t(&format!("{january} 18:00"))], &mut ctx), 0.75);
+                close(crate::call(time, &[t("6:00 PM")], &mut ctx), 0.75);
+                is_err(crate::call(time, &[t(&format!("{invalid} 18:00"))], &mut ctx), CellError::Value);
+            }
+        }
+        let mut ctx =
+            TestCtx { sys: gridcraft_core::DateSystem::D1904, region: gridcraft_core::region::find("en-GB").unwrap(), ..TestCtx::default() };
+        close(crate::call(date, &[t("01/01/1904")], &mut ctx), 0.0);
+        is_err(crate::call(date, &[t("29/02/1900")], &mut ctx), CellError::Value);
+        is_err(ev("TIMEVALUE", vec![t("13/01/2026 18:00")]), CellError::Value);
+    }
+
+    #[test]
+    /// Use the shared parser for localized months and YMD text in both date-text functions.
+    fn date_text_functions_share_regional_names_and_year_first_order() {
+        let date = crate::lookup("DATEVALUE").unwrap();
+        let time = crate::lookup("TIMEVALUE").unwrap();
+        for (region, input) in
+            [("it-IT", "13 gennaio 2026"), ("fr-FR", "13 janvier 2026"), ("de-DE", "13. Januar 2026"), ("ja-JP", "26/01/13"), ("ja-JP", "2026/01/13")]
+        {
+            let mut ctx = TestCtx { region: gridcraft_core::region::find(region).unwrap(), ..TestCtx::default() };
+            close(crate::call(date, &[t(input)], &mut ctx), d(2026.0, 1.0, 13.0));
+            close(crate::call(time, &[t(&format!("{input} 18:00"))], &mut ctx), 0.75);
+        }
+        let mut ctx = TestCtx { region: gridcraft_core::region::find("ja-JP").unwrap(), ..TestCtx::default() };
+        close(crate::call(date, &[t("26/01/02")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(time, &[t("午後3:30")], &mut ctx), 15.5 / 24.0);
+        close(crate::call(time, &[t("午前3:30")], &mut ctx), 3.5 / 24.0);
+        is_err(crate::call(date, &[t("13/01/2026")], &mut ctx), CellError::Value);
+        is_err(crate::call(time, &[t("午後13:30")], &mut ctx), CellError::Value);
+    }
+
+    #[test]
+    /// Keep general numeric coercion canonical while implicit date text follows the selected region.
+    fn regional_date_arguments_do_not_change_general_text_coercion() {
+        let mut ctx = TestCtx { region: gridcraft_core::region::find("it-IT").unwrap(), ..TestCtx::default() };
+        let date = crate::lookup("DATEVALUE").unwrap();
+        close(crate::call(date, &[t("02/01/2026")], &mut ctx), d(2026.0, 1.0, 2.0));
+        close(crate::call(crate::lookup("VALUE").unwrap(), &[t("1,234")], &mut ctx), 1234.0);
+        close(crate::call(crate::lookup("VALUE").unwrap(), &[t("1.234")], &mut ctx), 1.234);
+        close(crate::call(crate::lookup("MONTH").unwrap(), &[t("02/01/2026")], &mut ctx), 1.0);
+    }
+
+    /// Reject padded date arguments and holidays while retaining the numeric-serial text contract.
+    #[test]
+    fn regional_date_arguments_reject_padded_dates_and_holidays() {
+        for sys in [gridcraft_core::DateSystem::D1900, gridcraft_core::DateSystem::D1904] {
+            for tag in ["en-US", "it-IT"] {
+                let mut ctx = TestCtx { sys, region: gridcraft_core::region::find(tag).unwrap(), ..TestCtx::default() };
+                for input in [" 01/02/2026", "01/02/2026 ", "   01/02/2026  "] {
+                    for name in ["DAY", "MONTH", "YEAR", "WEEKDAY", "ISOWEEKNUM"] {
+                        is_err(crate::call(crate::lookup(name).unwrap(), &[t(input)], &mut ctx), CellError::Value);
+                    }
+                    is_err(crate::call(crate::lookup("DAYS").unwrap(), &[t(input), t("01/01/2026")], &mut ctx), CellError::Value);
+                    let holiday = crate::Arg::reference(Value::Array(gridcraft_core::Array::new(1, 1, vec![Value::text(input)]).unwrap().into()));
+                    is_err(
+                        crate::call(
+                            crate::lookup("NETWORKDAYS").unwrap(),
+                            &[
+                                n(gridcraft_core::date::serial_from_ymd(sys, 2026, 1, 1).unwrap()),
+                                n(gridcraft_core::date::serial_from_ymd(sys, 2026, 1, 31).unwrap()),
+                                holiday,
+                            ],
+                            &mut ctx,
+                        ),
+                        CellError::Value,
+                    );
+                }
+                close(crate::call(crate::lookup("HOUR").unwrap(), &[t(" 45000.5 ")], &mut ctx), 12.0);
+            }
+        }
+    }
+
+    /// Date ranges and holiday arrays share regional date coercion, including the 1904 epoch.
+    #[test]
+    fn regional_date_ranges_and_holidays_use_the_same_calendar() {
+        for sys in [gridcraft_core::DateSystem::D1900, gridcraft_core::DateSystem::D1904] {
+            let mut ctx = TestCtx { sys, region: gridcraft_core::region::find("it-IT").unwrap(), ..TestCtx::default() };
+            let holiday = crate::Arg::reference(Value::Array(gridcraft_core::Array::new(1, 1, vec![Value::text("16/01/2026")]).unwrap().into()));
+            close(crate::call(crate::lookup("DAYS").unwrap(), &[t("19/01/2026"), t("15/01/2026")], &mut ctx), 4.0);
+            close(crate::call(crate::lookup("WEEKDAY").unwrap(), &[t("15/01/2026")], &mut ctx), 5.0);
+            close(crate::call(crate::lookup("ISOWEEKNUM").unwrap(), &[t("15/01/2026")], &mut ctx), 3.0);
+            close(crate::call(crate::lookup("NETWORKDAYS").unwrap(), &[t("15/01/2026"), t("19/01/2026"), holiday.clone()], &mut ctx), 2.0);
+            close(
+                crate::call(crate::lookup("WORKDAY").unwrap(), &[t("15/01/2026"), n(1.0), holiday], &mut ctx),
+                gridcraft_core::date::serial_from_ymd(sys, 2026, 1, 19).unwrap(),
+            );
+            let dates = crate::Arg::reference(Value::Array(
+                gridcraft_core::Array::new(1, 2, vec![Value::text("31/01/2026"), Value::text("03/02/2026")]).unwrap().into(),
+            ));
+            let result = crate::call(crate::lookup("MONTH").unwrap(), &[dates], &mut ctx);
+            assert_eq!(rows_of(&result), vec![vec![nv(1.0), nv(2.0)]]);
+        }
+    }
+
+    #[test]
     fn isoweek_at_calendar_start() {
         let iso = crate::lookup("ISOWEEKNUM").unwrap();
         let wk = crate::lookup("WEEKNUM").unwrap();
@@ -893,6 +1106,23 @@ mod tests {
         let mut ctx = TestCtx { sys: gridcraft_core::DateSystem::D1904, ..TestCtx::default() };
         for s in [0.0, 1.0, 2.0] {
             close(crate::call(iso, &[n(s)], &mut ctx), 53.0);
+        }
+    }
+
+    /// Regional text keeps the ISO-week boundary fix for both supported calendar epochs.
+    #[test]
+    fn isoweek_regional_text_at_calendar_start() {
+        let iso = crate::lookup("ISOWEEKNUM").unwrap();
+        let week = crate::lookup("WEEKNUM").unwrap();
+        for (sys, dates, expected) in [
+            (gridcraft_core::DateSystem::D1900, vec!["01/01/1900"], 52.0),
+            (gridcraft_core::DateSystem::D1904, vec!["01/01/1904", "02/01/1904", "03/01/1904"], 53.0),
+        ] {
+            let mut ctx = TestCtx { sys, region: gridcraft_core::region::find("it-IT").unwrap(), ..TestCtx::default() };
+            for date in dates {
+                close(crate::call(iso, &[t(date)], &mut ctx), expected);
+                close(crate::call(week, &[t(date), n(21.0)], &mut ctx), expected);
+            }
         }
     }
 
