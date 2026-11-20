@@ -45,14 +45,16 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let response = area.show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_width(230.0);
+            // `filter` sorts the AutoFilter range with its header row fixed, as Excel's drop-down
+            // does; without it the sort followed the cursor and guessed the header (#3544).
             let ascending = ui.button("↑  Sort Ascending");
             if ascending.clicked() {
-                let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
+                let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col), "filter": true}));
                 close = true;
             }
             let descending = ui.button("↓  Sort Descending");
             if descending.clicked() {
-                let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
+                let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col), "filter": true}));
                 close = true;
             }
             ui.separator();
