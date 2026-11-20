@@ -27,15 +27,18 @@ fn main() {
     let windows_menu = nsapp.windowsMenu().expect("AppKit knows the Window menu");
     assert_eq!(windows_menu.title().to_string(), "Window");
 
-    // A poll lists the open workbook windows at the end of the Window menu (#716).
+    // AppKit lists the workbook windows itself; the menu adds no second list, which also went stale
+    // as workbooks opened (muda removes by its own index, which AppKit's own items shift).
     let mut session = gridcraft_engine::Session::new();
     session.new_workbook();
     let mut app = gridcraft_ui_egui::SheetApp::new(session, Default::default());
     menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
-    let open = app.open_windows();
-    assert_eq!(open.len(), 1, "one workbook window");
-    let last = windows_menu.itemAtIndex(windows_menu.numberOfItems() - 1).expect("a Window menu item");
-    assert_eq!(last.title().to_string(), open[0].label(), "the Window menu lists the open workbook");
+    let first = app.open_windows()[0].label();
+    let _ = app.run("file.new", serde_json::json!({}));
+    menu.poll(&mut app, &ctx, egui::ViewportId::ROOT);
+    assert_eq!(app.open_windows().len(), 2, "two workbook windows");
+    let titles: Vec<String> = (0..windows_menu.numberOfItems()).filter_map(|i| windows_menu.itemAtIndex(i)).map(|m| m.title().to_string()).collect();
+    assert!(!titles.contains(&first), "no workbook entries of our own in {titles:?}");
 
     println!("mac_menu_appkit: ok");
 }
