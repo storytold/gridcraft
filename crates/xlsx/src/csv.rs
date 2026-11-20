@@ -286,7 +286,8 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             let pos = CellRef::new(row, col as u32);
             let (r0, c0, c1) = used.map_or((row, col as u32, col as u32), |(r0, c0, _, c1)| (r0, c0.min(col as u32), c1.max(col as u32)));
             used = Some((r0, c0, row, c1));
-            let cell = if opts.parse_values {
+            // The typed-entry apostrophe prefix means nothing in a file; it is data.
+            let cell = if opts.parse_values && !f.starts_with('\'') {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
                 let p = read_field(&f, opts.date_system, rule);
                 let style = match p.format {
