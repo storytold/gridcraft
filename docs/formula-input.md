@@ -1,8 +1,14 @@
 # Formula language
 
 View → Interface language is the existing, persisted language preference. Choose **Español**
-for Spanish formula entry and display. On first run the preference follows the system language.
-English and the other interface languages currently use the English formula table and separators.
+for Spanish or **Magyar** for Hungarian formula entry and display. On first run the preference
+follows the system language. Other interface languages currently use the English formula table
+and separators.
+
+Hungarian uses `SZUM` (`SUM`), `HA` (`IF`) and `FKERES` (`VLOOKUP`), decimal commas and
+semicolon arguments: `=HA(IGAZ;SZUM(1,5;2,25);0)` is stored as
+`IF(TRUE,SUM(1.5,2.25),0)` and evaluates to 3.75. It uses the same array separators as Spanish.
+See [Hungarian coverage and source provenance](localization-parity.md#hungarian-interface-2026-10-18).
 
 | Spanish | Canonical English |
 | --- | --- |
@@ -22,9 +28,10 @@ and reference unions, and backslashes between array columns (`{1\2;3\4}`). For e
 decimal points and comma array columns; it does not silently translate Spanish aliases.
 
 The cell editor, formula bar, Show Formulas, autocomplete, the Formula ribbon, Insert Function, and argument hints
-use the selected formula language. Common Spanish function help is translated; functions
-without a Spanish entry retain their English names/help. General interface labels and errors
-fall back to English where Spanish translations are not provided. An edit captures its language
+use the selected formula language. Common Spanish and Hungarian function help is translated;
+functions without a localized entry retain their English names/help. Ctrl+Shift+A inserts
+argument names after accented names too: `=ÁTLAG(` becomes `=ÁTLAG(szám1;szám2;...)`. General interface labels
+and errors fall back to English where translations are not provided. An edit captures its language
 when it starts so switching the preference cannot reinterpret unfinished input.
 
 Workbook/sheet names, table names, LET bindings and LAMBDA parameters take precedence over

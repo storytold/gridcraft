@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-15 · **Change:** minor (RaTeX equation parser messages follow the interface language); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Arabic PDF export no longer fails when a character or the Arabic font is missing; Arabic PDF cells keep their reading direction and RTL pages mirror); previously minor (Brazilian Portuguese function help); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-18 · **Change:** minor (Hungarian locale synchronized with upstream main); previously minor (RaTeX equation parser messages follow the interface language); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Arabic PDF export no longer fails when a character or the Arabic font is missing; Arabic PDF cells keep their reading direction and RTL pages mirror); previously minor (Brazilian Portuguese function help); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -94,6 +94,66 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 - **PDF export** shapes Arabic with embedded Noto Arabic glyph outlines; CJK uses a predefined,
   non-embedded Adobe-GB1 CID font (#1912); Devanagari and Thai cannot export yet.
 
+## Hungarian interface (2026-10-18)
+
+Hungarian (`hu`, shown as **Magyar**) is available in the interface-language selector.
+`hu-HU` and `hu_HU.UTF-8` system locales select it on first launch; an explicit choice is saved
+with the other UI preferences. Its 1,100 catalog entries include the original 971-entry set, nine accessibility, page-order
+and Macros labels from the earlier integration, and 120 translations for keys added on main
+through November 18. The original set covered 970 keys from the October 18 catalogs plus the
+Macros introduction. The integrated catalog union currently contains 1,314 keys, of which
+214 have no Hungarian entry; this is reported rather than treated as a failing coverage gate.
+The current Macros dialog translates its introduction and step
+counts without translating user-defined script names.
+
+Hungarian formula entry and display now use 520 function-name entries (447 translated),
+semicolon arguments, decimal commas and backslash array-column separators. Accented lowercase
+names work in entry, autocomplete and Insert Function search. English names remain available
+where they do not collide with a Hungarian alias. XLSX and engine/API formulas retain canonical
+English syntax; defined names, text and references are preserved. Some recent function names
+remain canonical where public documentation is inconsistent. 39 common functions now have original Hungarian descriptions and parameter
+labels, including arithmetic, conditional aggregation, logic, dates, text, lookups and variance.
+Other functions still fall back to English; number/date display formats are unchanged. Catalog coverage is not complete UI coverage:
+strings that do not use the translation lookup, including engine/import warnings and parts
+of dialogs and task panes, still appear in English. Native-speaker review remains pending.
+
+### Source provenance and verification
+
+The available project-local scripts show that the 520-entry alias table was generated by
+matching English and Hungarian documentation entries by shared page path, with syntax-page
+checks, explicit corrections and canonical fallbacks. This is not a manually verified,
+independently observed name-by-name compilation. The evidence does not establish that a
+complete published bilingual list was copied, but the original input acquisition chain could
+not be fully reconstructed from the retained scripts. The reviewer's stricter own-compilation
+requirement therefore remains unverified; tests establish behavior, not authorship.
+
+`SUM`/`SZUM`, `IF`/`HA` and `VLOOKUP`/`FKERES` came from that documentation-entry matching,
+not the explicit correction table. The module header records the public references. Only
+function identifiers are included; the Hungarian help descriptions and parameter labels are
+original GridCraft text.
+The three requested spellings were individually rechecked on 2026-11-04 against the public
+[SZUM](https://support.microsoft.com/hu-hu/excel/functions/sum-function),
+[HA](https://support.microsoft.com/hu-hu/excel/functions/if-function) and
+[FKERES](https://support.microsoft.com/hu-hu/excel/functions/vlookup-function) function pages.
+These checks confirm the identifiers; they do not independently establish the provenance of all 520 entries.
+
+Native Rust regressions check all 1,100 compiled translations for unique keys, nonempty text
+and matching placeholders, without requiring complete translation of the expanding cross-language catalog. Missing keys
+are reported by `cargo xtask i18n-report` and fall back to English, following the main branch policy. The formula-locale
+integration test inspects `xl/worksheets/sheet1.xml` directly after Hungarian entry, then
+reopens the workbook and verifies both Hungarian display and canonical English API input.
+The earlier Spanish and Hungarian round-trip tests used `file.save` without a path, which
+requested a save dialog instead of returning bytes. They now use `file.saveBytes`; their
+previous passing results alone did not prove an XLSX round trip.
+The existing rendered variance regression verifies that `VAR.S` (population) and `VAR.M`
+(sample) remain distinct; the renderer consumes the already-localized signature only once.
+
+The English fallback is observable in code: `Language::tr` returns unknown labels unchanged,
+and the chart pane still renders labels such as `Horizontal axis title:` without lookup.
+The README therefore describes partial UI coverage, rather than treating catalog keys as a
+fully translated interface. The roadmap header keeps its four existing metadata fields;
+the review date remains the date of the full parity review, not this narrower audit.
+
 ## Languages
 
 UI strings translated are measured counts against the ~2,200 estimate, as a snapshot from when
@@ -104,6 +164,7 @@ separators, number/date formats, machine translation with agent review, and scri
 
 | Language | Code | UI strings translated | Dialogs / tooltips / help | Script support | Native review | Status | Estimate to full |
 |---|---|---|---|---|---|---|---|
+| Hungarian | hu | 1,100 catalog entries (~50% of the historical ~2,200 estimate) | where translation lookup is wired; Macros dialog included | Latin | pending | interface catalog; Hungarian formula names and separators | not estimated |
 | English | en | ~2,200 / ~2,200 (100%, source) | yes | Latin: yes | yes | full | — |
 | Simplified Chinese (Mandarin) | zh-Hans | 266 (~12%) | no | CJK system-font fallback (#38); IME unverified; PDF can't export | no | menus only | 8–13 h |
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
@@ -146,10 +207,13 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | Merge upstream main into Hungarian UI; add 120 Hungarian translations for new upstream keys (1,100 entries), preserving upstream behavior and regressions |
 | 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |
 | 2026-11-09 | minor | Arabic PDF export no longer fails on a character the Arabic face lacks (it falls back like other text) or when no Arabic font is available (Arabic is set in the CID font, which has no Arabic glyphs, and a message says so) |
+| 2026-11-04 | minor | Integrate Hungarian locale with current main; preserve map-based bindings and shared function help; validate 980 catalog entries and real XLSX/API round trips; audit alias provenance |
+| 2026-11-04 | minor | Fix Ctrl+Shift+A argument insertion after accented Hungarian names; retain the existing shared CI workflow |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
 | 2026-11-08 | minor | Strings built with `format!` in English now translate their template first and fill it in once (`Language::tr_fill`): status bar statistics and the circular-reference note, the column width / row height drag tip, the formula bar text for a picture in a cell, the Move or Copy and Unhide notes, the Format Control title, the equation editor's error prefix and its own check messages (macro definitions, `%` with a link, nesting, length, matrix-cell and size limits; RaTeX parser errors stay English), and the Goal Seek and macro recorder/runner toasts (#3600, #3602, #3603, #3605, #3607–#3611). 24 new keys in every catalog; Average, Count, Sum and the three existing templates added to the 11 catalogs that lacked them, and Ukrainian's English placeholders for those six replaced. Numbers in these strings keep the `.` decimal point |
 | 2026-10-26 | minor | Arabic PDF cells inherit explicit or contextual direction; wrapped lines retain paragraph direction, and RTL pages mirror cell and object geometry |
@@ -165,6 +229,9 @@ language (none so far) and of localized function names.
 | 2026-10-20 | minor | Dutch (nl) interface catalog (`i18n/nl.rs`, 518 labels, ~24%): the shared key set every language must cover (ribbon, context menus, File view, dialog titles, Options page), matching the German, French and Czech catalogs; `nl-NL`, `nl-BE` locale tags resolve to Dutch |
 | 2026-10-20 | minor | XLSX: a theme's per-script typefaces (`<a:font script="Arab">`, Hebr, Jpan…) are kept through open + save, so Arabic Excel's theme fonts for shapes, charts and theme-font cells survive a GridCraft save |
 | 2026-10-20 | trivial | XLSX: a workbook theme's major/minor East Asian (`<a:ea>`) and complex-script (`<a:cs>`) typefaces are kept through open + save, so a Japanese workbook keeps its theme's East Asian font; rendering does not resolve them yet (follow-up) |
+| 2026-10-19 | minor | Hungarian formula table, Unicode entry/completion/search, localized separators and XLSX round-trip regression coverage |
+| 2026-10-19 | minor | Add Hungarian help and parameter labels for 39 functions; test catalog-key union and canonical/alias help collisions |
+| 2026-10-19 | minor | Preserve already-localized signature names in formula hints; rendered regression distinguishes population VAR.S from sample VAR.M |
 | 2026-10-19 | minor | Text order (Sort, SORT/SORTBY, `<`/`>`, approximate MATCH/XLOOKUP, `"<x"` criteria) compares letters first: Arabic vowel and Quranic marks, tatweel and invisible format characters (bidi marks, embeddings and isolates, ZWJ/ZWNJ, BOM, soft hyphen) no longer decide where text sorts, and Arabic-Indic digits sort as digits. Text with the same letters then sorts letter by letter, unmarked before marked, marks in Excel's order (sukun before shadda) and digits ASCII, Arabic-Indic, Extended Arabic-Indic; checked against Excel 16.0 build 20527 (en-US). Equality is unchanged |
 | 2026-10-19 | minor | XLSX fonts retain charset and family metadata so systems can select a substitute font with the intended script when the named font is unavailable |
 | 2026-10-19 | minor | Arabic CSV and text imports decode Windows-1256 text; Arabic shaping and bidirectional UI remain unsupported |
@@ -174,6 +241,7 @@ language (none so far) and of localized function names.
 | 2026-10-19 | trivial | Text boxes and shapes keep right-to-left paragraph direction (`a:pPr rtl`) on XLSX save, so Excel-authored Arabic and Hebrew text boxes reopen right to left |
 | 2026-10-19 | minor | Save as Web Page and copied HTML mark right-to-left sheets `dir="rtl"`, let General-aligned Arabic and Hebrew text align by its own direction (`dir="auto"`), and keep numbers on right-to-left sheets left to right and on the left |
 | 2026-10-19 | minor | French and Serbian kept the context in three `context\|label` translations ("Options\|Général", "Opcije\|Opšte" for `Options\|General`; also `Options\|Save`, `Sheet Options\|View`). `tr` shows a found translation as it is, so File › Options headings and the Sheet Options "View" checkboxes showed the prefix. Fixed; a test checks that no catalog shows a `\|` |
+| 2026-10-18 | minor | Add Hungarian selection, locale detection and 971 catalog entries; localize the Macros dialog; keep formula syntax unchanged |
 | 2026-10-17 | minor | Vietnamese catalog (`i18n/vi.rs`, every key in the master table); `vi` locale tags resolve to Vietnamese |
 | 2026-10-17 | minor | Lao text falls back to an installed Lao face (`sys-lao`) instead of tofu boxes |
 | 2026-10-15 | minor | Function help in the interface language: argument hints, autocomplete, Insert Function (search, categories) and the Formulas-tab menus read per-language tables of descriptions and argument names keyed by the catalog's English text; Spanish keeps its 10 functions in the new format |
