@@ -137,7 +137,8 @@ fn tbill_args(a: &[Arg], sys: DateSystem) -> R<(f64, f64)> {
 pub(super) fn tbillprice(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (dsm, d) = tbill_args(a, c.date_system())?;
     let p = 100.0 * (1.0 - d * dsm / 360.0);
-    if p <= 0.0 {
+    // Excel returns 0 at the exact zero-price boundary (`discount * DSM == 360`), not #NUM!.
+    if p < 0.0 {
         return Err(CellError::Num);
     }
     num_val(p)
@@ -151,7 +152,12 @@ pub(super) fn tbillyield(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 pub(super) fn tbilleq(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (dsm, d) = tbill_args(a, c.date_system())?;
     if dsm <= 182.0 {
-        return num_val(365.0 * d / (360.0 - d * dsm));
+        let denom = 360.0 - d * dsm;
+        // At the exact zero-price boundary (`discount * DSM == 360`) Excel returns 0, not #NUM!.
+        if denom == 0.0 {
+            return num_val(0.0);
+        }
+        return num_val(365.0 * d / denom);
     }
     let price = 100.0 * (1.0 - d * dsm / 360.0);
     if price <= 0.0 {

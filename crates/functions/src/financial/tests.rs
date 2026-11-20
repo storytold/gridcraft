@@ -266,6 +266,27 @@ fn securities() {
     close_tol(ev("YIELD", vec![d(2008, 2, 15), d(2008, 6, 15), n(0.05), n(pv), n(100.0), n(2.0)]), 0.04, 1e-9);
 }
 
+/// Excel returns 0 at the exact zero-price discount boundary, where `discount * DSM == 360`:
+/// TBILLPRICE's price and TBILLEQ's denominator both reach zero there, and neither is an error
+/// (#4079). Either side of the boundary is unchanged.
+#[test]
+fn tbill_zero_price_discount_boundary_matches_excel() {
+    let s = serial_from_ymd(DateSystem::D1900, 2023, 1, 1).unwrap();
+    let at = |f: &str, discount: f64| ev(f, vec![n(s), n(s + 180.0), n(discount)]);
+    close(at("TBILLPRICE", 2.0), 0.0);
+    close(at("TBILLEQ", 2.0), 0.0);
+    // The boundary is exact for every settlement serial, including the 1900 system's first days.
+    for start in [0.0, 1.0, 59.0, 60.0] {
+        close(ev("TBILLPRICE", vec![n(start), n(start + 180.0), n(2.0)]), 0.0);
+        close(ev("TBILLEQ", vec![n(start), n(start + 180.0), n(2.0)]), 0.0);
+    }
+    // Controls: ordinary discounts on either side still give the documented results.
+    close_tol(at("TBILLPRICE", 0.05), 97.5, 1e-12);
+    close(at("TBILLPRICE", 1.0), 50.0);
+    close_tol(at("TBILLEQ", 0.05), 0.051994301994301995, 1e-15);
+    close_tol(at("TBILLEQ", 1.0), 2.0277777777777777, 1e-15);
+}
+
 fn number(v: Value) -> f64 {
     match v {
         Value::Number(x) => x,
