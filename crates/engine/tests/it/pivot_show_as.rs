@@ -448,6 +448,25 @@ fn a_named_base_item_pins_its_field() {
 }
 
 #[test]
+fn changing_the_base_field_keeps_previous_and_next_items() {
+    // #3394 review: setting the base field reset (next) to (previous) as well; only a named
+    // item belongs to the old base field.
+    let mut s = sales();
+    pivot(&mut s, &["Region", "Product"], &[]);
+    settings(&mut s, json!({"showAs": "differenceFrom", "baseItem": "(Next)"}));
+    settings(&mut s, json!({"baseField": "Product"}));
+    assert_eq!(value_json(&mut s)["baseItem"], "(next)");
+    close(at(&s, &["East", "Apples"], None), 160.0 - 120.0);
+    close(at(&s, &["East", "Pears"], None), 120.0 - 60.0);
+    empty(at(&s, &["East", "Plums"], None));
+    // A named item still moves to (previous) when its field changes.
+    settings(&mut s, json!({"baseItem": "Pears"}));
+    settings(&mut s, json!({"baseField": "Region"}));
+    assert_eq!(value_json(&mut s)["baseItem"], "(previous)");
+    empty(at(&s, &["East", "Apples"], None));
+}
+
+#[test]
 fn a_base_field_that_leaves_the_report_is_forgotten() {
     let mut s = sales();
     pivot(&mut s, &["Region", "Product"], &[]);

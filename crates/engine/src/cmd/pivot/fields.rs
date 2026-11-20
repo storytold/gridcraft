@@ -609,7 +609,9 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(field) = &base_field {
             let field = field.as_deref().map(|name| axis_field_name(C, pt, name)).transpose()?;
-            if field.as_deref().map(str::to_ascii_lowercase) != v.base_field.as_deref().map(str::to_ascii_lowercase) {
+            if matches!(v.base_item, PivotBaseItem::Named(_))
+                && field.as_deref().map(str::to_ascii_lowercase) != v.base_field.as_deref().map(str::to_ascii_lowercase)
+            {
                 // A named base item belongs to the old base field.
                 v.base_item = PivotBaseItem::Previous;
             }
