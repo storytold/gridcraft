@@ -7121,3 +7121,24 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
+
+/// #4416: Command Search shows each command's own label, so the labels follow the feature names
+/// (`docs/feature-names.md`): Decorative Text, not WordArt; Diagram, not SmartArt. The command ids
+/// stay as they are.
+#[test]
+fn command_labels_use_the_feature_names() {
+    let s = Session::new();
+    let commands = s.commands();
+    let label = |id: &str| commands.iter().find(|c| c.id == id).map(|c| c.label.to_string());
+    assert_eq!(label("insert.wordArt").as_deref(), Some("Decorative Text"));
+    assert_eq!(label("wordArt.set").as_deref(), Some("Format Decorative Text"));
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    for c in &commands {
+        for retired in ["WordArt", "SmartArt"] {
+            let named = c.label.match_indices(retired).any(|(at, _)| {
+                !c.label[..at].chars().next_back().is_some_and(word) && !c.label[at + retired.len()..].chars().next().is_some_and(word)
+            });
+            assert!(!named, "{}: {}", c.id, c.label);
+        }
+    }
+}
