@@ -19,6 +19,47 @@ fn blank() -> Session {
     s
 }
 
+/// The Borders icon follows successful commands but never failed formatting.
+#[test]
+fn border_icon_tracks_only_successful_commands() {
+    let mut h = harness(blank());
+    let app = h.state_mut();
+
+    assert_eq!(app.grid.last_border, "bottom");
+
+    // Menu-style dispatch must remember the selected preset.
+    app.run_or_alert("home.borders", json!({"preset": "thickOutside"}));
+    assert_eq!(app.grid.last_border, "thickOutside");
+
+    // Direct and keyboard-style command dispatch use the same success path.
+    app.run("home.borders", json!({"preset": "doubleBottom"})).unwrap();
+    assert_eq!(app.grid.last_border, "doubleBottom");
+
+    // A protected worksheet rejects formatting; neither dispatch route may
+    // replace the last successful preset.
+    app.run("review.protectSheet", json!({})).unwrap();
+
+    assert!(app.run("home.borders", json!({"preset": "all"})).is_err());
+    assert_eq!(app.grid.last_border, "doubleBottom");
+
+    app.run_or_alert("home.borders", json!({"preset": "none"}));
+    assert_eq!(app.grid.last_border, "doubleBottom");
+
+    // The engine defaults an omitted preset to Bottom Border.
+    app.run("review.unprotectSheet", json!({})).unwrap();
+    app.run("home.borders", json!({})).unwrap();
+    assert_eq!(app.grid.last_border, "bottom");
+
+    // Unknown or non-string preset parameters are rejected under `home.borders` without mutating `last_border`.
+    app.run("home.borders", json!({"preset": "thickOutside"})).unwrap();
+    assert_eq!(app.grid.last_border, "thickOutside");
+    let err = app.run("home.borders", json!({"preset": "outsidee"})).unwrap_err();
+    assert!(err.contains("home.borders"), "{err}");
+    assert_eq!(app.grid.last_border, "thickOutside");
+    assert!(app.run("home.borders", json!({"preset": 42})).is_err());
+    assert_eq!(app.grid.last_border, "thickOutside");
+}
+
 #[test]
 fn the_formulas_ribbon_keeps_watch_window_inside_the_ribbon() {
     // Regression test for #360 (#342): Watch Window was a fourth small button in a column of
