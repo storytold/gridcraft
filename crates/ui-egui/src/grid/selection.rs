@@ -190,7 +190,8 @@ fn toggled_ranges(mut ranges: Vec<String>, clicked: String, add: bool) -> Vec<St
     ranges
 }
 
-pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
+/// Updates the active worksheet's selection ranges and returns whether `selection.set` succeeded.
+pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) -> bool {
     let current: Vec<String> =
         if add { app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect()).unwrap_or_default() } else { vec![] };
     let clicked = r.a1();
@@ -198,7 +199,7 @@ pub(super) fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: 
     // A removed area takes the active cell with it; `selection.set` then puts it at the start of the last area.
     let params =
         if ranges.contains(&clicked) { json!({"range": ranges.join(","), "active": active.a1()}) } else { json!({"range": ranges.join(",")}) };
-    let _ = app.session.run("selection.set", params);
+    app.session.run("selection.set", params).is_ok()
 }
 
 #[cfg(test)]

@@ -1638,6 +1638,218 @@ fn solver_load_model_after_a_cross_sheet_pick_reads_the_dialogs_sheet() {
     assert_eq!(selection(&h).0, 0, "back on the dialog's sheet");
 }
 
+/// #1388: Remove Duplicates starts with the selected range and can pick a new one.
+#[test]
+fn remove_duplicates_range_can_be_picked_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    assert_eq!(field(&h, "range"), "B2:C4");
+    assert_eq!(h.get_all_by_label("Collapse dialog").count(), 1);
+
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("range"));
+
+    drag(&mut h, "D2", "E5");
+    assert_eq!(field(&h, "range"), "$D$2:$E$5");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert_eq!(collapsed(&h), None);
+    assert_eq!(field(&h, "range"), "$D$2:$E$5");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: typing immediately after opening Remove Duplicates edits Range, not Columns.
+#[test]
+fn remove_duplicates_initial_focus_goes_to_range_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    assert!(h.ctx.text_edit_focused(), "Range should own text focus");
+    assert_eq!(field(&h, "range"), "B2:C4");
+    assert_eq!(field(&h, "columnsText"), "");
+
+    // Initial focus selects the existing range so typing replaces it.
+    type_text(&mut h, "D2:E5");
+
+    assert_eq!(field(&h, "range"), "D2:E5");
+    assert_eq!(field(&h, "columnsText"), "", "typing a range must not change the Columns field");
+}
+
+/// #1388: clicking the already-selected cell must replace the inferred region.
+#[test]
+fn remove_duplicates_can_pick_already_selected_cell_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "B2:C4",
+                "values": [
+                    ["Name", "Qty"],
+                    ["A", 1],
+                    ["B", 2]
+                ]
+            }),
+        )
+        .unwrap();
+
+    session.execute("selection.set", json!({"range": "C3"})).unwrap();
+
+    let mut h = harness(session);
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    // A single cursor initially infers the surrounding data region.
+    assert_eq!(field(&h, "range"), "B2:C4");
+    assert_eq!(selection(&h).1, "C3");
+
+    click_button(&mut h, "Collapse dialog", 0);
+    assert_eq!(collapsed(&h).as_deref(), Some("range"));
+
+    // Explicitly pick C3 without changing the current selection.
+    let pos = cell_pos(&h, "C3");
+    click_at(&mut h, pos);
+
+    assert_eq!(selection(&h).1, "C3");
+    assert_eq!(field(&h, "range"), "$C$3", "an explicit click must replace the inferred region");
+}
+
+/// Simulates a primary pointer click with keyboard modifiers.
+fn click_with_modifiers_1388(h: &mut H, pos: egui::Pos2, modifiers: Modifiers) {
+    h.input_mut().events.push(Event::ModifiersChanged(modifiers));
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    h.run_steps(1);
+
+    for pressed in [true, false] {
+        h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers });
+        h.run_steps(1);
+    }
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+}
+
+/// #1388: picking an already-selected cell on another sheet keeps its name.
+#[test]
+fn remove_duplicates_cross_sheet_same_cell_1388() {
+    let mut h = harness(two_sheets());
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    h.state_mut().session.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    h.run_steps(3);
+
+    assert_eq!(selection(&h), (1, "A1".into()));
+
+    let pos = cell_pos(&h, "A1");
+    click_at(&mut h, pos);
+
+    assert_eq!(field(&h, "range"), "Rates!$A$1");
+}
+
+/// #1388: Shift-click must retain the full resulting selection.
+#[test]
+fn remove_duplicates_shift_click_keeps_full_range_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("selection.set", json!({"range": "B2:C4", "active": "B2"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "C4");
+    click_with_modifiers_1388(&mut h, pos, Modifiers::SHIFT);
+
+    assert_eq!(selection(&h).1, "B2:C4");
+    assert_eq!(field(&h, "range"), "$B$2:$C$4");
+}
+
+/// #1388: reference picking must not toggle cell checkboxes.
+#[test]
+fn remove_duplicates_checkbox_pick_does_not_edit_workbook_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("insert.checkbox", json!({"range": "D6"})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "D6");
+    click_at(&mut h, pos);
+
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: selecting a cell beneath a spin control must not operate that control.
+#[test]
+fn remove_duplicates_pick_over_spin_control_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session.execute("insert.spinButton", json!({"at": "D6", "width": 90, "height": 38, "value": 5})).unwrap();
+
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "D6");
+    h.input_mut().events.push(Event::PointerMoved(pos));
+    press(&mut h, pos, true);
+    h.run_steps(2);
+    press(&mut h, pos, false);
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before, "reference picking must not change the spin control or workbook");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
 /// Shows the sheet at `index` from a script, as a sheet tab click or the control channel does.
 fn show_sheet(h: &mut H, index: usize) {
     h.state_mut().session.execute("sheet.activate", json!({"sheet": index})).unwrap();
@@ -1882,4 +2094,656 @@ fn a_click_on_the_selected_cell_picks_into_a_collapsed_box_on_another_sheet() {
     assert_eq!(field(&h, "changing"), "", "showing another sheet is not a pick");
     single_click(&mut h, "A1");
     assert_eq!(field(&h, "changing"), "Rates!$A$1", "a click on that sheet's selected cell is");
+}
+
+/// #1388: picking a hyperlink cell must not follow the link.
+#[test]
+fn remove_duplicates_pick_over_hyperlink_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell": "D6", "input": "Website"})).unwrap();
+    session.execute("insert.link", json!({"cell": "D6", "target": "https://example.org"})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "D6");
+    click_at(&mut h, pos);
+
+    assert_eq!(h.state().dialog.as_ref().unwrap().name, "removeDuplicates");
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: a worksheet shape must not intercept a range-picking click.
+#[test]
+fn remove_duplicates_pick_under_shape_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute(
+            "insert.shape",
+            json!({
+                "kind": "rectangle",
+                "at": "D6",
+                "width": 110,
+                "height": 55
+            }),
+        )
+        .unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "D6");
+    click_at(&mut h, pos);
+
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert!(h.state().selected_object.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: dragging across a shape selects cells without moving the object.
+#[test]
+fn remove_duplicates_drag_over_shape_is_read_only_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session.execute("insert.shape", json!({"kind": "rectangle", "at": "D6", "width": 110, "height": 55})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    drag(&mut h, "D6", "G9");
+
+    assert_eq!(field(&h, "range"), "$D$6:$G$9");
+    assert!(h.state().selected_object.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: clicking and dragging across a chart selects cells without selecting or moving the chart.
+#[test]
+fn remove_duplicates_pick_and_drag_over_chart_is_read_only_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("range.setValues", json!({"range": "A1", "values": [["Label", "Val"], ["A", 10], ["B", 20]]})).unwrap();
+    session.execute("insert.chart", json!({"range": "A1:B3", "type": "column", "at": "D6", "width": 200, "height": 120})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let pos = cell_pos(&h, "D6");
+    click_at(&mut h, pos);
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert!(h.state().selected_object.is_none());
+
+    drag(&mut h, "D6", "F9");
+    assert_eq!(field(&h, "range"), "$D$6:$F$9");
+    assert!(h.state().selected_object.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: dragging from the selection fill handle must not fill cells.
+#[test]
+fn remove_duplicates_fill_handle_drag_is_read_only_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session.execute("cell.set", json!({"cell": "B2", "input": "42"})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let from = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        geo.range_rect(sheet, doc.selection.current()).right_bottom()
+    };
+    let to = cell_pos(&h, "E6");
+
+    h.input_mut().events.push(Event::PointerMoved(from));
+    press(&mut h, from, true);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(3);
+    press(&mut h, to, false);
+    h.run_steps(3);
+
+    assert!(field(&h, "range").contains("$E$6"), "fill-handle drag should pick the destination cell");
+    assert_eq!(h.state().session.active().unwrap().wb, before, "reference picking must never autofill workbook cells");
+}
+
+/// #1388: dragging from the selection border must select cells instead of moving them.
+#[test]
+fn remove_duplicates_border_drag_is_read_only_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session.execute("cell.set", json!({"cell": "B2", "input": "42"})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let from = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let r = geo.range_rect(sheet, doc.selection.current());
+        egui::pos2(r.center().x, r.top())
+    };
+    let to = cell_pos(&h, "E6");
+
+    h.input_mut().events.push(Event::PointerMoved(from));
+    press(&mut h, from, true);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(3);
+    press(&mut h, to, false);
+    h.run_steps(3);
+
+    assert!(field(&h, "range").contains("$E$6"), "border drag should pick the destination cell");
+    assert_eq!(h.state().session.active().unwrap().wb, before, "reference picking must never move workbook cells");
+}
+
+/// #1388: a slicer value tile must pick its underlying cell, not filter the table.
+#[test]
+fn remove_duplicates_slicer_tile_pick_is_read_only_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+
+    session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "A1",
+                "values": [["Region", "Qty"], ["East", 2], ["West", 5]]
+            }),
+        )
+        .unwrap();
+
+    session.execute("insert.table", json!({"range": "A1:B3", "name": "Sales"})).unwrap();
+
+    session
+        .execute(
+            "insert.slicer",
+            json!({
+                "table": "Sales",
+                "column": "Region",
+                "at": "D6",
+                "width": 170,
+                "height": 120
+            }),
+        )
+        .unwrap();
+
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    let pos = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let slicer = &sheet.slicers[0];
+
+        let rect = gridcraft_ui_egui::chartview::object_rect(
+            &geo,
+            sheet,
+            gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Slicer, slicer.id),
+        )
+        .expect("Inserted slicer must have an object rectangle");
+        let layout = gridcraft_ui_egui::chartview::slicer_layout(rect, geo.z, 2, slicer.columns);
+        let pos = layout.tiles[0].center();
+
+        // Verify the pointer really lands on an actionable slicer tile.
+        let hit = gridcraft_ui_egui::chartview::slicer_click(&geo, sheet, &doc.wb, doc.wb.active_sheet(), pos);
+        assert!(matches!(hit, Some((_, gridcraft_ui_egui::chartview::SlicerAction::Toggle(_)))));
+
+        pos
+    };
+
+    let expected_cell = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let c = geo.cell_at(sheet, geo.mirror_pos(pos));
+        format!("${}${}", gridcraft_engine::core::col_to_letters(c.col), c.row + 1)
+    };
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    click_at(&mut h, pos);
+
+    assert_eq!(h.state().dialog.as_ref().unwrap().name, "removeDuplicates");
+    assert_eq!(field(&h, "range"), expected_cell);
+    assert!(h.state().selected_object.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before, "slicer tile must not change table filtering during reference picking");
+}
+
+/// #1388: other RefEdit dialogs (Goal Seek, Data Analysis) also pick already-selected,
+/// checkbox, and form-control cells cleanly without mutating the workbook.
+#[test]
+fn other_ref_edit_dialogs_pick_selected_checkbox_and_control_cells_1388() {
+    let mut session = workbook();
+    session.execute("insert.checkbox", json!({"range": "C6"})).unwrap();
+    session.execute("insert.spinButton", json!({"at": "D6", "width": 90, "height": 38, "value": 5})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    // Goal Seek: picking into `changing` (already-selected B5, checkbox C6, spin control D6).
+    open_goal_seek(&mut h);
+    let boxes = dialog_boxes(&h);
+    click_at(&mut h, boxes[2].center());
+
+    single_click(&mut h, "B5");
+    assert_eq!(field(&h, "changing"), "$B$5");
+
+    single_click(&mut h, "C6");
+    assert_eq!(field(&h, "changing"), "$C$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+
+    single_click(&mut h, "D6");
+    assert_eq!(field(&h, "changing"), "$D$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+
+    // Data Analysis (Descriptive Statistics): `Field::Ref` dialog also picks under controls & checkboxes.
+    h.state_mut().session.execute("selection.set", json!({"range": "B5"})).unwrap();
+    h.run_steps(2);
+    h.state_mut().open_dialog("analysisToolPak", json!({"tool": "descriptive"}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    single_click(&mut h, "B5");
+    assert_eq!(field(&h, "range"), "$B$5");
+
+    single_click(&mut h, "D6");
+    assert_eq!(field(&h, "range"), "$D$6");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: idle RefEdit picker frames never commit an open cell draft.
+#[test]
+fn ref_edit_idle_frames_do_not_commit_open_cell_draft_1388() {
+    let mut session = workbook();
+    session.execute("cell.set", json!({"cell": "B2", "input": "old"})).unwrap();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+
+    let mut h = harness(session);
+    let before = h.state().session.active().unwrap().wb.clone();
+
+    h.state_mut().begin_edit(Some("draft".into()), false);
+    assert!(h.state().editor.is_some());
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(6);
+    assert!(h.state().editor.is_some(), "opening/focusing RefEdit must not commit the draft on idle frames");
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+
+    // Cancelling without clicking the grid leaves the draft uncommitted.
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb, before);
+}
+
+/// #1388: clicking a non-selectable locked cell must not overwrite Remove Duplicates' inferred range.
+#[test]
+fn ref_edit_rejected_locked_cell_click_keeps_inferred_range_1388() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session
+        .execute(
+            "range.setValues",
+            json!({
+                "range": "B2:C4",
+                "values": [["Name", "Qty"], ["A", 1], ["B", 2]]
+            }),
+        )
+        .unwrap();
+    session.execute("home.lockCell", json!({"range": "B2:C4", "on": false})).unwrap();
+    session.execute("review.protectSheet", json!({"selectLockedCells": false})).unwrap();
+    session.execute("selection.set", json!({"range": "C3"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    assert_eq!(field(&h, "range"), "B2:C4");
+
+    click_button(&mut h, "Collapse dialog", 0);
+    single_click(&mut h, "D6");
+
+    assert_eq!(selection(&h).1, "C3", "locked D6 stays unselectable");
+    assert_eq!(field(&h, "range"), "B2:C4", "failed selection must not record C3 as a pick");
+}
+
+/// #1388: cancelling a RefEdit pick mid-drag clears drag state so release does not apply Format Painter.
+#[test]
+fn ending_pick_mid_drag_does_not_apply_format_painter_on_release_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    session.execute("home.bold", json!({})).unwrap();
+    session.execute("edit.formatPainter", json!({})).unwrap();
+    session.execute("selection.set", json!({"cell": "B5"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let from = cell_pos(&h, "C3");
+    let to = cell_pos(&h, "D4");
+    h.input_mut().events.push(Event::PointerMoved(from));
+    press(&mut h, from, true);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(2);
+
+    // Cancel the dialog via control channel while the primary button is still held down.
+    let r = control(&mut h, "ui.dialog.cancel", json!({}));
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().dialog.is_none());
+
+    press(&mut h, to, false);
+    h.run_steps(3);
+
+    let d4_bold = {
+        let doc = h.state().session.active().unwrap();
+        let sh = doc.wb.active().unwrap();
+        doc.wb.styles.get(sh.style_id(CellRef::parse("D4").unwrap())).font.bold
+    };
+    assert!(!d4_bold, "cancelling mid-drag must not apply Format Painter on pointer release");
+}
+
+/// #1388: dragging row or column headers while picking keeps the active cell inside the picked lines.
+#[test]
+fn ref_edit_header_drag_keeps_active_cell_inside_picked_lines_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let (row6, row8, col_d, col_f) = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let hx = (geo.head_left() + geo.cells.left()) * 0.5;
+        let hy = (geo.head_top() + geo.cells.top()) * 0.5;
+        let r6 = geo.cell_rect(sheet, CellRef::parse("A6").unwrap()).center().y;
+        let r8 = geo.cell_rect(sheet, CellRef::parse("A8").unwrap()).center().y;
+        let cd = geo.cell_rect(sheet, CellRef::parse("D1").unwrap()).center().x;
+        let cf = geo.cell_rect(sheet, CellRef::parse("F1").unwrap()).center().x;
+        (egui::pos2(hx, r6), egui::pos2(hx, r8), egui::pos2(cd, hy), egui::pos2(cf, hy))
+    };
+
+    h.input_mut().events.push(Event::PointerMoved(row6));
+    press(&mut h, row6, true);
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(row8));
+    h.run_steps(2);
+    press(&mut h, row8, false);
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$A$6:$XFD$8");
+    assert_eq!(h.state().session.active().unwrap().selection.active.row, 5, "active row should stay on row 6");
+
+    h.input_mut().events.push(Event::PointerMoved(col_d));
+    press(&mut h, col_d, true);
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(col_f));
+    h.run_steps(2);
+    press(&mut h, col_f, false);
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$D$1:$F$1048576");
+    assert_eq!(h.state().session.active().unwrap().selection.active.col, 3, "active col should stay on column D");
+}
+
+/// #1388: hovering fill handle, selection border, objects, or selected column headers during
+/// RefEdit pick shows only pick cursors and no fill-handle crosshair or move cursor.
+#[test]
+fn ref_edit_pick_hover_suppresses_fill_border_object_and_col_move_cursors_1388() {
+    use egui::CursorIcon;
+
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("insert.shape", json!({"kind": "rectangle", "at": "F6", "width": 110, "height": 55})).unwrap();
+    session.execute("selection.set", json!({"range": "B2:C4"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let (handle_pos, border_pos, shape_pos) = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let r = geo.range_rect(sheet, doc.selection.current());
+        (r.right_bottom(), egui::pos2(r.center().x, r.top()), cell_pos(&h, "F6"))
+    };
+
+    for pos in [handle_pos, border_pos, shape_pos] {
+        h.input_mut().events.push(Event::PointerMoved(pos));
+        h.run_steps(2);
+        assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Cell, "cursor at {pos:?}");
+    }
+
+    // Select column C and verify column header hover uses Default, not Move.
+    let col_c_header = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        egui::pos2(geo.cell_rect(sheet, CellRef::parse("C1").unwrap()).center().x, (geo.head_top() + geo.cells.top()) * 0.5)
+    };
+    click_at(&mut h, col_c_header);
+    assert_eq!(field(&h, "range"), "$C$1:$C$1048576");
+    h.input_mut().events.push(Event::PointerMoved(col_c_header));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, CursorIcon::Default);
+}
+
+/// #1388: cancelling a dialog that does not own a picker drag preserves any existing grid drag.
+#[test]
+fn cancelling_unrelated_dialog_preserves_non_picker_drag_1388() {
+    use gridcraft_ui_egui::grid::Drag;
+
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = harness(session);
+
+    let from = {
+        let app = h.state();
+        let doc = app.session.active().unwrap();
+        let sheet = doc.wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        geo.range_rect(sheet, doc.selection.current()).right_bottom()
+    };
+    let to = cell_pos(&h, "B4");
+
+    h.input_mut().events.push(Event::PointerMoved(from));
+    press(&mut h, from, true);
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(2);
+    assert!(matches!(h.state().grid.drag, Drag::Fill { .. }), "fill drag should be active");
+
+    h.state_mut().open_dialog("rowHeight", json!({}));
+    h.run_steps(2);
+
+    let ctx = h.ctx.clone();
+    let Outcome::Done(r) = handle(h.state_mut(), &ctx, "ui.dialog.cancel", &json!({})) else {
+        panic!("expected Done outcome");
+    };
+    assert_eq!(r["ok"], json!(true), "{r}");
+    assert!(h.state().dialog.is_none());
+    assert!(matches!(h.state().grid.drag, Drag::Fill { .. }), "unrelated cancel must preserve active Fill drag");
+
+    press(&mut h, to, false);
+    h.run_steps(3);
+    assert_eq!(h.state().grid.drag, Drag::None);
+}
+
+/// #1388: a shrinking Shift-drag across row or column headers keeps `selection.active` inside the picked lines.
+#[test]
+fn ref_edit_shrinking_shift_header_drag_keeps_active_cell_inside_area_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"cell": "A6"})).unwrap();
+
+    let mut h = harness(session);
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+
+    let (row7, row8, col_d, col_e, col_f) = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let hx = (geo.head_left() + geo.cells.left()) * 0.5;
+        let hy = (geo.head_top() + geo.cells.top()) * 0.5;
+        let r7 = geo.cell_rect(sheet, CellRef::parse("A7").unwrap()).center().y;
+        let r8 = geo.cell_rect(sheet, CellRef::parse("A8").unwrap()).center().y;
+        let cd = geo.cell_rect(sheet, CellRef::parse("D1").unwrap()).center().x;
+        let ce = geo.cell_rect(sheet, CellRef::parse("E1").unwrap()).center().x;
+        let cf = geo.cell_rect(sheet, CellRef::parse("F1").unwrap()).center().x;
+        (egui::pos2(hx, r7), egui::pos2(hx, r8), egui::pos2(cd, hy), egui::pos2(ce, hy), egui::pos2(cf, hy))
+    };
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.input_mut().events.push(Event::PointerMoved(row8));
+    h.input_mut().events.push(Event::PointerButton { pos: row8, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::SHIFT });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(row7));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: row7, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::SHIFT });
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$A$6:$XFD$7");
+    {
+        let sel = &h.state().session.active().unwrap().selection;
+        assert!(sel.current().contains(sel.active), "active {:?} must stay inside {:?}", sel.active, sel.current());
+    }
+
+    click_at(&mut h, col_d);
+    assert_eq!(field(&h, "range"), "$D$1:$D$1048576");
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.input_mut().events.push(Event::PointerMoved(col_f));
+    h.input_mut().events.push(Event::PointerButton { pos: col_f, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::SHIFT });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(col_e));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: col_e, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::SHIFT });
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "range"), "$D$1:$E$1048576");
+    let sel = &h.state().session.active().unwrap().selection;
+    assert!(sel.current().contains(sel.active), "active {:?} must stay inside {:?}", sel.active, sel.current());
+}
+
+/// #1388: Cmd/Ctrl-dragging column headers in a multi-area RefEdit preserves earlier areas.
+#[test]
+fn solver_additive_cmd_header_drag_preserves_prior_areas_1388() {
+    let mut h = harness(workbook());
+    h.state_mut().open_dialog("solver", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 1);
+    assert_eq!(collapsed(&h).as_deref(), Some("variables"));
+
+    drag(&mut h, "A1", "A2");
+    assert_eq!(field(&h, "variables"), "$A$1:$A$2");
+
+    let (col_d, col_f) = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        let hy = (geo.head_top() + geo.cells.top()) * 0.5;
+        let cd = geo.cell_rect(sheet, CellRef::parse("D1").unwrap()).center().x;
+        let cf = geo.cell_rect(sheet, CellRef::parse("F1").unwrap()).center().x;
+        (egui::pos2(cd, hy), egui::pos2(cf, hy))
+    };
+
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
+    h.input_mut().events.push(Event::PointerMoved(col_d));
+    h.input_mut().events.push(Event::PointerButton { pos: col_d, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::COMMAND });
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerMoved(col_f));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: col_f, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::COMMAND });
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+
+    assert_eq!(field(&h, "variables"), "$A$1:$A$2,$D$1:$F$1048576");
+}
+
+/// #1388: cancelling a RefEdit pick restores the Shift-selection anchor alongside range and active cell.
+#[test]
+fn cancelling_ref_edit_restores_shift_selection_anchor_1388() {
+    let mut session = workbook();
+    session.execute("selection.set", json!({"range": "B2:C4", "active": "C4"})).unwrap();
+
+    let mut h = harness(session);
+    let c4 = CellRef::parse("C4").unwrap();
+    h.state_mut().session.active_mut().unwrap().selection.anchor = c4;
+
+    h.state_mut().open_dialog("removeDuplicates", json!({}));
+    h.run_steps(4);
+    click_button(&mut h, "Collapse dialog", 0);
+    single_click(&mut h, "D6");
+    assert_eq!(field(&h, "range"), "$D$6");
+
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+
+    let sel = &h.state().session.active().unwrap().selection;
+    assert_eq!(sel.a1(), "B2:C4");
+    assert_eq!(sel.active, c4);
+    assert_eq!(sel.anchor, c4);
 }

@@ -61,10 +61,10 @@ struct Home {
     /// copy of it is never taken for it, and an undo that brings it back makes it the dialog's
     /// again.
     uid: SheetUid,
-    /// The ranges and active cell on the dialog's sheet from before picking began, taken when a
-    /// box starts picking (from the sheet's kept selection when another sheet is shown then), and
-    /// put back once when the dialog runs its command or closes.
-    selection: Option<(String, String)>,
+    /// The ranges, active cell, and Shift anchor on the dialog's sheet from before picking began,
+    /// taken when a box starts picking (from the sheet's kept selection when another sheet is shown
+    /// then), and put back once when the dialog runs its command or closes.
+    selection: Option<(String, String, gridcraft_engine::core::CellRef)>,
 }
 
 /// Whether the dialog has reference boxes: Goal Seek, Solver, Data Analysis, and any form with a
@@ -86,14 +86,14 @@ pub(super) fn record_home(app: &SheetApp, d: &mut Dialog) {
     }
 }
 
-/// The selection on the dialog's own sheet as (ranges, active cell): the one shown while that
-/// sheet is active, else the one the sheet keeps for when it is shown again. `None` once the
-/// sheet is deleted.
-fn home_selection(doc: &DocState, home: &Home) -> Option<(String, String)> {
+/// The selection on the dialog's own sheet as (ranges, active cell, Shift anchor): the one shown
+/// while that sheet is active, else the one the sheet keeps for when it is shown again. `None`
+/// once the sheet is deleted.
+fn home_selection(doc: &DocState, home: &Home) -> Option<(String, String, gridcraft_engine::core::CellRef)> {
     let i = doc.wb.sheets.iter().position(|s| s.uid.get() == home.uid.get())?;
     let sel = if i == doc.wb.active_sheet() { &doc.selection } else { doc.sheet_selections.get(i)? };
     let ranges: Vec<String> = sel.ranges.iter().map(|r| r.a1()).collect();
-    Some((ranges.join(","), sel.active.a1()))
+    Some((ranges.join(","), sel.active.a1(), sel.anchor))
 }
 
 /// The grid's current area (the one being selected) as a reference for a dialog of `d`'s: with
@@ -255,12 +255,20 @@ fn arrows_move_selection(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
+/// Clears active grid selection drag state owned by a reference-box pick.
+pub(super) fn clear_picker_drag(app: &mut SheetApp) {
+    if std::mem::take(&mut app.grid.picker_drag) {
+        app.grid.drag = crate::grid::Drag::None;
+        app.grid.drag_select = false;
+    }
+}
+
 /// After the dialog's window is drawn: remembers where the expanded window is, and ends picking
 /// into a reference box when the box was not drawn (the dialog stopped showing it) or when
 /// another text field of the dialog takes the keyboard. A collapsed dialog shows no other field,
 /// so its box keeps picking whatever else is clicked (the Name Box, the formula bar, the
 /// ribbon): only Escape, Enter or the expand button end that state.
-pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool, rect: Option<egui::Rect>) {
+pub(super) fn window_shown(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, collapsed: bool, rect: Option<egui::Rect>) {
     if !collapsed {
         d.refs.rect = rect;
     }
@@ -268,6 +276,7 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
     // A press the boxes did not take this frame (none was picking) is not kept for a later one.
     d.refs.pressed = false;
     d.refs.other_field = d.refs.collapsed.as_deref().is_some_and(|key| other_field_focused(ctx, key));
+    let was_picking = d.refs.target.is_some();
     // The box compares the grid selection with the one it last saw only while it is drawn: a
     // hidden box would take a selection made meanwhile when it comes back.
     if !std::mem::take(&mut d.refs.target_drawn) {
@@ -275,6 +284,9 @@ pub(super) fn window_shown(ctx: &egui::Context, d: &mut Dialog, collapsed: bool,
     }
     if !collapsed && ctx.text_edit_focused() && d.refs.target.as_deref().is_none_or(|key| !ctx.memory(|m| m.has_focus(ref_edit_id(key)))) {
         d.refs.target = None;
+    }
+    if was_picking && d.refs.target.is_none() {
+        clear_picker_drag(app);
     }
 }
 
@@ -330,6 +342,7 @@ pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String>
     super::sort_dialog::restore_selection(app, d);
     d.refs.target = None;
     d.refs.collapsed = None;
+    clear_picker_drag(app);
     let Some(home) = d.refs.home.as_mut() else { return Ok(()) };
     let Some(sheet) = app.session.active().and_then(|doc| home_sheet(&doc.wb, home)).map(|s| s.name.clone()) else { return Ok(()) };
     // After an OK that failed, the selection is already back and only the sheet is shown again,
@@ -337,8 +350,12 @@ pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String>
     if !active_sheet_name(app).eq_ignore_ascii_case(&sheet) {
         app.run("sheet.activate", json!({"sheet": sheet}))?;
     }
-    if let Some((range, active)) = home.selection.take() {
-        let _ = app.run("selection.set", json!({"range": range, "active": active}));
+    if let Some((range, active, anchor)) = home.selection.take()
+        && app.run("selection.set", json!({"range": range, "active": active})).is_ok()
+        && let Some(doc) = app.session.active_mut()
+        && doc.wb.active().is_some_and(|s| s.uid.get() == home.uid.get())
+    {
+        doc.selection.anchor = anchor;
     }
     Ok(())
 }
@@ -356,6 +373,10 @@ pub(super) fn ref_edit(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, key: &
             RefLabel::By(label) => r.labelled_by(label),
             RefLabel::Named(name) => r.accessible_name(lang.tr(name)),
         };
+        // Give initial focus to a RefEdit field when it is the form's first focusable input.
+        if !collapsed && super::show::first_focus_key(d) == Some(key) {
+            super::show::take_first_focus(d, &r);
+        }
         // F4 cycles the anchors of the reference in the box, as in Excel's reference boxes.
         if r.has_focus() && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F4)) {
             s = cycle_anchors(&s);
