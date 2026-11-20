@@ -7,8 +7,8 @@ use super::state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 use super::updates_ui;
 use super::{
     CellRef, HashMap, INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, Perf, RangeRef, Session, SheetApp, UiRequest, UiState, backstage,
-    clamp_interface_scale, clean_error, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n, json,
-    keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
+    clamp_interface_scale, clean_error, cloud, control, desktop_theme, dialogs, editor, floating_pictures, formula_bar, formula_locale, grid, i18n,
+    json, keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
 mod clipboard;
@@ -37,6 +37,10 @@ impl SheetApp {
             text_box_editor: None,
             dialog: None,
             backstage: None,
+            cloud: cloud::CloudFiles::new(),
+            cloud_sent: cloud::Sent::new(),
+            sharing: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new(),
             message: None,
             toast: None,
             notice: None,
@@ -78,6 +82,7 @@ impl SheetApp {
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),
             allow_close: false,
+            quit_after_save: None,
             window_controls: false,
             viewport_commands: Vec::new(),
             bring_forward: false,
@@ -144,6 +149,11 @@ impl SheetApp {
         updates_ui::tick(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
+        // Answers from the cloud worker, when a host has connected one (none does yet).
+        cloud::pump(self, ctx);
+        // A quit waiting on the cloud save that answering Save started: finish it once that
+        // transfer is no longer busy, whichever frame `cloud::pump` (just above) clears it on.
+        self.poll_quit_after_save(ctx);
         self.autosave(ctx);
         self.update_title(ctx);
         self.request_hidden_paint(ctx);
@@ -250,6 +260,14 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        // Unconditional, as craft-ui documents: answers are collected here whether the dialog is
+        // open or not, and a connected `ShareBackend`'s capability answer never arrives without
+        // this running every frame. No backend is connected anywhere yet (see `apps/gridcraft` /
+        // `apps/gridcraft-web`), so this only drains an empty channel until one is.
+        self.sharing.show(&ctx);
+        // A conditional write the service refused: somebody else's work is in the stored copy.
+        // craft-ui draws the choice between reloading theirs and keeping a copy of this one.
+        craft_ui::cloud::conflict_modal(self, &ctx);
         macro_ui::forget_closed_editor(self);
         macro_ui::question_box(self, &ctx);
         widgets::message_box(self, &ctx);

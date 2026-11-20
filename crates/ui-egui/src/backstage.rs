@@ -241,6 +241,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     {
         out.close = true;
     }
+    // Leaving the Save As page without submitting a cloud save, whether by closing Backstage or
+    // switching to another page, abandons any conflict-copy target and suggested name the modal
+    // left in `cloud::CloudFiles`. Without this, the next cloud save through this window would
+    // redirect to that abandoned workbook instead of the one actually open.
+    if bs.page == Page::SaveAs && (out.close || out.page.is_some_and(|p| p != Page::SaveAs)) {
+        crate::cloud::cancel_save_as(app);
+    }
     if let Some(page) = out.page {
         bs.page = page;
     }
@@ -584,6 +591,13 @@ fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outc
     ui.add_space(22.0);
     section(ui, lang, "Recent");
     recent_list(app, ui, bs, out, usize::MAX);
+    // Cloud storage sits beside the local picker and Recent list, never in place of them, and
+    // only when a host has connected a `cloud::CloudBackend` (none does yet).
+    if crate::cloud::available(app) {
+        ui.add_space(22.0);
+        section(ui, lang, "Cloud");
+        crate::cloud::open_page(app, ui);
+    }
 }
 
 /// Review › Protect Workbook and File › Info › Protect Workbook: the protect dialog (with an
@@ -712,6 +726,14 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     }
     ui.add_space(18.0);
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
+    // Cloud storage, only when a host has connected a `cloud::CloudBackend` (none does yet).
+    if crate::cloud::available(app) {
+        ui.add_space(22.0);
+        section(ui, lang, "Cloud");
+        if crate::cloud::save_page(app, ui) {
+            out.close = true;
+        }
+    }
 }
 
 fn export(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {

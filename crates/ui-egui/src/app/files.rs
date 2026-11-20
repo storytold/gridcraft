@@ -105,15 +105,22 @@ impl SheetApp {
     /// `logic` so a hidden or logic-only frame still saves; the monotonic timestamp check keeps a
     /// forced hidden UI pass from saving the same change twice.
     pub(super) fn autosave(&mut self, ctx: &egui::Context) {
-        let dirty_xlsx = self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
+        // A local file in a full-fidelity format, or a document with a cloud origin to write
+        // back to: `d.path` is `None` for the latter, so a save with nowhere to go would
+        // otherwise open the Save As dialog instead of saving, which autosave must never do.
+        let due = self.session.active().is_some_and(|d| {
+            d.is_dirty() && (d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")) || (d.path.is_none() && crate::cloud::has_target(self)))
+        });
         let now = crate::monotonic_ms();
         let autosave_due =
-            self.ui.autosave && self.editor.is_none() && self.text_box_editor.is_none() && now - self.grid.last_autosave > 2000.0 && dirty_xlsx;
+            self.ui.autosave && self.editor.is_none() && self.text_box_editor.is_none() && now - self.grid.last_autosave > 2000.0 && due;
         if autosave_due {
             self.grid.last_autosave = now;
             self.store_view_state();
-            let _ = self.session.run("file.save", json!({}));
-        } else if self.ui.autosave && dirty_xlsx {
+            // Through the UI layer, not `self.session.run`, so a cloud-origin document's save
+            // redirects to `cloud::save` the same way an interactive Ctrl+S does.
+            let _ = self.run("file.save", json!({}));
+        } else if self.ui.autosave && due {
             // Keep checking even when no input arrives while the window is hidden.
             ctx.request_repaint_after(std::time::Duration::from_secs(2));
         }

@@ -20,6 +20,9 @@ mod border_preview;
 mod cell_pictures;
 mod chartcache;
 pub mod chartview;
+/// Open and Save against cloud storage. See the module doc comment for what is, and is not,
+/// part of this contract.
+pub mod cloud;
 pub mod code_editor;
 pub mod control;
 pub mod control_ui;
@@ -248,6 +251,22 @@ pub struct SheetApp {
     pub dialog: Option<dialogs::Dialog>,
     /// The File tab's Backstage view, when open (UI-only; replaces the ribbon, grid and tabs).
     pub backstage: Option<backstage::Backstage>,
+    /// Open and Save against cloud storage: the account, the folders being browsed, and where
+    /// each open workbook came from. Held by craft-ui, which draws the pages. Inert until the
+    /// host connects a [`cloud::CloudBackend`] (none does yet; see `crates/ui-egui/src/cloud.rs`).
+    pub cloud: cloud::CloudFiles,
+    /// The workbook snapshot each cloud save in flight encoded. Only GridCraft knows what a
+    /// version of a workbook is, so `cloud` itself holds none of these.
+    pub(crate) cloud_sent: cloud::Sent,
+    /// Who a document is shared with, and the controls for changing that. Offered only where the
+    /// provider behind the connected backend reports it.
+    pub sharing: craft_ui::share::ShareDialog,
+    /// Who else is in the document, drawn beside the account badge through
+    /// [`craft_ui::cloud::who`]. `CloudApp::presence` exists for a host with a live source of peer
+    /// presence to populate through [`craft_ui::presence::PresenceBar::set`]. That surface is
+    /// RFC-0020's, stated by neither `craft-cloud` nor this contract, so nothing here calls `set`.
+    /// The bar therefore stays empty and `who` draws nothing for it. See `docs/cloud.md`.
+    pub presence: craft_ui::presence::PresenceBar,
     pub message: Option<(String, String)>,
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
@@ -323,6 +342,12 @@ pub struct SheetApp {
     /// Every unsaved workbook has been answered for quitting (or `app.quit` asked): the next
     /// window close goes through.
     pub allow_close: bool,
+    /// Save Changes was answered Save, on a document with a cloud save still in flight (its own
+    /// write is asynchronous, so nothing clears the dirty flag by the time the dialog's command
+    /// returns). `(uid, quitting)`: once `cloud::pump` finishes that transfer, close the document
+    /// and, if this was part of quitting, go on to the next unsaved one, exactly as the
+    /// synchronous path does when a local save clears the flag immediately.
+    pub(crate) quit_after_save: Option<(u64, bool)>,
     /// Linux/BSD: the window has no system frame; the title bar draws minimize, maximize and
     /// close, and the window resizes from its edges (`ribbon::window_frame`).
     pub window_controls: bool,
