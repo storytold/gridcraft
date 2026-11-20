@@ -1,6 +1,4 @@
-use super::{
-    Arg, CellError, Ctx, DateSystem, R, Value, datetime_from_serial, days_in_month, is_leap, max_serial, num, num_val, opt_num, serial_from_ymd,
-};
+use super::{Arg, CellError, Ctx, DateSystem, R, Value, datetime_from_serial, days_in_month, is_leap, num, num_val, opt_num, serial_from_ymd};
 
 // ---------------------------------------------------------------------------------------------
 // Dates and day counts
@@ -96,9 +94,9 @@ pub(super) fn year_frac(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64>
                 let denom = if feb29_1 || feb29_2 { 366.0 } else { 365.0 };
                 return Ok(days / denom);
             }
-            let start = serial(sys, y1, 1, 1)?;
-            let end = serial(sys, y2 + 1, 1, 1).unwrap_or(max_serial(sys) as f64 + 1.0);
-            let avg = (end - start) / (y2 - y1 + 1) as f64;
+            // Real calendar-year lengths: 1900-system serials would count the fictitious 29 February 1900 (#4098).
+            let year_days: f64 = (y1..=y2).map(|y| if is_leap(y) { 366.0 } else { 365.0 }).sum();
+            let avg = year_days / (y2 - y1 + 1) as f64;
             Ok(days / avg)
         }
     }
