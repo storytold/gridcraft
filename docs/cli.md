@@ -34,6 +34,38 @@ cargo install --path apps/gridcraft-cli     # or: cargo run -p gridcraft-cli -- 
 | `send <port> <method> [json]` | `gridcraft-cli send 7979 engine.execute '{"command":"home.bold","params":{"range":"A1:C1"}}'` — one control-channel request to a running app (`gridcraft --control 7979`). |
 | `version` | Prints `gridcraft-cli <version>`. |
 
+## Region for date-text formulas
+
+`info`, `convert`, `eval`, `cat`, `run`, `check` and local `mcp` accept `--region TAG`
+(for example `it-IT`, `en-GB` or `ja-JP`). The tag is validated and applied before a
+workbook's first recalculation. Omit it for en-US; it is independent of interface language.
+Tags are case-insensitive and accept `_` in place of `-`. Unknown tags are usage errors.
+
+```sh
+gridcraft-cli eval '=DATEVALUE("13/01/2026")' --region it-IT
+gridcraft-cli eval '=MONTH("13/01/2026")' --region it-IT
+gridcraft-cli run --region it-IT --in book.xlsx --cmd 'data.refreshAll' --print A1:G7
+gridcraft-cli check book.xlsx --region it-IT --json
+gridcraft --region it-IT book.xlsx
+```
+
+The native flag overrides the saved region for this launch before sample, blank or file workbooks
+are created. It does not overwrite the saved preference on exit. A deliberate `app.region`
+change replaces the launch override and becomes the saved choice. The CLI always starts with explicit flags or en-US. `check` applies the region
+to both its oracle recalculation and the workbook read back for round-trip comparison.
+Region is an application preference and is not serialized into XLSX. Formula names and
+programmatic cell/range input keep their existing canonical en-US syntax. Date/time
+text in implicit arguments such as `YEAR`, `MONTH`, `DAY` and holiday ranges follows
+the selected region. Numeric serial text retains en-US coercion: for example,
+`HOUR("46035.5")` remains 12 under `it-IT`.
+General `VALUE` and arithmetic text coercion also remain en-US, so an ambiguous date string
+can differ from the same string passed directly to `MONTH`. See the explicit
+[remaining coercion gap and whitespace contract](date-order-repro.md#known-coercion-boundary-and-whitespace);
+this is not a claim of full regional Excel formula parity.
+
+`mcp --connect` rejects `--region`: configure the running application before it opens the
+file instead. A connected client must not silently replace that application's preference.
+
 ## `run`
 
 ```sh

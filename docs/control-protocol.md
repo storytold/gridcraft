@@ -145,6 +145,38 @@ the password, and never replaces the encrypted original.
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).
 
+### Region and date-text recalculation
+
+Start with `gridcraft --region it-IT --control 7979 book.xlsx` to select the region
+before the first recalculation for this launch, without overwriting the saved preference.
+`app.region` queries the effective region or deliberately replaces it and updates the saved choice:
+
+```json
+{"id": 2, "method": "engine.execute", "params": {"command": "app.region", "params": {"region": "it-IT"}}}
+```
+
+Empty params or `{"region":null}` query it. The result contains `region`, `name`,
+`decimal`, `group`, `dateOrder` (`MDY`, `DMY`, `YMD`), `shortDate`, `longDate` and
+`available` tags. Unknown tags or non-string values return an error without changing it.
+
+Changing it recalculates `DATEVALUE`, `TIMEVALUE`, implicit date/time text arguments
+(such as `YEAR`, `MONTH`, `DAY` and holiday arrays) and their dependents in every open
+document. It preserves each document's clean/dirty state and is not an undoable edit;
+undo/redo and undo-group rollback retain the current session region. Region-only changes
+inside a group create no undo step. Rollback restores the original clean/dirty state unless
+a workbook save inside the group established a different save point. It does not refresh PivotTables: execute
+`data.refreshAll` separately to rebuild reports from the recalculated source formulas.
+
+This bridge uses the shared Region/parser from #1524 and `region-typed-input`. It does
+not enable regional display or change programmatic `cell.set`/`range.setValues` input,
+which remains canonical en-US. Numeric serial text in date/time functions also retains
+canonical en-US coercion; only its date/time interpretation follows the region.
+General `VALUE` and arithmetic remain en-US as well. This leaves a documented
+[coercion gap](date-order-repro.md#known-coercion-boundary-and-whitespace) for ambiguous
+date strings passed indirectly through those operations. Implicit date arguments reject
+surrounding whitespace on date/time text while preserving numeric serial text rules.
+The default region is en-US, independent of UI language.
+
 ### Native printing
 
 Desktop `engine.commands {"search":"print"}` (and connected MCP `list_commands`)
