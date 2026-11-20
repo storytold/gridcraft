@@ -37,7 +37,8 @@ pub struct Services {
     pub paste_image: Option<Box<dyn FnMut() -> Option<image::RgbaImage>>>,
     /// Web: deliver a file to the user (name, bytes).
     pub download: Option<Download>,
-    /// Web: start an asynchronous file pick; the bytes arrive later in `inbox`.
+    /// Start File › Open's pick without waiting for it: web (the bytes arrive later in `inbox`) and
+    /// macOS (the Open panel as a window of its own; the host opens the picked path).
     pub open_async: Option<Box<dyn Fn()>>,
     /// Files delivered asynchronously (name, bytes), opened on the next frame.
     pub inbox: Option<Inbox>,

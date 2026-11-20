@@ -17,6 +17,8 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(target_os = "macos")]
+mod open_panel;
 mod opener;
 mod print;
 
@@ -28,8 +30,15 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-/// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
-struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app, its native window per workbook window, and (macOS) the menu bar, Finder events and
+/// the workbooks picked in the Open panel.
+struct App(
+    SheetApp,
+    DocWindows,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "macos")] std::sync::mpsc::Receiver<String>,
+);
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -42,6 +51,7 @@ impl eframe::App for App {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
+            open_panel::poll(&self.4, &mut self.0);
         }
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
@@ -155,6 +165,9 @@ fn read_clipboard<T>(
     read(clipboard.as_mut()?).ok()
 }
 
+/// File › Open's file types (the "Spreadsheets" filter; on macOS the Open panel's too).
+const SPREADSHEETS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"];
+
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
@@ -175,7 +188,7 @@ fn services() -> Services {
         })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
+                .add_filter("Spreadsheets", SPREADSHEETS)
                 .add_filter("Excel Workbook", &["xlsx", "xlsm"])
                 .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
                 .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
@@ -400,6 +413,8 @@ fn main() -> eframe::Result<()> {
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
                 }
+                #[cfg(target_os = "macos")]
+                let picked = open_panel::connect(&mut app, &cc.egui_ctx);
                 let windows = DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window());
                 Ok(Box::new(App(
                     app,
@@ -408,6 +423,8 @@ fn main() -> eframe::Result<()> {
                     None,
                     #[cfg(target_os = "macos")]
                     apple_events.connect(&cc.egui_ctx),
+                    #[cfg(target_os = "macos")]
+                    picked,
                 )))
             }),
         )
