@@ -118,19 +118,29 @@ fn quoted(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut 
     Ok(j + 1)
 }
 
-fn error_literal(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn error_literal(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let rest = src.get(start..).unwrap_or("");
-    let error = CellError::ALL
-        .iter()
-        .copied()
-        .find(|error| rest.get(..error.as_str().len()).is_some_and(|text| text.eq_ignore_ascii_case(error.as_str())))
-        .ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
-    let end = i + error.as_str().chars().count();
+    let (error, len) = locale.error_prefix(rest).ok_or_else(|| LexError { msg: "unknown error literal".into(), pos: start })?;
+    let end = i + len;
     emit(src, chars, out, Tok::Error(error), start, end);
     Ok(end)
 }
 
-fn structured_ref(src: &str, chars: &[(usize, char)], i: usize, start: usize, out: &mut Vec<Token>) -> Result<usize, LexError> {
+fn structured_ref(
+    src: &str,
+    chars: &[(usize, char)],
+    locale: crate::FormulaLocale,
+    i: usize,
+    start: usize,
+    out: &mut Vec<Token>,
+) -> Result<usize, LexError> {
     let mut depth = 0;
     let mut j = i;
     loop {
@@ -151,8 +161,8 @@ fn structured_ref(src: &str, chars: &[(usize, char)], i: usize, start: usize, ou
             Some(_) => j += 1,
         }
     }
-    let inner = src.get(byte_pos(src, chars, i + 1)..byte_pos(src, chars, j.saturating_sub(1))).unwrap_or("").to_string();
-    emit(src, chars, out, Tok::Struct(inner), start, j);
+    let inner = src.get(byte_pos(src, chars, i + 1)..byte_pos(src, chars, j.saturating_sub(1))).unwrap_or("");
+    emit(src, chars, out, Tok::Struct(locale.table_reference(inner, false)), start, j);
     Ok(j)
 }
 
@@ -293,10 +303,10 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                 i += 1;
             }
             '#' => {
-                i = error_literal(src, &chars, i, start, &mut out)?;
+                i = error_literal(src, &chars, locale, i, start, &mut out)?;
             }
             '[' => {
-                i = structured_ref(src, &chars, i, start, &mut out)?;
+                i = structured_ref(src, &chars, locale, i, start, &mut out)?;
             }
             '.' if ch(i + 1) == Some(':') => {
                 // Trim reference `A1.:E10` / `A1.:.E10` (the word before stopped at the dot).
