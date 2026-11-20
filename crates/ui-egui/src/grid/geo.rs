@@ -33,6 +33,17 @@ pub struct Geo {
     pub paper: Option<Arc<gridcraft_engine::paper::PageGrid>>,
 }
 
+/// The line an arrow of a scrollbar goes to from `first`, which is partly scrolled out or not.
+fn one_line(first: u32, partly_out: bool, forward: bool, frozen: u32, end: u32, shown: impl Fn(u32) -> bool) -> u32 {
+    if forward {
+        return (first + 1..end).find(|l| shown(*l)).unwrap_or(first);
+    }
+    if partly_out {
+        return first;
+    }
+    (frozen..first).rev().find(|l| shown(*l)).unwrap_or(frozen)
+}
+
 /// The parts of the grid's geometry that depend on the sheet alone: where each row and column
 /// starts, and the row and column outlines. Building them walks every row and column that has a
 /// size, a style or an outline level (a million rows in a file whose filter hides most of them),
@@ -160,6 +171,25 @@ impl Geo {
             Some(pg) => pg.col_x(col) as f32,
             None => (self.ci.start(col) - self.ci.start(self.fc)) as f32,
         }
+    }
+    /// The scroll that brings the next column to the left of the scrolled area, or back to the start
+    /// of the one partly scrolled out and then the one before it. Hidden columns are skipped.
+    pub fn scroll_one_col(&self, sh: &Sheet, scroll: f32, forward: bool) -> f32 {
+        if self.paper.is_some() {
+            return scroll + if forward { sh.default_col_width } else { -(sh.default_col_width) };
+        }
+        let first = self.ci.at(scroll as f64 + self.ci.start(self.fc));
+        let target = one_line(first, scroll > self.scroll_left_of(sh, first) + 0.01, forward, self.fc, MAX_COLS, |c| sh.col_width(c) > 0.0);
+        self.scroll_left_of(sh, target)
+    }
+    /// `scroll_one_col` for rows.
+    pub fn scroll_one_row(&self, sh: &Sheet, scroll: f32, forward: bool) -> f32 {
+        if self.paper.is_some() {
+            return scroll + if forward { sh.default_row_height } else { -(sh.default_row_height) };
+        }
+        let first = self.ri.at(scroll as f64 + self.ri.start(self.fr));
+        let target = one_line(first, scroll > self.scroll_top_of(sh, first) + 0.01, forward, self.fr, MAX_ROWS, |r| sh.row_height(r) > 0.0);
+        self.scroll_top_of(sh, target)
     }
     /// Screen x for a logical x (and back): identity unless the sheet is right-to-left.
     pub fn mirror_x(&self, x: f32) -> f32 {

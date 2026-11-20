@@ -470,20 +470,24 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
 /// The worksheet is painted virtually, so it needs its own scrollbar rather than a
 /// ScrollArea containing all million rows. Keep the scroll extent stable during a drag.
 fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &Geo, track_x: (f32, f32), limit: f32, t: &Tokens) {
+    app.grid.vscroll = None;
     // A workbook that hides its vertical scroll bar leaves it no width.
     if track_x.1 <= track_x.0 {
         return;
     }
-    let track = Rect::from_min_max(pos2(track_x.0, geo.cells.top() + geo.frozen_h), pos2(track_x.1, geo.cells.bottom()));
-    if track.height() <= 0.0 || track.width() <= 0.0 {
+    let whole = Rect::from_min_max(pos2(track_x.0, geo.cells.top() + geo.frozen_h), pos2(track_x.1, geo.cells.bottom()));
+    if whole.height() <= 0.0 || whole.width() <= 0.0 {
         return;
     }
-    let visible = track.height() / geo.z;
+    let id = ui.scope_id().with("vscroll");
+    let (track, arrow) = scroll_arrows(ui, whole, false, id, t);
+    app.grid.vscroll = Some(track);
+    // A page is what the cells show, whatever the arrows take from the track.
+    let visible = whole.height() / geo.z;
     let scroll = app.view().scroll.y;
     let last = geo.used.map(|r| r.end.row.saturating_add(10)).unwrap_or(100).clamp(100, MAX_ROWS - 1);
     let content = geo.scroll_top_of(sh, last);
     let extent = (content - visible).max(scroll).max(0.0).min(limit);
-    let id = ui.scope_id().with("vscroll");
     let resp = ui.interact(track, id, Sense::click_and_drag());
     let drag_id = id.with("extent");
     if resp.drag_started() {
@@ -511,6 +515,9 @@ fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &G
     if resp.hovered() {
         next -= ui.input(|i| i.smooth_scroll_delta.y) / geo.z;
     }
+    if let Some(forward) = arrow {
+        next = geo.scroll_one_row(sh, scroll, forward);
+    }
     next = next.clamp(0.0, limit);
     if next != scroll {
         if let Some(v) = app.view_mut() {
@@ -520,14 +527,77 @@ fn vertical_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, sh: &Sheet, geo: &G
     }
 }
 
+/// A scrollbar's two arrows at the ends of `whole`, as in Excel: pressing one scrolls by one line and
+/// holding it keeps scrolling. Returns the track left between them and, when an arrow fires, whether
+/// it was the far one. With too little room there are no arrows.
+fn scroll_arrows(ui: &mut egui::Ui, whole: Rect, horizontal: bool, id: egui::Id, t: &Tokens) -> (Rect, Option<bool>) {
+    const HOLD_DELAY: f64 = 0.4;
+    const HOLD_EVERY: f64 = 0.08;
+    let size = 16.0;
+    let (length, thickness) = if horizontal { (whole.width(), whole.height()) } else { (whole.height(), whole.width()) };
+    if length < size * 3.0 || thickness <= 0.0 {
+        return (whole, None);
+    }
+    let (near, far, track) = if horizontal {
+        (
+            Rect::from_min_max(whole.min, pos2(whole.left() + size, whole.bottom())),
+            Rect::from_min_max(pos2(whole.right() - size, whole.top()), whole.max),
+            Rect::from_min_max(pos2(whole.left() + size, whole.top()), pos2(whole.right() - size, whole.bottom())),
+        )
+    } else {
+        (
+            Rect::from_min_max(whole.min, pos2(whole.right(), whole.top() + size)),
+            Rect::from_min_max(pos2(whole.left(), whole.bottom() - size), whole.max),
+            Rect::from_min_max(pos2(whole.left(), whole.top() + size), pos2(whole.right(), whole.bottom() - size)),
+        )
+    };
+    let now = ui.input(|i| i.time);
+    let mut fired = None;
+    for (rect, is_far) in [(near, false), (far, true)] {
+        let arrow_id = id.with(("arrow", is_far));
+        let resp = ui.interact(rect, arrow_id, Sense::click());
+        let down = resp.is_pointer_button_down_on();
+        ui.painter().rect_filled(rect, 0.0, if down || resp.hovered() { t.hover } else { t.tab_bar });
+        let c = rect.center();
+        let (ahead, side) = match (horizontal, is_far) {
+            (true, false) => (vec2(-3.5, 0.0), vec2(0.0, 3.5)),
+            (true, true) => (vec2(3.5, 0.0), vec2(0.0, 3.5)),
+            (false, false) => (vec2(0.0, -3.5), vec2(3.5, 0.0)),
+            (false, true) => (vec2(0.0, 3.5), vec2(3.5, 0.0)),
+        };
+        let color = if resp.hovered() || down { t.text } else { t.text_dim };
+        ui.painter().add(egui::Shape::convex_polygon(vec![c + ahead, c - ahead * 0.6 + side, c - ahead * 0.6 - side], color, egui::Stroke::NONE));
+        let due_id = arrow_id.with("due");
+        if !down {
+            ui.ctx().data_mut(|d| d.remove::<f64>(due_id));
+            continue;
+        }
+        let wait = match ui.ctx().data(|d| d.get_temp::<f64>(due_id)) {
+            None => Some(HOLD_DELAY),
+            Some(due) if now >= due => Some(HOLD_EVERY),
+            Some(_) => None,
+        };
+        if let Some(wait) = wait {
+            ui.ctx().data_mut(|d| d.insert_temp(due_id, now + wait));
+            fired = Some(is_far);
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(40));
+    }
+    (track, fired)
+}
+
 /// The horizontal counterpart of `vertical_scrollbar`, drawn in the sheet tab bar as in Excel. The tab
 /// bar is laid out before the grid, so this reads the last frame's geometry and leaves clamping the
 /// far end to the grid, which runs later in the same frame.
-pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track: Rect, t: &Tokens) {
-    app.grid.hscroll = Some(track);
-    if track.height() <= 0.0 || track.width() <= 0.0 {
+pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, whole: Rect, t: &Tokens) {
+    app.grid.hscroll = Some(whole);
+    app.grid.hscroll_track = None;
+    if whole.height() <= 0.0 || whole.width() <= 0.0 {
         return;
     }
+    let id = ui.scope_id().with("hscroll");
+    let (track, arrow) = scroll_arrows(ui, whole, true, id, t);
+    app.grid.hscroll_track = Some(track);
     let Some(geo) = app.grid.geo.clone() else { return };
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
     let Some(sh) = wb.active() else { return };
@@ -536,7 +606,6 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     let last = geo.used.map(|r| r.end.col.saturating_add(10)).unwrap_or(26).clamp(26, MAX_COLS - 1);
     let content = geo.scroll_left_of(sh, last);
     let extent = (content - visible).max(scroll).max(0.0);
-    let id = ui.scope_id().with("hscroll");
     let resp = ui.interact(track, id, Sense::click_and_drag());
     let drag_id = id.with("extent");
     if resp.drag_started() {
@@ -567,6 +636,10 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     if resp.hovered() {
         let d = ui.input(|i| i.smooth_scroll_delta);
         next -= (if d.x != 0.0 { dir * d.x } else { d.y }) / geo.z;
+    }
+    if let Some(towards_end) = arrow {
+        // The arrows point where the sheet moves to: on a right-to-left sheet, left is onwards.
+        next = geo.scroll_one_col(sh, scroll, towards_end != geo.rtl);
     }
     next = next.max(0.0);
     if next != scroll {
