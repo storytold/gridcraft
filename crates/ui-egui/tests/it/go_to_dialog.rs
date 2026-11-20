@@ -87,3 +87,25 @@ fn a_reference_entered_is_listed_and_a_double_click_returns_to_it() {
     assert!(h.state().dialog.is_none(), "the dialog closed");
     assert_eq!(place(&h), (0, "B14:C22,F19:G30".to_string()));
 }
+
+#[test]
+fn an_invalid_reference_stays_open_for_correction() {
+    let mut h = harness();
+    let before = place(&h);
+    control(&mut h, "ui.dialog", json!({"name": "goTo"}));
+    control(&mut h, "ui.dialog.set", json!({"field": "reference", "value": "missing_name"}));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    let dialog = h.state().dialog.as_ref().expect("an invalid reference keeps Go To open");
+    assert_eq!(dialog.name, "goTo");
+    assert_eq!(dialog.values.get("reference"), Some(&json!("missing_name")));
+    assert_eq!(place(&h), before, "an invalid reference must not change the selection");
+    assert!(h.state().message.as_ref().is_some_and(|(title, message)| title == "Go To" && message == "Reference isn't valid."));
+
+    control(&mut h, "ui.message.dismiss", json!({}));
+    control(&mut h, "ui.dialog.set", json!({"field": "reference", "value": "D5"}));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(2);
+    assert!(h.state().dialog.is_none(), "a corrected reference closes Go To");
+    assert_eq!(place(&h), (0, "D5".to_string()));
+}
