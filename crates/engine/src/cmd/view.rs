@@ -64,6 +64,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.rightToLeft", "Sheet Right-to-Left", ["Page Layout", "Sheet Options"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "rtl")),
         cmd!("view.zoom", "Zoom", ["View", "Zoom"], None, "{percent: 10..400}", has_doc, zoom),
         cmd!("view.zoom100", "100%", ["View", "Zoom"], None, "{}", has_doc, |s, _| zoom(s, &json!({"percent": 100}))),
+        cmd!(
+            query "options.defaultAccounting",
+            "Default Accounting Currency",
+            [],
+            None,
+            "{currency?: USD|EUR|GBP|CHF, position?: auto|before|after}",
+            always,
+            default_accounting
+        ),
         cmd!(query "view.formulaBar", "Formula Bar", ["View", "Show"], None, "{on?: bool}", always, |s, p| {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
@@ -233,6 +242,28 @@ fn show_objects(s: &mut Session, p: &Json) -> Result<Json> {
         cx.wb.show_objects = if on { ShowObjects::All } else { ShowObjects::None };
         Ok(json!({"on": on}))
     })
+}
+
+/// Sets the application-wide Accounting preferences without needing a workbook.
+fn default_accounting(s: &mut Session, p: &Json) -> Result<Json> {
+    if p.get("currency").is_some_and(|v| !matches!(v.as_str(), Some("USD" | "EUR" | "GBP" | "CHF"))) {
+        return Err(bad("options.defaultAccounting", "currency must be USD, EUR, GBP or CHF"));
+    }
+    if p.get("position").is_some_and(|v| !matches!(v.as_str(), Some("auto" | "before" | "after"))) {
+        return Err(bad("options.defaultAccounting", "position must be auto, before or after"));
+    }
+
+    if let Some(currency) = str_param(p, "currency") {
+        s.prefs.default_accounting_currency = currency.into();
+    }
+    if let Some(position) = str_param(p, "position") {
+        s.prefs.accounting_symbol_position = position.into();
+    }
+
+    Ok(json!({
+        "currency": s.prefs.default_accounting_currency,
+        "position": s.prefs.accounting_symbol_position
+    }))
 }
 
 fn status_bar(s: &mut Session, p: &Json) -> Result<Json> {
@@ -543,6 +574,23 @@ mod tests {
         s.execute("view.zoom", json!({"percent": 150})).unwrap();
         assert_eq!(s.execute("view.zoom100", json!({})).unwrap()["zoom"], 100);
         assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 100);
+    }
+
+    #[test]
+    fn default_accounting_preferences_work_through_the_engine() {
+        let mut s = Session::new();
+        assert!(s.commands().iter().any(|c| c.id == "options.defaultAccounting"));
+
+        let defaults = json!({"currency": "USD", "position": "auto"});
+        assert_eq!(s.execute("options.defaultAccounting", json!({})).unwrap(), defaults);
+
+        let changed = json!({"currency": "EUR", "position": "after"});
+        assert_eq!(s.execute("options.defaultAccounting", changed.clone()).unwrap(), changed);
+
+        assert!(s.execute("options.defaultAccounting", json!({"currency": "JPY", "position": "before"})).is_err());
+        assert!(s.execute("options.defaultAccounting", json!({"position": "invalid"})).is_err());
+        assert_eq!(s.prefs.default_accounting_currency, "EUR");
+        assert_eq!(s.prefs.accounting_symbol_position, "after");
     }
 
     #[test]
