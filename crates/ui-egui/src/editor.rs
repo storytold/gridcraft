@@ -368,13 +368,14 @@ impl EditState {
     }
 }
 
-/// References in formula text with their byte spans and colour index (same reference text ⇒
-/// same colour), for colouring the editor and outlining ranges on the grid.
-pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize)> {
+/// References in formula text with their byte spans, colour index and whether they use the spill
+/// operator (same reference text ⇒ same colour), for colouring the editor and outlining ranges
+/// on the grid.
+pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, usize, bool)> {
     let body = text.strip_prefix('=').or_else(|| text.strip_prefix('+')).unwrap_or(text);
     let offset = text.len() - body.len();
     let Ok(toks) = gridcraft_engine::formula::lexer::tokenize(body) else { return vec![] };
-    let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize)> = Vec::new();
+    let mut out: Vec<(usize, usize, RangeRef, Option<String>, usize, bool)> = Vec::new();
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let mut i = 0;
     while i < toks.len() {
@@ -396,25 +397,36 @@ pub fn formula_refs(text: &str) -> Vec<(usize, usize, RangeRef, Option<String>, 
             } else {
                 None
             };
-            let (range, end) = if let Some(range_end) = range_end {
-                i = j + 3;
-                range_end
+            let (range, end, next) = if let Some(range_end) = range_end {
+                (range_end.0, range_end.1, j + 3)
             } else if let Some(c) = CellRef::parse(w) {
-                i = j + 1;
-                (RangeRef::cell(c), toks[j].end)
+                (RangeRef::cell(c), toks[j].end, j + 1)
             } else {
                 i += 1;
                 continue;
             };
+            // The lexer keeps a spill operator separate from the cell word. Include it in the
+            // editor span so `#` gets the reference colour, then let the grid resolve the anchor
+            // to its current spill rectangle.
+            let spill = matches!(toks.get(next).map(|t| &t.tok), Some(Tok::Op("#")));
+            let span_end = if spill { toks[next].end } else { end };
+            i = next + usize::from(spill);
             let key = body.get(start..end).unwrap_or("").replace('$', "").to_ascii_uppercase();
             let next = seen.len();
             let idx = *seen.entry(key).or_insert(next);
-            out.push((start + offset, end + offset, range, sheet, idx % REF_COLOR_COUNT));
+            out.push((start + offset, span_end + offset, range, sheet, idx % REF_COLOR_COUNT, spill));
             continue;
         }
         i += 1;
     }
     out
+}
+
+/// The live rectangle denoted by a formula reference on `sheet`. A spill reference only expands
+/// when its anchor currently has a successful spill; while an incomplete formula is being typed,
+/// keeping the anchor cell visible is more useful than drawing nothing.
+pub fn resolved_formula_range(sheet: &gridcraft_engine::model::Sheet, range: RangeRef, spill: bool) -> RangeRef {
+    if spill && range.is_single() { sheet.spill_ranges.get(&range.start).copied().unwrap_or(range) } else { range }
 }
 
 /// Whether a reference of the formula being edited belongs on the sheet shown: a reference with a
@@ -529,6 +541,25 @@ mod tests {
         assert_eq!(r[0].4, r[2].4); // A1 and a1 share a colour
         assert_eq!(r[1].2.a1(), "B2:C3");
         assert_eq!(r[3].3.as_deref(), Some("Sheet2"));
+    }
+
+    #[test]
+    fn spill_reference_includes_hash_in_its_coloured_span() {
+        let r = formula_refs("=A1#+A1");
+        assert_eq!(r.len(), 2);
+        assert_eq!(&"=A1#+A1"[r[0].0..r[0].1], "A1#");
+        assert!(r[0].5);
+        assert_eq!(r[0].4, r[1].4, "the anchor and its spill reference share a colour");
+    }
+
+    #[test]
+    fn spill_reference_resolves_to_its_live_range() {
+        let mut sheet = gridcraft_engine::model::Sheet::new("Sheet1");
+        let anchor = CellRef::new(0, 0);
+        let spill = RangeRef::new(anchor, CellRef::new(2, 1));
+        sheet.spill_ranges.insert(anchor, spill);
+        assert_eq!(resolved_formula_range(&sheet, RangeRef::cell(anchor), true), spill);
+        assert_eq!(resolved_formula_range(&sheet, RangeRef::cell(anchor), false), RangeRef::cell(anchor));
     }
 
     #[test]
