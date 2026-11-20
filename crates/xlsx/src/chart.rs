@@ -186,6 +186,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
     let ser_els: Vec<&El> = plot.map(|p| p.children.iter().flat_map(|g| g.kids("ser")).collect()).unwrap_or_default();
     let kind = map_chart_type(dc.kind, plot);
+    let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
     let series = dc
         .series
         .into_iter()
@@ -246,7 +247,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         title: dc.title,
         series,
         legend,
-        data_labels: dc.data_labels,
+        data_labels: dc.data_labels || series_labels,
         data_table: dc.data_table.map(|t| ChartDataTable {
             show_keys: t.show_keys,
             horizontal_border: t.horizontal_border,
