@@ -128,6 +128,8 @@ pub struct Backstage {
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
     recent: RecentFiles,
+    /// File › New: templates discovered in the configured personal folder.
+    templates: TemplateFiles,
 }
 
 /// Save As file types: (extension, label). The first is the workbook itself; the others are
@@ -147,6 +149,7 @@ impl Backstage {
             preview: None,
             save_format: "xlsx",
             recent: RecentFiles::default(),
+            templates: TemplateFiles::default(),
         }
     }
 }
@@ -220,7 +223,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 ui.add_space(18.0);
                 match bs.page {
                     Page::Home => home(app, ui, &mut bs, &mut out),
-                    Page::New => new_page(app, ui, &mut out),
+                    Page::New => new_page(app, ui, &mut bs, &mut out),
                     Page::Open => open_page(app, ui, &mut bs, &mut out),
                     Page::Info => info(app, ui, &mut bs),
                     Page::SaveAs => save_as(app, ui, &mut bs, &mut out),
@@ -343,7 +346,7 @@ fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
 }
 
 /// Blank workbook and the built-in samples.
-fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
+fn new_tiles(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(18.0, 14.0);
@@ -358,6 +361,40 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
             }
         }
     });
+    let folder = app.ui.personal_templates_location.as_str();
+    if !folder.is_empty() {
+        ui.add_space(22.0);
+        ui.horizontal(|ui| {
+            ui.heading(lang.tr("Personal templates"));
+            if ui.small_button(lang.tr("Refresh")).clicked() {
+                bs.templates.refresh();
+            }
+        });
+        #[cfg(target_arch = "wasm32")]
+        dim(ui, lang.tr("Personal template folders are available in the desktop app."));
+        #[cfg(not(target_arch = "wasm32"))]
+        match bs.templates.known(ui.ctx(), folder) {
+            None => {
+                if bs.templates.folder != folder {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                dim(ui, lang.tr("Loading templates…"));
+            }
+            Some(Err(error)) => dim(ui, &lang.tr_fill("Could not read personal templates: {error}", &[("error", &error)])),
+            Some(Ok(templates)) if templates.is_empty() => dim(ui, lang.tr("No .xltx or .xltm templates found in this folder.")),
+            Some(Ok(templates)) => {
+                egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
+                    for path in templates {
+                        let label = path.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_else(|| lang.tr("Template"));
+                        if ui.button(label).on_hover_text(path.to_string_lossy()).clicked() {
+                            app.open_path(&path.to_string_lossy());
+                            out.close = true;
+                        }
+                    }
+                });
+            }
+        }
+    }
 }
 
 /// File name and folder of a recent path, split as text.
@@ -366,6 +403,95 @@ fn split_path(path: &str) -> (String, String) {
     let name = p.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path).to_string();
     let folder = p.parent().and_then(std::path::Path::to_str).unwrap_or("").to_string();
     (name, folder)
+}
+
+/// One scan at a time keeps a slow personal-template folder off the UI thread.
+#[cfg(not(target_arch = "wasm32"))]
+static TEMPLATE_ASKING: AtomicBool = AtomicBool::new(false);
+
+/// Shared slot filled by the background personal-template scan.
+type TemplateScan = Arc<Mutex<Option<(String, Result<Vec<std::path::PathBuf>, String>)>>>;
+
+/// Cached result of scanning a personal templates folder.
+#[derive(Clone, Debug, Default)]
+struct TemplateFiles {
+    folder: String,
+    found: TemplateScan,
+}
+
+impl TemplateFiles {
+    /// Starts a scan when `folder` changes and returns its result once the worker finishes.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn known(&mut self, ctx: &egui::Context, folder: &str) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        if self.folder != folder && !TEMPLATE_ASKING.swap(true, Ordering::SeqCst) {
+            *self.found.lock().unwrap_or_else(PoisonError::into_inner) = None;
+            self.folder = folder.to_string();
+            if let Err(error) = ask_templates(ctx.clone(), self.folder.clone(), self.found.clone()) {
+                *self.found.lock().unwrap_or_else(PoisonError::into_inner) = Some((self.folder.clone(), Err(error.to_string())));
+                TEMPLATE_ASKING.store(false, Ordering::SeqCst);
+                ctx.request_repaint();
+            }
+        }
+        self.result_for(folder)
+    }
+
+    /// Returns only a result produced for the folder that is still requested.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn result_for(&self, folder: &str) -> Option<Result<Vec<std::path::PathBuf>, String>> {
+        if self.folder != folder {
+            return None;
+        }
+        self.found
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+            .and_then(|(result_folder, result)| (result_folder == folder).then_some(result))
+    }
+
+    /// Makes the next frame rescan the configured folder.
+    fn refresh(&mut self) {
+        self.folder.clear();
+        *self.found.lock().unwrap_or_else(PoisonError::into_inner) = None;
+    }
+}
+
+/// Reads a personal templates folder on a worker and asks the UI to repaint with the result.
+#[cfg(not(target_arch = "wasm32"))]
+fn ask_templates(ctx: egui::Context, folder: String, found: TemplateScan) -> std::io::Result<()> {
+    struct Done;
+    impl Drop for Done {
+        fn drop(&mut self) {
+            TEMPLATE_ASKING.store(false, Ordering::SeqCst);
+        }
+    }
+    std::thread::Builder::new()
+        .name("gridcraft-personal-templates".into())
+        .spawn(move || {
+            let _done = Done;
+            let result = scan_templates(&folder);
+            *found.lock().unwrap_or_else(PoisonError::into_inner) = Some((folder, result));
+            ctx.request_repaint();
+        })
+        .map(|_| ())
+}
+
+/// Lists only Excel templates and returns filesystem errors to the caller instead of hiding them.
+#[cfg(not(target_arch = "wasm32"))]
+fn scan_templates(folder: &str) -> Result<Vec<std::path::PathBuf>, String> {
+    let entries = std::fs::read_dir(folder)
+        .map_err(|error| error.to_string())?
+        .map(|entry| {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let is_file = entry.file_type().map_err(|error| error.to_string())?.is_file();
+            Ok((entry.path(), is_file))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut templates: Vec<_> = entries
+        .into_iter()
+        .filter_map(|(path, is_file)| (is_file && gridcraft_engine::io::is_template_path(&path.to_string_lossy())).then_some(path))
+        .collect();
+    templates.sort();
+    Ok(templates)
 }
 
 /// Width of the column that tells when a recent workbook was last changed.
@@ -555,7 +681,7 @@ fn square_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
 fn home(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
     section(ui, lang, "New");
-    new_tiles(app, ui, out);
+    new_tiles(app, ui, bs, out);
     ui.add_space(22.0);
     section(ui, lang, "Recent");
     recent_list(app, ui, bs, out, 8);
@@ -567,8 +693,8 @@ fn home(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) 
     }
 }
 
-fn new_page(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
-    new_tiles(app, ui, out);
+fn new_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
+    new_tiles(app, ui, bs, out);
 }
 
 fn open_page(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
@@ -745,8 +871,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         "html" => "file.exportHtml",
         _ => return false,
     };
-    let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-    let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
+    let stem = app.session.active().map(gridcraft_engine::DocState::export_stem).unwrap_or_else(|| "Book1".into());
     if let Some(pick) = &app.services.pick_save {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.
@@ -909,5 +1034,78 @@ mod tests {
     fn recent_paths_split_without_touching_the_disk() {
         assert_eq!(split_path("/home/me/Budget.xlsx"), ("Budget.xlsx".into(), "/home/me".into()));
         assert_eq!(split_path("Budget.xlsx"), ("Budget.xlsx".into(), "".into()));
+    }
+
+    #[test]
+    fn personal_template_location_persists_and_defaults_for_old_preferences() {
+        let state = crate::UiState { personal_templates_location: "/templates".into(), ..Default::default() };
+        let restored: crate::UiState = serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+        assert_eq!(restored.personal_templates_location, "/templates");
+        assert!(serde_json::from_str::<crate::UiState>("{}").unwrap().personal_templates_location.is_empty());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn personal_template_results_belong_to_the_requested_folder() {
+        let found = Arc::new(Mutex::new(Some(("old".into(), Ok(vec![std::path::PathBuf::from("old/template.xltx")])))));
+        let mut files = TemplateFiles { folder: "old".into(), found };
+        assert_eq!(files.result_for("old").unwrap().unwrap(), [std::path::PathBuf::from("old/template.xltx")]);
+        files.folder = "new".into();
+        assert!(files.result_for("new").is_none());
+        *files.found.lock().unwrap_or_else(PoisonError::into_inner) = Some(("new".into(), Err("worker unavailable".into())));
+        assert_eq!(files.result_for("new").unwrap().unwrap_err(), "worker unavailable");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn rejected_template_scan_keeps_the_previous_cached_result() {
+        struct ResetAsking;
+        impl Drop for ResetAsking {
+            fn drop(&mut self) {
+                TEMPLATE_ASKING.store(false, Ordering::SeqCst);
+            }
+        }
+
+        let found = Arc::new(Mutex::new(Some(("old".into(), Ok(vec![std::path::PathBuf::from("old/template.xltx")])))));
+        let mut files = TemplateFiles { folder: "old".into(), found };
+        TEMPLATE_ASKING.store(true, Ordering::SeqCst);
+        let _reset = ResetAsking;
+
+        assert!(files.known(&egui::Context::default(), "new").is_none());
+        assert_eq!(files.folder, "old");
+        assert_eq!(files.result_for("old").unwrap().unwrap(), [std::path::PathBuf::from("old/template.xltx")]);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn personal_template_scan_filters_and_reports_errors() {
+        static NEXT_DIR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+        struct TempDir(std::path::PathBuf);
+        impl Drop for TempDir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        let unique = NEXT_DIR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = TempDir(std::env::temp_dir().join(format!("gridcraft-personal-templates-{}-{unique}", std::process::id())));
+        std::fs::create_dir(&dir.0).unwrap();
+        std::fs::write(dir.0.join("Budget.xltx"), b"template").unwrap();
+        std::fs::write(dir.0.join("Macro.xltm"), b"template").unwrap();
+        std::fs::write(dir.0.join("Upper.XLTX"), b"template").unwrap();
+        std::fs::write(dir.0.join("Ignore.xlsx"), b"workbook").unwrap();
+        std::fs::create_dir(dir.0.join("Folder.xltx")).unwrap();
+
+        let names: Vec<_> = scan_templates(&dir.0.to_string_lossy())
+            .unwrap()
+            .into_iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["Budget.xltx", "Macro.xltm", "Upper.XLTX"]);
+        let empty = dir.0.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        assert!(scan_templates(&empty.to_string_lossy()).unwrap().is_empty());
+        assert!(scan_templates(&dir.0.join("missing").to_string_lossy()).is_err());
     }
 }

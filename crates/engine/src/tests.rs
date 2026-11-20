@@ -3,6 +3,8 @@ use serde_json::json;
 
 use crate::Session;
 
+static TEST_PATH_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 thread_local! {
     /// Copies of a document's undo and redo history `execute` has taken on this thread.
     pub(crate) static HISTORY_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -16,6 +18,108 @@ fn s() -> Session {
 
 fn v(s: &Session, a: &str) -> Value {
     s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(a).unwrap())
+}
+
+#[test]
+fn opening_a_template_creates_an_unsaved_workbook_with_a_stem_title() {
+    let mut source = s();
+    source.execute("cell.set", json!({"cell": "A1", "input": "kept"})).unwrap();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Forecast.v2.xltx").unwrap();
+    let mut s = s();
+    let result = s.execute("file.open", json!({"name": "Forecast.v2.xltx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+
+    assert_eq!(result["title"], "Forecast.v2");
+    assert_eq!(s.doc().unwrap().display_title(), "Forecast.v2");
+    assert_eq!(v(&s, "A1"), Value::text("kept"));
+    assert!(s.doc().unwrap().path.is_none(), "Save must ask for a destination instead of replacing the template");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "Forecast.v2.xlsx");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "Forecast.v2.csv");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "html"})).unwrap()["name"], "Forecast.v2.html");
+    s.doc_mut().unwrap().path = Some("saved-template.xltx".into());
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "saved-template.xlsx");
+
+    let result = s.execute("file.open", json!({"name": "Starter.xlsx", "base64": crate::io::base64_encode(&bytes), "template": true})).unwrap();
+    assert_eq!(result["title"], "Starter");
+    assert!(s.doc().unwrap().path.is_none());
+    assert!(s.doc().unwrap().is_template_instance(), "the explicit template decision survives a non-template source name");
+    assert_eq!(s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "Starter.xlsx");
+    s.execute("file.save", json!({})).unwrap();
+    assert!(matches!(s.ui_requests.last(), Some(crate::UiRequest::Dialog(name, _)) if name == "saveAs"));
+}
+
+#[test]
+fn export_names_distinguish_pathless_sources_from_complete_stems() {
+    let source = s();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "source.xlsx").unwrap();
+    let mut opened = s();
+    opened.execute("file.open", json!({"name": "budget.2026", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(opened.doc().unwrap().export_stem(), "budget.2026");
+    assert_eq!(opened.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "budget.2026.csv");
+    assert_eq!(opened.execute("file.saveBytes", json!({"format": "html"})).unwrap()["name"], "budget.2026.html");
+
+    let doc = opened.doc_mut().unwrap();
+    doc.title = "Budget.xlsx".into();
+    std::sync::Arc::make_mut(&mut doc.wb).source_path = Some("Budget.xlsx".into());
+    assert_eq!(opened.doc().unwrap().export_stem(), "Budget");
+    assert_eq!(opened.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "Budget.csv");
+
+    let doc = opened.doc_mut().unwrap();
+    doc.title = "Report.csv".into();
+    std::sync::Arc::make_mut(&mut doc.wb).source_path = Some("Report.csv.xltx".into());
+    assert_eq!(opened.doc().unwrap().export_stem(), "Report.csv");
+
+    let ods = ods_fixture();
+    let mut imported = s();
+    imported.execute("file.open", json!({"name": "budget.dat", "base64": crate::io::base64_encode(&ods)})).unwrap();
+    assert_eq!(imported.doc().unwrap().display_title(), "budget (imported).xlsx");
+    assert_eq!(imported.doc().unwrap().export_stem(), "budget (imported)");
+    assert_eq!(imported.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "budget (imported).xlsx");
+    assert_eq!(imported.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "budget (imported).csv");
+}
+
+#[test]
+fn opening_another_file_keeps_an_empty_template_instance() {
+    let source = s();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Empty.xltx").unwrap();
+    let encoded = crate::io::base64_encode(&bytes);
+    let mut opened = s();
+    opened.execute("file.open", json!({"name": "Empty.xltx", "base64": encoded})).unwrap();
+    assert_eq!(opened.documents().len(), 1, "the template replaces only the initial blank placeholder");
+    assert!(opened.doc().unwrap().is_template_instance());
+
+    opened.execute("file.open", json!({"name": "Other.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(opened.documents().len(), 2, "an empty template-derived workbook is still a real document");
+}
+
+#[test]
+fn opening_a_template_path_twice_creates_two_unsaved_workbooks() {
+    struct RemoveFileOnDrop(std::path::PathBuf);
+    impl Drop for RemoveFileOnDrop {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    let mut source = s();
+    source.execute("cell.set", json!({"cell": "A1", "input": "from template"})).unwrap();
+    let bytes = crate::io::save_bytes(&source.doc().unwrap().wb, "Template.XLTX").unwrap();
+    let unique = TEST_PATH_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("gridcraft-personal-template-{}-{unique}.XLTX", std::process::id()));
+    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).unwrap();
+    let _cleanup = RemoveFileOnDrop(path.clone());
+    std::io::Write::write_all(&mut file, &bytes).unwrap();
+
+    let mut s = s();
+    let path = path.to_string_lossy().into_owned();
+    let first = s.execute("file.open", json!({"path": &path})).unwrap();
+    let second = s.execute("file.open", json!({"path": &path})).unwrap();
+    assert!(first.get("alreadyOpen").is_none());
+    assert!(second.get("alreadyOpen").is_none());
+    assert_eq!(s.documents().len(), 2);
+    for document in s.documents() {
+        assert!(document.path.is_none(), "a template must never become its own save target");
+        assert_eq!(document.wb.active().unwrap().value(CellRef::parse("A1").unwrap()), Value::text("from template"));
+    }
 }
 
 #[test]
