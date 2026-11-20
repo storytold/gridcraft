@@ -712,6 +712,17 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
         match app.grid.drag.clone() {
             Drag::Select => {
                 select_to_pointer(app, geo, sh, wb, p);
+                // Frames otherwise come only from pointer events: keep scrolling while the
+                // pointer rests past the edge of the grid, as Excel does, and keep the clock
+                // running while the brake holds the scroll still.
+                if auto != egui::Vec2::ZERO {
+                    input.context.request_repaint();
+                }
+                if auto.y > 0.0 {
+                    let py = p.y.clamp(geo.cells.top() + 1.0, geo.cells.bottom() - 1.0);
+                    let now = input.context.input(|i| i.time);
+                    auto.y = brake_select_scroll(app, geo, sh, pc.row, py, auto.y, now);
+                }
                 scroll_by(app, auto);
             }
             Drag::Rows(anchor) => {
@@ -793,6 +804,7 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 {
                     select_to_pointer(app, geo, sh, wb, p);
                 }
+                app.grid.select_brake = None;
                 format_painter_apply(app);
             }
             // Whole rows or columns clicked or dragged over by their headers.
@@ -1013,6 +1025,29 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
             d.selection.anchor = anchor;
         }
     }
+}
+
+/// Caps a downward auto-scroll step `dy` (sheet points) of a cell-selection drag so it slows down
+/// at the last row of the data in the selected columns (#4546). `row` is the row under the
+/// pointer, at screen y `py`. Pointing at a reference for a formula or a dialog, and Page Layout
+/// view, scroll freely.
+fn brake_select_scroll(app: &mut SheetApp, geo: &Geo, sh: &Sheet, row: u32, py: f32, dy: f32, now: f64) -> f32 {
+    let pointing = app.dialog.as_ref().is_some_and(|d| d.picks_references()) || app.editor.as_ref().is_some_and(|ed| ed.point.is_some());
+    let Some((anchor, current)) = app.session.active().map(|d| (d.selection.anchor, d.selection.current())) else { return dy };
+    if pointing || geo.paper.is_some() {
+        return dy;
+    }
+    let cols = (current.start.col, current.end.col);
+    if !app.grid.select_brake.as_ref().is_some_and(|b| b.is_for(anchor, cols)) {
+        app.grid.select_brake = Some(super::select_brake::SelectBrake::new(sh, anchor, cols, row, now));
+    }
+    let Some(cap) = app.grid.select_brake.as_mut().and_then(|b| b.limit(row, now)) else { return dy };
+    if cap >= MAX_ROWS - 1 {
+        return dy;
+    }
+    // As far as the sheet can scroll with the row under the pointer still no further than `cap`.
+    let room = (geo.y(sh, cap + 1) - py) / geo.z - 0.01;
+    dy.min(room.max(0.0))
 }
 
 /// A drag size in points: NaN or negative becomes 0 (a hidden line).

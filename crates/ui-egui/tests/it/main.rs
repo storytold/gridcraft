@@ -32,6 +32,7 @@ mod dialog_confirm;
 mod dialog_focus;
 mod dialog_move;
 mod drag_cursor;
+mod drag_select_data_edge;
 mod equation_editor;
 mod error_checking_menu;
 mod file_menu;

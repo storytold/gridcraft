@@ -32,6 +32,7 @@ mod interact;
 mod keyboard;
 mod menus;
 mod quadrant;
+mod select_brake;
 mod selection;
 mod show;
 mod tables;
@@ -278,6 +279,8 @@ pub struct GridState {
     pub reveal_from: Option<CellRef>,
     pub last_title: Option<String>,
     pub drag_select: bool,
+    /// A cell-selection drag's slowdown at the last row of the data (#4546).
+    pub(crate) select_brake: Option<select_brake::SelectBrake>,
     pub rect: Option<Rect>,
     pub cells_rect: Option<Rect>,
     /// Column and row of the clicked header cell, and where to open the menu.
