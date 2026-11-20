@@ -237,7 +237,7 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let Solve { outcome, not_linear, evo_end } =
         optimise(&mut ev, &model, model.goal, &x0, Bounds { lo: &prob.lo, hi: &prob.hi, integer: &prob.integer }, gap);
-    let (status, message, solution) = match outcome {
+    let (mut status, mut message, mut solution) = match outcome {
         _ if not_linear => ("notLinear", "The model isn't linear in the variable cells, so Simplex LP can't solve it. Try GRG Nonlinear.", None),
         Outcome::Solved(x, _, true) if model.method == Method::Evolutionary => match evo_end {
             Some(EvoEnd::Stalled) => {
@@ -263,10 +263,19 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let evaluations = ev.evals;
     // The objective's value at the solution.
-    let objective = solution.as_ref().and_then(|x| {
+    let mut objective = solution.as_ref().and_then(|x| {
         ev.budget = ev.budget.saturating_add(1);
         ev.eval(x).map(|p| p.f)
     });
+    if status == "optimal"
+        && let Goal::Value(target) = model.goal
+        && !objective.is_some_and(|actual| (actual - target).abs() <= PRECISION * target.abs().max(1.0))
+    {
+        status = "infeasible";
+        message = "Solver could not reach the requested objective value within tolerance.";
+        solution = None;
+        objective = None;
+    }
     let mut values = serde_json::Map::new();
     if let Some(x) = &solution {
         for (c, v) in model.vars.iter().zip(x) {
