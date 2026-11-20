@@ -126,6 +126,16 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                     ch.pivot = Some(crate::pivot::chart_link(&name, &pivot));
                 }
             }
+            // A PivotTable source naming the sheet follows it (#3738). Table and defined-name
+            // sources don't change, so they keep their text.
+            for pt in sh.pivots.iter_mut() {
+                if let Ok(expr) = gridcraft_formula::parse(pt.source.trim().trim_start_matches('=')) {
+                    let renamed = gridcraft_formula::adjust::rename_sheet(expr.clone(), &old, &name);
+                    if renamed != expr {
+                        pt.source = gridcraft_formula::print(&renamed);
+                    }
+                }
+            }
         }
         crate::cmd::edit::rewrite_cell_links(&mut cx.wb, |_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
         for n in cx.wb.names.iter_mut() {
