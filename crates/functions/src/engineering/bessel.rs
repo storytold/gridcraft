@@ -138,6 +138,9 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
         return Some(if n == 0 { 1.0 } else { 0.0 });
     }
     let ax = x.abs();
+    if n >= 2 && (1.0..=10_000.0).contains(&ax) {
+        return bessel_i_miller(n, ax, x < 0.0 && n % 2 == 1);
+    }
     let nf = n as f64;
     let ln_t0 = nf * (ax / 2.0).ln() - crate::special::ln_gamma(nf + 1.0);
     let q = ax * ax / 4.0;
@@ -158,6 +161,38 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
     let r = (ln_t0 + sum.ln()).exp();
     let r = if x < 0.0 && n % 2 == 1 { -r } else { r };
     if r.is_finite() { Some(r) } else { None }
+}
+
+/// Downward recurrence for I_n, normalized by exp(x) = I_0 + 2Σ I_k.
+/// The recurrence is I_{k-1} = I_{k+1} + (2k/x)I_k; the extra orders
+/// suppress the arbitrary starting values before the requested order is reached.
+fn bessel_i_miller(n: u32, x: f64, negative: bool) -> Option<f64> {
+    let margin = 32.0 + (40.0 * x.max(1.0)).sqrt();
+    let top = (n as f64 + margin).max(x + margin).ceil() as usize;
+    let (mut next, mut current): (f64, f64) = (0.0, 1.0);
+    let mut norm = 2.0;
+    let (mut target_log, mut target_scale) = (None, 0.0);
+    let mut log_scale = 0.0;
+
+    for k in (1..=top).rev() {
+        if k == n as usize {
+            target_log = Some(current.ln());
+            target_scale = log_scale;
+        }
+        let mut previous = next + (2.0 * k as f64 / x) * current;
+        if previous.abs() > 1e200 {
+            current *= 1e-200;
+            previous *= 1e-200;
+            norm *= 1e-200;
+            log_scale += 200.0 * std::f64::consts::LN_10;
+        }
+        norm += if k == 1 { previous } else { 2.0 * previous };
+        (next, current) = (current, previous);
+    }
+
+    let log_scaled = target_log? - (log_scale - target_scale) - norm.ln();
+    let result = (log_scaled + x).exp() * if negative { -1.0 } else { 1.0 };
+    if result.is_finite() { Some(result) } else { None }
 }
 
 /// K_n(x) for x > 0: K_0 and K_1 from ∫₀^∞ e^{−x cosh t} cosh(νt) dt (trapezoid rule), then
