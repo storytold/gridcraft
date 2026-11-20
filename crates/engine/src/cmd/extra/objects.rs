@@ -140,7 +140,12 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
         Some(Json::Array(a)) => a.iter().map(|v| v.as_u64().and_then(|x| u32::try_from(x).ok()).ok_or_else(bad_ids)).collect::<Result<_>>()?,
         Some(_) => return Err(bad_ids()),
     };
-    let how = str_param(p, "align").unwrap_or("left").to_string();
+    let how = match p.get("align") {
+        None => "left",
+        Some(Json::String(how)) if matches!(how.as_str(), "left" | "center" | "right" | "top" | "middle" | "bottom") => how.as_str(),
+        Some(_) => return Err(bad("arrange.align", "align must be left, center, right, top, middle or bottom")),
+    }
+    .to_string();
     let si = s.doc()?.wb.active_sheet();
     crate::cmd::controls::check_objects_unlocked(s, si, kind, &ids)?;
     edit(s, |cx| {
