@@ -9,7 +9,10 @@ use crate::style::{Color, Style};
 mod pivot;
 mod print;
 
-pub use pivot::{PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue};
+pub use pivot::{
+    PIVOT_INDEXER, PivotCalcField, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotIndexer, PivotItemRef, PivotLayout,
+    PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, pivot_key,
+};
 pub use print::{EditRange, HfPage, LineInfo, Orientation, PageOrder, PrintSettings, SheetProtection, password_hash};
 
 // ---------------------------------------------------------------- tables
@@ -668,6 +671,9 @@ pub enum ShapeKind {
     /// A freehand ink stroke; `Shape::text` holds the points as `x,y;x,y;…` relative to the
     /// anchor (sheet points), `Shape::line` the ink colour and `fill` unused.
     Ink,
+    /// Decorative text (`insert.wordArt`): a transparent shape whose `Shape::text` is drawn with
+    /// the large, filled/outlined/shadowed text properties of `Shape::format`.
+    WordArt,
     /// An equation: `Shape::text` holds its LaTeX source, `Shape::line` its ink colour
     /// (`Color::Auto` for the sheet's text colour) and `Shape::math` its cached layout.
     Equation,
@@ -684,6 +690,9 @@ pub struct Shape {
     /// Outline visibility and text formatting (DrawingML `a:ln`, `a:bodyPr`, `a:pPr`, `a:rPr`).
     #[serde(default)]
     pub format: ShapeFormat,
+    /// Degrees clockwise about the anchor rect's centre, in `[0, 360)`.
+    #[serde(default)]
+    pub rotation: f32,
     /// An equation's layout, rebuilt from `text` and never saved.
     #[serde(skip)]
     pub math: EquationCache,
@@ -1026,6 +1035,8 @@ pub struct ShapeFormat {
     pub text_color: Option<Color>,
     /// Text outline (`a:rPr/a:ln`): colour and width in points.
     pub text_outline: Option<(Color, f32)>,
+    /// Text drop shadow colour (`a:rPr/a:effectLst/a:outerShdw`); `None` is no shadow.
+    pub text_shadow: Option<Color>,
     /// `None`: the shape's default (left for text boxes, centred for other shapes).
     pub align: Option<ShapeTextAlign>,
     /// `None`: the shape's default (top for text boxes, middle for other shapes).
