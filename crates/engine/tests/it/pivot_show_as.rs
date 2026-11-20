@@ -467,6 +467,22 @@ fn changing_the_base_field_keeps_previous_and_next_items() {
 }
 
 #[test]
+fn a_padded_base_item_matches_its_exact_label() {
+    // #3399 review: the request was trimmed before matching, so a label with spaces couldn't be
+    // named, and with " East " and "East" both present the trim picked the wrong one.
+    let mut s = session_with(&[(" East ", "x", json!(1.0)), ("West", "x", json!(2.0))]);
+    pivot(&mut s, &["Region"], &[]);
+    settings(&mut s, json!({"showAs": "differenceFrom", "baseItem": " East "}));
+    empty(at(&s, &[" East "], None));
+    close(at(&s, &["West"], None), 2.0 - 1.0);
+    // Both labels present: the exact padded request wins over its trim.
+    let mut s = session_with(&[(" East ", "x", json!(1.0)), ("East", "x", json!(4.0)), ("West", "x", json!(2.0))]);
+    pivot(&mut s, &["Region"], &[]);
+    settings(&mut s, json!({"showAs": "percentOf", "baseItem": " East "}));
+    close(at(&s, &["East"], None), 4.0 / 1.0);
+}
+
+#[test]
 fn a_base_field_that_leaves_the_report_is_forgotten() {
     let mut s = sales();
     pivot(&mut s, &["Region", "Product"], &[]);
@@ -491,6 +507,27 @@ fn undo_restores_the_previous_mode() {
 }
 
 // ---------------------------------------------------------------- file round trip
+
+#[test]
+fn a_report_with_values_on_rows_needs_one_column_per_item() {
+    // Upstream review: the size check multiplied the column count by the number of value fields
+    // even when the values stack as rows, where each item is one data column.
+    let mut s = Session::new();
+    s.new_workbook();
+    let n = 10_000;
+    let mut rows = vec![json!(["Item", "Sales"])];
+    rows.extend((0..n).map(|i| json!([format!("i{i:05}"), (i + 1) as f64])));
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({"source": format!("Sheet1!$A$1:$B${}", n + 1), "columns": ["Item"], "values": ["Sales"], "destination": "Sheet1!D3"}),
+    )
+    .unwrap();
+    s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Sales", "area": "values"})).unwrap();
+    let r = s.doc().unwrap().wb.active().unwrap().pivots[0].last_range.unwrap();
+    assert!((r.end.col - r.start.col) as usize >= n, "the report wrote one column per item");
+}
 
 #[test]
 fn every_mode_and_base_survives_an_xlsx_round_trip() {
