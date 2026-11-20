@@ -858,7 +858,8 @@ fn item_order(field: Option<&PivotField>, f: &CField, labels: &[String]) -> Vec<
     order
 }
 
-/// The engine's ascending item order: numbers, then text (ignoring case), logicals, errors, blanks.
+/// The engine's ascending item order: numbers, then text (ignoring case), logicals, errors
+/// (by label, as the engine's item keys rank them), blanks.
 fn ascending(a: &Value, b: &Value) -> std::cmp::Ordering {
     let class = |v: &Value| match v {
         Value::Number(_) => 0,
@@ -871,6 +872,7 @@ fn ascending(a: &Value, b: &Value) -> std::cmp::Ordering {
         (Value::Number(x), Value::Number(y)) => x.total_cmp(y),
         (Value::Text(x), Value::Text(y)) => x.to_lowercase().cmp(&y.to_lowercase()),
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        (Value::Error(x), Value::Error(y)) => x.as_str().cmp(y.as_str()),
         _ => std::cmp::Ordering::Equal,
     })
 }

@@ -241,6 +241,24 @@ fn sorts_survive_an_xlsx_round_trip() {
     assert_eq!(grid(&back), before);
 }
 
+#[test]
+fn error_items_keep_the_engines_order_over_a_round_trip() {
+    // #3398 review: the cache ranked two error items equal, so it kept first-seen order and a
+    // reopen moved them.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Kind", "Sales"], ["", 1.0], ["", 2.0], ["B", 3.0]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=NA()"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "=1/0"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    pivot(&mut s, &["Kind"], &[], json!(["Sales"]));
+    sort(&mut s, json!({"field": "Kind", "order": "custom", "items": ["B"]})).unwrap();
+    let before = labels(&s);
+    assert_eq!(before, ["B", "#DIV/0!", "#N/A"], "the engine orders error items by label");
+    let back = reopen(&mut s);
+    assert_eq!(labels(&back), before, "the saved order preserves it");
+}
+
 // ---------------------------------------------------------------- every combination
 
 /// Every way of sorting, on a row or a column field, in every layout: the grand total holds and,
