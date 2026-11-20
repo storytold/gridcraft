@@ -38,6 +38,8 @@ pub type Key = (usize, CellRef);
 pub(super) struct Node {
     pub(super) areas: Vec<Area>,
     pub(super) dynamic: bool,
+    /// The formula reads row visibility (SUBTOTAL/AGGREGATE): a filter hiding rows dirties it.
+    pub(super) filter_aware: bool,
 }
 
 /// Ranges wider than this many columns go to the per-sheet wide index instead of per-column ones.
