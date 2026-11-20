@@ -510,6 +510,83 @@ fn a_relative_list_source_is_read_from_the_cell_being_checked() {
     }
 }
 
+/// Picks `item` from the in-cell dropdown of `cell` the way the grid's list picker does: the
+/// entries come from `list_items` and the clicked one is entered with `cell.set` (no sheet named,
+/// as the picker sends it).
+fn pick_from_dropdown(s: &mut Session, cell: &str, item: &str) {
+    let at = CellRef::parse(cell).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let si = wb.active_sheet();
+    let dv = wb.sheet(si).unwrap().validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(at))).cloned().unwrap();
+    let items = list_items(&wb, si, at, &dv);
+    let it = items.iter().find(|x| x.as_str() == item).unwrap_or_else(|| panic!("{cell} lists {items:?}, not {item}"));
+    s.execute("cell.set", json!({"cell": at.a1(), "input": it})).unwrap();
+}
+
+fn shown(s: &Session, cell: &str) -> Value {
+    s.doc().unwrap().wb.active().unwrap().value(CellRef::parse(cell).unwrap())
+}
+
+#[test]
+fn an_if_reading_a_dropdown_cell_recalculates_when_a_list_item_is_picked() {
+    // #3570: a toggle cell with a list dropdown, an IF testing it; picking the other item left
+    // the IF showing the old outcome. Literal and range sources, text, number and boolean items.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "K1:K2", "values": [["On"], ["Off"]]})).unwrap();
+    let cases = [
+        // (toggle, source, first item, second item, IF formula, outcome after first, after second,
+        // stored value after first pick, stored value after second pick)
+        (
+            "A1",
+            r#""Yes,No""#,
+            "Yes",
+            "No",
+            r#"=IF(A1="Yes","shown","hidden")"#,
+            Value::text("shown"),
+            Value::text("hidden"),
+            Value::text("Yes"),
+            Value::text("No"),
+        ),
+        ("A2", "1,2", "1", "2", r#"=IF(A2=1,"one","two")"#, Value::text("one"), Value::text("two"), Value::number(1.0), Value::number(2.0)),
+        ("A3", "TRUE,FALSE", "TRUE", "FALSE", r#"=IF(A3,"on","off")"#, Value::text("on"), Value::text("off"), Value::Bool(true), Value::Bool(false)),
+        ("A4", "=$K$1:$K$2", "On", "Off", r#"=IF(A4="On",100,0)"#, Value::number(100.0), Value::number(0.0), Value::text("On"), Value::text("Off")),
+    ];
+    for (toggle, source, _, _, formula, _, _, _, _) in &cases {
+        s.execute("data.validation", json!({"range": toggle, "type": "list", "formula1": source})).unwrap();
+        let row = &toggle[1..];
+        s.execute("cell.set", json!({"cell": format!("B{row}"), "input": formula})).unwrap();
+    }
+    for (toggle, _, first, second, _, when_first, when_second, stored_first, stored_second) in cases {
+        let out = format!("B{}", &toggle[1..]);
+        pick_from_dropdown(&mut s, toggle, first);
+        assert_eq!(shown(&s, toggle), stored_first, "{toggle} stored value after picking {first}");
+        assert_eq!(shown(&s, &out), when_first, "{out} after picking {first} in {toggle}");
+        pick_from_dropdown(&mut s, toggle, second);
+        assert_eq!(shown(&s, toggle), stored_second, "{toggle} stored value after picking {second}");
+        assert_eq!(shown(&s, &out), when_second, "{out} after picking {second} in {toggle}");
+        pick_from_dropdown(&mut s, toggle, first);
+        assert_eq!(shown(&s, toggle), stored_first, "{toggle} stored value after picking {first} again");
+        assert_eq!(shown(&s, &out), when_first, "{out} after picking {first} again in {toggle}");
+    }
+}
+
+#[test]
+fn an_if_reading_a_typed_cell_recalculates_when_it_is_retyped() {
+    // The baseline for #3570's text case: the same IF over a cell without validation, edited by
+    // typing (the unvalidated text comparison at B1 only). It does not cover the boolean case,
+    // and both tests edit through cell.set, so it does not by itself isolate the dropdown's
+    // edit path.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "B1", "input": r#"=IF(A1="Yes","shown","hidden")"#})).unwrap();
+    assert_eq!(shown(&s, "B1").display(), "hidden");
+    s.execute("cell.set", json!({"cell": "A1", "input": "Yes"})).unwrap();
+    assert_eq!(shown(&s, "B1").display(), "shown");
+    s.execute("cell.set", json!({"cell": "A1", "input": "No"})).unwrap();
+    assert_eq!(shown(&s, "B1").display(), "hidden");
+}
+
 #[test]
 fn a_list_source_that_takes_in_the_cell_does_not_list_the_value_being_typed() {
     // `=$A1:$A2` on A2:A3 is A1:A2 at A2 and A2:A3 at A3. The list is the one before the entry, as
