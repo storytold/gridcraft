@@ -162,6 +162,12 @@ pub(super) fn scenario_show(s: &mut Session, p: &Json) -> Result<Json> {
                     let style = cx.wb.sheet(si).map(|sh| sh.style_id(*c)).unwrap_or_default();
                     Some(Cell { value: Value::Number(n), formula: None, style, py: None })
                 }
+                None if let Some(text) =
+                    v.as_str().filter(|text| text.starts_with('=') || text.eq_ignore_ascii_case("TRUE") || text.eq_ignore_ascii_case("FALSE")) =>
+                {
+                    let style = cx.wb.sheet(si).map(|sh| sh.style_id(*c)).unwrap_or_default();
+                    Some(Cell { value: Value::from(text), formula: None, style, py: None })
+                }
                 None => crate::cmd::edit::input_to_cell(&crate::cmd::edit::json_to_input(v), si, *c, &mut cx.wb)?,
             };
             let sh = cx.sheet_mut(si)?;

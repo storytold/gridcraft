@@ -78,6 +78,30 @@ fn seek_unit() {
 }
 
 #[test]
+fn scenario_show_preserves_captured_formula_and_boolean_like_text() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "'=1+1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=ISFORMULA(A1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "'TRUE"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "'FALSE"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E1", "input": "'0012"})).unwrap();
+    s.execute("data.scenarioAdd", json!({"name": "Captured", "changing": "A1,C1:E1"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Before"]]})).unwrap();
+
+    s.execute("data.scenarioShow", json!({"name": "Captured"})).unwrap();
+
+    assert_eq!(v(&s, "A1"), Value::from("=1+1"));
+    assert_eq!(v(&s, "B1"), Value::Bool(false), "A1 must remain text to its dependent formula");
+    assert_eq!(v(&s, "C1"), Value::from("TRUE"));
+    assert_eq!(v(&s, "D1"), Value::from("FALSE"));
+    assert_eq!(n(&s, "E1"), 12.0);
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    for address in ["A1", "C1", "D1"] {
+        assert!(sh.cell(CellRef::parse(address).unwrap()).is_some_and(|cell| cell.formula.is_none()), "{address} must remain text");
+    }
+}
+
+#[test]
 fn scenario_show_restores_a_percentage_cells_stored_number() {
     let mut s = s();
     s.execute("home.numberFormat", json!({"range": "B2", "format": "Percentage"})).unwrap();
