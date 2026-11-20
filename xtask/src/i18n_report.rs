@@ -1,6 +1,6 @@
 //! `cargo xtask i18n-report`: the interface strings each language doesn't translate yet, read from
-//! the catalogs in `crates/ui-egui/src/i18n/`. A string a catalog lacks shows in English, so the
-//! report always succeeds; `cargo xtask ci` runs it first so the list shows in the gate log.
+//! the catalogs in `crates/ui-egui/src/i18n/`. A string a catalog lacks shows in English, so
+//! missing translations do not fail the report; `cargo xtask ci` runs it first.
 //!
 //! The reference set comes from `keys.rs`, plus any existing catalog key the inventory has not yet
 //! recorded. A catalog is a source file with a `fn translate`; its keys are the string literals
@@ -18,7 +18,9 @@ pub fn run(root: &Path) -> Result<(), String> {
     let dir = root.join("crates/ui-egui/src/i18n");
     let mut catalogs = BTreeMap::new();
     let mut help = BTreeMap::new();
-    let inventory = std::fs::read_to_string(dir.join("keys.rs")).map_or_else(|_| BTreeSet::new(), |source| inventory_keys(&source));
+    let inventory_path = dir.join("keys.rs");
+    let source = std::fs::read_to_string(&inventory_path).map_err(|e| format!("can't read {}: {e}", inventory_path.display()))?;
+    let inventory = inventory_keys(&source).map_err(|e| format!("{}: {e}", inventory_path.display()))?;
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) => {
@@ -60,11 +62,10 @@ pub fn render(catalogs: &BTreeMap<String, BTreeSet<String>>, inventory: &BTreeSe
 
 /// The explicit interface inventory, rather than a catalog implementation. It lets the report
 /// include UI strings that already call `Language::tr` but do not have a translation yet.
-fn inventory_keys(source: &str) -> BTreeSet<String> {
-    let Some((_, source)) = source.split_once("pub(super) const INTERFACE") else { return BTreeSet::new() };
-    let Some((_, source)) = source.split_once("&[") else { return BTreeSet::new() };
-    let Some((source, _)) = source.rsplit_once("];") else { return BTreeSet::new() };
-    literals(source).into_iter().map(|(value, _, _)| value).collect()
+fn inventory_keys(source: &str) -> Result<BTreeSet<String>, String> {
+    let (_, source) = source.split_once("pub(super) const INTERFACE: &[&str] = &[").ok_or("INTERFACE initializer not recognized")?;
+    let (source, _) = source.split_once("];").ok_or("INTERFACE initializer not terminated")?;
+    Ok(literals(source).into_iter().map(|(value, _, _)| value).collect())
 }
 
 fn list<'a>(out: &mut String, keys: impl Iterator<Item = &'a str>, count: usize) {
@@ -247,6 +248,8 @@ pub(super) const INTERFACE: &[&str] = &[
     "Long \u{2026}",
 ];
 "#;
-        assert_eq!(inventory_keys(source).iter().map(String::as_str).collect::<Vec<_>>(), ["Long …", "Paste"]);
+        assert_eq!(inventory_keys(source).unwrap().iter().map(String::as_str).collect::<Vec<_>>(), ["Long …", "Paste"]);
+        assert_eq!(inventory_keys(&format!("{source}\nconst OTHER: &[&str] = &[\"Not an interface key\"];\n")).unwrap().len(), 2);
+        assert!(inventory_keys("pub(super) const INTERFACE: &[&str] = something_else;").is_err());
     }
 }

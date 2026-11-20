@@ -86,8 +86,8 @@ mod tests {
             fill("bad number `abc`", "bad number `{number}`", "Invalid number: {number}", super::super::Language::En),
             Some("Invalid number: abc".into())
         );
-        assert_eq!(format_message("prefix: bad number `abc`", super::super::Language::En), None);
-        assert_eq!(format_message("bad number `abc` suffix", super::super::Language::En), None);
+        assert_eq!(fill("prefix: bad number `abc`", "bad number `{number}`", "Invalid number: {number}", super::super::Language::En), None);
+        assert_eq!(fill("bad number `abc` suffix", "bad number `{number}`", "Invalid number: {number}", super::super::Language::En), None);
         assert_eq!(format_message("Printer Office: permission denied", super::super::Language::En), None);
     }
 }

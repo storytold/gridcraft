@@ -1,4 +1,4 @@
-// Shared interface-key inventory. Locale catalogs must cover this same set.
+// Shared interface-key inventory. Missing catalog entries fall back to English.
 // This includes existing catalog keys and the additional audited UI labels.
 // Formula identifiers and user document text are not interface translation keys.
 
