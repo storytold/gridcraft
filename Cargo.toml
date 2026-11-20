@@ -16,6 +16,7 @@ gridcraft-core = { path = "crates/core" }
 gridcraft-numfmt = { path = "crates/numfmt" }
 gridcraft-sandbox = { path = "crates/sandbox" }
 gridcraft-formula = { path = "crates/formula" }
+gridcraft-dax = { path = "crates/dax" }
 gridcraft-functions = { path = "crates/functions" }
 gridcraft-model = { path = "crates/model" }
 gridcraft-calc = { path = "crates/calc" }
