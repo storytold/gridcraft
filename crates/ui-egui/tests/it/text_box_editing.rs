@@ -93,7 +93,8 @@ fn group_frame_painted(h: &Harness, group_id: u32) -> bool {
         pos2(geo.x(sh, anchor.cell.col) + anchor.dx * geo.z, geo.y(sh, anchor.cell.row) + anchor.dy * geo.z),
         vec2(anchor.width, anchor.height.max(1.0)) * geo.z,
     );
-    let border = gridcraft_ui_egui::theme::Tokens::light().sheet_control_border;
+    // Main uses the shared floating-object frame with a neutral gray outline.
+    let border = egui::Color32::from_gray(120);
     h.output().shapes.iter().any(|s| matches!(&s.shape, EguiShape::Rect(frame) if frame.rect == expected && frame.stroke.color == border))
 }
 
