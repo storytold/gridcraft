@@ -2080,6 +2080,70 @@ fn tables_and_structured_refs() {
     assert_eq!(v(&s, "B4"), Value::Number(7.0));
 }
 
+/// A table's Total Row turned on again shows what it held when it was turned off, as in Excel: a
+/// custom total is its formula (it was written as text), and the first column keeps its own
+/// label or function (it always became "Total").
+#[test]
+fn total_row_turned_on_again_restores_custom_totals_and_labels() {
+    use gridcraft_model::{Table, TableColumn, TotalsFn};
+    let col = |name: &str, totals: TotalsFn, label: Option<&str>| TableColumn {
+        name: name.into(),
+        totals,
+        totals_label: label.map(str::to_string),
+        formula: None,
+        unique_name: None,
+        xml: None,
+    };
+    let table = |columns: Vec<TableColumn>| Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse("A1:C3").unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns,
+        style: "TableStyleMedium2".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: true,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    };
+    // The table as a file holds it with its Total Row turned off, then the row turned on.
+    let opened = |t: Table| {
+        let mut s = self::s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount", "Mean"], ["x", 7, 1], ["y", 8, 2]]})).unwrap();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().tables.push(t);
+        s.execute("table.totalRow", json!({"on": true, "table": "Table1"})).unwrap();
+        s
+    };
+    let formula_of = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["formula"].clone();
+    // #4296's table: a label, a custom formula and an Average.
+    let mut s = opened(table(vec![
+        col("Group", TotalsFn::None, Some("Total")),
+        col("Amount", TotalsFn::Custom, Some("SUM(B2:B3)+10")),
+        col("Mean", TotalsFn::Average, None),
+    ]));
+    assert_eq!(formula_of(&mut s, "B4"), json!("=SUM(B2:B3)+10"));
+    assert_eq!(v(&s, "B4"), Value::Number(25.0));
+    assert_eq!(v(&s, "C4"), Value::Number(1.5));
+    assert_eq!(v(&s, "A4"), Value::text("Total"));
+    // The first column keeps a label of its own, or its function.
+    let s =
+        opened(table(vec![col("Group", TotalsFn::None, Some("All groups")), col("Amount", TotalsFn::Sum, None), col("Mean", TotalsFn::None, None)]));
+    assert_eq!(v(&s, "A4"), Value::text("All groups"));
+    let s = opened(table(vec![col("Group", TotalsFn::Count, None), col("Amount", TotalsFn::Sum, None), col("Mean", TotalsFn::None, None)]));
+    assert_eq!(v(&s, "A4"), Value::Number(2.0));
+    // A table that never had a total row still gets "Total" and a Sum of its last column.
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Item", "Qty"], ["x", 2], ["y", 5]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    s.execute("table.totalRow", json!({"on": true, "table": "Table1"})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B4")), (Value::text("Total"), Value::Number(7.0)));
+}
+
 #[test]
 fn structured_refs_to_columns_with_edge_spaces() {
     let mut s = s();
