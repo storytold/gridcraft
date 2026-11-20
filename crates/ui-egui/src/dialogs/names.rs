@@ -1,11 +1,34 @@
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
 
+/// A defined name is a reusable custom function when its definition starts with `LAMBDA(`.
+/// Keep this display-only check deliberately tolerant: damaged or future formulas still belong
+/// in Name Manager, and their full text remains available through Edit.
+fn is_lambda(n: &Json) -> bool {
+    n.get("refersTo").and_then(Json::as_str).is_some_and(|f| {
+        let f = f.trim_start_matches('=').trim_start();
+        let f = if f.get(..6).is_some_and(|p| p.eq_ignore_ascii_case("_xlfn.")) { &f[6..] } else { f };
+        f.get(..7).is_some_and(|p| p.eq_ignore_ascii_case("LAMBDA("))
+    })
+}
+
+/// A single-line preview prevents a long named LAMBDA from widening the entire dialog. Its full
+/// definition is available through the row's hover text and Edit dialog.
+fn preview(text: &str, max: usize) -> String {
+    let mut out: String = text.chars().take(max).collect();
+    if text.chars().nth(max).is_some() {
+        out.push('…');
+    }
+    out
+}
+
+/// Renders the bounded, virtualized Name Manager list and the selected name's details.
 pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
     let names = list.as_array().cloned().unwrap_or_default();
     let selected = names.get(d.list_index).cloned();
     let field = |n: &Json, k: &str| n.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let lambda_count = names.iter().filter(|n| is_lambda(n)).count();
     ui.horizontal(|ui| {
         if ui.button("New…").clicked() {
             app.open_dialog("defineName", json!({}));
@@ -28,28 +51,53 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
         }
     });
     ui.add_space(4.0);
-    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+    if lambda_count > 0 {
+        ui.label(format!("Custom functions: {lambda_count} LAMBDA name(s)"));
+    }
+    let row_height = ui.text_style_height(&egui::TextStyle::Button).max(ui.spacing().interact_size.y) + 2.0 * ui.spacing().button_padding.y;
+    egui::ScrollArea::vertical().max_height(280.0).auto_shrink([false, true]).show_rows(ui, row_height, names.len() + 1, |ui, rows| {
         egui::Grid::new("names").striped(true).num_columns(4).show(ui, |ui| {
-            ui.strong("Name");
-            ui.strong("Value");
-            ui.strong("Refers To");
-            ui.strong("Scope");
-            ui.end_row();
-            if names.is_empty() {
+            if rows.contains(&0) {
+                ui.strong("Name");
+                ui.strong("Value");
+                ui.strong("Refers To");
+                ui.strong("Scope");
+                ui.end_row();
+            }
+            if names.is_empty() && rows.contains(&0) {
                 ui.label(egui::RichText::new("No names defined").italics());
                 ui.end_row();
             }
-            for (i, n) in names.iter().enumerate() {
-                if ui.selectable_label(i == d.list_index, field(n, "name")).clicked() {
+            let start = rows.start.saturating_sub(1);
+            let end = rows.end.saturating_sub(1).min(names.len());
+            for (i, n) in names.iter().enumerate().skip(start).take(end.saturating_sub(start)) {
+                if ui.add_sized([150.0, row_height], egui::Button::new(field(n, "name")).selected(i == d.list_index)).clicked() {
                     d.list_index = i;
                 }
-                ui.label(n.get("value").map(|v| v.to_string()).unwrap_or_default().chars().take(30).collect::<String>());
-                ui.label(field(n, "refersTo"));
-                ui.label(field(n, "scope"));
+                let value = if is_lambda(n) { "LAMBDA".into() } else { preview(&n.get("value").map(|v| v.to_string()).unwrap_or_default(), 18) };
+                ui.add_sized([72.0, row_height], egui::Label::new(value));
+                let refers_to = field(n, "refersTo");
+                ui.add_sized(
+                    [260.0, row_height],
+                    egui::Label::new(preview(&refers_to.replace(['\n', '\r'], " "), 48)).truncate().show_tooltip_when_elided(false),
+                )
+                .on_hover_text(refers_to);
+                ui.add_sized([90.0, row_height], egui::Label::new(field(n, "scope")));
                 ui.end_row();
             }
         });
     });
+    if let Some(n) = selected {
+        ui.add_space(6.0);
+        ui.separator();
+        ui.strong(format!("{}{}", field(&n, "name"), if is_lambda(&n) { " (custom LAMBDA function)" } else { "" }));
+        let comment = field(&n, "comment");
+        if !comment.is_empty() {
+            ui.label(comment);
+        }
+        let refers_to = field(&n, "refersTo");
+        ui.label(egui::RichText::new(preview(&refers_to, 180)).monospace()).on_hover_text(refers_to);
+    }
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.button(" Close ").clicked() {
@@ -131,4 +179,22 @@ pub(super) fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, 
         d.values.insert("name".into(), json!(n));
     }
     ok_cancel(ui, confirm, open);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifies_imported_lambda_names() {
+        assert!(is_lambda(&json!({"refersTo": "=_xlfn.LAMBDA(_xlpm.x,_xlpm.x)"})), "file spelling is still a LAMBDA");
+        assert!(is_lambda(&json!({"refersTo": "=LAMBDA(x,x)"})));
+        assert!(!is_lambda(&json!({"refersTo": "=SUM(A1:A2)"})));
+    }
+
+    #[test]
+    fn previews_are_bounded_without_losing_short_text() {
+        assert_eq!(preview("LAMBDA(x,x)", 20), "LAMBDA(x,x)");
+        assert_eq!(preview("LAMBDA(x,x)", 6), "LAMBDA…");
+    }
 }
