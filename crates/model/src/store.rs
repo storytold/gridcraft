@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::ops::RangeInclusive;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use gridcraft_core::{CellRef, RangeRef};
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,56 @@ fn has_value(cell: &Cell) -> bool {
 struct Band {
     /// row → (col → cell)
     rows: BTreeMap<u32, BTreeMap<u32, Cell>>,
+    /// The band's multi-cell legacy array formulas, found on first use. Derived from `rows`, so
+    /// it is never saved or compared, and every mutable access to a band goes through
+    /// [`edit`], which drops it.
+    #[serde(skip)]
+    arrays: ArrayCache,
+}
+
+/// A multi-cell legacy array formula: its formula cell and the range it covers.
+pub type ArrayFormula = (CellRef, RangeRef);
+
+/// Lazily computed [`ArrayFormula`]s of one band, row-major. A clone starts empty and two caches
+/// are always equal, so the cache is invisible to `Clone`, `PartialEq` and serde.
+#[derive(Debug, Default)]
+struct ArrayCache(OnceLock<Vec<ArrayFormula>>);
+
+impl Clone for ArrayCache {
+    fn clone(&self) -> Self {
+        ArrayCache::default()
+    }
+}
+
+impl PartialEq for ArrayCache {
+    fn eq(&self, _: &ArrayCache) -> bool {
+        true
+    }
+}
+
+impl Band {
+    fn array_formulas(&self) -> &[ArrayFormula] {
+        self.arrays.0.get_or_init(|| {
+            let mut found = Vec::new();
+            for (row, cols) in &self.rows {
+                for (col, cell) in cols {
+                    let at = CellRef::new(*row, *col);
+                    if let Some(a) = cell.formula.as_ref().and_then(|f| f.array).filter(|a| a.start == at && !a.is_single()) {
+                        found.push((at, a));
+                    }
+                }
+            }
+            found
+        })
+    }
+}
+
+/// Mutable access to a band (copied if shared) that forgets what was derived from its cells.
+/// Every write to a band must come through here.
+fn edit(band: &mut Arc<Band>) -> &mut Band {
+    let b = Arc::make_mut(band);
+    b.arrays = ArrayCache::default();
+    b
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -50,7 +100,7 @@ impl CellStore {
         if !band.rows.get(&c.row).is_some_and(|r| r.contains_key(&c.col)) {
             return None;
         }
-        Arc::make_mut(band).rows.get_mut(&c.row)?.get_mut(&c.col)
+        edit(band).rows.get_mut(&c.row)?.get_mut(&c.col)
     }
     /// Stores a cell; a default (empty, unstyled) cell is removed instead.
     pub fn set(&mut self, c: CellRef, cell: Cell) {
@@ -58,7 +108,7 @@ impl CellStore {
             self.remove(c);
             return;
         }
-        let band = Arc::make_mut(self.bands.entry(c.row / BAND).or_default());
+        let band = edit(self.bands.entry(c.row / BAND).or_default());
         if band.rows.entry(c.row).or_default().insert(c.col, cell).is_none() {
             self.len += 1;
         }
@@ -91,7 +141,7 @@ impl CellStore {
         if !band.rows.get(&c.row).is_some_and(|r| r.contains_key(&c.col)) {
             return None;
         }
-        let b = Arc::make_mut(band);
+        let b = edit(band);
         let row = b.rows.get_mut(&c.row)?;
         let old = row.remove(&c.col);
         if row.is_empty() {
@@ -113,6 +163,17 @@ impl CellStore {
                 .range(r.start.row..=r.end.row)
                 .flat_map(move |(row, cols)| cols.range(r.start.col..=r.end.col).map(move |(col, cell)| (CellRef::new(*row, *col), cell)))
         })
+    }
+    /// The multi-cell legacy array formulas whose formula cell lies in `r`, row-major, as the
+    /// formula cell and the range its array covers. Each band finds its own the first time it is
+    /// asked and keeps them until a cell in it is written, so a store cloned from one already
+    /// asked re-scans only the bands the edit touched.
+    pub fn array_formulas(&self, r: RangeRef) -> impl Iterator<Item = ArrayFormula> + '_ {
+        let (b0, b1) = (r.start.row / BAND, r.end.row / BAND);
+        self.bands
+            .range(b0..=b1)
+            .flat_map(|(_, band)| band.array_formulas().iter().copied())
+            .filter(move |(at, _)| at.row >= r.start.row && at.row <= r.end.row && at.col >= r.start.col && at.col <= r.end.col)
     }
     pub fn iter(&self) -> impl Iterator<Item = (CellRef, &Cell)> + '_ {
         self.bands
@@ -374,7 +435,7 @@ impl CellStore {
                 }
                 continue;
             }
-            let band = Arc::make_mut(band);
+            let band = edit(band);
             let mut block = band.rows.split_off(&r0);
             let mut tail = match r1.checked_add(1) {
                 Some(next) => block.split_off(&next),
@@ -430,7 +491,7 @@ impl CellStore {
             if !writes {
                 continue;
             }
-            let band = Arc::make_mut(self.bands.entry(key).or_default());
+            let band = edit(self.bands.entry(key).or_default());
             for (row, mut cols) in group.drain(..) {
                 match band.rows.entry(row) {
                     Entry::Vacant(slot) => {
@@ -520,6 +581,124 @@ mod tests {
         assert_eq!(snap.get(c(5, 0)).ok_or("none")?.value, Value::Number(5.0));
         assert_eq!(s.get(c(5, 0)).ok_or("none")?.value, Value::Number(99.0));
         Ok(())
+    }
+
+    fn array_cell(at: CellRef, to: CellRef) -> Cell {
+        let mut f = crate::cell::Formula::new("=1");
+        f.array = Some(RangeRef::new(at, to));
+        Cell::formula(f)
+    }
+
+    fn all() -> RangeRef {
+        RangeRef::new(c(0, 0), c(MAX_ROWS - 1, MAX_COLS - 1))
+    }
+
+    fn arrays(s: &CellStore) -> Vec<(CellRef, RangeRef)> {
+        s.array_formulas(all()).collect()
+    }
+
+    /// What the query must say: a walk of every cell.
+    fn arrays_by_walk(s: &CellStore) -> Vec<(CellRef, RangeRef)> {
+        s.iter().filter_map(|(at, x)| x.formula.as_ref().and_then(|f| f.array).filter(|a| a.start == at && !a.is_single()).map(|a| (at, a))).collect()
+    }
+
+    #[test]
+    fn array_formulas_follow_every_write() {
+        let mut s = CellStore::new();
+        let one = RangeRef::new(c(70, 2), c(72, 2));
+        // Asked while empty, then added: a cache made before the write must not survive it.
+        assert!(arrays(&s).is_empty());
+        s.set(c(70, 2), array_cell(c(70, 2), c(72, 2)));
+        assert_eq!(arrays(&s), [(c(70, 2), one)]);
+        // A one-cell array and a formula that only claims a range it does not start are not arrays.
+        s.set(c(1, 1), array_cell(c(1, 1), c(1, 1)));
+        s.set(c(2, 2), array_cell(c(1, 1), c(3, 3)));
+        assert_eq!(arrays(&s), [(c(70, 2), one)]);
+        // Changed in place through `get_mut`: the array is dropped, then another is made.
+        assert_eq!(arrays(&s).len(), 1);
+        if let Some(x) = s.get_mut(c(70, 2)) {
+            x.formula = None;
+        }
+        assert!(arrays(&s).is_empty());
+        if let Some(x) = s.get_mut(c(2, 2)) {
+            x.formula = array_cell(c(2, 2), c(4, 2)).formula;
+        }
+        assert_eq!(arrays(&s), [(c(2, 2), RangeRef::new(c(2, 2), c(4, 2)))]);
+        // Overwritten by a plain value, then removed.
+        s.set(c(2, 2), Cell::value(1.0.into()));
+        assert!(arrays(&s).is_empty());
+        s.set(c(5, 5), array_cell(c(5, 5), c(6, 6)));
+        assert_eq!(arrays(&s).len(), 1);
+        s.remove(c(5, 5));
+        assert!(arrays(&s).is_empty());
+    }
+
+    #[test]
+    fn array_formulas_of_a_snapshot_are_its_own() {
+        let mut s = CellStore::new();
+        for r in 0..200 {
+            s.set(c(r, 0), Cell::value(f64::from(r).into()));
+        }
+        s.set(c(100, 4), array_cell(c(100, 4), c(101, 4)));
+        // Asked on the store, so the snapshot shares bands that already hold the answer.
+        assert_eq!(arrays(&s).len(), 1);
+        let snap = s.clone();
+        s.set(c(100, 4), Cell::value(1.0.into()));
+        s.set(c(10, 4), array_cell(c(10, 4), c(12, 5)));
+        assert_eq!(arrays(&s), [(c(10, 4), RangeRef::new(c(10, 4), c(12, 5)))]);
+        // The snapshot (an undo state) is unchanged, and restoring it brings the array back.
+        assert_eq!(arrays(&snap), [(c(100, 4), RangeRef::new(c(100, 4), c(101, 4)))]);
+        let restored = snap.clone();
+        assert_eq!(arrays(&restored), arrays_by_walk(&restored));
+        assert_eq!(restored, snap);
+    }
+
+    #[test]
+    fn array_formulas_follow_moves_and_rebuilds() {
+        let mut s = CellStore::new();
+        s.set(c(3, 1), array_cell(c(3, 1), c(5, 1)));
+        s.set(c(130, 1), array_cell(c(130, 1), c(131, 1)));
+        assert_eq!(arrays(&s).len(), 2);
+        // Moved cells keep a formula range that still says where they were: only formula cells
+        // whose range starts where they now are are arrays.
+        s.shift_rows(0, 2);
+        assert_eq!(arrays(&s), arrays_by_walk(&s));
+        assert!(arrays(&s).is_empty());
+        let taken = s.take_range(RangeRef::new(c(0, 0), c(200, 5)));
+        assert_eq!(taken.len(), 2);
+        assert!(arrays(&s).is_empty());
+        for (at, x) in taken {
+            s.set(at, x);
+        }
+        assert_eq!(arrays(&s), arrays_by_walk(&s));
+        s.delete_rows(&[(0, 1)]);
+        s.delete_cols(&[(0, 1)]);
+        assert_eq!(arrays(&s), arrays_by_walk(&s));
+        s.set(c(7, 7), array_cell(c(7, 7), c(8, 8)));
+        s.shift_cols_in_rows(7, 7, 0, 1);
+        s.shift_rows_in_cols(7, 8, 0, 1);
+        assert_eq!(arrays(&s), arrays_by_walk(&s));
+        // A store read back from JSON starts with no cache and finds the same arrays.
+        let mut t = CellStore::new();
+        t.set(c(1, 1), array_cell(c(1, 1), c(2, 2)));
+        assert_eq!(arrays(&t).len(), 1);
+        let mut back: CellStore = serde_json::from_str(&serde_json::to_string(&t).unwrap_or_default()).unwrap_or_default();
+        assert_eq!(back, t);
+        assert_eq!(arrays(&back), arrays(&t));
+        back.rebuild();
+        assert_eq!(arrays(&back), arrays(&t));
+    }
+
+    #[test]
+    fn array_formulas_are_found_by_their_formula_cell_in_the_query_range() {
+        let mut s = CellStore::new();
+        s.set(c(2, 2), array_cell(c(2, 2), c(9, 9)));
+        s.set(c(80, 2), array_cell(c(80, 2), c(81, 9)));
+        let up_to = |r, k| RangeRef::new(c(0, 0), c(r, k));
+        assert_eq!(s.array_formulas(up_to(1, 20)).count(), 0);
+        assert_eq!(s.array_formulas(up_to(20, 1)).count(), 0);
+        assert_eq!(s.array_formulas(up_to(20, 2)).count(), 1);
+        assert_eq!(s.array_formulas(up_to(80, 2)).count(), 2);
     }
 
     #[test]

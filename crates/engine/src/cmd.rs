@@ -656,30 +656,114 @@ pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocke
 /// formula cell, while the array stays (Excel: "You can't change part of an array."). The array
 /// would show its value there while the file kept the new content. Cells shifted by row and
 /// column edits aren't edits of their content, so structural commits aren't checked.
+///
+/// An array a merged cell blocks shows #SPILL! and spills nothing, but its range is still the
+/// array's: the file writes it as the array's range, and reading it back drops whatever else was
+/// in it (#3397). Sheets with merged cells also look for such arrays by their formula.
 fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
+    let refused = || Err(EngineError::Other("You can't change part of an array.".into()));
     for sh in &old.sheets {
-        if sh.spill.is_empty() {
+        let Some(after) = new.sheet_index(&sh.name).and_then(|i| new.sheets.get(i)) else { continue };
+        let may_be_blocked = !sh.merges.is_empty() || !after.merges.is_empty();
+        if sh.spill.is_empty() && !may_be_blocked {
             continue;
         }
-        let Some(after) = new.sheet_index(&sh.name).and_then(|i| new.sheets.get(i)) else { continue };
         if std::sync::Arc::ptr_eq(sh, after) {
             continue;
         }
+        // Edited cells no spilled array holds, to look for in blocked arrays.
+        let mut unspilled = Vec::new();
         for c in sh.cells.diff(&after.cells) {
             let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
-            if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
+            if !filled || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }
-            let in_array = sh.spill_ranges.keys().any(|&anchor| {
-                anchor != c
-                    && after.cell(anchor).and_then(|x| x.formula.as_ref()).and_then(|f| f.array).is_some_and(|a| a.start == anchor && a.contains(c))
-            });
+            let in_array = sh.spill.contains_key(&c)
+                && sh.spill_ranges.keys().any(|&anchor| {
+                    anchor != c
+                        && after
+                            .cell(anchor)
+                            .and_then(|x| x.formula.as_ref())
+                            .and_then(|f| f.array)
+                            .is_some_and(|a| a.start == anchor && a.contains(c))
+                });
             if in_array {
-                return Err(EngineError::Other("You can't change part of an array.".into()));
+                return refused();
             }
+            if may_be_blocked {
+                unspilled.push(c);
+            }
+        }
+        let Some(last_row) = unspilled.iter().map(|c| c.row).max() else { continue };
+        let last_col = unspilled.iter().map(|c| c.col).max().unwrap_or(0);
+        // An array's formula is in its top-left cell, so only cells above and left of an edit
+        // can hold one that covers it.
+        let reach = RangeRef::new(CellRef::new(0, 0), CellRef::new(last_row, last_col));
+        // The store keeps each band's array formulas, so this does not walk the sheet's cells.
+        let arrays: Vec<(CellRef, RangeRef)> = after.cells.array_formulas(reach).collect();
+        if array_holds_edit(&unspilled, &arrays) {
+            return refused();
         }
     }
     Ok(())
+}
+
+/// Whether an array in `arrays` (formula cell, range) covers a cell in `edits` other than its own
+/// formula cell. A sweep down the rows with a Fenwick tree over the edits' columns counts the
+/// edits in each array's range: O((E + A) log (E + A)), where testing every edit against every
+/// array is O(E × A). `edits` holds each cell once.
+pub(crate) fn array_holds_edit(edits: &[CellRef], arrays: &[(CellRef, RangeRef)]) -> bool {
+    if edits.is_empty() || arrays.is_empty() {
+        return false;
+    }
+    let mut points: Vec<CellRef> = edits.to_vec();
+    points.sort_unstable();
+    points.dedup();
+    let mut cols: Vec<u32> = points.iter().map(|c| c.col).collect();
+    cols.sort_unstable();
+    cols.dedup();
+    // Edits by row, for the sweep.
+    let mut by_row: Vec<(u32, usize)> = points.iter().filter_map(|c| Some((c.row, cols.binary_search(&c.col).ok()?))).collect();
+    by_row.sort_unstable();
+    // Each array asks for the edits down to its last row (+1) and to the row above its first (-1).
+    let mut asks: Vec<(u32, usize, i64)> = Vec::with_capacity(arrays.len() * 2);
+    for (i, (_, a)) in arrays.iter().enumerate() {
+        asks.push((a.end.row, i, 1));
+        if let Some(above) = a.start.row.checked_sub(1) {
+            asks.push((above, i, -1));
+        }
+    }
+    asks.sort_unstable();
+    let mut tree = vec![0i64; cols.len() + 1];
+    let mut counts = vec![0i64; arrays.len()];
+    let mut next = 0;
+    for (row, i, sign) in asks {
+        while let Some(&(r, col)) = by_row.get(next)
+            && r <= row
+        {
+            let mut at = col + 1;
+            while let Some(slot) = tree.get_mut(at) {
+                *slot += 1;
+                at += 1 << at.trailing_zeros();
+            }
+            next += 1;
+        }
+        let Some((_, a)) = arrays.get(i) else { continue };
+        let upto = |n: usize| {
+            let (mut n, mut sum) = (n, 0i64);
+            while n > 0 {
+                sum += tree.get(n).copied().unwrap_or(0);
+                n -= 1 << n.trailing_zeros();
+            }
+            sum
+        };
+        let (lo, hi) = (cols.partition_point(|&c| c < a.start.col), cols.partition_point(|&c| c <= a.end.col));
+        if let Some(n) = counts.get_mut(i) {
+            *n += sign * (upto(hi) - upto(lo));
+        }
+    }
+    // An array's own formula cell is not part of it for this check.
+    arrays.iter().zip(&counts).any(|((anchor, _), &n)| n - i64::from(points.binary_search(anchor).is_ok()) > 0)
 }
 
 /// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result

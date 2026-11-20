@@ -2613,6 +2613,255 @@ fn part_of_a_legacy_array_cant_be_changed() {
 }
 
 #[test]
+fn part_of_an_array_in_merged_cells_cant_be_changed() {
+    // Found by the command-sequence fuzzer (#3397, seed 76): the merged cells blocked the array,
+    // so it spilled nothing and the guard above let the edit through. The workbook showed -5.89
+    // in L9, but the file kept the array's range there, and reading it back lost the value.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "budget"})).unwrap();
+    s.execute("selection.set", json!({"range": "J9:M14"})).unwrap();
+    s.execute("home.mergeCells", json!({})).unwrap();
+    s.execute("cell.set", json!({"array": true, "cell": "K11", "input": "=E18&\"-\"&G14"})).unwrap();
+    let range = gridcraft_core::RangeRef::parse("J9:M14").unwrap();
+    let array = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().cell(range.start).and_then(|c| c.formula.as_ref()).and_then(|f| f.array);
+    assert_eq!(array(&s), Some(range), "the array takes the merged range");
+    let values = |s: &Session| -> Vec<Value> {
+        let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+        range.iter().map(|c| sh.value(c)).collect()
+    };
+    let before = values(&s);
+    let e = s.execute("cell.set", json!({"cell": "L9", "input": "-5.89", "sheet": 0})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    // The refusal itself changed nothing, before any round-trip.
+    assert_eq!(values(&s), before);
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().value(CellRef::parse("L9").unwrap()), Value::Empty);
+    // The round-trip invariant the fuzzer checks: what the workbook holds is what the file keeps.
+    reopen(&mut s);
+    assert_eq!(array(&s), Some(range));
+    assert_eq!(values(&s), before);
+}
+
+#[test]
+fn part_of_an_array_blocked_by_a_later_merge_cant_be_changed() {
+    // #3397 the other way round: merging cells over part of an existing array blocks it too, and a
+    // cell of the array outside the merged cells is still the array's.
+    let mut s = s();
+    s.execute("selection.set", json!({"range": "A1:A4"})).unwrap();
+    s.execute("cell.set", json!({"input": "=5", "array": true})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "A1:B1"})).unwrap();
+    let e = s.execute("range.setValues", json!({"range": "A3", "values": [[13]]})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    assert_eq!(v(&s, "A3"), Value::Empty);
+    // Cells beside the array can still be changed.
+    s.execute("cell.set", json!({"cell": "C3", "input": "7"})).unwrap();
+    assert_eq!(v(&s, "C3"), Value::Number(7.0));
+    s.execute("cell.set", json!({"cell": "B2", "input": "8"})).unwrap();
+    assert_eq!(v(&s, "B2"), Value::Number(8.0));
+    // Replacing the whole array is fine.
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4]]})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::Number(3.0));
+}
+
+#[test]
+fn a_new_array_on_a_sheet_with_merged_cells_elsewhere_is_entered() {
+    // Merged cells anywhere on a sheet make the guard look for arrays by their formula, in the
+    // workbook after the edit, so it also sees an array the same command creates. Entering one
+    // clears the other cells of its range, so none of them is an edit inside it.
+    let mut s = s();
+    s.execute("home.mergeCells", json!({"range": "Z50:AA51"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
+    s.execute("cell.set", json!({"input": "=5", "array": true})).unwrap();
+    assert_eq!(v(&s, "A3"), Value::Number(5.0));
+    // Over cells that hold values too: the array takes them.
+    s.execute("range.setValues", json!({"range": "C1", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:C3"})).unwrap();
+    s.execute("cell.set", json!({"input": "=7", "array": true})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Number(7.0));
+    // Moving an array with cut and paste makes a new one at the destination.
+    s.execute("edit.cut", json!({"range": "A1:A3"})).unwrap();
+    s.execute("selection.set", json!({"range": "E1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(v(&s, "E3"), Value::Number(5.0));
+    // The arrays are still guarded.
+    let e = s.execute("cell.set", json!({"cell": "E2", "input": "1"})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+}
+
+/// Testing every edit against every array: what `array_holds_edit` must agree with.
+fn array_holds_edit_by_pairs(edits: &[CellRef], arrays: &[(CellRef, gridcraft_core::RangeRef)]) -> bool {
+    edits.iter().any(|&c| arrays.iter().any(|&(anchor, a)| anchor != c && a.contains(c)))
+}
+
+#[test]
+fn array_sweep_agrees_with_testing_every_pair() {
+    use gridcraft_core::RangeRef;
+    let mut state = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = |m: u32| {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state % u64::from(m)) as u32
+    };
+    for round in 0..600 {
+        // Small grids make overlaps, shared anchors and edits on anchors common.
+        let size = 3 + next(10);
+        let arrays: Vec<(CellRef, RangeRef)> = (0..next(7))
+            .map(|_| {
+                let at = CellRef::new(next(size), next(size));
+                (at, RangeRef::new(at, CellRef::new(at.row + 1 + next(4), at.col + next(4))))
+            })
+            .collect();
+        let mut edits: Vec<CellRef> = (0..next(9)).map(|_| CellRef::new(next(size + 4), next(size + 4))).collect();
+        edits.sort_unstable();
+        edits.dedup();
+        assert_eq!(
+            crate::cmd::array_holds_edit(&edits, &arrays),
+            array_holds_edit_by_pairs(&edits, &arrays),
+            "round {round}: {edits:?} vs {arrays:?}"
+        );
+    }
+}
+
+#[test]
+fn array_sweep_keeps_the_anchor_exemption() {
+    use gridcraft_core::RangeRef;
+    let at = |a: &str| CellRef::parse(a).unwrap();
+    let big = (at("B2"), RangeRef::parse("B2:D4").unwrap());
+    // The formula cell alone is not inside its own array; any other cell is.
+    assert!(!crate::cmd::array_holds_edit(&[at("B2")], &[big]));
+    assert!(crate::cmd::array_holds_edit(&[at("B2"), at("C3")], &[big]));
+    assert!(crate::cmd::array_holds_edit(&[at("D4")], &[big]));
+    assert!(!crate::cmd::array_holds_edit(&[at("A2"), at("E4"), at("B5"), at("D1")], &[big]));
+    // The formula cell of one array that sits inside another is inside that one.
+    let inner = (at("C3"), RangeRef::parse("C3:C4").unwrap());
+    assert!(crate::cmd::array_holds_edit(&[at("C3")], &[big, inner]));
+    assert!(!crate::cmd::array_holds_edit(&[at("C3")], &[inner]));
+    // Rows and columns at the edge of the grid.
+    let far = (CellRef::new(0, 0), RangeRef::new(CellRef::new(0, 0), CellRef::new(gridcraft_core::MAX_ROWS - 1, gridcraft_core::MAX_COLS - 1)));
+    assert!(crate::cmd::array_holds_edit(&[CellRef::new(gridcraft_core::MAX_ROWS - 1, gridcraft_core::MAX_COLS - 1)], &[far]));
+    assert!(!crate::cmd::array_holds_edit(&[], &[far]));
+    assert!(!crate::cmd::array_holds_edit(&[at("A1")], &[]));
+}
+
+/// Many arrays and a large edit that touches none of them: testing every edit against every
+/// array is 4 billion checks here.
+#[test]
+fn array_sweep_handles_many_arrays_and_a_large_disjoint_edit() {
+    use gridcraft_core::RangeRef;
+    // 20,000 arrays of 2 x 2 on every third row and column of a 400 x 50 block of slots.
+    let arrays: Vec<(CellRef, RangeRef)> = (0..400u32)
+        .flat_map(|i| {
+            (0..50u32).map(move |j| {
+                let at = CellRef::new(i * 3, j * 3);
+                (at, RangeRef::new(at, CellRef::new(at.row + 1, at.col + 1)))
+            })
+        })
+        .collect();
+    assert_eq!(arrays.len(), 20_000);
+    // 200,000 edits in the third row and third column of each slot, which no array covers.
+    let mut edits: Vec<CellRef> =
+        (0..400u32).flat_map(|i| (0..150u32).flat_map(move |j| [CellRef::new(i * 3 + 2, j), CellRef::new(i * 3, j * 3 + 2)])).collect();
+    edits.sort_unstable();
+    edits.dedup();
+    assert!(edits.len() >= 100_000, "{}", edits.len());
+    assert!(!crate::cmd::array_holds_edit(&edits, &arrays));
+    // The arrays' formula cells are exempt, even among that many.
+    edits.extend(arrays.iter().map(|(at, _)| *at));
+    edits.sort_unstable();
+    edits.dedup();
+    assert!(!crate::cmd::array_holds_edit(&edits, &arrays));
+    // One edit inside one array, the last one, is found.
+    edits.push(CellRef::new(399 * 3 + 1, 49 * 3 + 1));
+    assert!(crate::cmd::array_holds_edit(&edits, &arrays));
+}
+
+/// A merged sheet with many arrays, and a large paste beside them: the result is the same as for
+/// one array, an edit into an array is refused and nothing else is.
+#[test]
+fn array_guard_on_a_merged_sheet_with_many_arrays_and_a_large_paste() {
+    let mut s = s();
+    // 200 arrays of A:B over two rows, each blocked by a merge over the second row.
+    for i in 0..200 {
+        s.execute("selection.set", json!({"range": format!("A{}:B{}", i * 3 + 1, i * 3 + 2)})).unwrap();
+        s.execute("cell.set", json!({"input": "=1", "array": true})).unwrap();
+        s.execute("home.mergeCells", json!({"range": format!("A{0}:B{0}", i * 3 + 2)})).unwrap();
+    }
+    // A 200 x 12 block of values in the columns right of the arrays' and a row between each.
+    let rows: Vec<Vec<i32>> = (0..200).map(|_| (0..12).collect()).collect();
+    s.execute("range.setValues", json!({"range": "D1", "values": rows})).unwrap();
+    assert_eq!(v(&s, "L200"), Value::Number(8.0));
+    // Into an array, at the other end of the sheet from the paste.
+    let e = s.execute("cell.set", json!({"cell": "B598", "input": "5"})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    // The row between two arrays is free, as is a paste over the lot that leaves them be.
+    s.execute("cell.set", json!({"cell": "A600", "input": "5"})).unwrap();
+    let rows: Vec<Vec<i32>> = (0..200).map(|_| (0..12).collect()).collect();
+    s.execute("range.setValues", json!({"range": "D1", "values": rows})).unwrap();
+    // A paste that takes in one cell of one array, among cells that are free, is refused whole.
+    let e = s.execute("range.setValues", json!({"range": "B300", "values": vec![vec![7; 20]; 5]})).unwrap_err();
+    assert!(e.to_string().contains("part of an array"), "{e}");
+    assert_eq!(v(&s, "C300"), Value::Empty);
+}
+
+/// The guard finds an array wherever the workbook got it: typed, undone, redone, cleared,
+/// opened from a file, copied with its sheet.
+#[test]
+fn array_guard_follows_arrays_added_removed_undone_and_loaded() {
+    let mut s = s();
+    let refused = |s: &mut Session, cell: &str| {
+        let r = s.execute("cell.set", json!({"cell": cell, "input": "9"}));
+        match r {
+            Ok(_) => {
+                // Undo the probe so the next one starts from the same document.
+                s.execute("edit.undo", json!({})).unwrap();
+                false
+            }
+            Err(e) => {
+                assert!(e.to_string().contains("part of an array"), "{e}");
+                true
+            }
+        }
+    };
+    s.execute("home.mergeCells", json!({"range": "E1:F1"})).unwrap();
+    // No array yet: the edit goes through.
+    assert!(!refused(&mut s, "A3"));
+    // Added.
+    s.execute("selection.set", json!({"range": "A1:A4"})).unwrap();
+    s.execute("cell.set", json!({"input": "=5", "array": true})).unwrap();
+    assert!(refused(&mut s, "A3"));
+    // Undone (a probe that succeeds would end the redo history, so the document is read), then
+    // redone.
+    let formula_at_a1 = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().cell(CellRef::new(0, 0)).and_then(|c| c.formula.clone()).is_some();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!formula_at_a1(&s));
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(formula_at_a1(&s));
+    assert!(refused(&mut s, "A3"));
+    // Moved down by a row insert: a structural edit moves the formula cell and its range.
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    assert!(refused(&mut s, "A4"));
+    assert!(!refused(&mut s, "A1"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(refused(&mut s, "A3"));
+    // Written out and read back.
+    reopen(&mut s);
+    assert!(refused(&mut s, "A3"));
+    // Removed, by replacing the whole array and by clearing it.
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4]]})).unwrap();
+    assert!(!refused(&mut s, "A3"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(refused(&mut s, "A3"));
+    s.execute("edit.clearContents", json!({"range": "A1:A4"})).unwrap();
+    assert!(!refused(&mut s, "A3"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(refused(&mut s, "A3"));
+    // Copied with its sheet.
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).unwrap();
+    assert!(refused(&mut s, "A3"));
+}
+
+#[test]
 fn create_names_from_selection() {
     let names = |s: &Session| -> Vec<(String, String)> {
         let mut v: Vec<_> = s.doc().unwrap().wb.names.iter().map(|n| (n.name.clone(), n.formula.clone())).collect();
