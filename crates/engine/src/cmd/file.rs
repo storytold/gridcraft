@@ -9,11 +9,11 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
         cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, encoding?: utf-8|utf-8-bom|utf-16le|utf-16be|windows-1252} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension). CSV/TSV keep the encoding and line ends of the text file the workbook was read from; when that encoding can't hold a character nothing is written and the answer is {saved: false, encoding, unencodable, suggested}: save again with an `encoding` (characters it can't hold become ?)", has_doc, save),
+        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, encoding?} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet; `encoding` as in file.save)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool, encoding?} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV (`encoding` as in file.save); `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE), always as UTF-8, so not with `encoding`", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -119,15 +119,20 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
+    let encoding = encoding_param("file.save", p)?;
     let d = s.doc_mut()?;
     // The document's own file keeps the format its content had when opened; any other path
     // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
     let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
-    let bytes = match kind {
-        Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
-        None => crate::io::save_bytes(wb, &path)?,
+    let (bytes, chosen) = match kind {
+        Some(k @ (crate::io::FileKind::Csv | crate::io::FileKind::Tsv)) => match encode_text_file(wb, k, encoding)? {
+            Ok(done) => done,
+            Err((own, chars)) => return Ok(ask_encoding(s, "file.save", json!({"path": path}), own, &chars)),
+        },
+        Some(kind) => (crate::io::save_bytes_as(wb, &path, kind)?, None),
+        None => (crate::io::save_bytes(wb, &path)?, None),
     };
     crate::io::write_file(&path, &bytes)?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
@@ -142,7 +147,63 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }
+    // The document's own text file saved in a chosen encoding that held every character is in that
+    // encoding from now on: the next save doesn't ask again.
+    if let Some(e) = chosen
+        && d.path.as_deref() == Some(path.as_str())
+    {
+        let format = gridcraft_model::TextFormat { encoding: e, ..d.wb.csv_format.unwrap_or_default() };
+        if d.wb.csv_format != Some(format) {
+            std::sync::Arc::make_mut(&mut d.wb).csv_format = Some(format);
+        }
+    }
     Ok(json!({"path": path, "bytes": bytes.len()}))
+}
+
+/// The `encoding` parameter of a text save: `utf-8`, `utf-8-bom`, `utf-16le`, `utf-16be` or
+/// `windows-1252`.
+fn encoding_param(cmd: &str, p: &Json) -> Result<Option<gridcraft_model::TextEncoding>> {
+    use gridcraft_model::TextEncoding;
+    match str_param(p, "encoding") {
+        None => Ok(None),
+        Some(id) => TextEncoding::from_id(id)
+            .map(Some)
+            .ok_or_else(|| bad(cmd, format!("unknown `encoding` {id:?}: use {}", TextEncoding::ALL.map(TextEncoding::id).join(", ")))),
+    }
+}
+
+/// Encodes the active sheet as the text file `kind` ([`crate::io::text_file`]). With `encoding` (a
+/// choice: the person's in the dialog, or the caller's), in that encoding: characters it can't
+/// hold become `?`, and it comes back, to be remembered, only when it held every one. Without, in
+/// the file's own encoding; `Err` gives that encoding and the characters it can't hold.
+type Encoded = std::result::Result<(Vec<u8>, Option<gridcraft_model::TextEncoding>), (gridcraft_model::TextEncoding, Vec<char>)>;
+fn encode_text_file(wb: &gridcraft_model::Workbook, kind: crate::io::FileKind, encoding: Option<gridcraft_model::TextEncoding>) -> Result<Encoded> {
+    let (text, format) = crate::io::text_file(wb, kind)?;
+    Ok(match encoding {
+        Some(e) => match gridcraft_xlsx::encode_text(&text, e, false) {
+            Ok(bytes) => Ok((bytes, Some(e))),
+            Err(_) => Ok((gridcraft_xlsx::encode_text(&text, e, true).unwrap_or_default(), None)),
+        },
+        None => gridcraft_xlsx::encode_text(&text, format.encoding, false).map(|bytes| (bytes, None)).map_err(|chars| (format.encoding, chars)),
+    })
+}
+
+/// The file's encoding can't hold some characters: nothing is written, and the person is asked
+/// which encoding to save in, UTF-8 (which holds every character) suggested. The command's answer
+/// says the same, for callers to choose an `encoding` and run `cmd` again with `params`.
+fn ask_encoding(s: &mut Session, cmd: &str, params: Json, own: gridcraft_model::TextEncoding, chars: &[char]) -> Json {
+    let info = json!({
+        "saved": false,
+        "command": cmd,
+        "params": params,
+        "encoding": own.id(),
+        "encodingName": own.name(),
+        "unencodable": chars.iter().collect::<String>(),
+        "message": crate::io::unencodable(own, chars).to_string(),
+        "suggested": gridcraft_model::TextEncoding::Utf8.id(),
+    });
+    s.ui_requests.push(crate::UiRequest::Dialog("textEncoding".into(), info.clone()));
+    info
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
@@ -185,14 +246,30 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.export", "missing `path`"))?.to_string();
+    let encoding = encoding_param("file.exportCsv", p)?;
     let d = s.doc()?;
     let wb = (*d.wb).clone();
     if p.get("sheet").is_some() {
         wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+    let values = ext == "csv" && bool_param(p, "values").unwrap_or(false);
+    if values && encoding.is_some() {
+        return Err(bad("file.exportCsv", "`encoding` applies to the displayed values; `values: true` always writes UTF-8"));
+    }
+    let bytes = if values {
         crate::io::csv_values_bytes(&wb)?
+    } else if ext == "csv" {
+        match encode_text_file(&wb, crate::io::FileKind::Csv, encoding)? {
+            Ok((bytes, _)) => bytes,
+            Err((own, chars)) => {
+                let mut params = json!({"path": target});
+                if let Some(sheet) = p.get("sheet") {
+                    params["sheet"] = sheet.clone();
+                }
+                return Ok(ask_encoding(s, "file.exportCsv", params, own, &chars));
+            }
+        }
     } else {
         crate::io::save_bytes(&wb, &target)?
     };
