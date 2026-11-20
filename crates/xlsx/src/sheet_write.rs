@@ -195,7 +195,6 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     part.features.drawing = write_sheet_drawing_rel(wb, si, sheet, &mut rels, out);
     let (legacy_rid, notes_frag) = write_sheet_notes_frag(sheet, si, &kept, &mut rels, out);
     part.features.legacy_drawing = legacy_rid;
-    push_fragment_kids(&mut part.root, &notes_frag);
 
     if !tables.is_empty() {
         let mut used_names: HashSet<String> = HashSet::new();
@@ -214,7 +213,20 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     write_sheet_extensions(&mut ext_xml, sheet, &x14_cf);
     push_fragment_kids(&mut part.root, &ext_xml);
 
-    let xml = String::from_utf8(part.to_xml(&rows)).unwrap_or_default();
+    let mut xml = String::from_utf8(part.to_xml(&rows)).unwrap_or_default();
+    if !notes_frag.is_empty() {
+        let after_data = xml
+            .find("</sheetData>")
+            .map(|p| p + "</sheetData>".len())
+            .or_else(|| xml.find("<sheetData/>").map(|p| p + "<sheetData/>".len()))
+            .unwrap_or(0);
+        let pos = ["<webPublishItems", "<tableParts", "<extLst", "</worksheet>"]
+            .iter()
+            .filter_map(|tag| xml[after_data..].find(tag).map(|p| after_data + p))
+            .min()
+            .unwrap_or(xml.len());
+        xml.insert_str(pos, &notes_frag);
+    }
     (xml, rels)
 }
 
