@@ -92,10 +92,50 @@ pub(crate) fn signature(name: &str, locale: FormulaLocale, language: Language) -
     Some(format!("{}({args})", locale.function_name(head)))
 }
 
-/// A function's description in the interface language (English while untranslated).
-pub(crate) fn description(name: &str, locale: FormulaLocale, language: Language) -> Option<String> {
-    let english = crate::formula_bar::function_description(locale.canonical_name(name))?;
-    Some(language.function_description(&english).map_or(english, str::to_string))
+const PORTUGUESE_HELP: &[(&str, &str, &str)] = &[
+    ("SUM", "SOMA(número1; [número2]; ...)", "Soma os números."),
+    ("AVERAGE", "MÉDIA(número1; [número2]; ...)", "Retorna a média dos números."),
+    ("IF", "SE(teste_lógico; valor_se_verdadeiro; [valor_se_falso])", "Retorna um valor se uma condição for verdadeira e outro se for falsa."),
+    ("COUNT", "CONT.NUM(valor1; [valor2]; ...)", "Conta as células que contêm números."),
+    ("COUNTA", "CONT.VALORES(valor1; [valor2]; ...)", "Conta as células não vazias."),
+    ("SUMIF", "SOMASE(intervalo; critério; [intervalo_soma])", "Soma as células especificadas por um determinado critério."),
+    ("COUNTIF", "CONT.SE(intervalo; critério)", "Conta as células que atendem a um critério."),
+    (
+        "VLOOKUP",
+        "PROCV(valor_procurado; matriz_tabela; núm_índice_coluna; [procurar_intervalo])",
+        "Procura um valor na primeira coluna de uma tabela e retorna o valor na mesma linha de outra coluna.",
+    ),
+    (
+        "HLOOKUP",
+        "PROCH(valor_procurado; matriz_tabela; núm_índice_linha; [procurar_intervalo])",
+        "Procura um valor na primeira linha de uma tabela e retorna o valor na mesma coluna de outra linha.",
+    ),
+    (
+        "XLOOKUP",
+        "PROCX(pesquisa_valor; matriz_pesquisa; matriz_retorno; [se_não_encontrada]; [modo_correspondência]; [modo_pesquisa])",
+        "Pesquisa um intervalo ou matriz e retorna o item correspondente.",
+    ),
+    ("MATCH", "CORRESP(valor_procurado; matriz_procurada; [tipo_correspondência])", "Retorna a posição de um item em um intervalo."),
+    ("INDEX", "ÍNDICE(matriz; núm_linha; [núm_coluna])", "Retorna o valor em uma linha e coluna de uma matriz."),
+    ("TODAY", "HOJE()", "Retorna a data atual."),
+    ("NOW", "AGORA()", "Retorna a data e hora atuais."),
+    ("TRUE", "VERDADEIRO()", "Retorna o valor lógico VERDADEIRO."),
+    ("FALSE", "FALSO()", "Retorna o valor lógico FALSO."),
+];
+
+pub(crate) fn signature(name: &str, locale: FormulaLocale) -> Option<String> {
+    let canonical = locale.canonical_name(name);
+    if locale == FormulaLocale::Es
+        && let Some((_, signature, _)) = SPANISH_HELP.iter().find(|(name, ..)| *name == canonical)
+    {
+        return Some((*signature).into());
+    }
+    if locale == FormulaLocale::Pt
+        && let Some((_, signature, _)) = PORTUGUESE_HELP.iter().find(|(name, ..)| *name == canonical)
+    {
+        return Some((*signature).into());
+    }
+    crate::formula_bar::function_signature(canonical).map(|s| s.replace(',', &locale.list_separator().to_string()))
 }
 
 /// `SUM(number1, [number2], ...)` -> `SUM` and its arguments as written.
@@ -119,6 +159,12 @@ fn translate_argument(arg: &str, language: Language) -> Option<String> {
     if name == "..." {
         return Some(arg.to_string());
     }
+    if locale == FormulaLocale::Pt
+        && let Some((_, _, description)) = PORTUGUESE_HELP.iter().find(|(name, ..)| *name == canonical)
+    {
+        return Some((*description).into());
+    }
+    crate::formula_bar::function_description(canonical)
     // `arg` is `[`? + `name` + index + `]`?, so the first match is the name itself.
     Some(arg.replacen(name, language.function_argument(name)?, 1))
 }
