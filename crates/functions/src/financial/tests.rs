@@ -394,6 +394,19 @@ fn securities_read_dates_in_the_1904_system() {
     close_tol(ev4("ODDFPRICE", odd), 113.597717474079, 1e-9);
 }
 
+#[test]
+fn tbilleq_366_day_leap_year_matches_excel() {
+    // 366-day bills spanning leap day use a 366-day year (t = 1.0), matching Excel.
+    for (y0, y1) in [(2019, 2020), (2023, 2024), (2027, 2028)] {
+        close_tol(ev("TBILLEQ", vec![d(y0, 3, 1), d(y1, 3, 1), n(0.05)]), 0.0528572777068281, 1e-12);
+    }
+    // 365-day bills (non-leap and leap-spanning) and 183-day bills still use dsm / 365.
+    close_tol(ev("TBILLEQ", vec![d(2022, 3, 1), d(2023, 3, 1), n(0.05)]), 0.05270709977197674, 1e-12);
+    close_tol(ev("TBILLEQ", vec![d(2023, 3, 2), d(2024, 3, 1), n(0.05)]), 0.05270709977197674, 1e-12);
+    close_tol(ev("TBILLEQ", vec![d(2023, 9, 1), d(2024, 3, 2), n(0.05)]), 0.0520128354682795, 1e-12);
+    close_tol(ev("TBILLEQ", vec![d(2022, 9, 1), d(2023, 3, 3), n(0.05)]), 0.0520128354682795, 1e-12);
+}
+
 /// Excel truncates ACCRINTM's dates to whole days and accrues nothing when issue equals
 /// settlement, in every basis and both date systems; only issue after settlement is #NUM! (#4096).
 #[test]
