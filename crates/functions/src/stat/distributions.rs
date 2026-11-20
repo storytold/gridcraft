@@ -758,7 +758,19 @@ pub(super) fn betadist_legacy(a: &[Arg], _: C) -> R<Value> {
     num_val(reg_inc_beta((x - lo) / (hi - lo), al, be))
 }
 
-pub(super) fn beta_inv(a: &[Arg], _: C) -> R<Value> {
+/// BETA.INV: Excel answers a probability of exactly 0 or 1 with #NUM! (#4014).
+pub(super) fn beta_inv(a: &[Arg], c: C) -> R<Value> {
+    let (p, _, _) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
+    beta_bounds(a, 3)?;
+    if p <= 0.0 || p >= 1.0 {
+        return Err(CellError::Num);
+    }
+    betainv(a, c)
+}
+
+/// BETAINV, and BETA.INV once its endpoints are refused. BETAINV keeps the closed range: its
+/// endpoints have not been measured against Excel.
+pub(super) fn betainv(a: &[Arg], _: C) -> R<Value> {
     let (p, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
     let (lo, hi) = beta_bounds(a, 3)?;
     if al <= 0.0 || be <= 0.0 || !(0.0..=1.0).contains(&p) {

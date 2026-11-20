@@ -772,6 +772,25 @@ fn t_inv_zero_probability_returns_div0() {
 }
 
 #[test]
+fn beta_inv_refuses_probabilities_0_and_1() {
+    // Excel answers a probability of exactly 0 or 1 with #NUM! (#4014).
+    for p in [0.0, 1.0] {
+        is_err(ev("BETA.INV", vec![n(p), n(0.5), n(0.5)]), CellError::Num);
+        is_err(ev("BETA.INV", vec![n(p), n(8.0), n(10.0), n(1.0), n(3.0)]), CellError::Num);
+    }
+    close_tol(ev("BETA.INV", vec![n(0.5), n(0.5), n(0.5)]), 0.5, 1e-12);
+    // Just inside the endpoints there is still an answer, inside the bounds.
+    for p in [1e-12, 1.0 - 1e-12] {
+        match ev("BETA.INV", vec![n(p), n(8.0), n(10.0), n(1.0), n(3.0)]) {
+            Value::Number(x) => assert!((1.0..=3.0).contains(&x), "{p}: {x}"),
+            other => panic!("{p}: {other:?}"),
+        }
+    }
+    // An argument error still comes before the range check.
+    is_err(ev("BETA.INV", vec![n(0.0), n(0.5), n(0.5), t("x")]), CellError::Value);
+}
+
+#[test]
 fn binom_inv_huge_trials_returns() {
     // Above 2^53 neighbouring f64 values are more than 1 apart; the bisection must still end.
     let cases: [(&str, f64, f64, f64); 3] = [("BINOM.INV", 1e17, 0.5, 0.5), ("CRITBINOM", 1e300, 1.0, 0.5), ("BINOM.INV", 1e300, 0.5, 0.5)];
