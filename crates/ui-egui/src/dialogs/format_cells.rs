@@ -159,21 +159,25 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             ui.horizontal(|ui| {
                 if ui.button(lang.tr("None")).clicked() {
                     st.borders = Default::default();
+                    touch(d, "borders");
                 }
                 if ui.button(lang.tr("Outline")).clicked() {
+                    for edge in ["top", "bottom", "left", "right"] {
+                        touch(d, &format!("borders/{edge}"));
+                    }
                     st.borders.top = line;
                     st.borders.bottom = line;
                     st.borders.left = line;
                     st.borders.right = line;
                 }
             });
-            for (n, slot) in [
-                ("Top", &mut st.borders.top),
-                ("Bottom", &mut st.borders.bottom),
-                ("Left", &mut st.borders.left),
-                ("Right", &mut st.borders.right),
-                ("Diagonal ↘", &mut st.borders.diag_down),
-                ("Diagonal ↗", &mut st.borders.diag_up),
+            for (n, key, slot) in [
+                ("Top", "top", &mut st.borders.top),
+                ("Bottom", "bottom", &mut st.borders.bottom),
+                ("Left", "left", &mut st.borders.left),
+                ("Right", "right", &mut st.borders.right),
+                ("Diagonal ↘", "diag_down", &mut st.borders.diag_down),
+                ("Diagonal ↗", "diag_up", &mut st.borders.diag_up),
             ] {
                 let n = lang.tr(n);
                 ui.horizontal(|ui| {
@@ -192,6 +196,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                         let selected = slot.style == s;
                         response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, format!("{n} {label}")));
                         if response.clicked() {
+                            touch(d, &format!("borders/{key}"));
                             slot.style = s;
                         }
                     }
@@ -204,6 +209,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             let colors = app.session.active().map(|doc| doc.wb.theme.colors).unwrap_or_default();
             ui.label(lang.tr("Background Color:"));
             if let Some(c) = crate::widgets::color_palette(ui, &colors, lang.tr("No Color")) {
+                touch(d, "fill");
                 st.fill = if c == "none" {
                     Default::default()
                 } else {
@@ -228,11 +234,67 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
     }
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(style) = d.values.get("style").cloned() {
-        app.run_or_alert("home.formatCells", json!({"style": style}));
+    if *confirm && let Some(style) = d.values.get("style") {
+        // Only what the user changed: the rest of the active cell's style must not be stamped
+        // onto every selected cell (#2534).
+        let mut patch = d.values.get("baseStyle").map_or_else(|| style.clone(), |base| style_patch(base, style));
+        // Properties the user set explicitly go to the whole selection even when the value equals
+        // the active cell's (Fill > No Color, Border > None on a mixed selection).
+        if let (Some(m), Some(touched)) = (patch.as_object_mut(), d.values.get("touched").and_then(|t| t.as_array())) {
+            for path in touched.iter().filter_map(|t| t.as_str()) {
+                copy_path(m, style, path);
+            }
+        }
+        if patch.as_object().is_none_or(|m| !m.is_empty()) {
+            app.run_or_alert("home.formatCells", json!({"style": patch}));
+        }
     }
     if !open {
         app.dialog = None;
         *confirm = true; // closes
+    }
+}
+
+/// Records that the user explicitly set the style property at `path` (`fill`, `borders/top`).
+fn touch(d: &mut Dialog, path: &str) {
+    let touched = d.values.entry("touched").or_insert_with(|| json!([]));
+    if let Some(list) = touched.as_array_mut()
+        && !list.iter().any(|t| t.as_str() == Some(path))
+    {
+        list.push(json!(path));
+    }
+}
+
+/// Copies the value at `path` (slash-separated keys) of `style` into `patch`, creating the
+/// intermediate objects and replacing whatever the diff put there.
+fn copy_path(patch: &mut serde_json::Map<String, serde_json::Value>, style: &serde_json::Value, path: &str) {
+    let Some(value) = path.split('/').try_fold(style, |v, k| v.get(k)) else { return };
+    let mut keys = path.split('/').peekable();
+    let mut cur = patch;
+    while let Some(k) = keys.next() {
+        if keys.peek().is_none() {
+            cur.insert(k.to_string(), value.clone());
+            return;
+        }
+        let entry = cur.entry(k.to_string()).or_insert_with(|| json!({}));
+        match entry.as_object_mut() {
+            Some(m) => cur = m,
+            None => return,
+        }
+    }
+}
+
+/// The part of `new` that differs from `base`. Objects with the same keys (style structs) are
+/// compared field by field; anything else that changed is sent whole.
+fn style_patch(base: &serde_json::Value, new: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value as Json;
+    match (base, new) {
+        (Json::Object(b), Json::Object(n)) if b.len() == n.len() && n.keys().all(|k| b.contains_key(k)) => Json::Object(
+            n.iter()
+                .filter(|(k, v)| b.get(*k) != Some(*v))
+                .map(|(k, v)| (k.clone(), b.get(k).map_or_else(|| v.clone(), |bv| style_patch(bv, v))))
+                .collect(),
+        ),
+        _ => new.clone(),
     }
 }
