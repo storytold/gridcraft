@@ -67,7 +67,7 @@ GridCraft is a Rust-native spreadsheet (egui/eframe), run natively and on the we
 
 Layout:
 
-- Layers (`cargo xtask layers` checks them): `core`/`numfmt` L0, `formula`/`functions` L1, `model`/`calc`/`xlsx` L2, `chart` L3, `engine` L5, `ui-egui`/`mcp` L6, `apps/*` L7. Nothing below L6 depends on egui, eframe, winit or rfd.
+- Layers (`cargo xtask layers` checks them): `core`/`numfmt`/`pdf`/`sandbox` L0, `formula`/`functions`/`math` L1, `model`/`calc`/`xlsx` L2, `chart` L3, `engine` L5, `ui-egui`/`mcp` L6, `apps/*` L7. Nothing below L6 depends on egui, eframe, winit or rfd.
 - Commands live in `crates/engine/src/cmd/*`; ids follow Excel's ribbon (`home.bold`, `data.sortAscending`) plus primitives (`cell.set`, `range.setValues`). UI-only commands live in `crates/ui-egui`. Panels act through `app.run(id, params)`; colours come from `theme::Tokens`. A command called with empty params runs with defaults or returns an error; only menu-style invocation opens a dialog (`UiRequest::Dialog`).
 - `apps/gridcraft` (desktop), `apps/gridcraft-cli` (headless, MCP), `xtask/`.
 
