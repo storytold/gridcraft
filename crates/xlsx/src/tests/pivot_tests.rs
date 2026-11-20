@@ -603,7 +603,10 @@ fn axis_filters_and_calculated_fields_dedupe_ignoring_case() {
     let (wb, report) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
     let pt = &wb.sheet(0).unwrap().pivots[0];
     assert_eq!((pt.rows.len(), pt.columns.len()), (1, 1), "{:?}", report.warnings);
-    assert_eq!(pt.filters, vec![PivotFilter { source_col: "K".into(), selected: Some(vec!["a".into()]) }]);
+    assert_eq!(
+        pt.filters,
+        vec![PivotFilter { source_col: "K".into(), selected: Some(vec!["a".into()]), hidden: false, date_group: Default::default() }]
+    );
     assert_eq!(pt.calculated_fields, vec![PivotCalcField { name: "Price".into(), formula: "=1".into() }]);
 }
 
