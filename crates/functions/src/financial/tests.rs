@@ -234,6 +234,29 @@ fn coupons() {
     close(ev("COUPNCD", vec![d(2011, 3, 15), d(2011, 11, 30), n(2.0)]), serial_from_ymd(DateSystem::D1900, 2011, 5, 31).unwrap());
 }
 
+/// An omitted required argument of DISC, INTRATE, PRICEDISC, RECEIVED or YIELDDISC is `#N/A`,
+/// as in Excel, not zero. A blank cell reference still counts as zero, and an invalid basis
+/// is reported ahead of an omitted argument (#4086, #4087).
+#[test]
+fn discount_securities_reject_omitted_required_arguments() {
+    let full = || vec![d(2025, 1, 15), d(2025, 2, 14), n(0.05), n(100.0), n(2.0)];
+    for f in ["DISC", "INTRATE", "PRICEDISC", "RECEIVED", "YIELDDISC"] {
+        for slot in 0..4 {
+            let mut args = full();
+            args[slot] = empty();
+            is_err(ev(f, args.clone()), CellError::NA);
+            args[4] = n(9.0);
+            is_err(ev(f, args.clone()), CellError::Num);
+            args[4] = t("x");
+            is_err(ev(f, args), CellError::Value);
+        }
+    }
+    close_tol(ev("PRICEDISC", vec![rf(Value::Empty), d(2025, 2, 14), n(0.05), n(100.0), n(2.0)]), -534.75, 1e-9);
+    // An omitted basis is still basis 0.
+    let base = ev("DISC", vec![d(2025, 1, 15), d(2025, 2, 14), n(95.0), n(100.0)]);
+    assert_eq!(ev("DISC", vec![d(2025, 1, 15), d(2025, 2, 14), n(95.0), n(100.0), empty()]), base);
+}
+
 #[test]
 fn securities() {
     close_tol(ev("DISC", vec![d(2007, 1, 25), d(2007, 6, 15), n(97.975), n(100.0), n(1.0)]), 0.052420213, 1e-8);
