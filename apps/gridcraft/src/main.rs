@@ -12,6 +12,8 @@
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod control_server;
+#[cfg(target_os = "macos")]
+mod font_panel;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
@@ -28,8 +30,46 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
-/// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
-struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The app, its native window per workbook window, and (macOS) the menu bar, Finder events and
+/// the system font panel (made the first time Format › Font… is chosen).
+struct App(
+    SheetApp,
+    DocWindows,
+    #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
+    #[cfg(target_os = "macos")] Option<font_panel::FontPanel>,
+);
+
+/// The active cell's font, as the ribbon's Font group shows it.
+#[cfg(target_os = "macos")]
+fn active_face(app: &SheetApp) -> font_panel::Face {
+    let font = app.session.active().and_then(|d| Some(d.wb.styles.get(d.wb.active()?.style_id(d.selection.active)).font.clone())).unwrap_or_default();
+    font_panel::Face { family: font.name, size: f64::from(font.size), bold: font.bold, italic: font.italic }
+}
+
+/// Formats the selected cells with what the user changed in the font panel, as the ribbon's Font
+/// group does. Cells have one strikethrough, so a double one is a single one.
+#[cfg(target_os = "macos")]
+fn apply_font_pick(app: &mut SheetApp, pick: &font_panel::Pick) {
+    use font_panel::Line;
+    let underline = |line: Line| match line {
+        Line::None => json!({"on": false}),
+        Line::Single => json!({"on": true, "style": "single"}),
+        Line::Double => json!({"on": true, "style": "double"}),
+    };
+    let runs = [
+        pick.family.as_ref().map(|name| ("home.fontName", json!({"name": name}))),
+        pick.size.map(|size| ("home.fontSize", json!({"size": size}))),
+        pick.bold.map(|on| ("home.bold", json!({"on": on}))),
+        pick.italic.map(|on| ("home.italic", json!({"on": on}))),
+        pick.color.map(|[r, g, b]| ("home.fontColor", json!({"color": format!("#{r:02X}{g:02X}{b:02X}")}))),
+        pick.underline.map(|line| ("home.underline", underline(line))),
+        pick.strike.map(|line| ("home.strikethrough", json!({"on": line != Line::None}))),
+    ];
+    for (id, params) in runs.into_iter().flatten() {
+        app.run_or_alert(id, params);
+    }
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -38,10 +78,35 @@ impl eframe::App for App {
             if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
                 self.2 = Some(native_menu::NativeMenu::install(ctx));
             }
+            // Made at start, so `follow` can close the panels macOS reopens from the last quit.
+            if self.4.is_none()
+                && let Some(mtm) = objc2::MainThreadMarker::new()
+            {
+                let wake = ctx.clone();
+                let panel = font_panel::FontPanel::new(mtm, move || wake.request_repaint());
+                // A cell's font has no shadow (nor does xlsx).
+                panel.hide_shadow();
+                self.4 = Some(panel);
+            }
+            // Picks first: they format the window they were made in, before a Window-menu switch or a
+            // Finder open makes another one active.
+            if let Some(panel) = &self.4 {
+                for pick in panel.picks() {
+                    apply_font_pick(&mut self.0, &pick);
+                }
+            }
             if let Some(m) = &mut self.2 {
                 m.poll(&mut self.0, ctx, self.1.focused_viewport());
+                if std::mem::take(&mut m.show_fonts)
+                    && let Some(panel) = &self.4
+                {
+                    panel.show(active_face(&self.0));
+                }
             }
             apple_events::poll(&self.3, &mut self.0, ctx);
+            if let Some(panel) = &self.4 {
+                panel.follow(|| active_face(&self.0));
+            }
         }
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
@@ -408,6 +473,8 @@ fn main() -> eframe::Result<()> {
                     None,
                     #[cfg(target_os = "macos")]
                     apple_events.connect(&cc.egui_ctx),
+                    #[cfg(target_os = "macos")]
+                    None,
                 )))
             }),
         )
@@ -455,5 +522,29 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod font_pick_tests {
+    use super::*;
+    use font_panel::{Line, Pick};
+
+    #[test]
+    fn a_pick_formats_the_cell_with_only_what_changed() {
+        let mut session = Session::new();
+        session.execute("file.new", json!({})).unwrap();
+        let mut app = SheetApp::new(session, Services::default());
+        let pick = Pick { color: Some([0x12, 0xAB, 0xEF]), underline: Some(Line::Double), strike: Some(Line::Double), ..Pick::default() };
+        apply_font_pick(&mut app, &pick);
+        let d = app.session.active().unwrap();
+        let font = &d.wb.styles.get(d.wb.active().unwrap().style_id(d.selection.active)).font;
+        assert_eq!(format!("{:?} {:?} {}", font.color, font.underline, font.strike), "Rgb(1223663) Double true");
+        assert_eq!(active_face(&app).family, font.name, "family, size, bold and italic are untouched");
+        // Lines off again.
+        apply_font_pick(&mut app, &Pick { underline: Some(Line::None), strike: Some(Line::None), ..Pick::default() });
+        let d = app.session.active().unwrap();
+        let font = &d.wb.styles.get(d.wb.active().unwrap().style_id(d.selection.active)).font;
+        assert_eq!(format!("{:?} {}", font.underline, font.strike), "None false");
     }
 }
