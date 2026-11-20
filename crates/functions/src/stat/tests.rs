@@ -365,6 +365,21 @@ fn percentiles() {
 }
 
 #[test]
+fn large_and_small_return_the_rank_error_before_a_data_error() {
+    // Native Excel (#4278): with an error in the data and another in the rank, LARGE and SMALL
+    // return the rank's error; with one error, that error.
+    let data = |e: CellError| rf(arr(vec![vec![nv(10.0), nv(20.0), Value::Error(e), nv(40.0)]]));
+    let rank = |e: CellError| rf(Value::Error(e));
+    for f in ["LARGE", "SMALL"] {
+        is_err(ev(f, vec![data(CellError::NA), rank(CellError::Div0)]), CellError::Div0);
+        is_err(ev(f, vec![data(CellError::Div0), rank(CellError::NA)]), CellError::NA);
+        is_err(ev(f, vec![data(CellError::NA), n(1.0)]), CellError::NA);
+        is_err(ev(f, vec![c(&[10.0, 20.0, 30.0, 40.0]), rank(CellError::Div0)]), CellError::Div0);
+    }
+    close(ev("LARGE", vec![c(&[10.0, 20.0, 30.0, 40.0]), n(1.0)]), 40.0);
+}
+
+#[test]
 fn pairs_and_regression() {
     close_tol(ev("CORREL", vec![c(&[3.0, 2.0, 4.0, 5.0, 6.0]), c(&[9.0, 7.0, 12.0, 15.0, 17.0])]), 0.997054486, 1e-9);
     close_tol(ev("PEARSON", vec![c(&[9.0, 7.0, 5.0, 3.0, 1.0]), c(&[10.0, 6.0, 1.0, 5.0, 3.0])]), 0.699379, D7);

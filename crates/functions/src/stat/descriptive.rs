@@ -363,12 +363,15 @@ pub(super) fn mode_mult(a: &[Arg], _: C) -> R<Value> {
     col_value(m)
 }
 
+// The rank is read before the data: when both hold an error, Excel returns the rank's (#4278).
 pub(super) fn large(a: &[Arg], _: C) -> R<Value> {
-    num_val(kth(arg_nums(a, 0)?, num(a, 1)?, true)?)
+    let k = num(a, 1)?;
+    num_val(kth(arg_nums(a, 0)?, k, true)?)
 }
 
 pub(super) fn small(a: &[Arg], _: C) -> R<Value> {
-    num_val(kth(arg_nums(a, 0)?, num(a, 1)?, false)?)
+    let k = num(a, 1)?;
+    num_val(kth(arg_nums(a, 0)?, k, false)?)
 }
 
 pub(super) fn rank_impl(a: &[Arg], avg: bool) -> R<Value> {
