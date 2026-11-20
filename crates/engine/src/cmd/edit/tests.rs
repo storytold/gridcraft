@@ -1,5 +1,54 @@
 use super::*;
 
+#[test]
+fn go_to_special_keeps_every_area_of_the_selection() {
+    // #1295: coalesce() truncated the selection to 2,000 areas while the command still
+    // reported every match, so a later delete acted on fewer cells than the count said.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.fill", json!({"range": "A1:A4002", "input": "=IF(MOD(ROW(),2)=0,1,\"\")"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A4002"})).unwrap();
+    let out = s.execute("edit.goToSpecial", json!({"kind": "numbers"})).unwrap();
+    assert_eq!(out["count"], json!(2001));
+    let d = s.doc().unwrap();
+    assert_eq!(d.selection.ranges.len(), 2001);
+    assert_eq!(d.selection.ranges.last().unwrap().start.a1(), "A4002");
+}
+
+#[test]
+fn go_to_special_refuses_more_areas_than_it_can_select() {
+    // More areas than the cap is a resource limit: the command fails before it touches the
+    // selection instead of silently dropping areas past the cap.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.fill", json!({"range": "A1:A131072", "input": "=IF(MOD(ROW(),2)=0,1,\"\")"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A131072"})).unwrap();
+    let ok = s.execute("edit.goToSpecial", json!({"kind": "numbers"})).unwrap();
+    assert_eq!(ok["count"], json!(65536));
+    assert_eq!(s.doc().unwrap().selection.ranges.len(), 65536);
+    // One more area tips it over.
+    s.execute("range.fill", json!({"range": "A1:A131074", "input": "=IF(MOD(ROW(),2)=0,1,\"\")"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    let err = s.execute("edit.goToSpecial", json!({"kind": "numbers"})).unwrap_err();
+    assert!(err.to_string().contains("areas"), "{err}");
+    let d = s.doc().unwrap();
+    assert_eq!(d.selection.ranges.len(), 1, "the selection was left as it was");
+    assert_eq!(d.selection.active.a1(), "B2");
+}
+
+#[test]
+fn go_to_special_coalesces_a_contiguous_run() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.fill", json!({"range": "B1:B10000", "input": "1"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B10000"})).unwrap();
+    let out = s.execute("edit.goToSpecial", json!({"kind": "numbers"})).unwrap();
+    assert_eq!(out["count"], json!(10000));
+    let d = s.doc().unwrap();
+    assert_eq!(d.selection.ranges.len(), 1);
+    assert_eq!(d.selection.ranges[0].a1(), "B1:B10000");
+}
+
 /// Sheet1 and Sheet2 with a workbook range name, a name scoped to each sheet, a constant, a
 /// formula and a hidden name.
 fn go_to_workbook() -> Session {
