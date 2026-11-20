@@ -33,6 +33,33 @@ fn tvm() {
     is_err(ev("CUMIPMT", vec![n(0.01), n(360.0), n(125000.0), n(1.0), n(1.0), n(2.0)]), CellError::Num);
 }
 
+/// #4077: IPMT/PPMT take a period up to (not including) nper + 1, so the last part-period of a
+/// fractional term and a sub-period term both calculate; a period below 1 stays #NUM!.
+#[test]
+fn ipmt_ppmt_terminal_period() {
+    let call = |f: &str, per: f64, np: f64, typ: f64| ev(f, vec![n(0.05), n(per), n(np), n(1000.0), n(0.0), n(typ)]);
+    for f in ["IPMT", "PPMT"] {
+        is_err(call(f, 0.9, 12.0, 0.0), CellError::Num);
+        is_err(call(f, 13.0, 12.0, 0.0), CellError::Num);
+    }
+    close_tol(call("IPMT", 1.0, 12.0, 1.0), 0.0, 1e-10);
+    close_tol(call("IPMT", 12.0, 12.0, 0.0), -5.372638572419783, 1e-10);
+    close_tol(call("IPMT", 12.1, 12.0, 0.0), -4.847093708006867, 1e-10);
+    close_tol(call("IPMT", 12.9, 12.0, 1.0), -0.522986967476363, 1e-10);
+    close_tol(call("IPMT", 13.0, 12.9, 0.0), -4.5988441332562395, 1e-10);
+    close_tol(call("IPMT", 1.0, 0.5, 0.0), -50.0, 1e-10);
+    close_tol(call("IPMT", 1.0, 0.5, 1.0), 0.0, 1e-10);
+    close_tol(call("IPMT", 1.1, 12.0, 0.0), -49.69272480229204, 1e-10);
+    close_tol(call("PPMT", 1.0, 12.0, 1.0), -107.45277144839562, 1e-10);
+    close_tol(call("PPMT", 12.0, 12.0, 0.0), -107.45277144839564, 1e-10);
+    close_tol(call("PPMT", 12.1, 12.0, 0.0), -107.97831631280856, 1e-10);
+    close_tol(call("PPMT", 12.9, 12.0, 1.0), -106.92978448091925, 1e-10);
+    close_tol(call("PPMT", 13.0, 12.9, 0.0), -102.44808052168624, 1e-10);
+    close_tol(call("PPMT", 1.0, 0.5, 0.0), -2024.695076595959, 1e-10);
+    close_tol(call("PPMT", 1.0, 0.5, 1.0), -1975.9000729485324, 1e-10);
+    close_tol(call("PPMT", 1.1, 12.0, 0.0), -63.13268521852336, 1e-10);
+}
+
 /// RATE with the given arguments, as a number or an error.
 fn rate_of(args: &[f64]) -> Value {
     ev("RATE", args.iter().map(|x| n(*x)).collect())

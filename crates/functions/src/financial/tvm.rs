@@ -98,10 +98,18 @@ fn ipmt_calc(rate: f64, per: f64, nper: f64, pv: f64, fv: f64, typ: f64) -> f64 
     if typ == 1.0 { i / (1.0 + rate) } else { i }
 }
 
+/// IPMT/PPMT's period range. Period `per` charges interest on the balance after `per - 1` periods,
+/// and Excel takes any `per` from 1 up to (not including) `nper + 1`: period 12.9 of a 12-period
+/// loan, 13 of a 12.9-period one, or 1 of a 0.5-period one calculate, while period 13 of 12 and
+/// any period below 1 are #NUM! (observed, #4077).
+fn payment_period_ok(per: f64, np: f64) -> bool {
+    np != 0.0 && per >= 1.0 && per - 1.0 < np
+}
+
 pub(super) fn ipmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (rate, per, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
     let (fv, typ) = (opt_num(a, 4, 0.0)?, type_arg(a, 5)?);
-    if per < 1.0 || per > np || np == 0.0 {
+    if !payment_period_ok(per, np) {
         return Err(CellError::Num);
     }
     num_val(ipmt_calc(rate, per, np, pv, fv, typ))
@@ -110,7 +118,7 @@ pub(super) fn ipmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 pub(super) fn ppmt(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (rate, per, np, pv) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, num(a, 3)?);
     let (fv, typ) = (opt_num(a, 4, 0.0)?, type_arg(a, 5)?);
-    if per < 1.0 || per > np || np == 0.0 {
+    if !payment_period_ok(per, np) {
         return Err(CellError::Num);
     }
     num_val(pmt_calc(rate, np, pv, fv, typ) - ipmt_calc(rate, per, np, pv, fv, typ))
