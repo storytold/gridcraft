@@ -40,6 +40,12 @@ impl Formula {
     pub fn from_expr(e: Expr) -> Formula {
         Formula { text: gridcraft_formula::print(&e), expr: Some(Arc::new(e)), array: None, dynamic: false }
     }
+    /// A formula read from a file: keeps the text as saved and parses nothing, leaving the tree
+    /// to be re-parsed on demand by [`with_expr`](Self::with_expr). For huge workbooks this keeps
+    /// the parsed trees out of the resident set until a recalculation actually needs them.
+    pub fn from_file_text(text: &str) -> Formula {
+        Formula { text: text.strip_prefix('=').unwrap_or(text).to_string(), expr: None, array: None, dynamic: false }
+    }
     /// The parsed expression, re-parsing when no tree is cached.
     pub fn expr(&self) -> Option<Expr> {
         self.expr.as_deref().cloned().or_else(|| gridcraft_formula::parse(&self.text).ok())

@@ -713,7 +713,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                 let expr = gridcraft_formula::parse(text).ok();
                 let cost = shared_cost(text, expr.as_ref());
                 st.shared.insert(si, Shared { anchor: pos, expr, text: text.to_string(), unwrapped: *unwrapped, cost });
-                Some(Formula::new(text))
+                Some(Formula::from_file_text(text))
             } else {
                 let Some(sh) = st.shared.get(&si) else {
                     cx.warn("a shared formula refers to a missing master cell; kept the cached value");
@@ -742,9 +742,12 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
                     Some(e) => {
                         let dr = pos.row as i64 - sh.anchor.row as i64;
                         let dc = pos.col as i64 - sh.anchor.col as i64;
-                        Formula::from_expr(gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc))
+                        let shifted = gridcraft_formula::adjust::shift_relative(e.clone(), dr, dc);
+                        let printed = gridcraft_formula::print(&shifted);
+                        drop(shifted);
+                        Formula::from_file_text(&printed)
                     }
-                    None => Formula::new(&sh.text),
+                    None => Formula::from_file_text(&sh.text),
                 })
             }
         }
@@ -752,7 +755,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 return None;
             }
-            let mut fm = Formula::new(text);
+            let mut fm = Formula::from_file_text(text);
             let range = f.attr("ref").and_then(RangeRef::parse).unwrap_or(RangeRef::cell(pos));
             if !range.is_single() {
                 push_dynamic(st, range);
@@ -770,7 +773,7 @@ fn read_formula_text(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, 
             if text.is_empty() {
                 None
             } else {
-                Some(Formula::new(text))
+                Some(Formula::from_file_text(text))
             }
         }
     }
