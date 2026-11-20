@@ -18,12 +18,12 @@ fn harness() -> Harness {
     for (name, refers, scope) in [("Price", "=Sheet1!$B$2:$B$5", "Workbook"), ("Local", "=Sheet2!$C$3", "Sheet2"), ("Rate", "=0.07", "Workbook")] {
         session.execute("formulas.defineName", json!({"name": name, "refersTo": refers, "scope": scope})).unwrap();
     }
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h
@@ -57,7 +57,7 @@ fn double_click(h: &mut Harness, label: &str) {
 
 fn place(h: &Harness) -> (usize, String) {
     let d = h.state().session.active().unwrap();
-    (d.wb.active_sheet, d.selection.a1())
+    (d.wb.active_sheet(), d.selection.a1())
 }
 
 #[test]

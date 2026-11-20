@@ -213,8 +213,33 @@ pub fn parse(xml: &[u8]) -> Result<El, IoError> {
     parse_streaming(xml, &[], &mut |_| Ok(()))
 }
 
-/// Parses a part; complete elements named in `split` (below the root) are handed to `cb` and not
-/// kept in the returned tree.
+/// The first element named `local_name` (namespace prefix dropped) in `xml`, read from its start tag
+/// alone: no children, and nothing after the tag is read, so unbalanced markup around it (a VML
+/// caption's unclosed `<br>`) neither hides nor moves it. `None` when there is none, or when the
+/// markup before it is malformed.
+pub fn first_start(xml: &[u8], local_name: &str) -> Option<El> {
+    let mut reader = Reader::from_reader(xml);
+    {
+        let cfg = reader.config_mut();
+        cfg.check_end_names = false;
+        cfg.allow_unmatched_ends = true;
+        cfg.allow_dangling_amp = true;
+    }
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Start(e) | Event::Empty(e) if local(e.name().as_ref()) == local_name => return Some(start_el(&e)),
+            Event::Eof => return None,
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+/// Parses a part; complete elements named in `split` that are children or grandchildren of the
+/// root (`sst/si`, `worksheet/sheetData/row`) are handed to `cb` and not kept in the returned
+/// tree. Deeper elements of the same name (the `xdr:row` of a form control's anchor) stay in the
+/// tree.
 pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Result<(), IoError>) -> Result<El, IoError> {
     let data = to_utf8(xml);
     let mut reader = Reader::from_reader(data.as_ref());
@@ -230,8 +255,11 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     let mut root: Option<El> = None;
     let mut buf = Vec::new();
     // Elements kept in the tree so far, so a pathological part that passes the byte limits can
-    // still be refused before the tree itself outgrows memory.
+    // still be refused before the tree itself outgrows memory. Elements inside a `split` element
+    // are handed out with it and do not stay in the tree, so a streamed worksheet or shared-string
+    // table of any size passes: `kept_at_start` remembers the count when each open element began.
     let mut kept = 0usize;
+    let mut kept_at_start: Vec<usize> = Vec::new();
     // Attach a finished element to its parent (or emit it / make it the root).
     fn finish(
         stack: &mut [El],
@@ -240,11 +268,17 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
         split: &[&str],
         cb: &mut dyn FnMut(El) -> Result<(), IoError>,
         kept: &mut usize,
+        kept_at_start: Option<usize>,
     ) -> Result<(), IoError> {
+        let shallow = stack.len() <= 2;
         match stack.last_mut() {
             Some(parent) => {
-                if split.contains(&el.name.as_str()) {
+                if shallow && split.contains(&el.name.as_str()) {
                     cb(el)?;
+                    // The element and everything parsed inside it have left the tree.
+                    if let Some(k) = kept_at_start {
+                        *kept = k;
+                    }
                 } else {
                     *kept = kept.saturating_add(1);
                     if *kept > MAX_XML_NODES {
@@ -269,14 +303,16 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
                     return Err(IoError::Xml("XML nested too deeply".into()));
                 }
                 stack.push(start_el(&e));
+                kept_at_start.push(kept);
             }
             Event::Empty(e) => {
                 let el = start_el(&e);
-                finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                finish(&mut stack, &mut root, el, split, cb, &mut kept, None)?;
             }
             Event::End(_) => {
                 if let Some(el) = stack.pop() {
-                    finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+                    let at_start = kept_at_start.pop();
+                    finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
                 }
             }
             Event::Text(t) => {
@@ -315,116 +351,59 @@ pub fn parse_streaming(xml: &[u8], split: &[&str], cb: &mut dyn FnMut(El) -> Res
     }
     // Unclosed elements (truncated part): close them so we keep what we have.
     while let Some(el) = stack.pop() {
-        finish(&mut stack, &mut root, el, split, cb, &mut kept)?;
+        let at_start = kept_at_start.pop();
+        finish(&mut stack, &mut root, el, split, cb, &mut kept, at_start)?;
     }
     root.ok_or_else(|| IoError::Xml("no root element".into()))
 }
 
 // ---------------------------------------------------------------- writing helpers
 
-/// Escapes text content.
-pub fn esc(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '\r' => o.push_str("&#13;"),
-            c if is_xml_char(c) => o.push(c),
-            _ => {}
+// XML escaping and SpreadsheetML strings are shared; phonetic/model mapping stays here.
+pub use craft_xml::{esc, esc_attr};
+#[cfg(test)]
+use craft_xml::{is_xml_char, push_esc};
+
+/// Appends `n` in decimal.
+pub fn push_u64(o: &mut String, mut n: u64) {
+    let mut buf = [0u8; 20];
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        if let Some(d) = buf.get_mut(i) {
+            *d = b'0' + (n % 10) as u8;
+        }
+        n /= 10;
+        if n == 0 || i == 0 {
+            break;
         }
     }
-    o
+    for &d in buf.get(i..).unwrap_or_default() {
+        o.push(char::from(d));
+    }
 }
 
-/// Escapes an attribute value (double-quoted).
-pub fn esc_attr(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => o.push_str("&amp;"),
-            '<' => o.push_str("&lt;"),
-            '>' => o.push_str("&gt;"),
-            '"' => o.push_str("&quot;"),
-            '\n' => o.push_str("&#10;"),
-            '\r' => o.push_str("&#13;"),
-            '\t' => o.push_str("&#9;"),
-            c if is_xml_char(c) => o.push(c),
-            _ => {}
+/// Appends the `A1`-style text of `c` ([`gridcraft_core::CellRef::a1`]).
+#[cfg(test)]
+fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
+    let mut letters = [0u8; 8];
+    let mut i = letters.len();
+    let mut n = u64::from(c.col) + 1;
+    while n > 0 && i > 0 {
+        i -= 1;
+        if let Some(l) = letters.get_mut(i) {
+            *l = b'A' + ((n - 1) % 26) as u8;
         }
+        n = (n - 1) / 26;
     }
-    o
-}
-
-fn is_xml_char(c: char) -> bool {
-    matches!(c, '\t' | '\n' | '\r' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
-}
-
-/// ST_Xstring encoding for cell text: characters XML can't carry and carriage returns become
-/// `_xHHHH_`, and literal `_xHHHH_` sequences are protected with `_x005F_`. The result still needs
-/// [`esc`].
-pub fn encode_xstring(s: &str) -> String {
-    let mut o = String::with_capacity(s.len());
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if c == '_' && looks_like_escape(&chars, i) {
-            o.push_str("_x005F_");
-        } else if !is_xml_char(c) || (c.is_control() && !matches!(c, '\t' | '\n')) {
-            o.push_str(&format!("_x{:04X}_", c as u32 & 0xFFFF));
-        } else {
-            o.push(c);
-        }
+    for &l in letters.get(i..).unwrap_or_default() {
+        o.push(char::from(l));
     }
-    o
+    push_u64(o, u64::from(c.row) + 1);
 }
 
-fn looks_like_escape(chars: &[char], i: usize) -> bool {
-    chars.get(i + 1) == Some(&'x') && chars.get(i + 6) == Some(&'_') && (i + 2..i + 6).all(|k| chars.get(k).is_some_and(|c| c.is_ascii_hexdigit()))
-}
-
-fn escape_unit(chars: &[char], i: usize) -> Option<u32> {
-    let hex: String = chars.get(i + 2..i + 6)?.iter().collect();
-    u32::from_str_radix(&hex, 16).ok()
-}
-
-/// The character for a high surrogate escape at `i` (value `high`) followed directly by a low surrogate escape.
-fn surrogate_pair(chars: &[char], i: usize, high: u32) -> Option<char> {
-    if !(0xD800..=0xDBFF).contains(&high) || chars.get(i + 7) != Some(&'_') || !looks_like_escape(chars, i + 7) {
-        return None;
-    }
-    let low = escape_unit(chars, i + 7).filter(|l| (0xDC00..=0xDFFF).contains(l))?;
-    char::from_u32(0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00))
-}
-
-/// Inverse of [`encode_xstring`].
-pub fn decode_xstring(s: &str) -> String {
-    if !s.contains("_x") {
-        return s.to_string();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    let mut o = String::with_capacity(s.len());
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '_' && looks_like_escape(&chars, i) {
-            let unit = escape_unit(&chars, i);
-            if let Some(ch) = unit.and_then(char::from_u32) {
-                o.push(ch);
-                i += 7;
-                continue;
-            }
-            // A high surrogate escape followed by a low surrogate escape is one UTF-16 pair.
-            if let Some(ch) = unit.and_then(|high| surrogate_pair(&chars, i, high)) {
-                o.push(ch);
-                i += 14;
-                continue;
-            }
-        }
-        o.push(chars[i]);
-        i += 1;
-    }
-    o
-}
+// Existing call sites and regression coverage use the production shared codec.
+pub use craft_xlsx::{decode_xstring, encode_xstring};
 
 /// `<t>` element with `xml:space="preserve"` when needed.
 pub fn t_el(s: &str) -> String {
@@ -475,13 +454,30 @@ pub fn si_body(text: &str, phonetic: Option<&PhoneticString>) -> String {
 
 /// Formats a number for an XML attribute/value (shortest round-trip form).
 pub fn num(n: f64) -> String {
+    let mut s = String::new();
+    push_num(&mut s, n);
+    s
+}
+
+/// Appends [`num`]`(n)` to `o`.
+pub fn push_num(o: &mut String, n: f64) {
     if !n.is_finite() {
-        return "0".into();
+        o.push('0');
+        return;
     }
     if n == n.trunc() && n.abs() < 1e15 {
-        return format!("{}", n as i64);
+        let i = n as i64;
+        if i < 0 {
+            o.push('-');
+        }
+        push_u64(o, i.unsigned_abs());
+        return;
     }
-    format!("{n:?}").replace('e', "E")
+    let start = o.len();
+    let _ = write!(o, "{n:?}");
+    if let Some(e) = o.get(start..).and_then(|t| t.find('e')) {
+        o.replace_range(start + e..start + e + 1, "E");
+    }
 }
 
 #[cfg(test)]
@@ -493,6 +489,26 @@ mod tests {
         for s in ["plain", " leading ", "a & <b>", "line\nbreak", "日本語", "x_x0041_"] {
             assert_eq!(si_body(s, None), t_el(s));
         }
+    }
+
+    #[test]
+    fn a_streamed_part_may_hold_more_elements_than_the_cap() {
+        // A worksheet of ordinary size: 5001 rows of 100 cells is 1,000,200 `c` and `v` elements,
+        // more than the cap, but the rows are streamed out one by one and never pile up in the
+        // tree, so the part is read whole. Kept in a tree (no split), the same part is refused.
+        let row = format!("<row>{}</row>", "<c><v>1</v></c>".repeat(100));
+        let xml = format!("<sheetData>{}</sheetData>", row.repeat(5001));
+        let mut rows = 0usize;
+        let root = parse_streaming(xml.as_bytes(), &["row"], &mut |r| {
+            assert_eq!(r.children.len(), 100);
+            rows += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(rows, 5001);
+        assert!(root.children.is_empty());
+        let err = parse(xml.as_bytes()).unwrap_err();
+        assert!(err.to_string().contains("elements"), "{err}");
     }
 
     #[test]
@@ -618,6 +634,62 @@ mod tests {
         assert_eq!(esc_attr("a\rb"), "a&#13;b");
     }
 
+    /// The appending helpers the sheet writer uses write exactly what the allocating spellings
+    /// (`CellRef::a1`, `to_string`, the `num` formula and the `esc` character loop) write.
+    #[test]
+    fn appending_helpers_match_the_allocating_spellings() {
+        use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
+        for c in [
+            CellRef::new(0, 0),
+            CellRef::new(9, 25),
+            CellRef::new(99, 26),
+            CellRef::new(0, 701),
+            CellRef::new(0, 702),
+            CellRef::new(MAX_ROWS - 1, MAX_COLS - 1),
+            CellRef::new(u32::MAX, u32::MAX),
+        ] {
+            let mut s = String::from("x");
+            push_a1(&mut s, c);
+            assert_eq!(s, format!("x{}", c.a1()));
+        }
+        for n in [0, 9, 10, 99, 1_048_576, u64::MAX] {
+            let mut s = String::from("x");
+            push_u64(&mut s, n);
+            assert_eq!(s, format!("x{n}"));
+        }
+        for n in
+            [0.0, -0.0, 1.0, -3.0, 0.1, -2.5, 1e-7, 1.5e20, 1e15, -1e15, 999_999_999_999_999.0, f64::NAN, f64::INFINITY, f64::MIN_POSITIVE, f64::MAX]
+        {
+            let reference = if !n.is_finite() {
+                "0".to_string()
+            } else if n == n.trunc() && n.abs() < 1e15 {
+                format!("{}", n as i64)
+            } else {
+                format!("{n:?}").replace('e', "E")
+            };
+            let mut s = String::from("x");
+            push_num(&mut s, n);
+            assert_eq!(s, format!("x{reference}"), "{n}");
+            assert_eq!(num(n), reference);
+        }
+        for t in ["plain", "", "a & <b> > c \"q\"", "tab\tnew\nline\rcr", "\u{1}\u{8}ctl", "日本語 ü", "\u{FFFE}\u{FFFF}x", "~\u{7F}"] {
+            let mut reference = String::new();
+            for c in t.chars() {
+                match c {
+                    '&' => reference.push_str("&amp;"),
+                    '<' => reference.push_str("&lt;"),
+                    '>' => reference.push_str("&gt;"),
+                    '\r' => reference.push_str("&#13;"),
+                    c if is_xml_char(c) => reference.push(c),
+                    _ => {}
+                }
+            }
+            let mut s = String::from("x");
+            push_esc(&mut s, t);
+            assert_eq!(s, format!("x{reference}"), "{t:?}");
+        }
+    }
+
     #[test]
     fn numbers() {
         assert_eq!(num(1.0), "1");
@@ -626,5 +698,46 @@ mod tests {
         assert_eq!(num(-3.0), "-3");
         assert_eq!(num(1.5e20), "1.5E20");
         assert_eq!("1.5E20".parse::<f64>().unwrap(), 1.5e20);
+    }
+}
+
+#[cfg(test)]
+mod shared_escape_parity {
+    use super::*;
+    #[test]
+    fn xml_content_and_attributes_preserve_grid_bytes() {
+        let value = "&<>\"'\t\n\r\0\u{1f}\u{fffe}\u{ffff}é😀";
+        assert_eq!(esc(value), "&amp;&lt;&gt;\"'\t\n&#13;é😀");
+        assert_eq!(esc_attr(value), "&amp;&lt;&gt;&quot;'&#9;&#10;&#13;é😀");
+        let mut appended = "prefix:".to_owned();
+        push_esc(&mut appended, value);
+        assert_eq!(appended, format!("prefix:{}", esc(value)));
+        assert_eq!(esc("plain ASCII\t\n"), "plain ASCII\t\n");
+        assert_eq!(decode_xstring(&encode_xstring("_x000D_\r\0😀")), "_x000D_\r\0😀");
+    }
+}
+
+#[cfg(test)]
+mod shared_xstring_parity {
+    use super::*;
+
+    #[test]
+    fn xstring_preserves_controls_unicode_and_literal_escapes() {
+        // XML-invalid scalars, C1 controls and literal escapes survive save/reopen.
+        for c in (0..=0xffff).filter_map(char::from_u32) {
+            let text = format!("left{c}right_x0041_");
+            assert_eq!(decode_xstring(&encode_xstring(&text)), text);
+        }
+        for (encoded, decoded) in [
+            ("_x005F_x000D_", "_x000D_"),
+            ("_xD83D__xDE00_", "😀"),
+            ("_xD83D__x0041_", "_xD83D_A"),
+            ("_xD83D__x005F_xDE00_", "_xD83D__xDE00_"),
+            ("_X0041_", "_X0041_"),
+            ("_xZZZZ_", "_xZZZZ_"),
+        ] {
+            assert_eq!(decode_xstring(encoded), decoded);
+        }
+        assert_eq!(encode_xstring("\r\n\t\0"), "_x000D_\n\t_x0000_");
     }
 }

@@ -17,8 +17,9 @@ pub struct EditState {
     rect: Option<Rect>,
 }
 
+/// Returns the stable id for the text-box editor.
 pub(crate) fn editor_id() -> egui::Id {
-    egui::Id::new("gridcraft.text_box_editor")
+    egui::Id::unique("gridcraft.text_box_editor")
 }
 
 impl SheetApp {
@@ -32,7 +33,7 @@ impl SheetApp {
         }
         let Some(d) = self.session.active() else { return false };
         let Some(sh) = d.wb.active() else { return false };
-        let Some(shape) = sh.shapes.iter().find(|s| s.id == id && s.kind == ShapeKind::TextBox) else {
+        let Some(shape) = sh.shapes.iter().find(|s| s.id == id && matches!(s.kind, ShapeKind::TextBox | ShapeKind::WordArt)) else {
             return false;
         };
         // shape.setText refuses edits on a protected sheet; don't open an editor that can't commit.
@@ -44,12 +45,12 @@ impl SheetApp {
             id,
             text: shape.text.clone(),
             uid: d.uid,
-            sheet: d.wb.active_sheet,
+            sheet: d.wb.active_sheet(),
             original: shape.text.clone(),
             request_focus: true,
             rect: None,
         });
-        self.selected_chart = Some(id);
+        self.selected_object = Some(gridcraft_engine::model::ObjRef::new(gridcraft_engine::model::ObjKind::Shape, id));
         self.grid.drag = crate::grid::Drag::None;
         self.grid.drag_select = false;
         self.session.mode = Mode::Edit;
@@ -110,13 +111,14 @@ pub(crate) fn contains_pointer(app: &SheetApp, ctx: &egui::Context) -> bool {
     app.text_box_editor.as_ref().and_then(|ed| ed.rect).is_some_and(|r| ctx.input(|i| i.pointer.hover_pos().is_some_and(|p| r.contains(p))))
 }
 
+/// Draws the text-box editor with focus/caret state, save shortcuts, scrolling/clipping, and clears editing mode when the shape is gone.
 pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcraft_engine::model::Sheet) {
     let Some(mut ed) = app.text_box_editor.take() else { return };
     if app.view_key() != Some((ed.uid, ed.sheet)) {
         app.text_box_editor = Some(ed);
         return;
     }
-    let Some(shape) = sh.shapes.iter().find(|s| s.id == ed.id && s.kind == ShapeKind::TextBox) else {
+    let Some(shape) = sh.shapes.iter().find(|s| s.id == ed.id && matches!(s.kind, ShapeKind::TextBox | ShapeKind::WordArt)) else {
         app.session.mode = Mode::Ready;
         return;
     };
@@ -147,20 +149,30 @@ pub(crate) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &gridcr
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt(id).max_rect(rect));
     child.set_clip_rect(rect);
     egui::ScrollArea::vertical().id_salt(id).max_height(rect.height()).auto_shrink([false, false]).show(&mut child, |ui| {
-        let response = ui.add(
-            TextEdit::multiline(&mut ed.text)
-                .id(id)
-                .font(FontId::new(14.0 * geo.z, egui::FontFamily::Name(theme::CELL.into())))
-                .text_color(Color32::BLACK)
-                .frame(egui::Frame::NONE)
-                .margin(egui::Margin::ZERO)
-                .desired_width(rect.width())
-                .desired_rows(1)
-                // shape.setText's limit (a cell's).
-                .char_limit(32_767)
-                .min_size(rect.size())
-                .lock_focus(true),
-        );
+        let response = ui
+            .add(
+                TextEdit::multiline(&mut ed.text)
+                    .id(id)
+                    .font(FontId::new(
+                        // WordArt is edited at its own size (clamped so the box stays usable).
+                        if shape.kind == ShapeKind::WordArt {
+                            shape.format.font_size.map_or(14.0, |pt| (pt * 96.0 / 72.0).clamp(8.0, 200.0))
+                        } else {
+                            14.0
+                        } * geo.z,
+                        egui::FontFamily::Name(theme::CELL.into()),
+                    ))
+                    .text_color(Color32::BLACK)
+                    .frame(egui::Frame::NONE)
+                    .margin(egui::Margin::ZERO)
+                    .desired_width(rect.width())
+                    .desired_rows(1)
+                    // shape.setText's limit (a cell's).
+                    .char_limit(32_767)
+                    .min_size(rect.size())
+                    .lock_focus(true),
+            )
+            .accessible_name(app.ui.language.tr("Text Box"));
         if ed.request_focus {
             response.request_focus();
             ed.request_focus = false;

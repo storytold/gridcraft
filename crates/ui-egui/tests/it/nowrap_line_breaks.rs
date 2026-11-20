@@ -15,12 +15,12 @@ fn harness() -> Harness {
     s.execute("cell.set", json!({"cell": "A3", "input": "Wrapped\nText"})).unwrap();
     s.execute("home.formatCells", json!({"range": "A3", "style": {"align": {"wrap": true}}})).unwrap();
     s.execute("selection.set", json!({"range": "H20"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut gridcraft_ui_egui::SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        gridcraft_ui_egui::SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     h

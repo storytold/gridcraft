@@ -10,13 +10,14 @@ use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
 
+/// Builds a stepped 1200x800 harness around the caller's session and settles its frames.
 fn harness(session: Session) -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     settle(&mut h);
     h
@@ -149,6 +150,7 @@ fn height_eases_instead_of_jumping() {
     assert!((layout(&h).height - (base + 4.0 * rh)).abs() < 0.5);
 }
 
+/// Opens a multi-line edit in B3, checks the text is kept whole, and returns the painted editor height.
 fn in_cell_height(lines: usize) -> f32 {
     let mut s = blank();
     s.execute("selection.set", json!({"cell": "B3"})).unwrap();
@@ -157,7 +159,7 @@ fn in_cell_height(lines: usize) -> f32 {
     h.state_mut().begin_edit(Some(text.clone()), false);
     settle(&mut h);
     assert_eq!(h.state().editor.as_ref().unwrap().text, text, "the text is kept whole");
-    let rect: Rect = h.ctx.data(|d| d.get_temp(egui::Id::new("gridcraft.cell_editor.rect"))).expect("the in-cell editor painted");
+    let rect: Rect = h.ctx.data(|d| d.get_temp(egui::Id::unique("gridcraft.cell_editor.rect"))).expect("the in-cell editor painted");
     rect.height()
 }
 
@@ -171,22 +173,15 @@ fn in_cell_editor_grows_with_every_line() {
 }
 
 #[test]
+/// The code editor indents after Enter and preserves indentation across typed lines, with an accessibility check.
 fn code_editor_indents_and_keeps_indentation() {
     struct State {
         text: String,
         focused: bool,
     }
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 300.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(vec2(400.0, 300.0)).build_ui_state(
         |ui, s: &mut State| {
-            if ui.ctx().cumulative_pass_nr() == 0 {
-                // egui's own fonts stand in for the system ones under the theme's family names.
-                let mut fonts = egui::FontDefinitions::default();
-                let mono = fonts.families.get(&egui::FontFamily::Monospace).cloned().unwrap_or_default();
-                fonts.families.insert(egui::FontFamily::Name(theme::MONO.into()), mono);
-                ui.ctx().set_fonts(fonts);
-                return;
-            }
-            let id = egui::Id::new("code");
+            let id = egui::Id::unique("code");
             if !s.focused {
                 ui.memory_mut(|m| m.request_focus(id));
                 s.focused = true;
@@ -196,6 +191,8 @@ fn code_editor_indents_and_keeps_indentation() {
         State { text: String::new(), focused: false },
     );
     h.run_steps(2);
+    // The code editor's text field has no visible label; the strict policy checks its name.
+    h.check_accessibility();
     h.input_mut().events.push(Event::Text("if x:".into()));
     h.run_steps(1);
     h.input_mut().events.extend(key(Key::Enter, Modifiers::NONE));

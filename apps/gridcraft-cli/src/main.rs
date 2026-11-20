@@ -11,6 +11,7 @@
 //! gridcraft-cli functions [--json] [--search X] [--category C]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
+//! gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
 //! gridcraft-cli version | --version
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -30,6 +31,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod sandbox_check;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -49,6 +51,8 @@ const USAGE: &str = "usage:
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
+  gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+                     whether this system confines programs (no program: a confined self-test)
   gridcraft-cli version";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
@@ -62,6 +66,11 @@ fn stdout_failed(e: std::io::Error) -> ! {
 }
 
 fn main() -> ExitCode {
+    // A confined launcher run (and its probes) comes first, before anything else starts.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
@@ -79,6 +88,7 @@ fn main() -> ExitCode {
         Some("cat") => cat(rest),
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
+        Some("sandbox-check") => return sandbox_check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),
@@ -195,7 +205,18 @@ fn pretty(v: &Value) -> String {
 
 /// A number as a person would type it: `6`, `0.5`, `1e+300`.
 fn number_text(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e15 { format!("{}", n as i64) } else { format!("{n}") }
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else if n.is_finite() && (n.abs() >= 1e15 || n.abs() < 1e-5) {
+        // Rust's `Display` never uses exponent form; `{:e}` omits the `+` on positive exponents.
+        let s = format!("{n:e}");
+        match s.split_once('e') {
+            Some((m, e)) if !e.starts_with('-') => format!("{m}e+{e}"),
+            _ => s,
+        }
+    } else {
+        format!("{n}")
+    }
 }
 
 /// A computed value (as returned by `formulas.evaluate` / `sheet.read`) as plain text.
@@ -606,6 +627,11 @@ mod tests {
     fn value_texts() {
         assert_eq!(value_text(&json!(6.0)), "6");
         assert_eq!(value_text(&json!(0.25)), "0.25");
+        assert_eq!(value_text(&json!(1e300)), "1e+300");
+        assert_eq!(value_text(&json!(-1.5e300)), "-1.5e+300");
+        assert_eq!(value_text(&json!(1e-20)), "1e-20");
+        assert_eq!(value_text(&json!(1e-300)), "1e-300");
+        assert_eq!(value_text(&json!(0.0001)), "0.0001");
         assert_eq!(value_text(&json!(true)), "TRUE");
         assert_eq!(value_text(&json!({"error": "#DIV/0!"})), "#DIV/0!");
         assert_eq!(value_text(&json!([[1.0, 2.0], [3.0, "x"]])), "1\t2\n3\tx");

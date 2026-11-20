@@ -2,7 +2,7 @@
 //! Show Details) unless its Enable show details option is off; a label of the report still opens
 //! the cell for editing.
 
-use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+use egui::{Event, Modifiers, PointerButton, Pos2};
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::{SheetApp, grid::Geo};
@@ -17,15 +17,7 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
         .execute("insert.pivotTable", json!({"source": "Sheet1!A1:B4", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Sales"]}))
         .unwrap();
     session.execute("selection.set", json!({"cell": "A1"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 fn center(h: &egui_kittest::Harness<'_, SheetApp>, cell: &str) -> Pos2 {

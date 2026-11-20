@@ -8,7 +8,7 @@ use serde_json::json;
 fn app() -> (SheetApp, egui::Context) {
     let mut s = Session::new();
     s.new_workbook();
-    (SheetApp::new(s, Default::default()), egui::Context::default())
+    (crate::common::app(s), egui::Context::default())
 }
 
 fn a1(app: &SheetApp) -> String {

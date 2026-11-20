@@ -1,7 +1,7 @@
 //! Right-clicking a PivotTable's value cell offers Show Details in the cell menu (Excel's
 //! right-click › Show Details); labels of the report and ordinary cells don't offer it.
 
-use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
+use egui::{Event, Modifiers, PointerButton, Pos2};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
@@ -17,15 +17,7 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
         .execute("insert.pivotTable", json!({"source": "Sheet1!A1:B4", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Sales"]}))
         .unwrap();
     session.execute("selection.set", json!({"cell": "A1"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 fn center(h: &egui_kittest::Harness<'_, SheetApp>, cell: &str) -> Pos2 {
@@ -121,7 +113,7 @@ fn the_cell_menu_computes_the_report_once_for_all_its_cells() {
     // West goes away behind the session's back, so the revision stays the same. A menu that
     // computed the report again for D4 would find it out of date and offer Show Details there.
     let doc = h.state_mut().session.active_mut().unwrap();
-    let si = doc.wb.active_sheet;
+    let si = doc.wb.active_sheet();
     std::sync::Arc::make_mut(&mut doc.wb).sheet_mut(si).unwrap().set_value(CellRef::parse("A3").unwrap(), Value::text("East"));
     right_click(&mut h, "D4");
     assert!(h.query_by_label("Show Details").is_none(), "D4 is a label of the report computed for E4");

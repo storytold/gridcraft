@@ -13,13 +13,13 @@ fn harness(active: &str) -> Harness {
     s.execute("cell.set", json!({"cell": "B2", "input": "'123"})).unwrap();
     s.execute("cell.set", json!({"cell": "B3", "input": "'abc"})).unwrap();
     s.execute("selection.set", json!({"cell": active})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
             app.ui(ui);
         },
-        SheetApp::new(s, Default::default()),
+        crate::common::app(s),
     );
     h.run_steps(4);
     h

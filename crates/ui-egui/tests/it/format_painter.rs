@@ -18,16 +18,7 @@ fn harness() -> Harness {
     session.execute("home.bold", json!({"range": "A1", "on": true})).unwrap();
     session.execute("home.fillColor", json!({"range": "A1", "color": "#FFFF00"})).unwrap();
     session.execute("selection.set", json!({"cell": "A1"})).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::harness(session, 4)
 }
 
 fn style(h: &Harness, a1: &str) -> Style {
