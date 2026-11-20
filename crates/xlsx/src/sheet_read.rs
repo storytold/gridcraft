@@ -248,7 +248,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
         cx.warn(format!("sheet \"{name}\" is damaged: more than {} cells", crate::xml::MAX_XML_NODES));
         return Ok((Sheet::new(name), Default::default()));
     }
-    if sheet_part.features.merges.len() > crate::xml::MAX_XML_NODES {
+    if sheet_part.merges.len() > crate::xml::MAX_XML_NODES {
         cx.warn(format!("sheet \"{name}\" is damaged: more than {} merge cells", crate::xml::MAX_XML_NODES));
         return Ok((Sheet::new(name), Default::default()));
     }
