@@ -212,6 +212,10 @@ impl SheetApp {
         }
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
+        let rtl = self.ui.language.is_rtl();
+        if ctx.global_style().right_to_left != rtl {
+            ctx.all_styles_mut(|s| s.right_to_left = rtl);
+        }
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);
