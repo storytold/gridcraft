@@ -1243,6 +1243,162 @@ fn symbol_text_is_never_shaped_as_arabic() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+// ------------------------------------------------------------ embedded fallback faces
+
+#[test]
+fn vietnamese_text_is_set_in_an_embedded_subset_face() -> Result<(), Box<dyn Error>> {
+    let bytes = embed::synthetic::font(&[('ệ', 1), ('ạ', 2)]);
+    let mut doc = PdfDoc::new();
+    assert!(doc.set_unicode_font(Font::Helvetica, bytes.clone(), 0));
+    assert!(!doc.set_unicode_font(Font::Helvetica, bytes, 0), "a font slot takes one face");
+    doc.add_page(300.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "Việt ạ");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    let s = String::from_utf8_lossy(&pdf);
+    for (needle, why) in [
+        ("/Subtype /Type0", "the fallback face is a composite font"),
+        ("/Encoding /Identity-H", "two-byte glyph ids"),
+        ("/Subtype /CIDFontType2", "a TrueType descendant font"),
+        ("/CIDToGIDMap /Identity", "glyph ids are unchanged"),
+        ("/FontFile2", "the subset is embedded"),
+        ("/ToUnicode", "the text stays searchable"),
+    ] {
+        assert!(s.contains(needle), "{why}: {needle}");
+    }
+    // `V i` keep Helvetica, `ệ` is glyph 1 of the fallback face, `t ` return to Helvetica.
+    assert!(s.contains("(Vi) Tj"), "{s}");
+    assert!(s.contains("/U1 12 Tf"), "the embedded face is selected: {s}");
+    assert!(s.contains("\n<0001> Tj"), "ệ is glyph 1 of the fallback face: {s}");
+    assert!(s.contains("(t ) Tj"), "the run returns to Helvetica: {s}");
+    assert!(s.contains("\n<0002> Tj"), "ạ is glyph 2: {s}");
+    // The glyphs carry the characters they draw for copying and search.
+    assert!(s.contains("<0001> <1EC7>") && s.contains("<0002> <1EA1>"));
+    assert!(!s.contains("<1EC7> Tj"), "no CID-font hex for a character the face has");
+    // `ActualText` carries the source text exactly, independently of the glyph map.
+    assert_eq!(utf16_entry(&pdf, "/ActualText")?, "Việt ạ");
+    Ok(())
+}
+
+#[test]
+fn characters_that_share_a_glyph_keep_their_identity() -> Result<(), Box<dyn Error>> {
+    // Greek capital alpha and Cyrillic capital A, mapped to one glyph as look-alike faces do.
+    let bytes = embed::synthetic::font(&[('Α', 1), ('А', 1)]);
+    let mut doc = PdfDoc::new();
+    assert!(doc.set_unicode_font(Font::Helvetica, bytes, 0));
+    doc.add_page(200.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "ΑА");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    let s = String::from_utf8_lossy(&pdf);
+    assert!(s.contains("\n<00010001> Tj"), "both characters are glyph 1: {s}");
+    assert_eq!(utf16_entry(&pdf, "/ActualText")?, "ΑА", "copied text keeps each character");
+    // The ToUnicode fallback has one entry per glyph, as the format allows.
+    assert!(s.contains("<0001> <0391>") || s.contains("<0001> <0410>"), "{s}");
+    Ok(())
+}
+
+#[test]
+fn a_later_page_does_not_change_an_earlier_pages_unicode_mapping() -> Result<(), Box<dyn Error>> {
+    let bytes = embed::synthetic::font(&[('Α', 1), ('А', 1)]);
+    let mut doc = PdfDoc::new();
+    assert!(doc.set_unicode_font(Font::Helvetica, bytes, 0));
+    doc.add_page(200.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "Α");
+    doc.add_page(200.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "А");
+    let (first, second) = (doc.pages[0].content.clone(), doc.pages[1].content.clone());
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    let s = String::from_utf8_lossy(&pdf);
+    // Glyph 1 keeps the first page's character in the shared face.
+    assert!(s.contains("<0001> <0391>"), "{s}");
+    assert!(!s.contains("<0001> <0410>"), "{s}");
+    // Each page still carries its own source text.
+    assert!(first.contains("<FEFF0391>"), "{first}");
+    assert!(second.contains("<FEFF0410>"), "{second}");
+    Ok(())
+}
+
+#[test]
+fn a_composite_glyph_chain_is_closed_completely() -> Result<(), Box<dyn Error>> {
+    // Glyph 1 is a composite referring to glyph 2, which refers to glyph 3, down a chain of 12
+    // glyphs ending in a simple outline. The subset has to keep every component, however deep.
+    use skrifa::MetadataProvider as _;
+    let bytes = embed::synthetic::composite_chain();
+    let mut doc = PdfDoc::new();
+    assert!(doc.set_unicode_font(Font::Helvetica, bytes, 0));
+    doc.add_page(200.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "ạ");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    let font_file = embedded_font_file(&pdf).ok_or_else(|| io::Error::other("no embedded font file"))?;
+    let font = skrifa::FontRef::from_index(&font_file, 0).map_err(|e| io::Error::other(e.to_string()))?;
+    let glyf = font.table_data(skrifa::Tag::new(b"glyf")).ok_or_else(|| io::Error::other("glyf missing"))?;
+    // Eleven 16-byte composites and one 34-byte rectangle: a closure cut at a depth limit would
+    // keep only the first few.
+    assert!(glyf.as_bytes().len() > 200, "the component outlines are kept: {} bytes", glyf.as_bytes().len());
+    assert_eq!(font.charmap().map('ạ').map(|glyph| glyph.to_u32()), Some(1));
+    Ok(())
+}
+
+#[test]
+fn a_composite_with_many_components_is_not_cut_off() -> Result<(), Box<dyn Error>> {
+    // OpenType does not cap the component count; 1,025 records must not be refused.
+    let bytes = embed::synthetic::many_components(1025);
+    let mut doc = PdfDoc::new();
+    assert!(doc.set_unicode_font(Font::Helvetica, bytes, 0));
+    doc.add_page(200.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "ạ");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    let font_file = embedded_font_file(&pdf).ok_or_else(|| io::Error::other("no embedded font file"))?;
+    let font = skrifa::FontRef::from_index(&font_file, 0).map_err(|e| io::Error::other(e.to_string()))?;
+    let glyf = font.table_data(skrifa::Tag::new(b"glyf")).ok_or_else(|| io::Error::other("glyf missing"))?;
+    // 1,025 six-byte component records and the rectangle they all draw.
+    assert!(glyf.as_bytes().len() > 6000, "the whole component list is kept: {} bytes", glyf.as_bytes().len());
+    Ok(())
+}
+
+/// The bytes of the first `FontFile2` stream in `pdf` (streams are written uncompressed here).
+fn embedded_font_file(pdf: &[u8]) -> Option<Vec<u8>> {
+    let at = find(pdf, b"/Length1 ")?;
+    let stream = find(&pdf[at..], b"stream\n")? + at + b"stream\n".len();
+    let end = find(&pdf[stream..], b"\nendstream")? + stream;
+    Some(pdf[stream..end].to_vec())
+}
+
+#[test]
+fn a_character_the_supplied_face_lacks_keeps_the_cid_fallback() -> Result<(), Box<dyn Error>> {
+    let bytes = embed::synthetic::font(&[('ạ', 1)]);
+    let mut doc = PdfDoc::new();
+    assert!(doc.set_unicode_font(Font::Helvetica, bytes, 0));
+    doc.add_page(300.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "ệ");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"<1EC7> Tj").is_some(), "the face has no glyph for ệ, so the CID font is used");
+    assert!(find(&pdf, b"/Encoding /UniGB-UTF16-H").is_some());
+    Ok(())
+}
+
+#[test]
+fn a_system_face_carries_vietnamese_when_one_is_installed() -> Result<(), Box<dyn Error>> {
+    let Some(face) = embed::default_face(Font::Helvetica) else {
+        eprintln!("diagnostic: no system fallback font on this machine; the check was not run");
+        return Ok(());
+    };
+    if face.glyph('ệ').is_none() {
+        eprintln!("diagnostic: the system fallback face has no Vietnamese glyphs; the check was not run");
+        return Ok(());
+    }
+    // Measuring uses the embedded face's advance, not the CID font's full em.
+    let measured = advance(Font::Helvetica, 'ệ');
+    assert!(measured < 1000, "measured as the fallback face's advance, not a CID em: {measured}");
+    assert!((text_width(Font::Helvetica, 10.0, "ệ") - f32::from(measured) / 100.0).abs() < 1e-5);
+    let mut doc = PdfDoc::new();
+    doc.add_page(300.0, 100.0).text(20.0, 40.0, 12.0, Font::Helvetica, [0, 0, 0], "Tiếng Việt");
+    let pdf = doc.finish()?;
+    check_xref(&pdf)?;
+    assert!(find(&pdf, b"/FontFile2").is_some(), "the system face is embedded as a subset");
+    assert!(find(&pdf, b"/Identity-H").is_some());
+    assert!(find(&pdf, b"<1EC7> Tj").is_none(), "no CID hex for Vietnamese when the face has the glyph");
+    Ok(())
+}
+
 #[test]
 fn shared_run_length_preserves_pixels_at_packet_boundaries() {
     for len in [0, 1, 2, 3, 127, 128, 129, 255, 256, 257, 1024] {

@@ -1,10 +1,12 @@
 //! PDF 1.7 drawing for GridCraft print/export, with shared object and xref framing.
 //!
 //! - The 14 standard fonts (no embedding) with WinAnsiEncoding, plus approximate width tables
-//!   ([`text_width`]) so callers can measure, align and wrap text. Characters outside
-//!   WinAnsiEncoding (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID
-//!   font with the `UniGB-UTF16-H` CMap instead of being replaced by `?`. Symbol uses its own
-//!   built-in encoding ([`symbol_code`]), for Greek letters and mathematical operators.
+//!   ([`text_width`]) so callers can measure, align and wrap text. Text WinAnsiEncoding cannot
+//!   carry (Vietnamese `ạ ế ơ đ`, Czech `č ř ě`, Greek, Cyrillic) is set in an embedded, subset
+//!   TrueType face standing in for the standard font (see [`embed`]); characters that face lacks
+//!   (CJK and other scripts) are set in a predefined, non-embedded Adobe-GB1 CID font with the
+//!   `UniGB-UTF16-H` CMap instead of being replaced by `?`. Symbol uses its own built-in encoding
+//!   ([`symbol_code`]), for Greek letters and mathematical operators.
 //! - Arabic is shaped and set in embedded Type3 subsets, with exact shaped advances.
 //! - Vector drawing: rectangles, lines (solid or dashed), polygons, circles (Bézier), clipping.
 //! - RGBA images as RGB image XObjects with a soft mask for alpha (run-length encoded).
@@ -15,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 mod arabic;
+mod embed;
 mod metrics;
 mod symbol;
 
@@ -259,6 +262,18 @@ impl Font {
     }
 }
 
+/// Advance width of `c` as [`Page::text`] draws it, in 1/1000 em: the standard font's own width
+/// where `c` is in its encoding, an embedded fallback face's width where that face has the glyph,
+/// and the CID font's width where the text still falls back to it. [`text_width`] sums this, so
+/// measuring and drawing agree.
+pub fn advance(font: Font, c: char) -> u16 {
+    if font == Font::Symbol || !needs_cid(c) || arabic::is_arabic(c) {
+        return font.char_width(c);
+    }
+    let Some(face) = embed::default_face(font) else { return font.char_width(c) };
+    face.glyph(c).map_or_else(|| font.char_width(c), |glyph| face.width(glyph))
+}
+
 /// Whether [`text_width_with_direction`] is the sum of `text`'s character widths: not shaped,
 /// not reordered right to left and holding no bidi controls. A prefix's width is then a running sum.
 pub fn width_is_char_sum(font: Font, text: &str, direction: TextDirection) -> bool {
@@ -281,7 +296,7 @@ pub fn text_width_with_direction(font: Font, size: f32, text: &str, direction: T
     }
     // u64: a u32 sum overflows for ~8 million characters.
     let Ok(visual) = arabic::latin_visual(text, direction) else { return 0.0 };
-    let units: u64 = visual.chars().map(|c| u64::from(font.char_width(c))).sum();
+    let units: u64 = visual.chars().map(|c| u64::from(advance(font, c))).sum();
     units as f32 * size / 1000.0
 }
 
@@ -336,6 +351,41 @@ const CID_WIDTH: u16 = 1000;
 /// True when `c` has no WinAnsiEncoding byte and is drawn with the CID font.
 fn needs_cid(c: char) -> bool {
     !c.is_control() && c != '?' && win_ansi(c) == b'?'
+}
+
+/// How one character of standard-font text is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Run {
+    /// In the standard font's own encoding.
+    Standard,
+    /// In the embedded fallback face standing in for the standard font.
+    Embedded,
+    /// In the non-embedded CID font.
+    Cid,
+}
+
+/// The run a character belongs to: its WinAnsi byte, else its fallback-face glyph (unless the
+/// character is Arabic, which needs shaping), else the CID font. [`advance`] makes the same choice,
+/// so measuring and drawing agree.
+fn run_kind(c: char, glyph: Option<u16>, symbol: bool) -> Run {
+    if symbol || !needs_cid(c) {
+        Run::Standard
+    } else if glyph.is_some() && !arabic::is_arabic(c) {
+        Run::Embedded
+    } else {
+        Run::Cid
+    }
+}
+
+/// Appends one text run to a content stream: its font and size, the text matrix on the first run,
+/// then the string. Each `Tj` leaves the text position after it, so the runs follow on the baseline.
+fn push_run(runs: &mut String, matrix: &str, size: &str, resource: &str, string: &str) {
+    let first = runs.is_empty();
+    let _ = writeln!(runs, "/{resource} {size} Tf");
+    if first {
+        let _ = writeln!(runs, "{matrix} Tm");
+    }
+    let _ = writeln!(runs, "{string} Tj");
 }
 
 /// A PDF hex string `< … >` of `text` in UTF-16BE (the `UniGB-UTF16-H` encoding).
@@ -509,6 +559,10 @@ pub struct Page {
     height: f32,
     content: String,
     fonts: [bool; FONT_SLOTS],
+    /// Glyphs of the embedded fallback face used on this page, for each standard font.
+    unicode: [Option<embed::Usage>; FONT_COUNT],
+    /// The embedded fallback faces, shared with the document.
+    faces: std::sync::Arc<embed::Faces>,
     images: Vec<ImageData>,
     /// Indexes into `images`, by content hash; a hash match is confirmed with [`ImageData::same`].
     image_index: HashMap<u64, Vec<usize>>,
@@ -873,36 +927,94 @@ impl Page {
                 return;
             }
         };
-        let fi = font.index();
         let size = n(size);
-        let mut runs = String::new();
-        // Runs of WinAnsi text use `font`; runs it cannot encode use the CID font. Each `Tj`
-        // advances the text position, so the runs follow each other on the baseline.
-        // Symbol text is one run in Symbol's own encoding (the CID font has no maths symbols).
+        // Runs of WinAnsi text use `font`; runs it cannot encode use the embedded fallback face
+        // where that face has the glyphs, and the CID font for everything else. Each `Tj` advances
+        // the text position, so the runs follow each other on the baseline. Symbol text is one run
+        // in Symbol's own encoding (the CID and fallback faces have no maths symbols).
         let symbol = font == Font::Symbol;
-        let uses_cid = |c: char| !symbol && needs_cid(c);
-        let mut rest: &str = &visual;
-        while let Some(first) = rest.chars().next() {
-            let cid = uses_cid(first);
-            let end = rest.char_indices().find(|(_, c)| uses_cid(*c) != cid).map_or(rest.len(), |(i, _)| i);
-            let (run, tail) = rest.split_at(end);
-            let (slot, string) = if cid { (CID_FONT, pdf_utf16_string(run)) } else { (fi, pdf_string_in(run, symbol)) };
-            if let Some(f) = self.fonts.get_mut(slot) {
-                *f = true;
+        let mut runs = String::new();
+        let mut embedded = false;
+        if !symbol && !visual.chars().any(needs_cid) {
+            // The common case: every character is in the standard font's encoding, so no fallback
+            // face is looked at.
+            if !visual.is_empty() {
+                if let Some(used) = self.fonts.get_mut(font.index()) {
+                    *used = true;
+                }
+                push_run(&mut runs, matrix, &size, &format!("F{}", font.index() + 1), &pdf_string_in(&visual, false));
             }
-            let first_run = runs.is_empty();
-            let _ = writeln!(runs, "/F{} {} Tf", slot + 1, size);
-            if first_run {
-                let _ = writeln!(runs, "{matrix} Tm");
-            }
-            let _ = writeln!(runs, "{string} Tj");
-            rest = tail;
+        } else {
+            let glyphs: Vec<(char, Option<u16>)> = match self.faces.get(font) {
+                Some(face) if !symbol => face.glyphs(&visual),
+                _ => visual.chars().map(|c| (c, None)).collect(),
+            };
+            embedded = self.text_runs(&mut runs, matrix, &size, font, symbol, &glyphs);
         }
         let mut s = String::new();
         self.set_fill(&mut s, color);
         let _ = write!(s, "BT\n{runs}ET");
-        let s = if visual != text { format!("/Span << /ActualText {} >> BDC\n{s}\nEMC", arabic::unicode_string(text, true)) } else { s };
+        // The ToUnicode map is per glyph, so two source characters that share a glyph (Greek `Α`
+        // and Cyrillic `А` in a face that maps both to one outline) would copy as the same
+        // character. `ActualText` carries the exact source text for the marked content, so copied
+        // and searched text keeps each occurrence. It is also needed when the visual order differs
+        // from the logical one.
+        let s = if visual != text || embedded { format!("/Span << /ActualText {} >> BDC\n{s}\nEMC", arabic::unicode_string(text, true)) } else { s };
         self.text_op(&s);
+    }
+
+    /// Appends one `Tf`/`Tm`/`Tj` run for every stretch of characters `glyphs` that is drawn the
+    /// same way; true when some run used the embedded fallback face.
+    fn text_runs(&mut self, runs: &mut String, matrix: &str, size: &str, font: Font, symbol: bool, glyphs: &[(char, Option<u16>)]) -> bool {
+        let mut embedded = false;
+        let mut start = 0;
+        while let Some(&(first, glyph)) = glyphs.get(start) {
+            let kind = run_kind(first, glyph, symbol);
+            let mut end = start + 1;
+            while glyphs.get(end).is_some_and(|&(c, glyph)| run_kind(c, glyph, symbol) == kind) {
+                end += 1;
+            }
+            let run = glyphs.get(start..end).unwrap_or_default();
+            embedded |= kind == Run::Embedded;
+            if kind != Run::Embedded
+                && let Some(used) = self.fonts.get_mut(if kind == Run::Cid { CID_FONT } else { font.index() })
+            {
+                *used = true;
+            }
+            let resource = match kind {
+                Run::Standard => format!("F{}", font.index() + 1),
+                Run::Cid => format!("F{}", CID_FONT + 1),
+                Run::Embedded => format!("U{}", font.index() + 1),
+            };
+            let string = match kind {
+                Run::Embedded => self.embedded_text(font, run),
+                Run::Cid => pdf_utf16_string(&run.iter().map(|(c, _)| *c).collect::<String>()),
+                Run::Standard => pdf_string_in(&run.iter().map(|(c, _)| *c).collect::<String>(), symbol),
+            };
+            push_run(runs, matrix, size, &resource, &string);
+            start = end;
+        }
+        embedded
+    }
+
+    /// The content-stream hex string of an embedded run, recording each glyph's character for the
+    /// page's ToUnicode map.
+    fn embedded_text(&mut self, font: Font, run: &[(char, Option<u16>)]) -> String {
+        let mut hex = String::with_capacity(run.len() * 4 + 2);
+        hex.push('<');
+        let mut used: Vec<(u16, char)> = Vec::with_capacity(run.len());
+        for (c, glyph) in run {
+            let Some(glyph) = glyph else { continue };
+            used.push((*glyph, *c));
+            let _ = write!(hex, "{glyph:04X}");
+        }
+        hex.push('>');
+        if let Some(slot) = self.unicode.get_mut(font.index()) {
+            for (glyph, c) in used {
+                slot.get_or_insert_with(embed::Usage::default).entry(glyph).or_insert(c);
+            }
+        }
+        hex
     }
 
     fn text_op(&mut self, s: &str) {
@@ -981,6 +1093,8 @@ pub struct Info {
 pub struct PdfDoc {
     pages: Vec<Page>,
     pub info: Info,
+    /// Embedded fallback faces, read from the system on first use unless supplied.
+    faces: std::sync::Arc<embed::Faces>,
 }
 
 /// PackBits-style run-length encoding (PDF `RunLengthDecode`).
@@ -1012,6 +1126,15 @@ impl PdfDoc {
         PdfDoc::default()
     }
 
+    /// Supplies the TrueType face (`data`, `index` selects a face of a collection) that stands in
+    /// for `font` in text `WinAnsiEncoding` cannot carry, instead of the system face found on first
+    /// use. False when the face cannot be embedded (no TrueType outlines, a licence that forbids
+    /// embedding, malformed tables) or that font already has a face. A supplied face is used for
+    /// drawing; [`advance`] keeps measuring with the system's face.
+    pub fn set_unicode_font(&mut self, font: Font, data: Vec<u8>, index: u32) -> bool {
+        embed::Face::parse(data, index).is_some_and(|face| self.faces.set(font, face))
+    }
+
     /// Adds a page of `width_pt` × `height_pt` points and returns it for drawing.
     pub fn add_page(&mut self, width_pt: f32, height_pt: f32) -> &mut Page {
         let width = if width_pt.is_finite() { width_pt.clamp(3.0, 14_400.0) } else { 612.0 };
@@ -1021,6 +1144,8 @@ impl PdfDoc {
             height,
             content: String::new(),
             fonts: [false; FONT_SLOTS],
+            unicode: Default::default(),
+            faces: std::sync::Arc::clone(&self.faces),
             images: Vec::new(),
             image_index: HashMap::new(),
             #[cfg(test)]
@@ -1044,6 +1169,30 @@ impl PdfDoc {
     /// The page at `i`, to keep drawing on it.
     pub fn page_mut(&mut self, i: usize) -> Option<&mut Page> {
         self.pages.get_mut(i)
+    }
+
+    /// Writes one embedded fallback face for every standard font a page drew such text in, holding
+    /// every glyph any page used, and adds its resource name to `font_dict`. A glyph keeps the first
+    /// character seen for it across the document, so a later page cannot change how an earlier
+    /// page's ToUnicode reads; `ActualText` still preserves each page's own source text.
+    fn write_unicode_faces(&self, font_dict: &mut String, next: &mut u32, out: &mut craft_pdf::classic::Writer) -> Result<(), Error> {
+        let mut unicode: Vec<Option<embed::Usage>> = (0..FONT_COUNT).map(|_| None).collect();
+        for page in &self.pages {
+            for (i, page_usage) in page.unicode.iter().enumerate() {
+                let (Some(page_usage), Some(slot)) = (page_usage, unicode.get_mut(i)) else { continue };
+                let usage = slot.get_or_insert_with(embed::Usage::default);
+                for (glyph, c) in page_usage {
+                    usage.entry(*glyph).or_insert(*c);
+                }
+            }
+        }
+        for (i, usage) in unicode.iter().enumerate() {
+            let (Some(usage), Some(font)) = (usage, Font::ALL.get(i).copied()) else { continue };
+            let Some(face) = self.faces.get(font) else { continue };
+            let id = embed::write_objects(face, usage, next, out)?;
+            let _ = write!(font_dict, "/U{} {} 0 R ", i + 1, id);
+        }
+        Ok(())
     }
 
     /// Whether some Arabic text was set in the standard and CID fonts, which have no Arabic glyphs,
@@ -1128,6 +1277,9 @@ impl PdfDoc {
                 out.object(*id, &format!("<< /Type /Font /Subtype /Type1 /BaseFont /{name}{enc} >>"))?;
             }
         }
+        // Embedded fallback faces: each glyph any page drew with one, written once per standard
+        // font. The resource names are `/U{n}` so they cannot clash with the `/F{n}` faces.
+        self.write_unicode_faces(&mut font_dict, &mut next, &mut out)?;
         // Images already written, by content hash: (page, image, object id). A hash match is
         // confirmed by comparing the pixels before an object is shared.
         let mut written: HashMap<u64, Vec<(usize, usize, u32)>> = HashMap::new();
