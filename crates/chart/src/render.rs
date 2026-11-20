@@ -34,9 +34,15 @@ const STOCK: Rgba = [0x40, 0x40, 0x40, 0xFF];
 pub(crate) const UP: Rgba = [0x3E, 0x9B, 0x5F, 0xFF];
 pub(crate) const DOWN: Rgba = [0xD6, 0x4F, 0x45, 0xFF];
 
-const TITLE_SIZE: f32 = 14.0;
-const LABEL_SIZE: f32 = 9.0;
-const AXIS_TITLE_SIZE: f32 = 10.0;
+/// Chart units (pixels at 100%) per point. Text sizes are Excel's, in points: drawn in pixels
+/// they come out as large as in Excel.
+const PX_PER_PT: f32 = 96.0 / 72.0;
+/// Excel's chart title, 14 pt.
+const TITLE_SIZE: f32 = 14.0 * PX_PER_PT;
+/// Excel's labels (axes, legend, data labels), 9 pt.
+const LABEL_SIZE: f32 = 9.0 * PX_PER_PT;
+/// Excel's axis titles, 10 pt.
+const AXIS_TITLE_SIZE: f32 = 10.0 * PX_PER_PT;
 /// Most categories drawn by category-axis charts.
 const MAX_CATS: usize = 20_000;
 /// Lines with more points than this are decimated (min/max per pixel column).
