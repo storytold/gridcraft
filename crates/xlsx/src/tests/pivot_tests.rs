@@ -797,6 +797,20 @@ fn number_ranges_are_written_on_the_field_itself() {
 }
 
 #[test]
+fn a_grouping_of_one_value_writes_expandable_bounds() {
+    // #3395 review: a source of one distinct number groups to start == end; Office requires
+    // startNum < endNum, so the export widens the end by one interval, keeping the labels.
+    let cols = [("Age", vec![Value::number(42.0), Value::number(42.0)]), ("Sales", vec![Value::number(10.0), Value::number(20.0)])];
+    let parts = small_pivot(&cols, |p| {
+        p.rows = vec![PivotField { number_group: PivotNumberGroup::new(42.0, 42.0, 10.0), ..field("Age") }];
+        p.values = vec![PivotValue { source_col: "Sales".into(), name: "Sum of Sales".into(), ..PivotValue::default() }];
+    });
+    let cache = &parts["xl/pivotCache/pivotCacheDefinition1.xml"];
+    assert!(cache.contains(r#"<rangePr autoStart="0" autoEnd="0" startNum="42" endNum="52" groupInterval="10"/>"#), "{cache}");
+    assert!(cache.contains(r#"<s v="&lt;42"/><s v="42-51"/>"#), "the bucket labels stay the model's: {cache}");
+}
+
+#[test]
 fn time_groups_are_written_with_excels_captions() {
     let cols = [("When", vec![Value::number(0.25), Value::number(0.75)]), ("Sales", vec![Value::number(10.0), Value::number(20.0)])];
     for (by, name, first, last) in [

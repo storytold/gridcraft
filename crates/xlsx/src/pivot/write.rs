@@ -671,11 +671,21 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
                 }
                 GroupKind::Numbers { interval } => {
                     let num = crate::xml::num;
+                    // Office requires startNum < endNum; a grouping of one distinct value has
+                    // start == end, so the export widens the end by one interval. The bucket
+                    // labels stay the model's (`items` above).
+                    let end = if g.end > g.start && (g.end - g.start).is_finite() {
+                        g.end
+                    } else if (g.start + interval).is_finite() {
+                        g.start + interval
+                    } else {
+                        g.end
+                    };
                     let _ = write!(
                         s,
                         "<rangePr autoStart=\"0\" autoEnd=\"0\" startNum=\"{}\" endNum=\"{}\" groupInterval=\"{}\"",
                         num(g.start),
-                        num(g.end),
+                        num(end),
                         num(interval)
                     );
                 }
