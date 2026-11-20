@@ -5376,6 +5376,104 @@ fn paste_special_validation_moves_relative_references() {
     assert!(ok(&mut s, "C3", "20"));
 }
 
+/// A dropdown label is the region's text; the canonical spelling a script passes still works,
+/// unless it is the label of another cell.
+#[test]
+fn filter_labels_are_the_regions_text_not_the_canonical_value() {
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["n"], [1234], [1.234]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2", "code": "#,##0"})).unwrap();
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A2").unwrap()), "1.234");
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A3").unwrap()), "1,234");
+    s.execute("data.filter", json!({})).unwrap();
+    let hidden = |s: &Session| -> Vec<u32> {
+        let mut h: Vec<u32> = s.doc().unwrap().wb.sheet(0).unwrap().rows.iter().filter(|(_, r)| r.hidden).map(|(k, _)| *k).collect();
+        h.sort();
+        h
+    };
+    // The label `1.234` is A2's text only: A3 holds 1.234 but is shown `1,234`.
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1.234"]})).unwrap();
+    assert_eq!(hidden(&s), vec![2]);
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1,234"]})).unwrap();
+    assert_eq!(hidden(&s), vec![1]);
+    // Canonical values that no cell shows as a label still select by value.
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1234"]})).unwrap();
+    assert_eq!(hidden(&s), vec![2]);
+}
+
+/// The labels that keep a canonical spelling from matching are the dropdown's: blank rows offer
+/// none, a label blocks only a value it matches itself, and the dropdown checks what the filter
+/// shows.
+#[test]
+fn canonical_filter_values_follow_the_dropdown_labels() {
+    // A de-DE sheet with column A, formulas and number formats by cell, filtered by `values`.
+    let filtered = |cells: serde_json::Value, formulas: &[(&str, &str)], codes: &[(&str, &str)], values: &[&str]| -> Session {
+        let mut s = s();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
+        s.execute("range.setValues", json!({"range": "A1", "values": cells})).unwrap();
+        for (cell, input) in formulas {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        for (range, code) in codes {
+            s.execute("home.numberFormat", json!({"range": range, "code": code})).unwrap();
+        }
+        s.execute("data.filter", json!({})).unwrap();
+        s.execute("data.filterBy", json!({"column": "A", "values": values})).unwrap();
+        s
+    };
+    let text =
+        |s: &Session, a: &str| crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse(a).unwrap());
+    let hidden = |s: &Session| -> Vec<u32> {
+        let mut h: Vec<u32> = s.doc().unwrap().wb.sheet(0).unwrap().rows.iter().filter(|(_, r)| r.hidden).map(|(k, _)| *k).collect();
+        h.sort();
+        h
+    };
+    // A2 is blank (an empty text) shown `1234` by its text section; A3 holds 1234 shown `1.234`.
+    let s = filtered(json!([["n"], ["-"], [1234], ["x"]]), &[("A2", "=\"\"")], &[("A2", "0;0;0;\"1234\""), ("A3", "#,##0")], &["1234"]);
+    assert_eq!((text(&s, "A2"), text(&s, "A3")), ("1234".into(), "1.234".into()));
+    assert_eq!(hidden(&s), vec![1, 3]);
+    // No cell shows `1.234` but A2 holds it: its row stays, and its dropdown entry is checked.
+    let s = filtered(json!([["n"], [1.234], ["x"]]), &[], &[], &["1.234"]);
+    assert_eq!(text(&s, "A2"), "1,234");
+    assert_eq!(hidden(&s), vec![2]);
+    assert_eq!(crate::cmd::data::filter_values(&s.doc().unwrap().wb, 0, 0), vec![("1,234".to_string(), true), ("x".to_string(), false)]);
+    // `ä1` does not match `Ä1` (matching folds ASCII case only), so it doesn't block A3's value.
+    let s = filtered(json!([["t"], ["ä1"], ["Ä1"], ["x"]]), &[], &[("A3", "\"prefix\"@")], &["Ä1"]);
+    assert_eq!(text(&s, "A3"), "prefixÄ1");
+    assert_eq!(hidden(&s), vec![1, 3]);
+}
+
+/// The dropdown lists at most a million rows, but a label below them still decides its checkbox.
+#[test]
+fn a_label_past_the_dropdown_cap_still_blocks_the_canonical_spelling() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["n"], [1234]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2", "code": "#,##0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1000003", "input": "'1234"})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A1000003"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["1234"]})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert!(wb.sheet(0).unwrap().is_row_hidden(1), "A2 shows 1,234 and `1234` is A1000003's label");
+    assert!(crate::cmd::data::filter_values(wb, 0, 0).contains(&("1,234".to_string(), false)));
+}
+
+/// The clipboard's text is read back by `edit.paste`, which reads en-US: a number copied from a
+/// region pastes back as the same number, not as the region's grouped text read the en-US way.
+#[test]
+fn copied_numbers_paste_back_as_the_same_numbers_in_a_region() {
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1234.5]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "#,##0.00"})).unwrap();
+    assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A1").unwrap()), "1.234,50");
+    let text = s.execute("edit.copy", json!({"range": "A1"})).unwrap()["text"].as_str().unwrap().to_string();
+    // Another session has no internal clipboard, so the paste goes through the text.
+    let mut other = self::s();
+    other.execute("edit.paste", json!({"text": text, "at": "B2"})).unwrap();
+    assert_eq!(v(&other, "B2").as_f64(), Some(1234.5), "{text:?}");
+}
+
 /// "Set precision as displayed" (formulas.calculationOptions `precisionAsDisplayed`). Behaviour
 /// observed in Excel through COM with synthetic values: turning it on rounds existing constants
 /// and formulas to their formats; constants typed or reformatted while it is on are rounded at

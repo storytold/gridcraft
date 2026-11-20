@@ -558,6 +558,8 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
+/// Always with en-US separators and names, whatever the workbook's region: CSV is read back with
+/// en-US rules (`gridcraft_xlsx::read_csv`), so a regional `1.000` would reopen as 1.
 /// One intentional difference: a number shown as General is not narrowed to the cell width and
 /// never gets an exponent (`gridcraft_numfmt::format_value_full`). Below 1E+15 it is written as
 /// `&` converts it (15 significant digits); from 1E+15 as the shortest digits that read back as

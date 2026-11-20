@@ -162,6 +162,38 @@ fn filter_blank(v: &Value) -> bool {
     v.is_empty() || matches!(v, Value::Text(t) if t.is_empty())
 }
 
+/// The labels that keep a Values criterion's canonical spellings from matching: what a non-blank
+/// cell of the column shows, kept only when the criterion names it (so the set is bounded by
+/// `values`). Matching folds ASCII case, so the labels are ASCII-lowercased the same way.
+fn named_labels(wb: &Workbook, sh: &Sheet, col: u32, rows: std::ops::RangeInclusive<u32>, values: &[String]) -> std::collections::HashSet<String> {
+    if values.is_empty() {
+        return std::collections::HashSet::new();
+    }
+    let named: std::collections::HashSet<String> = values.iter().map(|x| x.to_ascii_lowercase()).collect();
+    rows.filter_map(|row| {
+        let c = CellRef::new(row, col);
+        if filter_blank(&sh.value(c)) {
+            return None;
+        }
+        let shown = crate::display::cell_text(wb, sh, c).to_ascii_lowercase();
+        named.contains(&shown).then_some(shown)
+    })
+    .collect()
+}
+
+/// Whether a non-blank cell shown as `text` and holding `v` is one of a Values criterion's
+/// `values`. The dropdown's labels are the region's text; a value a script passes in its canonical
+/// spelling (`1234` for a cell shown as `1,234`) matches too, unless it is a label some cell shows
+/// (`labels`, from [`named_labels`]).
+fn values_match(values: &[String], labels: &std::collections::HashSet<String>, text: &str, v: &Value) -> bool {
+    // The canonical spelling is formatted once, and only when a value isn't the shown text.
+    let mut canonical: Option<String> = None;
+    values.iter().any(|x| {
+        x.eq_ignore_ascii_case(text)
+            || (x.eq_ignore_ascii_case(canonical.get_or_insert_with(|| v.display())) && !labels.contains(&x.to_ascii_lowercase()))
+    })
+}
+
 /// Excel grows an AutoFilter range when a value is entered in the row right below it, in one of its columns (#2342).
 /// A table's own filter is left to the table, and a row typed after a blank row does not count.
 /// A formula counts before it is calculated: this runs inside the edit, ahead of the recalc.
@@ -190,7 +222,12 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
+    // The labels of each Values criterion's column that block a canonical spelling.
+    let mut labels: std::collections::HashMap<usize, std::collections::HashSet<String>> = std::collections::HashMap::new();
     for (i, (off, c)) in af.criteria.iter().enumerate() {
+        if let FilterCriterion::Values { values, .. } = c {
+            labels.insert(i, named_labels(wb, sh, r.start.col + off, r.start.row + 1..=r.end.row, values));
+        }
         if matches!(c, FilterCriterion::Top10 { .. } | FilterCriterion::AboveAverage(_)) {
             let col = r.start.col + off;
             let mut nums: Vec<f64> = (r.start.row + 1..=r.end.row).filter_map(|row| sh.value(CellRef::new(row, col)).as_f64()).collect();
@@ -218,7 +255,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
                     if filter_blank(&v) {
                         *blanks
                     } else {
-                        values.iter().any(|x| x.eq_ignore_ascii_case(&text) || x.eq_ignore_ascii_case(&v.display()))
+                        labels.get(&i).is_some_and(|l| values_match(values, l, &text, &v))
                     }
                 }
                 FilterCriterion::Custom { a, b, and } => {
@@ -300,8 +337,17 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
     let Some(af) = &sh.autofilter else { return vec![] };
     let off = col.saturating_sub(af.range.start.col);
     let selected: Option<&FilterCriterion> = af.criteria.iter().find(|(o, _)| *o == off).map(|(_, c)| c);
+    // The labels that block a canonical spelling come from every row the filter reads (as in
+    // `apply_filter`), so a checkbox agrees with what the filter shows; only the list is capped.
+    let labels = match selected {
+        Some(FilterCriterion::Values { values, .. }) => {
+            named_labels(wb, sh, col, af.range.start.row + 1..=af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), values)
+        }
+        _ => std::collections::HashSet::new(),
+    };
+    let rows = af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000);
     let mut seen = std::collections::BTreeMap::new();
-    for row in af.range.start.row + 1..=af.range.end.row.min(af.range.start.row + 1_000_000) {
+    for row in rows {
         let c = CellRef::new(row, col);
         let v = sh.value(c);
         let blank = filter_blank(&v);
@@ -311,7 +357,7 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
                 if blank {
                     *blanks
                 } else {
-                    values.iter().any(|x| x.eq_ignore_ascii_case(&t))
+                    values_match(values, &labels, &t, &v)
                 }
             }
             _ => true,
