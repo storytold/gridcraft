@@ -22,6 +22,7 @@ mod ko;
 mod nl;
 mod pl;
 mod pt;
+mod pt_functions;
 mod ro;
 mod ru;
 mod sr;
@@ -275,6 +276,7 @@ impl Language {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
             Self::Fr => Some((fr_functions::DESCRIPTIONS, fr_functions::ARGUMENTS)),
+            Self::PtBr => Some((pt_functions::DESCRIPTIONS, pt_functions::ARGUMENTS)),
             _ => None,
         }
     }
