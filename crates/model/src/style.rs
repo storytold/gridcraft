@@ -31,11 +31,13 @@ impl Color {
         Color::Rgb(((r as u32) << 16) | ((g as u32) << 8) | b as u32)
     }
     pub fn from_hex(s: &str) -> Option<Color> {
-        let h = s.trim().trim_start_matches('#');
-        let h = if h.len() == 8 { h.get(2..)? } else { h };
-        if h.len() != 6 {
+        let h = s.trim();
+        let h = h.strip_prefix('#').unwrap_or(h);
+        // Alpha is ignored for RGB colors, but its digits must still be valid hexadecimal.
+        if !matches!(h.len(), 6 | 8) || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
             return None;
         }
+        let h = if h.len() == 8 { h.get(2..)? } else { h };
         u32::from_str_radix(h, 16).ok().map(Color::Rgb)
     }
     /// Resolved RGB, `None` for automatic.
@@ -543,6 +545,12 @@ mod tests {
         let th = Theme::default();
         assert_eq!(Color::from_hex("#FF0000").ok_or("none")?.resolve(&th), Some([255, 0, 0]));
         assert_eq!(Color::from_hex("FF00FF00").ok_or("none")?.resolve(&th), Some([0, 255, 0]));
+        assert_eq!(Color::from_hex("#80FF0000"), Some(Color::Rgb(0xFF0000)));
+        assert_eq!(Color::from_hex(" ff0000 "), Some(Color::Rgb(0xFF0000)));
+        assert_eq!(Color::from_hex(" #80ff0000 "), Some(Color::Rgb(0xFF0000)));
+        for invalid in ["#GGFF0000", "#0GFF0000", "#éFF0000", "#+F0000", "##FF0000", "##80FF0000", "###FF0000"] {
+            assert_eq!(Color::from_hex(invalid), None, "{invalid}");
+        }
         assert_eq!(Color::Theme(0, -500).resolve(&th), Some([128, 128, 128]));
         assert_eq!(Color::Theme(1, 500).resolve(&th), Some([128, 128, 128]));
         assert_eq!(Color::Auto.resolve(&th), None);
