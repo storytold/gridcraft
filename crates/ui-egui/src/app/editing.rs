@@ -6,6 +6,14 @@ pub(crate) const DRAFT_SHEET_GONE: &str = "The sheet of the cell being edited wa
 /// Why a draft of Python code that sheet protection hid while it was open is dropped.
 pub(crate) const DRAFT_CODE_HIDDEN: &str = "Sheet protection now hides the code of the cell being edited, so the entry was discarded.";
 
+/// Why a Ctrl+Enter fill over an area too large to fill was refused: `range.fill` refuses it too,
+/// and its cells' data validation was not checked (an unchecked fill is never treated as passed).
+pub(crate) const FILL_NOT_CHECKED: &str =
+    "The selection is too large to fill: an area holds more than 2,000,000 cells. Nothing was entered, and its data validation was not checked.";
+
+/// The Yes/No question a destination's Warning alert asks before a Ctrl+Enter fill.
+pub(crate) const FILL_WARNING_DIALOG: &str = "fillValidationWarning";
+
 impl SheetApp {
     /// Starts editing the active cell. `text` replaces the content (typing) or pre-fills it.
     pub fn begin_edit(&mut self, text: Option<String>, from_formula_bar: bool) {
@@ -166,8 +174,10 @@ impl SheetApp {
             }
             None => text,
         };
-        // Data validation.
-        if let Some(d) = self.session.active()
+        // Data validation of the cell typed in. A Ctrl+Enter fill asks every cell it writes instead,
+        // below, once its sheet is showing.
+        if !fill_selection
+            && let Some(d) = self.session.active()
             && let Some((dv, msg)) = gridcraft_engine::cmd::data::check_validation(&d.wb, ed.sheet, ed.cell, &text)
         {
             if dv.error_style == gridcraft_engine::model::ErrorStyle::Stop {
@@ -187,6 +197,48 @@ impl SheetApp {
             self.editor = Some(ed);
             self.session.mode = gridcraft_engine::Mode::Edit;
             return false;
+        }
+        // Ctrl+Enter: no write command applies data validation, so the rule of every cell the fill
+        // writes is asked here, not only the typed-in cell's (#3670). A Stop anywhere refuses the
+        // whole fill; a Warning asks Yes/No first; an Information shows and the fill goes ahead.
+        if fill_selection {
+            use gridcraft_engine::cmd::data::{FillValidation, check_fill_validation};
+            use gridcraft_engine::model::ErrorStyle;
+            let accepted = ed.fill_warning_accepted.take();
+            // The selection this check runs on, after the draft's sheet was re-activated
+            // above: re-activating a sheet restores its remembered selection, which can
+            // differ from the one the Warning answer compared against.
+            let writing_selection = self.session.active().map(|d| d.selection.a1());
+            let check = self.session.active().map(|d| check_fill_validation(&d.wb, ed.sheet, &d.selection.ranges, &text));
+            let refusal = match check {
+                Some(FillValidation::NotChecked) => Some(("GridCraft".to_string(), FILL_NOT_CHECKED.to_string())),
+                Some(FillValidation::Alert(a)) => {
+                    let title = if a.rule.error_title.is_empty() { "GridCraft".to_string() } else { a.rule.error_title.clone() };
+                    match a.rule.error_style {
+                        ErrorStyle::Stop => Some((title, a.message)),
+                        ErrorStyle::Warning if !matches!(&accepted, Some((t, sel)) if t == &text && *sel == writing_selection) => {
+                            let checked_selection = self.session.active().map(|d| d.selection.a1());
+                            let ask = json!({"title": title, "message": a.message, "messageCustom": !a.rule.error_message.is_empty(), "text": text, "doc": ed.doc, "sheetUid": ed.sheet_uid, "cell": ed.cell.a1(), "selection": checked_selection, "dr": dr, "dc": dc});
+                            self.editor = Some(ed);
+                            self.session.mode = gridcraft_engine::Mode::Edit;
+                            self.open_dialog(FILL_WARNING_DIALOG, ask);
+                            return false;
+                        }
+                        ErrorStyle::Warning => None,
+                        ErrorStyle::Information => {
+                            self.toast = Some((a.message, now_ms()));
+                            None
+                        }
+                    }
+                }
+                Some(FillValidation::Passed) | None => None,
+            };
+            if let Some(message) = refusal {
+                self.message = Some(message);
+                self.editor = Some(ed);
+                self.session.mode = gridcraft_engine::Mode::Edit;
+                return false;
+            }
         }
         // Committing nothing into an empty cell changes nothing: no undo step (#1855, Backspace has
         // already cleared the cell as its own step).
@@ -218,6 +270,48 @@ impl SheetApp {
                 false
             }
         }
+    }
+
+    /// Answers the Warning alert a Ctrl+Enter fill raised ([`FILL_WARNING_DIALOG`]; `ask` is its
+    /// values). No keeps the draft open and writes nothing. Yes fills the selection with the entry
+    /// the question was about; it doesn't ask that question again, while a Stop is still refused.
+    /// The answer applies only to the draft it was asked for: another draft (or none), and a
+    /// draft of the same cell on another sheet, is left alone.
+    /// It also applies only to the selection the question checked, in the window the draft
+    /// belongs to: if that selection moved while the question was open, the new selection is
+    /// checked on its own rules (asked, refused, or filled) instead of inheriting this answer.
+    /// The checked selection is stored with the answer and compared again when the fill
+    /// runs, after the draft's sheet is re-activated: re-activating a sheet restores its
+    /// remembered selection, which may be a selection this answer never checked.
+    /// Returns whether the fill was written.
+    pub fn answer_fill_warning(&mut self, yes: bool, ask: &serde_json::Map<String, serde_json::Value>) -> bool {
+        let text = ask.get("text").and_then(serde_json::Value::as_str);
+        let same = |ed: &editor::EditState| {
+            ask.get("doc").and_then(serde_json::Value::as_u64) == Some(ed.doc)
+                && ask.get("sheetUid").and_then(serde_json::Value::as_u64) == Some(ed.sheet_uid)
+                && ask.get("cell").and_then(serde_json::Value::as_str) == Some(ed.cell.a1().as_str())
+        };
+        let Some(ed) = self.editor.as_mut().filter(|ed| same(ed)) else { return false };
+        let Some(text) = text.filter(|_| yes) else {
+            ed.request_focus = true;
+            return false;
+        };
+        let step = |k: &str| ask.get(k).and_then(serde_json::Value::as_i64).unwrap_or(0);
+        // Yes waives the Warning of the selection the question checked, not of any selection
+        // the user has moved to since: a moved selection goes through the check again, so its
+        // own Warning is asked and a Stop there is still refused.
+        let checked = ask.get("selection").and_then(serde_json::Value::as_str);
+        // The checked selection is the owning window's, not whichever window happens to be
+        // showing: another window on the same workbook keeps its own selection, and its
+        // showing the checked address must not grant this answer.
+        let owner = ed.window.filter(|w| self.session.window(*w).is_some()).or_else(|| self.session.doc_window(ed.doc));
+        let current =
+            owner.and_then(|w| self.session.window_selection(w)).map(|sel| sel.a1()).or_else(|| self.session.active().map(|d| d.selection.a1()));
+        if checked != current.as_deref() {
+            return self.commit_edit(step("dr"), step("dc"), false, true);
+        }
+        ed.fill_warning_accepted = Some((text.to_string(), checked.map(str::to_string)));
+        self.commit_edit(step("dr"), step("dc"), false, true)
     }
 
     /// After a command, keeps the open draft on its own sheet: a sheet inserted, deleted or moved
@@ -513,6 +607,356 @@ mod protected_cell_tests {
     }
 }
 
+/// Ctrl+Enter asks the data validation of every cell the fill writes, not only the typed-in one
+/// (#3670).
+#[cfg(test)]
+mod fill_validation_tests {
+    use super::*;
+    use gridcraft_engine::Session;
+    use gridcraft_engine::core::{CellRef, Value};
+
+    fn book() -> SheetApp {
+        let mut session = Session::new();
+        session.new_workbook();
+        SheetApp::new(session, Default::default())
+    }
+
+    /// A "whole number greater than 10" rule on `range`, with this alert style, title and message.
+    fn rule(app: &mut SheetApp, range: &str, style: &str) {
+        let p = json!({
+            "range": range, "type": "whole", "operator": "greaterThan", "formula1": "10",
+            "errorStyle": style, "errorTitle": format!("{style} title"), "errorMessage": format!("{style} at {range}"),
+        });
+        app.run("data.validation", p).unwrap();
+    }
+
+    fn value(app: &SheetApp, a1: &str) -> Value {
+        let at = CellRef::parse(a1).unwrap();
+        app.session.active().and_then(|d| d.wb.sheet(0)).map(|sh| sh.value(at)).unwrap_or_default()
+    }
+
+    fn value_on(app: &SheetApp, sheet: usize, a1: &str) -> Value {
+        let at = CellRef::parse(a1).unwrap();
+        app.session.active().and_then(|d| d.wb.sheet(sheet)).map(|sh| sh.value(at)).unwrap_or_default()
+    }
+
+    fn column_on(app: &SheetApp, sheet: usize, cells: &[&str]) -> Vec<Value> {
+        cells.iter().map(|c| value_on(app, sheet, c)).collect()
+    }
+
+    fn column(app: &SheetApp, cells: &[&str]) -> Vec<Value> {
+        cells.iter().map(|c| value(app, c)).collect()
+    }
+
+    fn undo_len(app: &SheetApp) -> usize {
+        app.session.active().unwrap().undo.len()
+    }
+
+    /// Types `text` in the active cell of `range` and commits it with Ctrl+Enter.
+    fn ctrl_enter(app: &mut SheetApp, range: &str, active: &str, text: &str) -> bool {
+        app.run("selection.set", json!({"range": range, "active": active})).unwrap();
+        app.begin_edit(Some(text.into()), false);
+        app.commit_edit(0, 0, false, true)
+    }
+
+    fn draft(app: &SheetApp) -> Option<&str> {
+        app.editor.as_ref().map(|ed| ed.text.as_str())
+    }
+
+    fn warning_values(app: &SheetApp) -> serde_json::Map<String, serde_json::Value> {
+        let d = app.dialog.as_ref().expect("the Warning question is open");
+        assert_eq!(d.name(), FILL_WARNING_DIALOG);
+        d.values.clone()
+    }
+
+    #[test]
+    fn a_stop_rule_on_another_destination_refuses_the_whole_fill() {
+        // The issue's repro: A1:A3 selected, typing in A1 (no rule), a Stop rule on A2 only.
+        let mut app = book();
+        rule(&mut app, "A2", "stop");
+        let undo = undo_len(&app);
+
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"), "the fill is refused");
+
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "nothing is written, not even A1");
+        assert_eq!(app.message, Some(("stop title".into(), "stop at A2".into())), "A2's own alert");
+        assert_eq!(draft(&app), Some("5"), "the draft stays in the cell");
+        assert_eq!(undo_len(&app), undo, "no undo step");
+    }
+
+    #[test]
+    fn a_stop_in_a_later_area_of_a_multi_area_fill_refuses_every_write() {
+        let mut app = book();
+        rule(&mut app, "C2", "stop");
+        let undo = undo_len(&app);
+
+        assert!(!ctrl_enter(&mut app, "A1:A2,C1:C2", "A1", "5"), "the fill is refused");
+
+        assert_eq!(column(&app, &["A1", "A2", "C1", "C2"]), vec![Value::Empty; 4], "no area is written");
+        assert_eq!(app.message, Some(("stop title".into(), "stop at C2".into())));
+        assert_eq!(undo_len(&app), undo, "no undo step");
+    }
+
+    #[test]
+    fn a_warning_on_another_destination_asks_and_no_writes_nothing() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        let undo = undo_len(&app);
+
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"), "the fill waits for the answer");
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "nothing written before the answer");
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("title"), Some(&json!("warning title")));
+        assert_eq!(ask.get("message"), Some(&json!("warning at A2")));
+        assert_eq!(ask.get("messageCustom"), Some(&json!(true)), "the rule's own message is flagged as custom text");
+        assert_eq!(app.dialog.as_ref().map(|d| d.title.as_str()), Some("warning title"));
+
+        assert!(!app.answer_fill_warning(false, &ask), "No writes nothing");
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3]);
+        assert_eq!(draft(&app), Some("5"), "No keeps the draft");
+        assert_eq!(undo_len(&app), undo);
+    }
+
+    #[test]
+    fn a_warning_answered_yes_fills_the_whole_selection() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+
+        assert!(app.answer_fill_warning(true, &ask), "Yes writes the fill");
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Number(5.0); 3]);
+        assert!(app.editor.is_none(), "the draft is committed");
+    }
+
+    #[test]
+    fn a_yes_for_a_moved_selection_asks_again_instead_of_filling() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        rule(&mut app, "C2", "warning");
+        let undo = undo_len(&app);
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at A2")));
+
+        // The selection moves while the question is open (a right-click elsewhere).
+        app.run("selection.set", json!({"range": "C1:C3", "active": "C1"})).unwrap();
+
+        assert!(!app.answer_fill_warning(true, &ask), "Yes was for the old selection: it asks again, writes nothing");
+        assert_eq!(column(&app, &["A1", "A2", "A3", "C1", "C2", "C3"]), vec![Value::Empty; 6]);
+        assert_eq!(undo_len(&app), undo, "no undo step");
+        assert_eq!(draft(&app), Some("5"), "the draft stays in the cell");
+
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at C2")), "the new selection's own Warning is asked");
+        assert_eq!(ask.get("selection"), Some(&json!("C1:C3")), "the question names the checked selection");
+
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the checked selection fills it");
+        assert_eq!(column(&app, &["C1", "C2", "C3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first selection was never written");
+    }
+
+    #[test]
+    fn a_yes_answer_does_not_carry_over_to_another_draft() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+        // The draft is cancelled and another started elsewhere before Yes arrives.
+        app.cancel_edit();
+        app.run("selection.set", json!({"range": "C1"})).unwrap();
+        app.begin_edit(Some("other".into()), false);
+
+        assert!(!app.answer_fill_warning(true, &ask), "the answer was for another draft");
+        assert_eq!(column(&app, &["A1", "A2", "A3", "C1"]), vec![Value::Empty; 4]);
+        assert_eq!(draft(&app), Some("other"));
+    }
+
+    #[test]
+    fn a_yes_answer_does_not_carry_over_to_a_draft_on_another_sheet() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+        // The draft is cancelled and the same entry started on another sheet, at the same
+        // address over the same selection, before Yes arrives.
+        app.cancel_edit();
+        app.run("home.insertSheet", json!({})).unwrap();
+        rule(&mut app, "A2", "warning");
+        app.run("selection.set", json!({"range": "A1:A3", "active": "A1"})).unwrap();
+        app.begin_edit(Some("5".into()), false);
+        assert_eq!(draft(&app), Some("5"));
+
+        assert!(!app.answer_fill_warning(true, &ask), "the answer was for another sheet's draft");
+        assert_eq!(column_on(&app, 1, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "nothing is written on the new sheet");
+        assert_eq!(draft(&app), Some("5"), "the new sheet's draft stays open");
+
+        // Its own fill is asked on its own sheet's rules, and Yes to that question fills it.
+        assert!(!app.commit_edit(0, 0, false, true), "the new sheet's own Warning is asked");
+        let ask = warning_values(&app);
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the new sheet's question fills it");
+        assert_eq!(column_on(&app, 1, &["A1", "A2", "A3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column_on(&app, 0, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first sheet was never written");
+    }
+
+    #[test]
+    fn a_yes_checked_in_the_owning_window_is_not_granted_by_another_windows_selection() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        rule(&mut app, "C2", "warning");
+        let undo = undo_len(&app);
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+
+        // The owning window's selection moves while the question is open, and another window
+        // on the same workbook comes forward showing the checked selection. The second
+        // window's selection is moved at engine level (as a script or the control channel
+        // moves it), so the draft stays in the fields of the window that answers.
+        app.run("selection.set", json!({"range": "C1:C3", "active": "C1"})).unwrap();
+        app.session.new_window().unwrap();
+        app.session.run("selection.set", json!({"range": "A1:A3", "active": "A1"})).unwrap();
+
+        assert!(!app.answer_fill_warning(true, &ask), "Yes was for the owning window's old selection: it asks again, writes nothing");
+        assert_eq!(column(&app, &["A1", "A2", "A3", "C1", "C2", "C3"]), vec![Value::Empty; 6]);
+        assert_eq!(undo_len(&app), undo, "no undo step");
+        assert_eq!(draft(&app), Some("5"), "the draft stays in the cell");
+
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at C2")), "the owning selection's own Warning is asked");
+        assert_eq!(ask.get("selection"), Some(&json!("C1:C3")), "the question names the checked selection");
+
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the checked selection fills it");
+        assert_eq!(column(&app, &["C1", "C2", "C3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first selection was never written");
+    }
+
+    #[test]
+    fn a_yes_is_not_granted_to_the_selection_restored_by_sheet_activation() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        rule(&mut app, "C2", "warning");
+        // A second sheet whose remembered selection is the checked one.
+        app.run("home.insertSheet", json!({})).unwrap();
+        app.run("selection.set", json!({"range": "A1:A3", "active": "A1"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": 0})).unwrap();
+
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at A2")));
+        assert_eq!(ask.get("selection"), Some(&json!("A1:A3")));
+        let undo = undo_len(&app);
+
+        // The draft's sheet moves to another selection while the question is open, and
+        // the second sheet (showing the checked selection) comes forward: activating
+        // the draft's sheet for the fill restores the moved selection there.
+        app.run("selection.set", json!({"range": "C1:C3", "active": "C1"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": 1})).unwrap();
+
+        assert!(!app.answer_fill_warning(true, &ask), "Yes was for A1:A3: the restored selection is asked again, writes nothing");
+        assert_eq!(column(&app, &["A1", "A2", "A3", "C1", "C2", "C3"]), vec![Value::Empty; 6]);
+        assert_eq!(undo_len(&app), undo, "no undo step");
+        assert_eq!(draft(&app), Some("5"), "the draft stays in the cell");
+
+        let ask = warning_values(&app);
+        assert_eq!(ask.get("message"), Some(&json!("warning at C2")), "the restored selection's own Warning is asked");
+        assert_eq!(ask.get("selection"), Some(&json!("C1:C3")), "the question names the checked selection");
+
+        assert!(app.answer_fill_warning(true, &ask), "Yes for the checked selection fills it");
+        assert_eq!(column(&app, &["C1", "C2", "C3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3], "the first selection was never written");
+    }
+
+    #[test]
+    fn an_information_rule_shows_its_message_and_the_fill_goes_ahead() {
+        let mut app = book();
+        rule(&mut app, "A3", "information");
+
+        assert!(ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Number(5.0); 3]);
+        assert_eq!(app.toast.as_ref().map(|(m, _)| m.as_str()), Some("information at A3"));
+        assert!(app.message.is_none() && app.dialog.is_none());
+    }
+
+    #[test]
+    fn a_stop_wins_over_a_warning_met_first() {
+        let mut app = book();
+        rule(&mut app, "A2", "warning");
+        rule(&mut app, "A3", "stop");
+
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "5"));
+
+        assert!(app.dialog.is_none(), "no Yes/No question when a Stop refuses anyway");
+        assert_eq!(app.message, Some(("stop title".into(), "stop at A3".into())));
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3]);
+    }
+
+    #[test]
+    fn a_stop_on_a_filtered_out_row_does_not_block_and_that_row_stays_untouched() {
+        let mut app = book();
+        let rows = json!([["Val", "Tag"], ["", "keep"], ["orig", "hide"], ["", "keep"]]);
+        app.run("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        app.run("data.filter", json!({"range": "A1:B4"})).unwrap();
+        app.run("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+        rule(&mut app, "A3", "stop");
+
+        assert!(ctrl_enter(&mut app, "A2:A4", "A2", "5"), "the hidden row's rule doesn't decide the fill");
+
+        assert_eq!(column(&app, &["A2", "A3", "A4"]), vec![Value::Number(5.0), Value::text("orig"), Value::Number(5.0)]);
+        assert!(app.message.is_none());
+
+        // A Stop on a visible row of the same filtered range still refuses it.
+        rule(&mut app, "A4", "stop");
+        assert!(!ctrl_enter(&mut app, "A2:A4", "A2", "7"));
+        assert_eq!(column(&app, &["A2", "A3", "A4"]), vec![Value::Number(5.0), Value::text("orig"), Value::Number(5.0)]);
+        assert_eq!(app.message, Some(("stop title".into(), "stop at A4".into())));
+    }
+
+    #[test]
+    fn a_literal_fill_is_checked_as_the_fill_leaves_the_sheet() {
+        // At most one cell of A1:A3 filled: each cell alone accepts "x", the three filled don't.
+        let mut app = book();
+        app.run("data.validation", json!({"range": "A1:A3", "type": "custom", "formula1": "=COUNTA($A$1:$A$3)<=1"})).unwrap();
+
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "x"));
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3]);
+    }
+
+    #[test]
+    fn a_formula_fill_is_checked_at_each_destination() {
+        let mut app = book();
+        app.run("data.validation", json!({"range": "A2", "type": "custom", "formula1": "=FALSE"})).unwrap();
+
+        assert!(!ctrl_enter(&mut app, "A1:A3", "A1", "=ROW()"), "A2's Stop refuses a formula fill too");
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Empty; 3]);
+        assert_eq!(draft(&app), Some("=ROW()"));
+    }
+
+    #[test]
+    fn an_area_too_large_to_check_is_refused_not_written_unchecked() {
+        let mut app = book();
+        rule(&mut app, "A1", "stop");
+        let undo = undo_len(&app);
+
+        assert!(!ctrl_enter(&mut app, "A1:B1000001", "A1", "50"));
+
+        assert_eq!(app.message.as_ref().map(|(_, m)| m.as_str()), Some(FILL_NOT_CHECKED));
+        assert_eq!(value(&app, "A1"), Value::Empty);
+        assert_eq!(draft(&app), Some("50"));
+        assert_eq!(undo_len(&app), undo);
+    }
+
+    #[test]
+    fn plain_enter_still_asks_only_the_typed_in_cell() {
+        // Enter (not Ctrl+Enter) writes one cell: a Stop elsewhere in the selection is not asked.
+        let mut app = book();
+        rule(&mut app, "A2", "stop");
+        app.run("selection.set", json!({"range": "A1:A3", "active": "A1"})).unwrap();
+        app.begin_edit(Some("5".into()), false);
+        assert!(app.commit_edit(0, 0, false, false));
+        assert_eq!(column(&app, &["A1", "A2", "A3"]), vec![Value::Number(5.0), Value::Empty, Value::Empty]);
+    }
+}
 #[cfg(test)]
 mod merged_cell_enter_tests {
     use super::*;

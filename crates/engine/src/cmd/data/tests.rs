@@ -557,3 +557,93 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+// ---------------------------------------------------------------- Ctrl+Enter fill validation (#3670)
+
+/// A sheet with a "whole number greater than 10" rule of each style on its range.
+fn fill_rules(rules: &[(&str, &str)]) -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    for (range, style) in rules {
+        let p = json!({"range": range, "type": "whole", "operator": "greaterThan", "formula1": "10", "errorStyle": style, "errorMessage": format!("{style} at {range}")});
+        s.execute("data.validation", p).unwrap();
+    }
+    s
+}
+
+fn fill_check(s: &Session, ranges: &str, input: &str) -> FillValidation {
+    let ranges: Vec<RangeRef> = ranges.split(',').map(|r| RangeRef::parse(r).unwrap()).collect();
+    check_fill_validation(&s.doc().unwrap().wb, 0, &ranges, input)
+}
+
+fn alert(v: FillValidation) -> (String, ErrorStyle) {
+    match v {
+        FillValidation::Alert(a) => (a.cell.a1(), a.rule.error_style),
+        other => panic!("expected an alert, got {other:?}"),
+    }
+}
+
+#[test]
+fn fill_check_asks_every_destination_not_only_the_first() {
+    let s = fill_rules(&[("A2", "stop")]);
+    assert_eq!(alert(fill_check(&s, "A1:A3", "5")), ("A2".into(), ErrorStyle::Stop));
+    assert!(matches!(fill_check(&s, "A1:A3", "50"), FillValidation::Passed));
+    assert!(matches!(fill_check(&s, "C1:C3", "5"), FillValidation::Passed), "no rule on the destinations");
+}
+
+#[test]
+fn fill_check_asks_destinations_in_every_area_of_a_multi_area_fill() {
+    // A Stop in a later area of a multi-area fill decides the whole fill, for a literal
+    // input and for a formula judged per destination alike.
+    let s = fill_rules(&[("C2", "stop")]);
+    assert_eq!(alert(fill_check(&s, "A1:A2,C1:C2", "5")), ("C2".into(), ErrorStyle::Stop));
+    assert!(matches!(fill_check(&s, "A1:A2,C1:C2", "50"), FillValidation::Passed));
+    let mut s = fill_rules(&[]);
+    s.execute("data.validation", json!({"range": "C2", "type": "custom", "formula1": "=FALSE"})).unwrap();
+    assert_eq!(alert(fill_check(&s, "A1:A2,C1:C2", "=ROW()")), ("C2".into(), ErrorStyle::Stop));
+}
+
+#[test]
+fn fill_check_reports_the_most_severe_style_first_met() {
+    // A Stop later in the fill wins over a Warning and an Information met before it.
+    let s = fill_rules(&[("A1", "information"), ("A2", "warning"), ("A3", "stop")]);
+    assert_eq!(alert(fill_check(&s, "A1:A3", "5")), ("A3".into(), ErrorStyle::Stop));
+    assert_eq!(alert(fill_check(&s, "A1:A2", "5")), ("A2".into(), ErrorStyle::Warning));
+    assert_eq!(alert(fill_check(&s, "A1", "5")), ("A1".into(), ErrorStyle::Information));
+}
+
+#[test]
+fn fill_check_skips_rows_a_filter_hides() {
+    // range.fill doesn't write rows an applied filter hides (#1175), so their rules don't decide.
+    let mut s = fill_rules(&[]);
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Val", "Tag"], ["", "keep"], ["", "hide"], ["", "keep"]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:B4"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("data.validation", json!({"range": "A3", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
+    assert!(matches!(fill_check(&s, "A2:A4", "5"), FillValidation::Passed));
+    s.execute("data.validation", json!({"range": "A4", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
+    assert_eq!(alert(fill_check(&s, "A2:A4", "5")), ("A4".into(), ErrorStyle::Stop));
+}
+
+#[test]
+fn literal_fill_is_checked_against_the_filled_workbook_formula_fill_per_destination() {
+    // "At most one cell of A1:A3 filled": each cell alone accepts an entry, the three filled don't.
+    let mut s = fill_rules(&[]);
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "custom", "formula1": "=COUNTA($A$1:$A$3)<=1"})).unwrap();
+    assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "x").is_none(), "alone, each cell accepts x");
+    assert_eq!(alert(fill_check(&s, "A1:A3", "x")), ("A1".into(), ErrorStyle::Stop));
+    // A formula is judged per destination as typed there alone (as the typed-in cell's check does),
+    // so the same rule lets it through.
+    assert!(matches!(fill_check(&s, "A1:A3", "=ROW()"), FillValidation::Passed));
+    s.execute("data.validation", json!({"range": "A2", "type": "custom", "formula1": "=FALSE"})).unwrap();
+    assert_eq!(alert(fill_check(&s, "A1:A3", "=ROW()")), ("A2".into(), ErrorStyle::Stop));
+}
+
+#[test]
+fn fill_check_over_the_fill_bound_is_not_checked_rather_than_passed() {
+    let s = fill_rules(&[("A1", "stop")]);
+    // 2 × 1,000,001 cells: one area over MAX_FILL_AREA, which range.fill refuses too.
+    assert!(matches!(fill_check(&s, "A1:B1000001", "5"), FillValidation::NotChecked));
+    assert!(matches!(fill_check(&s, "A1:B1000001", "=1"), FillValidation::NotChecked));
+    assert!(matches!(fill_check(&s, "C1:C3,A1:B1000001", "50"), FillValidation::NotChecked));
+}
