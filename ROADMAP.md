@@ -133,6 +133,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 
 ## Progress log
 
+- 2026-11-02: macOS disk images preserve signed bundle metadata: create from the staged folder, clear extended attributes before signing, and strictly verify both the mounted app and an installed copy before notarizing the DMG.
+
 | Date | What landed |
 |---|---|
 | 2026-11-16 | A selected chart outlines its data as Excel does (series names red, category labels purple, values one blue block), and dragging a corner of the values outline changes the cells the chart plots: series keep their formatting, a wider block adds series, aligned names and labels follow, one undo step, Esc cancels; `chart.setValuesRange` does the same for scripts, the CLI and MCP (#4389, #4390) |
