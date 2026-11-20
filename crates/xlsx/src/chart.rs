@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartKind, ChartTextStyle, ChartTextStyles, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -197,6 +199,114 @@ fn read_trendline(t: &El) -> Option<Trendline> {
     })
 }
 
+/// A chart part's text style. Each property is taken from the nearest place that sets it: a title's
+/// first run of rich text, then its rich paragraph's defaults, then the part's `txPr`.
+fn text_style(e: Option<&El>, root: &El) -> ChartTextStyle {
+    let part = |path: &[&str]| e.and_then(|e| e.path(path));
+    let layers = [
+        part(&["tx", "rich", "p", "r", "rPr"]),
+        part(&["tx", "rich", "p", "pPr", "defRPr"]),
+        part(&["txPr", "p", "pPr", "defRPr"]),
+        // The chart's own default text, which every part inherits.
+        root.path(&["txPr", "p", "pPr", "defRPr"]),
+    ];
+    let attr = |k: &str| layers.iter().flatten().find_map(|l| l.attr(k));
+    ChartTextStyle {
+        size: attr("sz").and_then(|v| v.trim().parse::<f32>().ok()).map(|v| v / 100.0).filter(|v| (1.0..=400.0).contains(v)),
+        bold: attr("b").map(|v| matches!(v.trim(), "1" | "true")),
+        caps: attr("cap") == Some("all"),
+        color: layers.iter().flatten().find_map(|l| l.child("solidFill")).and_then(text_color),
+    }
+}
+
+/// A text fill's colour: an RGB value, or a theme colour lightened (`lumOff`) or darkened
+/// (`lumMod` alone) as a tint, the way Excel's own chart text is grey (`tx1` at 65% plus 35%).
+fn text_color(fill: &El) -> Option<Color> {
+    if let Some(c) = fill.child("schemeClr") {
+        let Some(Color::Theme(i, _)) = dml_color(fill) else { return dml_color(fill) };
+        let pct = |name: &str| c.child(name).and_then(|m| m.attr_f64("val")).filter(|v| v.is_finite()).map(|v| v / 100_000.0);
+        let tint = match (pct("lumMod"), pct("lumOff")) {
+            (_, Some(off)) => off.clamp(0.0, 1.0),
+            (Some(m), None) => -(1.0 - m).clamp(0.0, 1.0),
+            (None, None) => 0.0,
+        };
+        return Some(Color::Theme(i, (tint * 1000.0).round() as i16));
+    }
+    if let Some(p) = fill.child("prstClr").and_then(|c| c.attr("val")) {
+        return match p {
+            "black" => Some(Color::Rgb(0)),
+            "white" => Some(Color::Rgb(0xFFFFFF)),
+            _ => None,
+        };
+    }
+    dml_color(fill)
+}
+
+/// Excel's text where the file doesn't format it (measured on a synthetic chart, every style):
+/// 10 pt black. Styles 41-48 draw it white on a black chart, which GridCraft doesn't fill yet, so
+/// their colour is left as GridCraft draws it.
+fn excel_text_defaults(mut t: ChartTextStyle, style: u32) -> ChartTextStyle {
+    t.size = t.size.or(Some(10.0));
+    if !(41..=48).contains(&style) {
+        t.color = t.color.or(Some(Color::Rgb(0)));
+    }
+    t
+}
+
+/// Excel's chart title where the file doesn't format it (measured on a synthetic chart): 18 pt,
+/// bold and black for an automatic title or rich text with paragraph defaults (`a:pPr/a:defRPr`),
+/// as Excel and GridCraft write it; rich text with no paragraph properties at all is not bold.
+/// Styles 41-48 draw it white on a black chart, not filled by GridCraft yet: colour left as is.
+fn excel_title_defaults(title: Option<&El>, mut t: ChartTextStyle, style: u32) -> ChartTextStyle {
+    let Some(title) = title else { return t };
+    let bare_rich = title.path(&["tx", "rich", "p"]).is_some_and(|p| p.child("pPr").is_none());
+    t.size = t.size.or(Some(18.0));
+    if !bare_rich {
+        t.bold = t.bold.or(Some(true));
+    }
+    if !(41..=48).contains(&style) {
+        t.color = t.color.or(Some(Color::Rgb(0)));
+    }
+    t
+}
+
+/// GridCraft's own chart title, written out so Excel shows the same: 14 pt, regular, dark grey.
+const TITLE_SIZE: f32 = 14.0;
+
+/// GridCraft's own chart text, written out so Excel shows the same: 9 pt in dark grey (#595959).
+const TEXT_SIZE: f32 = 9.0;
+const TEXT_COLOR: u32 = 0x595959;
+
+/// A part's `c:txPr`: its size, weight, capitals and colour, GridCraft's where it has none.
+fn txpr_xml(t: ChartTextStyle, wb: &Workbook) -> String {
+    let r = def_rpr(t, TEXT_SIZE, wb);
+    format!("<c:txPr><a:bodyPr/><a:lstStyle/><a:p><a:pPr>{r}</a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>")
+}
+
+/// An `a:defRPr` with a part's size, weight, capitals and colour, GridCraft's where it has none.
+fn def_rpr(t: ChartTextStyle, default_size: f32, wb: &Workbook) -> String {
+    let size = t.size.filter(|s| s.is_finite()).unwrap_or(default_size).clamp(1.0, 400.0);
+    let color = t.color.and_then(|c| srgb(&c, &wb.theme)).unwrap_or_else(|| format!("<a:srgbClr val=\"{TEXT_COLOR:06X}\"/>"));
+    let mut r = format!("<a:defRPr sz=\"{}\" b=\"{}\"", (size * 100.0).round() as u32, u8::from(t.bold.unwrap_or(false)));
+    if t.caps {
+        r.push_str(" cap=\"all\"");
+    }
+    let _ = write!(r, "><a:solidFill>{color}</a:solidFill></a:defRPr>");
+    r
+}
+
+/// The chart's title with its style in each paragraph's defaults, GridCraft's 14 pt dark grey
+/// where it has none, so Excel draws it as GridCraft does.
+fn chart_title_xml(t: &str, style: ChartTextStyle, wb: &Workbook) -> String {
+    let r = def_rpr(style, TITLE_SIZE, wb);
+    let mut s = String::from("<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/>");
+    for line in t.split('\n') {
+        let _ = write!(s, "<a:p><a:pPr>{r}</a:pPr><a:r><a:t>{}</a:t></a:r></a:p>", esc(line));
+    }
+    s.push_str("</c:rich></c:tx><c:overlay val=\"0\"/></c:title>");
+    s
+}
+
 fn rich_title(t: &El) -> Option<String> {
     let tx = t.child("tx")?;
     if let Some(rich) = tx.child("rich") {
@@ -260,6 +370,17 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             _ => LegendPos::Right,
         },
     };
+    // Labels' style from the first series that has them, else from a group's.
+    let labels =
+        groups.iter().find_map(|(g, _)| g.kids("ser").find_map(|s| s.child("dLbls"))).or_else(|| groups.iter().find_map(|(g, _)| g.child("dLbls")));
+    let style = root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2);
+    let text = ChartTextStyles {
+        title: excel_title_defaults(chart.child("title"), text_style(chart.child("title"), root), style),
+        legend: excel_text_defaults(text_style(chart.child("legend"), root), style),
+        data_labels: excel_text_defaults(text_style(labels, root), style),
+        category_axis: excel_text_defaults(text_style(x_ax, root), style),
+        value_axis: excel_text_defaults(text_style(y_ax, root), style),
+    };
     let doughnut = plot.child("doughnutChart");
     let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
     let first_slice_angle =
@@ -279,7 +400,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
             outline: bool_val(t, "showOutline"),
         }),
         gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
-        style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
+        style,
         hole_size,
         first_slice_angle,
         x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
@@ -287,6 +408,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        text,
     })
 }
 
@@ -661,16 +783,16 @@ fn trendline_xml(t: &Trendline, wb: &Workbook) -> String {
     x
 }
 
-fn dlbls(show: bool) -> String {
+fn dlbls(show: bool, txpr: &str) -> String {
     format!(
-        "<c:dLbls><c:showLegendKey val=\"0\"/><c:showVal val=\"{}\"/><c:showCatName val=\"0\"/><c:showSerName val=\"0\"/><c:showPercent val=\"0\"/><c:showBubbleSize val=\"0\"/></c:dLbls>",
+        "<c:dLbls>{txpr}<c:showLegendKey val=\"0\"/><c:showVal val=\"{}\"/><c:showCatName val=\"0\"/><c:showSerName val=\"0\"/><c:showPercent val=\"0\"/><c:showBubbleSize val=\"0\"/></c:dLbls>",
         show as u8
     )
 }
 
 fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
     let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
-    let dl = dlbls(ch.data_labels);
+    let dl = dlbls(ch.data_labels, &if ch.data_labels { txpr_xml(ch.text.data_labels, wb) } else { String::new() });
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
         G::Bar { bar, grouping } => {
@@ -718,6 +840,8 @@ struct Ax<'a> {
     grid: bool,
     title: Option<&'a str>,
     crosses_max: bool,
+    /// The tick labels' `c:txPr`.
+    text: &'a str,
 }
 
 fn axis_xml(a: &Ax<'_>) -> String {
@@ -736,7 +860,8 @@ fn axis_xml(a: &Ax<'_>) -> String {
     }
     let _ = write!(
         s,
-        "<c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"out\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"{}\"/><c:crosses val=\"{}\"/>",
+        "<c:numFmt formatCode=\"General\" sourceLinked=\"1\"/><c:majorTickMark val=\"out\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/>{}<c:crossAx val=\"{}\"/><c:crosses val=\"{}\"/>",
+        a.text,
         a.cross,
         if a.crosses_max { "max" } else { "autoZero" }
     );
@@ -770,12 +895,13 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     s.push_str("<c:chart>");
     match &ch.title {
         Some(t) if !t.is_empty() => {
-            s.push_str(&title_xml(t));
+            s.push_str(&chart_title_xml(t, ch.text.title, wb));
             s.push_str("<c:autoTitleDeleted val=\"0\"/>");
         }
         _ => s.push_str("<c:autoTitleDeleted val=\"1\"/>"),
     }
     s.push_str("<c:plotArea><c:layout/>");
+    let (cat_text, val_text) = (txpr_xml(ch.text.category_axis, wb), txpr_xml(ch.text.value_axis, wb));
     let all: Vec<(usize, &Series)> = ch.series.iter().enumerate().collect();
     let primary_g;
     let mut secondary: Option<G> = None;
@@ -820,6 +946,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 delete: false,
                 grid: false,
                 title: ch.x_title.as_deref(),
+                text: &cat_text,
                 crosses_max: false,
             }));
             s.push_str(&axis_xml(&Ax {
@@ -830,6 +957,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 delete: false,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
+                text: &val_text,
                 crosses_max: false,
             }));
         }
@@ -842,6 +970,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 delete: false,
                 grid: false,
                 title: ch.x_title.as_deref(),
+                text: &cat_text,
                 crosses_max: false,
             }));
             s.push_str(&axis_xml(&Ax {
@@ -852,6 +981,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 delete: false,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
+                text: &val_text,
                 crosses_max: false,
             }));
         }
@@ -864,6 +994,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 delete: false,
                 grid: false,
                 title: ch.x_title.as_deref(),
+                text: &cat_text,
                 crosses_max: false,
             }));
             s.push_str(&axis_xml(&Ax {
@@ -874,13 +1005,14 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
                 delete: false,
                 grid: ch.gridlines,
                 title: ch.y_title.as_deref(),
+                text: &val_text,
                 crosses_max: false,
             }));
         }
     }
     if secondary.is_some() {
-        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false, text: "" }));
+        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true, text: "" }));
     }
     if let Some(t) = &ch.data_table {
         let _ = write!(
@@ -901,7 +1033,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         LegendPos::Right => Some("r"),
     };
     if let Some(p) = pos {
-        let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
+        let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/>{}</c:legend>", txpr_xml(ch.text.legend, wb));
     }
     s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
     s

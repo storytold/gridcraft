@@ -3,7 +3,7 @@
 use std::borrow::Cow;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, ChartTextStyle, ChartTextStyles, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, nice_scale};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, points_per_series, series_color};
@@ -56,6 +56,36 @@ pub(crate) const MAX_WEDGES: usize = 2_048;
 struct Ctx<'a> {
     out: Vec<Prim>,
     m: &'a dyn Measure,
+    /// The chart's own text styles (from its file); what they leave out keeps GridCraft's look.
+    text: ChartTextStyles,
+    /// Their colours, resolved.
+    colors: crate::TextColors,
+}
+
+/// A kind of chart text as drawn: the chart's size, weight and capitals where its file gives
+/// them, else GridCraft's size, regular and as typed.
+#[derive(Clone, Copy)]
+struct Look {
+    size: f32,
+    bold: bool,
+    caps: bool,
+    /// The chart's colour for it; `None` draws the caller's.
+    color: Option<Rgba>,
+}
+
+impl Look {
+    /// `style`'s look, its size from points to the chart's pixels; `size` (already in pixels) where
+    /// it sets none.
+    fn of(style: ChartTextStyle, size: f32) -> Look {
+        const PX_PER_PT: f32 = 96.0 / 72.0;
+        Look { size: style.size.map_or(size, |s| s * PX_PER_PT), bold: style.bold.unwrap_or(false), caps: style.caps, color: None }
+    }
+    fn colored(self, color: Option<Rgba>) -> Look {
+        Look { color, ..self }
+    }
+    fn cased(self, s: &str) -> String {
+        if self.caps { s.to_uppercase() } else { s.to_string() }
+    }
 }
 
 #[cfg(test)]
@@ -64,7 +94,10 @@ mod perf_tests;
 
 impl Ctx<'_> {
     fn tw(&self, s: &str, size: f32) -> f32 {
-        let w = self.m.text_width(s, size, false);
+        self.measure(s, size, false)
+    }
+    fn measure(&self, s: &str, size: f32, bold: bool) -> f32 {
+        let w = self.m.text_width(s, size, bold);
         if w.is_finite() { w.max(0.0) } else { 0.0 }
     }
     /// `s` shortened with an ellipsis to fit `maxw`; empty when not even one character fits.
@@ -77,7 +110,10 @@ impl Ctx<'_> {
     /// A label with a line break is not monotone (the ellipsis moves to a new line and the widest
     /// line can get shorter), so it takes the linear scan, longest prefix first.
     fn fit(&self, s: &str, size: f32, maxw: f32) -> String {
-        if self.tw(s, size) <= maxw {
+        self.fit_weighted(s, size, false, maxw)
+    }
+    fn fit_weighted(&self, s: &str, size: f32, bold: bool, maxw: f32) -> String {
+        if self.measure(s, size, bold) <= maxw {
             return s.to_string();
         }
         // Byte offset where each of the first 400 characters starts; a prefix of `k` characters
@@ -89,7 +125,7 @@ impl Ctx<'_> {
             let mut t = String::with_capacity(end + 3);
             t.push_str(s.get(..end).unwrap_or(""));
             t.push('…');
-            self.tw(&t, size) <= maxw
+            self.measure(&t, size, bold) <= maxw
         };
         if s.contains('\n') {
             let k = (1..=top).rev().find(|&k| fits(k));
@@ -105,6 +141,25 @@ impl Ctx<'_> {
             }
         }
         if lo == 0 { String::new() } else { format!("{}…", s.get(..starts.get(lo).copied().unwrap_or(s.len())).unwrap_or("")) }
+    }
+    /// The data labels' look.
+    fn labels(&self) -> Look {
+        Look::of(self.text.data_labels, LABEL_SIZE).colored(self.colors.data_labels)
+    }
+    fn look_tw(&self, s: &str, l: Look) -> f32 {
+        self.measure(&l.cased(s), l.size, l.bold)
+    }
+    /// `s` in `l`, shortened to `maxw` with an ellipsis.
+    fn look_fit(&self, s: &str, l: Look, maxw: f32) -> String {
+        self.fit_weighted(&l.cased(s), l.size, l.bold, maxw)
+    }
+    /// Text drawn in `l`.
+    fn styled(&mut self, x: f32, y: f32, s: &str, l: Look, color: Rgba, (align, valign): (HAlign, VAlign)) {
+        if s.is_empty() {
+            return;
+        }
+        let color = l.color.unwrap_or(color);
+        self.out.push(Prim::Text { x, y, text: l.cased(s), size: l.size, color, bold: l.bold, align, valign, rotation: 0.0 });
     }
     fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
         if s.is_empty() {
@@ -135,6 +190,7 @@ fn sanitize_vals(v: &[Option<f64>]) -> Vec<Option<f64>> {
 pub(crate) fn sanitize(d: &ChartData) -> ChartData {
     ChartData {
         palette: d.palette.iter().take(MAX_POINTS).copied().collect(),
+        text_colors: d.text_colors,
         categories: d.categories.iter().take(MAX_POINTS).cloned().collect(),
         category_levels: d.category_levels.iter().take(3).map(|l| l.iter().take(MAX_POINTS).cloned().collect()).collect(),
         series: d
@@ -213,14 +269,16 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
         return vec![];
     }
     let data = sanitized(data);
-    let mut ctx = Ctx { out: Vec::new(), m };
+    let mut ctx = Ctx { out: Vec::new(), m, text: chart.text, colors: data.text_colors };
     ctx.out.push(Prim::Rect { x: 0.0, y: 0.0, w, h, fill: Some(WHITE), stroke: Some((GRID, 1.0)), radius: 0.0 });
     let pad = (w.min(h) * 0.04).clamp(2.0, 10.0);
     let mut area = Bx { x: pad, y: pad, w: w - 2.0 * pad, h: h - 2.0 * pad };
     if let Some(t) = chart_title(chart, &data) {
-        let size = TITLE_SIZE.min(h * 0.12).max(4.0);
-        let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
+        let look = Look::of(ctx.text.title, TITLE_SIZE).colored(ctx.colors.title);
+        let size = look.size.min(h * 0.12).max(4.0);
+        let look = Look { size, ..look };
+        let t = ctx.look_fit(&t, look, area.w);
+        ctx.styled(w / 2.0, area.y, &t, look, TEXT, (HAlign::Center, VAlign::Top));
         let used = size * 1.3 + 4.0;
         area.y += used;
         area.h -= used;

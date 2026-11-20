@@ -119,6 +119,17 @@ impl Measure for ApproxMeasure {
     }
 }
 
+/// Text colours of a chart's parts, resolved against the workbook theme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TextColors {
+    pub title: Option<Rgba>,
+    pub legend: Option<Rgba>,
+    pub data_labels: Option<Rgba>,
+    pub category_axis: Option<Rgba>,
+    pub value_axis: Option<Rgba>,
+}
+
 /// Resolved data: series names, categories and values pulled from the workbook.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChartData {
@@ -132,6 +143,9 @@ pub struct ChartData {
     /// Workbook-theme colours for the points of pie-like charts, repeating (point `j` uses entry `j % len`); empty uses the default theme.
     #[serde(default)]
     pub palette: Vec<Rgba>,
+    /// The colours of the chart's text, against the workbook theme; `None` keeps GridCraft's.
+    #[serde(default)]
+    pub text_colors: TextColors,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
