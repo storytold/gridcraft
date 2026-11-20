@@ -118,3 +118,8 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.devius]
+real_name = "Davit Matchakhelidze"
+display_name = "Davit Matchakhelidze"
+sync_github_name = false
