@@ -299,6 +299,39 @@ fn consolidate_by_position_and_label() {
 }
 
 #[test]
+fn consolidate_rejects_non_string_sources_without_changing_the_document() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[2, 3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "99"})).unwrap();
+    // Keep both undo and redo populated so a refused request must preserve them.
+    s.execute("cell.set", json!({"cell": "C1", "input": "redo marker"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    let (before, revision, undo, redo) = {
+        let doc = s.doc().unwrap();
+        assert!(!doc.undo.is_empty() && !doc.redo.is_empty());
+        (doc.wb.clone(), doc.revision, doc.undo.len(), doc.redo.len())
+    };
+    for bad in [json!(null), json!(false), json!(7), json!({"range": "B1"}), json!(["B1"])] {
+        // All-invalid arrays already fail; valid neighbors expose silent omission.
+        let params = json!({"sources": ["A1", bad, "B1"], "destination": "D1"});
+        let error = s.execute("data.consolidate", params.clone()).unwrap_err().to_string();
+        assert!(error.contains("sources must contain only range strings"), "{params}: {error}");
+        let doc = s.doc().unwrap();
+        assert_eq!(*doc.wb, *before, "{params}");
+        assert_eq!((doc.revision, doc.undo.len(), doc.redo.len()), (revision, undo, redo), "{params}");
+        assert_eq!(n(&s, "D1"), 99.0, "{params}");
+    }
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::from("redo marker"));
+    for sources in [json!(["A1", "B1"]), json!("A1;B1")] {
+        // Either accepted form must replace the sentinel with the complete result.
+        s.execute("cell.set", json!({"cell": "D1", "input": "99"})).unwrap();
+        s.execute("data.consolidate", json!({"sources": sources, "destination": "D1"})).unwrap();
+        assert_eq!(n(&s, "D1"), 5.0);
+    }
+}
+
+#[test]
 fn advanced_filter_refuses_a_list_times_criteria_product_over_the_work_limit() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], ["A"]]})).unwrap();

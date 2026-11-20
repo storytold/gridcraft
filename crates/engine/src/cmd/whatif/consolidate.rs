@@ -91,7 +91,12 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
     let srcs: Vec<String> = p
         .get("sources")
         .and_then(Json::as_array)
-        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+        .map(|a| {
+            a.iter()
+                .map(|x| x.as_str().map(str::to_string).ok_or_else(|| bad(CMD, "sources must contain only range strings")))
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
         .or_else(|| str_param(p, "sources").map(|t| t.split(';').map(str::to_string).collect()))
         .unwrap_or_default();
     if srcs.is_empty() {
