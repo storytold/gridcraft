@@ -184,6 +184,24 @@ fn cash_flows() {
 }
 
 #[test]
+fn dollar_fraction_sign_is_checked_before_truncation() {
+    // #4068: a fraction strictly between -1 and 0 truncates to -0.0; Excel still rejects its sign.
+    for f in [-0.9, -0.1] {
+        is_err(ev("DOLLARDE", vec![n(1.125), n(f)]), CellError::Num);
+        is_err(ev("DOLLARFR", vec![n(1.125), n(f)]), CellError::Num);
+    }
+    // Controls from the report.
+    for name in ["DOLLARDE", "DOLLARFR"] {
+        is_err(ev(name, vec![n(1.125), n(-1.0)]), CellError::Num);
+        is_err(ev(name, vec![n(1.125), n(0.0)]), CellError::Div0);
+        is_err(ev(name, vec![n(1.125), n(0.9)]), CellError::Div0);
+        close(ev(name, vec![n(1.125), n(1.0)]), 1.125);
+    }
+    close(ev("DOLLARDE", vec![n(1.125), n(16.0)]), 1.78125);
+    close(ev("DOLLARFR", vec![n(1.125), n(16.0)]), 1.02);
+}
+
+#[test]
 fn depreciation() {
     close(ev("SLN", vec![n(30000.0), n(7500.0), n(10.0)]), 2250.0);
     is_err(ev("SLN", vec![n(30000.0), n(7500.0), n(0.0)]), CellError::Div0);
