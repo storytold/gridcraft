@@ -9,6 +9,29 @@ fn ev2(name: &str, x: f64, y: f64) -> Value {
     ev(name, vec![n(x), n(y)])
 }
 
+// #4291: INT drops binary noise below Excel's 15 digits before rounding down, as FLOOR.MATH does,
+// and keeps a difference those digits show.
+#[test]
+fn int_rounds_down_the_15_digit_value() {
+    let int = |x: f64| ev1("INT", x);
+    let eps = 2f64.powi(-51);
+    assert_eq!(int(3.0 - eps), Value::Number(3.0));
+    assert_eq!(int(-3.0 - eps), Value::Number(-3.0));
+    assert_eq!(int(3.0 - 2f64.powi(-39)), Value::Number(2.0));
+    assert_eq!(int(-3.0 - 2f64.powi(-39)), Value::Number(-4.0));
+    assert_eq!(int(0.1 + 0.2 + 0.7 - 1e-16), Value::Number(1.0));
+    assert_eq!(int(2.999_999_999_999_9), Value::Number(2.0));
+    assert_eq!(int(-0.5), Value::Number(-1.0));
+    assert_eq!(int(1e300), Value::Number(1e300));
+    // 15 digits of ±f64::MAX round past it; INT keeps the number, as before.
+    assert!(!clean(f64::MAX).is_finite());
+    assert_eq!(int(f64::MAX), Value::Number(f64::MAX));
+    assert_eq!(int(-f64::MAX), Value::Number(-f64::MAX));
+    for x in [3.0 - eps, -3.0 - eps, 3.0 - 2f64.powi(-39), -2.5] {
+        assert_eq!(int(x), ev1("FLOOR.MATH", x), "INT and FLOOR.MATH agree at {x}");
+    }
+}
+
 #[test]
 fn percentof() {
     // SUM(subset) / SUM(all): text, booleans and blanks inside ranges are skipped like SUM.
