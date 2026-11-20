@@ -408,6 +408,21 @@ fn refuses_encrypted_old_and_foreign_files() {
     assert!(read_xls(&doc).is_err());
 }
 
+/// A BIFF5 workbook is refused with a path that works without Excel, which often blocks or can't
+/// open Excel 5.0/95 files (#3715). Both ways in: a `Book` stream, and a `Workbook` stream whose
+/// BOF says BIFF5.
+#[test]
+fn biff5_refusal_does_not_send_the_person_to_excel() {
+    let biff5_bof = rec(0x0809, &cat(&[&u16s(&[0x0500, 0x0005, 0x0DBB, 0x07CC]), &[0; 8]]));
+    let stream = cat(&[&biff5_bof, &eof()]);
+    for name in ["Book", "Workbook"] {
+        let err = read_xls(&compound(name, &stream)).unwrap_err().to_string();
+        assert!(err.contains("BIFF5"), "{name}: {err}");
+        assert!(err.contains("another spreadsheet program"), "{name}: {err}");
+        assert!(!err.contains("in Excel"), "{name}: {err}");
+    }
+}
+
 #[test]
 fn hostile_xls_input_never_panics_or_hangs() {
     let stream = sample(false);

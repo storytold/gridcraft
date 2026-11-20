@@ -29,6 +29,11 @@ pub(crate) fn invalid(msg: impl Into<String>) -> IoError {
 const ENCRYPTED: &str =
     "this .xls workbook is password-protected (encrypted). GridCraft can't open encrypted .xls files; remove the password in Excel and try again.";
 
+/// The message for an Excel 5.0/95 (BIFF5) workbook. It names no program: Excel itself often
+/// blocks or can't open these files (File Block policies, Protected View, no Excel at all), so
+/// "save it in Excel" is not a path that reliably exists (#3715).
+const BIFF5: &str = "Excel 5.0/95 workbooks (BIFF5) are not supported; convert the file to .xlsx with another spreadsheet program and try again.";
+
 /// Whether the bytes are a compound file holding an Excel workbook stream (BIFF8 `Workbook`
 /// or BIFF5 `Book`).
 pub(crate) fn is_xls(bytes: &[u8]) -> bool {
@@ -50,7 +55,7 @@ pub fn read_xls_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook,
 fn error(e: x::Error) -> IoError {
     match e {
         x::Error::Encrypted => invalid(ENCRYPTED),
-        x::Error::Biff5 => invalid("Excel 5.0/95 workbooks (BIFF5) are not supported; save the file as .xlsx in Excel and try again."),
+        x::Error::Biff5 => invalid(BIFF5),
         x::Error::TooLarge(why) => IoError::TooLarge(format!("XLS: {why}")),
         x::Error::Invalid(why) => invalid(why),
         e => invalid(e.to_string()),
