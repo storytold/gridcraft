@@ -68,12 +68,12 @@ fn map_formula(f: &craft_xlsx::CellFormula, at: craft_xlsx::CellRef, report: &mu
         return None;
     }
     match f.kind {
-        craft_xlsx::FormulaKind::Normal | craft_xlsx::FormulaKind::Shared => Some(Formula::new(text)),
+        craft_xlsx::FormulaKind::Normal | craft_xlsx::FormulaKind::Shared => Some(Formula::new(&text)),
         craft_xlsx::FormulaKind::Array => {
             let pos = CellRef::new(at.row, at.col);
-            let mut fm = Formula::new(text);
+            let mut fm = Formula::new(&text);
             fm.array = Some(
-                f.reference
+                f.range
                     .map(|r| RangeRef::new(CellRef::new(r.first.row, r.first.col), CellRef::new(r.last.row, r.last.col)))
                     .unwrap_or_else(|| RangeRef::cell(pos)),
             );
@@ -87,7 +87,7 @@ fn map_formula(f: &craft_xlsx::CellFormula, at: craft_xlsx::CellRef, report: &mu
 }
 
 fn import_defined_names(book: &craft_xlsx::Workbook, file_to_model: &[Option<usize>], wb: &mut Workbook) {
-    for d in &book.names {
+    for d in &book.defined_names {
         let scope = match d.local_sheet_id {
             Some(i) => match file_to_model.get(i as usize).copied().flatten() {
                 Some(m) => Some(m),
