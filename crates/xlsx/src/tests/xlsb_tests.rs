@@ -291,18 +291,37 @@ fn xlsb_requires_internal_typed_relationships_and_sniffs_only_root_workbook() {
 }
 
 #[test]
-fn xlsb_declared_counts_and_decoded_text_are_bounded() {
+fn xlsb_invalid_shared_string_counts_are_rejected() {
     let bad_sst = record(159, &[0xff; 8]);
     assert!(read_xlsb(&package(&book(false), &worksheet(&[], &[]), &bad_sst, ROOT, RELS, TYPES)).is_err());
     let mut count_mismatch = record(159, &[1, 0, 0, 0, 1, 0, 0, 0]);
     count_mismatch.extend(record(160, &[]));
     assert!(read_xlsb(&package(&book(false), &worksheet(&[], &[]), &count_mismatch, ROOT, RELS, TYPES)).is_err());
-    let mut data = row(0);
-    let text = wide(&"x".repeat(32767));
-    for col in 0..2050 {
-        data.extend(cell(6, col, &text));
-    }
-    assert!(read_xlsb(&file(&worksheet(&data, &[]))).unwrap_err().to_string().contains("64 MiB"));
+}
+
+#[test]
+fn xlsb_import_budget_preserves_shared_limits_and_the_browser_text_cap() {
+    let limits = crate::xlsb::import_limits();
+    assert_eq!(limits.binary_cells, 4_000_000);
+    assert_eq!(limits.binary_records, 40_000_000);
+    assert_eq!(limits.binary_text, if cfg!(target_arch = "wasm32") { 64 << 20 } else { 256 << 20 });
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn xlsb_native_import_accepts_more_than_64_mib_of_decoded_text() {
+    // Three UTF-8 bytes per character cross the old cap with ~43 MiB of BIFF12 input.
+    let value = "界".repeat(32767);
+    let encoded = wide(&value);
+    let bytes = {
+        let mut data = row(0);
+        for col in 0..684 {
+            data.extend(cell(6, col, &encoded));
+        }
+        file(&worksheet(&data, &[]))
+    };
+    let (workbook, _) = read_xlsb(&bytes).unwrap();
+    assert_eq!(workbook.sheets[0].value(CellRef::new(0, 683)), text(&value));
 }
 
 #[test]

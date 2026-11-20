@@ -369,6 +369,7 @@ fn sample() -> Workbook {
         line: Color::Rgb(0x000000),
         text: "Hi\nthere".into(),
         format: Default::default(),
+        rotation: 30.0,
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -379,6 +380,7 @@ fn sample() -> Workbook {
         line: Color::Rgb(0xFF0000),
         text: String::new(),
         format: Default::default(),
+        rotation: 0.0,
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -401,6 +403,7 @@ fn sample() -> Workbook {
             anchor: Some(ShapeTextAnchor::Bottom),
             rtl: true,
         },
+        rotation: 0.0,
     });
     let base_chart = Chart {
         id: 20,
@@ -2209,4 +2212,86 @@ fn remove_personal_information_is_kept_and_honoured() {
     let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
+}
+
+#[test]
+fn issue_778_xlsx_xml_import_save_reopen_roundtrip() {
+    let mut wb = Workbook::new();
+    let mut s = Sheet::new("Delegated");
+    s.cells.set(at("A1"), Cell { value: Value::text("Item"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("B1"), Cell { value: Value::text("Amount"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("A2"), Cell { value: Value::text("Alpha"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("B2"), Cell { value: Value::Number(42.5), formula: None, style: StyleId::DEFAULT, py: None });
+    let mut f = Cell::formula(Formula::new("=B2*2"));
+    f.value = Value::Number(85.0);
+    s.cells.set(at("B3"), f);
+    s.merges.push(rr("A4:B4"));
+    s.hyperlinks.insert(at("A2"), Hyperlink { target: "https://example.com".into(), tooltip: Some("Example".into()), external: true });
+    s.comments.insert(
+        at("B2"),
+        Comment {
+            author: "Reviewer".into(),
+            text: "Checked".into(),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: true,
+            dates: vec![],
+            note_box: None,
+        },
+    );
+    s.shapes.push(Shape {
+        id: 1,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor { cell: at("D2"), dx: 4.0, dy: 4.0, width: 120.0, height: 60.0, mode: AnchorMode::MoveAndSize },
+        fill: Color::Rgb(0x336699),
+        line: Color::Rgb(0x112233),
+        text: "Box".into(),
+        format: Default::default(),
+        rotation: 0.0,
+        math: Default::default(),
+    });
+    s.charts.push(Chart {
+        id: 2,
+        kind: ChartKind::ColumnClustered,
+        anchor: Anchor { cell: at("D6"), dx: 0.0, dy: 0.0, width: 320.0, height: 200.0, mode: AnchorMode::MoveAndSize },
+        title: Some("Sales".into()),
+        series: vec![Series {
+            name: Some("Delegated!$B$1".into()),
+            categories: Some("Delegated!$A$2:$A$2".into()),
+            values: "Delegated!$B$2:$B$2".into(),
+            ..Default::default()
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: true,
+        data_table: Some(ChartDataTable::default()),
+        gridlines: true,
+        style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    wb.sheets[0] = Arc::new(s);
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let (reopened, _) = read_xlsx(&bytes).unwrap();
+    let bytes2 = write_xlsx(&reopened).unwrap();
+    let (again, _) = read_xlsx(&bytes2).unwrap();
+
+    let sh = &again.sheets[0];
+    assert_eq!(sh.cells.get(at("A2")).unwrap().value, Value::text("Alpha"));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().value, Value::Number(85.0));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("B2*2"));
+    assert_eq!(sh.merges, vec![rr("A4:B4")]);
+    assert_eq!(sh.hyperlinks.get(&at("A2")).map(|h| h.target.as_str()), Some("https://example.com"));
+    assert_eq!(sh.comments.get(&at("B2")).map(|c| c.text.as_str()), Some("Checked"));
+    assert_eq!(sh.shapes.len(), 1);
+    assert_eq!(sh.shapes[0].text, "Box");
+    assert_eq!(sh.charts.len(), 1);
+    assert_eq!(sh.charts[0].title.as_deref(), Some("Sales"));
+    assert_eq!(sh.charts[0].data_table, Some(ChartDataTable::default()));
 }
