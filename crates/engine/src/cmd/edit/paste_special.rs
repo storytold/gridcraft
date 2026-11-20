@@ -21,6 +21,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         other => return Err(bad("edit.pasteSpecial", format!("unknown `what`: {other}"))),
     };
     let op = str_param(p, "operation").unwrap_or("none").to_string();
+    if !matches!(op.as_str(), "none" | "add" | "subtract" | "multiply" | "divide") {
+        return Err(bad("edit.pasteSpecial", format!("unknown `operation`: {op}")));
+    }
     let skip_blanks = bool_param(p, "skipBlanks").unwrap_or(false);
     let transpose = bool_param(p, "transpose").unwrap_or(false);
     let link = bool_param(p, "link").unwrap_or(false);
