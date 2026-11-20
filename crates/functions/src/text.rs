@@ -700,6 +700,10 @@ fn textsplit(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if col_d.iter().all(|d| d.is_empty()) && row_d.iter().all(|d| d.is_empty()) {
         return Err(CellError::Value);
     }
+    // An empty entry inside a delimiter array is invalid, as it is in Excel.
+    if [&col_d, &row_d].iter().any(|d| d.len() > 1 && d.iter().any(|x| x.is_empty())) {
+        return Err(CellError::Value);
+    }
     let ignore = opt_bool(a, 3, false)?;
     let mode = opt_int(a, 4, 0)?;
     if !(0..=1).contains(&mode) {
@@ -1492,6 +1496,13 @@ mod tests {
         assert_eq!(rows_of(&v), vec![vec![tv("a"), tv(""), tv("b")]]);
         let v = ev("TEXTSPLIT", vec![t("a b-c"), av(row_t(&[" ", "-"]))]);
         assert_eq!(rows_of(&v), vec![vec![tv("a"), tv("b"), tv("c")]]);
+        // Empty entries inside a delimiter array are #VALUE! (#3962).
+        let v = ev("TEXTSPLIT", vec![t("abc"), av(row_t(&["", "b"]))]);
+        assert_eq!(v, Value::Error(CellError::Value));
+        let v = ev("TEXTSPLIT", vec![t("a;b"), empty(), av(row_t(&["", ";"]))]);
+        assert_eq!(v, Value::Error(CellError::Value));
+        let v = ev("TEXTSPLIT", vec![t("abc"), av(row_t(&["c", "b"]))]);
+        assert_eq!(rows_of(&v), vec![vec![tv("a"), tv(""), tv("")]]);
         let v = ev("TEXTSPLIT", vec![t("1;2"), empty(), t(";")]);
         assert_eq!(rows_of(&v), vec![vec![tv("1")], vec![tv("2")]]);
         let v = ev("TEXTSPLIT", vec![t("aXbxc"), t("x"), empty(), b(false), n(1.0)]);
