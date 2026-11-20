@@ -116,6 +116,8 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
     let mut col_label: HashMap<Key, String> = HashMap::new();
     let mut aggs: HashMap<(usize, usize), Agg> = HashMap::new();
     let mut total: u64 = 0;
+    // Writing from inside a source would overwrite its values or formulas (#3799).
+    let mut dest_in_source = false;
     let index_of = |keys: &mut Vec<Key>, index: &mut HashMap<Key, usize>, k: Key| -> usize {
         *index.entry(k).or_insert_with_key(|k| {
             keys.push(k.clone());
@@ -128,6 +130,7 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         if total > MAX_CONSOLIDATE_CELLS {
             return Err(bad(CMD, "the sources are too large"));
         }
+        dest_in_source |= si == dsi && r.contains(dest);
         let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
         let r0 = r.start.row + top as u32;
         let c0 = r.start.col + left as u32;
@@ -177,6 +180,9 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
     }
     if output_cells(row_keys.len(), col_keys.len(), top, left) > MAX_CONSOLIDATE_CELLS {
         return Err(bad(CMD, "the consolidated table would be too large"));
+    }
+    if dest_in_source {
+        return Err(EngineError::Other("A source reference overlaps the destination area.".into()));
     }
     let mut cells: Vec<(CellRef, Value)> = Vec::new();
     if top {

@@ -320,6 +320,39 @@ fn consolidate_keys_are_indexed_and_the_output_is_bounded() {
     assert!(r.unwrap_err().to_string().contains("too large"));
 }
 
+/// A destination that starts inside a source on the same sheet is refused before any cell
+/// changes, so source values and formulas survive (#3799). A destination outside every source is
+/// still accepted, even when the written table then reaches into a source.
+#[test]
+fn consolidate_refuses_a_destination_that_starts_inside_a_source() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[10, 20]]})).unwrap();
+    let r = s.execute("data.consolidate", json!({"sources": ["Sheet1!A1", "Sheet1!B1"], "destination": "A1"}));
+    assert!(r.unwrap_err().to_string().contains("overlaps the destination"));
+    assert_eq!(n(&s, "Sheet1!A1"), 10.0);
+    assert_eq!(n(&s, "Sheet1!B1"), 20.0);
+    // Inside a larger source's interior or edge.
+    s.execute("range.setValues", json!({"range": "B2", "values": [[10, 20], [30, 40]]})).unwrap();
+    assert!(s.execute("data.consolidate", json!({"sources": ["B2:C3"], "destination": "C3"})).is_err());
+    assert_eq!(n(&s, "Sheet1!C3"), 40.0);
+    // A source formula keeps its formula.
+    s.execute("cell.set", json!({"cell": "E1", "input": "=F1*2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "5"})).unwrap();
+    assert!(s.execute("data.consolidate", json!({"sources": ["E1"], "destination": "E1"})).is_err());
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(0).unwrap();
+    assert!(sh.cell(CellRef::new(0, 4)).and_then(|c| c.formula.as_ref()).is_some());
+    // Same address on another sheet, or outside the source: accepted.
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Out"})).unwrap();
+    let r = s.execute("data.consolidate", json!({"sources": ["Sheet1!A1", "Sheet1!B1"], "destination": "Out!A1"})).unwrap();
+    assert_eq!(r["range"], "A1");
+    assert_eq!(n(&s, "Out!A1"), 30.0);
+    let r = s.execute("data.consolidate", json!({"sources": ["Sheet1!A1", "Sheet1!B1"], "destination": "Sheet1!D1"})).unwrap();
+    assert_eq!(r["range"], "D1");
+    assert_eq!(n(&s, "Sheet1!D1"), 30.0);
+}
+
 #[test]
 fn scenario_summary_refuses_a_matrix_over_its_cell_limit() {
     let mut s = s();
