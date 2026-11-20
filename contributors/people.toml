@@ -118,3 +118,7 @@ sync_github_name = true
 
 [people.RockerHX]
 sync_github_name = true
+
+[people.NicolasBohn]
+real_name = "Nicolas Bohn"
+sync_github_name = false
