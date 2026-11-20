@@ -109,6 +109,7 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
                     craft_drawingml::style::Fill::Solid { color } => crate::chart::map_dml_color(color),
                     _ => None,
                 })
+                .or_else(|| sel.and_then(|el| el.path(&["spPr", "solidFill"])).and_then(crate::drawing::dml_color))
                 .filter(|c| *c != gridcraft_model::Color::Theme(4 + (idx % 6) as u8, 0));
             let quartiles = sel
                 .and_then(|el| el.path(&["layoutPr", "statistics"]))
