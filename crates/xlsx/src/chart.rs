@@ -185,7 +185,7 @@ const EMU_PER_PT: f64 = 12_700.0;
 pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
     let groups: Vec<&El> = plot.map(|p| p.children.iter().filter(|g| g.name.ends_with("Chart")).collect()).unwrap_or_default();
-    fn ax_ids<'a>(g: &'a El) -> Vec<&'a str> {
+    fn ax_ids(g: &El) -> Vec<&str> {
         g.kids("axId").filter_map(|a| a.attr("val")).collect()
     }
     let first_axes = groups.first().map(|g| ax_ids(g)).unwrap_or_default();
