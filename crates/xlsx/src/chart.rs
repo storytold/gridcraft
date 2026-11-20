@@ -110,14 +110,17 @@ fn map_trendline(t: &DmlTrendline, el: Option<&El>) -> Trendline {
         TrendlineType::MovingAvg => TrendlineKind::MovingAverage(t.period.unwrap_or(2).clamp(2, 255)),
     };
     let ln = el.and_then(|e| e.path(&["spPr", "ln"]));
+    let forecast = |name: &str, dml: Option<f64>| {
+        Trendline::clamp_forecast(el.and_then(|e| e.child(name)).and_then(|c| c.attr_f64("val")).or(dml).unwrap_or(0.0))
+    };
     Trendline {
         kind,
         name: t.name.clone(),
-        forward: Trendline::clamp_forecast(t.forward.unwrap_or(0.0)),
-        backward: Trendline::clamp_forecast(t.backward.unwrap_or(0.0)),
+        forward: forecast("forward", t.forward),
+        backward: forecast("backward", t.backward),
         intercept: t.intercept,
-        display_equation: t.disp_eq,
-        display_r_squared: t.disp_r_sqr,
+        display_equation: el.and_then(|e| e.child("dispEq")).map_or(t.disp_eq, |c| c.flag("val", true)),
+        display_r_squared: el.and_then(|e| e.child("dispRSqr")).map_or(t.disp_r_sqr, |c| c.flag("val", true)),
         color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
         width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0),
         dash: ln.and_then(|l| l.child("prstDash")).and_then(|d| d.attr("val")).and_then(|v| DASHES.iter().find(|(_, n)| *n == v).map(|(d, _)| *d)),
