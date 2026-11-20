@@ -129,4 +129,5 @@ mod validation_input_message;
 mod wheel_zoom;
 mod whole_line_shortcuts;
 mod widgets;
+mod wrap_breaks;
 mod zoom_dialog;
