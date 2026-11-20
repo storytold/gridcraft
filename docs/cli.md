@@ -93,10 +93,6 @@ part has a content type, every content-type override and internal relationship t
 unique: what Excel would "repair"), compared with the source (no kind of relationship it had, such as `xmlMaps`, is
 missing; a calculation chain doesn't count, Excel rebuilds it, nor do a link to a place in the workbook and a
 relationship to an empty part, such as a comments part without comments) and read back. Categories compared: `package`, `sheets` (names and order),
-`values`, `formulas`, `numFmts` (per cell), `merges`, `names`, `tables` (name, range, columns), `condFormats` (rules
-per sheet), `validations`, `charts` (kinds and series counts), `comments`, `hyperlinks`, `pivots`. `#SPILL!`/`#CALC!`
-compare equal to `#VALUE!` and `#CIRC!` to 0, as that's what the file format stores.
-unique: what Excel would "repair") and read back. Categories compared: `package`, `sheets` (names and order),
 `values`, `formulas`, `numFmts` (per cell), `merges`, `names`, `tables` (name, range, columns), `condFormats` (each
 sheet's rules in priority order, priority numbers aside), `validations`, `charts` (kinds and series counts), `comments`,
 `hyperlinks`, `pivots`. `#SPILL!`/`#CALC!` compare equal to `#VALUE!` and `#CIRC!` to 0, as
