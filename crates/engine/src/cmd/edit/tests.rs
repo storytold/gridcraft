@@ -432,6 +432,22 @@ fn tsv() {
 }
 
 #[test]
+fn copying_a_formula_copies_its_sheet_local_name() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("sheet.rename", json!({"name": "Source"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=10", "scope": "Source"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=Rate"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Target"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Source"})).unwrap();
+    s.execute("edit.copy", json!({"range": "B1"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Target"})).unwrap();
+    s.execute("edit.paste", json!({"at": "B1"})).unwrap();
+
+    assert_eq!(s.execute("cell.get", json!({"cell": "B1"})).unwrap()["value"], json!(10.0));
+}
+
+#[test]
 fn paste_special_operations_keep_text_errors_and_formulas() {
     let mut s = Session::new();
     s.new_workbook();
