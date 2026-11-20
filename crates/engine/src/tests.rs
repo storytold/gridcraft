@@ -418,6 +418,26 @@ fn bulk_formula_history_is_bounded_and_latest_edit_still_undoes() {
 }
 
 #[test]
+fn undoing_bulk_edits_keeps_every_step_to_redo() {
+    // #3865 (fuzz seed 91): the bulk of a whole-column border lives in the current workbook while
+    // the step is on the undo stack, but in the snapshots once it is undone. Undoing must not
+    // drop redo steps for that: redoing them all gives back the workbook as it was.
+    let mut s = s();
+    for col in ["A:A", "C:C"] {
+        s.execute("home.borders", json!({"preset": "outside", "range": col})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": col})).unwrap();
+    }
+    let end = s.doc().unwrap().wb.clone();
+    let n = s.doc().unwrap().undo.len();
+    assert_eq!(n, 4);
+    s.execute("edit.undo", json!({"steps": n})).unwrap();
+    assert_eq!(s.doc().unwrap().redo.len(), n);
+    s.execute("edit.redo", json!({"steps": n})).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &end));
+    assert_eq!(v(&s, "B1"), Value::from("C:C"));
+}
+
+#[test]
 fn small_edits_keep_the_full_undo_depth() {
     let mut session = s();
     for number in 0..100 {
