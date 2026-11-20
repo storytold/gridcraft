@@ -328,7 +328,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                             }
                         }
-                        What::All => {
+                        What::All | What::AllExceptBorders => {
                             if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
                                 cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
                             }
@@ -366,16 +366,28 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         // Merged areas inside the copied block travel with it.
-        if matches!(what, What::All | What::Formats) && !transpose {
+        if matches!(what, What::All | What::AllExceptBorders | What::Formats) && !transpose {
             let merges: Vec<RangeRef> = src_sheet.merges.iter().filter(|m| src.contains_range(m)).copied().collect();
-            for m in merges {
-                let dr = at.row as i64 - src.start.row as i64;
-                let dc = at.col as i64 - src.start.col as i64;
-                if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
-                    let nm = RangeRef::new(a, b);
-                    let sh = cx.sheet_mut(dest_sheet)?;
-                    sh.merges.retain(|x| !x.intersects(&nm));
-                    sh.merges.push(nm);
+            if !merges.is_empty() {
+                let sh = cx.sheet_mut(dest_sheet)?;
+                let mode = PasteMergeTiles { src, at, h, w, tiles_r, tiles_c, skip_rows: &skip_rows };
+                // Resolve intersections with existing destination merges once before appending
+                // the translated tiles so we never rescan newly inserted non-overlapping merges.
+                sh.merges.retain(|x| !x.intersects(&pasted) || !merges.iter().any(|m| mode.hits(x, m)));
+                // Every tile of a tiled paste gets its own copy; a row a filter hides keeps its merges.
+                for m in merges {
+                    for tr in 0..tiles_r {
+                        for tc in 0..tiles_c {
+                            let dr = at.row as i64 + i64::from(tr * h) - src.start.row as i64;
+                            let dc = at.col as i64 + i64::from(tc * w) - src.start.col as i64;
+                            if let (Some(a), Some(b)) = (m.start.offset(dr, dc), m.end.offset(dr, dc)) {
+                                if (a.row..=b.row).any(|r| skip_rows.contains(&r)) {
+                                    continue;
+                                }
+                                sh.merges.push(RangeRef::new(a, b));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -731,4 +743,73 @@ pub(crate) fn check_python_fits(py: &gridcraft_model::PyCode, sheet: &str, at: C
         at.a1(),
         gridcraft_model::python::MAX_FORMULA_CHARS
     )))
+}
+
+struct PasteMergeTiles<'a> {
+    src: RangeRef,
+    at: CellRef,
+    h: u32,
+    w: u32,
+    tiles_r: u32,
+    tiles_c: u32,
+    skip_rows: &'a std::collections::BTreeSet<u32>,
+}
+
+impl PasteMergeTiles<'_> {
+    /// True if existing destination merge `x` intersects any non-skipped tile of source merge `m`.
+    fn hits(&self, x: &RangeRef, m: &RangeRef) -> bool {
+        let r0 = m.start.row - self.src.start.row;
+        let r1 = m.end.row - self.src.start.row;
+        let c0 = m.start.col - self.src.start.col;
+        let c1 = m.end.col - self.src.start.col;
+        axis_hits_tiles(x.start.col, x.end.col, self.at.col, self.w, self.tiles_c, c0, c1) && self.rows_hit(x, r0, r1)
+    }
+
+    fn rows_hit(&self, x: &RangeRef, r0: u32, r1: u32) -> bool {
+        if self.skip_rows.is_empty() {
+            return axis_hits_tiles(x.start.row, x.end.row, self.at.row, self.h, self.tiles_r, r0, r1);
+        }
+        if self.tiles_r == 0 {
+            return false;
+        }
+        let lo = x.start.row.max(self.at.row + r0);
+        let hi = x.end.row.min(self.at.row + (self.tiles_r - 1) * self.h + r1);
+        if lo > hi {
+            return false;
+        }
+        if self.h == 1 {
+            return (lo..=hi).any(|r| !self.skip_rows.contains(&r));
+        }
+        let tr_lo = (lo - self.at.row) / self.h;
+        let tr_hi = ((hi - self.at.row) / self.h).min(self.tiles_r - 1);
+        (tr_lo..=tr_hi).any(|tr| {
+            let a = self.at.row + tr * self.h + r0;
+            let b = self.at.row + tr * self.h + r1;
+            a <= hi && b >= lo && !(a..=b).any(|r| self.skip_rows.contains(&r))
+        })
+    }
+}
+
+fn axis_hits_tiles(x_start: u32, x_end: u32, at: u32, step: u32, tiles: u32, off0: u32, off1: u32) -> bool {
+    if tiles == 0 {
+        return false;
+    }
+    let min_pos = at + off0;
+    let max_pos = at + (tiles - 1) * step + off1;
+    if x_end < min_pos || x_start > max_pos {
+        return false;
+    }
+    let lo = x_start.max(min_pos) - at;
+    let hi = x_end.min(max_pos) - at;
+    if hi - lo + 1 >= step {
+        return true;
+    }
+    let t_lo = lo / step;
+    let t_hi = (hi / step).min(tiles - 1);
+    let hits = |t: u32| {
+        let a = t * step + off0;
+        let b = t * step + off1;
+        lo <= b && a <= hi
+    };
+    hits(t_lo) || (t_hi != t_lo && hits(t_hi))
 }
