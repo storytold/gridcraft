@@ -47,12 +47,12 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             ui.set_width(230.0);
             let ascending = ui.button("↑  Sort Ascending");
             if ascending.clicked() {
-                let _ = app.run("data.sortAscending", json!({"column": col_to_letters(col)}));
+                app.run_or_alert("data.sortAscending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
             let descending = ui.button("↓  Sort Descending");
             if descending.clicked() {
-                let _ = app.run("data.sortDescending", json!({"column": col_to_letters(col)}));
+                app.run_or_alert("data.sortDescending", json!({"column": col_to_letters(col)}));
                 close = true;
             }
             ui.separator();
