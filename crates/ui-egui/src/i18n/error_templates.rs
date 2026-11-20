@@ -45,7 +45,11 @@ fn fill(message: &str, source: &str, translated: &str, language: super::Language
         let (name, tail) = slot.split_once('}')?;
         let delimiter = tail.split('{').next()?;
         let end = if delimiter.is_empty() { rest.len() } else { rest.find(delimiter)? };
-        values.push((name, rest.get(..end)?));
+        let value = rest.get(..end)?;
+        if value.contains('`') && (prefix.ends_with('`') || delimiter.starts_with('`')) {
+            return None;
+        }
+        values.push((name, value));
         rest = rest.get(end..)?;
         pattern = tail;
     }
@@ -67,7 +71,7 @@ fn fill(message: &str, source: &str, translated: &str, language: super::Language
         rendered.push((*name, value));
     }
     let args: Vec<(&str, &str)> = rendered.iter().map(|(key, value)| (*key, value.as_str())).collect();
-    Some(craft_i18n::fmt(translated, &args))
+    Some(super::fill(translated, &args))
 }
 
 #[cfg(test)]

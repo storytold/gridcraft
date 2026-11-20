@@ -54,8 +54,6 @@ craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "3b8e426a26
 craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "a20dfd1623709b0bd9830106d3a92a1a443902e3", version = "0.1.0" }
 craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "08da5e1486ee640de1d2cccd8fe8dd32b1d3b62c", version = "=0.1.0" }
 
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "1b34eba41e62138fc2438d2734523b302840b45d", version = "=0.1.0" }
-
 # foundation
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }

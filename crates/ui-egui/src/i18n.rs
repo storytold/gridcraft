@@ -231,11 +231,6 @@ impl Language {
         }
     }
 
-    #[cfg(test)]
-    fn translated(self, text: &str) -> Option<&'static str> {
-        self.translation(text)
-    }
-
     /// Translates an import warning for display in the interface. File-format and engine layers
     /// retain canonical English for the CLI, control channel and MCP.
     pub(crate) fn open_warning(self, warning: &str) -> String {
@@ -451,11 +446,11 @@ mod tests {
     fn every_catalog_has_distinct_diagram_and_decorative_text() {
         for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
             let code = language.code();
-            let diagram = language.translated("Diagram");
+            let diagram = language.translation("Diagram");
             assert!(diagram.is_some(), "{code}: Diagram");
-            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            assert!(language.translation("Decorative Text").is_some(), "{code}: Decorative Text");
             for chart in ["Chart", "Charts"] {
-                if let Some(chart_text) = language.translated(chart) {
+                if let Some(chart_text) = language.translation(chart) {
                     assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
                 }
             }
@@ -577,7 +572,7 @@ mod tests {
             assert_eq!(Language::En.tr(key), english);
             for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
                 let code = language.code();
-                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                let shown = language.translation(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
                 assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
                 assert_eq!(shown.contains("{letters}"), key.contains("{letters}"), "{code}: placeholder of {key:?}: {shown:?}");
             }
