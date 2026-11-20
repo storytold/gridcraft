@@ -55,10 +55,16 @@ fn map_visibility(visibility: craft_xlsx::Visibility) -> Visibility {
     }
 }
 
+pub(super) fn import_limits() -> craft_xlsx::Limits {
+    let limits = craft_xlsx::Limits::default();
+    // Keep the lower decoded-text budget in the browser's WebAssembly heap.
+    if cfg!(target_arch = "wasm32") { craft_xlsx::Limits { binary_text: 64 << 20, ..limits } } else { limits }
+}
+
 /// Imports worksheet scalar values and saved formula results. Number formats are omitted;
 /// dates remain serial numbers with the workbook's original date system. Inspect warnings.
 pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
-    let limits = craft_xlsx::Limits { binary_text: 64 << 20, ..craft_xlsx::Limits::default() };
+    let limits = import_limits();
     let mut package = craft_xlsx::Package::open(bytes, &limits).map_err(map_error)?;
     if !package.is_binary() {
         return Err(IoError::Format("XLSB: not a binary workbook".into()));
