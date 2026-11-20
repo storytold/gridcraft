@@ -1949,3 +1949,23 @@ fn save_model_counts_areas_outside_quoted_sheet_names() {
         assert!(e.contains("one range"), "{name}: {e}");
     }
 }
+
+#[test]
+fn solver_refuses_variables_in_merged_cells() {
+    for var in ["A2", "A1", "A1:A2"] {
+        let mut s = s();
+        set(&mut s, &[("A1", "2"), ("B1", "=A2*2+A1")]);
+        s.execute("home.mergeCells", json!({"range": "A1:A2"})).unwrap();
+        let before = s.execute("sheet.read", json!({"range": "A1:B2"})).unwrap();
+        let p = json!({"objective": "B1", "goal": "max", "variables": var, "constraints": ["A2 <= 10"], "method": "simplex", "keep": true});
+        assert!(s.execute("data.solver", p).is_err(), "{var}");
+        assert_eq!(s.execute("sheet.read", json!({"range": "A1:B2"})).unwrap(), before, "{var}");
+    }
+    // A merge elsewhere does not matter.
+    let mut s = s();
+    set(&mut s, &[("A1", "2"), ("B1", "=A1*2")]);
+    s.execute("home.mergeCells", json!({"range": "D1:E1"})).unwrap();
+    let p = json!({"objective": "B1", "goal": "max", "variables": "A1", "constraints": ["A1 <= 10"], "method": "simplex", "keep": true});
+    let r = s.execute("data.solver", p).unwrap();
+    assert_eq!(r["status"], "optimal", "{r}");
+}
