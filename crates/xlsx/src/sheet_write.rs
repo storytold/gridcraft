@@ -331,7 +331,7 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
 /// Focus Cell is not an ISO/IEC 29500 sheet-view attribute, so it rides in the view's extension
 /// list under GridCraft's own namespace. Excel does not read it, and keeps its own extensions
 /// beside it.
-const FOCUS_CELL_NS: &str = "https://github.com/storytold/gridcraft/xlsx/2026/focuscell";
+pub(crate) const FOCUS_CELL_NS: &str = "https://github.com/storytold/gridcraft/xlsx/2026/focuscell";
 
 /// The Focus Cell extension inside `<sheetView>`. Written whenever the sheet carries either
 /// half of the setting, so a color chosen while the tint is off stays remembered.

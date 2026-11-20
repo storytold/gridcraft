@@ -1877,6 +1877,24 @@ fn focus_cell_and_its_color_roundtrip() {
     assert_eq!(back.sheets[1].focus_cell_color, None, "and keeps the theme default");
 }
 
+/// Another extension in the same `extLst` may use the child name `focusCell` too. Only the
+/// extension with GridCraft's URI sets Focus Cell, wherever the other one sits.
+#[test]
+fn focus_cell_ignores_another_extension_with_the_same_child_name() {
+    let ours = format!(r#"<ext uri="{0}" xmlns:gcf="{0}"><gcf:focusCell on="1" rgb="FF5FC8D8"/></ext>"#, crate::sheet_write::FOCUS_CELL_NS);
+    let other = r#"<ext uri="urn:example:other" xmlns:x="urn:example:other"><x:focusCell on="0" rgb="FFC00000"/></ext>"#;
+    let view = |exts: &str| format!(r#"<sheetViews><sheetView workbookViewId="0"><extLst>{exts}</extLst></sheetView></sheetViews><sheetData/>"#);
+    for exts in [format!("{ours}{other}"), format!("{other}{ours}")] {
+        let (wb, _) = read_xlsx(&super::minimal(&view(&exts), &[], "", "")).unwrap();
+        let sheet = wb.sheet(0).unwrap();
+        assert!(sheet.focus_cell, "GridCraft's extension sets the tint: {exts}");
+        assert_eq!(sheet.focus_cell_color, Some(Color::Rgb(0x5FC8D8)), "and its color: {exts}");
+    }
+    let (wb, _) = read_xlsx(&super::minimal(&view(other), &[], "", "")).unwrap();
+    let sheet = wb.sheet(0).unwrap();
+    assert!(!sheet.focus_cell && sheet.focus_cell_color.is_none(), "the other extension alone changes nothing");
+}
+
 /// Japanese paper sizes survive an XLSX save and reopen. IDs 12/13 are the JIS B4/B5; the
 /// Japanese postcards and envelopes have their own IDs, and `B4 (ISO)` keeps ISO B4. The ISO B5/B6
 /// names only exist in the engine: ECMA-376 has no `paperSize` id for them (only ISO B4), so they
