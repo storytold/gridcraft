@@ -467,6 +467,9 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
         return;
     }
+    if app.editor.is_some() && app.function_arguments_open() {
+        return;
+    }
     // Point mode while editing a formula: clicking inserts a reference.
     if let Some(ed) = app.editor.as_mut()
         && ed.can_point()

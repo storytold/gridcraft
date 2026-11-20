@@ -390,6 +390,9 @@ pub fn begin(app: &mut SheetApp, sheet: usize, sh: &Sheet, page: (usize, usize),
     if app.grid.hf_edit.is_some() {
         commit(app);
     }
+    if app.editor.is_some() && app.function_arguments_open() {
+        return;
+    }
     // A cell being edited is entered first, as when clicking another cell.
     if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
         return;

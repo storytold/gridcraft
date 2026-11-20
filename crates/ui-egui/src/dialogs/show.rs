@@ -6,6 +6,7 @@ use super::cond_format_rules::manage_rules;
 use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
+use super::function_arguments::function_arguments;
 use super::insert_function::insert_function;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
@@ -149,7 +150,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 820.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
+        "insertFunction" | "functionArguments" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "equation" => 520.0,
         "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -188,6 +189,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "dataValidation" => data_validation_form(app, ui, &mut d, &mut confirm, &mut open),
                 "advancedFilter" => advanced_filter_form(app, ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
+                "functionArguments" => function_arguments(app, ui, &mut d, &mut confirm, &mut open),
                 "find" => find(app, ui, &mut d),
                 "goTo" => go_to(app, ui, &mut d, &mut confirm),
                 "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
@@ -406,6 +408,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             cancel_solver_options(&mut d);
         } else {
             open = false;
+            super::function_arguments::closed(app, &d);
         }
     }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
