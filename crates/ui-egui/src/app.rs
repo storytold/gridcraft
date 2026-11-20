@@ -333,6 +333,15 @@ mod lifecycle_tests {
         SheetApp::new(session, Services::default())
     }
 
+    #[test]
+    /// The contextual ribbon uses a UI command to open the Selection Pane.
+    fn selection_pane_ui_command_opens_the_pane() {
+        let mut app = app();
+        assert_eq!(app.grid.pane, None);
+        assert!(app.run("ui.selectionPane", json!({})).is_ok());
+        assert_eq!(app.grid.pane.as_deref(), Some("selection"));
+    }
+
     /// One headless pass; a test has no renderer for the texture atlas delta (0.37 panics when it
     /// is dropped unapplied).
     fn ui_pass(ctx: &egui::Context, raw: egui::RawInput, f: impl FnMut(&mut egui::Ui)) -> egui::FullOutput {

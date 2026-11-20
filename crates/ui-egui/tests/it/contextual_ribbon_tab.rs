@@ -2,7 +2,9 @@
 //! The tab remembered in the saved UI state, or left behind when the selection moves away, must
 //! not leave the ribbon blank: it falls back to Home.
 
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
+use gridcraft_engine::model::{ObjKind, ObjRef};
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
@@ -42,6 +44,188 @@ fn a_saved_chart_design_tab_without_a_chart_opens_on_home() {
     session.new_workbook();
     let h = app_restored_on("Chart Design", session);
     assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+#[test]
+fn shape_format_is_available_only_while_a_shape_is_selected() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let result = session.execute("insert.shape", json!({"kind": "rectangle", "at": "B2"}));
+    assert!(result.is_ok(), "test shape should be created");
+    let id = result.ok().and_then(|value| value["shape"].as_u64()).and_then(|id| u32::try_from(id).ok());
+    assert!(id.is_some(), "shape creation returns its object id");
+    let Some(id) = id else { return };
+
+    let mut h = harness(session);
+    h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Shape, id));
+    h.state_mut().ui.ribbon_tab = "Shape Format".into();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Shape Format");
+    assert!(h.query_by_label("Rotate selected shape 90 degrees").is_none());
+    assert!(h.query_by_label("Bring object forward or to front").is_none());
+    assert!(h.query_by_label("Send object backward or to back").is_none());
+    h.get_by_label("Selection Pane").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Bring Forward").is_none());
+    assert!(h.query_by_label("Send Backward").is_none());
+
+    h.state_mut().selected_object = None;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+#[test]
+fn slicer_tab_is_available_only_while_a_slicer_is_selected() {
+    let mut session = session_with_table();
+    let result = session.execute("insert.slicer", json!({"table": "Table1", "column": "Name"}));
+    assert!(result.is_ok(), "test slicer should be created");
+    let id = result.ok().and_then(|value| value["slicer"].as_u64()).and_then(|id| u32::try_from(id).ok());
+    assert!(id.is_some(), "slicer creation returns its object id");
+    let Some(id) = id else { return };
+
+    let mut h = harness(session);
+    h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Slicer, id));
+    h.state_mut().ui.ribbon_tab = "Slicer".into();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Slicer");
+
+    h.state_mut().selected_object = None;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+#[test]
+fn picture_format_is_available_only_while_a_picture_is_selected() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let result = session.execute("insert.picture", json!({"base64": "AQID", "mime": "image/png", "at": "B2"}));
+    assert!(result.is_ok(), "test picture should be created");
+    let id = result.ok().and_then(|value| value["image"].as_u64()).and_then(|id| u32::try_from(id).ok());
+    assert!(id.is_some(), "picture creation returns its object id");
+    let Some(id) = id else { return };
+
+    let mut h = harness(session);
+    h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Image, id));
+    h.state_mut().ui.ribbon_tab = "Picture Format".into();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Picture Format");
+
+    h.state_mut().selected_object = None;
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+/// A contextual delete targets the selected kind/id, leaving another object of that kind intact.
+#[test]
+fn contextual_delete_uses_the_selected_object_identity() {
+    for (kind, command, params, result_key, tab, label) in [
+        (ObjKind::Shape, "insert.shape", json!({"kind": "rectangle", "at": "B2"}), "shape", "Shape Format", "Delete Shape"),
+        (ObjKind::Image, "insert.picture", json!({"base64": "AQID", "mime": "image/png", "at": "B2"}), "image", "Picture Format", "Delete Picture"),
+        (ObjKind::Slicer, "insert.slicer", json!({"table": "Table1", "column": "Name"}), "slicer", "Slicer", "Delete Slicer"),
+    ] {
+        let mut session = session_with_table();
+        let first = session.execute(command, params.clone()).unwrap()[result_key].as_u64().unwrap() as u32;
+        let second = session.execute(command, params).unwrap()[result_key].as_u64().unwrap() as u32;
+        assert_ne!(first, second);
+        let mut h = harness(session);
+        h.state_mut().selected_object = Some(ObjRef::new(kind, second));
+        h.state_mut().ui.ribbon_tab = tab.into();
+        h.run_steps(2);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        let sh = h.state().session.active().unwrap().wb.active().unwrap();
+        assert!(sh.object_anchor(ObjRef::new(kind, first)).is_some(), "{tab} leaves the other object intact");
+        assert!(sh.object_anchor(ObjRef::new(kind, second)).is_none(), "{tab} deletes the selected object");
+        assert!(h.state().selected_object.is_none());
+        assert_eq!(h.state().ui.ribbon_tab, "Home");
+    }
+}
+
+/// An id from a different object kind or an object that was deleted cannot keep a tab active.
+#[test]
+fn contextual_tabs_reject_wrong_kind_and_deleted_objects() {
+    let mut session = session_with_table();
+    let id = session.execute("insert.shape", json!({"kind": "rectangle", "at": "B2"})).unwrap()["shape"].as_u64().unwrap() as u32;
+    let mut h = harness(session);
+    for (kind, tab) in [(ObjKind::Image, "Picture Format"), (ObjKind::Slicer, "Slicer"), (ObjKind::Chart, "Chart Design")] {
+        h.state_mut().selected_object = Some(ObjRef::new(kind, id));
+        h.state_mut().ui.ribbon_tab = tab.into();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.ribbon_tab, "Home", "{tab} cannot use a shape's id");
+    }
+    h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Shape, id));
+    h.state_mut().ui.ribbon_tab = "Shape Format".into();
+    h.run_steps(2);
+    h.state_mut().run("object.delete", json!({"kind": "shape", "id": id})).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state().ui.ribbon_tab, "Home");
+}
+
+#[test]
+fn an_equation_masquerading_as_a_shape_cannot_expose_shape_actions() {
+    let mut session = session_with_table();
+    let id = session.execute("insert.equation", json!({"latex":"x^2", "cell":"C4"})).unwrap()["equation"].as_u64().unwrap() as u32;
+    let sh = session.active().unwrap().wb.active().unwrap();
+    // This is the mismatch missed by anchor-only validation: equations share shape storage.
+    assert!(sh.object_anchor(ObjRef::new(ObjKind::Shape, id)).is_some());
+    assert_eq!(sh.object_ref(id), Some(ObjRef::new(ObjKind::Equation, id)));
+    let mut h = harness(session);
+    let journal = h.state().session.journal.len();
+    for kind in [ObjKind::Shape, ObjKind::Equation] {
+        h.state_mut().selected_object = Some(ObjRef::new(kind, id));
+        h.state_mut().ui.ribbon_tab = "Shape Format".into();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.ribbon_tab, "Home");
+        for label in ["Shape Fill", "Shape Outline", "Delete Shape"] {
+            assert!(h.query_by_label(label).is_none(), "{kind:?} must not expose {label}");
+        }
+        assert_eq!(h.state().session.journal.len(), journal);
+        assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().object_ref(id), Some(ObjRef::new(ObjKind::Equation, id)));
+    }
+}
+
+#[test]
+fn portuguese_shape_palettes_translate_no_change_and_leave_the_shape_unchanged() {
+    for label in ["Preenchimento da Forma", "Contorno da Forma"] {
+        let mut session = session_with_table();
+        let id = session.execute("insert.shape", json!({"kind":"rectangle", "at":"D4"})).unwrap()["shape"].as_u64().unwrap() as u32;
+        let mut h = harness(session);
+        h.state_mut().run("app.language.set", json!({"language":"pt"})).unwrap();
+        h.state_mut().selected_object = Some(ObjRef::new(ObjKind::Shape, id));
+        h.state_mut().ui.ribbon_tab = "Shape Format".into();
+        h.run_steps(3);
+        let journal = h.state().session.journal.len();
+        let undo = h.state().session.active().unwrap().undo.len();
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        assert!(h.query_by_label("No change").is_none());
+        h.get_by_label("Sem alteração").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.journal.len(), journal, "{label}: no color command");
+        assert_eq!(h.state().session.active().unwrap().undo.len(), undo, "{label}: no edit to undo");
+    }
+}
+
+/// Newly supported form controls must not inherit another floating object's action tab.
+#[test]
+fn form_controls_cannot_expose_shape_picture_slicer_or_chart_actions() {
+    let mut session = session_with_table();
+    let id = session.execute("insert.button", json!({"at":"D4", "text":"Test control"})).unwrap()["control"].as_u64().unwrap() as u32;
+    let mut h = harness(session);
+    let journal = h.state().session.journal.len();
+    for kind in [ObjKind::Control, ObjKind::Shape] {
+        for tab in ["Shape Format", "Picture Format", "Slicer", "Chart Design"] {
+            h.state_mut().selected_object = Some(ObjRef::new(kind, id));
+            h.state_mut().ui.ribbon_tab = tab.into();
+            h.run_steps(3);
+            assert_eq!(h.state().ui.ribbon_tab, "Home", "{kind:?} must not expose {tab}");
+            for label in ["Shape Fill", "Shape Outline", "Delete Shape", "Delete Picture", "Delete Slicer"] {
+                assert!(h.query_by_label(label).is_none(), "form controls must not expose {label}");
+            }
+            assert_eq!(h.state().session.journal.len(), journal);
+            assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().object_ref(id), Some(ObjRef::new(ObjKind::Control, id)));
+        }
+    }
 }
 
 #[test]
