@@ -104,21 +104,6 @@ pub(super) fn year_frac(sys: DateSystem, s1: f64, s2: f64, basis: u32) -> R<f64>
     }
 }
 
-/// Days in a year for discount securities.
-pub(super) fn year_basis(sys: DateSystem, basis: u32, s: f64) -> R<f64> {
-    Ok(match basis {
-        0 | 2 | 4 => 360.0,
-        3 => 365.0,
-        _ => {
-            if is_leap(ymd(sys, s)?.0) {
-                366.0
-            } else {
-                365.0
-            }
-        }
-    })
-}
-
 /// Date `months` months before/after an anchor date, keeping end-of-month alignment.
 pub(super) fn shift_months(sys: DateSystem, anchor: (i32, u32, u32), months: i64, eom: bool) -> R<f64> {
     let (y, m, d) = anchor;
