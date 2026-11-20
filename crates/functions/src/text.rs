@@ -262,9 +262,14 @@ fn rept(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn find_impl(a: &[Arg], wild: bool) -> R<Value> {
     let needle = text(a, 0)?;
     let hay = text(a, 1)?;
-    let start = opt_num(a, 2, 1.0)?;
+    // A fractional start counts from its whole part, as Excel's does (#4027).
+    let start = opt_num(a, 2, 1.0)?.trunc();
     let hc = chars(&hay);
-    if (start.is_nan() || start < 1.0) || start > hc.len().max(1) as f64 {
+    // FIND also finds empty text just past the last character (FIND("","abc",4) is 4, and
+    // FIND("","") is 1); SEARCH starts no later than the last character, so it finds nothing in
+    // empty text, as native Excel shows (#4020, #4028).
+    let last = if wild { hc.len() } else { hc.len() + 1 };
+    if start.is_nan() || start < 1.0 || start > last as f64 {
         return Err(CellError::Value);
     }
     let start = start as usize - 1;
@@ -1308,8 +1313,25 @@ mod tests {
         is_err(ev("SEARCH", vec![t("b"), t("a\u{130}bc"), n(4.0)]), CellError::Value);
         for f in ["FIND", "SEARCH"] {
             close(ev(f, vec![t(""), t("abc"), n(3.0)]), 3.0);
-            is_err(ev(f, vec![t(""), t("abc"), n(4.0)]), CellError::Value);
+            is_err(ev(f, vec![t(""), t("abc"), n(5.0)]), CellError::Value);
+            // A fractional start counts from its whole part (#4027).
+            close(ev(f, vec![t("a"), t("a"), n(1.5)]), 1.0);
+            close(ev(f, vec![t("b"), t("abcb"), n(3.9)]), 4.0);
+            is_err(ev(f, vec![t("a"), t("a"), n(2.0)]), CellError::Value);
+            is_err(ev(f, vec![t("a"), t("a"), n(0.9)]), CellError::Value);
         }
+        // Empty text just past the end: FIND finds it, SEARCH does not, as in native Excel (#4020).
+        close(ev("FIND", vec![t(""), t("abc"), n(4.0)]), 4.0);
+        close(ev("FIND", vec![t(""), t("x"), n(2.0)]), 2.0);
+        is_err(ev("FIND", vec![t("a"), t("abc"), n(4.0)]), CellError::Value);
+        is_err(ev("SEARCH", vec![t(""), t("abc"), n(4.0)]), CellError::Value);
+        // SEARCH finds nothing in empty text, wildcards included; FIND finds empty text there (#4028).
+        close(ev("FIND", vec![t(""), t("")]), 1.0);
+        for needle in ["", "*", "?"] {
+            is_err(ev("SEARCH", vec![t(needle), t("")]), CellError::Value);
+        }
+        close(ev("SEARCH", vec![t(""), t("a")]), 1.0);
+        close(ev("SEARCH", vec![t("*"), t("a")]), 1.0);
         assert_eq!(ev("EXACT", vec![t("a"), t("A")]), Value::Bool(false));
         assert_eq!(ev("EXACT", vec![t("a"), t("a")]), Value::Bool(true));
     }
