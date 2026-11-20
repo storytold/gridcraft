@@ -338,9 +338,8 @@ fn main() -> eframe::Result<()> {
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
-    for f in &files {
-        app.open_path(f);
-    }
+    // They open on the first frame, once the fonts the grid draws with can measure them.
+    app.open_on_first_frame(files);
     // Linux/BSD: Excel's layout — no window-manager title bar above ours; our title bar carries the
     // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
     app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();

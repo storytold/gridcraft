@@ -47,6 +47,24 @@ impl SheetApp {
         }
         let ctx = ctx.clone();
         self.session.text_width = Some(std::sync::Arc::new(move |text, font, exact| theme::cell_text_width(&ctx, text, font, exact)));
+        // An opened workbook's fonts are installed a frame or two after it opens: its rows wait
+        // for them (`fit_rows_once_fonts_settle`). The web build installs none.
+        self.session.defer_row_fit = !cfg!(target_arch = "wasm32");
+    }
+
+    /// Fits the rows of workbooks opened since the last frame once their fonts are what the grid
+    /// draws with: the font set applied, the installed fonts scanned and bound for every open
+    /// workbook. Measured before, wrapped text in Arial or Verdana would fold with the widths of
+    /// the default cell font, and its rows come out a line short or tall.
+    pub(super) fn fit_rows_once_fonts_settle(&mut self) {
+        if !self.fonts_ready || self.fonts_rebind {
+            return;
+        }
+        let bound = self.prepared_fonts || (fonts::scan_done() && self.fonts_seen == self.fonts_key());
+        if bound && self.session.fit_deferred_rows() {
+            // The fit changed the workbooks' revision: no font is new to them.
+            self.fonts_seen = self.fonts_key();
+        }
     }
 
     /// Applies the font gates: a language Han-order change, startup/prepared fonts and workbook
