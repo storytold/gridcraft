@@ -105,7 +105,7 @@ pub(crate) fn open(app: &mut SheetApp, params: &Json) -> Option<Dialog> {
     let mut d = Dialog::custom(
         "functionArguments",
         "Function Arguments",
-        json!({"function": name, "args": args, "before": before, "after": after, "restore": restore, "active": 0}),
+        json!({"function": name, "args": args, "given": args.len(), "before": before, "after": after, "restore": restore, "active": 0}),
     );
     d.focus_first_field = true;
     Some(d)
@@ -134,7 +134,8 @@ pub(crate) fn compose(d: &Dialog, locale: FormulaLocale) -> (String, String) {
     let name = text_value(d, "function");
     let p = params_of(&name, locale);
     let args = args_of(d, &p);
-    let call = format!("{name}({})", p.written(&args).join(&locale.list_separator().to_string()));
+    let given = d.values.get("given").and_then(Json::as_u64).map_or(0, |g| g as usize);
+    let call = format!("{name}({})", p.written_keeping(&args, given).join(&locale.list_separator().to_string()));
     let full = format!("{}{call}{}", text_value(d, "before"), text_value(d, "after"));
     (call, full)
 }
@@ -174,11 +175,12 @@ pub(crate) fn preview(app: &mut SheetApp, ctx: &egui::Context, text: &str) -> Op
     if cache.wb != wb || cache.values.len() > 256 {
         cache = Cache { wb, values: HashMap::new() };
     }
-    if let Some(v) = cache.values.get(&formula) {
+    let key = format!("{sheet:?}|{}|{formula}", cell.a1());
+    if let Some(v) = cache.values.get(&key) {
         return v.clone();
     }
     let shown = app.session.run("formulas.evaluate", json!({"formula": formula, "cell": cell.a1()})).ok().map(|v| show_value(&v, locale));
-    cache.values.insert(formula, shown.clone());
+    cache.values.insert(key, shown.clone());
     ctx.data_mut(|m| m.insert_temp(id, cache));
     shown
 }
@@ -304,7 +306,9 @@ pub(super) fn function_arguments(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
     }
     if *confirm {
         sync_editor(app, &call, &full, &before);
-        app.commit_edit(0, 0, false, false);
+        if !app.commit_edit(0, 0, false, false) {
+            *confirm = false;
+        }
     }
 }
 

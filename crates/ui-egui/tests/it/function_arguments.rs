@@ -2,11 +2,11 @@
 //! the formula built from the boxes, and editing the call at the caret or in the active cell.
 
 use egui::os::OperatingSystem;
-use egui::{Event, Key, Modifiers, vec2};
+use egui::{Event, Key, Modifiers, PointerButton, vec2};
 use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
-use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::{SheetApp, grid::Geo};
 use serde_json::{Value as Json, json};
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -166,4 +166,78 @@ fn fx_on_a_formula_cell_edits_its_first_call_and_cancel_leaves_the_cell() {
     h.state_mut().open_dialog("insertFunction", json!({"category": "Math & Trig"}));
     h.run_steps(3);
     assert_eq!(dialog_name(&h).as_deref(), Some("insertFunction"));
+}
+
+fn click_cell(h: &mut Harness, cell: &str) {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let pos = geo.cell_rect(sheet, CellRef::parse(cell).unwrap()).center();
+    h.input_mut().events.extend([
+        Event::PointerMoved(pos),
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(3);
+}
+
+#[test]
+fn clicking_the_sheet_while_the_dialog_is_open_does_not_enter_its_draft() {
+    let mut h = harness();
+    new_call(&mut h, "SUM");
+    set_args(&mut h, &["1"]);
+    assert_eq!(editor_text(&h).as_deref(), Some("=SUM(1)"));
+    click_cell(&mut h, "B9");
+    assert_eq!(input(&h, "D1"), "", "the draft is not entered by a click on the sheet");
+    assert_eq!(dialog_name(&h).as_deref(), Some("functionArguments"));
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert_eq!(input(&h, "D1"), "");
+    assert_eq!(editor_text(&h), None);
+}
+
+#[test]
+fn ok_without_edits_writes_back_explicit_blank_arguments() {
+    for formula in ["=IF(FALSE,1,)", "=LET(x,,x)"] {
+        let mut h = harness();
+        h.state_mut().run("cell.set", json!({"cell": "D1", "input": formula})).unwrap();
+        h.run_steps(2);
+        h.state_mut().open_dialog("insertFunction", json!({}));
+        h.run_steps(4);
+        assert_eq!(dialog_name(&h).as_deref(), Some("functionArguments"), "{formula}");
+        ok(&mut h);
+        assert_eq!(dialog_name(&h), None, "{formula}");
+        assert_eq!(input(&h, "D1"), formula);
+    }
+}
+
+#[test]
+fn the_preview_of_a_cell_dependent_formula_is_not_reused_for_another_cell() {
+    let mut h = harness();
+    new_call(&mut h, "ROW");
+    assert!(painted(&h).iter().any(|t| t == "Formula result = 1"), "{:?}", painted(&h));
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    h.state_mut().run("selection.set", json!({"cell": "D7"})).unwrap();
+    h.run_steps(2);
+    new_call(&mut h, "ROW");
+    assert!(painted(&h).iter().any(|t| t == "Formula result = 7"), "{:?}", painted(&h));
+}
+
+#[test]
+fn a_refused_ok_keeps_the_dialog_and_its_arguments_open() {
+    let mut h = harness();
+    new_call(&mut h, "VLOOKUP");
+    set_args(&mut h, &["2"]);
+    ok(&mut h);
+    assert_eq!(dialog_name(&h).as_deref(), Some("functionArguments"));
+    assert_eq!(value(&h, "args").as_array().unwrap()[0], json!("2"));
+    assert_eq!(editor_text(&h).as_deref(), Some("=VLOOKUP(2)"));
+    assert_eq!(input(&h, "D1"), "");
+    assert!(h.state().message.is_some(), "the refusal is shown");
+    h.state_mut().message = None;
+    set_args(&mut h, &["2", "A1:B3", "2", "FALSE"]);
+    ok(&mut h);
+    assert_eq!(dialog_name(&h), None);
+    assert_eq!(input(&h, "D1"), "=VLOOKUP(2,A1:B3,2,FALSE)");
 }
