@@ -13,9 +13,22 @@ fn book(rtl: bool, cells: &[(&str, gridcraft_core::Value, gridcraft_model::HAlig
     wb
 }
 
+/// Compare legacy rendering independently of the new, separately tested value metadata.
+fn visible_clipboard_markup(mut html: String) -> String {
+    for name in ["region", "number", "format", "calendar"] {
+        let prefix = format!(" data-gridcraft-{name}-v1=\"");
+        while let Some(start) = html.find(&prefix) {
+            let value = start + prefix.len();
+            let end = value + html[value..].find('"').unwrap() + 1;
+            html.replace_range(start..end, "");
+        }
+    }
+    html
+}
+
 fn copied(wb: &Workbook, range: &str) -> String {
     let r = RangeRef::parse(range).unwrap();
-    range_html(wb, 0, r, &crate::display::range_text(wb, 0, r)).unwrap()
+    range_html(wb, 0, r, &crate::display::range_text(wb, 0, r), &gridcraft_numfmt::Locale::EN_US).unwrap()
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -225,14 +238,14 @@ fn html_export_marks_right_to_left_sheets() {
     assert!(html.contains("<body><table dir=\"rtl\">"), "{html}");
     assert!(html.contains("<td style=\"\" dir=\"auto\">Hello!</td>"), "Latin text keeps its own direction: {html}");
     assert!(html.contains("<td style=\"text-align:left;\" dir=\"ltr\">-5</td>"), "numbers mirror to the left and keep their sign in front: {html}");
-    let clip = copied(&wb, "A1:B1");
+    let clip = visible_clipboard_markup(copied(&wb, "A1:B1"));
     assert!(clip.starts_with("<table dir=\"rtl\" style="), "{clip}");
     assert_eq!(clip.matches("dir=\"auto\"").count(), 1, "{clip}");
     assert!(clip.contains("text-align:left;\" dir=\"ltr\">-5</td>"), "{clip}");
 
     let ltr = book(false, &[("A1", Value::text("Hello!"), HAlign::General)]);
     assert!(to_html(&ltr, 0).unwrap().contains("<body><table><tr>"));
-    assert!(copied(&ltr, "A1").starts_with("<table style="));
+    assert!(visible_clipboard_markup(copied(&ltr, "A1")).starts_with("<table style="));
 }
 
 #[test]
@@ -288,7 +301,7 @@ fn html_export_of_latin_ltr_sheet_is_unchanged() {
     );
     let cell = "border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;";
     assert_eq!(
-        copied(&wb, "A1:B2"),
+        visible_clipboard_markup(copied(&wb, "A1:B2")),
         format!(
             "<table style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">\
                  <tr><td style=\"{cell}text-align:left;\">Name</td><td style=\"{cell}text-align:center;\">Qty</td></tr>\
@@ -989,7 +1002,7 @@ fn html_merge_lookups_and_spans_stay_bounded() {
     let sh = wb.sheet_mut(0).unwrap();
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(2, 1)); 100];
     assert!(to_html(&wb, 0).is_err());
-    assert!(range_html(&wb, 0, RangeRef::parse("A1:B3").unwrap(), "").is_none());
+    assert!(range_html(&wb, 0, RangeRef::parse("A1:B3").unwrap(), "", &gridcraft_numfmt::Locale::EN_US).is_none());
 }
 
 /// Thousands of pictures over thousands of custom rows: each is placed through a row index.
@@ -1038,4 +1051,18 @@ fn the_merge_index_holds_a_bounded_number_of_cells() {
     assert_eq!(merge_index(&sh, rect).map(|m| m.len()), Some(1_000_000));
     sh.merges = vec![RangeRef::new(CellRef::new(0, 0), CellRef::new(1_000_000, 0))];
     assert!(merge_index(&sh, rect).is_none());
+}
+
+/// The shared SYLK reader still imports explicit short-date codes as literal formats.
+#[test]
+fn sylk_custom_short_dates_keep_literal_identity() {
+    let bytes = b"ID;PGridCraft\r\nP;Pm/d/yyyy\r\nF;P0;Y1;X1\r\nC;Y1;X1;K45292\r\nE\r\n";
+    let (wb, warnings) = open_bytes("Dates.slk", bytes).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let sh = wb.sheet(0).unwrap();
+    let at = CellRef::new(0, 0);
+    assert_eq!(sh.value(at), gridcraft_core::Value::Number(45292.0));
+    let fmt = &wb.styles.get(sh.style_id(at)).num_fmt;
+    assert_eq!(fmt.as_str(), "m/d/yyyy");
+    assert!(fmt.is_literal_short_date());
 }

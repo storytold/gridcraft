@@ -291,6 +291,17 @@ fn read_protection(p: &El) -> Protection {
     Protection { locked: p.flag("locked", true), hidden: p.flag("hidden", false) }
 }
 
+/// A declaration below 164 still names a built-in format, even when numFmts supplies its code.
+/// Share this rule with DXFs so short dates retain regional identity and their built-in IDs.
+fn declared_num_fmt(id: Option<u32>, code: &str) -> NumFmt {
+    match id {
+        Some(14) if code.eq_ignore_ascii_case("mm-dd-yy") || code.eq_ignore_ascii_case("m/d/yyyy") => NumFmt::new("m/d/yyyy"),
+        Some(22) if code.eq_ignore_ascii_case("m/d/yy h:mm") || code.eq_ignore_ascii_case("m/d/yyyy h:mm") => NumFmt::new("m/d/yyyy h:mm"),
+        Some(id) if id < 164 => NumFmt::new(code),
+        _ => NumFmt::custom(code),
+    }
+}
+
 /// A number format by id. Custom formats are built once and shared (`NumFmt` is an `Arc`), so
 /// many cell formats naming one long code don't each copy it.
 fn num_fmt_code(id: u32, custom: &HashMap<u32, NumFmt>) -> NumFmt {
@@ -365,7 +376,8 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             d.kids("dxf").filter_map(|x| x.child("numFmt")).filter(|n| n.attr("formatCode").is_none()).filter_map(|n| n.attr_u32("numFmtId")),
         );
     }
-    let shared_fmts: HashMap<u32, NumFmt> = fmts.iter().filter(|(id, _)| used.contains(id)).map(|(&id, code)| (id, NumFmt::new(code))).collect();
+    let shared_fmts: HashMap<u32, NumFmt> =
+        fmts.iter().filter(|(id, _)| used.contains(id)).map(|(&id, code)| (id, declared_num_fmt(Some(id), code))).collect();
     // The scheme link only means something on a font in the body face; elsewhere it stays as a new font has it.
     let body_font = |e: &El| {
         let mut f = read_font(e, &palette);
@@ -393,14 +405,14 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
             }
         }
     }
-    // Inline dxf format codes are interned: a code repeated by many dxfs is one allocation.
+    // Intern repeated inline DXF codes within their built-in or custom identity.
     let mut inline_fmts = HashMap::new();
     let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts, &mut inline_fmts)).collect()).unwrap_or_default();
     StylesIn { xfs, dxfs, palette, named, num_fmts: fmts }
 }
 
 /// One differential format (`dxf`): the style it sets over a cell's own.
-fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_fmts: &mut HashMap<&'a str, NumFmt>) -> Style {
+fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_fmts: &mut HashMap<(Option<u32>, &'a str), NumFmt>) -> Style {
     let mut s = Style::default();
     if let Some(e) = x.child("font") {
         let f = read_font(e, palette);
@@ -423,7 +435,10 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
     }
     if let Some(n) = x.child("numFmt") {
         if let Some(code) = n.attr("formatCode") {
-            s.num_fmt = inline_fmts.entry(code).or_insert_with(|| NumFmt::new(code)).clone();
+            let id = n.attr_u32("numFmtId");
+            // A built-in and a custom short date can have identical code but different meaning.
+            let key = (id.filter(|&id| id < 164), code);
+            s.num_fmt = inline_fmts.entry(key).or_insert_with(|| declared_num_fmt(id, code)).clone();
         } else if let Some(id) = n.attr_u32("numFmtId") {
             s.num_fmt = num_fmt_code(id, fmts);
         }
@@ -656,10 +671,19 @@ pub struct NumFmts {
 }
 
 impl NumFmts {
+    /// Reuse a recognized built-in ID or allocate a custom ID for an ordinary format code.
     pub fn id(&mut self, code: &str) -> u32 {
         if let Some(id) = builtin_id(code) {
             return id;
         }
+        self.custom_id(code)
+    }
+    /// Force marked literal short-date aliases to custom IDs even when their code matches a built-in.
+    fn format_id(&mut self, fmt: &NumFmt) -> u32 {
+        if fmt.is_literal_short_date() { self.custom_id(fmt.as_str()) } else { self.id(fmt.as_str()) }
+    }
+    /// Intern an exact custom code, reusing its assigned ID or allocating one from 164.
+    fn custom_id(&mut self, code: &str) -> u32 {
         if let Some(&id) = self.map.get(code) {
             return id;
         }
@@ -693,7 +717,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String], mut nf
         let border = intern(&mut borders, &mut border_map, &st.borders);
         // A checkbox is General plus the feature-property-bag complement (see `feature_bags`).
         let checkbox = st.num_fmt.as_str() == "checkbox";
-        let fmt = if checkbox { 0 } else { nf.id(st.num_fmt.as_str()) };
+        let fmt = if checkbox { 0 } else { nf.format_id(&st.num_fmt) };
         let _ = write!(xfs, "<xf numFmtId=\"{fmt}\" fontId=\"{font}\" fillId=\"{fill}\" borderId=\"{border}\" xfId=\"0\"");
         if fmt != 0 {
             xfs.push_str(" applyNumberFormat=\"1\"");
@@ -740,7 +764,7 @@ pub fn write_styles(wb: &Workbook, dxfs: &[Style], extra_fmts: &[String], mut nf
         let font = intern(&mut fonts, &mut font_map, &st.font);
         let fill = intern(&mut fills, &mut fill_map, &st.fill);
         let border = intern(&mut borders, &mut border_map, &st.borders);
-        let fmt = nf.id(st.num_fmt.as_str());
+        let fmt = nf.format_id(&st.num_fmt);
         let _ = write!(style_xfs, "<xf numFmtId=\"{fmt}\" fontId=\"{font}\" fillId=\"{fill}\" borderId=\"{border}\"");
         let al = alignment_xml(&st.align);
         let pr = protection_xml(&st.protection);
@@ -816,7 +840,7 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
         dx.push_str(&font_xml(&d.font, Some(&d.dxf_stated), false));
     }
     if d.num_fmt != def.num_fmt {
-        let id = nf.id(d.num_fmt.as_str());
+        let id = nf.format_id(&d.num_fmt);
         let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
     }
     if d.fill != def.fill {
@@ -847,6 +871,27 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Both shared and inline differential formats preserve literal versus regional dates.
+    #[test]
+    fn differential_helper_preserves_short_date_identity_for_both_tags() {
+        for tag in ["dxf", "x14:dxf"] {
+            for literal in [false, true] {
+                let style = Style { num_fmt: if literal { NumFmt::custom("m/d/yyyy") } else { NumFmt::new("m/d/yyyy") }, ..Style::default() };
+                let mut formats = NumFmts::default();
+                let xml = dxf_xml(tag, &style, &mut formats);
+                let root = crate::xml::parse(xml.as_bytes()).unwrap();
+                let fmt = root.child("numFmt").unwrap();
+                let id = fmt.attr_u32("numFmtId").unwrap();
+                assert_eq!(fmt.attr("formatCode"), Some("m/d/yyyy"));
+                if literal {
+                    assert!(id >= 164, "a literal short date keeps its custom identity in {tag}");
+                } else {
+                    assert_eq!(id, 14, "a regional short date keeps its built-in identity in {tag}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn absent_or_invalid_reading_order_is_unspecified() {

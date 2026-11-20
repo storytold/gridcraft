@@ -1,7 +1,7 @@
 //! GridCraft charts (layer L3, toolkit-free).
 //!
-//! - [`resolve`] pulls series names, categories and values out of a workbook,
-//! - [`render`] lays a chart out into a list of drawing primitives ([`Prim`]) that any UI
+//! - [`resolve()`] pulls series names, categories and values out of a workbook,
+//! - [`render()`] lays a chart out into a list of drawing primitives ([`Prim`]) that any UI
 //!   toolkit (or the built-in [`rasterize`]) can paint,
 //! - [`render_sparkline`] draws in-cell sparklines,
 //! - [`rasterize`] turns primitives into RGBA pixels for PNG export and tests.
