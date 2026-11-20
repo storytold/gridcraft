@@ -35,5 +35,6 @@ mod table_resize_overlap;
 mod table_style_looks;
 mod table_total_row_last_row;
 mod trace_error;
+mod web_functions;
 mod workbook_author;
 mod wrap_row_height;
