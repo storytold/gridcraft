@@ -194,8 +194,12 @@ pub fn read_xlsb(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     }
     import_defined_names(&book, &file_to_model, &mut wb);
     let external_links = package.external_links(&book).map_err(map_error)?;
-    if let Some(preserved) = preserve_external_links(&external_links) {
+    let (preserved, ordinal_map) = preserve_external_links(&external_links, &mut report);
+    if let Some(preserved) = preserved {
         wb.preserved = Some(Arc::new(preserved));
+    }
+    if let Some(remap) = ordinal_map {
+        remap_workbook_external_ordinals(&mut wb, &remap);
     }
     for warning in package.warnings() {
         report.warn(warning);
@@ -211,32 +215,110 @@ pub(crate) fn is_xlsb(bytes: &[u8]) -> bool {
     craft_xlsx::is_xlsb(bytes)
 }
 
-fn preserve_external_links(links: &[(String, Option<craft_xlsx::ExternalLink>)]) -> Option<Preserved> {
-    if links.is_empty() || links.iter().all(|(_, l)| l.is_none()) {
-        return None;
+fn preserve_external_links(
+    links: &[(String, Option<craft_xlsx::ExternalLink>)],
+    report: &mut ReadReport,
+) -> (Option<Preserved>, Option<Vec<Option<usize>>>) {
+    if links.is_empty() {
+        return (None, None);
     }
     const CT_EXT_LINK: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml";
     let mut p = Preserved::default();
     let mut refs_xml = format!("<externalReferences xmlns:r=\"{NS_REL}\">");
+    let mut remap = vec![None; links.len() + 1];
+    let mut next_ordinal = 0usize;
+    let mut had_missing = false;
+    let mut shifted = false;
     for (i, (_, link)) in links.iter().enumerate() {
-        let rid = format!("rId{}", i + 1);
-        let part_name = format!("xl/externalLinks/externalLink{}.xml", i + 1);
-        // Missing slots still need a schema-valid <externalLink> part and r:id so ECMA-376
-        // <externalReferences> and XLSX reopen keep the 1-based `[n]` ordinals for later links.
-        let (xml, rels) = match link {
-            Some(link) => external_link_part_xml(link),
-            None => (
-                format!("{XML_DECL}<externalLink xmlns=\"{NS_MAIN}\"><ddeLink ddeService=\"missing\" ddeTopic=\"missing\"/></externalLink>"),
-                Vec::new(),
-            ),
+        let Some(link) = link else {
+            had_missing = true;
+            continue;
         };
+        next_ordinal += 1;
+        let old_ordinal = i + 1;
+        remap[old_ordinal] = Some(next_ordinal);
+        if next_ordinal != old_ordinal {
+            shifted = true;
+        }
+        let rid = format!("rId{next_ordinal}");
+        let part_name = format!("xl/externalLinks/externalLink{next_ordinal}.xml");
+        let (xml, rels) = external_link_part_xml(link);
         p.rels.push(PreservedRel { id: rid.clone(), rel_type: format!("{NS_REL}/externalLink"), target: part_name.clone(), external: false });
         p.parts.push(PreservedPart { name: part_name, content_type: CT_EXT_LINK.into(), data: xml.into_bytes().into(), rels });
         let _ = write!(refs_xml, "<externalReference r:id=\"{rid}\"/>");
     }
+    if had_missing {
+        report.warn("XLSB: unresolved external link kept its cached values; its target could not be preserved");
+    }
+    if next_ordinal == 0 {
+        return (None, None);
+    }
     refs_xml.push_str("</externalReferences>");
     p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: refs_xml });
-    Some(p)
+    (Some(p), shifted.then_some(remap))
+}
+
+fn remap_workbook_external_ordinals(wb: &mut Workbook, remap: &[Option<usize>]) {
+    for sheet_arc in &mut wb.sheets {
+        let sheet = Arc::make_mut(sheet_arc);
+        let coords: Vec<CellRef> = sheet.cells.iter().filter(|(_, c)| c.formula.is_some()).map(|(pos, _)| pos).collect();
+        for pos in coords {
+            let Some(cell) = sheet.cells.get_mut(pos) else { continue };
+            let Some(fm) = &cell.formula else { continue };
+            if let Some(rewritten) = remap_external_formula(&fm.text, remap) {
+                let mut updated = (**fm).clone();
+                updated.text = rewritten;
+                cell.formula = Some(Arc::new(updated));
+            }
+        }
+    }
+    for name in &mut wb.names {
+        if let Some(rewritten) = remap_external_formula(&name.formula, remap) {
+            name.formula = rewritten;
+        }
+    }
+}
+
+fn remap_external_formula(text: &str, remap: &[Option<usize>]) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut out: Option<String> = None;
+    let mut i = 0;
+    let mut copied = 0;
+    let mut in_string = false;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            in_string = !in_string;
+            i += 1;
+            continue;
+        }
+        if !in_string && bytes[i] == b'[' {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j > i + 1
+                && j < bytes.len()
+                && bytes[j] == b']'
+                && let Ok(old) = text[i + 1..j].parse::<usize>()
+                && let Some(&Some(new_n)) = remap.get(old)
+                && new_n != old
+            {
+                let buf = out.get_or_insert_with(|| String::with_capacity(text.len()));
+                buf.push_str(&text[copied..=i]);
+                let _ = write!(buf, "{new_n}]");
+                i = j + 1;
+                copied = i;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if let Some(mut buf) = out {
+        buf.push_str(&text[copied..]);
+        Some(buf)
+    } else {
+        None
+    }
 }
 
 fn external_link_part_xml(link: &craft_xlsx::ExternalLink) -> (String, Vec<PreservedRel>) {
