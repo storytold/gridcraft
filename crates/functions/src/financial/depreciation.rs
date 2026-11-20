@@ -117,9 +117,18 @@ pub(super) fn vdb(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(total)
 }
 
+/// The day-count basis of AMORLINC and AMORDEGRC: 0, 1, 3 or 4. Excel has no Actual/360 basis
+/// for these two and answers basis 2 with #NUM!, though every other financial function takes it.
+fn amor_basis_arg(a: &[Arg], i: usize) -> R<u32> {
+    match basis_arg(a, i)? {
+        2 => Err(CellError::Num),
+        b => Ok(b),
+    }
+}
+
 pub(super) fn amorlinc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (cost, purchased, first, salvage) = (num(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
-    let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, basis_arg(a, 6)?);
+    let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, amor_basis_arg(a, 6)?);
     if cost < 0.0 || salvage < 0.0 || salvage > cost || period < 0.0 || rate <= 0.0 || first < purchased {
         return Err(CellError::Num);
     }
@@ -135,7 +144,7 @@ pub(super) fn amorlinc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 
 pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let (cost, purchased, first, salvage) = (num(a, 0)?, date(a, 1)?, date(a, 2)?, num(a, 3)?);
-    let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, basis_arg(a, 6)?);
+    let (period, rate, basis) = (num(a, 4)?.trunc(), num(a, 5)?, amor_basis_arg(a, 6)?);
     if cost < 0.0 || salvage < 0.0 || salvage > cost || period < 0.0 || rate <= 0.0 || first < purchased || period > 1e6 {
         return Err(CellError::Num);
     }
