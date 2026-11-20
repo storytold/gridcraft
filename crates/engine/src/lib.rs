@@ -202,6 +202,8 @@ pub struct DocState {
     /// `file.open` explicitly treated the source as a template. Kept separately from its name:
     /// callers may pass `template: true` for a source named `.xlsx`.
     template_source: bool,
+    /// The displayed title contains an output extension generated for an imported workbook.
+    generated_title_extension: bool,
     /// Per-sheet selection memory.
     pub sheet_selections: Vec<Selection>,
     /// Allow Edit Ranges unlocked with their password in this session: (sheet name, title).
@@ -358,6 +360,7 @@ impl DocState {
             uid: NEXT_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title,
             template_source: false,
+            generated_title_extension: false,
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
@@ -422,13 +425,17 @@ impl DocState {
         self.template_source = template;
     }
 
+    pub(crate) fn set_generated_title_extension(&mut self, generated: bool) {
+        self.generated_title_extension = generated;
+    }
+
     /// File-name stem for exports. A pathless title is treated as a stem unless its source has a
     /// known file type; this keeps `budget.2026` intact while turning an encrypted `Budget.xlsx`
     /// or imported workbook title into `Budget`.
     pub fn export_stem(&self) -> String {
         let title = self.display_title();
         let known_source = self.wb.source_path.as_ref().is_some_and(|path| crate::io::FileKind::from_path(&path.to_string_lossy()).is_some());
-        let strip_extension = self.path.is_some() || (!self.is_template_instance() && known_source);
+        let strip_extension = self.path.is_some() || (!self.is_template_instance() && (known_source || self.generated_title_extension));
         let stem =
             if strip_extension { std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or(&title) } else { &title };
         if stem.is_empty() { "Book1".to_string() } else { stem.to_string() }

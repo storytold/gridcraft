@@ -67,6 +67,14 @@ fn export_names_distinguish_pathless_sources_from_complete_stems() {
     doc.title = "Report.csv".into();
     std::sync::Arc::make_mut(&mut doc.wb).source_path = Some("Report.csv.xltx".into());
     assert_eq!(opened.doc().unwrap().export_stem(), "Report.csv");
+
+    let ods = ods_fixture();
+    let mut imported = s();
+    imported.execute("file.open", json!({"name": "budget.dat", "base64": crate::io::base64_encode(&ods)})).unwrap();
+    assert_eq!(imported.doc().unwrap().display_title(), "budget (imported).xlsx");
+    assert_eq!(imported.doc().unwrap().export_stem(), "budget (imported)");
+    assert_eq!(imported.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["name"], "budget (imported).xlsx");
+    assert_eq!(imported.execute("file.saveBytes", json!({"format": "csv"})).unwrap()["name"], "budget (imported).csv");
 }
 
 #[test]
