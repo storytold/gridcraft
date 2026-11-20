@@ -1135,6 +1135,21 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("\\@char has non-numeric argument {argument}", "\\@char の引数 {argument} が数値ではありません"),
     ("\\@char with invalid code point {code}", "\\@char のコード ポイント {code} が無効です"),
     ("Invalid environment name character: {character}", "環境名に無効な文字があります: {character}"),
+    // Data › Get Data (Text/CSV): Import Text/CSV (#2109)
+    ("Import Text/CSV", "テキスト/CSV のインポート"),
+    ("Detect automatically", "自動検出"),
+    ("Dot (1.5)", "ピリオド (1.5)"),
+    ("Comma (1,5)", "コンマ (1,5)"),
+    ("Based on first 200 rows", "最初の 200 行に基づく"),
+    ("Based on entire dataset", "データセット全体に基づく"),
+    ("Do not detect data types", "データ型を検出しない"),
+    ("Do not import column", "列をインポートしない"),
+    ("Choose at least one column to import.", "インポートする列を 1 つ以上選んでください。"),
+    ("Delimiter", "区切り記号"),
+    ("Decimal separator", "小数点の記号"),
+    ("Data Type Detection", "データ型検出"),
+    ("Rows of data:", "データの行数:"),
+    ("Load", "読み込み"),
 ];
 
 /// Labels of the ribbon menus, pop-ups and palettes that the reference catalog does not cover (the

@@ -1139,6 +1139,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char ha un argomento non numerico {argument}",
         "\\@char with invalid code point {code}" => "\\@char con punto di codice non valido {code}",
         "Invalid environment name character: {character}" => "Carattere non valido nel nome dell'ambiente: {character}",
+        // Data › Get Data (Text/CSV): Import Text/CSV (#2109)
+        "Import Text/CSV" => "Importa testo/CSV",
+        "Detect automatically" => "Rileva automaticamente",
+        "Dot (1.5)" => "Punto (1.5)",
+        "Comma (1,5)" => "Virgola (1,5)",
+        "Based on first 200 rows" => "In base alle prime 200 righe",
+        "Based on entire dataset" => "In base all'intero set di dati",
+        "Do not detect data types" => "Non rilevare i tipi di dati",
+        "Do not import column" => "Non importare la colonna",
+        "Choose at least one column to import." => "Scegli almeno una colonna da importare.",
+        "Delimiter" => "Delimitatore",
+        "Decimal separator" => "Separatore decimale",
+        "Data Type Detection" => "Rilevamento del tipo di dati",
+        "Rows of data:" => "Righe di dati:",
+        "Load" => "Carica",
         _ => return None,
     })
 }

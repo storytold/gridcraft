@@ -1131,6 +1131,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char має нечисловий аргумент {argument}",
         "\\@char with invalid code point {code}" => "\\@char з неприпустимою кодовою точкою {code}",
         "Invalid environment name character: {character}" => "Неприпустимий символ у назві середовища: {character}",
+        // Data › Get Data (Text/CSV): Import Text/CSV (#2109)
+        "Import Text/CSV" => "Імпорт тексту/CSV",
+        "Detect automatically" => "Визначати автоматично",
+        "Dot (1.5)" => "Крапка (1.5)",
+        "Comma (1,5)" => "Кома (1,5)",
+        "Based on first 200 rows" => "На основі перших 200 рядків",
+        "Based on entire dataset" => "На основі всього набору даних",
+        "Do not detect data types" => "Не визначати типи даних",
+        "Do not import column" => "Не імпортувати стовпець",
+        "Choose at least one column to import." => "Виберіть принаймні один стовпець для імпорту.",
+        "Delimiter" => "Роздільник",
+        "Decimal separator" => "Десятковий роздільник",
+        "Data Type Detection" => "Визначення типу даних",
+        "Rows of data:" => "Рядків даних:",
+        "Load" => "Завантажити",
         _ => return None,
     })
 }

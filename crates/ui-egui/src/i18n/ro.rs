@@ -1189,6 +1189,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char are un argument nenumeric {argument}",
         "\\@char with invalid code point {code}" => "\\@char cu punct de cod nevalid {code}",
         "Invalid environment name character: {character}" => "Caracter nevalid în numele mediului: {character}",
+        // Data › Get Data (Text/CSV): Import Text/CSV (#2109)
+        "Import Text/CSV" => "Importare text/CSV",
+        "Detect automatically" => "Detectare automată",
+        "Dot (1.5)" => "Punct (1.5)",
+        "Comma (1,5)" => "Virgulă (1,5)",
+        "Based on first 200 rows" => "Pe baza primelor 200 de rânduri",
+        "Based on entire dataset" => "Pe baza întregului set de date",
+        "Do not detect data types" => "Nu se detectează tipurile de date",
+        "Do not import column" => "Nu se importă coloana",
+        "Choose at least one column to import." => "Alegeți cel puțin o coloană de importat.",
+        "Delimiter" => "Delimitator",
+        "Decimal separator" => "Separator zecimal",
+        "Data Type Detection" => "Detectarea tipului de date",
+        "Rows of data:" => "Rânduri de date:",
+        "Load" => "Încărcare",
         _ => return None,
     })
 }
