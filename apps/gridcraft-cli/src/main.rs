@@ -367,7 +367,7 @@ fn print_range(s: &mut Session, range: Option<&str>, sheet: Option<&str>, formul
         let mut line = String::new();
         for (ci, cell) in r.iter().enumerate() {
             let w = widths.get(ci).copied().unwrap_or(0);
-            let cell: String = cell.chars().map(|c| if c == '\n' || c == '\t' { ' ' } else { c }).collect();
+            let cell: String = cell.chars().map(|c| if c == '\n' || c == '\r' || c == '\t' { ' ' } else { c }).collect();
             if ci > 0 {
                 line.push_str("  ");
             }
