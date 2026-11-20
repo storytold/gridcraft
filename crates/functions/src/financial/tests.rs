@@ -246,6 +246,10 @@ fn securities() {
     close_tol(ev("TBILLYIELD", vec![d(2008, 3, 31), d(2008, 6, 1), n(98.45)]), 0.091417, 1e-6);
     close_tol(ev("TBILLEQ", vec![d(2008, 3, 31), d(2008, 6, 1), n(0.0914)]), 0.094151, 1e-6);
     is_err(ev("TBILLPRICE", vec![d(2008, 3, 31), d(2009, 6, 1), n(0.09)]), CellError::Num);
+    // #4080: a discount that drives the price to zero or below is rejected on the short branch too.
+    is_err(ev("TBILLEQ", vec![d(2023, 1, 1), d(2023, 7, 2), n(2.0)]), CellError::Num);
+    is_err(ev("TBILLEQ", vec![d(2023, 1, 1), d(2023, 7, 1), n(2.0)]), CellError::Num);
+    close_tol(ev("TBILLEQ", vec![d(2023, 1, 1), d(2023, 6, 30), n(1.0)]), 2.0277777777777777, 1e-12);
     close_tol(ev("ACCRINTM", vec![d(2008, 4, 1), d(2008, 6, 15), n(0.1), n(1000.0), n(3.0)]), 20.54794521, 1e-9);
     is_err(ev("ACCRINTM", vec![d(2008, 6, 15), d(2008, 4, 1), n(0.1)]), CellError::Num);
     close_tol(ev("ACCRINT", vec![d(2008, 3, 1), d(2008, 8, 31), d(2008, 5, 1), n(0.1), n(1000.0), n(2.0), n(0.0)]), 16.66666667, 1e-9);
