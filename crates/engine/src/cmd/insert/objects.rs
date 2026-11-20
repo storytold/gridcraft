@@ -163,6 +163,7 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         line,
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
+        rotation: 0.0,
         math: Default::default(),
     };
     let sheet = d.wb.active_sheet();
@@ -300,9 +301,22 @@ fn move_anchor(a: &mut Anchor, p: &Json, at: Option<CellRef>) {
 pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
     let (sheet, o, kind, id) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
+    let rotation = f64_param(p, "rotation").filter(|v| v.is_finite());
+    if rotation.is_some() {
+        let ink = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.shapes.iter().any(|x| o.is_some_and(|o| x.id == o.id) && x.kind == ShapeKind::Ink));
+        if o.is_none_or(|o| o.kind != ObjKind::Shape) || ink {
+            return Err(bad("object.move", "only shapes other than ink rotate"));
+        }
+        if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected()) {
+            return Err(EngineError::Other(PROTECTED.into()));
+        }
+    }
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if let Some((gid, r)) = group_target(sh, &kind, id) {
+            if rotation.is_some() {
+                return Err(bad("object.move", "grouped objects do not support rotation"));
+            }
             let a = match r {
                 gridcraft_model::DrawingRef::Group(g) => sh.group_anchor(g),
                 _ => o.and_then(|o| sh.object_anchor(o)),
@@ -317,6 +331,11 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(o) = o else { return Err(bad("object.move", "no such object")) };
         let Some(a) = sh.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
         move_anchor(a, p, at);
+        if let Some(r) = rotation
+            && let Some(shape) = sh.shapes.iter_mut().find(|x| x.id == o.id)
+        {
+            shape.rotation = r.rem_euclid(360.0) as f32;
+        }
         Ok(Json::Null)
     })
 }

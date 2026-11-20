@@ -196,6 +196,7 @@ pub(super) fn read(obj: &El, anchor: Anchor, grouped: bool) -> Option<Shape> {
         line,
         text,
         format: Default::default(),
+        rotation: 0.0,
         math: Default::default(),
     })
 }

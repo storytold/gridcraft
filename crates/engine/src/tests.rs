@@ -870,6 +870,65 @@ fn deleting_a_multi_area_row_selection_removes_every_area_and_undoes_once() {
 }
 
 #[test]
+#[allow(clippy::disallowed_methods)] // native-only test: timing the two deletes
+fn deleting_many_separate_rows_takes_about_as_long_as_one_block() {
+    // #2287: every 10th row of a 12,000-row sheet, as 1,200 single-row areas.
+    let (rows, step) = (12_000u32, 10u32);
+    let values: Vec<serde_json::Value> = (0..rows).map(|r| json!([r, r + 100_000, r + 200_000])).collect();
+    let deleted = |r: u32| r >= 1 && (r - 1).is_multiple_of(step);
+    let list = (0..rows).filter(|&r| deleted(r)).map(|r| format!("{0}:{0}", r + 1)).collect::<Vec<_>>().join(",");
+    let build = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1", "input": format!("=SUM(A1:A{rows})")})).unwrap();
+        s.execute("cell.set", json!({"cell": "E3", "input": "=B25"})).unwrap();
+        s
+    };
+    let mut block = build();
+    let t = std::time::Instant::now();
+    block.execute("home.deleteRows", json!({"rows": format!("2:{}", rows / step + 1)})).unwrap();
+    let block_time = t.elapsed();
+
+    let mut s = build();
+    let t = std::time::Instant::now();
+    s.execute("home.deleteRows", json!({"rows": list})).unwrap();
+    let separate_time = t.elapsed();
+
+    let kept: Vec<u32> = (0..rows).filter(|&r| !deleted(r)).collect();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert_eq!(sh.used_range().unwrap().end.row as usize, kept.len() - 1);
+    for (i, r) in kept.iter().enumerate() {
+        assert_eq!(sh.value(CellRef::new(i as u32, 0)), Value::Number(*r as f64));
+        assert_eq!(sh.value(CellRef::new(i as u32, 2)), Value::Number((*r + 200_000) as f64));
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "E1"})).unwrap()["formula"], format!("=SUM(A1:A{})", kept.len()));
+    // B25 loses rows 2, 12 and 22 above it; the formula itself moves from E3 to E2.
+    assert_eq!(s.execute("cell.get", json!({"cell": "E2"})).unwrap()["formula"], "=B22");
+    assert!(
+        separate_time < block_time * 20 + std::time::Duration::from_millis(500),
+        "separate rows took {separate_time:?}, one block took {block_time:?}"
+    );
+}
+
+#[test]
+fn deleting_many_separate_columns_matches_per_area_result() {
+    let mut s = s();
+    let values: Vec<serde_json::Value> = (0..50).map(|r| json!((0..40).map(|c| r * 100 + c).collect::<Vec<_>>())).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    s.execute("cell.set", json!({"cell": "A60", "input": "=SUM(A1:AN1)+H2"})).unwrap();
+    // Columns B, E, H (refs) and F:G.
+    s.execute("home.deleteColumns", json!({"cols": "B:B,E:E,H:H,F:G"})).unwrap();
+    let kept: Vec<u32> = (0..40).filter(|c| ![1, 4, 5, 6, 7].contains(c)).collect();
+    for r in 0..50u32 {
+        for (i, c) in kept.iter().enumerate() {
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(r, i as u32)), Value::Number((r * 100 + c) as f64));
+        }
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "A60"})).unwrap()["formula"], "=SUM(A1:AI1)+#REF!");
+}
+
+#[test]
 fn move_columns_reorders_without_overwriting_and_undoes_once() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4, 5, 6, 7, 8]]})).unwrap();
@@ -3078,9 +3137,10 @@ fn overlapping_spills_keep_the_one_that_exists_whichever_anchor_is_first() {
 #[test]
 fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
     use gridcraft_core::CellError::Spill;
-    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, takes
-    // its cells, shrinks back and lets it spill again, then the steps are undone, redone, edited
-    // inside the contested area and cleared. Every state must match a full recalc.
+    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, is
+    // #SPILL! because E10 holds those cells (as in Excel), shrinks back and spills again, then the
+    // steps are undone, redone, edited inside the contested area and cleared. Every state must
+    // match a full recalc.
     let mut s = s();
     s.execute("cell.set", json!({"cell": "H1", "input": "1"})).unwrap();
     s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(H1)"})).unwrap();
@@ -3102,18 +3162,18 @@ fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
         s.execute(id, params.clone()).unwrap();
         assert_matches_full_recalc(&s);
         if i == 0 {
-            // Both held a spill: reading order gives F8 the cells.
-            assert_eq!(v(&s, "F12"), Value::Number(5.0));
-            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+            // Both held a spill: E10 holds F10, so it keeps it and F8 is blocked.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 2 {
             assert_eq!(v(&s, "E10"), Value::Number(10.0));
             assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 3 {
-            // Undone back to the grown F8.
-            assert_eq!(v(&s, "F12"), Value::Number(5.0));
-            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+            // Undone back to the grown F8, blocked again.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 8 {
             assert_eq!((v(&s, "F8"), v(&s, "E10"), v(&s, "F9")), (Value::Empty, Value::Empty, Value::Empty));
@@ -3356,6 +3416,21 @@ fn a_spill_that_goes_away_unblocks_another() {
 }
 
 #[test]
+fn a_contested_spill_area_stays_with_its_array_after_reopening() {
+    // F13's array wants F14:G14, which C14's array already fills, so F13 is #SPILL!. The file
+    // can only cache #VALUE! for it; reopening (which recalculates) used to hand the area to F13
+    // for coming first in reading order.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C14", "input": "=SEQUENCE(1,7)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F13", "input": "=SEQUENCE(5,2)"})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "contested.xlsx", "base64": saved["base64"]})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!((v(&s, "C14"), v(&s, "G14"), v(&s, "I14")), (Value::Number(1.0), Value::Number(5.0), Value::Number(7.0)));
+}
+
+#[test]
 fn an_array_reading_another_arrays_spill_is_updated() {
     // G5 is evaluated before D11 in the same pass, so it first reads D11's old spill.
     let mut s = s();
@@ -3377,6 +3452,19 @@ fn indirect_reads_a_spill_laid_out_in_the_same_pass() {
     assert_eq!(v(&s, "E5"), Value::Number(9.0));
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert_eq!(v(&s, "E5"), Value::Number(9.0));
+}
+
+#[test]
+fn inserting_rows_lays_out_spills_where_the_formulas_moved() {
+    // D1's array grows with the inserted rows to D1:D10 and C10's array moves down to C12:E14:
+    // the area C10:E12 it filled before the insertion blocks neither of them.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(ROWS(A2:A9))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C8", "input": "=1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C10", "input": "=SEQUENCE(3,3)"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "3:4"})).unwrap();
+    assert_eq!((v(&s, "D1"), v(&s, "D10")), (Value::Number(1.0), Value::Number(10.0)));
+    assert_eq!((v(&s, "C12"), v(&s, "D12"), v(&s, "E14")), (Value::Number(1.0), Value::Number(2.0), Value::Number(9.0)));
 }
 
 #[test]
@@ -5893,6 +5981,56 @@ fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
 }
 
 #[test]
+fn object_move_refuses_to_rotate_ink() {
+    let mut s = s();
+    let id = s.execute("draw.stroke", json!({"points": [[0, 0], [30, 20], [60, 5]]})).unwrap()["shape"].clone();
+    assert!(s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": 45})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+}
+
+#[test]
+fn object_move_rotates_shapes_only() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": -30})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 330.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let chart = s.execute("insert.chart", json!({"type": "column"})).unwrap()["chart"].clone();
+    assert!(s.execute("object.move", json!({"kind": "chart", "id": chart, "rotation": 45})).is_err());
+}
+
+#[test]
+fn object_move_rotation_respects_sheet_protection() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle", "at": "A1"})).unwrap()["shape"].clone();
+    let id_num = id.as_u64().unwrap() as u32;
+    let shape_state = |session: &Session| {
+        let doc = session.doc().unwrap();
+        let shape = doc.wb.active().unwrap().shapes.iter().find(|shape| shape.id == id_num).unwrap();
+        (shape.anchor, shape.rotation)
+    };
+
+    // Rotation remains available on an unprotected sheet.
+    s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "B2", "rotation": 45})).unwrap();
+    let (anchor, rotation) = shape_state(&s);
+    assert_eq!(rotation, 45.0);
+    assert_eq!(anchor.cell, CellRef::parse("B2").unwrap());
+    s.execute("edit.undo", json!({})).unwrap();
+
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = shape_state(&s);
+    let undo_len = s.doc().unwrap().undo.len();
+
+    let result = s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "C3", "rotation": 90}));
+    assert!(result.is_err(), "rotation should be rejected on a protected sheet");
+    assert_eq!(shape_state(&s), before, "a rejected rotation leaves the shape unchanged");
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+}
+
+#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {
@@ -6814,6 +6952,7 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod chart_data;
 mod controls;
 mod equation;
 mod json_golden;

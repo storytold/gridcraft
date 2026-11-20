@@ -22,7 +22,7 @@ mod window;
 
 pub(crate) use cells::is_checkbox_cell;
 use cells::{background, checkbox, draw_border, new_cell_style, recently_used, theme_colors, theme_fonts, toggle_checkbox, use_in_formula};
-use chart::{add_element, change_colors, format_series, move_chart, quick_layout, select_data};
+use chart::{add_element, change_colors, format_series, move_chart, quick_layout, select_data, set_values_range};
 use data::{from_csv, from_table_range, queries, table_resize};
 use objects::{align, arrange, rotate, selection_pane, shape_fill, shape_outline};
 pub(crate) use scripts::has_scripts;
@@ -60,6 +60,16 @@ pub fn specs() -> Vec<CommandSpec> {
             "{chart?, range?: \"Sheet1!A1:D7\", byRows?: bool, categories?: \"Sheet1!A2:A7\" (Horizontal (Category) Axis Labels for every series; \"\" clears), removeSeries?: [index…]}",
             has_doc,
             select_data
+        ),
+        // Dragging a corner of a selected chart's values outline on the sheet (#4389).
+        cmd!(
+            "chart.setValuesRange",
+            "Resize Chart Data",
+            [],
+            None,
+            "{chart?, range: \"B2:C9\" (the block every series' values come from, one column or row per series, on the data's sheet; names and category labels that line up follow it, series keep their formatting)}",
+            has_doc,
+            set_values_range
         ),
         cmd!("chart.changeType", "Change Chart Type…", ["Chart Design", "Type"], None, "{chart?, type, subtype?}", has_doc, |s, p| s
             .execute("chart.set", p.clone())),
