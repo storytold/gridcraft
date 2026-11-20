@@ -400,22 +400,27 @@ pub(super) fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
         return Err(CellError::NA);
     }
     let n = s.len() as f64;
-    let rank_of = |v: f64| -> f64 {
-        let less = s.iter().filter(|&&y| y < v).count() as f64;
+    // Rank of the value at sorted position `pos` (0-based).
+    let rank_at = |pos: f64| -> f64 {
         if exc {
-            (less + 1.0) / (n + 1.0)
+            (pos + 1.0) / (n + 1.0)
         } else if n <= 1.0 {
             1.0
         } else {
-            less / (n - 1.0)
+            pos / (n - 1.0)
         }
     };
+    let less = s.iter().filter(|&&y| y < x).count() as f64;
     let r = if s.contains(&x) {
-        rank_of(x)
+        // An exact match takes the position of its first copy.
+        rank_at(less)
     } else {
+        // Between two values Excel interpolates from the last copy of the
+        // lower value (position less - 1) to the first copy of the higher
+        // one (position less).
         let lo = s.iter().copied().filter(|&y| y < x).fold(f64::NEG_INFINITY, f64::max);
         let hi = s.iter().copied().filter(|&y| y > x).fold(f64::INFINITY, f64::min);
-        let (rl, rh) = (rank_of(lo), rank_of(hi));
+        let (rl, rh) = (rank_at(less - 1.0), rank_at(less));
         rl + (x - lo) / (hi - lo) * (rh - rl)
     };
     // From significance 15 up Excel returns 15 significant digits, rounded.
