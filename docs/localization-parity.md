@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-15 · **Change:** minor (RaTeX equation parser messages follow the interface language); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Arabic PDF export no longer fails when a character or the Arabic font is missing; Arabic PDF cells keep their reading direction and RTL pages mirror); previously minor (Brazilian Portuguese function help); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-20 · **Change:** minor (PDF export embeds a subset system TrueType face for text outside WinAnsiEncoding: Vietnamese, Czech, Greek and Cyrillic print with real glyphs, measured with the embedded advances; RaTeX equation parser messages follow the interface language); previously minor (status bar statistics, resize tips, picture-in-cell text, sheet notes, Format Control title, equation errors, Goal Seek and macro toasts follow the interface language); previously minor (Arabic PDF export no longer fails when a character or the Arabic font is missing; Arabic PDF cells keep their reading direction and RTL pages mirror); previously minor (Brazilian Portuguese function help); previously minor (Ukrainian Chart is Діаграма); previously minor (Diagram and Decorative Text labels, Diagram distinct from Chart); previously minor (CJK fallback baseline alignment); previously minor (Arabic bidi display, editing and cell reading direction; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (Arabic font fallback; missing translations are listed by `cargo xtask i18n-report` and never fail a check); previously minor (number formats honour the `B1`/`B2` calendar prefixes, checked against Excel; earlier: missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks); previously minor (AutoFit estimates Arabic text width from measured glyph widths); previously minor (missing translations are listed by `cargo xtask i18n-report` and never fail a check; Arabic text sorts by its letters, not its vowel marks) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Per-language status against Excel, which ships its UI in dozens of languages (Windows language
 packs cover 100+), with localized function names, argument separators, number and date formats,
@@ -91,8 +91,14 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 - **Names in any script.** Defined names (Define Name, Create from Selection) are limited to
   255 characters, counted as characters rather than UTF-8 bytes, so a 255-letter Arabic name is
   accepted as in Excel. Sheet names already counted characters (31).
-- **PDF export** shapes Arabic with embedded Noto Arabic glyph outlines; CJK uses a predefined,
-  non-embedded Adobe-GB1 CID font (#1912); Devanagari and Thai cannot export yet.
+- **PDF export** sets text outside WinAnsiEncoding in an embedded, subset system TrueType face
+  standing in for the standard font when that face has the glyphs: Vietnamese, Czech, Greek,
+  Cyrillic and the rest of Latin Extended, measured with the embedded advances. Text is not
+  normalized: a base letter followed by combining marks (`a` + U+0303 + U+0301) is drawn as those
+  glyphs, each with its own advance, not as one precomposed glyph. Arabic is shaped
+  with embedded Noto Arabic glyph outlines; CJK keeps a predefined, non-embedded Adobe-GB1 CID font
+  (#1912); Devanagari and Thai cannot export yet. The web build reads no system fonts, so there
+  the faces' characters keep the CID fallback.
 
 ## Languages
 
@@ -146,6 +152,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | PDF export: text outside WinAnsiEncoding is set in an embedded, subset system TrueType face — Vietnamese, Czech, Greek, Cyrillic and the rest of Latin Extended print with real glyphs instead of missing-glyph boxes, and the printed text copies and searches; measuring uses the embedded advances. CJK keeps the non-embedded Adobe-GB1 CID font; the web build reads no system fonts and keeps that fallback |
 | 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |
 | 2026-11-10 | minor | Diagram and Decorative Text labels in all 18 non-English catalogs; Diagram never repeats the catalog's chart word (German `Schema`, Ukrainian `Схема`, Romanian `Schemă`), see [feature-names.md](feature-names.md) |

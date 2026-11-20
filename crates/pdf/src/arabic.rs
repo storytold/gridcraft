@@ -44,7 +44,16 @@ pub(crate) fn shaped(font: Font, text: &str) -> bool {
 }
 
 pub(crate) fn needed(text: &str) -> bool {
-    text.chars().any(|ch| matches!(ch as u32, 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x089f | 0x08a0..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x10e60..=0x10e7f | 0x1ee00..=0x1eeff))
+    text.chars().any(is_arabic)
+}
+
+/// Whether `c` belongs to a script the Arabic shaper handles. A stand-in Latin face must not draw
+/// such a character without shaping, so it stays on the CID/glyph fallback.
+pub(crate) fn is_arabic(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x089f | 0x08a0..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x10e60..=0x10e7f | 0x1ee00..=0x1eeff
+    )
 }
 
 fn bold(font: Font) -> bool {

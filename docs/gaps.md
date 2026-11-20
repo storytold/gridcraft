@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-13 · **Change:** minor (§5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-18 · **Change:** minor (§5: PDF embeds a subset system face for text outside WinAnsiEncoding, so Vietnamese, Czech, Greek and Cyrillic print; CJK and other scripts remain); earlier: §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -60,19 +60,23 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
 ### 5. Text in non-Latin scripts doesn't render or export (L)
-- **Missing:** cross-platform script coverage, Devanagari/Thai shaping verification, non-Latin PDF outside Arabic and Arabic UI layout.
+- **Missing:** cross-platform script coverage, Devanagari/Thai shaping verification, CJK and remaining scripts in PDF, Arabic UI layout.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32); #142
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora). Arabic shared shaping/bidi,
   editing and cell Context/LTR/RTL now have focused regressions and full gates. Arabic font
   delivery and PDF output are separate PRs; other script shaping still needs verification.
-- **Missing:** CJK font fallback, complex shaping (Arabic, Devanagari, Thai), bidi, non-Latin PDF outside Arabic.
+- **Missing:** complex shaping (Arabic, Devanagari, Thai), bidi, CJK PDF outside the non-embedded CID font.
 - **Evidence:** system-font fallback for CJK, Thai and Hebrew landed in #38 (closed #32), and for
   Arabic (system, fontconfig and craft-fonts faces); a UI font with Arabic of its own (DejaVu Sans
   in the Flatpak) still draws interface Arabic ahead of fontconfig's choice (#229); #142
   (Chinese text) awaits confirmation; #54 (symbols as boxes on Fedora); no shaping for Arabic or
-  Devanagari in the UI. PDF now shapes Arabic with licensed glyph outlines, preserves cell reading direction, and mirrors RTL sheets.
+  Devanagari in the UI. PDF now shapes Arabic with licensed glyph outlines, preserves cell reading direction, and mirrors RTL sheets. Text outside WinAnsiEncoding that an installed
+  system face covers — Vietnamese (the missing-glyph boxes reported for printing, #446/#2039),
+  Czech, Greek, Cyrillic — is embedded as a subset TrueType face with matching advances, so it
+  prints and copies correctly; CJK still uses the non-embedded Adobe-GB1 CID font, and the web
+  build (no system fonts) keeps that fallback.
 - **Impact:** blocks most of the world's users even with an English UI.
-- **Estimate:** 12–20 h. [localization-parity.md](localization-parity.md)
+- **Estimate:** 12–20 h → 8–14 h (non-WinAnsi Latin, Greek and Cyrillic in PDF done). [localization-parity.md](localization-parity.md)
 
 ### 6. Calculation correctness bugs (F)
 - **Missing:** nothing known. The four this entry tracked have landed: 15-significant-digit
@@ -196,6 +200,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-18 | minor | §5: PDF sets text outside WinAnsiEncoding in an embedded, subset system TrueType face (Vietnamese, Czech, Greek, Cyrillic), measured with the embedded advances; CJK keeps the non-embedded CID font and other scripts still cannot export |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

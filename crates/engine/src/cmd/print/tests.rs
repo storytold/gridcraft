@@ -1250,3 +1250,40 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
+
+/// Whether this machine has a font the PDF writer can embed for Vietnamese text. The check draws
+/// each character the export test relies on the way printing does and requires the embedded face
+/// for both: `/FontFile2` alone only proves that one of them was embedded. A machine without such
+/// a font skips the test rather than failing, as the other real-font tests do.
+fn vietnamese_pdf_face_available() -> bool {
+    let embeds = |text: &str, cid_hex: &str| {
+        let mut doc = gridcraft_pdf::PdfDoc::new();
+        doc.add_page(100.0, 100.0).text(0.0, 50.0, 10.0, Font::Helvetica, [0, 0, 0], text);
+        // An export that writes but embeds nothing means no usable font; an export that fails is a
+        // bug in the writer, and must fail the test instead of skipping it.
+        let pdf = doc.finish().expect("a two-character export writes a PDF");
+        contains(&pdf, "/FontFile2") && !contains(&pdf, cid_hex)
+    };
+    embeds("ệ", "<1EC7> Tj") && embeds("ế", "<1EBF> Tj")
+}
+
+#[test]
+fn vietnamese_cells_print_with_an_embedded_face_instead_of_missing_glyph_boxes() {
+    if !vietnamese_pdf_face_available() {
+        eprintln!("diagnostic: no Vietnamese-capable system font; the embedded-face print check was not run");
+        return;
+    }
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Tiếng Việt"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Đường phố Hà Nội"})).unwrap();
+    let (pdf, _) = pdf_of(&mut s, json!({}));
+    assert!(contains(&pdf, "/FontFile2"), "the Vietnamese glyphs are embedded in the PDF");
+    assert!(contains(&pdf, "/Identity-H"));
+    assert!(contains(&pdf, "/ToUnicode"), "the printed text stays searchable");
+    // The characters used to reach the non-embedded Adobe-GB1 CID font, which has no glyphs for
+    // them; they are no longer set there.
+    assert!(!contains(&pdf, "<1EBF> Tj"), "ế must not be a CID code point");
+    assert!(!contains(&pdf, "<1EC7> Tj"), "ệ must not be a CID code point");
+    // The Latin letters of those cells still print in the standard font.
+    assert!(contains(&pdf, "(Ti) Tj") && contains(&pdf, "(ng Vi) Tj"), "Latin text keeps Helvetica");
+}
