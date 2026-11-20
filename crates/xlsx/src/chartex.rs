@@ -43,6 +43,24 @@ pub fn requires(k: ChartKind) -> (&'static str, &'static str) {
 
 // ---------------------------------------------------------------- reading
 
+fn chartex_formula(dim: &El) -> Option<String> {
+    let f = dim.child("f")?;
+    Some(crate::fmla::from_file(&crate::chart::chart_ref_from_file(&f.text)))
+}
+
+fn chartex_text(tx: &El) -> Option<String> {
+    if let Some(d) = tx.child("txData") {
+        if let Some(f) = d.child("f") {
+            return Some(crate::chart::chart_ref_from_file(&f.text));
+        }
+        return d.child("v").map(|v| v.text.clone());
+    }
+    let rich = tx.child("rich")?;
+    let paras: Vec<String> = rich.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect()).collect();
+    let s = paras.join("\n");
+    if s.is_empty() { None } else { Some(s) }
+}
+
 pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&El>) -> Option<Chart> {
     use craft_drawingml::chart::ChartType;
     let kind = match dc.kind {
@@ -55,6 +73,20 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         _ => return None,
     };
     let default_quartiles = if dc.inclusive_quartiles { QuartileMethod::Inclusive } else { QuartileMethod::Exclusive };
+    let data: Vec<(String, Option<String>, Option<String>)> = root
+        .and_then(|r| r.child("chartData"))
+        .map(|cd| {
+            cd.kids("data")
+                .map(|d| {
+                    let id = d.attr("id").unwrap_or("").to_string();
+                    let cat =
+                        d.kids("strDim").chain(d.kids("numDim")).find(|x| matches!(x.attr("type"), Some("cat" | "x"))).and_then(chartex_formula);
+                    let val = d.kids("numDim").find(|x| matches!(x.attr("type"), Some("val" | "size" | "y"))).and_then(chartex_formula);
+                    (id, cat, val)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let series_els: Vec<&El> = root
         .and_then(|r| r.path(&["chart", "plotArea", "plotAreaRegion"]))
         .map(|region| region.kids("series").filter(|s| s.attr("layoutId") != Some("paretoLine")).collect())
@@ -64,6 +96,12 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         .into_iter()
         .enumerate()
         .map(|(idx, s)| {
+            let sel = series_els.get(idx).copied();
+            let (cat, val) = sel
+                .and_then(|el| el.child_val("dataId"))
+                .and_then(|id| data.iter().find(|(i, _, _)| i == id))
+                .map(|(_, c, v)| (c.clone(), v.clone()))
+                .unwrap_or_default();
             let color = s
                 .fill
                 .as_ref()
@@ -72,20 +110,20 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
                     _ => None,
                 })
                 .filter(|c| *c != gridcraft_model::Color::Theme(4 + (idx % 6) as u8, 0));
-            let quartiles = series_els
-                .get(idx)
+            let quartiles = sel
                 .and_then(|el| el.path(&["layoutPr", "statistics"]))
                 .and_then(|st| st.attr("quartileMethod"))
                 .map(|m| if m == "inclusive" { QuartileMethod::Inclusive } else { QuartileMethod::Exclusive })
                 .unwrap_or(default_quartiles);
-            Series {
-                quartiles,
-                name: s.refs.name.as_deref().map(crate::chart::chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
-                categories: s.refs.categories.as_deref().map(|f| crate::fmla::from_file(&crate::chart::chart_ref_from_file(f))),
-                values: s.refs.values.as_deref().map(|f| crate::fmla::from_file(&crate::chart::chart_ref_from_file(f))).unwrap_or_default(),
-                color,
-                ..Default::default()
-            }
+            let name = sel
+                .and_then(|el| el.child("tx"))
+                .and_then(chartex_text)
+                .or_else(|| s.refs.name.as_deref().map(crate::chart::chart_ref_from_file))
+                .or_else(|| (!s.name.is_empty()).then_some(s.name));
+            let categories = cat.or_else(|| s.refs.categories.as_deref().map(|f| crate::fmla::from_file(&crate::chart::chart_ref_from_file(f))));
+            let values =
+                val.or_else(|| s.refs.values.as_deref().map(|f| crate::fmla::from_file(&crate::chart::chart_ref_from_file(f)))).unwrap_or_default();
+            Series { quartiles, name, categories, values, color, ..Default::default() }
         })
         .collect();
     let legend = match dc.legend.as_deref() {
