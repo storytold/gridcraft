@@ -59,6 +59,13 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
+                    let provider = match crate::file_providers::install_for_services(&mut services, cc.egui_ctx.clone(), app_bridge.is_some()) {
+                        Ok(installation) => installation,
+                        Err(error) => {
+                            log::error!("file providers are unavailable: {error:?}");
+                            None
+                        }
+                    };
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -100,7 +107,7 @@ pub fn start() {
                         bridge.post_ready();
                     }
                     crate::api::install(&mut app, cc.egui_ctx.clone());
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs, _provider: provider }))
                 }),
             )
             .await;
@@ -129,6 +136,7 @@ struct WebShell {
     inbox: Inbox,
     bridge: Option<crate::host::Bridge>,
     prefs: crate::prefs::PrefsSync,
+    _provider: Option<crate::file_providers::Installation>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -158,6 +166,9 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host, ctx);
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {
@@ -181,6 +192,9 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        if let Some(host) = &self.app.services.file_providers {
+            crate::file_providers::publish(host, ui.ctx());
+        }
         if let Some(bridge) = &self.bridge {
             bridge.sync(&mut self.app);
         }
@@ -191,6 +205,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
     Services {
+        provider_download: Some(Box::new(download)),
         copy_html: Some(Box::new(copy_html)),
         open_async: Some(Box::new(move || {
             let inbox = open_inbox.clone();

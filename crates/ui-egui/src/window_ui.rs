@@ -36,6 +36,15 @@ pub struct WindowUi {
 }
 
 impl WindowUi {
+    /// A closed window's draft still belongs to its workbook, not to whichever window is active.
+    fn draft_document(&self) -> Option<u64> {
+        self.editor.as_ref().map(|edit| edit.doc).or_else(|| self.text_box_editor.as_ref().map(|edit| edit.view_key().0))
+    }
+
+    fn has_open_draft(&self, session: &gridcraft_engine::Session) -> bool {
+        self.draft_document().is_some_and(|uid| session.doc_window(uid).is_some())
+    }
+
     /// A new window's state. The last border, fill and font colour picked carry over, as they are
     /// the user's recent choices rather than the window's; so does the ribbon tab.
     fn fresh(like: &grid::GridState, ribbon_tab: &str) -> WindowUi {
@@ -92,6 +101,98 @@ impl SheetApp {
         std::mem::swap(&mut self.ui.keytip_invoke_next, keytip_invoke_next);
     }
 
+    /// Pending workbook edits can be parked in another window while a save is awaiting a choice.
+    pub(crate) fn provider_drafts_for(&self, uid: u64) -> bool {
+        let owned = |editor: &Option<editor::EditState>, text: &Option<text_box::EditState>| {
+            editor.as_ref().is_some_and(|edit| edit.doc == uid) || text.as_ref().is_some_and(|edit| edit.belongs_to(uid))
+        };
+        owned(&self.editor, &self.text_box_editor) || self.parked.values().any(|state| owned(&state.editor, &state.text_box_editor))
+    }
+
+    /// Resolve every window's draft for this workbook without touching another workbook's draft.
+    pub(crate) fn settle_provider_drafts(&mut self, uid: u64) -> Result<(), String> {
+        self.follow_active_window();
+        let mut windows = self
+            .parked
+            .iter()
+            .filter(|(_, state)| {
+                state.editor.as_ref().is_some_and(|edit| edit.doc == uid) || state.text_box_editor.as_ref().is_some_and(|edit| edit.belongs_to(uid))
+            })
+            .map(|(window, _)| *window)
+            .collect::<Vec<_>>();
+        if (self.editor.as_ref().is_some_and(|edit| edit.doc == uid) || self.text_box_editor.as_ref().is_some_and(|edit| edit.belongs_to(uid)))
+            && let Some(window) = self.ui_window
+        {
+            windows.push(window);
+        }
+        let back = self.session.active_window();
+        for window in windows {
+            let recovered = self.recover_draft_window(window)?;
+            self.enter_window(recovered);
+            // A refusal keeps its original window and draft in front, as a native file command does.
+            self.settle_drafts()?;
+            self.store_view_state();
+            if recovered != window {
+                // A successful capture needs no extra window. On refusal the recovery window
+                // stays open instead, so the person can correct or cancel the actual draft.
+                self.session.close_window(recovered);
+                self.follow_active_window();
+            }
+        }
+        if let Some(back) = back {
+            self.enter_window(back);
+        }
+        if self.session.active().is_some_and(|doc| doc.uid == uid) {
+            self.store_view_state();
+        }
+        Ok(())
+    }
+
+    /// Restores a closed window's draft in an isolated window of its original, still-open workbook.
+    /// Never replace another window's editor or silently discard a refused cell/text-box edit.
+    pub(crate) fn recover_draft_window(&mut self, window: u64) -> Result<u64, String> {
+        if self.session.window(window).is_some() {
+            return Ok(window);
+        }
+        let state = self.parked.get(&window).ok_or("The draft window is no longer available")?;
+        let uid = state.draft_document().ok_or("The closed window has no draft to recover")?;
+        let owner = self.session.doc_window(uid).ok_or("The draft's workbook was closed")?;
+        let sheet = state
+            .editor
+            .as_ref()
+            .and_then(|edit| self.session.documents().iter().find(|doc| doc.uid == uid).and_then(|doc| edit.sheet_in(&doc.wb)))
+            .or_else(|| state.text_box_editor.as_ref().map(|edit| edit.view_key().1));
+        let back = self.session.active_window();
+        let mode = self.session.mode;
+        self.session.show_window(owner);
+        let recovered = self.session.new_window().map_err(|error| error.to_string());
+        let recovered = recovered.and_then(|recovered| {
+            if let Some(sheet) = sheet {
+                if !self.session.active().is_some_and(|doc| doc.wb.sheet(sheet).is_some()) {
+                    self.session.close_window(recovered);
+                    return Err("The draft's worksheet is no longer available".into());
+                }
+                // Restore the view without recording a synthetic sheet-activation macro step.
+                if let Some(doc) = self.session.active_mut() {
+                    doc.wb_switch_sheet(sheet);
+                }
+            }
+            Ok(recovered)
+        });
+        if let Some(back) = back {
+            self.session.show_window(back);
+        }
+        self.session.mode = mode;
+        let recovered = recovered?;
+        if let Some(mut state) = self.parked.remove(&window) {
+            if let Some(edit) = &mut state.editor {
+                edit.window = Some(recovered);
+            }
+            self.parked.insert(recovered, state);
+        }
+        Ok(recovered)
+    }
+
     /// The window whose interface state is in the per-window fields.
     pub fn ui_window(&self) -> Option<u64> {
         self.ui_window
@@ -99,17 +200,19 @@ impl SheetApp {
 
     /// Brings the per-window fields in line with the engine's active window, after a command (or
     /// a script) switched windows: the previous window's state is parked, the active one's swapped
-    /// in (a window never seen before starts fresh). A closed window's state is dropped.
+    /// in (a window never seen before starts fresh). Closed-window drafts remain recoverable while
+    /// their workbook is open; other state from closed windows is dropped.
     pub fn follow_active_window(&mut self) {
         let active = self.session.active_window();
         // A window hidden while parked (from another window's View › Hide) isn't drawn either:
         // its waiting key tip request goes, as it does for a window hidden as it is left.
         let session = &self.session;
         for (id, parked) in &mut self.parked {
-            if session.window(*id).is_some_and(|w| w.hidden) {
+            if session.window(*id).is_none_or(|w| w.hidden) {
                 parked.keytip_invoke_next = None;
             }
         }
+        self.parked.retain(|w, state| session.window(*w).is_some() || state.has_open_draft(session));
         if active == self.ui_window {
             return;
         }
@@ -127,13 +230,14 @@ impl SheetApp {
                 outgoing.keytip_invoke_next = None;
             }
             self.parked.insert(previous, outgoing);
+        } else if outgoing.has_open_draft(&self.session) {
+            outgoing.keytip_invoke_next = None;
+            self.parked.insert(previous, outgoing);
         }
         if let Some(mut incoming) = active.and_then(|w| self.parked.remove(&w)) {
             self.swap_window_ui(&mut incoming);
         }
         self.ui_window = active;
-        let session = &self.session;
-        self.parked.retain(|w, _| session.window(*w).is_some());
     }
 
     /// Activates window `id` (it becomes the most recently active) with its interface state.

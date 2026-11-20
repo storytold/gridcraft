@@ -87,6 +87,13 @@ impl SheetApp {
     /// workbook refuses stops the quit too, with its window in front and the reason shown.
     pub fn request_quit(&mut self, ctx: &egui::Context) {
         while let Some(window) = self.parked_window_with_draft() {
+            let window = match self.recover_draft_window(window) {
+                Ok(window) => window,
+                Err(error) => {
+                    self.alert(error);
+                    return;
+                }
+            };
             self.enter_window(window);
             if self.settle_drafts().is_err() {
                 return;
