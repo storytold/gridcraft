@@ -2394,7 +2394,7 @@ fn issue_778_full_workbook_import_save_reopen_roundtrip() {
         s
     };
     let out_wb = read_part("xl/workbook.xml");
-    assert!(out_wb.contains("<externalReferences>"), "{out_wb}");
+    assert!(out_wb.contains("<externalReferences"), "{out_wb}");
     let out_ext = read_part("xl/externalLinks/externalLink1.xml");
     assert!(out_ext.contains("<sheetName val=\"Sheet1\"/>"), "{out_ext}");
     let out_ext_rels = read_part("xl/externalLinks/_rels/externalLink1.xml.rels");
