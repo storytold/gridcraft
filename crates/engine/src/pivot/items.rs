@@ -46,7 +46,7 @@ impl From<PivotDateGroup> for Grouping {
 }
 
 fn cmp_items(a: &Item, b: &Item) -> Ordering {
-    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
+    a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| gridcraft_core::compare_text(&a.text, &b.text))
 }
 
 /// The caption and sort key of a date serial's part under a date grouping; `None` when the number
