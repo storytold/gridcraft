@@ -319,8 +319,9 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
-/// alignment and direction (`a:pPr algn`, `rtl`) and the first run's properties (`a:rPr`: size,
-/// bold, italic, fill, outline, `a:latin` typeface).
+/// alignment and direction (`a:pPr algn`, `rtl`) and the first run's properties (`a:rPr`,
+/// falling back to `a:pPr/a:defRPr` and `a:lstStyle`'s `a:lvl1pPr/a:defRPr` and
+/// `a:defPPr/a:defRPr`: size, bold, italic, fill, outline, and `a:latin`/`a:ea`/`a:cs` typeface).
 fn read_text_format(body: Option<&El>) -> ShapeFormat {
     let mut f = ShapeFormat::default();
     let Some(body) = body else { return f };
@@ -336,22 +337,50 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         _ => ShapeTextAlign::Left,
     });
     f.rtl = ppr.is_some_and(|p| p.flag("rtl", false));
-    let rpr = body.kids("p").flat_map(|p| p.kids("r")).find_map(|r| r.child("rPr"));
-    if let Some(r) = rpr {
-        // `sz` is in hundredths of a point (100..=400000 in the schema).
-        f.font_size = r.attr_f64("sz").filter(|v| v.is_finite()).map(|v| (v / 100.0).clamp(1.0, 4000.0) as f32);
-        f.bold = r.flag("b", false);
-        f.italic = r.flag("i", false);
-        f.font = r.child("latin").and_then(|l| l.attr("typeface")).filter(|t| !t.is_empty() && !t.starts_with('+')).map(str::to_string);
-        f.text_color = r.child("solidFill").and_then(dml_color);
-        f.text_shadow = r.child("effectLst").and_then(|e| e.child("outerShdw")).and_then(dml_color);
-        f.text_outline = r.child("ln").and_then(|l| {
-            let c = l.child("solidFill").and_then(dml_color)?;
+    let rprs = [
+        body.kids("p").flat_map(|p| p.kids("r")).find_map(|r| r.child("rPr")),
+        ppr.and_then(|p| p.child("defRPr")),
+        body.path(&["lstStyle", "lvl1pPr", "defRPr"]),
+        body.path(&["lstStyle", "defPPr", "defRPr"]),
+    ];
+    // `sz` is in hundredths of a point (100..=400000 in the schema).
+    f.font_size = rprs.into_iter().flatten().find_map(|r| r.attr_f64("sz").map(|v| (v / 100.0).clamp(1.0, 4000.0) as f32));
+    f.bold = rprs.into_iter().flatten().find_map(|r| r.attr_bool("b")).unwrap_or(false);
+    f.italic = rprs.into_iter().flatten().find_map(|r| r.attr_bool("i")).unwrap_or(false);
+    f.font = rprs.into_iter().flatten().find_map(|r| {
+        ["latin", "ea", "cs"]
+            .into_iter()
+            .find_map(|tag| r.child(tag).and_then(|l| l.attr("typeface")).filter(|t| !t.is_empty() && !t.starts_with('+')).map(str::to_string))
+    });
+    f.text_color = rprs
+        .into_iter()
+        .flatten()
+        .find_map(|r| {
+            if r.child("noFill").is_some() {
+                return Some(None);
+            }
+            r.child("solidFill").and_then(dml_color).map(Some)
+        })
+        .flatten();
+    f.text_shadow = rprs.into_iter().flatten().find_map(|r| r.child("effectLst").and_then(|e| e.child("outerShdw")).and_then(dml_color));
+    f.text_outline = rprs
+        .into_iter()
+        .flatten()
+        .find_map(|r| {
+            let l = r.child("ln")?;
+            if l.child("noFill").is_some() {
+                return Some(None);
+            }
+            let fill = l.child("solidFill")?;
+            if fill.children.iter().any(|c| c.child("alpha").and_then(|a| a.attr_i64("val")).is_some_and(|v| v <= 0)) {
+                return Some(None);
+            }
+            let c = dml_color(fill)?;
             // Width in EMU (12700 per point); Excel's default hairline is 0.75 pt.
-            let w = l.attr_f64("w").filter(|w| w.is_finite()).map_or(0.75, |w| (w / 12700.0).clamp(0.0, 100.0)) as f32;
-            Some((c, w))
-        });
-    }
+            let w = l.attr_f64("w").map_or(0.75, |w| (w / 12700.0).clamp(0.0, 100.0)) as f32;
+            Some(Some((c, w)))
+        })
+        .flatten();
     f
 }
 
@@ -741,7 +770,8 @@ fn run_props(f: &ShapeFormat, theme: &Theme) -> (String, String) {
         );
     }
     if let Some(font) = &f.font {
-        let _ = write!(body, "<a:latin typeface=\"{}\"/>", esc_attr(font));
+        let esc = esc_attr(font);
+        let _ = write!(body, "<a:latin typeface=\"{esc}\"/><a:ea typeface=\"{esc}\"/><a:cs typeface=\"{esc}\"/>");
     }
     (attrs, body)
 }
