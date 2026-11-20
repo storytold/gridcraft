@@ -172,9 +172,8 @@ The API is there in every mode, with or without a host. Opening a workbook, hand
 ## Renderer selection
 
 GridCraft's web build is the same egui app as the desktop one, compiled to wasm
-(`apps/gridcraft-web`). It renders with the backend `apps/gridcraft-web` selects (WebGPU
-where available, otherwise WebGL2). If the web app adds URL flags to force a backend (as the
-sibling Craft apps do with `?webgl` / `?cpu`), document them here; they also work on the
-iframe `src`.
+(`apps/gridcraft-web`). It renders with WebGPU where available, otherwise WebGL2.
+Add `?webgl` to the app URL to force WebGL2, or `&webgl` when other query options are already
+present (for example, `?host=parent&webgl`). The flag also works on the iframe `src`.
 
 A browser with neither WebGPU nor WebGL2 gets a message in place of the app.
