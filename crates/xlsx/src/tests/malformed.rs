@@ -503,6 +503,23 @@ fn shared_formula_copies_are_bounded() {
     assert!(rep.warnings.iter().any(|w| w.contains("shared formula is longer")), "{:?}", rep.warnings);
 }
 
+/// A shifted shared dependent can grow past the parser's length limit (each `A1` becomes
+/// `XFD1048576` in a far-away dependent). Such a dependent keeps its parsed tree, so it stays
+/// evaluable even though its text alone could no longer be re-parsed.
+#[test]
+fn a_shifted_shared_dependent_past_the_length_limit_keeps_its_tree() {
+    use gridcraft_core::CellRef;
+    // 8,190 characters: parseable as saved; shifted to XFD1048576 it prints 22,527.
+    let master = format!("A1{}", "+A1".repeat(2_047));
+    let rows = format!(
+        r#"<row r="1"><c r="A1"><f t="shared" si="0" ref="A1:XFD1048576">{master}</f><v>1</v></c></row><row r="1048576"><c r="XFD1048576"><f t="shared" si="0"/><v>7</v></c></row>"#
+    );
+    let (wb, _rep) = read_xlsx(&minimal(&format!("<sheetData>{rows}</sheetData>"), &[], "", "")).unwrap();
+    let fm = wb.sheets[0].cells.get(CellRef::new(1_048_575, 16_383)).unwrap().formula.as_ref().expect("the dependent keeps its formula");
+    assert!(fm.text.len() > gridcraft_formula::MAX_FORMULA_LEN, "the shifted text must pass the parser limit for this test to mean anything");
+    assert!(fm.expr().is_some(), "the over-limit dependent must keep its tree");
+}
+
 #[test]
 fn a_long_shared_master_expands_into_only_part_of_many_cells() {
     use gridcraft_core::{CellRef, Value};
