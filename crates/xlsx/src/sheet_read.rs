@@ -954,6 +954,8 @@ mod tests {
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],
+            pivot_charts: vec![],
+            chart_budget: crate::chart::ChartReadBudget::new(),
         }
     }
 
