@@ -10,17 +10,22 @@ const MAC: bool = cfg!(target_os = "macos");
 pub const MAC_TITLE_BAR: f32 = 28.0;
 
 /// The traffic lights as AppKit lays them out: button diameter, centre-to-centre pitch and the
-/// first button's left edge (8–10 pt depending on the macOS version; the larger value keeps the
-/// gap after them from shrinking).
-const MAC_LIGHT: f32 = 12.0;
+/// first button's left edge. Each takes the larger of the macOS versions' values (macOS 26 draws
+/// 14 pt lights 23 pt apart, earlier versions 12 pt lights 20 pt apart), so the gap after them
+/// never shrinks to nothing.
+const MAC_LIGHT: f32 = 14.0;
 
-const MAC_LIGHT_PITCH: f32 = 20.0;
+const MAC_LIGHT_PITCH: f32 = 23.0;
 
 const MAC_LIGHTS_LEFT: f32 = 10.0;
 
-/// Where title-bar content starts on macOS: the end of the three lights plus the gap the lights
-/// keep from the top of the window.
-pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+/// The gap between two title-bar icons' 16 pt glyph boxes: the theme's 6 pt item spacing plus
+/// the boxes' margins in their 26 pt buttons.
+const TITLE_ICON_GAP: f32 = 6.0 + (26.0 - 16.0);
+
+/// Where title-bar content starts on macOS: the end of the three lights plus the same gap the
+/// title-bar icons keep between themselves.
+pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + TITLE_ICON_GAP;
 
 /// Leave room for the macOS traffic lights when the content extends into the title bar.
 pub const TITLE_LEFT_PAD: f32 = if MAC { MAC_CONTENT_LEFT } else { 8.0 };
@@ -46,7 +51,8 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
         ui.horizontal_centered(|ui| {
-            ui.add_space(TITLE_LEFT_PAD);
+            // The traffic lights are in native points at every interface size; egui's are zoomed.
+            ui.add_space(if MAC { TITLE_LEFT_PAD / ui.ctx().zoom_factor() } else { TITLE_LEFT_PAD });
             // AutoSave toggle (saves after each change when the workbook has a file).
             ui.label(egui::RichText::new(app.ui.language.tr("AutoSave")).font(theme::ui_font(12.5)).color(t.text_dim));
             let on = app.ui.autosave;
@@ -329,10 +335,11 @@ mod title_bar_tests {
 
     #[test]
     fn mac_title_bar_centres_and_clears_the_traffic_lights() {
-        // The lights are centred in the bar, and content keeps the same gap after them.
-        let margin = (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+        // Content keeps the icons' own gap after the lights.
         let lights_end = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT;
-        assert_eq!(MAC_CONTENT_LEFT - lights_end, margin);
+        assert_eq!(MAC_CONTENT_LEFT - lights_end, TITLE_ICON_GAP);
+        // macOS 26's lights end at about 68 pt; content starting at 70 pt touched them.
+        const { assert!(MAC_CONTENT_LEFT >= 84.0) };
     }
 
     #[test]
