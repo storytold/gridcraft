@@ -2246,6 +2246,30 @@ fn slicer_filters_table() {
 }
 
 #[test]
+fn deleting_an_unfiltered_slicer_keeps_another_sheet_filter() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Qty"], ["East", 2], ["West", 5]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3", "name": "Sales"})).unwrap();
+    let slicer = s.execute("insert.slicer", json!({"table": "Sales", "column": "Region"})).unwrap()["slicer"].as_u64().unwrap();
+
+    s.execute("range.setValues", json!({"range": "D1", "values": [["Status"], ["Keep"], ["Drop"]]})).unwrap();
+    s.execute("selection.set", json!({"cell": "D1"})).unwrap();
+    s.execute("data.filter", json!({"range": "D1:D3"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "D", "values": ["Keep"]})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap();
+    let filter = before.autofilter.clone().unwrap();
+    assert_eq!(filter.range.a1(), "D1:D3");
+    assert_eq!(filter.criteria.len(), 1);
+    assert!(!before.is_row_hidden(1) && before.is_row_hidden(2));
+
+    s.execute("slicer.delete", json!({"slicer": slicer})).unwrap();
+    let after = s.doc().unwrap().wb.active().unwrap();
+    assert!(after.slicers.is_empty());
+    assert_eq!(after.autofilter.as_ref(), Some(&filter));
+    assert!(!after.is_row_hidden(1) && after.is_row_hidden(2));
+}
+
+#[test]
 fn accounting_format_takes_the_symbol_it_is_given() {
     // The command documents `symbol`; it used to be dropped, so only `$` was ever reachable
     // from the control channel (asking for lempiras, #1893, changed nothing).
