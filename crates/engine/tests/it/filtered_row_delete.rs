@@ -146,8 +146,10 @@ fn a_longer_list_keeps_every_hidden_row_and_its_formulas() {
     assert!(hidden(&s, last).iter().skip(1).all(|h| *h), "the rows that stayed are the hidden ones");
 }
 
+/// A row hidden by hand goes when it lies outside a filter's rows. Inside them it stays: a row has
+/// one `hidden` flag, so it cannot be told from a row the filter hides.
 #[test]
-fn rows_hidden_by_hand_in_the_selection_go() {
+fn rows_hidden_by_hand_go_outside_the_filters_rows_and_stay_inside_them() {
     // Without a filter: a row hidden by hand goes with the block.
     let mut s = Session::new();
     s.new_workbook();
@@ -163,6 +165,12 @@ fn rows_hidden_by_hand_in_the_selection_go() {
     s.execute("selection.set", json!({"range": "3:8"})).unwrap();
     s.execute("home.deleteRows", json!({})).unwrap();
     assert_eq!(column(&mut s, "A", 6), ["Name", "r1", "r3", "r5", "below2", ""], "rows 3, 5, 7 (shown) and 8 (hidden by hand) went");
+    // Inside the filter's rows: the shown row 3 hidden by hand stays with the rows the filter hides.
+    let mut s = blanks_filtered();
+    s.execute("home.hideRows", json!({"rows": "3:3"})).unwrap();
+    s.execute("selection.set", json!({"range": "3:5"})).unwrap();
+    s.execute("home.deleteRows", json!({})).unwrap();
+    assert_eq!(column(&mut s, "A", 6), ["Name", "r1", "r2", "r3", "r5", ""], "only the shown row 5 went");
 }
 
 #[test]

@@ -350,8 +350,10 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
 /// (`"3:3,7:8"`) or a multi-area selection yields several; `count` forces the single-area form.
 ///
 /// As in Excel, a row delete leaves the rows an applied filter hides, however the rows are named:
-/// each area is split around them, so only the rows that are shown (or hidden by hand) go.
-/// `includeFiltered` takes them too, for Insert Cut Cells closing the gap its moved rows left.
+/// each area is split around the rows `filtered_rows` returns, so the rows that are shown go, and
+/// rows hidden by hand outside a filter's rows. A row hidden by hand inside a filter's rows stays,
+/// as for the Clear commands: a row has one `hidden` flag. `includeFiltered` takes them all, for
+/// Insert Cut Cells closing the gap its moved rows left.
 fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
     let key = if axis == Axis::Rows { "rows" } else { "cols" };
     let spans: Vec<(u32, u32)> = if u32_param(p, "count").is_some() {
