@@ -811,7 +811,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         };
         let group_of = |i: usize, x: &Series| match group_for(kind_of(i, x)) {
             g @ (G::Bar { .. } | G::Area { .. }) => g,
-            G::Line { stacked, .. } => G::Line { stacked, markers: false },
+            G::Line { stacked, markers } => G::Line { stacked, markers },
             _ => G::Line { stacked: false, markers: false },
         };
         let mut prim_groups: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
@@ -924,9 +924,10 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             }));
         }
     }
-    if secondary.is_some() {
-        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true }));
+    if let Some(sec) = secondary {
+        let (cat_pos, val_pos) = if matches!(sec, G::Bar { bar: true, .. }) { ("l", "b") } else { ("b", "r") };
+        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: cat_pos, delete: true, grid: false, title: None, crosses_max: false }));
+        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: val_pos, delete: false, grid: false, title: None, crosses_max: true }));
     }
     if let Some(t) = &ch.data_table {
         let _ = write!(

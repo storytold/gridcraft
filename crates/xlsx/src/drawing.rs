@@ -254,13 +254,61 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
     Ok(())
 }
 
+const MAX_ANNOTATION_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ANNOTATION_RELS_BYTES: u64 = 4 * 1024 * 1024;
+
+fn optional_annotation_rels(cx: &mut Ctx<'_>, part: &str) -> Result<Option<Vec<crate::package::Rel>>, IoError> {
+    let rels_part = craft_opc::rels_path(part);
+    match cx.pkg.read_optional_limited(&rels_part, MAX_ANNOTATION_RELS_BYTES) {
+        Ok(Some(bytes)) => {
+            let rels = craft_opc::Rels::parse_in(&bytes, part, |n| cx.pkg.has(n).then(|| n.to_string()));
+            Ok(Some(
+                rels.list
+                    .into_iter()
+                    .map(|r| {
+                        let kind = r.kind().to_string();
+                        crate::package::Rel { id: r.id, kind, target: r.target, external: r.external }
+                    })
+                    .collect(),
+            ))
+        }
+        Ok(None) => Ok(Some(Vec::new())),
+        Err(IoError::TooLarge(m)) => Err(IoError::TooLarge(m)),
+        Err(e) => {
+            cx.warn(format!("skipped {rels_part}: {e}"));
+            Ok(None)
+        }
+    }
+}
+
+fn optional_annotation_xml(cx: &mut Ctx<'_>, part: &str) -> Result<Option<El>, IoError> {
+    match cx.pkg.read_optional_limited(part, MAX_ANNOTATION_BYTES) {
+        Ok(Some(b)) => match crate::xml::parse(&b) {
+            Ok(e) => Ok(Some(e)),
+            Err(e) => {
+                cx.warn(format!("skipped {part}: {part}: {e}"));
+                Ok(None)
+            }
+        },
+        Ok(None) => {
+            cx.warn(format!("missing part {part}"));
+            Ok(None)
+        }
+        Err(IoError::TooLarge(m)) => Err(IoError::TooLarge(m)),
+        Err(e) => {
+            cx.warn(format!("skipped {part}: {e}"));
+            Ok(None)
+        }
+    }
+}
+
 fn read_user_shapes(cx: &mut Ctx<'_>, chart_part: &str, chart_xml: &El, chart_anchor: Anchor, sheet: &mut Sheet) -> Result<(), IoError> {
     let Some(rid) = chart_xml.child("userShapes").and_then(|u| u.attr("id")) else { return Ok(()) };
-    let chart_rels = cx.pkg.rels(chart_part)?;
+    let Some(chart_rels) = optional_annotation_rels(cx, chart_part)? else { return Ok(()) };
     let Some(rel) = chart_rels.iter().find(|r| r.id == rid && !r.external) else { return Ok(()) };
     let us_part = rel.target.clone();
-    let Some(us_xml) = cx.optional_xml(&us_part)? else { return Ok(()) };
-    let us_rels = cx.pkg.rels(&us_part)?;
+    let Some(us_xml) = optional_annotation_xml(cx, &us_part)? else { return Ok(()) };
+    let Some(us_rels) = optional_annotation_rels(cx, &us_part)? else { return Ok(()) };
     let chart_x = sheet.col_left(chart_anchor.cell.col) + chart_anchor.dx as f64;
     let chart_y = sheet.row_top(chart_anchor.cell.row) + chart_anchor.dy as f64;
     let chart_w = chart_anchor.width.max(0.0) as f64;

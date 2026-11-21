@@ -66,7 +66,7 @@ fn area_and_line_combo_round_trips_both_groups() {
     assert_eq!(rt.series.len(), 3);
     assert_eq!(rt.series[0].kind, Some(ChartKind::Area));
     assert_eq!(rt.series[1].kind, Some(ChartKind::Area));
-    assert_eq!(rt.series[2].kind, Some(ChartKind::Line));
+    assert_eq!(rt.series[2].kind, Some(ChartKind::LineMarkers));
 
     // Combo chart with BarClustered + AreaStacked on primary axis and LineStacked on secondary axis.
     let bar_h = format!("<c:barChart><c:barDir val=\"bar\"/><c:grouping val=\"clustered\"/>{}{AX}</c:barChart>", ser(0));
