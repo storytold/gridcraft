@@ -721,12 +721,22 @@ fn getpivotdata_retries_after_a_lazy_build_fails() {
     s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
     s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
     assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+    // A second reader, with a LET variable beside the call.
+    let at = pt(&s).last_range.unwrap().start.a1();
+    s.execute("cell.set", json!({"cell": "K2", "input": format!(r#"=LET(base,0,GETPIVOTDATA("Sales",{at},"Region","West")+base)"#)})).unwrap();
+    assert_eq!(val(&s, "K2"), Value::Error(CellError::Ref));
+    // A third, with a defined name beside the call.
+    s.execute("formulas.defineName", json!({"name": "zero_offset", "refersTo": "=0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "K3", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","West")+zero_offset"#)})).unwrap();
+    assert_eq!(val(&s, "K3"), Value::Error(CellError::Ref));
     assert!(pt(&s).data_index.cells().is_none(), "the failed build caches nothing");
     // The lookup is shared, so caching a failure as an empty index would leave every state that
-    // shares it #REF! for good. Restoring the source lets the lookup build the index.
+    // shares it #REF! for good. Restoring the source lets the lookup build the index, and the
+    // readers already there try again without being entered again: the source has no edge to them.
     s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
     s.execute("cell.set", json!({"cell": "A2", "input": "East"})).unwrap();
     s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!([val(&s, "K1"), val(&s, "K2"), val(&s, "K3")], [Value::Number(285.0), Value::Number(285.0), Value::Number(285.0)]);
     assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
     assert!(pt(&s).data_index.cells().is_some(), "the lookup rebuilt after the failure");
 }
@@ -932,6 +942,67 @@ fn getpivotdata_matches_numeric_items_by_value_before_label() {
     s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Day",45000)"#})).unwrap();
     assert_eq!(val(&s, "K1"), Value::Number(20.0));
     assert_eq!(val(&s, "K2"), Value::Number(10.0));
+}
+
+/// The static precedents of `formula` entered on sheet `sheet` of the session's workbook, and
+/// whether it is dynamic.
+fn walked(s: &Session, sheet: usize, formula: &str) -> (Vec<gridcraft_calc::Area>, bool) {
+    let e = gridcraft_formula::parse(formula).unwrap();
+    gridcraft_calc::eval::precedents(&s.doc().unwrap().wb, sheet, &e)
+}
+
+#[test]
+fn getpivotdata_on_a_reference_into_a_report_depends_on_the_whole_report() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    let report_sheet = s.doc().unwrap().wb.sheet_index("Sheet2").unwrap();
+    let area = |a1: &str| gridcraft_calc::Area { sheet: report_sheet, range: gridcraft_core::RangeRef::parse(a1).unwrap() };
+    // From the report's sheet, and from another sheet naming it: the report, then the reference.
+    for (sheet, formula, reference) in
+        [(report_sheet, r#"=GETPIVOTDATA("Sales",$A$3,"Region","East")"#, "A3"), (0, r#"=GETPIVOTDATA("Sales",Sheet2!C6,"Region","East")"#, "C6")]
+    {
+        assert_eq!(walked(&s, sheet, formula), (vec![area("A3:E8"), area(reference)], false), "{formula}");
+    }
+    // The graph holds the report as the formula's precedent.
+    s.execute("cell.set", json!({"cell": "G1", "input": r#"=GETPIVOTDATA("Sales",$A$3,"Region","East")"#})).unwrap();
+    let d = s.doc().unwrap();
+    assert!(d.calc.graph.precedents_of((report_sheet, CellRef::parse("G1").unwrap())).contains(&area("A3:E8")));
+    assert_eq!(val(&s, "G1"), Value::Number(415.0));
+}
+
+#[test]
+fn getpivotdata_without_a_plain_reference_into_a_report_is_dynamic() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "report_corner", "refersTo": "=Sheet2!$A$3"})).unwrap();
+    let report_sheet = s.doc().unwrap().wb.sheet_index("Sheet2").unwrap();
+    for formula in [
+        // No report there, on the formula's sheet or on the sheet named.
+        r#"=GETPIVOTDATA("Sales",Z99)"#,
+        r#"=GETPIVOTDATA("Sales",Sheet1!$A$3)"#,
+        // A defined name, and a LET variable, holding a reference into the report.
+        r#"=GETPIVOTDATA("Sales",report_corner)"#,
+        r#"=LET(corner,$A$3,GETPIVOTDATA("Sales",corner))"#,
+    ] {
+        assert!(walked(&s, report_sheet, formula).1, "{formula}");
+    }
+}
+
+#[test]
+fn getpivotdata_in_a_names_definition_makes_its_readers_dynamic() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "east_sales", "refersTo": r#"=GETPIVOTDATA("Sales",Sheet2!$A$3,"Region","East")"#})).unwrap();
+    let report_sheet = s.doc().unwrap().wb.sheet_index("Sheet2").unwrap();
+    assert!(walked(&s, report_sheet, "=east_sales").1);
+    s.execute("cell.set", json!({"cell": "K1", "input": "=east_sales"})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(415.0));
+    // A refresh after a source edit updates the reader.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "1100"})).unwrap();
+    s.execute("data.refreshAll", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(1415.0));
 }
 
 #[test]

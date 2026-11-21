@@ -426,11 +426,16 @@ impl Workbook {
         Ok(())
     }
     /// Finds a defined name visible from `sheet`: sheet scope first, then workbook scope.
+    /// Its indexed twin is `NameIndex::find` in the calc crate, which must find the same name.
     pub fn name(&self, name: &str, sheet: usize) -> Option<&DefinedName> {
+        self.names.get(self.name_position(name, sheet)?)
+    }
+    /// Where in `names` [`Workbook::name`] finds `name` seen from `sheet`.
+    pub fn name_position(&self, name: &str, sheet: usize) -> Option<usize> {
         self.names
             .iter()
-            .find(|n| n.scope == Some(sheet) && n.name.eq_ignore_ascii_case(name))
-            .or_else(|| self.names.iter().find(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(name)))
+            .position(|n| n.scope == Some(sheet) && n.name.eq_ignore_ascii_case(name))
+            .or_else(|| self.names.iter().position(|n| n.scope.is_none() && n.name.eq_ignore_ascii_case(name)))
     }
     /// Spells calls of LAMBDA names the way the names are defined (`Double(4)`, where the
     /// parser gives `DOUBLE(4)`: it upper-cases function names, as built-in ones are shown).

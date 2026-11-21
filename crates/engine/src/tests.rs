@@ -5484,6 +5484,25 @@ fn precision_as_displayed_applies_in_manual_mode() {
 }
 
 #[test]
+fn leaving_manual_mode_calculates_what_waited() {
+    // In manual mode an edited cell's dependents wait for the next calculation. Leaving manual
+    // mode calculates them, for Automatic and for Automatic except tables alike: an edit elsewhere
+    // afterwards doesn't reach them.
+    for mode in ["automatic", "automaticExceptTables"] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "=A1+1"})).unwrap();
+        s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::Number(2.0), "{mode}: B1 waits in manual mode");
+        s.execute("formulas.calculationOptions", json!({"mode": mode})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::Number(6.0), "{mode}: leaving manual mode calculates B1");
+        s.execute("cell.set", json!({"cell": "C1", "input": "1"})).unwrap();
+        assert_eq!(v(&s, "B1"), Value::Number(6.0), "{mode}: after an unrelated edit");
+    }
+}
+
+#[test]
 fn precision_as_displayed_on_a_protected_sheet_keeps_locked_constants() {
     let mut s = s();
     let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
@@ -6770,6 +6789,7 @@ mod controls;
 mod equation;
 mod json_golden;
 mod macros;
+mod name_recalc;
 mod objects;
 mod python_cells;
 mod python_commands;
