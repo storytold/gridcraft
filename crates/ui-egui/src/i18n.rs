@@ -240,17 +240,20 @@ impl Language {
         if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
             return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
         }
-        const DRAWING_WARNINGS: [&str; 3] = [
-            "a histogram, waterfall, treemap… chart without its chart part was skipped",
-            "an embedded object (diagram, OLE…) was skipped",
-            "grouped shapes are not supported and were skipped",
+        const DRAWING_WARNINGS: [(&str, &str); 3] = [
+            (
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+            ),
+            ("an embedded object (SmartArt, OLE…) was skipped", "an embedded object (diagram, OLE…) was skipped"),
+            ("grouped shapes are not supported and were skipped", "grouped shapes are not supported and were skipped"),
         ];
-        for base in DRAWING_WARNINGS {
+        for (base, key) in DRAWING_WARNINGS {
             if let Some(suffix) = warning.strip_prefix(base)
                 && suffix.starts_with(" (")
                 && suffix.ends_with(')')
             {
-                return format!("{}{suffix}", self.translation(base).unwrap_or(base));
+                return format!("{}{suffix}", self.translation(key).unwrap_or(base));
             }
         }
         self.translation(warning).unwrap_or(warning).to_owned()
