@@ -240,7 +240,13 @@ fn build_craft_cols(sheet: &Sheet, sid: &dyn Fn(gridcraft_model::StyleId) -> u32
     let push_run = |cols: &mut Vec<CraftColumn>, (a, b, i): (u32, u32, LineInfo)| {
         let w = match i.size {
             Some(sz) => sz,
-            None => if sheet.default_col_width > 0.0 { sheet.default_col_width.max(1.0) } else { sheet.default_col_width },
+            None => {
+                if sheet.default_col_width > 0.0 {
+                    sheet.default_col_width.max(1.0)
+                } else {
+                    sheet.default_col_width
+                }
+            }
         };
         cols.push(CraftColumn {
             first: a,
