@@ -13,12 +13,79 @@ pub fn to_latex(e: &El) -> Option<String> {
     if e.name != "oMathPara" && e.name != "oMath" {
         return None;
     }
+    validate_conversion(e, 0, false, &mut (1 << 20))?;
     let mut xml = String::new();
     write_el(e, &mut xml);
     let math = craft_math::omml::read_str(&xml)?;
     let out = craft_math::math_latex::to_latex(&math.nodes);
     let out = out.trim().to_string();
     (!out.is_empty() && gridcraft_math::check(&out).is_ok()).then_some(out)
+}
+
+// The shared reader is tolerant; this importer must fall back instead of losing
+// equation content. Bound escaped XML before serializing or descending further.
+fn validate_conversion(e: &El, depth: usize, property: bool, remaining: &mut usize) -> Option<()> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    let charge = e.name.len().checked_mul(2)?.checked_add(16)?.checked_add(e.text.len().checked_mul(6)?)?;
+    *remaining = remaining.checked_sub(charge)?;
+    for (key, value) in &e.attrs {
+        *remaining = remaining.checked_sub(key.len().checked_add(value.len().checked_mul(6)?)?.checked_add(8)?)?;
+    }
+    let property = property || e.name.ends_with("Pr");
+    if !property
+        && !matches!(
+            e.name.as_str(),
+            "oMath"
+                | "oMathPara"
+                | "r"
+                | "t"
+                | "f"
+                | "num"
+                | "den"
+                | "rad"
+                | "deg"
+                | "e"
+                | "sSup"
+                | "sSub"
+                | "sSubSup"
+                | "sPre"
+                | "sub"
+                | "sup"
+                | "nary"
+                | "d"
+                | "m"
+                | "mr"
+                | "eqArr"
+                | "acc"
+                | "bar"
+                | "groupChr"
+                | "limLow"
+                | "limUpp"
+                | "lim"
+                | "func"
+                | "fName"
+                | "borderBox"
+                | "phant"
+                | "box"
+        )
+    {
+        return None;
+    }
+    // These limits truncate in the shared reader rather than refusing the matrix.
+    if (e.name == "m" && e.kids("mr").count() > 1000) || (e.name == "mr" && e.kids("e").count() > 64) {
+        return None;
+    }
+    // The pinned emitter treats a literal caret as syntax. Preserve original text
+    // rather than inventing a superscript; structural scripts remain supported.
+    if e.name == "t" && e.text.contains('^') {
+        return None;
+    }
+    for child in &e.children {
+        validate_conversion(child, depth + 1, property, remaining)?;
+    }
+    Some(())
 }
 
 fn write_el(e: &El, out: &mut String) {
@@ -205,7 +272,7 @@ fn mark_bytes(h: &mut u64, bytes: &[u8]) {
 
 /// Children in order, skipping property elements.
 const PROPERTIES: &[(&str, &[&str])] = &[
-    ("rPr", &["nor", "sty", "scr"]),
+    ("rPr", &["nor", "sty", "scr", "lit"]),
     ("fPr", &["type"]),
     ("radPr", &["degHide"]),
     ("naryPr", &["chr", "limLoc", "subHide", "supHide"]),
@@ -230,6 +297,29 @@ mod tests {
 
     fn latex(xml: &str) -> Option<String> {
         to_latex(&el(xml))
+    }
+
+    #[test]
+    fn conversion_does_not_accept_a_partial_equation() {
+        assert_eq!(latex("<m:r><m:t>x</m:t></m:r><m:unknown/>"), None);
+        assert_eq!(
+            latex(
+                "<m:r><m:t>x</m:t></m:r><mc:AlternateContent xmlns:mc=\"mc\"><mc:Fallback><m:r><m:t>y</m:t></m:r></mc:Fallback></mc:AlternateContent>"
+            ),
+            None
+        );
+        assert_eq!(latex("<m:r><m:t>x^2</m:t></m:r>"), None);
+        assert_eq!(latex("<m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>").as_deref(), Some("{x}^{2}"));
+        let cells = "<m:e><m:r><m:t>x</m:t></m:r></m:e>".repeat(65);
+        assert_eq!(latex(&format!("<m:m><m:mr>{cells}</m:mr></m:m>")), None);
+    }
+
+    #[test]
+    fn literal_run_property_invalidates_the_saved_source_marker() {
+        let plain = el("<m:r><m:t>x</m:t></m:r>");
+        let literal = el("<m:r><m:rPr><m:lit/></m:rPr><m:t>x</m:t></m:r>");
+        assert_ne!(body_marker(&plain), body_marker(&literal));
+        assert_eq!(body_marker(&plain), body_marker(&plain.clone()));
     }
 
     #[test]
