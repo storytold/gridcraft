@@ -33,6 +33,82 @@ fn tvm() {
     is_err(ev("CUMIPMT", vec![n(0.01), n(360.0), n(125000.0), n(1.0), n(1.0), n(2.0)]), CellError::Num);
 }
 
+/// RATE with the given arguments, as a number or an error.
+fn rate_of(args: &[f64]) -> Value {
+    ev("RATE", args.iter().map(|x| n(*x)).collect())
+}
+
+#[track_caller]
+fn rate_is(args: &[f64], expected: f64) {
+    close_tol(rate_of(args), expected, 1e-15);
+}
+
+/// Expected values observed in Excel 365 with these synthetic inputs.
+#[test]
+fn rate_follows_excel_iteration() {
+    // No payments and a zero future value: the answer is -100%, which the iteration
+    // approaches without reaching. Excel returns the last iterate, bit for bit.
+    rate_is(&[5.0, 0.0, -100.0, 0.0], -0.999_999_409_145_182_5);
+    rate_is(&[3.0, 0.0, -50.0, 0.0], -0.999_999_744_782_979_9);
+    rate_is(&[10.0, 0.0, -1.0, 0.0], -0.999_998_741_101_371_3);
+    rate_is(&[5.0, 0.0, -100.0, 0.0, 0.0, 0.5], -0.999_999_408_783_809_4);
+    rate_is(&[5.0, 0.0, -100.0, 0.0, 0.0, -0.99], -0.999_999_411_730_630_3);
+    // Second starting point goes the other way when the equation is positive at the guess.
+    rate_is(&[5.0, 0.0, 100.0, 0.0], -0.999_999_409_810_240_3);
+    rate_is(&[5.0, 0.0, -100.0, 1e-29], -0.999_999_260_333_075_4);
+    rate_is(&[5.0, 0.0, -100.0, 1e4], 1.511_886_431_510_563_3);
+    rate_is(&[4.0, 0.0, -1.0, 100.0], 2.162_277_660_168_009);
+    // Within 1e-7 by step but not by value: Excel keeps going.
+    rate_is(&[5.0, 0.0, -1e25, 0.0], -0.999_999_628_525_605_1);
+    // 200 steps without converging: the last iterate when it is within 1e-4, else #NUM!.
+    rate_is(&[20.0, 0.0, -1.0, 0.0], -0.999_112_071_912_539_3);
+    rate_is(&[36.0, 0.0, -1.0, 0.0, 0.0, -0.994], -0.999_875_315_309_626_9);
+    is_err(rate_of(&[12.0, 0.0, -1.0, 0.0]), CellError::Num);
+    is_err(rate_of(&[25.0, 0.0, -1.0, 0.0]), CellError::Num);
+    is_err(rate_of(&[20.0, 0.0, -1e60, 0.0]), CellError::Num);
+    // Large rates the iteration can't reach are #NUM! in Excel.
+    is_err(rate_of(&[4.0, 0.0, -0.0001, 100.0]), CellError::Num);
+    is_err(rate_of(&[5.0, 0.0, -100.0, 1e5]), CellError::Num);
+    is_err(rate_of(&[10.0, -300.0, 1000.0]), CellError::Num);
+    // ...but are found from a closer guess.
+    rate_is(&[4.0, 0.0, -0.1, 100.0, 0.0, 4.0], 4.623_413_251_903_489);
+    close_tol(rate_of(&[10.0, -300.0, 1000.0, 0.0, 0.0, 0.3]), 0.273_198_424_105_560_4, 1e-12);
+    // Converging on a rate at or below -100% (or within 1e-7 of it) is #NUM!.
+    is_err(rate_of(&[1.0, 0.0, -1.0, 0.0]), CellError::Num);
+    is_err(rate_of(&[10.0, -1000.0, 1000.0]), CellError::Num);
+    is_err(rate_of(&[1.0, 0.0, -100.0, 1e-5]), CellError::Num);
+    rate_is(&[1.0, 0.0, -100.0, 2e-5], -0.999_999_8);
+    is_err(rate_of(&[5.0, 0.0, -1e30, 0.0]), CellError::Num);
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.0]), CellError::Num);
+    // A value that never gets near zero is #NUM!, however small the step.
+    is_err(rate_of(&[4.0, 0.0, 100.0, 100.0]), CellError::Num);
+    is_err(rate_of(&[4.0, 0.0, -1e-12, 1e-6]), CellError::Num);
+    rate_is(&[4.0, 0.0, -1e-14, 1e-8], 0.099_000_000_283_235_72);
+    // Subnormal steps are flushed to zero.
+    rate_is(&[3.0, 0.0, -1e-305, 0.0], 0.101);
+    is_err(rate_of(&[4.0, 0.0, 0.0, 100.0]), CellError::Num);
+    // Guess at or below -1 is #VALUE!; type is 0 or anything else (1).
+    is_err(rate_of(&[10.0, -100.0, 1000.0, 0.0, 0.0, -1.0]), CellError::Value);
+    is_err(rate_of(&[0.0, -100.0, 1000.0]), CellError::Num);
+    // Excel does not step the second point back to -1: a fractional nper with a guess near -1 is #NUM!
+    // even though a root exists at -0.99, and the same case from a guess of -0.99 finds it.
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.9995]), CellError::Num);
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.5]), CellError::Num);
+    close_tol(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.99]), -0.99, 1e-7);
+    assert_eq!(rate_of(&[10.0, -100.0, 1000.0, 0.0, 2.0]), rate_of(&[10.0, -100.0, 1000.0, 0.0, 1.0]));
+    // Ordinary loans, and large amounts that can't get within 1e-7 of zero.
+    close_tol(rate_of(&[360.0, -1000.0, 150000.0]), 0.005_850_253_376_759_637, 1e-11);
+    close_tol(rate_of(&[360.0, -1000.0, 150000.0, 0.0, 1.0]), 0.005_898_953_457_098_463, 1e-11);
+    close_tol(rate_of(&[1000.0, -1e6, 1e8]), 0.009_999_522_655_994_865, 1e-12);
+    close_tol(rate_of(&[360.0, -1e9, 1.5e11]), 0.005_850_253_376_759_668, 1e-12);
+    close_tol(rate_of(&[10.0, -50.0, 1000.0]), -0.109_560_293_684_682_5, 1e-14);
+    // Roots at 0% come out as rounding noise in both, so only the absolute size matters.
+    match rate_of(&[10.0, -100.0, 1000.0]) {
+        Value::Number(x) => assert!(x.abs() < 1e-8, "{x}"),
+        other => panic!("{other:?}"),
+    }
+}
+
 /// PMT within about 4 ULPs of Excel's (Value2 of synthetic probes; libm differs by an ULP across
 /// platforms). The old `(1 + rate)^nper` form was 25 to 91 ULPs off on these, enough to flip a loan schedule's final `IF(p - SUM(r) > 0, ...)`.
 #[test]

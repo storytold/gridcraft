@@ -1,7 +1,13 @@
 use super::{
-    Anchor, CellPicture, CellRef, Color, EngineError, Image, Json, PROTECTED, Result, Session, Shape, ShapeKind, Sparkline, SparklineKind,
-    anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, locked_cell_error, ok, str_param, u32_param,
+    Anchor, CellPicture, CellRef, Color, EngineError, Image, Json, MAX_OBJECT_OFFSET, ObjKind, ObjRef, PROTECTED, Result, Session, Shape, ShapeKind,
+    Sparkline, SparklineKind, anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, locked_cell_error, ok,
+    size_cap, str_param, u32_param,
 };
+
+#[cfg(test)]
+pub(super) fn compiled() -> bool {
+    true
+}
 
 pub(super) fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
     let src = str_param(p, "range").ok_or_else(|| bad("insert.sparkline", "missing `range`"))?.to_string();
@@ -34,13 +40,24 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("insertPicture".into(), json!({"placement": placement})));
         return ok();
     };
+    place_picture(s, p, data, "insert.picture")
+}
+
+/// Put the picture in `data` on the active sheet as Insert ▸ Pictures does, with `p`'s
+/// `placement`, `at`, size, `mode` and `alt` (one undo step). `cmd` names the command in errors:
+/// `library.insert` places a Library picture through here too.
+pub(crate) fn place_picture(s: &mut Session, p: &Json, data: Vec<u8>, cmd: &str) -> Result<Json> {
+    let placement = str_param(p, "placement").unwrap_or("overCells");
+    if !matches!(placement, "cell" | "overCells") {
+        return Err(bad(cmd, "placement must be cell or overCells"));
+    }
     if placement == "cell" {
-        let mime = validate_cell_picture(&data)?;
+        let mime = validate_cell_picture(&data, cmd)?;
         let d = s.doc()?;
         let sheet = d.wb.active_sheet();
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
         let at = match str_param(p, "at") {
-            Some(a) => CellRef::parse(a).ok_or_else(|| bad("insert.picture", "invalid cell address"))?,
+            Some(a) => CellRef::parse(a).ok_or_else(|| bad(cmd, "invalid cell address"))?,
             None => d.selection.active,
         };
         let at = sh.merge_at(at).map(|r| r.start).unwrap_or(at);
@@ -56,13 +73,17 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         });
     }
     if data.len() > 64 * 1024 * 1024 {
-        return Err(bad("insert.picture", "image larger than 64 MB"));
+        return Err(bad(cmd, "image larger than 64 MB"));
     }
     let mime = str_param(p, "mime")
         .map(str::to_string)
         .unwrap_or_else(|| if data.starts_with(&[0x89, b'P', b'N', b'G']) { "image/png".into() } else { "image/jpeg".into() });
     let (w, h) = crate::io::image_size(&data).unwrap_or((320, 240));
     let d = s.doc()?;
+    // Sheet protection locks drawing objects, as for a text box's text.
+    if d.wb.active().is_some_and(|sh| sh.is_protected()) {
+        return Err(EngineError::Other(PROTECTED.into()));
+    }
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let scale = (640.0 / w.max(1) as f32).min(1.0);
@@ -89,21 +110,20 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Validate before mutating the workbook; header dimensions alone do not prove the pixels decode.
-fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
+fn validate_cell_picture(data: &[u8], cmd: &str) -> Result<&'static str> {
     if data.len() > 16 * 1024 * 1024 {
-        return Err(bad("insert.picture", "cell pictures must be at most 16 MiB"));
+        return Err(bad(cmd, "cell pictures must be at most 16 MiB"));
     }
-    let format = image::guess_format(data).map_err(|_| bad("insert.picture", "choose a valid PNG or JPEG picture"))?;
+    let format = image::guess_format(data).map_err(|_| bad(cmd, "choose a valid PNG or JPEG picture"))?;
     let mime = match format {
         image::ImageFormat::Png => "image/png",
         image::ImageFormat::Jpeg => "image/jpeg",
-        _ => return Err(bad("insert.picture", "cell pictures support PNG and JPEG")),
+        _ => return Err(bad(cmd, "cell pictures support PNG and JPEG")),
     };
-    let (width, height) = image::ImageReader::with_format(std::io::Cursor::new(data), format)
-        .into_dimensions()
-        .map_err(|_| bad("insert.picture", "invalid image dimensions"))?;
+    let (width, height) =
+        image::ImageReader::with_format(std::io::Cursor::new(data), format).into_dimensions().map_err(|_| bad(cmd, "invalid image dimensions"))?;
     if width == 0 || height == 0 || width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > 16_000_000 {
-        return Err(bad("insert.picture", "cell pictures are limited to 8192 pixels per side and 16 million pixels"));
+        return Err(bad(cmd, "cell pictures are limited to 8192 pixels per side and 16 million pixels"));
     }
     let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
     let mut limits = image::Limits::default();
@@ -111,7 +131,7 @@ fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
     limits.max_image_height = Some(8192);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
-    reader.decode().map_err(|_| bad("insert.picture", "picture cannot be decoded within the 64 MiB limit"))?;
+    reader.decode().map_err(|_| bad(cmd, "picture cannot be decoded within the 64 MiB limit"))?;
     Ok(mime)
 }
 
@@ -153,6 +173,7 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         line,
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
+        rotation: 0.0,
         math: Default::default(),
     };
     let sheet = d.wb.active_sheet();
@@ -176,8 +197,14 @@ pub(super) fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = d.wb.active_sheet();
     let sh = d.wb.active().ok_or_else(|| bad("shape.setText", "no such text box"))?;
     let shape = sh.shapes.iter().find(|shape| shape.id == id).ok_or_else(|| bad("shape.setText", "no such text box"))?;
-    if shape.kind != ShapeKind::TextBox {
+    if !matches!(shape.kind, ShapeKind::TextBox | ShapeKind::WordArt) {
         return Err(bad("shape.setText", "the shape is not a text box"));
+    }
+    if shape.kind == ShapeKind::WordArt && text.is_empty() {
+        return Err(bad("shape.setText", "WordArt text must not be empty"));
+    }
+    if shape.kind == ShapeKind::WordArt && text.chars().nth(crate::cmd::wordart::MAX_CHARS).is_some() {
+        return Err(bad("shape.setText", format!("`text` is longer than {} characters", crate::cmd::wordart::MAX_CHARS)));
     }
     // Sheet protection locks drawing objects (there is no "edit objects" allowance yet).
     if sh.is_protected() {
@@ -193,51 +220,65 @@ pub(super) fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// The floating object a `{kind, id}` command names on the active sheet. Unknown kinds and
+/// objects are errors, so a stale id never succeeds silently.
+fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
+    let id = u32_param(p, "id").ok_or_else(|| bad(cmd, "missing `id`"))?;
+    let kind =
+        str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer, equation or control"))?;
+    let d = s.doc()?;
+    let sheet = d.wb.active_sheet();
+    let o = ObjRef::new(kind, id);
+    if !d.wb.sheet(sheet).is_some_and(|sh| sh.has_object(o)) {
+        return Err(bad(cmd, "no such object"));
+    }
+    // A locked form control on a protected sheet stays as it is.
+    crate::cmd::controls::check_objects_unlocked(s, sheet, kind, &[id])?;
+    Ok((sheet, o))
+}
+
 pub(super) fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
-    let id = u32_param(p, "id").ok_or_else(|| bad("object.delete", "missing `id`"))?;
-    let kind = str_param(p, "kind").unwrap_or("").to_string();
-    let sheet = s.doc()?.wb.active_sheet();
+    let (sheet, o) = object_param(s, p, "object.delete")?;
     edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        match kind.as_str() {
-            "chart" => sh.charts.retain(|c| c.id != id),
-            "image" => sh.images.retain(|c| c.id != id),
-            "slicer" => sh.slicers.retain(|c| c.id != id),
-            _ => sh.shapes.retain(|c| c.id != id),
-        }
-        Ok(Json::Null)
+        cx.sheet_mut(sheet)?.remove_object(o);
+        Ok(json!({"deleted": o}))
     })
 }
 
 pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
-    let id = u32_param(p, "id").ok_or_else(|| bad("object.move", "missing `id`"))?;
-    let kind = str_param(p, "kind").unwrap_or("").to_string();
-    let sheet = s.doc()?.wb.active_sheet();
+    let (sheet, o) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
+    let rotation = f64_param(p, "rotation").filter(|v| v.is_finite());
+    if rotation.is_some() {
+        let ink = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.shapes.iter().any(|x| x.id == o.id && x.kind == ShapeKind::Ink));
+        if o.kind != ObjKind::Shape || ink {
+            return Err(bad("object.move", "only shapes other than ink rotate"));
+        }
+        if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected()) {
+            return Err(EngineError::Other(PROTECTED.into()));
+        }
+    }
     edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        let anchor = match kind.as_str() {
-            "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "slicer" => sh.slicers.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "shape" => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            _ => None,
-        };
-        let Some(a) = anchor else { return Err(bad("object.move", "no such object")) };
+        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
         if let Some(at) = at {
             a.cell = at;
         }
         if let Some(v) = f64_param(p, "dx") {
-            a.dx = v as f32;
+            a.dx = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
         }
         if let Some(v) = f64_param(p, "dy") {
-            a.dy = v as f32;
+            a.dy = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
         }
         if let Some(v) = f64_param(p, "width") {
-            a.width = v.clamp(1.0, 10000.0) as f32;
+            a.width = v.clamp(1.0, size_cap(a.width)) as f32;
         }
         if let Some(v) = f64_param(p, "height") {
-            a.height = v.clamp(0.0, 10000.0) as f32;
+            a.height = v.clamp(0.0, size_cap(a.height)) as f32;
+        }
+        if let Some(r) = rotation
+            && let Some(shape) = cx.sheet_mut(sheet)?.shapes.iter_mut().find(|x| x.id == o.id)
+        {
+            shape.rotation = r.rem_euclid(360.0) as f32;
         }
         Ok(Json::Null)
     })
@@ -247,21 +288,10 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
 /// cells" / "Don't move or size with cells"), so it follows — or ignores — its rows and columns
 /// when the sheet is sorted or edited structurally.
 pub(super) fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
-    let id = u32_param(p, "id").ok_or_else(|| bad("object.setAnchorMode", "missing `id`"))?;
-    let kind = str_param(p, "kind").unwrap_or("").to_string();
-    if !matches!(kind.as_str(), "chart" | "image" | "shape") {
-        return Err(bad("object.setAnchorMode", "kind must be chart, image or shape"));
-    }
+    let (sheet, o) = object_param(s, p, "object.setAnchorMode")?;
     let mode = anchor_mode_param(p).ok_or_else(|| bad("object.setAnchorMode", "mode must be moveAndSize, moveOnly or absolute"))?;
-    let sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
-        let sh = cx.sheet_mut(sheet)?;
-        let anchor = match kind.as_str() {
-            "chart" => sh.charts.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            "image" => sh.images.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-            _ => sh.shapes.iter_mut().find(|c| c.id == id).map(|c| &mut c.anchor),
-        };
-        let Some(a) = anchor else { return Err(bad("object.setAnchorMode", "no such object")) };
+        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.setAnchorMode", "no such object")) };
         a.mode = mode;
         Ok(json!({"mode": anchor_mode_name(mode)}))
     })

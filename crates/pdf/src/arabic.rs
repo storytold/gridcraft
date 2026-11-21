@@ -10,7 +10,7 @@ use skrifa::{
 };
 use unicode_bidi::BidiInfo;
 
-use crate::{CID_FONT, Error, Font, dict_obj, n, needs_cid, pdf_string, pdf_utf16_string, stream_obj};
+use crate::{CID_FONT, Error, Font, TextDirection, n, needs_cid, pdf_string, pdf_utf16_string};
 
 include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
 
@@ -208,10 +208,11 @@ pub(crate) struct Layout {
 }
 
 /// Positions are in 1/1000 em, matching the Type3 font matrix.
-pub(crate) fn layout(font: Font, text: &str) -> Result<Layout, Error> {
+pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result<Layout, Error> {
     if text.len() > MAX_TEXT_BYTES {
         return Err(Error("Arabic PDF text exceeds the 128 KiB per-line limit".into()));
     }
+    let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
     let face = loaded_face(font)?;
     let raw = face.font()?;
     let shaper = face.data.shaper(&raw).instance(Some(&face.instance)).build();
@@ -222,7 +223,7 @@ pub(crate) fn layout(font: Font, text: &str) -> Result<Layout, Error> {
     let scale = 1000.0 / units as f32;
     let single_line: String = text.chars().map(|ch| if is_paragraph_break(ch) { ' ' } else { ch }).collect();
     let text = single_line.as_str();
-    let bidi = BidiInfo::new(text, None);
+    let bidi = BidiInfo::new(text, direction.level());
     let mut layout = Layout { items: Vec::new(), width: 0.0 };
     for para in &bidi.paragraphs {
         let (levels, runs) = bidi.visual_runs(para, para.range.clone());
@@ -299,8 +300,8 @@ pub(crate) fn layout(font: Font, text: &str) -> Result<Layout, Error> {
     Ok(layout)
 }
 
-pub(crate) fn vertical_extents(font: Font, text: &str) -> Result<(f32, f32), Error> {
-    let layout = layout(font, text)?;
+pub(crate) fn vertical_extents(font: Font, text: &str, direction: TextDirection) -> Result<(f32, f32), Error> {
+    let layout = layout(font, text, direction)?;
     let face = loaded_face(font)?;
     let raw = face.font()?;
     let metrics = raw.glyph_metrics(Size::new(1000.0), skrifa::instance::LocationRef::new(face.instance.coords()));
@@ -331,6 +332,37 @@ pub(crate) fn vertical_extents(font: Font, text: &str) -> Result<(f32, f32), Err
         }
     }
     Ok((ascent, descent))
+}
+
+/// Whether standard-font `text` is drawn in its logical order, unchanged.
+pub(crate) fn is_logical_order(text: &str, direction: TextDirection) -> bool {
+    direction != TextDirection::RightToLeft && !text.chars().any(is_control)
+}
+
+/// Bidi reordering for standard-font text requires no optional Arabic font.
+pub(crate) fn latin_visual(text: &str, direction: TextDirection) -> Result<Cow<'_, str>, Error> {
+    if is_logical_order(text, direction) {
+        return Ok(Cow::Borrowed(text));
+    }
+    if text.len() > MAX_TEXT_BYTES {
+        return Err(Error("Bidirectional PDF text exceeds the 128 KiB per-line limit".into()));
+    }
+    let single_line: String = text.chars().map(|ch| if is_paragraph_break(ch) { ' ' } else { ch }).collect();
+    let text = single_line.as_str();
+    let bidi = BidiInfo::new(text, direction.level());
+    let mut out = String::with_capacity(text.len());
+    for para in &bidi.paragraphs {
+        let (levels, runs) = bidi.visual_runs(para, para.range.clone());
+        for run in runs {
+            let part = text.get(run.clone()).unwrap_or_default();
+            if levels.get(run.start).is_some_and(|level| level.is_rtl()) {
+                out.extend(part.chars().rev().filter(|ch| !is_control(*ch)).map(mirror_ansi));
+            } else {
+                out.extend(part.chars().filter(|ch| !is_control(*ch)));
+            }
+        }
+    }
+    Ok(Cow::Owned(out))
 }
 
 fn mirror_ansi(ch: char) -> char {
@@ -427,8 +459,8 @@ impl Subset {
         Ok(index)
     }
 
-    pub(crate) fn text(&mut self, font: Font, text: &str, size: f32) -> Result<String, Error> {
-        let layout = layout(font, text)?;
+    pub(crate) fn text(&mut self, font: Font, text: &str, size: f32, direction: TextDirection) -> Result<String, Error> {
+        let layout = layout(font, text, direction)?;
         let mut out = format!("/Span << /ActualText {} >> BDC\nBT\n", unicode_string(text, true));
         for item in layout.items {
             match item {
@@ -458,7 +490,7 @@ impl Subset {
     }
 
     /// Writes the subset fonts into `out` and returns their page resource entries.
-    pub(crate) fn write_objects(&self, next: &mut u32, out: &mut Vec<u8>, offsets: &mut Vec<usize>) -> String {
+    pub(crate) fn write_objects(&self, next: &mut u32, out: &mut craft_pdf::classic::Writer) -> Result<String, Error> {
         let mut resources = String::new();
         for (batch, glyphs) in self.glyphs.chunks(255).enumerate() {
             let id = *next;
@@ -475,7 +507,7 @@ impl Subset {
                 let _ = write!(names, "/g{code} ");
                 let _ = write!(widths, "{} ", n(glyph.width));
                 let body = glyph_procedure(glyph);
-                stream_obj(out, offsets, *next, "", body.as_bytes());
+                out.stream(*next, "", body.as_bytes())?;
                 *next += 1;
                 bounds[0] = bounds[0].min(glyph.bounds[0]);
                 bounds[1] = bounds[1].min(glyph.bounds[1]);
@@ -494,11 +526,8 @@ impl Subset {
                 cmap.push_str("endbfchar\n");
             }
             cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
-            stream_obj(out, offsets, cmap_id, "", cmap.as_bytes());
-            dict_obj(
-                out,
-                offsets,
-                id,
+            out.stream(cmap_id, "", cmap.as_bytes())?;
+            out.object(id,
                 &format!(
                     "<< /Type /Font /Subtype /Type3 /Name /GridCraftArabic /FontBBox [{} {} {} {}] /FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {procs}>> /Encoding << /Type /Encoding /Differences [1 {names}] >> /FirstChar 1 /LastChar {} /Widths [{widths}] /Resources << >> /ToUnicode {cmap_id} 0 R >>",
                     n(bounds[0]),
@@ -507,10 +536,10 @@ impl Subset {
                     n(bounds[3]),
                     glyphs.len()
                 ),
-            );
+            )?;
             let _ = write!(resources, "/A{} {id} 0 R ", batch + 1);
         }
-        resources
+        Ok(resources)
     }
 }
 
