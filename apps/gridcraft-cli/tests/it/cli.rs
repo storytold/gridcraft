@@ -46,6 +46,40 @@ fn eval_formulas() {
 }
 
 #[test]
+fn cat_and_run_use_sheet_names_before_indexes() {
+    let dir = tmpdir("sheet-selector");
+    let book = dir.join("indexed.xlsx");
+    let book_s = book.to_str().unwrap();
+    let printed = ok(&[
+        "run",
+        "--cmd",
+        r#"cell.set={"cell":"A1","input":"first"}"#,
+        "--cmd",
+        r#"home.insertSheet={"name":"0","before":1}"#,
+        "--cmd",
+        r#"cell.set={"cell":"A1","input":"second"}"#,
+        "--cmd",
+        r#"sheet.activate={"sheet":0}"#,
+        "--out",
+        book_s,
+        "--quiet",
+        "--print",
+        "A1",
+        "--sheet",
+        "1",
+    ]);
+    assert_eq!(printed.trim(), "second");
+    assert_eq!(ok(&["cat", book_s, "--range", "A1"]).trim(), "first");
+    assert_eq!(ok(&["cat", book_s, "--range", "A1", "--sheet", "1"]).trim(), "second");
+    assert_eq!(ok(&["cat", book_s, "--range", "A1", "--sheet", "0"]).trim(), "second");
+
+    let overflow = run(&["eval", "=1", "--sheet", "4294967296"]);
+    assert!(!overflow.status.success());
+    assert!(String::from_utf8_lossy(&overflow.stderr).contains("no such sheet"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn run_then_cat_and_info_on_sample() {
     let dir = tmpdir("run");
     let book = dir.join("budget.xlsx");
