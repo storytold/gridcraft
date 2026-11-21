@@ -389,6 +389,7 @@ fn page_count_300_rows_letter_portrait() {
     assert_eq!(pv["pageList"][0]["rows"], "1:45");
     assert_eq!(pv["pageList"][1]["rows"], "46:90");
     assert_eq!(s.execute("file.printPreview", json!({"page": 7})).unwrap()["page"]["rows"], "271:300");
+    assert!(s.execute("file.printPreview", json!({"page": 0})).is_err());
     assert!(s.execute("file.printPreview", json!({"page": 8})).is_err());
     // Landscape: 504pt / 15 = 33 rows per page → 10 pages.
     s.execute("pageLayout.pageSetup", json!({"orientation": "landscape"})).unwrap();
