@@ -12,10 +12,9 @@
 //! - `gridcraft:open` (from the host): `{ name, bytes }`. It opens like a workbook picked with
 //!   File › Open or dropped on the window; a file over [`MAX_OPEN_BYTES`] is refused before it is
 //!   copied.
-//! - `gridcraft:save` (to the host): `{ name, saveAs, bytes }` for every file GridCraft would
-//!   otherwise download: Save and Save As (an .xlsx workbook) and Export as PDF. The host stores
-//!   it and reports failures itself. `saveAs` is `true` for Save As and `false` for Save and
-//!   exports.
+//! - `gridcraft:save` (to the host): `{ name, saveAs, bytes, export }` for every file GridCraft
+//!   would otherwise download: Save and Save As (an .xlsx workbook, `export: false`) and exports
+//!   such as PDF (`export: true`). `saveAs` is `true` for Save As and `false` for Save and exports.
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
@@ -27,12 +26,16 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_web_host::web::{FileData, Host, Message};
+use craft_web_host::{Mode, Outgoing, message_type};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
+use wasm_bindgen::JsValue;
 
+use crate::host_save::SaveMessage;
 use crate::hostmode::{apply_saved, open_name, wire_save_services};
 
 /// The app id in the host messages (`gridcraft:ready`).
 const APP: &str = "gridcraft";
+
 /// The largest workbook taken from the host page, refused before it is copied.
 const MAX_OPEN_BYTES: u64 = 512 << 20;
 
@@ -42,6 +45,7 @@ const MAX_AUTHOR_CHARS: usize = 200;
 #[derive(Clone)]
 pub struct Bridge {
     host: Rc<Host>,
+    save_target: Rc<SaveTarget>,
     /// Names of the files handed to the host since the last frame.
     saved: Rc<RefCell<Vec<String>>>,
 }
@@ -51,15 +55,29 @@ impl Bridge {
     /// `data-host="page"` on the canvas, an unframed `?host=parent` page (it stays the normal app
     /// with downloads), or a parent on another origin.
     pub fn detect(canvas: &web_sys::HtmlCanvasElement) -> Option<Self> {
-        Some(Self { host: Rc::new(Host::connect(APP, canvas)?), saved: Rc::default() })
+        let host = Host::connect(APP, canvas)?;
+        let save_target = match host.mode() {
+            Mode::Parent => {
+                // Host::connect already admitted only a same-origin parent. Keep that origin
+                // as the postMessage target so later navigation can't receive workbook bytes.
+                let window = web_sys::window()?;
+                let parent = window.parent().ok().flatten()?;
+                let origin = window.location().origin().ok()?;
+                SaveTarget::Parent { parent, origin }
+            }
+            Mode::Page => SaveTarget::Page(canvas.clone()),
+        };
+        Some(Self { host: Rc::new(host), save_target: Rc::new(save_target), saved: Rc::default() })
     }
 
     /// Send saved and exported files to the host instead of downloading them, and hear files
     /// from it.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
-        let host = self.host.clone();
-        wire_save_services(services, self.saved.clone(), move |name, bytes, save_as| host.post_save(name, bytes, None, save_as));
+        let save_target = self.save_target.clone();
+        wire_save_services(services, self.saved.clone(), move |name, bytes, save_as| {
+            save_target.post(SaveMessage::new(name, bytes), save_as).map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+        });
     }
 
     /// `?author=`: the host's name for the user signs new notes and comments.
@@ -92,6 +110,38 @@ impl Bridge {
                 deliver_open(&inbox, &ctx, &name, &data);
             }
         });
+    }
+}
+
+/// A save-only adapter: the pinned host crate's `post_save` cannot add app-specific fields.
+/// All other messages and transport detection still go through `Host`.
+enum SaveTarget {
+    Parent { parent: web_sys::Window, origin: String },
+    Page(web_sys::HtmlCanvasElement),
+}
+
+impl SaveTarget {
+    fn post(&self, save: SaveMessage<'_>, save_as: bool) -> Result<(), JsValue> {
+        let buffer = js_sys::Uint8Array::from(save.bytes).buffer();
+        let kind = message_type(APP, Outgoing::Save.kind());
+        let payload = js_sys::Object::new();
+        let set = |key, value: JsValue| js_sys::Reflect::set(&payload, &JsValue::from_str(key), &value);
+        set("name", save.name.into())?;
+        set("bytes", buffer.clone().into())?;
+        set("saveAs", JsValue::from_bool(save_as && !save.export))?;
+        set("export", JsValue::from_bool(save.export))?;
+        match self {
+            Self::Parent { parent, origin } => {
+                set("type", kind.as_str().into())?;
+                parent.post_message_with_transfer(&payload, origin, &js_sys::Array::of1(&buffer))
+            }
+            Self::Page(canvas) => {
+                let init = web_sys::CustomEventInit::new();
+                init.set_detail(&payload.into());
+                let event = web_sys::CustomEvent::new_with_event_init_dict(&kind, &init)?;
+                canvas.dispatch_event(&event).map(|_| ())
+            }
+        }
     }
 }
 
