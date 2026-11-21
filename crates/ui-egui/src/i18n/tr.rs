@@ -451,6 +451,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Tüm klasörler",
+        "Library|Library folder" => "Kitaplık klasörü",
+        "Library|Add Folder…" => "Klasör Ekle…",
+        "Library|Remove" => "Kaldır",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Bu klasörü Kitaplıkta artık gösterme (dosyaları oldukları yerde kalır)"
+        }
+        "Library|Refresh" => "Yenile",
+        "Library|Read the folders again" => "Klasörleri yeniden oku",
+        "Library|Folder path" => "Klasör yolu",
+        "Library|Add" => "Ekle",
+        "Library|Reading {read} of {total} files…" => "Dosyalar okunuyor: {read}/{total}…",
+        "Library|Nothing matches \"{query}\"." => "\"{query}\" ile eşleşen bir şey yok.",
+        "Library|Nothing in this folder yet." => "Bu klasör henüz boş.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "{total} dosyanın ilk {shown} tanesi gösteriliyor: diğerlerini görmek için bir klasör seçin veya arama yapın."
+        }
+        "Library|Nothing in this file." => "Bu dosya boş.",
+        "Library|Hidden" => "Gizli",
+        "Library|Click to insert" => "Eklemek için tıklayın",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Bu öğeyi aynı yere yerleştir",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "ve {count} tane daha",
+        "Library|Pictures" => "Resimler",
+        "Library|Picture" => "Resim",
+        "Library|Insert picture" => "Resim ekle",
+        "Library|Search pictures" => "Resim ara",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "PNG ve JPEG dosyalarından oluşan bir klasördeki resimleri göster",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Burada görmek için PNG veya JPEG resimlerden oluşan bir klasör ekleyin. Bir resmi sayfaya yerleştirmek için üzerine tıklayın."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Kitaplık, bu bilgisayardaki klasörlerde bulunan resimleri gösterir; tarayıcı sürümü bunları okuyamaz. Kitaplığa göz atmak için masaüstü uygulamasını kullanın."
+        }
+        "Library" => "Kitaplık",
+        "Pictures from your own folders" => "Kendi klasörlerinizdeki resimler",
         "My list has headers" => "Verilerimde üst bilgi var",
         "Sort by" => "Sıralama ölçütü",
         "Then by" => "Sonra",

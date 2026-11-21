@@ -1085,6 +1085,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Toate folderele",
+        "Library|Library folder" => "Folder bibliotecă",
+        "Library|Add Folder…" => "Adăugare folder…",
+        "Library|Remove" => "Eliminare",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Nu mai afișa acest folder în bibliotecă (fișierele sale rămân unde sunt)"
+        }
+        "Library|Refresh" => "Reîmprospătare",
+        "Library|Read the folders again" => "Citește din nou folderele",
+        "Library|Folder path" => "Calea folderului",
+        "Library|Add" => "Adăugare",
+        "Library|Reading {read} of {total} files…" => "Se citesc fișierele: {read} din {total}…",
+        "Library|Nothing matches \"{query}\"." => "Nimic nu corespunde cu „{query}”.",
+        "Library|Nothing in this folder yet." => "Acest folder este încă gol.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Se afișează primele fișiere: {shown} din {total}. Alegeți un folder sau căutați pentru a le vedea pe celelalte."
+        }
+        "Library|Nothing in this file." => "Acest fișier este gol.",
+        "Library|Hidden" => "Ascuns",
+        "Library|Click to insert" => "Faceți clic pentru a insera",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Plasați acest element în același loc",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "și încă {count}",
+        "Library|Pictures" => "Imagini",
+        "Library|Picture" => "Imagine",
+        "Library|Insert picture" => "Inserare imagine",
+        "Library|Search pictures" => "Căutare imagini",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Afișați imaginile dintr-un folder cu fișiere PNG și JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Adăugați un folder cu imagini PNG sau JPEG pentru a le vedea aici. Faceți clic pe o imagine pentru a o plasa în foaie."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Biblioteca afișează imaginile din folderele de pe acest computer, pe care versiunea pentru browser nu le poate citi. Utilizați aplicația desktop pentru a răsfoi o bibliotecă."
+        }
+        "Library" => "Bibliotecă",
+        "Pictures from your own folders" => "Imagini din propriile foldere",
         "Numerical Count" => "Numărare numerică",
         "Minimum" => "Minim",
         "Maximum" => "Maxim",

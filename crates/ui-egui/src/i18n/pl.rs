@@ -1023,6 +1023,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Pokaż",
         "Collapse dialog" => "Zwiń okno dialogowe",
         "Expand dialog" => "Rozwiń okno dialogowe",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Wszystkie foldery",
+        "Library|Library folder" => "Folder biblioteki",
+        "Library|Add Folder…" => "Dodaj folder…",
+        "Library|Remove" => "Usuń",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Przestań pokazywać ten folder w bibliotece (jego pliki pozostaną na miejscu)"
+        }
+        "Library|Refresh" => "Odśwież",
+        "Library|Read the folders again" => "Odczytaj foldery ponownie",
+        "Library|Folder path" => "Ścieżka folderu",
+        "Library|Add" => "Dodaj",
+        "Library|Reading {read} of {total} files…" => "Odczytywanie plików: {read} z {total}…",
+        "Library|Nothing matches \"{query}\"." => "Brak wyników dla „{query}”.",
+        "Library|Nothing in this folder yet." => "Ten folder jest jeszcze pusty.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Wyświetlono pierwsze pliki: {shown} z {total}. Wybierz folder lub wyszukaj, aby zobaczyć pozostałe."
+        }
+        "Library|Nothing in this file." => "Ten plik jest pusty.",
+        "Library|Hidden" => "Ukryty",
+        "Library|Click to insert" => "Kliknij, aby wstawić",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Umieść ten element w tym samym miejscu",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "i jeszcze {count}",
+        "Library|Pictures" => "Obrazy",
+        "Library|Picture" => "Obraz",
+        "Library|Insert picture" => "Wstaw obraz",
+        "Library|Search pictures" => "Szukaj obrazów",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Pokaż obrazy z folderu plików PNG i JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Dodaj folder z obrazami PNG lub JPEG, aby zobaczyć je tutaj. Kliknij obraz, aby umieścić go w arkuszu."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Biblioteka pokazuje obrazy z folderów na tym komputerze, których wersja przeglądarkowa nie może odczytać. Użyj aplikacji klasycznej, aby przeglądać bibliotekę."
+        }
+        "Library" => "Biblioteka",
+        "Pictures from your own folders" => "Obrazy z Twoich folderów",
         "Numerical Count" => "Liczba wartości liczbowych",
         "Minimum" => "Minimum",
         "Maximum" => "Maksimum",

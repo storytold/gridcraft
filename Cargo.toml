@@ -53,6 +53,13 @@ craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "a20dfd1623
 craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "3b8e426a260695af840a2cd79a064d40778f939e", version = "0.1.0" }
 craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "a20dfd1623709b0bd9830106d3a92a1a443902e3", version = "0.1.0" }
 craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "08da5e1486ee640de1d2cccd8fe8dd32b1d3b62c", version = "=0.1.0" }
+# Insert ▸ Library: the Library core the Craft apps share (folders, bounds, caches, search, the
+# `library.*` answers) and its egui pane (in ui-egui). A temporary exception to the one revision
+# above: they exist only at storytold/craft-libs#1584's head until it merges, and they bring a
+# second craft-ui (craft-library-egui's) until then. Once #1584 is on craft-libs main, every
+# craft-libs pin here moves to one main commit, these two with them.
+craft-library = { git = "https://github.com/storytold/craft-libs", rev = "3bce146e933ae119a56e405a806ae3ced36dc3bb", version = "0.1.0" }
+craft-library-egui = { git = "https://github.com/storytold/craft-libs", rev = "3bce146e933ae119a56e405a806ae3ced36dc3bb", version = "0.1.0" }
 
 # foundation
 thiserror = "2"

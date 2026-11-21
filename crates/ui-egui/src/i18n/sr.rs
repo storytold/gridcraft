@@ -481,6 +481,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Prikaži",
         "Collapse dialog" => "Skupi dijalog",
         "Expand dialog" => "Proširi dijalog",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Sve fascikle",
+        "Library|Library folder" => "Fascikla biblioteke",
+        "Library|Add Folder…" => "Dodaj fasciklu…",
+        "Library|Remove" => "Ukloni",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Više ne prikazuj ovu fasciklu u biblioteci (njene datoteke ostaju gde jesu)"
+        }
+        "Library|Refresh" => "Osveži",
+        "Library|Read the folders again" => "Ponovo pročitaj fascikle",
+        "Library|Folder path" => "Putanja fascikle",
+        "Library|Add" => "Dodaj",
+        "Library|Reading {read} of {total} files…" => "Čitanje datoteka: {read} od {total}…",
+        "Library|Nothing matches \"{query}\"." => "Ništa ne odgovara upitu „{query}“.",
+        "Library|Nothing in this folder yet." => "Ova fascikla je još prazna.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Prikazane su prve datoteke: {shown} od {total}. Izaberite fasciklu ili pretražite da biste videli ostale."
+        }
+        "Library|Nothing in this file." => "Ova datoteka je prazna.",
+        "Library|Hidden" => "Skriveno",
+        "Library|Click to insert" => "Kliknite da biste umetnuli",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Postavi ovaj element na isto mesto",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "i još {count}",
+        "Library|Pictures" => "Slike",
+        "Library|Picture" => "Slika",
+        "Library|Insert picture" => "Umetni sliku",
+        "Library|Search pictures" => "Pretraži slike",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Prikaži slike iz fascikle sa PNG i JPEG datotekama",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Dodajte fasciklu sa PNG ili JPEG slikama da biste ih videli ovde. Kliknite na sliku da biste je postavili na list."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Biblioteka prikazuje slike iz fascikli na ovom računaru, koje verzija za pregledač ne može da pročita. Koristite aplikaciju za računar da biste pregledali biblioteku."
+        }
+        "Library" => "Biblioteka",
+        "Pictures from your own folders" => "Slike iz vaših fascikli",
         "My list has headers" => "Moji podaci imaju zaglavlja",
         "Sort by" => "Sortiraj po",
         "Then by" => "Zatim po",

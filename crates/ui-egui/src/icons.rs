@@ -151,6 +151,8 @@ pub enum Icon {
     SheetList,
     Book,
     Folder,
+    /// Insert ▸ Library: books on a shelf, one leaning.
+    Library,
     /// A book with a coloured spine and a category glyph (Formulas › Function Library). The
     /// spine and glyph take the accent colour of [`paint_accent`].
     FnBook(FnGlyph),
@@ -609,6 +611,13 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             for (x, y) in [(5.0, 11.0), (7.0, 8.0), (9.5, 9.5), (11.0, 5.0), (13.0, 4.0)] {
                 g.circle(x, y, 1.1, Some(blue), None);
             }
+        }
+        Icon::Library => {
+            g.rect(2.5, 4.0, 2.5, 9.5, Some(blue), None);
+            g.rect(5.5, 2.5, 3.0, 11.0, Some(orange), None);
+            g.line(&[(6.2, 4.5), (7.8, 4.5)], paper, 0.9);
+            g.poly(&[(9.2, 13.5), (11.2, 13.5), (14.0, 4.7), (12.1, 4.1)], green);
+            g.line(&[(1.5, 14.0), (14.5, 14.0)], c, 1.2);
         }
         Icon::Picture => {
             g.rect(2.0, 3.0, 12.0, 10.0, Some(pal.wash(Cat::Blue)), Some(c));

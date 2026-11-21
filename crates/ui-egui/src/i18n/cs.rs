@@ -600,6 +600,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Zobrazit",
         "Collapse dialog" => "Sbalit dialogové okno",
         "Expand dialog" => "Rozbalit dialogové okno",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Všechny složky",
+        "Library|Library folder" => "Složka knihovny",
+        "Library|Add Folder…" => "Přidat složku…",
+        "Library|Remove" => "Odebrat",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Přestat zobrazovat tuto složku v knihovně (její soubory zůstanou, kde jsou)"
+        }
+        "Library|Refresh" => "Aktualizovat",
+        "Library|Read the folders again" => "Znovu načíst složky",
+        "Library|Folder path" => "Cesta ke složce",
+        "Library|Add" => "Přidat",
+        "Library|Reading {read} of {total} files…" => "Načítání souborů: {read} z {total}…",
+        "Library|Nothing matches \"{query}\"." => "Hledání „{query}“ nic nenašlo.",
+        "Library|Nothing in this folder yet." => "Tato složka je zatím prázdná.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Zobrazeno prvních {shown} z {total} souborů: vyberte složku nebo hledejte, abyste viděli ostatní."
+        }
+        "Library|Nothing in this file." => "Tento soubor je prázdný.",
+        "Library|Hidden" => "Skryté",
+        "Library|Click to insert" => "Klikněte pro vložení",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Umístit tento prvek na stejné místo",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "a další ({count})",
+        "Library|Pictures" => "Obrázky",
+        "Library|Picture" => "Obrázek",
+        "Library|Insert picture" => "Vložit obrázek",
+        "Library|Search pictures" => "Hledat obrázky",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Zobrazit obrázky ze složky souborů PNG a JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Přidejte složku s obrázky PNG nebo JPEG a uvidíte je zde. Kliknutím na obrázek ho vložíte na list."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Knihovna zobrazuje obrázky ve složkách v tomto počítači, které verze pro prohlížeč nedokáže přečíst. K procházení knihovny použijte desktopovou aplikaci."
+        }
+        "Library" => "Knihovna",
+        "Pictures from your own folders" => "Obrázky z vašich vlastních složek",
         "My list has headers" => "Data obsahují záhlaví",
         "Sort by" => "Seřadit podle",
         "Then by" => "Potom podle",

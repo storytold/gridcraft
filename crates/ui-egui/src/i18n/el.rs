@@ -1029,6 +1029,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Όλοι οι φάκελοι",
+        "Library|Library folder" => "Φάκελος βιβλιοθήκης",
+        "Library|Add Folder…" => "Προσθήκη φακέλου…",
+        "Library|Remove" => "Κατάργηση",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Να μην εμφανίζεται πλέον αυτός ο φάκελος στη βιβλιοθήκη (τα αρχεία του μένουν στη θέση τους)"
+        }
+        "Library|Refresh" => "Ανανέωση",
+        "Library|Read the folders again" => "Ανάγνωση των φακέλων ξανά",
+        "Library|Folder path" => "Διαδρομή φακέλου",
+        "Library|Add" => "Προσθήκη",
+        "Library|Reading {read} of {total} files…" => "Ανάγνωση αρχείων: {read} από {total}…",
+        "Library|Nothing matches \"{query}\"." => "Δεν βρέθηκε τίποτα για «{query}».",
+        "Library|Nothing in this folder yet." => "Αυτός ο φάκελος είναι ακόμα κενός.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Εμφανίζονται τα πρώτα αρχεία: {shown} από {total}. Επιλέξτε φάκελο ή κάντε αναζήτηση για να δείτε τα υπόλοιπα."
+        }
+        "Library|Nothing in this file." => "Αυτό το αρχείο είναι κενό.",
+        "Library|Hidden" => "Κρυφό",
+        "Library|Click to insert" => "Κάντε κλικ για εισαγωγή",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Τοποθέτηση αυτού του στοιχείου στην ίδια θέση",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "και {count} ακόμα",
+        "Library|Pictures" => "Εικόνες",
+        "Library|Picture" => "Εικόνα",
+        "Library|Insert picture" => "Εισαγωγή εικόνας",
+        "Library|Search pictures" => "Αναζήτηση εικόνων",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Εμφάνιση των εικόνων ενός φακέλου με αρχεία PNG και JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Προσθέστε έναν φάκελο με εικόνες PNG ή JPEG για να τις δείτε εδώ. Κάντε κλικ σε μια εικόνα για να την τοποθετήσετε στο φύλλο."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Η βιβλιοθήκη εμφανίζει τις εικόνες σε φακέλους αυτού του υπολογιστή, τους οποίους η έκδοση για πρόγραμμα περιήγησης δεν μπορεί να διαβάσει. Χρησιμοποιήστε την εφαρμογή υπολογιστή για να περιηγηθείτε σε μια βιβλιοθήκη."
+        }
+        "Library" => "Βιβλιοθήκη",
+        "Pictures from your own folders" => "Εικόνες από τους δικούς σας φακέλους",
         "Numerical Count" => "Αριθμητικό πλήθος",
         "Minimum" => "Ελάχιστο",
         "Maximum" => "Μέγιστο",

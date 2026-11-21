@@ -28,6 +28,8 @@ gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
 image = { workspace = true }
 unicode-segmentation = "=1.13.3"
+# Insert ▸ Library: folders, bounds, caches, search and the `library.*` answers (see `library.rs`).
+craft-library = { workspace = true }
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }

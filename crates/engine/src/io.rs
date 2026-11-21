@@ -1143,6 +1143,140 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
+// ---------------------------------------------------------------- the Library's file access
+
+/// The Library ([`crate::library`]) reads folders and files only through these four, so the
+/// scripts' file sandbox refuses them as it refuses [`read_file`].
+fn library_check(path: &std::path::Path) -> std::result::Result<(), String> {
+    script_sandbox_check(&path.to_string_lossy()).map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn entry_kind(t: std::fs::FileType) -> craft_library::EntryKind {
+    use craft_library::EntryKind;
+    if t.is_symlink() {
+        EntryKind::Link
+    } else if t.is_dir() {
+        EntryKind::Folder
+    } else if t.is_file() {
+        EntryKind::File
+    } else {
+        EntryKind::Other
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn stamp_of(meta: &std::fs::Metadata) -> craft_library::Stamp {
+    craft_library::Stamp { len: meta.len(), modified: meta.modified().ok() }
+}
+
+/// At most `max` entries of the folder at `path`, and whether it holds more. Links are reported
+/// as links (from the entry's own type), never followed.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn library_entries(path: &std::path::Path, max: usize) -> std::result::Result<(Vec<craft_library::DirEntry>, bool), String> {
+    library_check(path)?;
+    let shown = path.display();
+    let mut out = vec![];
+    for entry in std::fs::read_dir(path).map_err(|e| format!("{shown}: {e}"))? {
+        if out.len() >= max {
+            return Ok((out, true));
+        }
+        // An entry that vanished or can't be examined is left out.
+        let Ok(entry) = entry else { continue };
+        let Ok(t) = entry.file_type() else { continue };
+        let kind = entry_kind(t);
+        let stamp =
+            if kind == craft_library::EntryKind::File { entry.metadata().map(|m| stamp_of(&m)).unwrap_or_default() } else { Default::default() };
+        out.push(craft_library::DirEntry { path: entry.path(), name: entry.file_name().to_str().map(String::from), kind, stamp });
+    }
+    Ok((out, false))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn library_entries(path: &std::path::Path, _max: usize) -> std::result::Result<(Vec<craft_library::DirEntry>, bool), String> {
+    library_check(path)?;
+    Err(format!("{}: folders on this computer are not available in the browser", path.display()))
+}
+
+/// What is at `path` (a link is reported as a link) and, for a file, its size and time.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn library_stat(path: &std::path::Path) -> std::result::Result<(craft_library::EntryKind, craft_library::Stamp), String> {
+    library_check(path)?;
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok((entry_kind(meta.file_type()), stamp_of(&meta)))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn library_stat(path: &std::path::Path) -> std::result::Result<(craft_library::EntryKind, craft_library::Stamp), String> {
+    library_check(path)?;
+    Err(format!("{}: files on this computer are not available in the browser", path.display()))
+}
+
+/// `path` made absolute with its links followed.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn library_canonical(path: &std::path::Path) -> std::result::Result<std::path::PathBuf, String> {
+    library_check(path)?;
+    std::fs::canonicalize(path).map(plain).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn library_canonical(path: &std::path::Path) -> std::result::Result<std::path::PathBuf, String> {
+    library_check(path)?;
+    Err(format!("{}: files on this computer are not available in the browser", path.display()))
+}
+
+/// A canonical Windows path without its `\\?\` prefix (`C:\…`, `\\server\share\…`), as people
+/// write it and as the folders are kept; elsewhere the path as it is.
+#[cfg(not(target_arch = "wasm32"))]
+fn plain(path: std::path::PathBuf) -> std::path::PathBuf {
+    if cfg!(windows)
+        && let Some(s) = path.to_str()
+    {
+        if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+            return std::path::PathBuf::from(format!(r"\\{unc}"));
+        }
+        if let Some(rest) = s.strip_prefix(r"\\?\")
+            && rest.as_bytes().get(1) == Some(&b':')
+        {
+            return std::path::PathBuf::from(rest);
+        }
+    }
+    path
+}
+
+/// The bytes of the regular file at `path`, no more than `max` of them: a larger file is an
+/// error, also one that grew after it was measured.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn library_read(path: &std::path::Path, max: u64) -> std::result::Result<Vec<u8>, String> {
+    use std::io::Read;
+    library_check(path)?;
+    let shown = path.display();
+    // Checked before opening, as `read_file` does: opening a FIFO nobody writes to blocks.
+    let meta = std::fs::metadata(path).map_err(|e| format!("{shown}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{shown}: not a regular file"));
+    }
+    if meta.len() > max {
+        return Err(format!("{shown}: larger than {} MB", max >> 20));
+    }
+    let file = std::fs::File::open(path).map_err(|e| format!("{shown}: {e}"))?;
+    if !file.metadata().map_err(|e| format!("{shown}: {e}"))?.is_file() {
+        return Err(format!("{shown}: not a regular file"));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(meta.len()).unwrap_or(0));
+    file.take(max.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| format!("{shown}: {e}"))?;
+    if bytes.len() as u64 > max {
+        return Err(format!("{shown}: the file grew past {} MB while it was read", max >> 20));
+    }
+    Ok(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn library_read(path: &std::path::Path, _max: u64) -> std::result::Result<Vec<u8>, String> {
+    library_check(path)?;
+    Err(format!("{}: files on this computer are not available in the browser", path.display()))
+}
+
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn base64_encode(data: &[u8]) -> String {

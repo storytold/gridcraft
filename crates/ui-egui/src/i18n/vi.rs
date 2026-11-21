@@ -451,6 +451,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Hiện",
         "Collapse dialog" => "Thu gọn hộp thoại",
         "Expand dialog" => "Mở rộng hộp thoại",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Tất cả thư mục",
+        "Library|Library folder" => "Thư mục thư viện",
+        "Library|Add Folder…" => "Thêm thư mục…",
+        "Library|Remove" => "Gỡ bỏ",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Không hiển thị thư mục này trong Thư viện nữa (các tệp vẫn ở nguyên chỗ)"
+        }
+        "Library|Refresh" => "Làm mới",
+        "Library|Read the folders again" => "Đọc lại các thư mục",
+        "Library|Folder path" => "Đường dẫn thư mục",
+        "Library|Add" => "Thêm",
+        "Library|Reading {read} of {total} files…" => "Đang đọc {read} trên {total} tệp…",
+        "Library|Nothing matches \"{query}\"." => "Không có kết quả khớp với \"{query}\".",
+        "Library|Nothing in this folder yet." => "Thư mục này chưa có gì.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Đang hiển thị {shown} tệp đầu tiên trên tổng số {total}: hãy chọn một thư mục hoặc tìm kiếm để xem các tệp khác."
+        }
+        "Library|Nothing in this file." => "Tệp này không có gì.",
+        "Library|Hidden" => "Ẩn",
+        "Library|Click to insert" => "Bấm để chèn",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Đặt phần tử này vào cùng vị trí",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "và {count} mục khác",
+        "Library|Pictures" => "Ảnh",
+        "Library|Picture" => "Ảnh",
+        "Library|Insert picture" => "Chèn ảnh",
+        "Library|Search pictures" => "Tìm ảnh",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Hiển thị ảnh trong một thư mục tệp PNG và JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Thêm một thư mục ảnh PNG hoặc JPEG để xem chúng ở đây. Bấm vào một ảnh để đặt nó lên trang tính."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "Thư viện hiển thị ảnh trong các thư mục trên máy tính này, mà phiên bản trình duyệt không đọc được. Hãy dùng ứng dụng máy tính để duyệt Thư viện."
+        }
+        "Library" => "Thư viện",
+        "Pictures from your own folders" => "Ảnh từ thư mục của riêng bạn",
         "My list has headers" => "Dữ liệu của tôi có tiêu đề",
         "Sort by" => "Sắp xếp theo",
         "Then by" => "Sau đó theo",
