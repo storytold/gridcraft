@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use gridcraft_core::region::Region;
 use gridcraft_model::{DateGroupItem, DateGrouping};
 
 use super::sort::sort_key;
@@ -504,12 +505,14 @@ impl FilterList {
     }
 }
 
-fn date_label(item: &DateGroupItem) -> String {
+fn date_label(item: &DateGroupItem, region: &Region) -> String {
     match item.grouping {
         DateGrouping::Year => item.year.to_string(),
-        DateGrouping::Month => {
-            gridcraft_core::date::MONTHS.get(item.month.saturating_sub(1) as usize).map_or_else(|| item.month.to_string(), |m| m.to_string())
-        }
+        // In the region's language, as the interface shows dates.
+        DateGrouping::Month => match region.month_name(item.month, false) {
+            "" => item.month.to_string(),
+            name => name.to_string(),
+        },
         DateGrouping::Day => format!("{:02}", item.day),
         DateGrouping::Hour => format!("{:02}", item.hour),
         DateGrouping::Minute => format!(":{:02}", item.minute),
@@ -518,7 +521,7 @@ fn date_label(item: &DateGroupItem) -> String {
 }
 
 /// Groups sorted leaves into nodes at `depth`, recursing to `leaf`; `path` holds the labels above.
-fn date_nodes(leaves: &[(DateGroupItem, BTreeSet<String>, bool)], depth: usize, leaf: usize, path: &str) -> Vec<DateNode> {
+fn date_nodes(leaves: &[(DateGroupItem, BTreeSet<String>, bool)], depth: usize, leaf: usize, path: &str, region: &Region) -> Vec<DateNode> {
     let Some(&grouping) = DateGrouping::ALL.get(depth) else { return vec![] };
     let mut out: Vec<DateNode> = vec![];
     let mut start = 0;
@@ -526,7 +529,7 @@ fn date_nodes(leaves: &[(DateGroupItem, BTreeSet<String>, bool)], depth: usize, 
         let key = DateGroupItem::of(&date_time_of(first), grouping);
         let len = leaves.iter().skip(start).take_while(|(it, ..)| DateGroupItem::of(&date_time_of(it), grouping) == key).count().max(1);
         let group = leaves.get(start..start + len).unwrap_or_default();
-        let label = date_label(&key);
+        let label = date_label(&key, region);
         let path = format!("{path} {label}");
         let node = if depth >= leaf {
             let mut search = path.clone();
@@ -546,7 +549,7 @@ fn date_nodes(leaves: &[(DateGroupItem, BTreeSet<String>, bool)], depth: usize, 
                 shown_on: usize::from(checked),
             }
         } else {
-            let children = date_nodes(group, depth + 1, leaf, &path);
+            let children = date_nodes(group, depth + 1, leaf, &path, region);
             let sum = |f: fn(&DateNode) -> usize| children.iter().map(f).sum::<usize>();
             let (leaves, shown_on) = (sum(|c| c.leaves), sum(|c| c.shown_on));
             DateNode { item: key, label, search: String::new(), checked: false, leaves, shown: leaves, shown_on, children }
@@ -571,8 +574,14 @@ fn date_time_of(it: &DateGroupItem) -> gridcraft_core::date::DateTime {
 
 /// The filter dropdown's list for a column: date cells as a Year › Month › Day tree (› Hour ›
 /// Minute › Second when any has a time), everything else as a flat list of distinct texts with
-/// `(Blanks)` for empty cells and empty text.
+/// `(Blanks)` for empty cells and empty text. Months are named in English; [`filter_list_in`]
+/// names them in a region's language.
 pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
+    filter_list_in(wb, sheet, col, gridcraft_core::region::default_region())
+}
+
+/// [`filter_list`] with the month names of `region`, the interface's language.
+pub fn filter_list_in(wb: &Workbook, sheet: usize, col: u32, region: &Region) -> FilterList {
     let Some(sh) = wb.sheet(sheet) else { return FilterList::default() };
     let Some(af) = &sh.autofilter else { return FilterList::default() };
     let off = col.saturating_sub(af.range.start.col);
@@ -640,7 +649,7 @@ pub fn filter_list(wb: &Workbook, sheet: usize, col: u32) -> FilterList {
     values.sort_by(|((a, ta), _), ((b, tb), _)| {
         a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
     });
-    FilterList { dates: date_nodes(&leaves, 0, leaf, ""), values: values.into_iter().map(|((_, t), on)| (t, on)).collect(), truncated }
+    FilterList { dates: date_nodes(&leaves, 0, leaf, "", region), values: values.into_iter().map(|((_, t), on)| (t, on)).collect(), truncated }
 }
 
 /// The fewest `dates` that select the checked leaves the search shows (counts from

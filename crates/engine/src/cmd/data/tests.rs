@@ -253,6 +253,20 @@ fn the_list_stops_at_excels_limit_of_distinct_items() {
 }
 
 #[test]
+fn month_names_and_their_search_follow_the_region() {
+    let s = dated_session();
+    let wb = &s.doc().unwrap().wb;
+    let months = |l: &FilterList| l.dates.iter().flat_map(|y| y.children.iter().map(|m| m.label.clone())).collect::<Vec<_>>();
+    let english = filter_list(wb, 0, 0);
+    let mut italian = filter_list_in(wb, 0, 0, gridcraft_core::region::lookup("it"));
+    assert_ne!(months(&english), months(&italian), "the region names the months");
+    assert!(months(&italian).iter().any(|m| m.as_str() == gridcraft_core::region::lookup("it").month_name(3, false)));
+    // The search finds a month by the name the tree shows.
+    italian.refresh(&gridcraft_core::region::lookup("it").month_name(3, false).to_lowercase());
+    assert!(italian.dates.iter().any(|n| n.shown > 0));
+}
+
+#[test]
 fn every_text_of_a_date_stays_searchable() {
     // One day shown in nine formats: the dropdown's search must find the ninth text too.
     let codes = ["yyyy-mm-dd", "d/m/yyyy", "m/d/yyyy", "dd.mm.yyyy", "d mmm yyyy", "mmm d, yyyy", "dddd d", "yyyy/mm/dd", "d mmmm yyyy"];

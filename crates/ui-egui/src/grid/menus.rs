@@ -38,6 +38,8 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         }
     }
     let wb = app.session.active().map(|d| d.wb.clone()).unwrap_or(wb);
+    // The date tree names months in the interface language.
+    let region = gridcraft_engine::core::region::lookup(app.ui.language.code());
     let key = egui::Id::unique(("filter_sel", col));
     let search_key = egui::Id::unique(("filter_search", col));
     // A menu that has just opened (or moved to another column or sheet) starts from the sheet as it
@@ -74,7 +76,7 @@ pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
             // Built once when the menu opens and shared between frames, so a frame neither rebuilds
             // nor copies the list (a date column can hold a million leaves).
             let state = ui.ctx().data_mut(|d| d.get_temp::<SharedFilterMenu>(key)).unwrap_or_else(|| {
-                let list = gridcraft_engine::cmd::data::filter_list(&wb, si, col);
+                let list = gridcraft_engine::cmd::data::filter_list_in(&wb, si, col, region);
                 let values_lc = list.values.iter().map(|(v, _)| v.to_lowercase()).collect();
                 let state: SharedFilterMenu = Arc::new(Mutex::new(FilterMenuState { list, values_lc, ..Default::default() }));
                 ui.ctx().data_mut(|d| d.insert_temp(key, state.clone()));
