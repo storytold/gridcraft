@@ -247,3 +247,59 @@ fn command_search_hides_disabled_and_handles_missing_shortcuts() {
         h.get_by_label_contains("Align Right    Home");
     }
 }
+
+/// In a comment or note, Enter with Shift, Alt or Ctrl starts a new line and keeps the box open;
+/// Enter alone saves it without adding a line.
+#[test]
+fn enter_with_a_modifier_starts_a_new_line_and_enter_alone_saves_the_comment() {
+    use egui::Modifiers;
+    for threaded in [true, false] {
+        let mut h = harness();
+        h.state_mut().open_dialog("comment", json!({"threaded": threaded}));
+        h.run_steps(6);
+        let modified = [Modifiers::SHIFT, Modifiers::ALT, Modifiers::CTRL, Modifiers::COMMAND];
+        for modifiers in modified {
+            h.input_mut().events.push(Event::Text("a".into()));
+            h.run_steps(1);
+            h.input_mut().events.push(Event::Key { key: Key::Enter, physical_key: Some(Key::Enter), pressed: true, repeat: false, modifiers });
+            h.run_steps(3);
+            assert!(h.state().dialog.is_some(), "Enter with {modifiers:?} kept the comment open (threaded: {threaded})");
+        }
+        h.input_mut().events.push(Event::Text("b".into()));
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(6);
+        assert!(h.state().dialog.is_none(), "Enter alone saved the comment (threaded: {threaded})");
+        let text = {
+            let d = h.state().session.active().unwrap();
+            d.wb.active().unwrap().comments.get(&CellRef::parse("C3").unwrap()).map(|c| c.text.clone()).unwrap_or_default()
+        };
+        assert_eq!(text.matches('\n').count(), modified.len(), "only the modified Enters added lines (threaded: {threaded}), got {text:?}");
+        assert!(text.ends_with('b'), "Enter alone added no line (threaded: {threaded}), got {text:?}");
+    }
+}
+
+/// Insert Hyperlink's Display field is one line: Enter confirms the link and adds no line break
+/// to its text, with or without a modifier.
+#[test]
+fn enter_in_a_link_display_confirms_without_a_line_break() {
+    use egui::Modifiers;
+    for modifiers in [Modifiers::NONE, Modifiers::SHIFT, Modifiers::ALT] {
+        let mut h = harness();
+        h.state_mut().open_dialog("insertLink", json!({}));
+        h.run_steps(6);
+        h.get_by_label("Display:").click();
+        h.run_steps(3);
+        h.input_mut().events.push(Event::Text("x".into()));
+        h.run_steps(1);
+        h.input_mut().events.push(Event::Key { key: Key::Enter, physical_key: Some(Key::Enter), pressed: true, repeat: false, modifiers });
+        h.run_steps(6);
+        assert!(h.state().dialog.is_none(), "Enter with {modifiers:?} confirmed the link");
+        let text = {
+            let d = h.state().session.active().unwrap();
+            let sheet = d.wb.active().unwrap();
+            gridcraft_engine::display::cell_text(&d.wb, sheet, CellRef::parse("C3").unwrap())
+        };
+        assert!(text.contains('x') && !text.contains('\n'), "the link text has no line break with {modifiers:?}, got {text:?}");
+    }
+}
