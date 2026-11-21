@@ -5,6 +5,7 @@ use serde_json::{Value as Json, json};
 use super::{CommandSpec, Result, Session, always, bad, bool_param, cmd, edit, has_doc, ok, str_param, target_sheet, u32_param};
 use crate::DocState;
 
+/// Command specifications for File, Options, and Window operations.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
@@ -24,6 +25,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{} → {calculation: {mode, iterative, maxIterations, maxChange, precisionAsDisplayed}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
             always,
             options
+        ),
+        cmd!(
+            query "options.newWorkbookColumnWidth",
+            "Default Column Width for New Workbooks",
+            [],
+            None,
+            "{width?: 0..1800 (96-dpi pixels)} → {width}: set or read the width used for newly created workbooks",
+            always,
+            new_workbook_column_width
         ),
         cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{window} | {doc} | {index} (a window id, a workbook id, or the workbook's position in the list)", has_doc, activate_window),
         cmd!(noundo "window.close", "Close Window", ["Window"], None, "{window?, doc?, force?: bool} → {closed, document}: closes a window (the active one by default); its workbook closes with its last window, asking first when it has unsaved changes unless `force`", has_doc, close_window),
@@ -235,6 +245,17 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
     Ok(json!({"calculation": calculation}))
 }
 
+/// Application preference, not a workbook edit. An empty request reads it.
+fn new_workbook_column_width(s: &mut Session, p: &Json) -> Result<Json> {
+    if let Some(value) = p.get("width") {
+        let width = value
+            .as_f64()
+            .filter(|w| w.is_finite() && (0.0..=1800.0).contains(w))
+            .ok_or_else(|| bad("options.newWorkbookColumnWidth", "`width` must be a number from 0 to 1800 pixels"))?;
+        s.prefs.default_column_width = width as f32;
+    }
+    Ok(json!({"width": s.prefs.new_workbook_column_width()}))
+}
 fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {
     let id = match u32_param(p, "index").filter(|_| p.get("window").is_none_or(Json::is_null) && p.get("doc").is_none_or(Json::is_null)) {
         Some(i) => {
