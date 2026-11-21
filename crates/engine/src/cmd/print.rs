@@ -292,6 +292,10 @@ fn print(s: &mut Session, p: &Json) -> Result<Json> {
 fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
     let opts = PrintOptions::from_params(p, "file.printPreview")?;
     let d = s.doc()?;
+    let page = u32_param(p, "page");
+    if page == Some(0) {
+        return Err(bad("file.printPreview", "page numbers start at 1"));
+    }
     let lays = layouts(&d.wb, &opts);
     let mut list = Vec::new();
     let mut n = 0usize;
@@ -316,9 +320,8 @@ fn print_preview(s: &mut Session, p: &Json) -> Result<Json> {
             }));
         }
     }
-    if let Some(page) = u32_param(p, "page") {
-        let one =
-            list.get((page as usize).saturating_sub(1)).cloned().ok_or_else(|| bad("file.printPreview", format!("there are only {n} pages")))?;
+    if let Some(page) = page {
+        let one = list.get((page - 1) as usize).cloned().ok_or_else(|| bad("file.printPreview", format!("there are only {n} pages")))?;
         return Ok(json!({"pages": n, "page": one}));
     }
     Ok(json!({"pages": n, "pageList": list}))
