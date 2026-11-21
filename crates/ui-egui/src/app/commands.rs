@@ -144,11 +144,20 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
+        // A Save that finds the workbook's file changed on disk asks what to do (`changed_on_disk`).
+        let save = matches!(id, "file.save" | "file.saveAs").then(|| params.clone());
         match self.run(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
-            Err(e) => self.alert(e),
-            Ok(_) => {}
+            Err(e) => match save {
+                Some(params) if super::changed_on_disk::is_changed_on_disk(&e) => self.ask_changed_on_disk(params, None),
+                _ => self.alert(e),
+            },
+            Ok(r) => {
+                if save.is_some() {
+                    self.resume_autosave(&r);
+                }
+            }
         }
     }
 
@@ -419,7 +428,11 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                // A caller may propose a name of its own (Save a Copy, `changed_on_disk`).
+                let suggested = match params.get("suggested").and_then(Json::as_str) {
+                    Some(name) => name.to_string(),
+                    None => self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into()),
+                };
                 if let Some(pick) = &self.services.pick_save {
                     if let Some(path) = pick(&suggested) {
                         let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };

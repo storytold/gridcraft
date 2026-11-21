@@ -11,6 +11,18 @@ pub enum NoticeKind {
     Warning,
 }
 
+/// An answer to the question a Save asks when the workbook's own file was changed on disk since
+/// it was opened here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChangedAnswer {
+    /// Save As, proposing the workbook's own name marked as a copy: both files stay.
+    SaveCopy,
+    /// Save over the newer file.
+    Overwrite,
+    /// Nothing is written.
+    Cancel,
+}
+
 /// An answer to the Save Changes question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveAnswer {

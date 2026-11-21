@@ -2,7 +2,7 @@
 use super::clock::monotonic_ms;
 use super::clock::now_ms;
 use super::services::{Chrome, Services};
-use super::state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
+use super::state::{ChangedAnswer, NoticeKind, OpenWindow, SaveAnswer, SheetView};
 #[cfg(not(target_arch = "wasm32"))]
 use super::updates_ui;
 use super::{
@@ -11,6 +11,7 @@ use super::{
     keytips, macro_ui, panes, pivot_pane, printing, ribbon, tabs, text_box, theme, widgets,
 };
 
+mod changed_on_disk;
 mod clipboard;
 mod commands;
 mod editing;
@@ -40,6 +41,7 @@ impl SheetApp {
             message: None,
             toast: None,
             notice: None,
+            autosave_held: Vec::new(),
             services,
             printing: Default::default(),
             print_feedback_seen: None,

@@ -70,6 +70,12 @@ impl SheetApp {
                     return false;
                 }
                 self.run_or_alert("file.save", json!({}));
+                // Its file was changed on disk: the question about it takes over, and the close goes
+                // on once a save went through (`changed_on_disk`).
+                if let Some(question) = self.dialog.as_mut().filter(|d| d.name == "fileChanged") {
+                    question.values.insert("then".into(), json!(if quitting { "quit" } else { "close" }));
+                    return true;
+                }
                 if self.session.active().is_some_and(|x| !x.is_dirty()) {
                     self.run_or_alert("file.close", json!({"force": true, "document": true}));
                     if quitting {

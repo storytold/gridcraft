@@ -81,7 +81,7 @@ mod state;
 
 pub use clock::{monotonic_ms, now_ms};
 pub use services::{Chrome, Inbox, Services};
-pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
+pub use state::{ChangedAnswer, NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 
 fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
@@ -252,6 +252,9 @@ pub struct SheetApp {
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
+    /// The workbooks AutoSave stopped for, by `DocState::uid`: their file was changed on disk
+    /// since it was opened here (see `app::changed_on_disk`).
+    pub(crate) autosave_held: Vec<u64>,
     pub services: Services,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
