@@ -1,6 +1,6 @@
 # Macros
 
-> **Last updated:** 2026-11-02 · **Change:** minor (form buttons run macros, `macro.run` takes `output`, and a button action kept in a hidden name comes back on reopen only while the file still agrees with it; earlier: a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
+> **Last updated:** 2026-11-05 · **Change:** minor (form buttons run macros with output mappings and retain approved actions only while file assignments agree; PDF font reads require explicit macro permission and approval disclosure; a close that waits on the step editor's question runs in the editor's window, and a further close asked meanwhile waits for the answer or is refused; earlier: closing a workbook or quitting asks about the step editor's unsaved draft first; recording macros and the management commands; Record Macro takes a name, shortcut and description; the macro interface: Automate › Macros, the Macros and Record Macro dialogs, the step editor, shortcuts)
 
 GridCraft macros are typed, declarative lists of commands, not VBA. Every step runs a GridCraft
 command (the same ids the ribbon, CLI and MCP use) or one of three bounded control steps. A macro
@@ -112,7 +112,11 @@ doesn't exist, a cell outside the grid), is refused before anything runs:
    Properties runs, and so do exports and printing (`file.exportPdf`, `exportCsv`, `exportHtml`, `print`, `printPreview`, `saveBytes`)
    that only produce bytes. Reading or writing a file (`data.getData`, `data.fromTextCsv`,
    `insert.picture` or `pageLayout.background` with a `path`, or an export or print with a
-   `path`) needs the command in the macro's `permissions`. Any `path` other than `null` counts,
+   `path`) needs the command in the macro's `permissions`. Explicit `fonts` or `fontFamilies`
+   in `file.exportPdf` or `file.print` also require that command's permission, even without an
+   output path. Approval states that the step reads and embeds local font files, separately from
+   writing an output file. Unresolved font selections are classified before their tokens resolve.
+   Any `path` other than `null` counts,
    including a blank one and a token, and the policy is checked again on the parameters as they
    are when the step runs. A macro that touches files, or that came with a workbook opened from
    a file, runs once the person approves it: the call fails with `approve: …` and runs with
@@ -371,3 +375,9 @@ recorded. A workbook can hold a script and a macro with the same name.
 
 A VBA project in an `.xlsm` or `.xltm` file is preserved on save and never run. GridCraft macros
 are stored apart from it.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-31 | minor | PDF exports disclose and require approval for local font reads, including byte-only output and named or tokenized font selections |

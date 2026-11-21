@@ -30,5 +30,6 @@ image = { workspace = true }
 unicode-segmentation = "=1.13.3"
 
 [dev-dependencies]
+gridcraft-pdf = { workspace = true, features = ["test-support"] }
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }

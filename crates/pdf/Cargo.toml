@@ -9,6 +9,9 @@ readme = "README.md"
 [lints]
 workspace = true
 
+[features]
+test-support = []
+
 [dependencies]
 craft-pdf.workspace = true
 craft-stream-codecs.workspace = true
