@@ -799,6 +799,11 @@ fn editor_arrow_keys(
 }
 
 fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, ed: &mut crate::editor::EditState) {
+    // F2 switches the in-cell edit between Edit mode (arrows move the caret) and Enter mode
+    // (arrows point at cells), as in Excel.
+    if !ed.from_formula_bar && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2)) {
+        toggle_enter_mode(app, ed);
+    }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
         cycle_anchor(ed);
     }
@@ -872,6 +877,21 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         None => {}
     }
     info
+}
+
+fn toggle_enter_mode(app: &mut SheetApp, ed: &mut crate::editor::EditState) {
+    ed.enter_mode = !ed.enter_mode;
+    // The next arrow starts pointing again from the edited cell.
+    ed.point = None;
+    ed.point_anchor = None;
+    ed.point_cell = None;
+    app.session.mode = if !ed.enter_mode {
+        gridcraft_engine::Mode::Edit
+    } else if ed.can_point() {
+        gridcraft_engine::Mode::Point
+    } else {
+        gridcraft_engine::Mode::Enter
+    };
 }
 
 fn cycle_anchor(ed: &mut crate::editor::EditState) {

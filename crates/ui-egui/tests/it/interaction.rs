@@ -427,6 +427,24 @@ fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
 }
 
 #[test]
+fn f2_during_an_edit_switches_arrows_between_caret_and_pointing() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    key(&mut h, Key::F2, Modifiers::NONE);
+    text(&mut h, "=SUM(");
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=SUM("), "after F2 the arrows move the caret, not point");
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=SUM(A10"), "a second F2 lets the arrows point at cells");
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=SUM(A10"), "a third F2 gives the arrows back to the caret");
+}
+
+#[test]
 fn ctrl_arrows_in_point_mode_jump_to_the_edge_of_the_data() {
     // Typing `=COUNTIF(`, clicking the top of a column and pressing Ctrl+Shift+Down (⌘⇧↓) points
     // at the whole column of data, as the same keys select it outside an edit.
