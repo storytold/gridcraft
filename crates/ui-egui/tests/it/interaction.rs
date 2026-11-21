@@ -226,6 +226,21 @@ fn space_toggles_the_active_checkbox_without_clicking_the_hovered_cell() {
 }
 
 #[test]
+fn clicking_a_locked_checkbox_shows_the_protection_warning() {
+    let mut session = blank();
+    session.execute("insert.checkbox", json!({"range": "B2"})).unwrap();
+    session.execute("review.protectSheet", json!({})).unwrap();
+    let mut h = harness(session);
+    let undo = h.state().session.active().unwrap().undo.len();
+
+    click_cell(&mut h, "B2");
+
+    assert_eq!(value(&h, "B2"), Value::Bool(false), "the locked checkbox stays unchecked");
+    assert_eq!(h.state().session.active().unwrap().undo.len(), undo, "the refused toggle adds no undo step");
+    assert!(h.state().message.as_ref().is_some_and(|(_, message)| message.contains("protected sheet")));
+}
+
+#[test]
 /// Name Box Enter selects A1; the next grid Enter moves down to A2.
 fn name_box_enter_goes_to_the_typed_cell_not_the_one_below() {
     // #247: typing A1 in the Name Box and pressing Enter selected A2; the grid replayed the Enter.
