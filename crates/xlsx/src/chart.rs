@@ -239,6 +239,10 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                     })
                 })
                 .or_else(|| sel.and_then(|e| e.path(&["marker", "spPr", "solidFill"])).and_then(dml_color));
+            let mut trendline_els = sel
+                .into_iter()
+                .flat_map(|e| e.kids("trendline").take(16))
+                .filter(|e| e.child("trendlineType").and_then(|c| c.attr("val")).and_then(TrendlineType::from_xml).is_some());
             Series {
                 name: s.refs.name.as_deref().map(chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
                 categories: s
@@ -266,7 +270,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                 },
                 quartiles: Default::default(),
                 smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
-                trendlines: s.trendlines.iter().enumerate().map(|(ti, t)| map_trendline(t, sel.and_then(|e| e.kids("trendline").nth(ti)))).collect(),
+                trendlines: s.trendlines.iter().map(|t| map_trendline(t, trendline_els.next())).collect(),
             }
         })
         .collect();
