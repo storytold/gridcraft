@@ -971,10 +971,11 @@ fn hebrew_and_the_shekel_sign_are_drawn_from_the_hebrew_face() {
 
 #[test]
 fn hebrew_points_are_drawn_on_their_letters_from_the_hebrew_face() {
-    let pointed = arabic::layout(Font::Helvetica, "בְּרֵאשִׁית", TextDirection::Auto);
-    if pointed.is_err() && arabic::HEBREW_FONTS.is_empty() {
+    // Skipped only without a Hebrew face, bundled or installed: a face that fails to lay the text out fails the test.
+    if arabic::shaping(Font::Helvetica, "בְּרֵאשִׁית") == arabic::Shaping::NoFont(arabic::Script::Hebrew) {
         return;
     }
+    let pointed = arabic::layout(Font::Helvetica, "בְּרֵאשִׁית", TextDirection::Auto);
     let (pointed, plain) = (pointed.unwrap(), arabic::layout(Font::Helvetica, "בראשית", TextDirection::Auto).unwrap());
     assert!(pointed.items.iter().all(|item| matches!(item, arabic::Item::Glyph { .. })), "{:?}", pointed.items);
     assert!(pointed.items.len() > plain.items.len(), "each point is a glyph of its own");
