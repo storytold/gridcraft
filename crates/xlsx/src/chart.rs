@@ -3,64 +3,143 @@
 
 use std::fmt::Write as _;
 
+use craft_drawingml::chart::{Chart as DmlChart, ChartType, Trendline as DmlTrendline, TrendlineType};
+use craft_drawingml::color::SchemeSlot;
+use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{AxisNumberFormats, Chart, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{AxisNumberFormats, Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, esc_attr, num};
 
 // ---------------------------------------------------------------- reading
 
-fn group_kind(g: &El) -> Option<ChartKind> {
-    let grouping = g.child_val("grouping").unwrap_or("standard");
-    let stacked = grouping == "stacked";
-    let pct = grouping == "percentStacked";
-    Some(match g.name.as_str() {
-        "barChart" | "bar3DChart" => {
-            let bar = g.child_val("barDir") == Some("bar");
-            match (bar, stacked, pct) {
-                (false, true, _) => ChartKind::ColumnStacked,
-                (false, _, true) => ChartKind::ColumnStacked100,
-                (false, _, _) => ChartKind::ColumnClustered,
-                (true, true, _) => ChartKind::BarStacked,
-                (true, _, true) => ChartKind::BarStacked100,
-                (true, _, _) => ChartKind::BarClustered,
-            }
+pub(crate) fn to_craft_el(e: &El) -> craft_xml::El {
+    let mut out = craft_xml::El::new(e.name.as_str());
+    out.attrs = e.attrs.clone();
+    for c in &e.children {
+        out.children.push(craft_xml::Node::El(to_craft_el(c)));
+    }
+    if !e.text.is_empty() {
+        out.children.push(craft_xml::Node::Text(e.text.clone()));
+    }
+    out
+}
+
+pub(crate) fn map_dml_color(c: &DmlColor) -> Option<Color> {
+    match &c.base {
+        ColorBase::Rgb { rgb } => Some(Color::Rgb((u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b))),
+        ColorBase::Scheme { slot } => {
+            let i = match slot {
+                SchemeSlot::Bg1 | SchemeSlot::Lt1 => 0,
+                SchemeSlot::Tx1 | SchemeSlot::Dk1 => 1,
+                SchemeSlot::Bg2 | SchemeSlot::Lt2 => 2,
+                SchemeSlot::Tx2 | SchemeSlot::Dk2 => 3,
+                SchemeSlot::Accent1 => 4,
+                SchemeSlot::Accent2 => 5,
+                SchemeSlot::Accent3 => 6,
+                SchemeSlot::Accent4 => 7,
+                SchemeSlot::Accent5 => 8,
+                SchemeSlot::Accent6 => 9,
+                SchemeSlot::Hlink => 10,
+                SchemeSlot::FolHlink => 11,
+                SchemeSlot::PhClr => return None,
+            };
+            Some(Color::Theme(i, 0))
         }
-        "lineChart" | "line3DChart" => {
-            if stacked || pct {
-                ChartKind::LineStacked
-            } else {
-                let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
-                let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
-                if !group_markers || (all_none && g.kids("ser").next().is_some()) { ChartKind::Line } else { ChartKind::LineMarkers }
-            }
+        ColorBase::System { last, .. } => Some(Color::Rgb((u32::from(last.r) << 16) | (u32::from(last.g) << 8) | u32::from(last.b))),
+        ColorBase::Preset { .. } => None,
+    }
+}
+
+fn map_chart_type(k: ChartType, plot: Option<&El>) -> ChartKind {
+    match k {
+        ChartType::Column => ChartKind::ColumnClustered,
+        ChartType::StackedColumn => ChartKind::ColumnStacked,
+        ChartType::PercentColumn => ChartKind::ColumnStacked100,
+        ChartType::Bar => ChartKind::BarClustered,
+        ChartType::StackedBar => ChartKind::BarStacked,
+        ChartType::PercentBar => ChartKind::BarStacked100,
+        ChartType::Line => {
+            let markers = plot
+                .into_iter()
+                .flat_map(|p| p.kids("lineChart").chain(p.kids("line3DChart")))
+                .filter(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")))
+                .any(|g| {
+                    let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+                    let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
+                    group_markers && !(all_none && g.kids("ser").next().is_some())
+                });
+            if markers { ChartKind::LineMarkers } else { ChartKind::Line }
         }
-        "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
-        "doughnutChart" => ChartKind::Doughnut,
-        "areaChart" | "area3DChart" => {
-            if pct {
-                ChartKind::AreaStacked100
-            } else if stacked {
-                ChartKind::AreaStacked
-            } else {
-                ChartKind::Area
-            }
+        ChartType::LineMarkers => ChartKind::LineMarkers,
+        ChartType::StackedLine => ChartKind::LineStacked,
+        ChartType::Area => ChartKind::Area,
+        ChartType::StackedArea => {
+            let pct = plot
+                .into_iter()
+                .flat_map(|p| p.kids("areaChart").chain(p.kids("area3DChart")))
+                .any(|g| g.child_val("grouping") == Some("percentStacked"));
+            if pct { ChartKind::AreaStacked100 } else { ChartKind::AreaStacked }
         }
-        "scatterChart" => {
-            let no_lines = g.kids("ser").all(|s| s.path(&["spPr", "ln"]).is_some_and(|l| l.child("noFill").is_some()));
-            if g.child_val("scatterStyle") == Some("marker") || (no_lines && g.kids("ser").next().is_some()) {
-                ChartKind::Scatter
-            } else {
-                ChartKind::ScatterLines
-            }
+        ChartType::Pie => ChartKind::Pie,
+        ChartType::Doughnut => ChartKind::Doughnut,
+        ChartType::Scatter => {
+            let marker_only = plot.and_then(|p| p.child("scatterChart")).is_some_and(|g| {
+                let no_lines = g.kids("ser").all(|s| s.path(&["spPr", "ln"]).is_some_and(|l| l.child("noFill").is_some()));
+                g.child_val("scatterStyle") == Some("marker") || (no_lines && g.kids("ser").next().is_some())
+            });
+            if marker_only { ChartKind::Scatter } else { ChartKind::ScatterLines }
         }
-        "bubbleChart" => ChartKind::Bubble,
-        "radarChart" => ChartKind::Radar,
-        "stockChart" => ChartKind::Stock,
-        _ => return None,
-    })
+        ChartType::Bubble => ChartKind::Bubble,
+        ChartType::Radar | ChartType::FilledRadar => ChartKind::Radar,
+        ChartType::Stock => ChartKind::Stock,
+        ChartType::Combo => ChartKind::Combo,
+        _ => ChartKind::ColumnClustered,
+    }
+}
+
+fn map_trendline(t: &DmlTrendline, el: Option<&El>) -> Trendline {
+    let kind = match t.kind {
+        TrendlineType::Linear => TrendlineKind::Linear,
+        TrendlineType::Exp => TrendlineKind::Exponential,
+        TrendlineType::Log => TrendlineKind::Logarithmic,
+        TrendlineType::Power => TrendlineKind::Power,
+        TrendlineType::Poly => TrendlineKind::Polynomial(t.order.unwrap_or(2).clamp(2, 6) as u8),
+        TrendlineType::MovingAvg => TrendlineKind::MovingAverage(t.period.unwrap_or(2).clamp(2, 255)),
+    };
+    let ln = el.and_then(|e| e.path(&["spPr", "ln"]));
+    let forecast = |name: &str, dml: Option<f64>| {
+        Trendline::clamp_forecast(el.and_then(|e| e.child(name)).and_then(|c| c.attr_f64("val")).or(dml).unwrap_or(0.0))
+    };
+    Trendline {
+        kind,
+        name: t.name.clone(),
+        forward: forecast("forward", t.forward),
+        backward: forecast("backward", t.backward),
+        intercept: t.intercept,
+        display_equation: el.and_then(|e| e.child("dispEq")).map_or(t.disp_eq, |c| c.flag("val", true)),
+        display_r_squared: el.and_then(|e| e.child("dispRSqr")).map_or(t.disp_r_sqr, |c| c.flag("val", true)),
+        color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
+        width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0),
+        dash: ln.and_then(|l| l.child("prstDash")).and_then(|d| d.attr("val")).and_then(|v| DASHES.iter().find(|(_, n)| *n == v).map(|(d, _)| *d)),
+    }
+}
+
+fn literal_array(e: Option<&El>) -> Option<String> {
+    let e = e?;
+    for k in ["numLit", "strLit"] {
+        if let Some(l) = e.child(k) {
+            let pts: Vec<String> = l
+                .kids("pt")
+                .filter_map(|p| p.child("v"))
+                .map(|v| if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) })
+                .collect();
+            return Some(format!("{{{}}}", pts.join(",")));
+        }
+    }
+    None
 }
 
 /// Excel's file notation for "this workbook" in front of a workbook-scoped defined name.
@@ -101,52 +180,6 @@ pub(crate) fn chart_ref_from_file(text: &str) -> String {
     out
 }
 
-fn data_ref(e: Option<&El>) -> Option<String> {
-    let e = e?;
-    for k in ["numRef", "strRef", "multiLvlStrRef"] {
-        if let Some(f) = e.child(k).and_then(|r| r.child("f")) {
-            return Some(chart_ref_from_file(&f.text));
-        }
-    }
-    // Literal values become an array constant.
-    for k in ["numLit", "strLit"] {
-        if let Some(l) = e.child(k) {
-            let pts: Vec<String> = l
-                .kids("pt")
-                .filter_map(|p| p.child("v"))
-                .map(|v| if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) })
-                .collect();
-            return Some(format!("{{{}}}", pts.join(",")));
-        }
-    }
-    None
-}
-
-fn read_series(s: &El, xy: bool) -> Series {
-    let name = s
-        .child("tx")
-        .and_then(|tx| tx.path(&["strRef", "f"]).map(|f| chart_ref_from_file(&f.text)).or_else(|| tx.child("v").map(|v| v.text.clone())));
-    let sp = s.child("spPr");
-    let color = sp
-        .and_then(|p| p.child("solidFill"))
-        .and_then(dml_color)
-        .or_else(|| sp.and_then(|p| p.path(&["ln", "solidFill"])).and_then(dml_color))
-        .or_else(|| s.path(&["marker", "spPr", "solidFill"]).and_then(dml_color));
-    Series {
-        name,
-        categories: data_ref(s.child("cat")).or_else(|| data_ref(s.child("xVal"))),
-        values: data_ref(s.child("val")).or_else(|| data_ref(s.child("yVal"))).unwrap_or_default(),
-        bubble_sizes: data_ref(s.child("bubbleSize")),
-        color,
-        secondary: false,
-        kind: None,
-        quartiles: Default::default(),
-        smooth: bool_val(s, "smooth"),
-        trendlines: s.kids("trendline").filter_map(read_trendline).collect(),
-        label_number_format: label_num_fmt(s.child("dLbls"), xy),
-    }
-}
-
 const DASHES: [(LineDash, &str); 11] = [
     (LineDash::Solid, "solid"),
     (LineDash::Dot, "dot"),
@@ -163,60 +196,8 @@ const DASHES: [(LineDash, &str); 11] = [
 
 const EMU_PER_PT: f64 = 12_700.0;
 
-/// A `CT_Boolean` child (`val` defaults to true).
-fn bool_val(e: &El, tag: &str) -> bool {
-    e.child(tag).is_some_and(|c| c.flag("val", true))
-}
-
-fn f64_val(e: &El, tag: &str) -> Option<f64> {
-    e.child(tag).and_then(|c| c.attr_f64("val"))
-}
-
-/// `<c:trendline>` (ECMA-376 Part 1, 21.2.2.211). Unknown types are dropped.
-fn read_trendline(t: &El) -> Option<Trendline> {
-    let kind = match t.child_val("trendlineType").unwrap_or("linear") {
-        "linear" => TrendlineKind::Linear,
-        "exp" => TrendlineKind::Exponential,
-        "log" => TrendlineKind::Logarithmic,
-        "power" => TrendlineKind::Power,
-        "poly" => TrendlineKind::Polynomial(t.child_val("order").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(2).clamp(2, 6)),
-        "movingAvg" => TrendlineKind::MovingAverage(t.child_val("period").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(2).clamp(2, 255)),
-        _ => return None,
-    };
-    let ln = t.path(&["spPr", "ln"]);
-    Some(Trendline {
-        kind,
-        name: t.child("name").map(|n| n.text.clone()),
-        forward: Trendline::clamp_forecast(f64_val(t, "forward").unwrap_or(0.0)),
-        backward: Trendline::clamp_forecast(f64_val(t, "backward").unwrap_or(0.0)),
-        intercept: f64_val(t, "intercept"),
-        display_equation: bool_val(t, "dispEq"),
-        display_r_squared: bool_val(t, "dispRSqr"),
-        color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
-        width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0),
-        dash: ln.and_then(|l| l.child("prstDash")).and_then(|d| d.attr("val")).and_then(|v| DASHES.iter().find(|(_, n)| *n == v).map(|(d, _)| *d)),
-    })
-}
-
-fn rich_title(t: &El) -> Option<String> {
-    let tx = t.child("tx")?;
-    if let Some(rich) = tx.child("rich") {
-        let paras: Vec<String> =
-            rich.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect();
-        let s = paras.join("\n");
-        return if s.is_empty() { None } else { Some(s) };
-    }
-    if let Some(sr) = tx.child("strRef") {
-        if let Some(v) = sr.path(&["strCache", "pt", "v"]) {
-            return Some(v.text.clone());
-        }
-        return sr.child("f").map(|f| f.text.trim().to_string());
-    }
-    None
-}
-
-fn axis_ids(g: &El) -> Vec<String> {
-    g.kids("axId").filter_map(|a| a.attr("val")).map(str::to_string).collect()
+fn bool_val(e: &El, k: &str) -> bool {
+    e.child(k).is_some_and(|c| c.flag("val", true))
 }
 
 /// A `<c:numFmt>` typed in Excel's Format pane (`sourceLinked="0"`); `None` when it follows the
@@ -242,109 +223,163 @@ fn axis_num_fmt(a: Option<&El>) -> Option<String> {
     typed_num_fmt(a.filter(|a| !bool_val(a, "delete")).and_then(|a| a.child("numFmt")))
 }
 
-pub fn read_chart(root: &El) -> Option<Chart> {
-    let chart = root.child("chart")?;
-    let plot = chart.child("plotArea")?;
-    let groups: Vec<(&El, ChartKind)> = plot.children.iter().filter_map(|g| group_kind(g).map(|k| (g, k))).collect();
-    let (first, first_kind) = *groups.first()?;
-    let first_axes = axis_ids(first);
-    let mut series = vec![];
-    for (gi, (g, k)) in groups.iter().enumerate() {
-        let xy = matches!(k, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
-        for s in g.kids("ser") {
-            let mut ser = read_series(s, xy);
-            if groups.len() > 1 {
-                // Every series of a combo chart keeps its own group's kind, the first group's included.
-                ser.kind = Some(*k);
-                ser.kind = Some(*k);
-            }
-            if gi > 0 {
-                ser.secondary = axis_ids(g) != first_axes;
-            }
-            // Labels set for the whole group apply to series without their own `dLbls`.
-            if s.child("dLbls").is_none() {
-                ser.label_number_format = label_num_fmt(g.child("dLbls"), xy);
-            }
-            series.push(ser);
-        }
+pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
+    let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
+    let groups: Vec<&El> = plot.map(|p| p.children.iter().filter(|g| g.name.ends_with("Chart")).collect()).unwrap_or_default();
+    fn ax_ids(g: &El) -> Vec<&str> {
+        g.kids("axId").filter_map(|a| a.attr("val")).collect()
     }
-    let kind = if groups.len() > 1 { ChartKind::Combo } else { first_kind };
-    let show_val = |e: &El| e.child("dLbls").is_some_and(|d| bool_val(d, "showVal"));
-    let data_labels = groups.iter().any(|(g, _)| show_val(g) || g.kids("ser").any(show_val));
-    let val_axes: Vec<&El> = plot.kids("valAx").collect();
-    let cat_ax = plot.child("catAx").or_else(|| plot.child("dateAx"));
-    let scatter = matches!(first_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
-    // Value axes by the groups that use them: the first group's, then a secondary group's.
-    let val_ax_of = |ids: &[String]| val_axes.iter().find(|a| a.child_val("axId").is_some_and(|v| ids.iter().any(|i| i == v))).copied();
-    let (x_ax, y_ax) = if scatter {
-        // The first group's two value axes: X lies along the bottom or top. When `axPos`
-        // doesn't tell them apart (openpyxl writes "l" on both), the group lists X first.
-        let own: Vec<&El> = first_axes.iter().filter_map(|id| val_axes.iter().find(|a| a.child_val("axId") == Some(id.as_str())).copied()).collect();
-        let horizontal = |a: &&El| matches!(a.child_val("axPos"), Some("b") | Some("t"));
-        match (own.iter().find(|a| horizontal(a)), own.iter().find(|a| !horizontal(a))) {
-            (Some(x), Some(y)) => (Some(*x), Some(*y)),
-            _ => (own.first().copied(), own.get(1).copied()),
-        }
-    } else {
-        (cat_ax, val_axes.first().copied())
-    };
-    let secondary_ids = groups.iter().map(|(g, _)| axis_ids(g)).find(|ids| *ids != first_axes);
-    // A 100% stacked line group reads as plain stacked (the model has no 100% line variant), so
-    // its values are drawn absolute. A format typed for its 0%–100% axis (`0.0%`) would label
-    // those absolute values ("2000000.0%"), so that axis keeps the source format.
-    let pct_unmodelled = |ids: &[String]| {
-        groups.iter().any(|(g, _)| {
-            matches!(g.name.as_str(), "lineChart" | "line3DChart") && g.child_val("grouping") == Some("percentStacked") && axis_ids(g) == ids
+    let first_axes = groups.first().map(|g| ax_ids(g)).unwrap_or_default();
+    let ser_els: Vec<(&El, &El, bool)> = groups
+        .iter()
+        .enumerate()
+        .flat_map(|(gi, g)| {
+            let sec = gi > 0 && ax_ids(g) != first_axes;
+            g.kids("ser").map(move |s| (s, *g, sec))
         })
-    };
-    let axis_number_formats = if scatter {
-        AxisNumberFormats { x: axis_num_fmt(x_ax), y: axis_num_fmt(y_ax), y2: None }
-    } else {
-        AxisNumberFormats {
-            x: None,
-            y: if pct_unmodelled(&first_axes) { None } else { axis_num_fmt(val_ax_of(&first_axes).or(y_ax)) },
-            y2: secondary_ids.filter(|ids| !pct_unmodelled(ids)).and_then(|ids| axis_num_fmt(val_ax_of(&ids))),
-        }
-    };
-    let legend = match chart.child("legend") {
+        .collect();
+    let multi_axis = ser_els.iter().any(|(_, _, sec)| *sec);
+    let is_combo = dc.kind == ChartType::Combo || multi_axis;
+    let base_kind = map_chart_type(dc.kind, plot);
+    let kind = if is_combo { ChartKind::Combo } else { base_kind };
+    let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
+    let series = dc
+        .series
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let (sel, group_el, fallback_sec) = match ser_els.get(i).copied() {
+                Some((el, g, sec)) => (Some(el), Some(g), sec),
+                None => (None, None, false),
+            };
+            let series_kind = s.kind.map(|k| map_chart_type(k, plot)).unwrap_or(base_kind);
+            let xy = matches!(series_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+            let color = s
+                .fill
+                .as_ref()
+                .and_then(|f| match f {
+                    DmlFill::Solid { color } => map_dml_color(color),
+                    _ => None,
+                })
+                .or_else(|| {
+                    s.line.as_ref().and_then(|l| l.fill.as_ref()).and_then(|f| match f {
+                        DmlFill::Solid { color } => map_dml_color(color),
+                        _ => None,
+                    })
+                })
+                .or_else(|| sel.and_then(|e| e.path(&["marker", "spPr", "solidFill"])).and_then(dml_color));
+            let mut trendline_els = sel
+                .into_iter()
+                .flat_map(|e| e.kids("trendline").take(16))
+                .filter(|e| e.child("trendlineType").and_then(|c| c.attr("val")).and_then(TrendlineType::from_xml).is_some());
+            Series {
+                name: s.refs.name.as_deref().map(chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
+                categories: s
+                    .refs
+                    .categories
+                    .as_deref()
+                    .map(chart_ref_from_file)
+                    .or_else(|| literal_array(sel.and_then(|e| e.child("cat").or_else(|| e.child("xVal"))))),
+                values: s
+                    .refs
+                    .values
+                    .as_deref()
+                    .map(chart_ref_from_file)
+                    .or_else(|| literal_array(sel.and_then(|e| e.child("val").or_else(|| e.child("yVal")))))
+                    .unwrap_or_default(),
+                bubble_sizes: s.refs.sizes.as_deref().map(chart_ref_from_file).or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")))),
+                color,
+                secondary: is_combo && (s.secondary_axis || fallback_sec),
+                kind: if dc.kind == ChartType::Combo {
+                    s.kind.map(|k| map_chart_type(k, plot))
+                } else if multi_axis {
+                    Some(s.kind.map(|k| map_chart_type(k, plot)).unwrap_or(base_kind))
+                } else {
+                    None
+                },
+                quartiles: Default::default(),
+                smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
+                trendlines: s.trendlines.iter().map(|t| map_trendline(t, trendline_els.next())).collect(),
+                label_number_format: sel
+                    .and_then(|e| e.child("dLbls"))
+                    .map_or_else(|| label_num_fmt(group_el.and_then(|g| g.child("dLbls")), xy), |d| label_num_fmt(Some(d), xy)),
+            }
+        })
+        .collect();
+    let legend = match dc.legend.as_deref() {
         None => LegendPos::None,
-        Some(l) => match l.child_val("legendPos").unwrap_or("r") {
-            "b" => LegendPos::Bottom,
-            "t" => LegendPos::Top,
-            "l" => LegendPos::Left,
-            _ => LegendPos::Right,
-        },
+        Some("b") => LegendPos::Bottom,
+        Some("t") => LegendPos::Top,
+        Some("l") => LegendPos::Left,
+        Some(_) => LegendPos::Right,
     };
-    let doughnut = plot.child("doughnutChart");
-    let hole_size = doughnut.and_then(|g| g.child_val("holeSize")).and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(75).clamp(10, 90);
-    let first_slice_angle =
-        plot.child("pieChart").or(doughnut).and_then(|g| g.child_val("firstSliceAng")).and_then(|v| v.trim().parse::<u16>().ok()).unwrap_or(0) % 360;
-    Some(Chart {
+    let hole_size =
+        if plot.is_some_and(|p| p.child("doughnutChart").is_some()) { (dc.hole_size * 100.0).round().clamp(10.0, 90.0) as u8 } else { 75 };
+    let axis_number_formats = if let Some(plot) = plot {
+        let val_axes: Vec<&El> = plot.kids("valAx").collect();
+        let cat_ax = plot.child("catAx").or_else(|| plot.child("dateAx"));
+        let scatter = matches!(base_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+        let val_ax_of = |ids: &[&str]| val_axes.iter().find(|a| a.child_val("axId").is_some_and(|v| ids.contains(&v))).copied();
+        let (x_ax, y_ax) = if scatter {
+            let own: Vec<&El> = first_axes.iter().filter_map(|id| val_axes.iter().find(|a| a.child_val("axId") == Some(*id)).copied()).collect();
+            let horizontal = |a: &&El| matches!(a.child_val("axPos"), Some("b") | Some("t"));
+            match (own.iter().find(|a| horizontal(a)), own.iter().find(|a| !horizontal(a))) {
+                (Some(x), Some(y)) => (Some(*x), Some(*y)),
+                _ => (own.first().copied(), own.get(1).copied()),
+            }
+        } else {
+            (cat_ax, val_axes.first().copied())
+        };
+        let secondary_ids = groups.iter().map(|g| ax_ids(g)).find(|ids| *ids != first_axes);
+        let pct_unmodelled = |ids: &[&str]| {
+            groups.iter().any(|g| {
+                matches!(g.name.as_str(), "lineChart" | "line3DChart") && g.child_val("grouping") == Some("percentStacked") && ax_ids(g) == ids
+            })
+        };
+        if scatter {
+            AxisNumberFormats { x: axis_num_fmt(x_ax), y: axis_num_fmt(y_ax), y2: None }
+        } else {
+            AxisNumberFormats {
+                x: None,
+                y: if pct_unmodelled(&first_axes) { None } else { axis_num_fmt(val_ax_of(&first_axes).or(y_ax)) },
+                y2: secondary_ids.filter(|ids| !pct_unmodelled(ids)).and_then(|ids| axis_num_fmt(val_ax_of(&ids))),
+            }
+        }
+    } else {
+        AxisNumberFormats::default()
+    };
+    Chart {
         id: 0,
         kind,
         anchor: Default::default(),
-        title: chart.child("title").and_then(rich_title),
+        title: dc.title,
         series,
         legend,
-        data_labels,
-        data_table: plot.child("dTable").map(|t| gridcraft_model::ChartDataTable {
-            show_keys: bool_val(t, "showKeys"),
-            horizontal_border: bool_val(t, "showHorzBorder"),
-            vertical_border: bool_val(t, "showVertBorder"),
-            outline: bool_val(t, "showOutline"),
+        data_labels: dc.data_labels || series_labels,
+        data_table: dc.data_table.map(|t| ChartDataTable {
+            show_keys: t.show_keys,
+            horizontal_border: t.horizontal_border,
+            vertical_border: t.vertical_border,
+            outline: t.outline,
         }),
-        gridlines: val_axes.iter().any(|a| a.child("majorGridlines").is_some()),
-        style: root.child_val("style").and_then(|v| v.parse().ok()).unwrap_or(2),
+        gridlines: dc.gridlines,
+        style: dc.style,
         hole_size,
-        first_slice_angle,
-        x_title: x_ax.and_then(|a| a.child("title")).and_then(rich_title),
-        y_title: y_ax.and_then(|a| a.child("title")).and_then(rich_title),
+        first_slice_angle: dc.first_slice_angle,
+        x_title: dc.axis_titles.0,
+        y_title: dc.axis_titles.1,
         source: None,
         by_rows: false,
-        pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
+        pivot: dc.pivot_source.as_deref().map(strip_book).filter(|n| !n.is_empty()).map(str::to_string),
         axis_number_formats,
         pivot_label_formats: Vec::new(),
-    })
+    }
+}
+
+pub fn read_chart(root: &El) -> Option<Chart> {
+    let craft = to_craft_el(root);
+    let dc = craft_drawingml::chart::read::chart_from(&craft)?;
+    Some(from_dml_chart(dc, Some(root)))
 }
 
 // ---------------------------------------------------------------- writing

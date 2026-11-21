@@ -4,7 +4,9 @@
 use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::{CellRef, RangeRef, Value, compare};
-use gridcraft_model::{CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Underline, Workbook, default_icon_thresholds};
+use gridcraft_model::{
+    CfOperator, CfRule, CfValueKind, Color, CondFormat, PatternType, Sheet, Style, Table, Underline, Workbook, default_icon_thresholds,
+};
 
 /// The conditional look of one cell.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -20,10 +22,12 @@ pub struct CfLook {
     pub hide_value: bool,
 }
 
-/// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates).
+/// Precomputed statistics per rule (min/max/percentiles/top-N thresholds/duplicates), and each
+/// table's visible edges. The grid and print keep one per paint.
 #[derive(Default)]
 pub struct CfCache {
     stats: HashMap<usize, RuleStats>,
+    table_edges: HashMap<RangeRef, crate::tables::ShownEdges>,
 }
 
 #[derive(Default, Clone)]
@@ -273,6 +277,11 @@ fn time_period_matches(wb: &Workbook, period: &str, serial: f64) -> bool {
 impl CfCache {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// [`crate::tables::shown_edges`] of `t`, found once per cache.
+    pub fn table_edges(&mut self, sh: &Sheet, t: &Table) -> crate::tables::ShownEdges {
+        *self.table_edges.entry(t.range).or_insert_with(|| crate::tables::shown_edges(sh, t))
     }
 
     /// Conditional look of `c`, or `None` when no rule applies.
@@ -728,6 +737,43 @@ mod tests {
         assert_eq!([look("A1"), look("A2")], [true, false]);
     }
 
+    #[test]
+    fn rules_compare_with_cells_on_other_sheets() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "E1", "values": [["Suspended"], ["OK"], ["Terminated"], [7], [3]]})).unwrap();
+        let rule = |r: serde_json::Value| json!({"range": "E1:E5", "rule": r});
+        s.execute(
+            "home.conditionalFormat",
+            rule(json!({"type": "cellIs", "operator": "equal", "value": "='Vehicle Range'!$A$8", "preset": "redText"})),
+        )
+        .unwrap();
+        s.execute(
+            "home.conditionalFormat",
+            rule(json!({"type": "cellIs", "operator": "equal", "value": "='Vehicle Range'!$A$9", "preset": "redText"})),
+        )
+        .unwrap();
+        s.execute(
+            "home.conditionalFormat",
+            rule(json!({"type": "expression", "formula": "=AND(ISNUMBER(E1),E1>'Vehicle Range'!$B$1)", "preset": "yellowFill"})),
+        )
+        .unwrap();
+        s.execute("home.insertSheet", json!({"name": "Vehicle Range"})).unwrap();
+        s.execute("range.setValues", json!({"range": "'Vehicle Range'!A8", "values": [["Suspended"], ["Terminated"]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "'Vehicle Range'!B1", "values": [[5]]})).unwrap();
+        let d = s.doc().unwrap();
+        let report = d.wb.sheets.iter().position(|sh| sh.name != "Vehicle Range").unwrap();
+        let mut cache = CfCache::new();
+        let mut look = |a: &str| cache.look(&d.wb, report, CellRef::parse(a).unwrap()).and_then(|l| l.style).unwrap_or_default();
+        let looks = ["E1", "E2", "E3", "E4", "E5"].map(&mut look);
+        // The cells equal to 'Vehicle Range'!A8 or A9 get the red text.
+        let red_text = looks[0].font.color;
+        assert_ne!(red_text, Color::Auto);
+        let red = |st: &Style| st.font.color == red_text;
+        let filled = |st: &Style| st.fill.pattern == PatternType::Solid;
+        assert_eq!(looks.each_ref().map(red), [true, false, true, false, false]);
+        assert_eq!(looks.each_ref().map(filled), [false, false, false, true, false]);
+    }
     #[test]
     fn text_rules_skip_error_values() {
         let mut s = crate::Session::new();
