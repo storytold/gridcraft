@@ -51,17 +51,10 @@ pub fn column_values(wb: &Workbook, sheet: usize, table: &str, column: &str) -> 
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
     for row in dr.start.row..=dr.end.row {
-        let c = CellRef::new(row, col);
-        let v = sh.value(c);
-        if super::data::filter_dropdown_blank(&v) {
+        let Some(tile) = super::data::slicer_tile_text(wb, sh, CellRef::new(row, col)) else {
             continue;
-        }
-        let text = crate::display::cell_text(wb, sh, c);
-        let tile = if text.trim().is_empty() { v.display().trim().to_string() } else { text.trim().to_string() };
-        if tile.is_empty() {
-            continue;
-        }
-        if seen.insert(tile.to_lowercase()) {
+        };
+        if seen.insert(tile.to_ascii_lowercase()) {
             out.push(tile);
         }
     }
@@ -98,7 +91,8 @@ fn reapply_slicer(wb: &mut Workbook, sheet: usize, id: u32) {
         let off = abs_col.saturating_sub(af.range.start.col);
         af.criteria.retain(|(o, _)| *o != off);
         if let Some(values) = selected {
-            af.criteria.push((off, FilterCriterion::Values { values, blanks: false, identities: Vec::new() }));
+            let identities = values.iter().map(|v| super::data::slicer_identity_token(v)).collect();
+            af.criteria.push((off, FilterCriterion::Values { values, blanks: false, identities }));
         }
     }
     super::data::apply_filter(wb, sheet);
@@ -184,19 +178,30 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
     if !all.iter().any(|v| v.trim().eq_ignore_ascii_case(trimmed_val)) {
         return Err(bad("slicer.toggle", "value is not in the column"));
     }
-    let new_selected: Option<Vec<String>> = if multi {
-        let mut set: Vec<String> = current.unwrap_or_else(|| all.clone());
-        match set.iter().position(|x| x.trim().eq_ignore_ascii_case(trimmed_val)) {
-            Some(pos) => {
-                set.remove(pos);
+    let dedup_tiles = |items: Vec<String>| -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        let mut out = Vec::new();
+        for item in items {
+            let t = item.trim();
+            if !t.is_empty() && seen.insert(t.to_ascii_lowercase()) {
+                out.push(t.to_string());
             }
-            None => set.push(trimmed_val.to_string()),
+        }
+        out
+    };
+    let normalized_current = current.map(dedup_tiles);
+    let new_selected: Option<Vec<String>> = if multi {
+        let mut set: Vec<String> = normalized_current.unwrap_or_else(|| all.clone());
+        let before = set.len();
+        set.retain(|x| !x.trim().eq_ignore_ascii_case(trimmed_val));
+        if set.len() == before {
+            set.push(trimmed_val.to_string());
         }
         // Everything selected is the same as no filter.
         if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| x.trim().eq_ignore_ascii_case(a.trim()))) { None } else { Some(set) }
     } else {
         // Single click: show only this value; clicking the sole selected value clears the filter.
-        match &current {
+        match &normalized_current {
             Some(set) if set.len() == 1 && set.iter().any(|x| x.trim().eq_ignore_ascii_case(trimmed_val)) => None,
             _ => Some(vec![trimmed_val.to_string()]),
         }

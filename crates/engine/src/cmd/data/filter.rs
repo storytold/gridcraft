@@ -219,52 +219,101 @@ fn visible_formula_text<'a>(wb: &Workbook, sh: &'a Sheet, c: CellRef) -> Option<
     (!crate::display::formula_hidden(wb, sh, c)).then_some(f.text.as_str())
 }
 
-/// Canonical checklist identity for `c`: `"v:<typed>"` when formulas and constants share a value
-/// group, or `"f:<typed>:<formula>"` / `"c:<typed>"` when formulas are distinguished.
-fn cell_identity_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, split_formulas: bool) -> String {
+/// Mode-independent `<kind>:<val>:<eff_disp>` base key of a non-blank cell.
+///
+/// Cells with distinct non-empty formatted displays (`42` vs `42.00`) stay distinct, whereas a cell
+/// whose custom format displays only whitespace falls back to its underlying value (`42`), keeping
+/// General `42` stable if later formatted as spaces.
+fn cell_base_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value) -> String {
     let typed = typed_value_token(v);
+    let vtext = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+    let eff = if vtext.trim().is_empty() { v.display().trim().to_ascii_lowercase() } else { vtext.trim().to_ascii_lowercase() };
+    format!("{typed}:{}", pct_encode(&eff))
+}
+
+/// Slicer tile text for `c`: trimmed `cell_text` (respecting Show Formulas), falling back to the
+/// underlying value only when a non-blank cell's formatted display is empty/whitespace.
+pub(crate) fn slicer_tile_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<String> {
+    let v = sh.value(c);
+    if filter_dropdown_blank(&v) {
+        return None;
+    }
+    let text = crate::display::cell_text(wb, sh, c);
+    let tile = if text.trim().is_empty() { v.display().trim().to_string() } else { text.trim().to_string() };
+    (!tile.is_empty()).then_some(tile)
+}
+
+/// Encodes a slicer tile's display key as an identity token (`s:<encoded_tile>`).
+pub(crate) fn slicer_identity_token(tile: &str) -> String {
+    format!("s:{}", pct_encode(&tile.trim().to_ascii_lowercase()))
+}
+
+/// Canonical checklist identity for `c`: `"d:<base>"` when formulas and constants share a value
+/// group, `"f:<base>:<formula>"` / `"c:<base>"` when formulas are distinguished, or `"w:<base>:<ws>"`
+/// when disambiguating legacy formatted-whitespace criteria.
+fn cell_identity_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, text: &str, split_formulas: bool, split_fmtws: bool) -> String {
+    let base = cell_base_token(wb, sh, c, v);
+    if split_fmtws && text.trim().is_empty() {
+        return format!("w:{base}:{}", pct_encode(&text.to_ascii_lowercase()));
+    }
     if !split_formulas {
-        return format!("v:{typed}");
+        return format!("d:{base}");
     }
     match visible_formula_text(wb, sh, c) {
-        Some(ft) => format!("f:{typed}:{}", pct_encode(&ft.trim().to_ascii_lowercase())),
-        None => format!("c:{typed}"),
+        Some(ft) => format!("f:{base}:{}", pct_encode(&ft.trim().to_ascii_lowercase())),
+        None => format!("c:{base}"),
     }
 }
 
-/// Whether stored checklist identity `id` distinguishes formula vs constant rows for `typed`.
-fn id_splits_typed(id: &str, typed: &str) -> bool {
-    id.strip_prefix("c:") == Some(typed) || id.strip_prefix("f:").and_then(|rest| rest.strip_prefix(typed)).is_some_and(|rest| rest.starts_with(':'))
+/// Whether stored checklist identity `id` distinguishes formula vs constant rows for `base`.
+fn id_splits_base(id: &str, base: &str) -> bool {
+    id.strip_prefix("c:") == Some(base) || id.strip_prefix("f:").and_then(|rest| rest.strip_prefix(base)).is_some_and(|rest| rest.starts_with(':'))
 }
 
-/// Checks whether a non-blank cell matches any stored checklist identity (`v:`, `c:`, or `f:`).
-fn row_matches_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, identities: &[String]) -> bool {
-    let typed = typed_value_token(v);
+/// Checks whether a non-blank cell matches any primary stored identity (`d:`, `c:`, `f:`, `w:`, `s:`).
+fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, text: &str, identities: &[String]) -> bool {
+    let base = cell_base_token(wb, sh, c, v);
     let mut formula_enc: Option<Option<String>> = None;
+    let mut slicer_enc: Option<Option<String>> = None;
     identities.iter().any(|id| {
-        if let Some(rest) = id.strip_prefix("v:") {
-            rest == typed
+        if let Some(rest) = id.strip_prefix("d:") {
+            rest == base
         } else if let Some(rest) = id.strip_prefix("c:") {
-            if rest != typed {
+            if rest != base {
                 return false;
             }
             formula_enc.get_or_insert_with(|| visible_formula_text(wb, sh, c).map(|ft| pct_encode(&ft.trim().to_ascii_lowercase()))).is_none()
         } else if let Some(rest) = id.strip_prefix("f:") {
-            let Some(tail) = rest.strip_prefix(&typed).and_then(|s| s.strip_prefix(':')) else {
+            let Some(tail) = rest.strip_prefix(&base).and_then(|s| s.strip_prefix(':')) else {
                 return false;
             };
             formula_enc.get_or_insert_with(|| visible_formula_text(wb, sh, c).map(|ft| pct_encode(&ft.trim().to_ascii_lowercase()))).as_deref()
                 == Some(tail)
+        } else if let Some(rest) = id.strip_prefix("w:") {
+            let Some(tail) = rest.strip_prefix(&base).and_then(|s| s.strip_prefix(':')) else {
+                return false;
+            };
+            text.trim().is_empty() && pct_encode(&text.to_ascii_lowercase()) == tail
+        } else if let Some(rest) = id.strip_prefix("s:") {
+            slicer_enc.get_or_insert_with(|| slicer_tile_text(wb, sh, c).map(|t| pct_encode(&t.to_ascii_lowercase()))).as_deref() == Some(rest)
         } else {
             false
         }
     })
 }
 
-/// Checks whether a non-blank cell matches a `Values` criterion: exact checklist identities when
-/// submitted by UI checklist/cell actions, or string matching for direct `data.filterBy` callers.
+/// Checks whether a non-blank cell matches a `Values` criterion: legacy `fmtws:` formatted-space
+/// tokens, exact checklist/slicer identities when present, or string matching for `data.filterBy`.
 fn row_matches_criterion(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, text: &str, values: &[String], identities: &[String]) -> bool {
-    if !identities.is_empty() { row_matches_identities(wb, sh, c, v, identities) } else { row_matches_values(values, text, v) }
+    if identities
+        .iter()
+        .filter_map(|id| id.strip_prefix("fmtws:"))
+        .any(|ws_enc| text.trim().is_empty() && pct_encode(&text.to_ascii_lowercase()) == ws_enc)
+    {
+        return true;
+    }
+    let has_primary = identities.iter().any(|id| !id.starts_with("fmtws:"));
+    if has_primary { row_matches_primary_identities(wb, sh, c, v, text, identities) } else { row_matches_values(values, text, v) }
 }
 
 /// Header-and-data range covered by a table's own AutoFilter (excluding any totals row).
@@ -411,9 +460,15 @@ pub(crate) fn migrate_loaded_autofilters(wb: &mut Workbook) {
     let migrate_list = |criteria: &mut [(u32, FilterCriterion)]| -> bool {
         let mut changed = false;
         for (_, crit) in criteria {
-            if let FilterCriterion::Values { values, blanks, .. } = crit
+            if let FilterCriterion::Values { values, blanks, identities } = crit
                 && values.iter().any(|v| v.trim().is_empty())
             {
+                for v in values.iter().filter(|v| v.trim().is_empty()) {
+                    let tok = format!("fmtws:{}", pct_encode(&v.to_ascii_lowercase()));
+                    if !identities.contains(&tok) {
+                        identities.push(tok);
+                    }
+                }
                 *blanks = true;
                 values.retain(|v| !v.trim().is_empty());
                 changed = true;
@@ -575,7 +630,7 @@ pub fn filter_by_cell_params(wb: &Workbook, sh: &Sheet, c: CellRef, col: &str) -
     let t = crate::display::cell_text(wb, sh, c);
     let has_visible_formula = sh.show_formulas && visible_formula_text(wb, sh, c).is_some();
     let raw = if has_visible_formula || t.trim().is_empty() { v.display().trim().to_string() } else { t.trim().to_string() };
-    let id = cell_identity_token(wb, sh, c, &v, sh.show_formulas);
+    let id = cell_identity_token(wb, sh, c, &v, &t, sh.show_formulas, false);
     json!({"column": col, "values": [raw], "identities": [id], "blanks": false})
 }
 
@@ -626,9 +681,10 @@ pub fn filter_choices(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterChoice
             ));
             continue;
         }
-        let typed = typed_value_token(&v);
-        let split_formulas = sh.show_formulas || selected_identities.is_some_and(|ids| ids.iter().any(|id| id_splits_typed(id, &typed)));
-        let id = cell_identity_token(wb, sh, c, &v, split_formulas);
+        let base = cell_base_token(wb, sh, c, &v);
+        let split_formulas = sh.show_formulas || selected_identities.is_some_and(|ids| ids.iter().any(|id| id_splits_base(id, &base)));
+        let split_fmtws = selected_identities.is_some_and(|ids| ids.iter().any(|id| id.starts_with("fmtws:") || id.starts_with("w:")));
+        let id = cell_identity_token(wb, sh, c, &v, &t, split_formulas, split_fmtws);
         let val_trimmed = v.display().trim().to_string();
         let formula_src = visible_formula_text(wb, sh, c);
         let has_visible_formula = sh.show_formulas && formula_src.is_some();
@@ -647,6 +703,8 @@ pub fn filter_choices(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterChoice
             format!("result: {val_trimmed}")
         } else if split_formulas && let Some(ft) = formula_src {
             format!("formula: ={ft}")
+        } else if disp_empty && split_fmtws {
+            format!("formatted {} space(s)", t.len())
         } else if disp_empty {
             "formatted blank".to_string()
         } else if !val_trimmed.eq_ignore_ascii_case(base_label.trim()) {
