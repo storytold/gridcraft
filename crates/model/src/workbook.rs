@@ -397,12 +397,7 @@ impl Workbook {
     }
     /// A fresh sheet name `SheetN` not in use.
     pub fn next_sheet_name(&self) -> String {
-        self.next_sheet_name_with_prefix("Sheet")
-    }
-
-    /// Finds the first unused numbered name for a generated sheet in the requested language.
-    pub fn next_sheet_name_with_prefix(&self, prefix: &str) -> String {
-        (1..).map(|n| format!("{prefix}{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| prefix.into())
+        (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())
     }
     /// Validates a sheet name like Excel: 1–31 chars, none of `: \ / ? * [ ]`, not starting or
     /// ending with `'`, unique (case-insensitive) unless it is `except`'s own name.
@@ -688,7 +683,6 @@ mod tests {
         let index = wb.sheets.len();
         wb.sheets.push(Arc::new(Sheet::new("лист1")));
         assert_eq!(wb.sheet_index("ЛИСТ1"), Some(index));
-        assert_eq!(wb.next_sheet_name_with_prefix("Лист"), "Лист2");
         assert!(wb.check_sheet_name("Лист1", None).is_err());
         assert!(wb.check_sheet_name("ЛИСТ1", Some(index)).is_ok());
     }
