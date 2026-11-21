@@ -46,7 +46,21 @@ impl SheetApp {
         }
     }
 
-    pub(super) fn submit_print(&mut self, params: Json) -> Result<Json, String> {
+    /// Submit a job using missing options from the open Print page; explicit control options win.
+    /// Null and empty-object parameters inherit the same selected print options.
+    pub(super) fn submit_print(&mut self, mut params: Json) -> Result<Json, String> {
+        if params.is_null() {
+            params = json!({});
+        }
+        if let Some(bs) = &self.backstage
+            && bs.page == crate::backstage::Page::Print
+            && let Some(map) = params.as_object_mut()
+        {
+            map.entry("sheets").or_insert_with(|| json!(if bs.print_all { "all" } else { "active" }));
+            if !map.contains_key("scaling") && !map.contains_key("fitToPage") {
+                map.insert("scaling".into(), json!(bs.scaling.id()));
+            }
+        }
         if self.services.print_native.is_some() && !self.printing.ready() {
             return Err("Select an available printer in File > Print before submitting.".into());
         }
@@ -62,7 +76,7 @@ impl SheetApp {
         } else {
             return Err("Printing is unavailable here; export a PDF instead.".into());
         }
-        Ok(json!({"printing": true, "bytes": len, "pending": self.services.print_native.is_some()}))
+        Ok(json!({"printing": true, "bytes": len, "pages": pdf["pages"], "pending": self.services.print_native.is_some()}))
     }
 
     /// Terminal feedback also reaches the normal window when printing starts through control.
