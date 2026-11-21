@@ -196,6 +196,11 @@ const DASHES: [(LineDash, &str); 11] = [
 
 const EMU_PER_PT: f64 = 12_700.0;
 
+/// Parses a legacy OOXML `<c:style val="..."/>` index (`1..=48`), trimming surrounding spaces.
+fn parse_chart_style(val: &str) -> Option<u32> {
+    val.trim().parse::<u32>().ok().filter(|s| (1..=48).contains(s))
+}
+
 pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
     let groups: Vec<&El> = plot.map(|p| p.children.iter().filter(|g| g.name.ends_with("Chart")).collect()).unwrap_or_default();
@@ -298,7 +303,18 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
             outline: t.outline,
         }),
         gridlines: dc.gridlines,
-        style: dc.style,
+        // Excel can wrap the legacy chart style in mc:AlternateContent.
+        // The c14 Choice uses different IDs, so read the c:style Fallback.
+        style: root
+            .and_then(|r| {
+                r.child_val("style").and_then(parse_chart_style).or_else(|| {
+                    r.kids("AlternateContent")
+                        .filter_map(|wrapper| wrapper.child("Fallback"))
+                        .find_map(|fallback| fallback.child_val("style").and_then(parse_chart_style))
+                })
+            })
+            .or_else(|| (1..=48).contains(&dc.style).then_some(dc.style))
+            .unwrap_or(2),
         hole_size,
         first_slice_angle: dc.first_slice_angle,
         x_title: dc.axis_titles.0,
