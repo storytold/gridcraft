@@ -110,8 +110,10 @@ fn resolve_target(source_dir: &str, target: &str) -> String {
 
 type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
 
-fn zip_names(zip: &mut Zip<'_>) -> Vec<String> {
-    (0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| entry_name(&f))).collect()
+/// `(index, name)` of every file entry. Parts are read by index: two entries can decode to the
+/// same name, and looking up a CP437 name scans the whole archive.
+fn zip_names(zip: &mut Zip<'_>) -> Vec<(usize, String)> {
+    (0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| (i, entry_name(&f)))).collect()
 }
 
 /// An entry's name: UTF-8, or CP437 when the entry isn't flagged UTF-8. A name that doesn't decode
@@ -120,8 +122,8 @@ fn entry_name<R: std::io::Read>(f: &zip::read::ZipFile<'_, R>) -> String {
     f.name().map(|n| n.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(f.name_raw()).into_owned())
 }
 
-fn read_zip_part(zip: &mut Zip<'_>, name: &str) -> Result<Vec<u8>, String> {
-    let f = zip.by_name(name).map_err(|e| format!("{name}: {e}"))?;
+fn read_zip_part(zip: &mut Zip<'_>, index: usize, name: &str) -> Result<Vec<u8>, String> {
+    let f = zip.by_index(index).map_err(|e| format!("{name}: {e}"))?;
     let mut buf = Vec::new();
     f.take(MAX_XML_PART).read_to_end(&mut buf).map_err(|e| format!("{name}: {e}"))?;
     Ok(buf)
@@ -134,8 +136,8 @@ enum PartError {
 }
 
 /// Reads a part like [`read_zip_part`], charging the decompressed bytes to `budget`.
-fn read_zip_part_within(zip: &mut Zip<'_>, name: &str, budget: &mut u64) -> Result<Vec<u8>, PartError> {
-    let f = zip.by_name(name).map_err(|_| PartError::Unreadable)?;
+fn read_zip_part_within(zip: &mut Zip<'_>, index: usize, budget: &mut u64) -> Result<Vec<u8>, PartError> {
+    let f = zip.by_index(index).map_err(|_| PartError::Unreadable)?;
     // One byte past what is left shows that the part doesn't fit.
     let limit = MAX_XML_PART.min(budget.saturating_add(1));
     let mut buf = Vec::new();
@@ -156,10 +158,10 @@ fn read_zip_part_within(zip: &mut Zip<'_>, name: &str, budget: &mut u64) -> Resu
 pub(super) fn full_calc_on_load(bytes: &[u8]) -> bool {
     let Ok(mut zip) = zip::ZipArchive::new(Cursor::new(bytes)) else { return false };
     let names = zip_names(&mut zip);
-    let find = |key: &str| names.iter().find(|n| part_key(n) == key).cloned();
+    let find = |key: &str| names.iter().find(|(_, n)| part_key(n) == key).cloned();
     let mut workbook = "xl/workbook.xml".to_string();
-    if let Some(rels) = find("_rels/.rels")
-        && let Ok(xml) = read_zip_part(&mut zip, &rels)
+    if let Some((i, rels)) = find("_rels/.rels")
+        && let Ok(xml) = read_zip_part(&mut zip, i, &rels)
         && let Ok(els) = xml_elements(&xml)
         && let Some(target) = els
             .iter()
@@ -168,8 +170,8 @@ pub(super) fn full_calc_on_load(bytes: &[u8]) -> bool {
     {
         workbook = resolve_target("", target);
     }
-    let Some(name) = find(&part_key(&workbook)) else { return false };
-    let Ok(xml) = read_zip_part(&mut zip, &name) else { return false };
+    let Some((i, name)) = find(&part_key(&workbook)) else { return false };
+    let Ok(xml) = read_zip_part(&mut zip, i, &name) else { return false };
     xml_elements(&xml)
         .ok()
         .into_iter()
@@ -183,15 +185,15 @@ pub(super) fn full_calc_on_load(bytes: &[u8]) -> bool {
 pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let names = zip_names(&mut zip);
-    let parts: HashSet<String> = names.iter().map(|n| part_key(n)).collect();
-    let mut read_part = |name: &str| read_zip_part(&mut zip, name);
+    let parts: HashSet<String> = names.iter().map(|(_, n)| part_key(n)).collect();
+    let mut read_part = |index: usize, name: &str| read_zip_part(&mut zip, index, name);
     let mut issues = Vec::new();
-    let ct_name = names.iter().find(|n| part_key(n) == "[content_types].xml").cloned();
+    let ct_name = names.iter().find(|(_, n)| part_key(n) == "[content_types].xml").cloned();
     let (mut defaults, mut overrides) = (HashSet::new(), HashSet::new());
     match ct_name {
         None => issues.push("no [Content_Types].xml".to_string()),
-        Some(n) => {
-            for (el, attrs) in xml_elements(&read_part(&n)?).map_err(|e| format!("[Content_Types].xml: {e}"))? {
+        Some((i, n)) => {
+            for (el, attrs) in xml_elements(&read_part(i, &n)?).map_err(|e| format!("[Content_Types].xml: {e}"))? {
                 match el.as_str() {
                     "Default" => {
                         if let Some(x) = attr(&attrs, "Extension") {
@@ -208,9 +210,9 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
             }
         }
     }
-    let mut sorted: Vec<&String> = names.iter().collect();
-    sorted.sort();
-    for n in &sorted {
+    let mut sorted: Vec<&(usize, String)> = names.iter().collect();
+    sorted.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
+    for (_, n) in &sorted {
         let key = part_key(n);
         if key == "[content_types].xml" {
             continue;
@@ -225,7 +227,7 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
     for p in missing_overrides {
         issues.push(format!("content type override for missing part /{p}"));
     }
-    for n in sorted {
+    for (i, n) in sorted {
         let key = part_key(n);
         let Some(rels_file) = key.strip_suffix(".rels") else { continue };
         // `dir/_rels/name.rels` describes `dir/name`; `_rels/.rels` the package itself.
@@ -239,7 +241,7 @@ pub fn validate_package(bytes: &[u8]) -> Result<Vec<String>, String> {
             issues.push(format!("{n} describes missing part {source}"));
         }
         let mut ids = HashSet::new();
-        for (el, attrs) in xml_elements(&read_part(n)?).map_err(|e| format!("{n}: {e}"))? {
+        for (el, attrs) in xml_elements(&read_part(*i, n)?).map_err(|e| format!("{n}: {e}"))? {
             if el != "Relationship" {
                 continue;
             }
@@ -274,17 +276,17 @@ pub(super) fn relationship_kinds(bytes: &[u8]) -> Result<BTreeMap<String, String
 fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<String, String>, String> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("not a zip package: {e}"))?;
     let names = zip_names(&mut zip);
-    let by_key: HashMap<String, &String> = names.iter().map(|n| (part_key(n), n)).collect();
+    let by_key: HashMap<String, &(usize, String)> = names.iter().map(|e| (part_key(&e.1), e)).collect();
     // Several relationships name the same part; each fresh check decompressed it again, so
     // repeated references to one highly compressible part multiplied the work. The verdict is
     // remembered per (part, named content) and the decompression the package can cause is
     // budgeted as a whole, the relationship parts included: many large, unreferenced rels parts
     // would otherwise each spend a full per-part allowance.
-    let mut verdicts: HashMap<(String, &'static str), bool> = HashMap::new();
+    let mut verdicts: HashMap<(usize, &'static str), bool> = HashMap::new();
     let mut kinds = BTreeMap::new();
-    for n in names.iter().filter(|n| part_key(n).ends_with(".rels")) {
+    for (i, n) in names.iter().filter(|(_, n)| part_key(n).ends_with(".rels")) {
         let Some(src_dir) = rels_source_dir(&part_key(n)) else { continue };
-        let xml = match read_zip_part_within(&mut zip, n, &mut budget) {
+        let xml = match read_zip_part_within(&mut zip, *i, &mut budget) {
             Ok(xml) => xml,
             Err(PartError::OverBudget) => return Err(format!("{n}: relationship check stopped at its decompression limit")),
             Err(PartError::Unreadable) => continue,
@@ -298,8 +300,8 @@ fn relationship_kinds_within(bytes: &[u8], mut budget: u64) -> Result<BTreeMap<S
             }
             let external = attr(attrs, "TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
             if !external
-                && let Some(part) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase())
-                && !holds_something(&mut zip, part, kind, &mut verdicts, &mut budget)
+                && let Some((index, _)) = by_key.get(&resolve_target(&src_dir, target).to_ascii_lowercase())
+                && !holds_something(&mut zip, *index, kind, &mut verdicts, &mut budget)
             {
                 continue;
             }
@@ -320,7 +322,7 @@ fn rels_source_dir(key: &str) -> Option<String> {
 /// comes first) a comment, for VML a shape. Read only as far as needed; an unreadable part counts.
 /// `verdicts` remembers the answer per (part, named content); `budget` is the decompression this
 /// package's remaining checks may cause, and once it is spent the part counts as having content.
-fn holds_something(zip: &mut Zip<'_>, name: &str, kind: &str, verdicts: &mut HashMap<(String, &'static str), bool>, budget: &mut u64) -> bool {
+fn holds_something(zip: &mut Zip<'_>, index: usize, kind: &str, verdicts: &mut HashMap<(usize, &'static str), bool>, budget: &mut u64) -> bool {
     let wanted: Option<&'static [u8]> = match kind.to_ascii_lowercase().as_str() {
         "comments" => Some(b"comment"),
         "vmldrawing" => Some(b"shape"),
@@ -331,17 +333,17 @@ fn holds_something(zip: &mut Zip<'_>, name: &str, kind: &str, verdicts: &mut Has
         Some(_) => "shape",
         None => "any",
     };
-    if let Some(v) = verdicts.get(&(name.to_ascii_lowercase(), marker)) {
+    if let Some(v) = verdicts.get(&(index, marker)) {
         return *v;
     }
-    let v = holds_something_uncached(zip, name, marker, budget);
-    verdicts.insert((name.to_ascii_lowercase(), marker), v);
+    let v = holds_something_uncached(zip, index, marker, budget);
+    verdicts.insert((index, marker), v);
     v
 }
 
-fn holds_something_uncached(zip: &mut Zip<'_>, name: &str, marker: &'static str, budget: &mut u64) -> bool {
+fn holds_something_uncached(zip: &mut Zip<'_>, index: usize, marker: &'static str, budget: &mut u64) -> bool {
     use quick_xml::events::Event;
-    let Ok(f) = zip.by_name(name) else { return true };
+    let Ok(f) = zip.by_index(index) else { return true };
     if *budget == 0 {
         return true;
     }
@@ -396,6 +398,57 @@ mod tests {
             z.write_all(tail.as_bytes()).unwrap();
         }
         z.finish().unwrap().into_inner()
+    }
+
+    /// A package with two relationship parts whose names both read `xl/_rels/é.xml.rels`: the first
+    /// stored as UTF-8 holding `first`, the second stored as CP437 (byte 0x82) holding `second`.
+    fn same_name_rels(first: &str, second: &str) -> Vec<u8> {
+        const PLACEHOLDER: &[u8] = b"xl/_rels/Q.xml.rels";
+        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        z.start_file("xl/_rels/\u{e9}.xml.rels", opts).unwrap();
+        z.write_all(first.as_bytes()).unwrap();
+        z.start_file(String::from_utf8(PLACEHOLDER.to_vec()).unwrap(), opts).unwrap();
+        z.write_all(second.as_bytes()).unwrap();
+        let mut bytes = z.finish().unwrap().into_inner();
+        // The name sits in the local header and in the central directory; both get the CP437 byte.
+        let mut at = 0;
+        let mut patched = 0;
+        while let Some(i) = bytes.get(at..).and_then(|rest| rest.windows(PLACEHOLDER.len()).position(|w| w == PLACEHOLDER)) {
+            bytes[at + i + 9] = 0x82;
+            at += i + PLACEHOLDER.len();
+            patched += 1;
+        }
+        assert_eq!(patched, 2);
+        bytes
+    }
+
+    fn rels_xml(rels: &[(&str, &str)]) -> String {
+        let body: String = rels
+            .iter()
+            .map(|(id, kind)| {
+                format!(
+                    r#"<Relationship Id="{id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/{kind}" Target="https://example.com" TargetMode="External"/>"#
+                )
+            })
+            .collect();
+        format!(r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{body}</Relationships>"#)
+    }
+
+    #[test]
+    fn parts_with_the_same_decoded_name_are_each_validated() {
+        let bytes = same_name_rels(&rels_xml(&[("rId1", "custom")]), &rels_xml(&[("rId1", "custom"), ("rId1", "custom")]));
+        let issues = validate_package(&bytes).unwrap();
+        let duplicates = issues.iter().filter(|i| i.ends_with("duplicate relationship id rId1")).count();
+        assert_eq!(duplicates, 1, "{issues:?}");
+    }
+
+    #[test]
+    fn relationship_kinds_read_parts_with_the_same_decoded_name() {
+        let bytes = same_name_rels(&rels_xml(&[("rId1", "custom")]), &rels_xml(&[("rId1", "audio")]));
+        let kinds = relationship_kinds(&bytes).unwrap();
+        assert!(kinds.contains_key("custom"), "{kinds:?}");
+        assert!(kinds.contains_key("audio"), "{kinds:?}");
     }
 
     #[test]
