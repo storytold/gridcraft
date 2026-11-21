@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 mod cs;
 mod de;
 mod el;
+mod error_templates;
 mod es;
 mod es_functions;
 mod fr;
@@ -195,18 +196,18 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        self.translation(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
 
     /// A ribbon tab's name. Where a language names the tab differently from a command with the
     /// same English label (Russian: the Insert tab is «Вставка», the Insert button «Вставить»), its
     /// catalog keys the tab `Tab|name`; every other language falls back to the plain label.
     pub fn tr_tab(self, tab: &str) -> &str {
-        self.translated(&format!("Tab|{tab}")).unwrap_or_else(|| self.tr(tab))
+        self.translation(&format!("Tab|{tab}")).unwrap_or_else(|| self.tr(tab))
     }
 
     /// The catalog entry for `text`, if this language has one.
-    fn translated(self, text: &str) -> Option<&'static str> {
+    pub fn translation(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
             Self::Es => es::translate(text),
@@ -230,18 +231,51 @@ impl Language {
         }
     }
 
+    /// Translates an import warning for display in the interface. File-format and engine layers
+    /// retain canonical English for the CLI, control channel and MCP.
+    pub(crate) fn open_warning(self, warning: &str) -> String {
+        if let Some(target) = warning.strip_prefix("missing picture ") {
+            return self.tr("missing picture {target}").replace("{target}", target);
+        }
+        if let Some(target) = warning.strip_prefix("chart ").and_then(|s| s.strip_suffix(" has no supported plot and was skipped")) {
+            return self.tr("chart {target} has no supported plot and was skipped").replace("{target}", target);
+        }
+        const DRAWING_WARNINGS: [(&str, &str); 3] = [
+            (
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+                "a histogram, waterfall, treemap… chart without its chart part was skipped",
+            ),
+            ("an embedded object (SmartArt, OLE…) was skipped", "an embedded object (diagram, OLE…) was skipped"),
+            ("grouped shapes are not supported and were skipped", "grouped shapes are not supported and were skipped"),
+        ];
+        for (base, key) in DRAWING_WARNINGS {
+            if let Some(suffix) = warning.strip_prefix(base)
+                && suffix.starts_with(" (")
+                && suffix.ends_with(')')
+            {
+                return format!("{}{suffix}", self.translation(key).unwrap_or(base));
+            }
+        }
+        self.translation(warning).unwrap_or(warning).to_owned()
+    }
+
     /// Translates `template`, then fills in its `{name}` placeholders (see [`fill`]).
     pub fn tr_fill(self, template: &str, values: &[(&str, &str)]) -> String {
         fill(self.tr(template), values)
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
-        let message = if message.starts_with("command `") { crate::clean_error(message) } else { message.to_owned() };
+        let original_parameters = message.starts_with("invalid parameters for `").then_some(message);
+        let message = if message.starts_with("command `") || message.starts_with("invalid parameters for `") {
+            crate::clean_error(message)
+        } else {
+            message.to_owned()
+        };
 
-        let translated = self.tr(&message);
-        let fallback = message.rsplit_once('|').map_or(message.as_str(), |(_, label)| label);
-
-        if translated == fallback { message } else { translated.to_owned() }
+        if let Some(translated) = self.translation(&message) {
+            return translated.to_owned();
+        }
+        error_templates::format_message(&message, self).unwrap_or_else(|| original_parameters.map_or(message, str::to_owned))
     }
 
     /// A worksheet function's description in this language, looked up by the English text of the
@@ -415,11 +449,11 @@ mod tests {
     fn every_catalog_has_distinct_diagram_and_decorative_text() {
         for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
             let code = language.code();
-            let diagram = language.translated("Diagram");
+            let diagram = language.translation("Diagram");
             assert!(diagram.is_some(), "{code}: Diagram");
-            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            assert!(language.translation("Decorative Text").is_some(), "{code}: Decorative Text");
             for chart in ["Chart", "Charts"] {
-                if let Some(chart_text) = language.translated(chart) {
+                if let Some(chart_text) = language.translation(chart) {
                     assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
                 }
             }
@@ -429,9 +463,9 @@ mod tests {
     /// Ukrainian Chart uses the shared craft-i18n term, which is not the Diagram word.
     #[test]
     fn ukrainian_chart_uses_the_shared_term() {
-        assert_eq!(Language::Uk.translated("Chart"), Some("Діаграма"));
-        assert_eq!(Language::Uk.translated("Insert Chart"), Some("Вставити діаграму"));
-        assert_eq!(Language::Uk.translated("Diagram"), Some("Схема"));
+        assert_eq!(Language::Uk.translation("Chart"), Some("Діаграма"));
+        assert_eq!(Language::Uk.translation("Insert Chart"), Some("Вставити діаграму"));
+        assert_eq!(Language::Uk.translation("Diagram"), Some("Схема"));
     }
 
     /// Help tables are sorted and unique: lookups binary-search them.
@@ -541,7 +575,7 @@ mod tests {
             assert_eq!(Language::En.tr(key), english);
             for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
                 let code = language.code();
-                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                let shown = language.translation(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
                 assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
                 assert_eq!(shown.contains("{letters}"), key.contains("{letters}"), "{code}: placeholder of {key:?}: {shown:?}");
             }
