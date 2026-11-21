@@ -237,8 +237,10 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- clear
 
-/// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
-fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
+/// The rows of `range` an applied filter hides: every hidden row inside a filter's rows (the sheet
+/// AutoFilter while it has criteria, or a filtered table). A row has one `hidden` flag, so a row
+/// hidden by hand inside a filter's rows is among them; one hidden by hand outside them is not.
+pub(crate) fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
     let spans = sh.filter_row_spans();
     if spans.is_empty() {
         return Default::default();
