@@ -290,7 +290,7 @@ fn apply_craft_sheet_part(
         }
         if let Some(w) = fmt.default_col_width {
             let px = col_width_to_px(w);
-            if px > 0.0 {
+            if w.is_finite() && (px > 0.0 || w == 0.0) {
                 sheet.default_col_width = px;
             }
         } else if let Some(b) = fmt.base_col_width {
