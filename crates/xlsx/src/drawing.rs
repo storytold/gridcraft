@@ -609,10 +609,11 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 items.push(CraftItem::Anchor(anchor));
             }
             Obj::Slicer(sl, name) => {
-                let (open, close) = anchor_open(sheet, &sl.anchor);
-                close_tag = close;
-                s.push_str(&open);
-                s.push_str(&crate::slicer::frame_xml(id, name, &xfrm(&sl.anchor, "xdr:xfrm"), &xfrm(&sl.anchor, "a:xfrm")));
+                let placement = to_placement(sheet, &sl.anchor);
+                let xml = crate::slicer::frame_xml(id, name, &xfrm(&sl.anchor, "xdr:xfrm"), &xfrm(&sl.anchor, "a:xfrm"));
+                if let Some(object) = parse_craft_fragment(&xml) {
+                    items.push(CraftItem::Anchor(CraftAnchor { placement, object, client_data: None }));
+                }
             }
             Obj::Shape(sh) if sh.kind == ShapeKind::Equation => {
                 let placement = to_placement(sheet, &sh.anchor);
