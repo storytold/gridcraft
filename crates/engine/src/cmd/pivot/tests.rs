@@ -572,6 +572,26 @@ fn pivot_chart_errors() {
 }
 
 #[test]
+fn pivot_chart_anchor_names_the_pivot_sheet() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"name": "SalesPivot", "destination": "Sheet1!G2", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+
+    assert!(s.execute("insert.pivotChart", json!({"pivot": "SalesPivot", "at": "Other!J3"})).is_err());
+    for at in ["Sheet1!J3", "J9"] {
+        s.execute("insert.pivotChart", json!({"pivot": "SalesPivot", "at": at})).unwrap();
+    }
+
+    let wb = &s.doc().unwrap().wb;
+    let other = wb.active().unwrap();
+    assert_eq!(other.name, "Other");
+    assert!(other.charts.is_empty());
+    let chart_sheet = wb.sheet(wb.sheet_index("Sheet1").unwrap()).unwrap();
+    let anchors: Vec<_> = chart_sheet.charts.iter().map(|chart| chart.anchor.cell.a1()).collect();
+    assert_eq!(anchors, ["J3", "J9"]);
+}
+
+#[test]
 fn calculated_field_on_sums() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
