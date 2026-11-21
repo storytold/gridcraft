@@ -194,7 +194,7 @@ pub(super) fn replace(s: &mut Session, p: &Json) -> Result<Json> {
     let active = s.doc()?.selection.active;
     let mut skipped = 0usize;
     let n = edit(s, |cx| {
-        let sheets: Vec<usize> = if workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet()] };
+        let sheets: Vec<usize> = if all && workbook { (0..cx.wb.sheets.len()).collect() } else { vec![cx.wb.active_sheet()] };
         let mut n = 0;
         let mut total = 0usize;
         for si in sheets {
