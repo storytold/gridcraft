@@ -152,6 +152,25 @@ fn a_hundred_percent_stacked_line_group_with_mixed_markers_keeps_each_series_mar
 }
 
 #[test]
+fn stacked_and_hundred_percent_stacked_line_groups_on_one_axis_keep_their_kinds() {
+    let ser = |i: usize| {
+        format!("<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/>{NO_MARKER}<c:val><c:numRef><c:f>Data!$A$1:$A$5</c:f></c:numRef></c:val></c:ser>")
+    };
+    let xml = format!(
+        "<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart><c:plotArea>\
+         <c:lineChart><c:grouping val=\"stacked\"/>{}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:lineChart>\
+         <c:lineChart><c:grouping val=\"percentStacked\"/>{}<c:axId val=\"1\"/><c:axId val=\"2\"/></c:lineChart>\
+         </c:plotArea></c:chart></c:chartSpace>",
+        ser(0),
+        ser(1)
+    );
+    let want = [Some(ChartKind::LineStacked), Some(ChartKind::LineStacked100)];
+    let ch = read_chart(&parse(xml.as_bytes()).unwrap()).unwrap();
+    assert_eq!(ch.kind, ChartKind::Combo);
+    assert_eq!(ch.series.iter().map(|s| s.kind).collect::<Vec<_>>(), want);
+}
+
+#[test]
 fn combo_areas_marked_lines_and_mixed_column_groupings_keep_their_kinds_when_saved() {
     let ser = |i: usize, marker: &str| {
         format!("<c:ser><c:idx val=\"{i}\"/><c:order val=\"{i}\"/>{marker}<c:val><c:numRef><c:f>Data!$A$1:$A$5</c:f></c:numRef></c:val></c:ser>")

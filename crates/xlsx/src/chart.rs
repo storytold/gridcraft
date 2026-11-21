@@ -225,11 +225,24 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let multi_axis = ser_els.iter().any(|(_, _, sec)| *sec);
     let base_kind = map_chart_type(dc.kind, &groups);
     let no_marker = |s: &El| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
-    // A 100% stacked line chart whose series differ in markers opens as a combo chart, so each series keeps its own.
-    let mixed = base_kind == ChartKind::LineStacked100Markers
-        && ser_els.iter().any(|(s, _, _)| no_marker(s))
-        && !ser_els.iter().all(|(s, _, _)| no_marker(s));
-    let is_combo = dc.kind == ChartType::Combo || multi_axis || mixed;
+    // Series `i` takes its own plot group's kind; a 100% stacked line series without markers in a group with them keeps its own.
+    let own_kind = |i: usize, k: ChartType| {
+        let (sel, scope): (Option<&El>, &[&El]) = match ser_els.get(i) {
+            Some((el, g, _)) => (Some(*el), std::slice::from_ref(g)),
+            None => (None, &groups),
+        };
+        match map_chart_type(k, scope) {
+            ChartKind::LineStacked100Markers if sel.is_some_and(no_marker) => ChartKind::LineStacked100,
+            own => own,
+        }
+    };
+    // A 100% stacked line chart whose series differ in markers, or that also holds a plain stacked line group, opens as a
+    // combo chart, so each series keeps its own kind.
+    let own_kinds: Vec<ChartKind> = dc.series.iter().enumerate().map(|(i, s)| own_kind(i, s.kind.unwrap_or(dc.kind))).collect();
+    let split = dc.kind != ChartType::Combo
+        && own_kinds.iter().any(|k| matches!(k, ChartKind::LineStacked100 | ChartKind::LineStacked100Markers))
+        && own_kinds.windows(2).any(|w| w[0] != w[1]);
+    let is_combo = dc.kind == ChartType::Combo || multi_axis || split;
     let kind = if is_combo { ChartKind::Combo } else { base_kind };
     let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
     let mut keyed: Vec<(Option<u32>, Series)> = dc
@@ -237,18 +250,9 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         .into_iter()
         .enumerate()
         .map(|(i, s)| {
-            let (sel, group, fallback_sec) = match ser_els.get(i).copied() {
-                Some((el, g, sec)) => (Some(el), Some(g), sec),
-                None => (None, None, false),
-            };
-            // A series takes its own plot group's kind; a 100% stacked line series without markers in a group with them keeps its own.
-            let scope: &[&El] = match &group {
-                Some(g) => std::slice::from_ref(g),
-                None => &groups,
-            };
-            let own_kind = |k: ChartType| match map_chart_type(k, scope) {
-                ChartKind::LineStacked100Markers if sel.is_some_and(no_marker) => ChartKind::LineStacked100,
-                own => own,
+            let (sel, fallback_sec) = match ser_els.get(i).copied() {
+                Some((el, _, sec)) => (Some(el), sec),
+                None => (None, false),
             };
             let color = s
                 .fill
@@ -288,9 +292,9 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                 color,
                 secondary: is_combo && (s.secondary_axis || fallback_sec),
                 kind: if dc.kind == ChartType::Combo {
-                    s.kind.map(own_kind)
-                } else if multi_axis || mixed {
-                    Some(own_kind(s.kind.unwrap_or(dc.kind)))
+                    s.kind.map(|k| own_kind(i, k))
+                } else if multi_axis || split {
+                    own_kinds.get(i).copied()
                 } else {
                     None
                 },
