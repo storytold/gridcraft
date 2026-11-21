@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-05 · **Change:** minor (Find and Replace keeps workbook Undo/Redo available while a button has keyboard focus; text fields keep their own Undo; earlier: punctuation shortcuts follow the keyboard layout's characters; earlier: preserve centered emoji and symbol fallback placement; earlier: preserve leading and trailing blank cell lines; earlier: align wrapped and unwrapped cells; earlier: CJK title baseline regression and mixed-script rendering validation; earlier: form controls: buttons, sliders and spin buttons on the sheet; earlier: Highlight the active cell's row, a global preference in File › Options › General; earlier: a linked cell's menu edits, opens or removes the link; earlier: Display options for this workbook: sheet tabs and scroll bars; earlier: dragging over row or column headers in point mode extends the reference; earlier: a picture on the system clipboard pastes as a floating picture at the active cell with Cmd/Ctrl+V or Paste (#699); earlier: frozen columns keep their text, gridlines and merged borders whole while the sheet scrolls (#2544); earlier: every Paste Special option has its access key; earlier: the Draw tab's live stroke preview uses the pen's colour and thickness; earlier: copy quotes only cells with a tab or line break, as Excel does; earlier: Ctrl+. Next Corner of Selection; earlier: dragging the selection's border onto data asks before replacing it; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis use them, the arrow keys select while a dialog is collapsed and F4 cycles a reference's anchors; earlier: Python cells: Python mode in the formula bar; earlier: Insert › Equation and the equation editor; earlier: every floating object selects, resizes from eight handles and deletes with the keyboard; earlier: Formulas › Error Checking › Trace Error; trace arrows stay through a zoom (#3097); earlier: Page Setup sets the page order, Down, then over or Over, then down, which printing, the print preview, Page Break Preview and Page Layout view follow; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and the Insert Function categories; Esc leaves a File-page text field before closing the view; earlier: checkbox cells print as boxes; Ctrl+arrow and Ctrl+Shift+arrow while pointing a formula reference; editing a hyperlink loads its existing fields; AutoSum over a selected row puts its total to the right; ribbon catalog count 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -105,6 +105,9 @@ Checked against Microsoft's published "Keyboard shortcuts in Excel" (Windows and
 `keymap.rs` (everything added in #110, with a `lookup` table that tests cover) and
 `formula_bar.rs` (keys while editing). "Ctrl" means Cmd on a Mac unless the Mac column says
 otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, wherever `$` is).
+Punctuation keys go by the character the keyboard layout types, as in Excel: on a Croatian or German
+keyboard Ctrl+Shift+, types `;` and inserts the date, Ctrl+Shift+. (`:`) the time, Ctrl++ opens Insert.
+A character egui has no key for (`č`, `ö`, `<`) falls back to the key's position.
 
 | Shortcut (Windows) | Mac | Action | Status |
 |---|---|---|---|
@@ -235,6 +238,24 @@ pairs (text 4.5:1, glyphs 3:1) are checked by `theme::contrast_tests`.
 
 ## Feel
 
+Mixed CJK, Latin and digits share a baseline in the grid, editor and window title when CJK
+fallback fonts are used. Baseline alignment can increase line height; manual row heights
+continue to clip oversized text.
+
+Wrapped and unwrapped cells use the same vertical margins. With the same font and top
+alignment, a number aligns with the first line of neighbouring wrapped text; fallback font
+height does not shift the primary font's baseline between cells. Leading and trailing blank
+lines retain their space when positioning wrapped text. Emoji and symbol fallbacks keep their
+centering when they start a line or occupy it alone.
+
+Offscreen macOS renders at 80%, 100% and 280% cover mixed text, regular/bold/italic/bold-italic
+roles, automatic wrapping, explicit line breaks and a `yyyy年m月d日` date. The before/after
+comparison uses the same synthetic cells and the default 10 pt cell role: Arial with
+Hiragino Sans GB fallback on the tested Mac.
+Automated regressions check baseline positions, including the actual truncated title layout.
+Glyph scaling is unchanged; the original Calibri 10 visual-size case still needs confirmation
+on a host with that font installed.
+
 Pixel comparison against Excel screenshots hasn't been run since M1; fonts depend on the system
 (no Calibri; Carlito would match metrics, #29, #4, #168 for weights); icons are GridCraft's own
 by rule and will never match Office's, by design.
@@ -249,7 +270,12 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | Reconcile upstream form-control coverage with the CJK baseline and cell-alignment updates |
+| 2026-11-04 | minor | Keep centered emoji and symbol fallback placement when a row starts with a fallback or contains only fallbacks; use primary or baseline-aligned glyphs to anchor cell alignment |
+| 2026-11-04 | minor | Preserve leading and trailing blank lines in wrapped cells when calculating vertical alignment; regression covers single, multiple and all-empty lines |
+| 2026-11-04 | minor | Align wrapped and unwrapped cells with the same vertical margins; regressions compare numbers with mixed CJK/Latin text, including explicit line breaks |
 | 2026-11-02 | minor | Form controls: buttons, sliders (scroll bars) and spin buttons placed, worked, selected and edited on the sheet (Insert › Controls, Assign Action, Format Control); catalog 281 / 296 |
+| 2026-11-03 | minor | Find and Replace: workbook Undo/Redo works with a keyboard-focused button; focused text fields keep text-editing Undo, and a modal message blocks workbook shortcuts. Regression covers Replace All, both Redo shortcuts, actual text undo, and an error message |
 | 2026-11-03 | minor | Highlight the active cell's row: a global preference that tints the whole row, off by default |
 | 2026-11-03 | minor | The formula bar's bottom edge is a resize handle: dragging it sets the bar's height in whole lines, up to half the window, and dragging it to one line collapses it; expanding (the chevron, Ctrl+Shift+U) returns to the dragged height, which is kept with the UI preferences. `view.expandFormulaBar {lines}` sets it (#1246) |
 | 2026-11-03 | minor | Cell context menu on a cell with a link: Edit Hyperlink… (the link dialog, titled Edit Hyperlink and filled with the link), Open Hyperlink and Remove Hyperlink, as in Excel, instead of Link… (#2120) |
@@ -267,13 +293,16 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-11-02 | minor | Python mode edits a cell's code in the formula bar's code editor (Ctrl+Alt+Shift+P, `=PY` then Tab, editing a Python cell), with the PY badge beside fx; its keys apply in input order, also several in one frame, and Ctrl+Enter commits through `python.set` (empty code clears the cell), keeping the code and showing the command's message when the code is refused |
 | 2026-11-02 | minor | Insert › Symbols: Equation split button (access keys N E), a gallery of examples, and an equation editor with quick-insert buttons, the error underlined at its position and a live preview; double-clicking an equation edits it |
 | 2026-11-02 | minor | Floating objects: one selection for charts, pictures, shapes and slicers, eight resize handles with matching cursors (right-to-left sheets included), Escape drops the selection |
+| 2026-11-02 | minor | Record macOS mixed CJK/Latin rendering validation, the actual fallback fonts and the unverified Calibri 10 case |
 | 2026-11-01 | minor | Chart Design › Add Chart Element offers Data Table with/no legend keys and None; Format Chart Area has a Data Table section with visibility, legend keys, horizontal/vertical borders and outline. Both use engine commands. |
 | 2026-11-01 | minor | Page Setup has a Page order choice (Down, then over, the default, or Over, then down) with a small picture of the order, also when Print Titles opens it on its Sheet tab; OK sets it with the margins in one undo step. Printing, PDF export, the print preview, Page Break Preview's page numbers and Page Layout view's headers and footers follow the order. The dialog is in German now too |
 | 2026-11-01 | minor | Formulas › Error Checking › Trace Error (`formulas.traceError`): red arrows from the cell an error starts in to the selected cell, through the first reference showing the same error at each step, and blue arrows from that cell's own references, as measured in Excel; the command returns the source and the arrows |
 | 2026-11-01 | minor | Trace arrows stay when the sheet is zoomed (View › Zoom, the status bar, Ctrl+wheel), as in Excel; every zoom used to remove them (#3097) |
+| 2026-11-01 | minor | Assert shared baselines in the actual title layout and record manual visual-size validation of a compiled macOS build |
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
 | 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |
+| 2026-10-31 | minor | CJK fallback text shares the Latin baseline in cells, editors and window titles; fixed row heights and clipping remain workbook-controlled |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
 | 2026-10-29 | minor | Insert Hyperlink opens with an existing link's address, display text and ScreenTip (#2876). An address-only edit preserves the cell's content and formula; Cancel leaves the link unchanged, and Undo restores the edit |
@@ -307,9 +336,11 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-19 | minor | Ctrl+Enter (`range.fill`) gives each cell what typing the input there gives: a General cell gets the automatic number format (`5%`, `$5`, `3/4/2026`, `=TODAY()`) even when it already held a value, and a cell with its own format, a formatted row or column, or Text keeps it. Cells that held a value used to keep General (`5%` showed 0.05), and empty cells took the active cell's format |
 | 2026-10-19 | trivial | While a mouse button is held (a click or a drag selecting cells) the selection outline is drawn on its cells at once instead of gliding after the pointer, which read as lag; keyboard moves still glide |
 | 2026-10-18 | minor | Keytip letters typed with left Alt held continue the sequence (Alt+H, O, A / Alt+H, O, I ran nothing before: Alt+letter cancelled keytips); other Alt combinations, AltGr and macOS Option are unchanged (#1846) |
+| 2026-10-14 | minor | Punctuation shortcuts follow the character the keyboard layout types, digits keep their position: on a Croatian or German keyboard Ctrl+Shift+, (`;`) inserts the date instead of decreasing the font size, Ctrl+Shift+. (`:`) the time, Ctrl++ opens Insert, Ctrl+' copies the formula above, and Ctrl+Shift+0 (`=`) unhides columns instead of opening Insert |
 | 2026-10-17 | minor | A Ctrl+Alt+letter key that types a character (a user-defined Windows hotkey such as Ctrl+Alt+A for `ä`) types it instead of running the Ctrl+letter shortcut, e.g. Select All (#1530) |
 | 2026-10-16 | minor | Right-drag on the fill handle opens the fill menu on release: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Series…; Esc cancels the drag or closes the menu without filling |
 | 2026-10-16 | minor | With the active cell in a Table whose header row is scrolled out of view, the column headings show the header names and their filter buttons in place of the letters (#1423) |
+| 2026-10-16 | minor | Custom Sort dialog: Sort by columns are a dropdown of the header names (Column A, B… without headers), Order follows the data (A to Z or Smallest to Largest), levels can be added, deleted, copied and reordered, the window moves and resizes, the grid selection follows "My list has headers" and is restored on close |
 | 2026-10-16 | minor | Ctrl+6 hides every object (charts, pictures, shapes, slicers) and shows them again; hidden objects are not drawn, take no clicks and drop their selection, and the setting is saved with the workbook (`workbookPr showObjects`) |
 | 2026-10-16 | minor | Ctrl+Shift+A (Control+Shift+A on a Mac) after a function name, or after its `(`, inserts the argument names and the closing parenthesis, as in Excel; one Undo in the editor takes them back |
 | 2026-10-16 | minor | Advanced Filter ribbon dialog, optional criteria for unique-only extraction (#1622); safe copy-to output (#1031) |
