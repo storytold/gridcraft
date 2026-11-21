@@ -58,8 +58,8 @@ craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "08d
 # above: they exist only at storytold/craft-libs#1584's head until it merges, and they bring a
 # second craft-ui (craft-library-egui's) until then. Once #1584 is on craft-libs main, every
 # craft-libs pin here moves to one main commit, these two with them.
-craft-library = { git = "https://github.com/storytold/craft-libs", rev = "85dca70d2852ffe5de18c74d680a7b93ee5cde20", version = "0.1.0" }
-craft-library-egui = { git = "https://github.com/storytold/craft-libs", rev = "85dca70d2852ffe5de18c74d680a7b93ee5cde20", version = "0.1.0" }
+craft-library = { git = "https://github.com/storytold/craft-libs", rev = "3bce146e933ae119a56e405a806ae3ced36dc3bb", version = "0.1.0" }
+craft-library-egui = { git = "https://github.com/storytold/craft-libs", rev = "3bce146e933ae119a56e405a806ae3ced36dc3bb", version = "0.1.0" }
 
 # foundation
 thiserror = "2"
