@@ -111,7 +111,13 @@ fn resolve_target(source_dir: &str, target: &str) -> String {
 type Zip<'a> = zip::ZipArchive<Cursor<&'a [u8]>>;
 
 fn zip_names(zip: &mut Zip<'_>) -> Vec<String> {
-    (0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| f.name().to_string())).collect()
+    (0..zip.len().min(MAX_ENTRIES)).filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !f.is_dir()).map(|f| entry_name(&f))).collect()
+}
+
+/// An entry's name: UTF-8, or CP437 when the entry isn't flagged UTF-8. A name that doesn't decode
+/// is listed with its raw bytes made lossy, so the entry is still checked and reported.
+fn entry_name<R: std::io::Read>(f: &zip::read::ZipFile<'_, R>) -> String {
+    f.name().map(|n| n.into_owned()).unwrap_or_else(|_| String::from_utf8_lossy(f.name_raw()).into_owned())
 }
 
 fn read_zip_part(zip: &mut Zip<'_>, name: &str) -> Result<Vec<u8>, String> {
