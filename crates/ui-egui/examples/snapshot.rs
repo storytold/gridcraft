@@ -6,6 +6,10 @@
 //!
 //! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
 //! `range` on the grid, as a person picking a range for that box does.
+//!
+//! `GRIDCRAFT_I18N_TRACE=path` adds the labels this run fell back to English for to `path` (see
+//! `i18n::untranslated`): rendering a tab with `--language zh` then measures a localization pass
+//! against the real interface instead of against a grep.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -154,4 +158,42 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());
+    // `GRIDCRAFT_I18N_TRACE=/tmp/…` collects the labels this run could not translate, so a
+    // localization pass can be measured instead of grepped. Each key is one JSON string per
+    // line: `tr` keys can carry newlines (`Resize\nTable`), and one raw key per line would
+    // split it into two records for the next run.
+    if let Some(path) = std::env::var_os("GRIDCRAFT_I18N_TRACE") {
+        // A line that doesn't parse (a corrupted record, or a plaintext key from before the JSON
+        // format) leaves the file alone: rewriting would drop that record for good.
+        let mut merged: std::collections::BTreeSet<String> = match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let mut records = std::collections::BTreeSet::new();
+                for line in text.lines().filter(|line| !line.is_empty()) {
+                    match serde_json::from_str::<String>(line) {
+                        Ok(key) => {
+                            records.insert(key);
+                        }
+                        Err(e) => {
+                            eprintln!("i18n trace: {}: {line:?} is not a JSON record ({e}); not rewriting the trace", path.to_string_lossy());
+                            return;
+                        }
+                    }
+                }
+                records
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
+            // A file that exists but can't be read keeps its contents: nothing is written on top of it.
+            Err(e) => {
+                eprintln!("i18n trace: can't read {}: {e}", path.to_string_lossy());
+                return;
+            }
+        };
+        merged.extend(gridcraft_ui_egui::i18n::untranslated());
+        let mut text = merged.into_iter().filter_map(|k| serde_json::to_string(&k).ok()).collect::<Vec<_>>().join("\n");
+        text.push('\n');
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!("i18n trace: can't write {}: {e}", path.to_string_lossy());
+            std::process::exit(1);
+        }
+    }
 }

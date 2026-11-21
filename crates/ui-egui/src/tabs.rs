@@ -134,7 +134,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
             ui.spacing_mut().item_spacing.x = 0.0;
             ui.add_space(8.0);
             if view.show_sheet_tabs {
-                if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, app.ui.language.tr("Previous sheet"), vec2(24.0, 24.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Left, t.text_dim, "Previous sheet", vec2(24.0, 24.0)).clicked() {
                     // Ctrl-click jumps to the first visible sheet, like Excel's tab scroll buttons.
                     let edge =
                         if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, false)) } else { None };
@@ -146,7 +146,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                         None => app.run_or_alert("sheet.previous", json!({})),
                     }
                 }
-                if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, app.ui.language.tr("Next sheet"), vec2(24.0, 24.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Right, t.text_dim, "Next sheet", vec2(24.0, 24.0)).clicked() {
                     // Ctrl-click jumps to the last visible sheet.
                     let edge =
                         if ui.input(|i| i.modifiers.command) { app.session.active().and_then(|d| edge_sheet(&d.wb.sheets, true)) } else { None };
@@ -158,7 +158,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                         None => app.run_or_alert("sheet.next", json!({})),
                     }
                 }
-                let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, app.ui.language.tr("All sheets"), vec2(24.0, 24.0));
+                let all = crate::widgets::icon_button(ui, Icon::SheetList, t.text_dim, "All sheets", vec2(24.0, 24.0));
                 all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
                 let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
                 let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
@@ -354,7 +354,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                         });
                 });
                 ui.add_space(6.0);
-                if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, app.ui.language.tr("New sheet (⇧F11)"), vec2(26.0, 26.0)).clicked() {
+                if crate::widgets::icon_button(ui, Icon::Plus, t.text_dim, "New sheet (⇧F11)", vec2(26.0, 26.0)).clicked() {
                     app.run_or_alert("home.insertSheet", json!({}));
                 }
             }
@@ -407,7 +407,12 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {
                         ui.add_space(12.0);
-                        text(ui, egui::RichText::new("Macros preserved (not executed)").font(theme::ui_font(12.5)).color(t.danger));
+                        text(
+                            ui,
+                            egui::RichText::new(crate::i18n::current(ui.ctx()).tr("Macros preserved (not executed)"))
+                                .font(theme::ui_font(12.5))
+                                .color(t.danger),
+                        );
                     }
                     if d.wb.calc.mode == gridcraft_engine::model::CalcMode::Manual {
                         ui.add_space(12.0);
@@ -472,7 +477,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.text_dim);
-                        if resp.on_hover_text(tip).clicked() {
+                        if resp.on_hover_text(app.ui.language.tr(tip)).clicked() {
                             app.run_or_alert(cmd, json!({}));
                         }
                     }
@@ -480,7 +485,10 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     // The layout runs right to left, so the last statistic is drawn first.
                     // Clicking a statistic copies its value (without the label) to the clipboard.
                     for p in selection_statistics(app).into_iter().rev() {
-                        let value = p.split_once(": ").map_or(p.as_str(), |(_, v)| v).to_owned();
+                        // Localized statistics use a full-width colon (`平均值：4`): copy just
+                        // the value after either separator, or the whole text when neither is
+                        // there.
+                        let value = p.split_once(": ").or_else(|| p.split_once('：')).map_or(p.as_str(), |(_, v)| v).to_owned();
                         let resp = ui.add(
                             egui::Label::new(egui::RichText::new(p).font(theme::ui_font(12.5)).color(t.text_dim))
                                 .selectable(false)
