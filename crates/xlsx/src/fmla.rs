@@ -92,6 +92,7 @@ fn prefix_params(e: Expr, scope: &[String], context: Option<&CellScope<'_>>) -> 
         },
         Expr::Unary(op, x) => Expr::Unary(op, sub(x, scope)),
         Expr::Paren(x) => Expr::Paren(sub(x, scope)),
+        Expr::Binary(op, a, b) if !matches!(*a, Expr::Binary(..)) => Expr::Binary(op, sub(a, scope), sub(b, scope)),
         Expr::Binary(op, a, b) => {
             // A long chain such as A1+A2+… nests on its left: follow it in a loop, not one
             // level of recursion per operand.
@@ -382,6 +383,18 @@ mod tests {
             }
         }
         assert!(checked > gridcraft_functions::all().len() * 10, "only {checked} formulas parsed");
+    }
+
+    /// NETWORKDAYS.INTL and WORKDAY.INTL are in the file format's own function list: saved without
+    /// `_xlfn.` (LibreOffice gives #NAME? for the prefixed spelling), and the prefixed spelling of a
+    /// file written by an older version still reads (#3517, #2775).
+    #[test]
+    fn intl_day_functions_are_saved_without_the_prefix() {
+        let f = Formula::new("NETWORKDAYS.INTL(DATE(2026,1,5),DATE(2026,1,9),1)+WORKDAY.INTL(DATE(2026,1,5),3,1)");
+        assert_eq!(to_file(&f), "NETWORKDAYS.INTL(DATE(2026,1,5),DATE(2026,1,9),1)+WORKDAY.INTL(DATE(2026,1,5),3,1)");
+        assert_eq!(text_to_file("=WORKDAY.INTL(A1,3,1)"), "WORKDAY.INTL(A1,3,1)");
+        assert_eq!(from_file("_xlfn.NETWORKDAYS.INTL(A1,B1,1)+_xlfn.WORKDAY.INTL(A1,3,1)"), "NETWORKDAYS.INTL(A1,B1,1)+WORKDAY.INTL(A1,3,1)");
+        assert_eq!(from_file("NETWORKDAYS.INTL(A1,B1,1)"), "NETWORKDAYS.INTL(A1,B1,1)");
     }
 
     #[test]
