@@ -293,6 +293,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Naposledy použité",
         "No recent workbooks yet." => "Zatím žádné naposledy použité sešity.",
         "More workbooks" => "Další sešity",
+        "More entries not shown" => "Další položky nejsou zobrazeny",
         "Modified" => "Změněno",
         "Not available" => "Nedostupné",
         "Just now" => "Právě teď",
