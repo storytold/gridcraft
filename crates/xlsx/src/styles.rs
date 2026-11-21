@@ -534,7 +534,9 @@ fn fill_xml(f: &Fill, dxf: bool) -> String {
     let mut s = format!("<fill><patternFill patternType=\"{}\">", pattern_name(f.pattern));
     if f.fg != Color::Auto {
         let _ = write!(s, "<fgColor {}/>", color_attrs(&f.fg));
-    } else if f.pattern != PatternType::Gray125 {
+    } else if f.pattern != PatternType::Gray125 && f.pattern != PatternType::Solid {
+        // shortcut: a solid fill's absent fgColor and an explicit `indexed="64"` both read as Auto, so
+        // neither is written back (Excel paints an explicit one black); upgrade by making `Fill::fg` optional (#4582).
         s.push_str("<fgColor indexed=\"64\"/>");
     }
     if f.bg != Color::Auto {
@@ -847,6 +849,15 @@ pub fn dxf_id(dxfs: &mut Vec<Style>, s: &Style) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn solid_fill_without_fg_color_is_written_without_one() {
+        for bg in ["<bgColor indexed=\"64\"/>", "<bgColor rgb=\"FF000000\"/>"] {
+            let xml = format!("<fill><patternFill patternType=\"solid\">{bg}</patternFill></fill>");
+            let fill = read_fill(&crate::xml::parse(xml.as_bytes()).unwrap(), &INDEXED, false);
+            assert_eq!(fill_xml(&fill, false), xml);
+        }
+    }
 
     #[test]
     fn absent_or_invalid_reading_order_is_unspecified() {
