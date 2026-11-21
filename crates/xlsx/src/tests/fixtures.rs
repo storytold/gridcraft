@@ -1332,3 +1332,44 @@ fn inline_dxf_number_formats_are_shared() {
     assert_eq!(read.dxfs[0].num_fmt.as_str(), code);
     assert!(read.dxfs.iter().all(|d| std::sync::Arc::ptr_eq(&d.num_fmt.0, &read.dxfs[0].num_fmt.0)));
 }
+
+#[test]
+fn two_column_groups_on_different_axes_preserve_secondary_and_kind() {
+    let drawing = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>
+    </xdr:wsDr>"#;
+    let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea>
+      <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:tx><c:v>Primary</c:v></c:tx><c:val><c:numRef><c:f>Data!$B$2:$B$5</c:f></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>
+      <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="1"/><c:tx><c:v>Secondary</c:v></c:tx><c:val><c:numRef><c:f>Data!$C$2:$C$5</c:f></c:numRef></c:val></c:ser><c:axId val="3"/><c:axId val="4"/></c:barChart>
+      <c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:catAx><c:axId val="3"/></c:catAx><c:valAx><c:axId val="4"/></c:valAx>
+    </c:plotArea></c:chart></c:chartSpace>"#;
+    let drels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#;
+    let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let bytes = minimal(
+        r#"<sheetData/><drawing r:id="rId1"/>"#,
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", srels),
+            ("xl/drawings/drawing1.xml", drawing),
+            ("xl/drawings/_rels/drawing1.xml.rels", drels),
+            ("xl/charts/chart1.xml", chart),
+        ],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let ch = &wb.sheet(0).unwrap().charts[0];
+    assert_eq!(ch.kind, gridcraft_model::ChartKind::Combo);
+    assert!(!ch.series[0].secondary);
+    assert!(ch.series[1].secondary);
+    assert_eq!(ch.series[0].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
+    assert_eq!(ch.series[1].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
+
+    let out = crate::write_xlsx(&wb).unwrap();
+    let (wb2, _) = read_xlsx(&out).unwrap();
+    let ch2 = &wb2.sheet(0).unwrap().charts[0];
+    assert_eq!(ch2.kind, gridcraft_model::ChartKind::Combo);
+    assert!(!ch2.series[0].secondary);
+    assert!(ch2.series[1].secondary);
+    assert_eq!(ch2.series[0].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
+    assert_eq!(ch2.series[1].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
+}

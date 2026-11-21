@@ -9,6 +9,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 
+use craft_xlsx::{Anchor as CraftAnchor, Drawing as CraftDrawing, Item as CraftItem, Marker as CraftMarker, Placement as CraftPlacement};
+
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
 use gridcraft_model::{
     Anchor, AnchorMode, Color, DrawingGroup, DrawingRef, GroupFile, GroupFileMember, Image, MAX_GROUP_DEPTH, ObjectRect, Shape, ShapeFormat,
@@ -36,54 +38,66 @@ pub(crate) fn marker(e: &El) -> (CellRef, f32, f32) {
     (CellRef::new(row, col), emu_px(num("colOff")).max(0.0), emu_px(num("rowOff")).max(0.0))
 }
 
-fn ext_px(e: Option<&El>) -> (f32, f32) {
-    match e {
-        Some(x) => (emu_px(x.attr_i64("cx")).max(0.0), emu_px(x.attr_i64("cy")).max(0.0)),
-        None => (0.0, 0.0),
-    }
+fn emu_to_px(v: i64) -> f32 {
+    (v as f64 / EMU_PER_PX).clamp(-1e7, 1e7) as f32
 }
 
-fn read_anchor(a: &El, sheet: &Sheet) -> Option<Anchor> {
-    match a.name.as_str() {
-        "twoCellAnchor" => {
-            let (cell, dx, dy) = marker(a.child("from")?);
-            let (to, tdx, tdy) = a.child("to").map(marker).unwrap_or((cell, dx, dy));
+fn craft_marker(m: CraftMarker) -> (CellRef, f32, f32) {
+    let col = m.col.min(MAX_COLS - 1);
+    let row = m.row.min(MAX_ROWS - 1);
+    (CellRef::new(row, col), emu_to_px(m.col_off).max(0.0), emu_to_px(m.row_off).max(0.0))
+}
+
+fn placement_to_anchor(p: &CraftPlacement, sheet: &Sheet) -> Anchor {
+    match p {
+        CraftPlacement::TwoCell { from, to, edit_as } => {
+            let (cell, dx, dy) = craft_marker(*from);
+            let (to, tdx, tdy) = craft_marker(*to);
             let x1 = sheet.col_left(cell.col) + dx as f64;
             let y1 = sheet.row_top(cell.row) + dy as f64;
             let x2 = sheet.col_left(to.col) + tdx as f64;
             let y2 = sheet.row_top(to.row) + tdy as f64;
-            // Excel stores "Move and size with cells" as a plain twoCellAnchor, "Move but don't
-            // size" as editAs="oneCell", and "Don't move or size" as editAs="absolute".
-            let mode = match a.attr("editAs") {
+            let mode = match edit_as.as_deref() {
                 Some("absolute") => AnchorMode::Absolute,
                 Some("oneCell") => AnchorMode::MoveOnly,
                 _ => AnchorMode::MoveAndSize,
             };
-            Some(Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode })
+            Anchor { cell, dx, dy, width: (x2 - x1).max(0.0) as f32, height: (y2 - y1).max(0.0) as f32, mode }
         }
-        "oneCellAnchor" => {
-            let (cell, dx, dy) = marker(a.child("from")?);
-            let (width, height) = ext_px(a.child("ext"));
-            Some(Anchor { cell, dx, dy, width, height, mode: AnchorMode::MoveOnly })
+        CraftPlacement::OneCell { from, cx, cy } => {
+            let (cell, dx, dy) = craft_marker(*from);
+            Anchor { cell, dx, dy, width: emu_to_px(*cx).max(0.0), height: emu_to_px(*cy).max(0.0), mode: AnchorMode::MoveOnly }
         }
-        "absoluteAnchor" => {
-            let pos = a.child("pos");
-            let x = emu_px(pos.and_then(|p| p.attr_i64("x"))).max(0.0) as f64;
-            let y = emu_px(pos.and_then(|p| p.attr_i64("y"))).max(0.0) as f64;
+        CraftPlacement::Absolute { x, y, cx, cy } => {
+            let x = emu_to_px(*x).max(0.0) as f64;
+            let y = emu_to_px(*y).max(0.0) as f64;
             let col = sheet.col_at(x);
             let row = sheet.row_at(y);
-            let (width, height) = ext_px(a.child("ext"));
-            Some(Anchor {
+            Anchor {
                 cell: CellRef::new(row, col),
                 dx: (x - sheet.col_left(col)).max(0.0) as f32,
                 dy: (y - sheet.row_top(row)).max(0.0) as f32,
-                width,
-                height,
+                width: emu_to_px(*cx).max(0.0),
+                height: emu_to_px(*cy).max(0.0),
                 mode: AnchorMode::Absolute,
-            })
+            }
         }
-        _ => None,
     }
+}
+
+fn from_craft_el(e: &craft_xml::El) -> El {
+    let name = e.name.split_once(':').map_or(e.name.as_str(), |(_, local)| local).to_string();
+    let attrs = e.attrs.iter().map(|(k, v)| (k.split_once(':').map_or(k.as_str(), |(_, local)| local).to_string(), v.clone())).collect();
+    let mut children = Vec::new();
+    let mut text = String::new();
+    for node in &e.children {
+        match node {
+            craft_xml::Node::El(c) => children.push(from_craft_el(c)),
+            craft_xml::Node::Text(t) | craft_xml::Node::CData(t) => text.push_str(t),
+            craft_xml::Node::Pi { .. } | craft_xml::Node::Comment(_) => {}
+        }
+    }
+    El { name, attrs, children, text }
 }
 
 /// Colour of a DrawingML colour choice inside `e` (e.g. a `solidFill`).
@@ -259,14 +273,44 @@ fn drawing_objects(children: &[El]) -> Vec<&El> {
 }
 
 pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(), IoError> {
-    let Some(x) = cx.optional_xml(part)? else { return Ok(()) };
+    let Some(bytes) = cx.pkg.read(part)? else {
+        cx.warn(format!("missing part {part}"));
+        return Ok(());
+    };
+    let opts = craft_xml::Options::canonical(&craft_xlsx::ns::CANONICAL).with_limits(craft_xml::Limits {
+        max_input: crate::package::MAX_PART as usize,
+        max_depth: crate::xml::MAX_DEPTH,
+        max_nodes: crate::xml::MAX_XML_NODES,
+        ..craft_xml::Limits::DEFAULT
+    });
+    let root = match opts.parse(&bytes) {
+        Ok(r) => r,
+        Err(e) if e.is_limit() => return Err(IoError::TooLarge(format!("{part}: {e}"))),
+        Err(e) => {
+            cx.warn(format!("skipped {part}: {e}"));
+            return Ok(());
+        }
+    };
+    let dr = CraftDrawing::read(&root);
     let rels = cx.pkg.rels(part)?;
-    for (n, a) in x.children.iter().enumerate() {
-        let Some(anchor) = read_anchor(a, sheet) else { continue };
+    let mut anchors: Vec<&CraftAnchor> = Vec::new();
+    let mut alt_anchors: Vec<CraftAnchor> = Vec::new();
+    for item in &dr.items {
+        match item {
+            CraftItem::Anchor(a) => anchors.push(a),
+            CraftItem::Other(e) if e.name == "mc:AlternateContent" => {
+                alt_anchors.extend(CraftDrawing::alternate_anchors(e));
+            }
+            CraftItem::Other(_) => {}
+        }
+    }
+    for (n, craft_a) in anchors.into_iter().chain(alt_anchors.iter()).enumerate() {
+        let anchor = placement_to_anchor(&craft_a.placement, sheet);
         let n = n + 1;
         let px = 1.0 / EMU_PER_PX;
         let place = Place { anchor, rect: sheet.anchor_rect(&anchor), scale: (px, px), flip: (false, false) };
-        for obj in drawing_objects(&a.children) {
+        let obj_el = from_craft_el(&craft_a.object);
+        for obj in drawing_objects(std::slice::from_ref(&obj_el)) {
             read_object(cx, (part, n), &rels, sheet, obj, place, 0)?;
         }
     }
