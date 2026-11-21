@@ -102,7 +102,7 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     let Some(name) = str_param(p, "name").map(|n| n.trim().to_string()) else { return Err(bad("sheet.rename", "missing `name`")) };
     s.doc()?.wb.check_sheet_name(&name, Some(i)).map_err(EngineError::Other)?;
-    edit(s, |cx| {
+    let result = edit(s, |cx| {
         let old = cx.wb.sheet(i).map(|s| s.name.clone()).unwrap_or_default();
         let order: Vec<_> = cx.wb.sheets.iter().map(|sheet| sheet.name.clone()).collect();
         cx.sheet_mut(i)?.name = name.clone();
@@ -137,7 +137,10 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::rename_sheet_in(e, &old, &name, &order))?;
         cx.structural = true;
         Ok(Json::Null)
-    })
+    })?;
+    // The clipboard snapshot stores pre-rename sheet names; end copy mode after a rename.
+    s.clipboard = None;
+    Ok(result)
 }
 
 pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {

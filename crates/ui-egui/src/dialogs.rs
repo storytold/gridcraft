@@ -841,13 +841,20 @@ impl Dialog {
                 });
                 // The Scope box is free text that opens showing the identity it was opened with, so
                 // a sheet literally named Workbook keeps that meaning while the text is left alone.
-                let identity = params.get("scope").cloned().filter(|v| !v.is_null()).unwrap_or(Json::Null);
+                let scope_identity = |key| match params.get(key).cloned().unwrap_or(Json::Null) {
+                    Json::String(sheet) if sheet != "Workbook" => json!({"sheet": sheet}),
+                    other => other,
+                };
+                let identity = scope_identity("scope");
                 let caption = names::scope_caption(&identity, app.ui.language);
                 let mut defaults = json!({"scope": caption, "refersTo": selection});
                 for key in ["name", "comment", "refersTo", "oldName"] {
                     if let Some(v) = params.get(key).filter(|v| v.is_string()) {
                         defaults[key] = v.clone();
                     }
+                }
+                if editing {
+                    defaults["oldScope"] = scope_identity("oldScope");
                 }
                 let mut dialog = Dialog::form(
                     "defineName",
@@ -1292,6 +1299,58 @@ mod tests {
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert!(rows[0]["scopeIdentity"].is_null(), "the name moved to workbook scope: {rows:?}");
         assert_eq!(rows[0]["refersTo"], "=1");
+    }
+
+    #[test]
+    fn dialog_open_preserves_string_sheet_scope_matching_the_workbook_caption() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("app.language.set", json!({"language": "it"})).unwrap();
+        app.run("home.insertSheet", json!({"name": "Cartella di lavoro"})).unwrap();
+        app.run("formulas.defineName", json!({"name": "Rate", "refersTo": "=1", "scope": {"sheet": "Cartella di lavoro"}})).unwrap();
+        app.run("formulas.defineName", json!({"name": "Rate", "refersTo": "=3"})).unwrap();
+
+        let mut d = Dialog::open(
+            &mut app,
+            "defineName",
+            json!({"name": "Rate", "scope": "Cartella di lavoro", "refersTo": "=1", "oldName": "Rate", "oldScope": "Cartella di lavoro"}),
+        )
+        .unwrap();
+        d.set_value("refersTo", json!("=2"));
+        let params = build_params(&d);
+        assert_eq!(params["scope"], json!({"sheet": "Cartella di lavoro"}));
+        assert_eq!(params["oldScope"], json!({"sheet": "Cartella di lavoro"}));
+        app.run(d.command.unwrap(), params).unwrap();
+        let rows = app.run("formulas.nameManager", json!({})).unwrap();
+        let rows = rows.as_array().unwrap();
+        assert_eq!(rows.iter().find(|row| row["scopeIdentity"].is_object()).unwrap()["refersTo"], "=2");
+        assert_eq!(rows.iter().find(|row| row["scopeIdentity"].is_null()).unwrap()["refersTo"], "=3");
+    }
+
+    #[test]
+    fn dialog_open_keeps_source_scope_when_target_scope_differs() {
+        let mut session = gridcraft_engine::Session::default();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("home.insertSheet", json!({"name": "Data"})).unwrap();
+        app.run("home.insertSheet", json!({"name": "Other"})).unwrap();
+        app.run("formulas.defineName", json!({"name": "Rate", "refersTo": "=1", "scope": {"sheet": "Data"}})).unwrap();
+        let d = Dialog::open(
+            &mut app,
+            "defineName",
+            json!({"name": "Rate", "scope": {"sheet": "Other"}, "refersTo": "=2", "oldName": "Rate", "oldScope": {"sheet": "Data"}}),
+        )
+        .unwrap();
+        let params = build_params(&d);
+        assert_eq!(params["scope"], json!({"sheet": "Other"}));
+        assert_eq!(params["oldScope"], json!({"sheet": "Data"}));
+        app.run(d.command.unwrap(), params).unwrap();
+        let rows = app.run("formulas.nameManager", json!({})).unwrap();
+        let rows = rows.as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["scopeIdentity"], json!({"sheet": "Other"}));
+        assert_eq!(rows[0]["refersTo"], "=2");
     }
 
     #[test]

@@ -24,13 +24,10 @@ use gridcraft_engine::model::PageOrder;
 /// an absent parameter.
 fn define_name_scope(d: &Dialog, v: &mut Json) {
     let Some(m) = v.as_object_mut() else { return };
-    if let Some((caption, identity)) = &d.scope_identity {
-        if m.get("scope").and_then(Json::as_str) == Some(caption.as_str()) {
-            m.insert("scope".into(), identity.clone());
-        }
-        if m.contains_key("oldName") {
-            m.insert("oldScope".into(), identity.clone());
-        }
+    if let Some((caption, identity)) = &d.scope_identity
+        && m.get("scope").and_then(Json::as_str) == Some(caption.as_str())
+    {
+        m.insert("scope".into(), identity.clone());
     }
     // `Workbook`, and the word the box itself uses for workbook scope in the interface language,
     // mean workbook scope: the command sees an absent parameter. Free text that happens to read

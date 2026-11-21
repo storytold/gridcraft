@@ -1079,6 +1079,21 @@ fn inserting_or_deleting_cells_cancels_copy_mode() {
 }
 
 #[test]
+fn renaming_a_cut_source_cancels_the_stale_clipboard() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "лист1"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "лист1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    assert!(s.clipboard.is_none());
+    s.execute("home.insertSheet", json!({"name": "ЛИСТ1"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "B1"})).is_err());
+    s.execute("sheet.activate", json!({"sheet": "Data"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(5.0));
+}
+
+#[test]
 fn fill_series() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1], [3]]})).unwrap();
