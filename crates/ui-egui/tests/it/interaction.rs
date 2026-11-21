@@ -445,6 +445,34 @@ fn f2_during_an_edit_switches_arrows_between_caret_and_pointing() {
 }
 
 #[test]
+fn f2_twice_after_pointing_keeps_pointing_from_the_pointed_cell() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    text(&mut h, "=");
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=A10"));
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=A9"), "the arrow moves the pointed reference, it doesn't commit");
+}
+
+#[test]
+fn f2_and_an_arrow_in_one_frame_apply_in_input_order() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    text(&mut h, "abc");
+    let press = |k: Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([press(Key::F2), press(Key::ArrowLeft)]);
+    h.run_steps(2);
+    assert_eq!(edited(&h).as_deref(), Some("abc"), "the arrow after F2 moves the caret instead of committing the entry");
+}
+
+#[test]
 fn ctrl_arrows_in_point_mode_jump_to_the_edge_of_the_data() {
     // Typing `=COUNTIF(`, clicking the top of a column and pressing Ctrl+Shift+Down (⌘⇧↓) points
     // at the whole column of data, as the same keys select it outside an edit.

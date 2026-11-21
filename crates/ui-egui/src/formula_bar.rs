@@ -670,9 +670,19 @@ fn editor_shortcuts(
     outcome.action = action;
     outcome.cancel = cancel;
     outcome.to_python |= py_trigger;
+    // F2 switches the in-cell edit between Edit mode (arrows move the caret) and Enter mode
+    // (arrows point at cells), as in Excel. An F2 pressed before an arrow in the same frame
+    // applies first, so that arrow already follows the new mode.
+    let f2_before_arrow = editor_f2_before_arrow(ui, ed);
+    if let Some(true) = f2_before_arrow {
+        toggle_enter_mode(app, ed);
+    }
     let (action, arrow) = editor_arrow_keys(app, ui, ed, outcome.action);
     outcome.action = action;
     outcome.arrow = arrow;
+    if let Some(false) = f2_before_arrow {
+        toggle_enter_mode(app, ed);
+    }
     editor_other_shortcuts(app, ui, id, ed);
     outcome
 }
@@ -799,11 +809,6 @@ fn editor_arrow_keys(
 }
 
 fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, ed: &mut crate::editor::EditState) {
-    // F2 switches the in-cell edit between Edit mode (arrows move the caret) and Enter mode
-    // (arrows point at cells), as in Excel.
-    if !ed.from_formula_bar && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2)) {
-        toggle_enter_mode(app, ed);
-    }
     if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
         cycle_anchor(ed);
     }
@@ -879,12 +884,30 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
     info
 }
 
+/// Whether F2 was pressed in the in-cell editor (consuming it), and if so whether it came before
+/// the frame's first arrow press. `None` when F2 wasn't pressed.
+fn editor_f2_before_arrow(ui: &mut egui::Ui, ed: &crate::editor::EditState) -> Option<bool> {
+    if ed.from_formula_bar {
+        return None;
+    }
+    let order = ui.input(|i| {
+        let press = |want: &dyn Fn(Key, egui::Modifiers) -> bool| {
+            i.events.iter().position(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if want(*key, *modifiers)))
+        };
+        let f2 = press(&|k, m| k == Key::F2 && m.is_none());
+        let arrow = press(&|k, _| matches!(k, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight));
+        f2.map(|f| arrow.is_none_or(|a| f < a))
+    });
+    if order.is_some() {
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2));
+    }
+    order
+}
+
+/// Flips Edit and Enter mode. The pointed reference stays, so pointing resumes from it while the
+/// caret hasn't moved.
 fn toggle_enter_mode(app: &mut SheetApp, ed: &mut crate::editor::EditState) {
     ed.enter_mode = !ed.enter_mode;
-    // The next arrow starts pointing again from the edited cell.
-    ed.point = None;
-    ed.point_anchor = None;
-    ed.point_cell = None;
     app.session.mode = if !ed.enter_mode {
         gridcraft_engine::Mode::Edit
     } else if ed.can_point() {
