@@ -9,8 +9,8 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
         cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, overwrite?: bool} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension; the workbook's own file, when another program changed it on disk since it was opened or saved here, is replaced only with `overwrite: true`)", has_doc, save),
+        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, overwrite?: bool} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet; `overwrite` as for file.save)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
@@ -85,11 +85,14 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
+    // What the file held as it was read: Save does not replace it once it holds something else.
+    let disk = path.as_ref().map(|_| crate::io::FileStamp::of(&bytes));
     // Someone else may have made the file: its active content asks before it runs.
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
+    doc.disk = disk;
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
@@ -114,6 +117,9 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
+    if !bool_param(p, "overwrite").unwrap_or(false) {
+        refuse_changed_on_disk(s, &path)?;
+    }
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
     if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
@@ -142,7 +148,29 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }
+    // The workbook's own file now holds what was just written (a CSV saved over its own file too).
+    if d.path.as_deref() == Some(path.as_str()) {
+        d.disk = Some(crate::io::FileStamp::of(&bytes));
+    }
     Ok(json!({"path": path, "bytes": bytes.len()}))
+}
+
+/// Refuses a save to the active workbook's own file when another program replaced that file since
+/// this session read or wrote it ([`DocState::disk`]): the save would put back what this session
+/// holds over the newer file, and the newer content would be lost (#4078). The same bytes written
+/// again, or a file that is gone, is no reason. The refusal asks: `overwrite: true` replaces the
+/// file anyway.
+fn refuse_changed_on_disk(s: &Session, path: &str) -> Result<()> {
+    let Some(d) = s.active().filter(|d| d.path.as_deref() == Some(path)) else { return Ok(()) };
+    let Some(stamp) = &d.disk else { return Ok(()) };
+    if stamp.compare(path)? != crate::io::OnDisk::Changed {
+        return Ok(());
+    }
+    let name = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path);
+    Err(crate::EngineError::Confirm(format!(
+        "'{name}' {} (by another program, or on another computer), so it was not saved: saving would replace the newer file.",
+        crate::io::CHANGED_ON_DISK
+    )))
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
@@ -197,7 +225,17 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
         crate::io::save_bytes(&wb, &target)?
     };
     crate::io::write_file(&target, &bytes)?;
+    renew_stamp(s, &target, &bytes);
     Ok(json!({"path": target, "bytes": bytes.len()}))
+}
+
+/// After the active workbook's own file was written other than by Save's own write (an export of
+/// the sheet as CSV or HTML, or the PDF a Save writes for a `.pdf` file): the file holds what this
+/// session wrote, so the next Save finds no change on disk ([`crate::DocState::disk`]).
+pub(crate) fn renew_stamp(s: &mut Session, path: &str, bytes: &[u8]) {
+    if let Some(d) = s.active_mut().filter(|d| d.path.as_deref() == Some(path)) {
+        d.disk = Some(crate::io::FileStamp::of(bytes));
+    }
 }
 
 fn properties(s: &mut Session, p: &Json) -> Result<Json> {
