@@ -9,7 +9,7 @@ use serde_json::{Value as Json, json};
 
 use super::{
     CommandSpec, Ctx, EngineError, PROTECTED, Result, Session, bad, bool_param, cell_param_on, cmd, edit, has_clipboard, has_doc, ok, parse_lines,
-    str_param, target_range, target_sheet, u32_param,
+    str_param, target_range, target_ranges, target_sheet, u32_param,
 };
 
 mod tabs;
@@ -548,12 +548,20 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let shift = str_param(p, "shift").unwrap_or("up");
-    let r = target_range(s, p)?;
+    // Entire row and Entire column take the lines of every area, as Delete Sheet Rows and Delete
+    // Sheet Columns do (a Go To Special selection is often many areas); a shift works on one block.
     match shift {
-        "row" | "entireRow" => return delete_lines(s, &json!({"rows": format!("{}:{}", r.start.row + 1, r.end.row + 1)}), Axis::Rows),
-        "column" | "entireColumn" => return delete_lines(s, &json!({"cols": RangeRef::cols(r.start.col, r.end.col).a1()}), Axis::Cols),
+        "row" | "entireRow" => {
+            let rows: Vec<String> = target_ranges(s, p)?.iter().map(|r| format!("{}:{}", r.start.row + 1, r.end.row + 1)).collect();
+            return delete_lines(s, &json!({"rows": rows.join(",")}), Axis::Rows);
+        }
+        "column" | "entireColumn" => {
+            let cols: Vec<String> = target_ranges(s, p)?.iter().map(|r| RangeRef::cols(r.start.col, r.end.col).a1()).collect();
+            return delete_lines(s, &json!({"cols": cols.join(",")}), Axis::Cols);
+        }
         _ => {}
     }
+    let r = target_range(s, p)?;
     let e = Edit::DeleteCells { axis: if shift == "left" { Axis::Cols } else { Axis::Rows }, range: r };
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
