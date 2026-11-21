@@ -153,14 +153,16 @@ pub(crate) const PX_TO_PT: f32 = 0.75;
 /// Most pages one export produces.
 pub const MAX_PAGES: usize = 2000;
 
-/// A rendered PDF and whether some of its Arabic text was set without an Arabic face.
+/// A rendered PDF and whether some of its Arabic or Hebrew text was set without a face for its script.
 pub struct RenderedPdf {
     pub bytes: Vec<u8>,
     pub pages: usize,
     pub missing_arabic_font: bool,
+    pub missing_hebrew_font: bool,
 }
 
 const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this PDF because no Noto Sans Arabic face was found for it.";
+const MISSING_HEBREW_FONT: &str = "Some Hebrew text could not be drawn in this PDF because no Noto Sans Hebrew face was found for it.";
 
 /// Renders laid-out sheets to a PDF.
 pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
@@ -249,9 +251,9 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
         }
     }
     let pages = doc.page_count();
-    let missing_arabic_font = doc.missing_arabic_font();
+    let (missing_arabic_font, missing_hebrew_font) = (doc.missing_arabic_font(), doc.missing_hebrew_font());
     let bytes = doc.finish().map_err(|error| EngineError::Other(error.to_string()))?;
-    Ok(RenderedPdf { bytes, pages, missing_arabic_font })
+    Ok(RenderedPdf { bytes, pages, missing_arabic_font, missing_hebrew_font })
 }
 
 // ---------------------------------------------------------------- commands
@@ -264,6 +266,9 @@ fn build_pdf(s: &mut Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let pdf = render_pdf(&d.wb, &lays, &d.display_title(), &path)?;
     if pdf.missing_arabic_font {
         s.ui_requests.push(crate::UiRequest::Message(MISSING_ARABIC_FONT.into()));
+    }
+    if pdf.missing_hebrew_font {
+        s.ui_requests.push(crate::UiRequest::Message(MISSING_HEBREW_FONT.into()));
     }
     Ok((pdf.bytes, pdf.pages))
 }
