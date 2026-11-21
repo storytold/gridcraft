@@ -307,25 +307,14 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         // The c14 Choice uses different IDs, so read the c:style Fallback.
         style: root
             .and_then(|r| {
-                r.child_val("style")
-                    .and_then(parse_chart_style)
-                    .or_else(|| {
-                        r.kids("AlternateContent")
-                            .filter_map(|wrapper| wrapper.child("Fallback"))
-                            .find_map(|fallback| fallback.child_val("style").and_then(parse_chart_style))
-                    })
+                r.child_val("style").and_then(parse_chart_style).or_else(|| {
+                    r.kids("AlternateContent")
+                        .filter_map(|wrapper| wrapper.child("Fallback"))
+                        .find_map(|fallback| fallback.child_val("style").and_then(parse_chart_style))
+                })
             })
             .or_else(|| (1..=48).contains(&dc.style).then_some(dc.style))
             .unwrap_or(2),
-        hole_size,
-        first_slice_angle: dc.first_slice_angle,
-        x_title: dc.axis_titles.0,
-        y_title: dc.axis_titles.1,
-        source: None,
-        by_rows: false,
-        pivot: dc.pivot_source.as_deref().map(strip_book).filter(|n| !n.is_empty()).map(str::to_string),
-    }
-}
         hole_size,
         first_slice_angle: dc.first_slice_angle,
         x_title: dc.axis_titles.0,
