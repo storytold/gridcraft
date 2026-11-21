@@ -261,7 +261,9 @@ pub(super) fn draw_header_footer(pg: &mut Page, lay: &SheetLayout, which: gridcr
                 let lw = gridcraft_pdf::text_width(font, size, line);
                 let x = match i {
                     0 => l,
-                    1 => (pw - lw) / 2.0,
+                    // Centred inside the content region, like the left and right sections:
+                    // with unequal side margins this shifts by half their difference (#4534).
+                    1 => l + (pw - l - r - lw) / 2.0,
                     _ => pw - r - lw,
                 };
                 let y = if header { hm + size * 0.8 + j as f32 * size * 1.2 } else { ph - fm - size * 0.22 - (n - 1.0 - j as f32) * size * 1.2 };

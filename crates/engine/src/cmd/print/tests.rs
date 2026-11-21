@@ -632,6 +632,23 @@ fn pdf_prints_cjk_text_instead_of_question_marks() {
     assert!(contains(&pdf, "(2) Tj"));
 }
 
+/// With Align with Page Margins on, the centred header/footer sits inside the content region:
+/// unequal side margins shift it by half their difference (#4534).
+#[test]
+fn centred_header_sits_between_the_margins_when_they_differ() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&CMid"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"left": 1.5, "right": 1.5})).unwrap();
+    let (equal, _) = pdf_of(&mut s, json!({}));
+    let x_equal = text_at(&equal, "Mid").unwrap().0;
+    s.execute("pageLayout.pageSetup", json!({"left": 1.5, "right": 1.0})).unwrap();
+    let (unequal, _) = pdf_of(&mut s, json!({}));
+    let x_unequal = text_at(&unequal, "Mid").unwrap().0;
+    let shift = (x_unequal - x_equal).abs();
+    assert!((shift - 18.0).abs() < 0.5, "the centred header moves by half the 0.5-inch margin difference (18 pt), got {shift}");
+}
+
 #[test]
 fn pdf_contains_text_and_header_codes_expand() {
     let mut s = s();
