@@ -198,7 +198,11 @@ fn slicer_toggle(s: &mut Session, p: &Json) -> Result<Json> {
             set.push(trimmed_val.to_string());
         }
         // Everything selected is the same as no filter.
-        if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| x.trim().to_lowercase() == a.trim().to_lowercase())) { None } else { Some(set) }
+        if set.len() == all.len() && all.iter().all(|a| set.iter().any(|x| x.trim().to_lowercase() == a.trim().to_lowercase())) {
+            None
+        } else {
+            Some(set)
+        }
     } else {
         // Single click: show only this value; clicking the sole selected value clears the filter.
         match &normalized_current {
