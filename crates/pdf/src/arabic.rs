@@ -165,6 +165,24 @@ pub(crate) fn bold_face_is_synthetic() -> bool {
     face(Script::Arabic, true).is_ok_and(|face| face.is_some_and(|face| face.synthetic_bold))
 }
 
+/// The left and right ends of each glyph's outline on the line, in 1/1000 em.
+#[cfg(test)]
+pub(crate) fn ink_spans(font: Font, text: &str) -> Result<Vec<[f32; 2]>, Error> {
+    let layout = layout(font, text, TextDirection::Auto)?;
+    let face = loaded_face(font, layout.script)?;
+    let raw = face.font()?;
+    let location = skrifa::instance::LocationRef::new(face.instance.coords());
+    let mut spans = Vec::new();
+    for item in layout.items {
+        let Item::Glyph { id, x, .. } = item else { continue };
+        let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing PDF glyph outline".into()))?;
+        let mut pen = Pen { bounds: [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], ..Default::default() };
+        glyph.draw(DrawSettings::unhinted(Size::new(1000.0), location), &mut pen).map_err(|e| Error(format!("Cannot draw PDF glyph: {e}")))?;
+        spans.push([x + pen.bounds[0], x + pen.bounds[2]]);
+    }
+    Ok(spans)
+}
+
 /// The face of a script for a weight, or `None` when none is bundled or installed. The search
 /// runs once per script and weight, so measuring text never rescans the font directories.
 fn face(script: Script, is_bold: bool) -> Result<Option<&'static Face>, Error> {

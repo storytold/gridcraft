@@ -980,6 +980,16 @@ fn hebrew_points_are_drawn_on_their_letters_from_the_hebrew_face() {
     assert!(pointed.items.iter().all(|item| matches!(item, arabic::Item::Glyph { .. })), "{:?}", pointed.items);
     assert!(pointed.items.len() > plain.items.len(), "each point is a glyph of its own");
     assert!((pointed.width - plain.width).abs() < 1.0, "the points sit on their letters and add no width");
+    // Which arm the dot sits over is what tells shin from sin, so it shows the points are placed and not only drawn.
+    // A face may draw the letter and its dot as one glyph, which leaves no dot to place.
+    let dot_from_letter = |text: &str| {
+        let mut spans = arabic::ink_spans(Font::Helvetica, text).unwrap();
+        spans.sort_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])));
+        let [dot, letter] = spans[..] else { return None };
+        Some((dot[0] + dot[1]) / 2.0 - (letter[0] + letter[1]) / 2.0)
+    };
+    assert!(dot_from_letter("שׁ").is_none_or(|x| x > 0.0), "the shin dot is over the right arm");
+    assert!(dot_from_letter("שׂ").is_none_or(|x| x < 0.0), "the sin dot is over the left arm");
 }
 
 #[test]
