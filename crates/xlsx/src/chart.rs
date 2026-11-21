@@ -140,7 +140,6 @@ impl ChartReadBudget {
     }
 }
 
-
 /// Excel's maximum worksheet row count bounds cache expansion while preserving declared trailing gaps.
 const MAX_CACHED_POINTS: usize = gridcraft_core::MAX_ROWS as usize;
 
@@ -478,14 +477,13 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>, budget: &mut Chart
                     .as_deref()
                     .map(chart_ref_from_file)
                     .or_else(|| literal_array(sel.and_then(|e| e.child("cat").or_else(|| e.child("xVal"))), budget)),
-                values: s
+                values: s.refs.values.as_deref().map(chart_ref_from_file).or_else(|| literal_array(values_el, budget)).unwrap_or_default(),
+                bubble_sizes: s
                     .refs
-                    .values
+                    .sizes
                     .as_deref()
                     .map(chart_ref_from_file)
-                    .or_else(|| literal_array(values_el, budget))
-                    .unwrap_or_default(),
-                bubble_sizes: s.refs.sizes.as_deref().map(chart_ref_from_file).or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")), budget)),
+                    .or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")), budget)),
                 color,
                 secondary: is_combo && (s.secondary_axis || fallback_sec),
                 kind: if dc.kind == ChartType::Combo {

@@ -215,7 +215,7 @@ fn trendline_metadata_pairing_skips_unknown_trendline_elements() {
       </c:barChart></c:plotArea></c:chart>
     </c:chartSpace>"#;
     let root = crate::xml::parse(xml.as_bytes()).unwrap();
-    let t = &crate::chart::read_chart(&root).unwrap().series[0].trendlines;
+    let t = &crate::chart::read_chart(&root).unwrap().0.series[0].trendlines;
     assert_eq!(t.len(), 1);
     assert_eq!(t[0].kind, TrendlineKind::Linear);
     assert_eq!(t[0].forward, 2.5);
