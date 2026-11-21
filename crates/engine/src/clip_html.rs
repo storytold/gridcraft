@@ -275,6 +275,64 @@ fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
 /// when a paste holds many bare `&`).
 const ENTITY_WINDOW: usize = 12;
 
+/// The named Greek character references (HTML5 alpha…omega and Alpha…Omega, plus `sigmaf`),
+/// which the importer kept as literal text before (#4511).
+fn greek_entity(name: &str) -> Option<char> {
+    let c = match name {
+        "alpha" => '\u{3b1}',
+        "beta" => '\u{3b2}',
+        "gamma" => '\u{3b3}',
+        "delta" => '\u{3b4}',
+        "epsilon" => '\u{3b5}',
+        "zeta" => '\u{3b6}',
+        "eta" => '\u{3b7}',
+        "theta" => '\u{3b8}',
+        "iota" => '\u{3b9}',
+        "kappa" => '\u{3ba}',
+        "lambda" => '\u{3bb}',
+        "mu" => '\u{3bc}',
+        "nu" => '\u{3bd}',
+        "xi" => '\u{3be}',
+        "omicron" => '\u{3bf}',
+        "pi" => '\u{3c0}',
+        "rho" => '\u{3c1}',
+        "sigmaf" => '\u{3c2}',
+        "sigma" => '\u{3c3}',
+        "tau" => '\u{3c4}',
+        "upsilon" => '\u{3c5}',
+        "phi" => '\u{3c6}',
+        "chi" => '\u{3c7}',
+        "psi" => '\u{3c8}',
+        "omega" => '\u{3c9}',
+        "Alpha" => '\u{391}',
+        "Beta" => '\u{392}',
+        "Gamma" => '\u{393}',
+        "Delta" => '\u{394}',
+        "Epsilon" => '\u{395}',
+        "Zeta" => '\u{396}',
+        "Eta" => '\u{397}',
+        "Theta" => '\u{398}',
+        "Iota" => '\u{399}',
+        "Kappa" => '\u{39a}',
+        "Lambda" => '\u{39b}',
+        "Mu" => '\u{39c}',
+        "Nu" => '\u{39d}',
+        "Xi" => '\u{39e}',
+        "Omicron" => '\u{39f}',
+        "Pi" => '\u{3a0}',
+        "Rho" => '\u{3a1}',
+        "Sigma" => '\u{3a3}',
+        "Tau" => '\u{3a4}',
+        "Upsilon" => '\u{3a5}',
+        "Phi" => '\u{3a6}',
+        "Chi" => '\u{3a7}',
+        "Psi" => '\u{3a8}',
+        "Omega" => '\u{3a9}',
+        _ => return None,
+    };
+    Some(c)
+}
+
 /// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
 /// space, trimmed. The text only serves to match a cell with the tab-separated text.
 fn decode(raw: &str) -> String {
@@ -287,21 +345,23 @@ fn decode(raw: &str) -> String {
         // boundary used to fall back to the complete suffix, re-scanning per '&'.
         let semi = rest.get(..ENTITY_WINDOW.min(rest.len())).and_then(|w| w.find(';'));
         let entity = semi.and_then(|e| rest.get(1..e));
-        let ch = entity.and_then(|e| match e {
-            "amp" => Some('&'),
-            "lt" => Some('<'),
-            "gt" => Some('>'),
-            "quot" => Some('"'),
-            "apos" => Some('\''),
-            "nbsp" => Some('\u{a0}'),
-            _ => {
-                let n = e
-                    .strip_prefix("#x")
-                    .or_else(|| e.strip_prefix("#X"))
-                    .map(|h| u32::from_str_radix(h, 16))
-                    .or_else(|| e.strip_prefix('#').map(str::parse::<u32>));
-                n.and_then(Result::ok).and_then(char::from_u32)
-            }
+        let ch = entity.and_then(|e| {
+            greek_entity(e).or_else(|| match e {
+                "amp" => Some('&'),
+                "lt" => Some('<'),
+                "gt" => Some('>'),
+                "quot" => Some('"'),
+                "apos" => Some('\''),
+                "nbsp" => Some('\u{a0}'),
+                _ => {
+                    let n = e
+                        .strip_prefix("#x")
+                        .or_else(|| e.strip_prefix("#X"))
+                        .map(|h| u32::from_str_radix(h, 16))
+                        .or_else(|| e.strip_prefix('#').map(str::parse::<u32>));
+                    n.and_then(Result::ok).and_then(char::from_u32)
+                }
+            })
         });
         match (ch, semi) {
             (Some(c), Some(e)) => {
@@ -390,6 +450,17 @@ mod tests {
 
         let quoted_gt = r#"<table><tr><td style='mso-number-format:"\[>=1000\]0"' x:num="1500">1500</td></tr></table>"#;
         assert_eq!(table_cells(quoted_gt, 1, 1), vec![vec![HtmlCell { text: "1500".into(), num: Some(1500.0), ..HtmlCell::default() }]]);
+    }
+
+    /// Named Greek references decode like their numeric forms, in both cases (#4511).
+    #[test]
+    fn named_greek_references_decode() {
+        assert_eq!(decode("X&alpha;Y"), "X\u{3b1}Y");
+        assert_eq!(decode("&beta;&gamma;"), "\u{3b2}\u{3b3}");
+        assert_eq!(decode("&Delta;&Theta;&Sigma;&Omega;"), "\u{394}\u{398}\u{3a3}\u{3a9}");
+        assert_eq!(decode("&pi;&lambda;&sigma;&theta;"), "\u{3c0}\u{3bb}\u{3c3}\u{3b8}");
+        assert_eq!(decode("X&#x3B1;Y"), "X\u{3b1}Y", "the numeric form already decoded");
+        assert_eq!(decode("X&alphay;Y"), "X&alphay;Y", "an unknown name stays literal");
     }
 
     #[test]
