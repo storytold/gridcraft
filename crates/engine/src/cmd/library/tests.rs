@@ -380,6 +380,11 @@ fn listing_and_search_read_no_file() {
     assert!(!err(s.execute("library.thumbnail", json!({"file": locked, "picture": 0}))).is_empty());
     assert!(!err(s.execute("library.insert", json!({"file": locked}))).is_empty());
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+    // A failed read isn't kept: once the file can be read, it is drawn (the pane's Refresh sends
+    // `refresh`, which the Library takes too).
+    assert!(s.execute("library.list", json!({"refresh": true})).is_ok());
+    let t = s.execute("library.thumbnail", json!({"file": locked, "picture": 0, "width": 32})).unwrap();
+    assert_eq!(t["width"], 8);
 }
 
 #[test]

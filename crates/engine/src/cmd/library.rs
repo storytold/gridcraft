@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "List Library",
             [],
             None,
-            "{folder?, file?, pictures?: bool (ignored: no file is read to list it)} → [{file, folder, title, pictures: [{index, title, hidden}], pictureCount, truncated?, error?}]: the picture files in the Library folders (or one folder, or one file), one picture each, known from the file name; a file over 256 MB is listed with its `error`, and one that isn't a picture fails when it is drawn or inserted",
+            "{folder?, file?, pictures?: bool (ignored: no file is read to list it), refresh?: bool} → [{file, folder, title, pictures: [{index, title, hidden}], pictureCount, truncated?, error?}]: the picture files in the Library folders (or one folder, or one file), one picture each, known from the file name; a file over 256 MB is listed with its `error`, and one that isn't a picture fails when it is drawn or inserted. With `refresh`, files that couldn't be read are read again",
             always,
             list
         ),
@@ -59,7 +59,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Search Library",
             [],
             None,
-            "{query, limit?: 1..=500 (default 100), folder?} → [{file, picture, title, match: title|text|file}]: pictures whose file name or format (PNG, JPEG) holds `query`, any case; no file is read",
+            "{query, limit?: 1..=500 (default 100), folder?, file?} → [{file, picture, title, hidden, match: title|text|file}]: pictures whose file name or format (PNG, JPEG) holds `query`, any case, in the Library folders (or one folder, or one file); no file is read",
             always,
             search
         ),
