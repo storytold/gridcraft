@@ -318,7 +318,9 @@ fn decode(raw: &str) -> String {
     let mut text = String::with_capacity(out.len());
     let mut space = false;
     for c in out.chars() {
-        if c.is_whitespace() && c != '\u{a0}' {
+        // Only ASCII whitespace folds: narrow no-break, thin and figure spaces are cell
+        // content, like the no-break space (#4530).
+        if c.is_ascii_whitespace() {
             space = true;
             continue;
         }
@@ -403,6 +405,18 @@ mod tests {
         assert_eq!(decode("&#x266A;"), "\u{266A}");
         assert_eq!(decode("a&amp;b&nbsp;c"), "a&b\u{a0}c");
         assert_eq!(decode("amp&"), "amp&");
+    }
+
+    /// Narrow no-break, thin and figure spaces are cell content, not collapsible whitespace:
+    /// only ASCII whitespace folds on HTML import (#4530).
+    #[test]
+    fn unicode_spaces_from_entities_survive_html_text() {
+        assert_eq!(decode("Alpha&#8239;Beta"), "Alpha\u{202f}Beta");
+        assert_eq!(decode("Alpha&#8201;Beta"), "Alpha\u{2009}Beta");
+        assert_eq!(decode("Alpha&#8199;Beta"), "Alpha\u{2007}Beta");
+        assert_eq!(decode("Alpha\u{202f}\u{2009}Beta"), "Alpha\u{202f}\u{2009}Beta");
+        assert_eq!(decode("a \t\n b"), "a b", "ASCII whitespace still folds");
+        assert_eq!(decode("a&#160;b"), "a\u{a0}b", "the no-break space was already kept");
     }
 
     #[test]
