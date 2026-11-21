@@ -98,16 +98,30 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
     let formulas = bool_param(p, "formulas").unwrap_or(false);
     let formatted = bool_param(p, "formatted").unwrap_or(false);
     let include_hidden = bool_param(p, "includeHidden").unwrap_or(false);
+    // A hidden sheet is read only with `includeHidden`, like hidden rows and columns: the read
+    // sees what a viewer of the sheet sees, and a viewer cannot see into a hidden sheet. The
+    // visibility is still named, so the caller can ask again with the opt-in.
+    if !include_hidden && sh.visibility != gridcraft_model::Visibility::Visible {
+        return Ok(json!({"range": null, "sheet": sh.name, "visibility": format!("{:?}", sh.visibility), "values": []}));
+    }
+    let (mut skipped_rows, mut skipped_cols) = (false, false);
+    let mut row_indices = Vec::with_capacity(r.height() as usize);
+    let mut col_indices: Option<Vec<u32>> = None;
     let mut rows = Vec::with_capacity(r.height() as usize);
     for row in r.start.row..=r.end.row {
         if !include_hidden && sh.is_row_hidden(row) {
+            skipped_rows = true;
             continue;
         }
+        row_indices.push(row + 1);
         let mut cols = Vec::with_capacity(r.width() as usize);
+        let mut col_idx = Vec::with_capacity(r.width() as usize);
         for col in r.start.col..=r.end.col {
             if !include_hidden && sh.is_col_hidden(col) {
+                skipped_cols = true;
                 continue;
             }
+            col_idx.push(col + 1);
             let c = CellRef::new(row, col);
             let v = if formulas && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref()) {
                 json!(format!("={}", f.text))
@@ -118,9 +132,26 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
             };
             cols.push(v);
         }
+        if let Some(prev) = &mut col_indices {
+            if *prev != col_idx {
+                // Two rows skipped different columns: no single col list covers the rectangle.
+                col_indices = None;
+            }
+        } else {
+            col_indices = Some(col_idx);
+        }
         rows.push(Json::Array(cols));
     }
-    Ok(json!({"range": r.a1(), "sheet": sh.name, "visibility": format!("{:?}", sh.visibility), "values": rows}))
+    let mut out = json!({"range": r.a1(), "sheet": sh.name, "visibility": format!("{:?}", sh.visibility), "values": rows});
+    // The concrete indices the rows of `values` sit in (1-based, as A1 shows them), when hidden
+    // rows or columns were dropped: a positionally-indexed `values` no longer covers `range`.
+    if let (true, Some(cols)) = (skipped_cols, col_indices) {
+        out["cols"] = json!(cols);
+    }
+    if skipped_rows {
+        out["rows"] = json!(row_indices);
+    }
+    Ok(out)
 }
 
 fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {

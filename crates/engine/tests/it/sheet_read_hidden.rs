@@ -22,14 +22,20 @@ fn reads_skip_hidden_rows_cols_unless_included() {
     let r = s.execute("sheet.read", json!({"range": "A1:C3"})).unwrap();
     assert_eq!(r["values"], json!([["a", "c"], ["g", "i"]]), "{}", r);
     assert_eq!(r["visibility"], "Visible");
+    // The dropped row and column are named, so `values` stays mappable onto `range`.
+    assert_eq!(r["rows"], json!([1, 3]), "{}", r);
+    assert_eq!(r["cols"], json!([1, 3]), "{}", r);
 
     let all = s.execute("sheet.read", json!({"range": "A1:C3", "includeHidden": true})).unwrap();
     assert_eq!(all["values"], json!([["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]]), "{}", all);
+    // Nothing was dropped: no index lists.
+    assert!(all.get("rows").is_none() && all.get("cols").is_none(), "{}", all);
 
     // Rows 1 and 3 stay visible; the only column in the range is hidden, so each
     // visible row reads as an empty row.
     let col = s.execute("sheet.read", json!({"range": "B1:B3"})).unwrap();
     assert_eq!(col["values"], json!([[], []]), "{}", col);
+    assert_eq!(col["rows"], json!([1, 3]), "{}", col);
     let col = s.execute("sheet.read", json!({"range": "B1:B3", "includeHidden": true})).unwrap();
     assert_eq!(col["values"], json!([["b"], ["e"], ["h"]]), "{}", col);
 }
@@ -41,7 +47,13 @@ fn a_hidden_sheet_is_read_only_with_includehidden() {
     s.execute("range.setValues", json!({"range": "A1", "values": [["secret"]]})).unwrap();
     s.execute("sheet.hide", json!({"sheet": "Vault"})).unwrap();
 
+    // Without the opt-in the hidden sheet's cells are not read: the response names the
+    // visibility and carries no values, so an agent can ask again with `includeHidden`.
     let r = s.execute("sheet.read", json!({"sheet": "Vault", "range": "A1"})).unwrap();
+    assert_eq!(r["visibility"], "Hidden");
+    assert_eq!(r["values"], json!([]), "{}", r);
+    // The opt-in reads the hidden sheet.
+    let r = s.execute("sheet.read", json!({"sheet": "Vault", "range": "A1", "includeHidden": true})).unwrap();
     assert_eq!(r["visibility"], "Hidden");
     assert_eq!(r["values"], json!([["secret"]]), "{}", r);
 }
