@@ -623,6 +623,23 @@ fn headers_scale_with_the_sheet_and_align_with_its_margins_unless_turned_off() {
 }
 
 #[test]
+fn centered_pdf_headers_and_footers_follow_side_margins() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let (left, right) = (1.5_f32, 1.0_f32);
+    s.execute("pageLayout.pageSetup", json!({"left": left, "right": right})).unwrap();
+    s.execute("pageLayout.headerFooter", json!({"header": "&CMidHeader", "footer": "&CMidFooter"})).unwrap();
+    let (aligned, _) = pdf_of(&mut s, json!({}));
+    s.execute("pageLayout.headerFooter", json!({"alignWithMargins": false})).unwrap();
+    let (unaligned, _) = pdf_of(&mut s, json!({}));
+    let expected_shift = (left - right) * 72.0 / 2.0;
+    for label in ["MidHeader", "MidFooter"] {
+        let shift = text_at(&aligned, label).unwrap().0 - text_at(&unaligned, label).unwrap().0;
+        assert!((shift - expected_shift).abs() < 0.01, "{label} shifted by {shift} points, expected {expected_shift}");
+    }
+}
+
+#[test]
 fn pdf_prints_cjk_text_instead_of_question_marks() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["签字清单", 2]]})).unwrap();
