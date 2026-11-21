@@ -175,9 +175,9 @@ fn spill_hits_overlap(index: &SpillIndex, sheet: usize, hits: &[CellRef], range:
 }
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
-/// overlaps merged cells, holds other cells, or the spill of another formula that outranks it
-/// (see `Standing`; unless that formula is recalculated in this pass, and so may spill elsewhere
-/// now). A spill it outranks gives way to it when written back.
+/// overlaps merged cells, holds other cells, or the spill of another formula that outranks it on
+/// a cell they share (see `Standing`; unless that formula is recalculated in this pass, and so
+/// may spill elsewhere now). A spill it outranks gives way to it when written back.
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let end =
@@ -194,7 +194,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
                     && r.contains(c)
                     && !host.exprs.contains_key(&(sheet, *o))
                     && !host.python.contains_key(&(sheet, *o))
-                    && standing.outranks((sheet, *o), (sheet, anchor))
+                    && standing.outranks_at(((sheet, *o), Some(*r)), ((sheet, anchor), own.copied()), c)
             })
     };
     end.row >= gridcraft_core::MAX_ROWS
