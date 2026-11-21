@@ -271,6 +271,14 @@ fn sane_python_output(v: &gridcraft_core::Value) -> bool {
     }
 }
 
+/// Why a PDF is not opened (after "We can't open 'name': "). The readers take workbook packages
+/// (`.xlsx`, `.xlsm`, `.xlsb`, `.ods`), compound files (`.xls`, a workbook with a password) and
+/// text (`.csv`, `.tsv`, `.txt`, `.json`, `.html`, `.slk`); a PDF can start as text, so it is told
+/// by its own first bytes.
+pub const NOT_A_SHEET_PDF: &str = "it is a PDF document, not a workbook or a text file.";
+/// Why other bytes the readers do not take are not opened (after "We can't open 'name': ").
+pub const NOT_A_SHEET: &str = "it does not look like a workbook or a text file that can be opened as a sheet.";
+
 /// Parses bytes that aren't encrypted, as they are.
 fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
@@ -284,6 +292,11 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
         return Err(EngineError::Other(format!(
             "'{name}' is a legacy binary file but not an Excel workbook (no workbook stream). GridCraft can't open it."
         )));
+    }
+    // A PDF is no sheet, whatever it is called: read as text, its bytes would become cells, and
+    // Save would write a print of them over it (#4299).
+    if bytes.starts_with(b"%PDF-") {
+        return Err(EngineError::Other(format!("We can't open '{name}': {NOT_A_SHEET_PDF}")));
     }
     // Content wins over the extension: an ODS or XLSB package is imported as what it is,
     // whatever it is called; the extension only decides when the bytes don't say.
@@ -310,6 +323,12 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
                 })
             })?;
         return Ok((wb, report.warnings));
+    }
+    // What is left is read as text. Bytes that are no text (the sniffer finds NULs or many control
+    // characters at the start: a picture, a program, an archive, text in UTF-16 without its byte
+    // order mark) are refused rather than read as cells (#4299). An empty file is an empty sheet.
+    if sniffed == gridcraft_xlsx::Format::Unknown && !bytes.is_empty() {
+        return Err(EngineError::Other(format!("We can't open '{name}': {NOT_A_SHEET}")));
     }
     if let Some(read) = read_html_table(name, kind, bytes, csv_as_text) {
         return read;
