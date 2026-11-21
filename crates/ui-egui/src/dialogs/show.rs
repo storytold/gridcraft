@@ -18,9 +18,36 @@ use gridcraft_engine::model::PageOrder;
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
 /// Unchanged hyperlink display text is omitted so its number or formula stays intact.
+/// Resolves Define Name's free-text Scope box: text left as the dialog opened keeps the identity
+/// the name was opened with (a sheet literally named Workbook, `{sheet: "Workbook"}`), a typed
+/// sheet name is used as it reads, and `Workbook` means workbook scope, which the command sees as
+/// an absent parameter.
+fn define_name_scope(d: &Dialog, v: &mut Json) {
+    let Some(m) = v.as_object_mut() else { return };
+    if let Some((caption, identity)) = &d.scope_identity {
+        if m.get("scope").and_then(Json::as_str) == Some(caption.as_str()) {
+            m.insert("scope".into(), identity.clone());
+        }
+        if m.contains_key("oldName") {
+            m.insert("oldScope".into(), identity.clone());
+        }
+    }
+    // `Workbook`, and the word the box itself uses for workbook scope in the interface language,
+    // mean workbook scope: the command sees an absent parameter. Free text that happens to read
+    // like the translated word is not a sheet name.
+    let workbook_caption = d.workbook_caption.as_deref();
+    for key in ["scope", "oldScope"] {
+        let reads_workbook = m.get(key).and_then(Json::as_str).is_some_and(|text| text == "Workbook" || Some(text) == workbook_caption);
+        if reads_workbook {
+            m.remove(key);
+        }
+    }
+}
+
 pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
+        "defineName" => define_name_scope(d, &mut v),
         "insertLink" => {
             if d.original_link_text.as_deref().is_some_and(|text| d.values.get("text").and_then(Json::as_str) == Some(text))
                 && let Some(m) = v.as_object_mut()
@@ -96,15 +123,6 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
                 v["stop"] = json!(s);
             } else if let Some(m) = v.as_object_mut() {
                 m.remove("stop");
-            }
-        }
-        "defineName" => {
-            if let Some(m) = v.as_object_mut() {
-                for key in ["scope", "oldScope"] {
-                    if m.get(key).and_then(Json::as_str) == Some("Workbook") {
-                        m.remove(key);
-                    }
-                }
             }
         }
         "pageSetup" => {

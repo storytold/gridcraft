@@ -4,6 +4,7 @@
 use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS, RangeRef};
 
 use crate::ast::{Anchor, Expr, RefKind, Reference, SheetSel, clamp_anchor};
+use crate::same_name;
 
 /// Copy/fill: relative parts move by `(dr, dc)`. References pushed off the sheet become `#REF!`.
 pub fn shift_relative(e: Expr, dr: i64, dc: i64) -> Expr {
@@ -95,11 +96,22 @@ pub enum Edit {
     MoveToSheet { from: RangeRef, to_sheet: String, to_row: u32, to_col: u32 },
 }
 
-/// Whether `r`, in a formula living on sheet `host`, points into sheet `target`.
-fn on_target(r: &Reference, host: &str, target: &str) -> bool {
+/// Resolve an exact spelling first, then a folded spelling in tab order, like Workbook::sheet_index.
+pub fn sheet_position(order: &[String], name: &str) -> Option<usize> {
+    order.iter().position(|s| s == name).or_else(|| order.iter().position(|s| same_name(s, name)))
+}
+
+/// An imported workbook may contain distinct tabs whose names fold to the same spelling.
+fn targets_sheet(reference: &str, target: &str, order: &[String]) -> bool {
+    reference == target
+        || (same_name(reference, target)
+            && sheet_position(order, reference).is_none_or(|i| order[i] == target || sheet_position(order, target) == Some(i)))
+}
+
+fn on_target(r: &Reference, host: &str, target: &str, order: &[String]) -> bool {
     match &r.sheet {
-        SheetSel::Current => host.eq_ignore_ascii_case(target),
-        SheetSel::Named(n) => n.eq_ignore_ascii_case(target),
+        SheetSel::Current => targets_sheet(host, target, order),
+        SheetSel::Named(n) => targets_sheet(n, target, order),
         SheetSel::Span(..) => false,
     }
 }
@@ -116,11 +128,11 @@ fn ref_changes(r: &Reference, edit: &Edit) -> bool {
 }
 
 /// Whether [`adjust`] would change the formula `e` at all, without copying or rebuilding it.
-fn changes(e: &Expr, host: &str, target: &str, edit: &Edit) -> bool {
+fn changes(e: &Expr, host: &str, target: &str, edit: &Edit, order: &[String]) -> bool {
     let mut changed = false;
     e.walk(&mut |x| {
         if !changed && let Expr::Ref(r) = x {
-            changed = on_target(r, host, target) && ref_changes(r, edit);
+            changed = on_target(r, host, target, order) && ref_changes(r, edit);
         }
     });
     changed
@@ -128,8 +140,13 @@ fn changes(e: &Expr, host: &str, target: &str, edit: &Edit) -> bool {
 
 /// Adjusts a formula living on sheet `host` after `edit` on sheet `target`.
 pub fn adjust(e: Expr, host: &str, target: &str, edit: &Edit) -> Expr {
+    adjust_in(e, host, target, edit, &[])
+}
+
+/// Adjusts references using the original tab order to resolve ambiguous names.
+pub fn adjust_in(e: Expr, host: &str, target: &str, edit: &Edit, order: &[String]) -> Expr {
     e.map(&mut |x| match x {
-        Expr::Ref(r) if on_target(&r, host, target) => match adjust_ref(r, edit) {
+        Expr::Ref(r) if on_target(&r, host, target, order) => match adjust_ref(r, edit) {
             Some(r) => Expr::Ref(r),
             None => Expr::Error(CellError::Ref),
         },
@@ -140,7 +157,12 @@ pub fn adjust(e: Expr, host: &str, target: &str, edit: &Edit) -> Expr {
 /// [`adjust`] for a borrowed formula: `None` when the edit leaves it exactly as it is, so a
 /// caller can skip unaffected formulas without copying, rebuilding or printing them.
 pub fn adjust_if_changed(e: &Expr, host: &str, target: &str, edit: &Edit) -> Option<Expr> {
-    changes(e, host, target, edit).then(|| adjust(e.clone(), host, target, edit))
+    adjust_if_changed_in(e, host, target, edit, &[])
+}
+
+/// Borrowed form of [`adjust_in`].
+pub fn adjust_if_changed_in(e: &Expr, host: &str, target: &str, edit: &Edit, order: &[String]) -> Option<Expr> {
+    changes(e, host, target, edit, order).then(|| adjust_in(e.clone(), host, target, edit, order))
 }
 
 /// New position of an index after an insert (`None` never) or delete (`None` = deleted).
@@ -273,17 +295,23 @@ fn adjust_ref(r: Reference, edit: &Edit) -> Option<Reference> {
     }
 }
 
-/// Renames sheet references `old` → `new`.
+/// Renames sheet references `old` в†’ `new`. Names compare with `same_name`, like
+/// `Workbook::sheet_index`, so a case variant in another script is renamed too.
 pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
+    rename_sheet_in(e, old, new, &[])
+}
+
+/// Rewrites only references which resolved to the renamed tab before the rename.
+pub fn rename_sheet_in(e: Expr, old: &str, new: &str, order: &[String]) -> Expr {
     e.map(&mut |x| match x {
         Expr::Ref(mut r) => {
             match &mut r.sheet {
-                SheetSel::Named(n) if n.eq_ignore_ascii_case(old) => *n = new.to_string(),
+                SheetSel::Named(n) if targets_sheet(n, old, order) => *n = new.to_string(),
                 SheetSel::Span(a, b) => {
-                    if a.eq_ignore_ascii_case(old) {
+                    if targets_sheet(a, old, order) {
                         *a = new.to_string();
                     }
-                    if b.eq_ignore_ascii_case(old) {
+                    if targets_sheet(b, old, order) {
                         *b = new.to_string();
                     }
                 }
@@ -292,9 +320,10 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
             Expr::Ref(r)
         }
         // Sheet-qualified defined name `Old!MyName` is stored as one string, with the bare sheet name as the parser
-        // stores it (the printer adds the quotes).
-        Expr::Name(n) => match n.split_at_checked(old.len()) {
-            Some((head, rest)) if head.eq_ignore_ascii_case(old) && rest.starts_with('!') => Expr::Name(format!("{new}{rest}")),
+        // stores it (the printer adds the quotes). Split at the last `!`: `same_name` folds names of different
+        // byte lengths (`K` U+212A and `K`, `Гџ` and `SS`), so `old.len()` is not where this name ends.
+        Expr::Name(n) => match n.rsplit_once('!') {
+            Some((head, rest)) if targets_sheet(head, old, order) => Expr::Name(format!("{new}!{rest}")),
             _ => Expr::Name(n),
         },
         other => other,
@@ -304,12 +333,12 @@ pub fn rename_sheet(e: Expr, old: &str, new: &str) -> Expr {
 /// References to a deleted sheet become `#REF!`. `order` lists the sheet names (before the deletion) in tab order:
 /// a 3-D span that loses an end sheet shrinks to the neighbouring surviving sheet, as in Excel.
 pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
-    let pos = |n: &str| order.iter().position(|o| o.eq_ignore_ascii_case(n));
+    let pos = |n: &str| sheet_position(order, n);
     e.map(&mut |x| match x {
-        Expr::Ref(r) if r.sheet_name().is_some_and(|n| n.eq_ignore_ascii_case(name)) => Expr::Error(CellError::Ref),
+        Expr::Ref(r) if r.sheet_name().is_some_and(|n| targets_sheet(n, name, order)) => Expr::Error(CellError::Ref),
         Expr::Ref(mut r) => {
             if let SheetSel::Span(a, b) = &r.sheet
-                && (a.eq_ignore_ascii_case(name) || b.eq_ignore_ascii_case(name))
+                && (targets_sheet(a, name, order) || targets_sheet(b, name, order))
             {
                 let (Some(ia), Some(ib)) = (pos(a), pos(b)) else { return Expr::Ref(r) };
                 if ia == ib {
@@ -317,12 +346,13 @@ pub fn delete_sheet(e: Expr, name: &str, order: &[String]) -> Expr {
                 }
                 // The deleted end moves one sheet towards the other end; the span keeps its direction.
                 let inward = |from: usize, to: usize| order.get(if from < to { from + 1 } else { from.saturating_sub(1) });
-                let (na, nb) = if a.eq_ignore_ascii_case(name) { (inward(ia, ib), order.get(ib)) } else { (order.get(ia), inward(ib, ia)) };
+                let (na, nb) = if targets_sheet(a, name, order) { (inward(ia, ib), order.get(ib)) } else { (order.get(ia), inward(ib, ia)) };
                 let (Some(na), Some(nb)) = (na, nb) else { return Expr::Error(CellError::Ref) };
-                r.sheet = if na.eq_ignore_ascii_case(nb) { SheetSel::Named(na.clone()) } else { SheetSel::Span(na.clone(), nb.clone()) };
+                r.sheet = if na == nb { SheetSel::Named(na.clone()) } else { SheetSel::Span(na.clone(), nb.clone()) };
             }
             Expr::Ref(r)
         }
+        Expr::Name(n) if n.rsplit_once('!').is_some_and(|(sheet, _)| targets_sheet(sheet, name, order)) => Expr::Error(CellError::Ref),
         other => other,
     })
 }
