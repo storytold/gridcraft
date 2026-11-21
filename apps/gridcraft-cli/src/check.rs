@@ -260,11 +260,20 @@ impl Discovery {
 /// (`~$…`) are skipped.
 fn collect_inputs(inputs: &[String]) -> Discovery {
     let mut out = Discovery::default();
+    #[cfg(unix)]
     let mut seen = std::collections::HashMap::new();
     for i in inputs {
         let p = PathBuf::from(i);
         if p.is_dir() {
-            if !walk(&p, 0, false, &mut out, &mut seen) {
+            if !walk(
+                &p,
+                0,
+                #[cfg(unix)]
+                false,
+                &mut out,
+                #[cfg(unix)]
+                &mut seen,
+            ) {
                 break;
             }
         } else if !out.add_file(p) {
@@ -283,8 +292,13 @@ fn collect_inputs(inputs: &[String]) -> Discovery {
 /// Returns false only when the global file budget stops traversal. `seen` holds the shallowest
 /// depth each directory was scanned from; `rescan` is set below a directory reached again from a
 /// shallower path (its depth-limited subtree may now fit), where already collected files are skipped.
-#[cfg_attr(not(unix), allow(unused_mut))]
-fn walk(dir: &Path, depth: usize, mut rescan: bool, out: &mut Discovery, seen: &mut std::collections::HashMap<(u64, u64), usize>) -> bool {
+fn walk(
+    dir: &Path,
+    depth: usize,
+    #[cfg(unix)] mut rescan: bool,
+    out: &mut Discovery,
+    #[cfg(unix)] seen: &mut std::collections::HashMap<(u64, u64), usize>,
+) -> bool {
     // A directory is visited once by identity (dev+inode on unix) unless reached from a shallower
     // path: several links to the same directory are aliases, not exponential branches of the scan
     // (each directory is scanned at most MAX_DEPTH + 1 times). Other platforms keep the depth cap only.
@@ -337,7 +351,15 @@ fn walk(dir: &Path, depth: usize, mut rescan: bool, out: &mut Discovery, seen: &
             }
         };
         if metadata.is_dir() {
-            if !walk(&p, depth + 1, rescan, out, seen) {
+            if !walk(
+                &p,
+                depth + 1,
+                #[cfg(unix)]
+                rescan,
+                out,
+                #[cfg(unix)]
+                seen,
+            ) {
                 return false;
             }
         } else if p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("xlsx") || e.eq_ignore_ascii_case("xlsm")) {
