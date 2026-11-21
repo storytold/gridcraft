@@ -473,6 +473,21 @@ fn f2_and_an_arrow_in_one_frame_apply_in_input_order() {
 }
 
 #[test]
+fn two_f2_presses_in_one_frame_toggle_twice() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    text(&mut h, "=");
+    let press = |k: Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    let release = |k: Key| Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([press(Key::F2), release(Key::F2), press(Key::F2), release(Key::F2)]);
+    h.run_steps(2);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=A10"), "two F2 presses return to pointing, so Up inserts a reference");
+}
+
+#[test]
 fn ctrl_arrows_in_point_mode_jump_to_the_edge_of_the_data() {
     // Typing `=COUNTIF(`, clicking the top of a column and pressing Ctrl+Shift+Down (⌘⇧↓) points
     // at the whole column of data, as the same keys select it outside an edit.

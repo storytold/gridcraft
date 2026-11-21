@@ -673,14 +673,14 @@ fn editor_shortcuts(
     // F2 switches the in-cell edit between Edit mode (arrows move the caret) and Enter mode
     // (arrows point at cells), as in Excel. An F2 pressed before an arrow in the same frame
     // applies first, so that arrow already follows the new mode.
-    let f2_before_arrow = editor_f2_before_arrow(ui, ed);
-    if let Some(true) = f2_before_arrow {
+    let (f2_before, f2_after) = editor_f2_presses(ui, ed);
+    for _ in 0..f2_before {
         toggle_enter_mode(app, ed);
     }
     let (action, arrow) = editor_arrow_keys(app, ui, ed, outcome.action);
     outcome.action = action;
     outcome.arrow = arrow;
-    if let Some(false) = f2_before_arrow {
+    for _ in 0..f2_after {
         toggle_enter_mode(app, ed);
     }
     editor_other_shortcuts(app, ui, id, ed);
@@ -884,24 +884,32 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
     info
 }
 
-/// Whether F2 was pressed in the in-cell editor (consuming it), and if so whether it came before
-/// the frame's first arrow press. `None` when F2 wasn't pressed.
-fn editor_f2_before_arrow(ui: &mut egui::Ui, ed: &crate::editor::EditState) -> Option<bool> {
+/// The F2 presses in the in-cell editor this frame (consuming them): how many came before the
+/// frame's first arrow press, and how many after it. Each press toggles the mode once.
+fn editor_f2_presses(ui: &mut egui::Ui, ed: &crate::editor::EditState) -> (usize, usize) {
     if ed.from_formula_bar {
-        return None;
+        return (0, 0);
     }
-    let order = ui.input(|i| {
-        let press = |want: &dyn Fn(Key, egui::Modifiers) -> bool| {
-            i.events.iter().position(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if want(*key, *modifiers)))
-        };
-        let f2 = press(&|k, m| k == Key::F2 && m.is_none());
-        let arrow = press(&|k, _| matches!(k, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight));
-        f2.map(|f| arrow.is_none_or(|a| f < a))
+    let (mut before, mut after, mut arrow_seen) = (0, 0, false);
+    ui.input(|i| {
+        for e in &i.events {
+            match e {
+                egui::Event::Key { key: Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, pressed: true, .. } => arrow_seen = true,
+                egui::Event::Key { key: Key::F2, pressed: true, modifiers, .. } if modifiers.is_none() => {
+                    if arrow_seen {
+                        after += 1;
+                    } else {
+                        before += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
     });
-    if order.is_some() {
+    if before + after > 0 {
         ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2));
     }
-    order
+    (before, after)
 }
 
 /// Flips Edit and Enter mode. The pointed reference stays, so pointing resumes from it while the
