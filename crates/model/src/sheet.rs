@@ -110,6 +110,10 @@ pub struct Sheet {
     /// Default column width and row height in pixels at 96 dpi (a file stores row heights in points).
     pub default_col_width: f32,
     pub default_row_height: f32,
+    /// Rows without an entry in `rows` are hidden (XLSX `sheetFormatPr zeroHeight`, written when
+    /// most rows are hidden): only rows with an entry show, unless that entry is hidden itself.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub rows_hidden_by_default: bool,
     pub merges: Vec<RangeRef>,
     /// Frozen rows and columns (top/left).
     pub freeze: Option<(u32, u32)>,
@@ -199,6 +203,7 @@ impl Sheet {
             rows: BTreeMap::new(),
             default_col_width: DEFAULT_COL_WIDTH,
             default_row_height: DEFAULT_ROW_HEIGHT,
+            rows_hidden_by_default: false,
             merges: vec![],
             freeze: None,
             tab_color: None,
@@ -481,11 +486,31 @@ impl Sheet {
         match self.rows.get(&row) {
             Some(i) if i.hidden => 0.0,
             Some(LineInfo { size: Some(h), .. }) => *h,
-            _ => self.default_row_height,
+            Some(_) => self.default_row_height,
+            None => self.unlisted_row_height(),
         }
     }
+    /// Height of a row without an entry in `rows`: the default height, or zero when rows are
+    /// hidden by default.
+    pub fn unlisted_row_height(&self) -> f32 {
+        if self.rows_hidden_by_default { 0.0 } else { self.default_row_height }
+    }
     pub fn is_row_hidden(&self, row: u32) -> bool {
-        self.rows.get(&row).is_some_and(|r| r.hidden)
+        self.rows.get(&row).map_or(self.rows_hidden_by_default, |r| r.hidden)
+    }
+    /// A new entry for a row that has none, as the row is now: hidden when rows are hidden by
+    /// default, so giving a row a style, height or outline level does not show it.
+    pub fn blank_row_info(&self) -> LineInfo {
+        LineInfo { hidden: self.rows_hidden_by_default, ..LineInfo::default() }
+    }
+    /// The row's entry, created as [`Sheet::blank_row_info`] when it has none.
+    pub fn row_entry(&mut self, row: u32) -> &mut LineInfo {
+        let blank = self.blank_row_info();
+        self.rows.entry(row).or_insert(blank)
+    }
+    /// Position index over the rows (sizes of hidden and unlisted rows included).
+    pub fn row_index(&self) -> LineIndex {
+        LineIndex::with_unlisted(&self.rows, self.default_row_height, self.unlisted_row_height(), gridcraft_core::MAX_ROWS)
     }
     /// Whether `row` is hidden by an applied filter: a hidden row below the header of the
     /// sheet AutoFilter while it has criteria, or a hidden data row of a filtered table.
@@ -505,11 +530,11 @@ impl Sheet {
     }
     /// Y offset (points) of the top of `row`.
     pub fn row_top(&self, row: u32) -> f64 {
-        let mut y = row as f64 * self.default_row_height as f64;
-        for (r, info) in self.rows.range(..row) {
-            let _ = r;
+        let unlisted = self.unlisted_row_height() as f64;
+        let mut y = row as f64 * unlisted;
+        for info in self.rows.range(..row).map(|(_, info)| info) {
             let h = if info.hidden { 0.0 } else { info.size.unwrap_or(self.default_row_height) };
-            y += h as f64 - self.default_row_height as f64;
+            y += h as f64 - unlisted;
         }
         y
     }
@@ -523,10 +548,11 @@ impl Sheet {
     }
     /// Row containing y (points from the top), clamped.
     pub fn row_at(&self, y: f64) -> u32 {
-        line_at(y, self.default_row_height as f64, &self.rows, gridcraft_core::MAX_ROWS)
+        line_at(y, self.default_row_height as f64, self.unlisted_row_height() as f64, &self.rows, gridcraft_core::MAX_ROWS)
     }
     pub fn col_at(&self, x: f64) -> u32 {
-        line_at(x, self.default_col_width as f64, &self.cols, gridcraft_core::MAX_COLS)
+        let w = self.default_col_width as f64;
+        line_at(x, w, w, &self.cols, gridcraft_core::MAX_COLS)
     }
 
     /// The merged range containing `c`, if any.
@@ -552,6 +578,7 @@ impl Sheet {
 /// when every row has an explicit height (common in imported files).
 #[derive(Clone, Debug, Default)]
 pub struct LineIndex {
+    /// Size of a line without an entry (an entry without a size takes the axis default instead).
     default: f64,
     max: u32,
     /// (line, start position of that line, its size), sorted by line.
@@ -560,12 +587,17 @@ pub struct LineIndex {
 
 impl LineIndex {
     pub fn new(custom: &BTreeMap<u32, LineInfo>, default: f32, max: u32) -> LineIndex {
-        let default = default as f64;
+        LineIndex::with_unlisted(custom, default, default, max)
+    }
+    /// [`LineIndex::new`] where a line without an entry is `unlisted` long (zero for rows hidden
+    /// by default) and an entry without a size is `default` long.
+    pub fn with_unlisted(custom: &BTreeMap<u32, LineInfo>, default: f32, unlisted: f32, max: u32) -> LineIndex {
+        let (default, unlisted) = (default as f64, unlisted as f64);
         let mut lines = Vec::with_capacity(custom.len());
         let mut pos = 0.0;
         let mut prev = 0u32;
         for (&line, info) in custom {
-            pos += (line - prev) as f64 * default;
+            pos += (line - prev) as f64 * unlisted;
             // A negative size (only a malformed file has one) counts as zero, so positions only
             // grow and the searches below stay valid.
             let size = if info.hidden { 0.0 } else { info.size.map_or(default, |s| s as f64).max(0.0) };
@@ -573,7 +605,7 @@ impl LineIndex {
             pos += size;
             prev = line + 1;
         }
-        LineIndex { default, max, lines }
+        LineIndex { default: unlisted, max, lines }
     }
     /// Start position of `line`.
     pub fn start(&self, line: u32) -> f64 {
@@ -626,9 +658,9 @@ impl LineIndex {
     }
     /// The line containing `pos`.
     pub fn at(&self, pos: f64) -> u32 {
-        if pos <= 0.0 {
-            return 0;
-        }
+        // A position at or before the top is the first line that shows there, not line 0 when
+        // that one is hidden (NaN counts as zero).
+        let pos = pos.max(0.0);
         // Last custom line starting at or before pos.
         let i = self.lines.partition_point(|e| e.1 <= pos);
         let (base_line, base_pos) = match i.checked_sub(1).and_then(|k| self.lines.get(k)) {
@@ -649,18 +681,18 @@ impl LineIndex {
     }
 }
 
-/// Inverse of the cumulative size along an axis with sparse custom sizes.
-fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -> u32 {
-    if pos <= 0.0 {
-        return 0;
-    }
+/// Inverse of the cumulative size along an axis with sparse custom sizes: lines without an entry
+/// are `unlisted` long, entries without a size `default` long.
+fn line_at(pos: f64, default: f64, unlisted: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -> u32 {
+    // As in `LineIndex::at`: at or before the top is the first line that shows there.
+    let pos = pos.max(0.0);
     let mut start_pos = 0.0; // position of line `idx`
     let mut idx: u32 = 0;
     for (&line, info) in custom.iter() {
-        // Lines idx..line have default size.
-        let span = (line - idx) as f64 * default;
+        // Lines idx..line have no entry.
+        let span = (line - idx) as f64 * unlisted;
         if pos < start_pos + span {
-            let k = ((pos - start_pos) / default).floor() as u32;
+            let k = ((pos - start_pos) / unlisted).floor() as u32;
             return (idx + k).min(max - 1);
         }
         start_pos += span;
@@ -671,10 +703,10 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
         start_pos += size;
         idx = line + 1;
     }
-    if default <= 0.0 {
+    if unlisted <= 0.0 {
         return idx.min(max - 1);
     }
-    let k = ((pos - start_pos) / default).floor();
+    let k = ((pos - start_pos) / unlisted).floor();
     let r = idx as f64 + k;
     if r >= max as f64 { max - 1 } else { r as u32 }
 }
@@ -683,6 +715,57 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    /// #4502: with rows hidden by default, a row without an entry is hidden and zero high, a row
+    /// with one shows at its own or the default height unless it is hidden itself, and positions
+    /// (row_top, row_at, LineIndex) count only the rows that show.
+    #[test]
+    fn rows_hidden_by_default_show_only_rows_with_an_entry() {
+        let mut s = Sheet::new("S");
+        s.rows_hidden_by_default = true;
+        for r in [0, 1, 2, 3, 119] {
+            s.rows.insert(r, LineInfo::default());
+        }
+        s.rows.insert(8, LineInfo { hidden: true, ..Default::default() });
+        s.rows.insert(2, LineInfo { size: Some(40.0), ..Default::default() });
+        let d = s.default_row_height;
+        for r in [4, 8, 118, gridcraft_core::MAX_ROWS - 1] {
+            assert!(s.is_row_hidden(r), "row {r}");
+            assert_eq!(s.row_height(r), 0.0, "row {r}");
+        }
+        for r in [0, 1, 3, 119] {
+            assert!(!s.is_row_hidden(r), "row {r}");
+            assert_eq!(s.row_height(r), d, "row {r}");
+        }
+        assert_eq!(s.row_height(2), 40.0);
+        // Rows 0, 1, 2 (40) and 3 come before row 119; nothing after it shows.
+        let top = 3.0 * d as f64 + 40.0;
+        assert_eq!(s.row_top(4), top);
+        assert_eq!(s.row_top(119), top);
+        assert_eq!(s.row_top(gridcraft_core::MAX_ROWS - 1), top + d as f64);
+        assert_eq!(s.row_at(top + 1.0), 119);
+        // Position zero is the first row that shows, as is a position above the sheet.
+        s.rows.remove(&0);
+        assert_eq!(s.row_at(0.0), 1);
+        assert_eq!(s.row_at(-5.0), 1);
+        assert_eq!(s.row_index().at(0.0), 1);
+        assert_eq!(s.row_index().at(f64::NAN), 1);
+        s.rows.insert(0, LineInfo::default());
+        assert_eq!(s.row_at(0.0), 0);
+        let idx = s.row_index();
+        assert_eq!(idx.start(119), top);
+        assert_eq!(idx.visible(0, gridcraft_core::MAX_ROWS - 1).collect::<Vec<_>>(), vec![0, 1, 2, 3, 119]);
+        assert_eq!(idx.next_visible(4), Some(119));
+        assert_eq!(idx.next_visible(120), None);
+        // A new entry starts hidden, so giving a row a style does not show it.
+        s.row_entry(50).style = Some(crate::style::StyleId(1));
+        assert!(s.is_row_hidden(50));
+        // Off, the same entries behave as before: unlisted rows show at the default height.
+        s.rows_hidden_by_default = false;
+        assert!(!s.is_row_hidden(4));
+        assert_eq!(s.row_height(4), d);
+        assert_eq!(s.row_index().next_visible(4), Some(4));
+    }
 
     /// `LineIndex::visible` lists exactly the lines a line-by-line size check shows, for hidden
     /// runs at the start, in the middle and up to the end of the axis, custom sizes (zero and

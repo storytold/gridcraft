@@ -117,7 +117,7 @@ fn fit_imported_rows(wb: &mut Workbook) {
             if after.is_none_or(|a| before > a + 0.5)
                 && let Some(sh) = wb.sheet_mut(si)
             {
-                sh.rows.entry(row).or_default().size = Some(before);
+                sh.row_entry(row).size = Some(before);
             }
         }
         left = sweep.left();
@@ -921,7 +921,7 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
     if fixed {
         // Sheet units are CSS pixels; the table starts at the used range, not at A1.
         // Indexed positions: each anchor would otherwise sum every custom row and column before it.
-        let ri = LineIndex::new(&sh.rows, sh.default_row_height, gridcraft_core::MAX_ROWS);
+        let ri = sh.row_index();
         let ci = LineIndex::new(&sh.cols, sh.default_col_width, gridcraft_core::MAX_COLS);
         let (left, top) = used.map_or((0.0, 0.0), |r| (ci.start(r.start.col), ri.start(r.start.row)));
         let place = |a: &gridcraft_model::Anchor| {
