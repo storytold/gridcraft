@@ -1066,11 +1066,8 @@ fn record_file_table(cx: &mut Ctx<'_>, t: &craft_xlsx::Table, model: &gridcraft_
     if model.id == 0 {
         return;
     }
-    let col_map: HashMap<u32, String> = t
-        .columns
-        .iter()
-        .filter_map(|c| Some((c.id?, xml::decode_xstring(c.name.as_deref().unwrap_or("")))))
-        .collect();
+    let col_map: HashMap<u32, String> =
+        t.columns.iter().filter_map(|c| Some((c.id?, xml::decode_xstring(c.name.as_deref().unwrap_or(""))))).collect();
     cx.file_tables.insert(model.id, (model.name.clone(), col_map));
 }
 
