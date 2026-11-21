@@ -678,3 +678,38 @@ fn slicer_groups_whitespace_variants_into_single_tile_2943() {
     assert!(sh.is_row_hidden(3), "'Other' row hidden");
     assert!(sh.is_row_hidden(4), "whitespace-only row hidden");
 }
+
+/// Table slicers merge non-ASCII Unicode case variants into a single tile and keep both visible (#2943).
+#[test]
+fn slicer_groups_unicode_case_variants_into_single_tile_2943() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({
+            "range": "A1",
+            "parse": false,
+            "values": [["School"], ["ÉCOLE"], ["école"], ["autre"]]
+        }),
+    )
+    .unwrap();
+    s.execute("insert.table", json!({"range": "A1:A4", "name": "Schools"})).unwrap();
+    let res = s.execute("insert.slicer", json!({"table": "Schools", "column": "School"})).unwrap();
+    let id = res["slicer"].as_u64().unwrap() as u32;
+
+    let wb = &s.doc().unwrap().wb;
+    let sl = wb.active().unwrap().slicers.iter().find(|x| x.id == id).unwrap();
+    let tiles = gridcraft_engine::cmd::slicer::slicer_items(wb, 0, sl);
+    // Unicode case variants 'ÉCOLE' and 'école' must share one tile.
+    assert_eq!(tiles.len(), 2, "must produce 2 tiles: ÉCOLE and autre, but was {tiles:?}");
+    assert!(tiles.iter().any(|(t, on)| (t == "ÉCOLE" || t == "école") && *on));
+    assert!(tiles.iter().any(|(t, on)| t == "autre" && *on));
+
+    // Selecting the shared tile keeps both 'ÉCOLE' and 'école' visible.
+    let tile_name = tiles.iter().find(|(t, _)| t == "ÉCOLE" || t == "école").unwrap().0.clone();
+    s.execute("slicer.toggle", json!({"slicer": id, "value": tile_name})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.is_row_hidden(1), "ÉCOLE row stays visible");
+    assert!(!sh.is_row_hidden(2), "école row stays visible");
+    assert!(sh.is_row_hidden(3), "autre row hidden");
+}

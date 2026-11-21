@@ -231,30 +231,30 @@ fn cell_base_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value) -> String {
     format!("{typed}:{}", pct_encode(&eff))
 }
 
-/// Slicer tile text for `c`: trimmed `cell_text` (respecting Show Formulas), falling back to the
-/// underlying value only when a non-blank cell's formatted display is empty/whitespace.
+/// Slicer tile text for `c`: formatted value display (mode-independent of Show Formulas),
+/// falling back to the underlying value display only when a non-blank cell's formatted display is empty/whitespace.
 pub(crate) fn slicer_tile_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<String> {
     let v = sh.value(c);
     if filter_dropdown_blank(&v) {
         return None;
     }
-    let text = crate::display::cell_text(wb, sh, c);
-    let tile = if text.trim().is_empty() { v.display().trim().to_string() } else { text.trim().to_string() };
+    let vtext = crate::display::value_text_as(wb, &v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+    let tile = if vtext.trim().is_empty() { v.display().trim().to_string() } else { vtext.trim().to_string() };
     (!tile.is_empty()).then_some(tile)
 }
 
 /// Encodes a slicer tile's display key as an identity token (`s:<encoded_tile>`).
 pub(crate) fn slicer_identity_token(tile: &str) -> String {
-    format!("s:{}", pct_encode(&tile.trim().to_ascii_lowercase()))
+    format!("s:{}", pct_encode(&tile.trim().to_lowercase()))
 }
 
 /// Canonical checklist identity for `c`: `"d:<base>"` when formulas and constants share a value
 /// group, `"f:<base>:<formula>"` / `"c:<base>"` when formulas are distinguished, or `"w:<base>:<ws>"`
-/// when disambiguating legacy formatted-whitespace criteria.
-fn cell_identity_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, text: &str, split_formulas: bool, split_fmtws: bool) -> String {
+/// when disambiguating whitespace-formatted cells.
+fn cell_identity_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, shown: &str, split_formulas: bool, split_fmtws: bool) -> String {
     let base = cell_base_token(wb, sh, c, v);
-    if split_fmtws && text.trim().is_empty() {
-        return format!("w:{base}:{}", pct_encode(&text.to_ascii_lowercase()));
+    if split_fmtws && shown.trim().is_empty() {
+        return format!("w:{base}:{}", pct_encode(&shown.to_ascii_lowercase()));
     }
     if !split_formulas {
         return format!("d:{base}");
@@ -271,7 +271,7 @@ fn id_splits_base(id: &str, base: &str) -> bool {
 }
 
 /// Checks whether a non-blank cell matches any primary stored identity (`d:`, `c:`, `f:`, `w:`, `s:`).
-fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, text: &str, identities: &[String]) -> bool {
+fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, identities: &[String]) -> bool {
     let base = cell_base_token(wb, sh, c, v);
     let mut formula_enc: Option<Option<String>> = None;
     let mut slicer_enc: Option<Option<String>> = None;
@@ -293,9 +293,10 @@ fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Val
             let Some(tail) = rest.strip_prefix(&base).and_then(|s| s.strip_prefix(':')) else {
                 return false;
             };
-            text.trim().is_empty() && pct_encode(&text.to_ascii_lowercase()) == tail
+            let shown = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+            shown.trim().is_empty() && pct_encode(&shown.to_ascii_lowercase()) == tail
         } else if let Some(rest) = id.strip_prefix("s:") {
-            slicer_enc.get_or_insert_with(|| slicer_tile_text(wb, sh, c).map(|t| pct_encode(&t.to_ascii_lowercase()))).as_deref() == Some(rest)
+            slicer_enc.get_or_insert_with(|| slicer_tile_text(wb, sh, c).map(|t| pct_encode(&t.to_lowercase()))).as_deref() == Some(rest)
         } else {
             false
         }
@@ -305,15 +306,16 @@ fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Val
 /// Checks whether a non-blank cell matches a `Values` criterion: legacy `fmtws:` formatted-space
 /// tokens, exact checklist/slicer identities when present, or string matching for `data.filterBy`.
 fn row_matches_criterion(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, text: &str, values: &[String], identities: &[String]) -> bool {
+    let shown = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
     if identities
         .iter()
         .filter_map(|id| id.strip_prefix("fmtws:"))
-        .any(|ws_enc| text.trim().is_empty() && pct_encode(&text.to_ascii_lowercase()) == ws_enc)
+        .any(|ws_enc| shown.trim().is_empty() && pct_encode(&shown.to_ascii_lowercase()) == ws_enc)
     {
         return true;
     }
     let has_primary = identities.iter().any(|id| !id.starts_with("fmtws:"));
-    if has_primary { row_matches_primary_identities(wb, sh, c, v, text, identities) } else { row_matches_values(values, text, v) }
+    if has_primary { row_matches_primary_identities(wb, sh, c, v, identities) } else { row_matches_values(values, text, v) }
 }
 
 /// Header-and-data range covered by a table's own AutoFilter (excluding any totals row).
@@ -683,8 +685,9 @@ pub fn filter_choices(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterChoice
         }
         let base = cell_base_token(wb, sh, c, &v);
         let split_formulas = sh.show_formulas || selected_identities.is_some_and(|ids| ids.iter().any(|id| id_splits_base(id, &base)));
-        let split_fmtws = selected_identities.is_some_and(|ids| ids.iter().any(|id| id.starts_with("fmtws:") || id.starts_with("w:")));
-        let id = cell_identity_token(wb, sh, c, &v, &t, split_formulas, split_fmtws);
+        let split_fmtws = true;
+        let shown = crate::display::value_text_as(wb, &v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
+        let id = cell_identity_token(wb, sh, c, &v, &shown, split_formulas, split_fmtws);
         let val_trimmed = v.display().trim().to_string();
         let formula_src = visible_formula_text(wb, sh, c);
         let has_visible_formula = sh.show_formulas && formula_src.is_some();
@@ -703,8 +706,6 @@ pub fn filter_choices(wb: &Workbook, sheet: usize, col: u32) -> Vec<FilterChoice
             format!("result: {val_trimmed}")
         } else if split_formulas && let Some(ft) = formula_src {
             format!("formula: ={ft}")
-        } else if disp_empty && split_fmtws {
-            format!("formatted {} space(s)", t.len())
         } else if disp_empty {
             "formatted blank".to_string()
         } else if !val_trimmed.eq_ignore_ascii_case(base_label.trim()) {
