@@ -21,6 +21,7 @@ mod ko;
 mod nl;
 mod pl;
 mod pt;
+mod pt_functions;
 mod ro;
 mod ru;
 mod sr;
@@ -219,7 +220,14 @@ impl Language {
         self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
 
-    /// The catalog's own translation of `text`, or `None` when it falls back to English.
+    /// A ribbon tab's name. Where a language names the tab differently from a command with the
+    /// same English label (Russian: the Insert tab is «Вставка», the Insert button «Вставить»), its
+    /// catalog keys the tab `Tab|name`; every other language falls back to the plain label.
+    pub fn tr_tab(self, tab: &str) -> &str {
+        self.translated(&format!("Tab|{tab}")).unwrap_or_else(|| self.tr(tab))
+    }
+
+    /// The catalog entry for `text`, if this language has one.
     fn translated(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
@@ -274,6 +282,7 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::PtBr => Some((pt_functions::DESCRIPTIONS, pt_functions::ARGUMENTS)),
             _ => None,
         }
     }
@@ -505,6 +514,13 @@ mod tests {
             assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
             assert_eq!(language.tr("Not in any catalog|Untranslated"), "Untranslated");
         }
+        // The Insert tab and the Insert command have different Russian names; elsewhere the tab
+        // name is the plain label.
+        assert_eq!(Language::Ru.tr_tab("Insert"), "Вставка");
+        assert_eq!(Language::Ru.tr("Insert"), "Вставить");
+        assert_eq!(Language::Ru.tr_tab("Data"), "Данные");
+        assert_eq!(Language::Es.tr_tab("Insert"), Language::Es.tr("Insert"));
+        assert_eq!(Language::En.tr_tab("Insert"), "Insert");
         // A `context|label` key shows only its label in English.
         assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
         // Errors drop the `command `id`:` prefix before translating; an untranslated one stays whole.
