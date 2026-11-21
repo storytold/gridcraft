@@ -20,6 +20,7 @@ thread_local! {
     static SENT: RefCell<Vec<(ViewportId, ViewportCommand)>> = const { RefCell::new(Vec::new()) };
     /// Input events for the root window's next frame (a key pressed in it).
     static EVENTS: RefCell<Vec<egui::Event>> = const { RefCell::new(Vec::new()) };
+    static CHILD_DECORATIONS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 fn record(mut out: egui::FullOutput) {
@@ -40,10 +41,15 @@ struct Desk {
 
 impl Desk {
     fn new(quit_with_last_window: bool) -> Desk {
+        Self::with_frame(quit_with_last_window, false)
+    }
+
+    fn with_frame(quit_with_last_window: bool, integrated: bool) -> Desk {
         INFOS.with(|i| i.borrow_mut().clear());
         let ctx = Context::default();
         ctx.set_embed_viewports(false);
         Context::set_immediate_viewport_renderer(|ctx, viewport| {
+            CHILD_DECORATIONS.set(viewport.builder.decorations);
             let id = viewport.ids.this;
             let mut input = RawInput { viewport_id: id, ..RawInput::default() };
             input.viewports = INFOS.with(|i| i.borrow().clone());
@@ -54,7 +60,8 @@ impl Desk {
         let mut session = Session::new();
         session.new_workbook();
         let mut app = SheetApp::new(session, Default::default());
-        let windows = DocWindows::new(&mut app, egui::ViewportBuilder::default(), quit_with_last_window);
+        app.window_controls = integrated;
+        let windows = DocWindows::new(&mut app, egui::ViewportBuilder::default().with_decorations(!integrated), quit_with_last_window);
         let mut desk = Desk { ctx, app, windows };
         desk.frames(3);
         desk
@@ -139,6 +146,17 @@ impl Desk {
             ed.dirty = true;
         }
         self.frames(2);
+    }
+}
+
+#[test]
+fn integrated_captions_do_not_get_a_second_frame_on_new_workbook_windows() {
+    for integrated in [true, false] {
+        let mut desk = Desk::with_frame(true, integrated);
+        CHILD_DECORATIONS.set(None);
+        desk.app.run("view.newWindow", json!({})).unwrap();
+        desk.frames(3);
+        assert_eq!(CHILD_DECORATIONS.get(), Some(!integrated));
     }
 }
 

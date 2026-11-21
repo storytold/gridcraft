@@ -344,6 +344,17 @@ fn main() -> eframe::Result<()> {
     // Linux/BSD: Excel's layout — no window-manager title bar above ours; our title bar carries the
     // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
     app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();
+    #[cfg(target_os = "linux")]
+    if app.window_controls {
+        use craft_window::{Prefix, policy};
+        let decision = policy::decide_for(Prefix::new("GRIDCRAFT"), policy::Backend::from_env(), policy::TitleBarPref::Integrated);
+        if let policy::Frame::Integrated(captions) = decision.frame {
+            app.captions = Some(captions);
+            app.caption_icon_theme = decision.desktop.icon_theme;
+        } else {
+            app.window_controls = false;
+        }
+    }
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])

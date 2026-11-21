@@ -37,15 +37,30 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
     egui::Panel::top("title_bar").exact_size(TITLE_BAR_H).frame(egui::Frame::NONE.fill(t.window)).show(ui, |ui| {
         let rect = ui.max_rect();
         // Dragging the empty title area moves the window.
-        let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
-        if bg.drag_started() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        #[cfg(target_os = "linux")]
+        craft_window::title_bar::empty_area(ui, rect)
+            .widget_info(|| egui::WidgetInfo::labeled(egui::Role::Window, true, app.ui.language.tr("Window title bar")));
+        #[cfg(not(target_os = "linux"))]
+        {
+            let bg = ui.interact(rect, ui.scope_id().with("drag_title"), Sense::click_and_drag());
+            if bg.drag_started() {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            if bg.double_clicked() {
+                let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+            }
         }
-        if bg.double_clicked() {
-            let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
+        let (left_controls, right_controls) = caption_widths(app, ui.ctx());
+        #[cfg(target_os = "linux")]
+        if left_controls + right_controls > 0.0 {
+            linux_captions(app, ui, rect);
         }
-        ui.horizontal_centered(|ui| {
+        // Keep narrow-window toolbar contents (including their hit targets) out of the captions.
+        let row = egui::Rect::from_min_max(rect.left_top() + vec2(left_controls, 0.0), rect.right_bottom() - vec2(right_controls, 0.0));
+        let mut content = ui.new_child(egui::UiBuilder::new().max_rect(row));
+        content.shrink_clip_rect(row);
+        content.horizontal_centered(|ui| {
             ui.add_space(TITLE_LEFT_PAD);
             // AutoSave toggle (saves after each change when the workbook has a file).
             ui.label(egui::RichText::new(app.ui.language.tr("AutoSave")).font(theme::ui_font(12.5)).color(t.text_dim));
@@ -120,9 +135,6 @@ pub fn title_bar(app: &mut SheetApp, ui: &mut Ui) {
             });
             let left_end = ui.min_rect().right();
             let right = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if app.window_controls {
-                    ui.add_space(3.0 * CONTROL_W);
-                }
                 ui.add_space(8.0);
                 let __k = icon_button(ui, Icon::Search, t.text_dim, "Search commands", vec2(28.0, ch));
                 control_keytip(app, ui, &__k, "commandSearch");
@@ -214,6 +226,57 @@ pub const CONTROL_W: f32 = 46.0;
 const CONTROL_TITLE_H: f32 = 38.0;
 const RESIZE_BAND: f32 = 5.0;
 
+fn caption_widths(app: &SheetApp, ctx: &egui::Context) -> (f32, f32) {
+    if !app.window_controls || ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+        return (0.0, 0.0);
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(c) = &app.captions {
+        let face = super::linux_caption::Face::new(c.family);
+        return (face.width(c.layout.left.len()), face.width(c.layout.right.len()));
+    }
+    (0.0, 3.0 * CONTROL_W)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_captions(app: &mut SheetApp, ui: &mut Ui, bar: egui::Rect) {
+    use craft_window::Button;
+    let Some(captions) = &app.captions else { return };
+    let maximized = ui.input(|i| i.viewport().maximized.unwrap_or(false));
+    let t = Tokens::get(ui.ctx());
+    let face = super::linux_caption::Face::new(captions.family);
+    let mut clicked = None;
+    for (left, buttons) in [(true, &captions.layout.left), (false, &captions.layout.right)] {
+        for (index, &button) in buttons.iter().enumerate() {
+            let (r, center) = face.slot(bar, left, index, buttons.len());
+            let resp = ui.interact(r, ui.scope_id().with(("caption", left, index)), Sense::click());
+            let label = match button {
+                Button::Close => "Close",
+                Button::Minimize => "Minimize",
+                Button::Maximize => {
+                    if maximized {
+                        "Restore Down"
+                    } else {
+                        "Maximize"
+                    }
+                }
+            };
+            let label = app.ui.language.tr(label);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            face.paint(ui, &resp, center, (button, maximized), app.caption_icon_theme.as_deref(), (t.text, t.window));
+            if resp.on_hover_text(label).clicked() {
+                clicked = Some(button);
+            }
+        }
+    }
+    match clicked {
+        Some(Button::Minimize) => app.run_or_alert("ui.window.minimize", json!({})),
+        Some(Button::Maximize) => app.run_or_alert("ui.window.maximize", json!({"on": !maximized})),
+        Some(Button::Close) => app.run_or_alert("ui.window.close", json!({})),
+        None => (),
+    }
+}
+
 /// Draw application controls and edge resizing for frameless windows.
 pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
     if !app.window_controls {
@@ -223,9 +286,25 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
     if fullscreen {
         return;
     }
-    let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    let controls = egui::Rect::from_min_size(egui::pos2(screen.max.x - 3.0 * CONTROL_W, screen.min.y), egui::vec2(3.0 * CONTROL_W, CONTROL_TITLE_H));
+    let (left, right) = caption_widths(app, ctx);
+    let controls = egui::Rect::from_min_size(egui::pos2(screen.max.x - right, screen.min.y), egui::vec2(right, CONTROL_TITLE_H));
+    let left_controls = egui::Rect::from_min_size(screen.min, vec2(left, CONTROL_TITLE_H));
+    #[cfg(target_os = "linux")]
+    let desktop_layout = app.captions.is_some();
+    #[cfg(not(target_os = "linux"))]
+    let desktop_layout = false;
+    if !desktop_layout {
+        classic_controls(app, ctx, maximized, controls);
+    }
+    if maximized {
+        return;
+    }
+    resize_edges(app, ctx, screen, controls, left_controls);
+}
+
+fn classic_controls(app: &mut SheetApp, ctx: &egui::Context, maximized: bool, controls: egui::Rect) {
+    let t = Tokens::get(ctx);
     egui::Area::new(egui::Id::unique("gc_window_controls")).order(egui::Order::Foreground).fixed_pos(controls.min).show(ctx, |ui| {
         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
         ui.horizontal(|ui| {
@@ -283,9 +362,9 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
             }
         });
     });
-    if maximized {
-        return;
-    }
+}
+
+fn resize_edges(app: &mut SheetApp, ctx: &egui::Context, screen: egui::Rect, controls: egui::Rect, left_controls: egui::Rect) {
     let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
         return;
     };
@@ -306,7 +385,7 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
     };
     if let Some(dir) = dir
         && ctx.input(|i| i.pointer.primary_pressed())
-        && !controls.contains(pos)
+        && !(controls.contains(pos) || left_controls.contains(pos))
     {
         let direction = match dir {
             egui::ResizeDirection::North => "north",
@@ -326,6 +405,43 @@ pub fn window_frame(app: &mut SheetApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod title_bar_tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn integrated_captions_leave_room_for_workbook_actions() {
+        use craft_window::{
+            Layout,
+            policy::{CaptionFamily, Captions},
+        };
+        use egui_kittest::{Harness, kittest::Queryable as _};
+        for (family, layout, close_on_left) in [(CaptionFamily::Adwaita, ":close", false), (CaptionFamily::Breeze, "close:minimize,maximize", true)] {
+            let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+            app.window_controls = true;
+            app.captions = Some(Captions { family, layout: Layout::parse(layout) });
+            let mut h = Harness::builder()
+                .with_context_setup(|ctx| ctx.set_fonts(theme::pinned_font_definitions()))
+                .with_size(vec2(1000.0, 600.0))
+                .build_ui_state(
+                    |ui, app| {
+                        title_bar(app, ui);
+                        app.flush_viewport_commands(ui.ctx());
+                    },
+                    app,
+                );
+            h.run_steps(3);
+            let close = h.get_by_label("Close").rect();
+            let auto = h.get_by_label("AutoSave").rect();
+            let undo = h.get_by_label("Undo").rect();
+            assert!(close.y_range().contains(undo.center().y));
+            assert!(if close_on_left { close.right() < auto.left() } else { close.left() > undo.right() });
+            assert_eq!(h.query_by_label("Minimize").is_some(), close_on_left);
+            h.get_by_label("Close").click();
+            assert!((0..3).any(|_| {
+                h.step();
+                h.output().viewport_output.values().any(|v| v.commands.contains(&egui::ViewportCommand::Close))
+            }));
+        }
+    }
 
     #[test]
     fn mac_title_bar_centres_and_clears_the_traffic_lights() {

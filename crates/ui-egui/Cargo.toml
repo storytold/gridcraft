@@ -32,6 +32,10 @@ web-time = { workspace = true }
 # accessibility bus; pinned to one version so nothing is built twice.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
+# Later releases pull in option-ext (MPL-2.0) through dirs 5.
+freedesktop-icons = "=0.2.4"
+craft-svg = { git = "https://github.com/storytold/craft-libs", rev = "e98299546f5c5c3c22388d16507f8b5e61a5f280", features = ["tree"] }
+resvg = { version = "=0.48.1", default-features = false }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }

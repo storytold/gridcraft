@@ -263,6 +263,11 @@ handling again for troubleshooting.
 
 ### Linux
 
+On GNOME and KDE Plasma, each workbook window keeps the desktop's window buttons on the same row as
+AutoSave, the workbook name and Share. The buttons follow the desktop's left/right layout and use
+its icon theme's symbolic window icons when available.
+Launch with `GRIDCRAFT_TITLEBAR=system` to use the system frame (`GRIDCRAFT_SYSTEM_TITLEBAR=1` also works).
+
 | Format | x86_64 | aarch64 (ARM64) | Notes |
 |---|---|---|---|
 | AppImage | `gridcraft-<ver>-linux-x86_64.AppImage` | `gridcraft-<ver>-linux-aarch64.AppImage` | Runs anywhere; updates itself with [AppImageUpdate](https://github.com/AppImageCommunity/AppImageUpdate) (`.zsync` files) |

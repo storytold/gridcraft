@@ -20,6 +20,8 @@ mod formulas;
 mod galleries;
 mod home;
 mod insert;
+#[cfg(target_os = "linux")]
+mod linux_caption;
 mod page_layout;
 mod review;
 mod shortcuts;
