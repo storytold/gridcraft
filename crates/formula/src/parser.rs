@@ -156,14 +156,21 @@ fn word_is_cell(w: &str) -> Option<Anchor> {
 /// function, never the built-in of the same name, and files need it back.
 pub fn normalize_function_name(name: &str) -> String {
     let u = name.to_ascii_uppercase();
-    for p in ["_XLFN._XLWS.", "_XLFN.", "_XLWS."] {
-        if let Some(r) = u.strip_prefix(p) {
-            return r.to_string();
+    let mut rest = u.as_str();
+    // Files can stack `_xlfn.`/`_xlws.` prefixes. Strip them all in a loop; each pass
+    // removes at least six bytes, so the loop is bounded by the name's length.
+    for _ in 0..rest.len() {
+        if let Some(r) = rest.strip_prefix("_XLFN.") {
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("_XLWS.") {
+            rest = r;
+        } else {
+            break;
         }
     }
-    match u.strip_prefix("_XLUDF.") {
+    match rest.strip_prefix("_XLUDF.") {
         Some(r) => format!("_xludf.{r}"),
-        None => u,
+        None => rest.to_string(),
     }
 }
 

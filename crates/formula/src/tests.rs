@@ -90,6 +90,12 @@ fn normalises() {
 }
 
 #[test]
+fn stacked_prefixes_normalize_completely() {
+    assert_eq!(normalize_function_name("_xlws._xlfn.RAND"), "RAND");
+    assert_eq!(normalize_function_name("_xlfn._xlws.SUMIF"), "SUMIF");
+}
+
+#[test]
 fn spill_operator() -> Result<(), Box<dyn std::error::Error>> {
     for f in ["A1#", "Sheet1!$D$1#", "SUM(B2#)", "'My Sheet'!A1#*2", "ROWS(A1#)+1", "IF(A1,#N/A,#REF!)"] {
         assert_eq!(rt(f), f);
