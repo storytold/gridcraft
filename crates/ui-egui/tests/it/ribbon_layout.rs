@@ -79,8 +79,9 @@ fn rtl_overflowing_tab_starts_at_right_edge_and_scrolls_left() {
     assert!(h.query_by_label("Scroll ribbon right").is_none(), "already flush at reading-start right edge");
     h.get_by_label("Scroll ribbon left").click();
     h.run_steps(3);
-    let after_left = RibbonOverflow::get(&h.ctx).offset;
-    assert!(after_left < o.offset, "Scroll ribbon left moved offset leftward (was {}, now {after_left})", o.offset);
+    let after = RibbonOverflow::get(&h.ctx);
+    assert!((after.content - o.content).abs() <= 1.0, "RTL ribbon content width stayed stable (was {}, now {})", o.content, after.content);
+    assert!(after.offset < o.offset, "Scroll ribbon left moved offset leftward (was {}, now {})", o.offset, after.offset);
 }
 
 #[test]
@@ -111,7 +112,14 @@ fn switching_ltr_to_rtl_initializes_ribbon_at_right_edge() {
 
     h.get_by_label("Scroll ribbon left").click();
     h.run_steps(3);
-    assert!(RibbonOverflow::get(&h.ctx).offset < rtl.offset, "Scroll ribbon left moves RTL ribbon leftward after language switch");
+    let after_rtl = RibbonOverflow::get(&h.ctx);
+    assert!(
+        (after_rtl.content - rtl.content).abs() <= 1.0,
+        "RTL ribbon content width stayed stable after switch (was {}, now {})",
+        rtl.content,
+        after_rtl.content
+    );
+    assert!(after_rtl.offset < rtl.offset, "Scroll ribbon left moves RTL ribbon leftward after language switch");
 
     h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::En;
     h.run_steps(4);

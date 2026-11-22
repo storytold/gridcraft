@@ -1339,6 +1339,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "{command} needs {count} premise(s), but only {available} available" => "{command} דורשת {count} הנחה/ות, אך זמינות רק {available}",
         "{command} valid only as a supported bussproofs command within prooftree" => "{command} תקפה רק כפקודת bussproofs נתמכת בתוך prooftree",
+        "Copy Cells" => "העתקת תאים",
+        "Fill Series" => "סדרת מילוי",
+        "Fill Formatting Only" => "מילוי עיצוב בלבד",
+        "Fill Without Formatting" => "מילוי ללא עיצוב",
+        "Fill Days" => "מילוי ימים",
+        "Fill Weekdays" => "מילוי ימי חול",
+        "Fill Months" => "מילוי חודשים",
+        "Fill Years" => "מילוי שנים",
+        "Auto Fill Options" => "אפשרויות מילוי אוטומטי",
         _ => return None,
     })
 }

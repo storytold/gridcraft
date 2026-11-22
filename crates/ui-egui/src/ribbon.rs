@@ -151,7 +151,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 let mut measured = 0.0;
                 let scroll = area.show(ui, |ui| {
-                    let body = |ui: &mut Ui| {
+                    let mut body = |ui: &mut Ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
@@ -170,8 +170,23 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     };
                     if rtl {
-                        let size = vec2(row_w, ui.available_size_before_wrap().y);
-                        measured = ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), body).response.rect.width();
+                        // Lay out groups right-to-left from `origin.x + row_w` with generous leftward room so
+                        // Frame 0 (before `row_w` is known) never hits `max_rect.min.x` (`fast_midpoint` jump),
+                        // and measure `ui.min_rect().width()` from the child UI directly so `row_w` never ratchets.
+                        let origin = ui.min_rect().min;
+                        let h = ui.available_size_before_wrap().y;
+                        let right = origin.x + row_w;
+                        let span = row_w.max(10_000.0);
+                        let layout_rect = Rect::from_min_max(pos2(right - span, origin.y), pos2(right, origin.y + h));
+                        measured = ui
+                            .scope_builder(
+                                egui::UiBuilder::new().max_rect(layout_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
+                                |ui| {
+                                    body(ui);
+                                    ui.min_rect().width()
+                                },
+                            )
+                            .inner;
                     } else {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), body);
                     }
