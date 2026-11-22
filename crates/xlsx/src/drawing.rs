@@ -200,9 +200,11 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         cx.warn(format!("missing picture {target}"));
                         continue;
                     };
-                    let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
+                    let props = obj.path(&["nvPicPr", "cNvPr"]);
+                    let alt = props.and_then(|c| c.attr("descr")).unwrap_or("").to_string();
+                    let name = props.and_then(|c| c.attr("name")).unwrap_or("").to_string();
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt, name });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -573,7 +575,10 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
         match o {
             Obj::Image(img, rid) => {
                 let placement = to_placement(sheet, &img.anchor);
-                let mut anchor = CraftAnchor::picture(placement, id as u32, &format!("Picture {}", id - 1), &img.alt, rid);
+                // The file's own name, so a save doesn't rename the picture (#4544); one made here gets
+                // a name from its position.
+                let name = if img.name.is_empty() { format!("Picture {}", id - 1) } else { img.name.clone() };
+                let mut anchor = CraftAnchor::picture(placement, id as u32, &name, &img.alt, rid);
                 if let Some(ext) = anchor.object.child_mut("xdr:spPr").and_then(|sp| sp.child_mut("a:xfrm")).and_then(|x| x.child_mut("a:ext")) {
                     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
                     ext.set_attr("cx", e(img.anchor.width));

@@ -23,6 +23,7 @@ mod ods_tests;
 mod page_order;
 mod passthrough_tests;
 mod phonetic_tests;
+mod picture_names;
 mod pivot_tests;
 mod richdata_tests;
 mod roundtrip;

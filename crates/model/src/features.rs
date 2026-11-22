@@ -654,6 +654,11 @@ pub struct Image {
     pub data: std::sync::Arc<Vec<u8>>,
     pub mime: String,
     pub alt: String,
+    /// The picture's name in the file it came from (`cNvPr name`, e.g. "Logo"), written back so
+    /// macros, links and other tools that refer to the picture by name still find it after a save.
+    /// Empty for a picture made here; a save then names it `Picture N` by its position.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
