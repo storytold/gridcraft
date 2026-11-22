@@ -37,24 +37,12 @@ fn translate_template(message: &str, language: super::Language) -> Option<String
 
 /// Resolves named slots once so braces inside a filename or sheet name stay literal.
 fn fill(message: &str, source: &str, translated: &str, language: super::Language) -> Option<String> {
-    let mut rest = message;
-    let mut pattern = source;
-    let mut values = Vec::new();
-    while let Some((prefix, slot)) = pattern.split_once('{') {
-        rest = rest.strip_prefix(prefix)?;
-        let (name, tail) = slot.split_once('}')?;
-        let delimiter = tail.split('{').next()?;
-        let end = if delimiter.is_empty() { rest.len() } else { rest.find(delimiter)? };
-        let value = rest.get(..end)?;
-        if value.contains('`') && (prefix.ends_with('`') || delimiter.starts_with('`')) {
+    let values = super::unfill(source, message)?;
+    for (name, value) in &values {
+        let slot = format!("{{{name}}}");
+        if value.contains('`') && (source.contains(&format!("`{slot}")) || source.contains(&format!("{slot}`"))) {
             return None;
         }
-        values.push((name, value));
-        rest = rest.get(end..)?;
-        pattern = tail;
-    }
-    if rest != pattern {
-        return None;
     }
     let locale = language.formula_locale();
     let mut rendered = Vec::with_capacity(values.len());
@@ -88,6 +76,7 @@ mod tests {
         );
         assert_eq!(fill("prefix: bad number `abc`", "bad number `{number}`", "Invalid number: {number}", super::super::Language::En), None);
         assert_eq!(fill("bad number `abc` suffix", "bad number `{number}`", "Invalid number: {number}", super::super::Language::En), None);
+        assert_eq!(fill("bad number `a`b`", "bad number `{number}`", "Invalid number: {number}", super::super::Language::En), None);
         assert_eq!(format_message("Printer Office: permission denied", super::super::Language::En), None);
     }
 }
