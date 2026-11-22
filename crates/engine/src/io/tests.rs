@@ -420,16 +420,8 @@ fn full_sync_tolerates_apple_enotsup() {
     let enotsup = Error::from_raw_os_error(45);
     assert!(flush_unsupported_on(&enotsup, true, true), "ENOTSUP on Apple");
     let host_maps_45_unsupported = enotsup.kind() == ErrorKind::Unsupported;
-    assert_eq!(
-        flush_unsupported_on(&enotsup, true, false),
-        host_maps_45_unsupported,
-        "45 on other Unix"
-    );
-    assert_eq!(
-        flush_unsupported_on(&enotsup, false, false),
-        host_maps_45_unsupported,
-        "45 on Windows"
-    );
+    assert_eq!(flush_unsupported_on(&enotsup, true, false), host_maps_45_unsupported, "45 on other Unix");
+    assert_eq!(flush_unsupported_on(&enotsup, false, false), host_maps_45_unsupported, "45 on Windows");
     assert!(flush_unsupported_on(&Error::from_raw_os_error(25), true, true), "ENOTTY on Apple");
     assert!(!flush_unsupported_on(&Error::from_raw_os_error(5), true, true), "EIO on Apple");
     assert!(!flush_unsupported_on(&Error::from_raw_os_error(28), true, true), "ENOSPC on Apple");
