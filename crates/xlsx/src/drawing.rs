@@ -390,7 +390,7 @@ const PLAIN_TEXT_PT: f32 = 11.0;
 
 /// An equation shape (inside the anchor): Office Math with a plain-text fallback when the source
 /// is in the subset OMML covers, else the plain-text box alone. Both carry the source.
-fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
+fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme, name: &str) {
     // The font size the equation is drawn at (it scales with its frame), in points.
     let size_pt = sh
         .math
@@ -416,8 +416,8 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
     let marker = |tx: &str| crate::xml::parse(tx.as_bytes()).map(|e| crate::omml::body_marker(&e)).unwrap_or_else(|_| "0".repeat(16));
     let sp = |tx: &str, marker: &str| {
         format!(
-            "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Equation {}\" descr=\"{}\"/><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr>{tx}</xdr:sp>",
-            id - 1,
+            "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"{}\" descr=\"{}\"/><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr>{tx}</xdr:sp>",
+            name,
             esc_attr(&format!("{LATEX_DESCR}{marker}:{}", sh.text)),
             xfrm(&sh.anchor, "a:xfrm")
         )
@@ -568,9 +568,22 @@ pub enum Obj<'a> {
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
+/// The first `"{prefix} {n}"` at or after `n` that `used` does not already hold; the name is
+/// reserved in `used`, and the number it landed on is returned with it.
+fn generated_name(used: &mut std::collections::HashSet<String>, prefix: &str, mut n: usize) -> (String, usize) {
+    loop {
+        let candidate = format!("{prefix} {n}");
+        if used.insert(candidate.clone()) {
+            return (candidate, n);
+        }
+        n += 1;
+    }
+}
+
 pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
-    // Names the file already gave its pictures; a fallback name must not reuse one of them, or a
-    // name-based reference could no longer tell two pictures apart.
+    // Names the file already gave its pictures; a generated name must not reuse one of them, or a
+    // name-based reference could no longer tell two objects apart. Generated names reserve
+    // theirs here too, so a later generated name cannot reuse an earlier one either.
     let mut used_names: std::collections::HashSet<String> = objs
         .iter()
         .filter_map(|o| match o {
@@ -578,6 +591,10 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
             _ => None,
         })
         .collect();
+    // The next number an unnamed picture's fallback search may start at: every `Picture N`
+    // below it is already taken, and taken names are never released, so a later search that
+    // restarted at its own position would only re-probe names it cannot use.
+    let mut picture_cursor = 1;
     let mut items = Vec::with_capacity(objs.len());
     for (i, o) in objs.iter().enumerate() {
         let id = i + 2;
@@ -587,13 +604,9 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 // The file's own name, so a save doesn't rename the picture (#4544); one made here gets
                 // a name from its position, moved past any name the file already used.
                 let name = if img.name.is_empty() {
-                    let mut n = id - 1;
-                    let mut candidate = format!("Picture {n}");
-                    while !used_names.insert(candidate.clone()) {
-                        n += 1;
-                        candidate = format!("Picture {n}");
-                    }
-                    candidate
+                    let (name, allocated) = generated_name(&mut used_names, "Picture", (id - 1).max(picture_cursor));
+                    picture_cursor = allocated + 1;
+                    name
                 } else {
                     img.name.clone()
                 };
@@ -608,9 +621,10 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
             Obj::Chart(ch, rid) if crate::chartex::is_chartex(ch.kind) => {
                 let placement = to_placement(sheet, &ch.anchor);
                 let (prefix, ns) = crate::chartex::requires(ch.kind);
+                let (chart_name, _) = generated_name(&mut used_names, "Chart", id - 1);
                 let xml = format!(
-                    "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:{prefix}=\"{ns}\" Requires=\"{prefix}\"><xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"Chart {}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>{}<a:graphic><a:graphicData uri=\"http://schemas.microsoft.com/office/drawing/2014/chartex\"><cx:chart xmlns:cx=\"http://schemas.microsoft.com/office/drawing/2014/chartex\" r:id=\"{rid}\"/></a:graphicData></a:graphic></xdr:graphicFrame></mc:Choice><mc:Fallback><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"0\" name=\"\"/><xdr:cNvSpPr><a:spLocks noTextEdit=\"1\"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>This chart type can't be shown by this application.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback></mc:AlternateContent>",
-                    id - 1,
+                    "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:{prefix}=\"{ns}\" Requires=\"{prefix}\"><xdr:graphicFrame macro=\"\"><xdr:nvGraphicFramePr><xdr:cNvPr id=\"{id}\" name=\"{}\"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr>{}<a:graphic><a:graphicData uri=\"http://schemas.microsoft.com/office/drawing/2014/chartex\"><cx:chart xmlns:cx=\"http://schemas.microsoft.com/office/drawing/2014/chartex\" r:id=\"{rid}\"/></a:graphicData></a:graphic></xdr:graphicFrame></mc:Choice><mc:Fallback><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"0\" name=\"\"/><xdr:cNvSpPr><a:spLocks noTextEdit=\"1\"/></xdr:cNvSpPr></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang=\"en-US\"/><a:t>This chart type can't be shown by this application.</a:t></a:r></a:p></xdr:txBody></xdr:sp></mc:Fallback></mc:AlternateContent>",
+                    chart_name,
                     xfrm(&ch.anchor, "xdr:xfrm"),
                     xfrm(&ch.anchor, "a:xfrm")
                 );
@@ -620,7 +634,8 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
             }
             Obj::Chart(ch, rid) => {
                 let placement = to_placement(sheet, &ch.anchor);
-                let mut anchor = CraftAnchor::chart(placement, id as u32, &format!("Chart {}", id - 1), rid);
+                let (chart_name, _) = generated_name(&mut used_names, "Chart", id - 1);
+                let mut anchor = CraftAnchor::chart(placement, id as u32, &chart_name, rid);
                 if let Some(ext) = anchor.object.child_mut("xdr:xfrm").and_then(|x| x.child_mut("a:ext")) {
                     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
                     ext.set_attr("cx", e(ch.anchor.width));
@@ -630,19 +645,22 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
             }
             Obj::Shape(sh) if sh.kind == ShapeKind::Equation => {
                 let placement = to_placement(sheet, &sh.anchor);
+                let (equation_name, _) = generated_name(&mut used_names, "Equation", id - 1);
                 let mut xml = String::new();
-                write_equation(&mut xml, sh, id, theme);
+                write_equation(&mut xml, sh, id, theme, &equation_name);
                 if let Some(object) = parse_craft_fragment(&xml) {
                     items.push(CraftItem::Anchor(CraftAnchor { placement, object, client_data: None }));
                 }
             }
             Obj::Shape(sh) => {
                 let placement = to_placement(sheet, &sh.anchor);
-                let xml = if let Some(xml) = ink::write(sh, theme, id) {
+                let (ink_name, _) = generated_name(&mut used_names, "Ink", id);
+                let xml = if let Some(xml) = ink::write(sh, theme, id, &ink_name) {
                     xml
                 } else {
+                    let (shape_name, _) = generated_name(&mut used_names, "Shape", id - 1);
                     let mut s = String::new();
-                    write_plain_shape(&mut s, sh, id, theme);
+                    write_plain_shape(&mut s, sh, id, theme, &shape_name);
                     s
                 };
                 if let Some(object) = parse_craft_fragment(&xml) {
@@ -655,7 +673,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
     String::from_utf8_lossy(&dr.to_xml()).into_owned()
 }
 
-fn write_plain_shape(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
+fn write_plain_shape(s: &mut String, sh: &Shape, id: usize, theme: &Theme, name: &str) {
     let (prst, tx) = match sh.kind {
         ShapeKind::Rectangle => ("rect", false),
         ShapeKind::RoundedRectangle => ("roundRect", false),
@@ -668,8 +686,8 @@ fn write_plain_shape(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
     };
     let _ = write!(
         s,
-        "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Shape {}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
-        id - 1,
+        "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"{}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
+        name,
         if tx { " txBox=\"1\"" } else { "" },
         xfrm_rot(&sh.anchor, "a:xfrm", sh.rotation)
     );

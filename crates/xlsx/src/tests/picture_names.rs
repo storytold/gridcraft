@@ -107,6 +107,98 @@ fn workbook_with_a_picture_named_picture_2() -> Vec<u8> {
     super::make_zip(&refs)
 }
 
+/// The `name` of every drawing object in a saved drawing part, in order (pictures, charts,
+/// shapes alike).
+fn drawing_names(xlsx: &[u8]) -> Vec<String> {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(xlsx.to_vec())).unwrap();
+    let mut xml = String::new();
+    z.by_name("xl/drawings/drawing1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    xml.split("<xdr:cNvPr ")
+        .skip(1)
+        .map(|c| {
+            let props = c.split('>').next().unwrap_or_default();
+            props.split(" name=\"").nth(1).and_then(|n| n.split('"').next()).unwrap_or_default().to_string()
+        })
+        .filter(|n| !n.is_empty())
+        .collect()
+}
+
+/// A sheet with one picture carrying `picture_name` from its file, plus one chart.
+fn workbook_with_picture_and_chart(picture_name: &str) -> Vec<u8> {
+    use gridcraft_model::{Anchor, Chart, ChartKind, Image, LegendPos, Sheet, Workbook};
+    let mut s = Sheet::new("Data");
+    s.images.push(Image {
+        id: 2,
+        anchor: Anchor::default(),
+        data: std::sync::Arc::new(b"\x89PNG\r\n\x1a\nfake".to_vec()),
+        mime: "image/png".into(),
+        alt: String::new(),
+        name: picture_name.into(),
+    });
+    s.charts.push(Chart {
+        id: 1,
+        kind: ChartKind::BarStacked,
+        anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 480.0, height: 300.0, ..Anchor::default() },
+        title: None,
+        series: Vec::new(),
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        data_table: None,
+        gridlines: true,
+        style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    let wb = Workbook { sheets: vec![std::sync::Arc::new(s)], ..Workbook::default() };
+    write_xlsx(&wb).unwrap()
+}
+
+/// A sheet with one picture carrying `picture_name` from its file, plus one plain shape.
+fn workbook_with_picture_and_shape(picture_name: &str) -> Vec<u8> {
+    use gridcraft_model::{Anchor, Color, Shape, ShapeKind, Sheet, Workbook};
+    let mut s = Sheet::new("Data");
+    s.images.push(gridcraft_model::Image {
+        id: 2,
+        anchor: Anchor::default(),
+        data: std::sync::Arc::new(b"\x89PNG\r\n\x1a\nfake".to_vec()),
+        mime: "image/png".into(),
+        alt: String::new(),
+        name: picture_name.into(),
+    });
+    s.shapes.push(Shape {
+        id: 1,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor { width: 120.0, height: 40.0, ..Anchor::default() },
+        fill: Color::Auto,
+        line: Color::Auto,
+        text: String::new(),
+        format: Default::default(),
+        rotation: 0.0,
+        math: Default::default(),
+    });
+    let wb = Workbook { sheets: vec![std::sync::Arc::new(s)], ..Workbook::default() };
+    write_xlsx(&wb).unwrap()
+}
+
+#[test]
+fn a_generated_chart_name_does_not_collide_with_a_preserved_picture_name() {
+    // The picture is named `Chart 2` in its file; the chart written after it would get
+    // `Chart 2` from its position if generated names did not check preserved names.
+    let saved = workbook_with_picture_and_chart("Chart 2");
+    assert_eq!(drawing_names(&saved), ["Chart 2", "Chart 3"]);
+}
+
+#[test]
+fn a_generated_shape_name_does_not_collide_with_a_preserved_picture_name() {
+    let saved = workbook_with_picture_and_shape("Shape 2");
+    assert_eq!(drawing_names(&saved), ["Shape 2", "Shape 3"]);
+}
+
 #[test]
 fn a_fallback_name_does_not_collide_with_a_preserved_name() {
     let (wb, _) = read_xlsx(&workbook_with_a_picture_named_picture_2()).unwrap();
