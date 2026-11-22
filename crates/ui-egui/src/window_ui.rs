@@ -130,10 +130,26 @@ impl SheetApp {
         }
         if let Some(mut incoming) = active.and_then(|w| self.parked.remove(&w)) {
             self.swap_window_ui(&mut incoming);
+        } else {
+            // A window seen for the first time shows what every window of its workbook shows.
+            self.note_autosave_held();
         }
         self.ui_window = active;
         let session = &self.session;
         self.parked.retain(|w, _| session.window(*w).is_some());
+    }
+
+    /// The information bar's notice of each window of workbook `doc` that has its interface state
+    /// (the current window, and the parked ones), for `f` to change.
+    pub(crate) fn notices_of(&mut self, doc: u64, mut f: impl FnMut(&mut Option<Notice>)) {
+        let windows: Vec<u64> = self.session.windows().iter().filter(|w| w.doc_uid == doc).map(|w| w.id).collect();
+        for w in windows {
+            if self.ui_window == Some(w) {
+                f(&mut self.notice);
+            } else if let Some(parked) = self.parked.get_mut(&w) {
+                f(&mut parked.notice);
+            }
+        }
     }
 
     /// Activates window `id` (it becomes the most recently active) with its interface state.

@@ -379,3 +379,43 @@ fn a_script_gets_the_refusal_and_no_question() {
     assert_eq!(dialog(&h), None);
     assert_eq!(std::fs::read(&path).unwrap(), newer);
 }
+
+/// The line that AutoSave stopped shows in every window of the workbook, one already open and one
+/// opened after it stopped, and goes from each once a save went through.
+#[test]
+fn the_autosave_line_shows_in_every_window_of_the_workbook() {
+    let dir = folder("autosave-windows");
+    let path = dir.0.join("Budget.xlsx");
+    let picker = Arc::new(Mutex::new(Picker::default()));
+    let mut h = opened(&path, &picker);
+    h.state_mut().ui.autosave = true;
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(2);
+    let first = h.state().session.windows()[0].id;
+    let second = h.state().session.windows()[1].id;
+    h.state_mut().enter_window(first);
+    h.run_steps(2);
+    let line = |h: &Harness| h.state().notice.as_ref().is_some_and(|n| n.text.starts_with("AutoSave is off for this workbook"));
+
+    replace_by_rename(&path, "newer from elsewhere");
+    set(&mut h, "A1", "not autosaved");
+    h.state_mut().grid.last_autosave = -1e12;
+    h.run_steps(2);
+    assert!(line(&h), "the window AutoSave ran in");
+    h.state_mut().enter_window(second);
+    h.run_steps(2);
+    assert!(line(&h), "the other window of the workbook");
+    h.state_mut().run("view.newWindow", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(line(&h), "a window opened after AutoSave stopped");
+
+    // Overwrite from one window: the line goes from each.
+    key(&mut h, Key::S, CTRL);
+    click(&mut h, "Overwrite");
+    assert!(!line(&h));
+    for w in [first, second] {
+        h.state_mut().enter_window(w);
+        h.run_steps(2);
+        assert!(!line(&h), "window {w}");
+    }
+}

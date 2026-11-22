@@ -74,14 +74,27 @@ impl SheetApp {
     }
 
     /// AutoSave met the active workbook's file changed on disk: it stops for that workbook (it asks
-    /// nothing and tries no more), and the information bar says why.
+    /// nothing and tries no more), and the information bar of each of its windows says why.
     pub(super) fn stop_autosave(&mut self) {
         let Some(doc) = self.session.active().map(|d| d.uid) else { return };
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
         self.autosave_held.retain(|d| open.contains(d) && *d != doc);
         self.autosave_held.push(doc);
-        let text = self.ui.language.tr(AUTOSAVE_STOPPED).to_string();
-        self.notice = Some(Notice { text, kind: NoticeKind::Warning, action: None });
+        let notice = self.autosave_stopped_notice();
+        self.notices_of(doc, |n| *n = Some(notice.clone()));
+    }
+
+    /// The information bar's line for a workbook AutoSave stopped for.
+    fn autosave_stopped_notice(&self) -> Notice {
+        Notice { text: self.ui.language.tr(AUTOSAVE_STOPPED).to_string(), kind: NoticeKind::Warning, action: None }
+    }
+
+    /// A window shown for the first time: when AutoSave stopped for its workbook, its information
+    /// bar says so, as the workbook's other windows do.
+    pub(crate) fn note_autosave_held(&mut self) {
+        if self.session.active().is_some_and(|d| self.autosave_held.contains(&d.uid)) && self.notice.is_none() {
+            self.notice = Some(self.autosave_stopped_notice());
+        }
     }
 
     /// After a save of the active workbook that answered `r`: once its own file was written
@@ -96,8 +109,10 @@ impl SheetApp {
         }
         self.autosave_held.retain(|d| *d != doc);
         let text = self.ui.language.tr(AUTOSAVE_STOPPED).to_string();
-        if self.notice.as_ref().is_some_and(|n| n.text == text) {
-            self.notice = None;
-        }
+        self.notices_of(doc, |n| {
+            if n.as_ref().is_some_and(|n| n.text == text) {
+                *n = None;
+            }
+        });
     }
 }
