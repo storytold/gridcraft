@@ -76,10 +76,12 @@ impl SheetApp {
     /// AutoSave met the active workbook's file changed on disk: it stops for that workbook (it asks
     /// nothing and tries no more), and the information bar of each of its windows says why.
     pub(super) fn stop_autosave(&mut self) {
-        let Some(doc) = self.session.active().map(|d| d.uid) else { return };
+        let Some(d) = self.session.active() else { return };
+        let hold = crate::AutosaveHold { doc: d.uid, disk: d.disk.clone(), saved: d.saved.clone() };
+        let doc = hold.doc;
         let open: Vec<u64> = self.session.documents().iter().map(|d| d.uid).collect();
-        self.autosave_held.retain(|d| open.contains(d) && *d != doc);
-        self.autosave_held.push(doc);
+        self.autosave_held.retain(|h| open.contains(&h.doc) && h.doc != doc);
+        self.autosave_held.push(hold);
         let notice = self.autosave_stopped_notice();
         self.notices_of(doc, |n| *n = Some(notice.clone()));
     }
@@ -92,27 +94,32 @@ impl SheetApp {
     /// A window shown for the first time: when AutoSave stopped for its workbook, its information
     /// bar says so, as the workbook's other windows do.
     pub(crate) fn note_autosave_held(&mut self) {
-        if self.session.active().is_some_and(|d| self.autosave_held.contains(&d.uid)) && self.notice.is_none() {
+        if self.session.active().is_some_and(|d| self.autosave_held.iter().any(|h| h.doc == d.uid)) && self.notice.is_none() {
             self.notice = Some(self.autosave_stopped_notice());
         }
     }
 
-    /// After a save of the active workbook that answered `r`: once its own file was written
-    /// (Overwrite, or Save As to another file that is now its own), AutoSave goes on for it, and
-    /// the line that said it stopped goes.
-    pub(super) fn resume_autosave(&mut self, r: &Json) {
-        let Some(d) = self.session.active() else { return };
-        let doc = d.uid;
-        let own = r.get("path").and_then(Json::as_str).is_some_and(|p| d.path.as_deref() == Some(p));
-        if !own || !self.autosave_held.contains(&doc) {
-            return;
-        }
-        self.autosave_held.retain(|d| *d != doc);
-        let text = self.ui.language.tr(AUTOSAVE_STOPPED).to_string();
-        self.notices_of(doc, |n| {
-            if n.as_ref().is_some_and(|n| n.text == text) {
-                *n = None;
+    /// AutoSave goes on for each workbook it stopped for whose own file was written since, whoever
+    /// wrote it (Overwrite, a script's or the control channel's save, Save As to a file that is
+    /// now its own): the file's stamp or the saved snapshot changed. The line that said it stopped
+    /// goes from each of its windows. A workbook that was closed is dropped.
+    pub(super) fn resume_autosave(&mut self) {
+        let mut resumed = Vec::new();
+        self.autosave_held.retain(|h| {
+            let Some(d) = self.session.documents().iter().find(|d| d.uid == h.doc) else { return false };
+            let written = d.disk != h.disk || !std::sync::Arc::ptr_eq(&d.saved, &h.saved);
+            if written {
+                resumed.push(h.doc);
             }
+            !written
         });
+        let text = self.ui.language.tr(AUTOSAVE_STOPPED).to_string();
+        for doc in resumed {
+            self.notices_of(doc, |n| {
+                if n.as_ref().is_some_and(|n| n.text == text) {
+                    *n = None;
+                }
+            });
+        }
     }
 }

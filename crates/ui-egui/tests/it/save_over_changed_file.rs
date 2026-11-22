@@ -419,3 +419,31 @@ fn the_autosave_line_shows_in_every_window_of_the_workbook() {
         assert!(!line(&h), "window {w}");
     }
 }
+
+/// AutoSave goes on after any save of the workbook's own file that went through, also one a script
+/// ran straight on the session (no question, no window): the line goes, and the next change is
+/// saved by AutoSave.
+#[test]
+fn autosave_goes_on_after_a_scripts_save_of_the_own_file() {
+    let dir = folder("autosave-script");
+    let path = dir.0.join("Budget.xlsx");
+    let picker = Arc::new(Mutex::new(Picker::default()));
+    let mut h = opened(&path, &picker);
+    h.state_mut().ui.autosave = true;
+    let due = |h: &mut Harness| {
+        h.state_mut().grid.last_autosave = -1e12;
+        h.run_steps(2);
+    };
+    replace_by_rename(&path, "newer from elsewhere");
+    set(&mut h, "A1", "mine");
+    due(&mut h);
+    assert!(h.state().notice.as_ref().is_some_and(|n| n.text.starts_with("AutoSave is off for this workbook")));
+
+    h.state_mut().session.run("file.save", json!({"overwrite": true})).unwrap();
+    h.run_steps(2);
+    assert_eq!(a1_on_disk(&path), text("mine"));
+    assert!(h.state().notice.is_none(), "{:?}", h.state().notice.as_ref().map(|n| &n.text));
+    set(&mut h, "A1", "autosaved again");
+    due(&mut h);
+    assert_eq!(a1_on_disk(&path), text("autosaved again"));
+}

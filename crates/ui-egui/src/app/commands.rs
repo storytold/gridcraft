@@ -153,11 +153,7 @@ impl SheetApp {
                 Some(params) if super::changed_on_disk::is_changed_on_disk(&e) => self.ask_changed_on_disk(params, None),
                 _ => self.alert(e),
             },
-            Ok(r) => {
-                if save.is_some() {
-                    self.resume_autosave(&r);
-                }
-            }
+            Ok(_) => {}
         }
     }
 
