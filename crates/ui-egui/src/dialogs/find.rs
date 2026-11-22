@@ -1,3 +1,5 @@
+use egui::Modifiers;
+
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
 
@@ -6,6 +8,19 @@ use super::{Dialog, Json, Key, SheetApp, json};
 /// report a no-result line there instead of a message box, while other errors - a missing workbook, a failing Replace All - keep the message-box path.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     let lang = app.ui.language;
+    // The dialog stays open over the sheet, so Undo and Redo reach the workbook (a Replace All
+    // is undone without closing it first); inside a text box they edit the typed text instead.
+    // A modal message blocks workbook shortcuts; otherwise use the grid's own shortcut table.
+    if app.message.is_none() && !ui.ctx().text_edit_focused() {
+        let pressed = ui.input_mut(|i| {
+            [(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z), (Modifiers::COMMAND, Key::Z), (Modifiers::COMMAND, Key::Y)]
+                .into_iter()
+                .find(|&(m, key)| i.consume_key(m, key))
+        });
+        if let Some((m, key)) = pressed {
+            crate::ribbon::shortcut(app, key, m);
+        }
+    }
     ui.horizontal(|ui| {
         // d.tab keeps English values for the control channel; the interface language shows the label.
         for (key, tab) in [("Find tab|Find", "Find"), ("Replace tab|Replace", "Replace")] {
