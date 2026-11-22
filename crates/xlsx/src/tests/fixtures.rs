@@ -95,6 +95,8 @@ fn print_area_parses_a_quoted_sheet_name_with_a_comma() {
     assert_eq!(parse_print_area("'Quarter, East'!$A$1:$B$3"), RangeRef::parse("A1:B3"));
     assert_eq!(parse_print_area("'Quarter, East'!$A$1:$B$3,'Quarter, East'!$D$1:$E$3"), RangeRef::parse("A1:B3"));
     assert_eq!(parse_print_area("'Quarter''s, East'!$A$1"), RangeRef::parse("A1"));
+    assert_eq!(parse_print_area("'a!b, c'!$A$1:$B$2"), RangeRef::parse("A1:B2"));
+    assert_eq!(parse_print_area("A1:B3,D1:E5"), RangeRef::parse("A1:B3"));
 }
 
 #[test]
