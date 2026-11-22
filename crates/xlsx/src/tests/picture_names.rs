@@ -69,6 +69,53 @@ fn picture_names(xlsx: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// A workbook whose one sheet has two pictures: the first is named `Picture 2` in the file
+/// (the fallback name the second, unnamed picture would get from its position), the second
+/// has no name.
+fn workbook_with_a_picture_named_picture_2() -> Vec<u8> {
+    let drawing = format!(
+        r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">{}{}</xdr:wsDr>"#,
+        pic(2, Some("Picture 2"), "rId1", 1),
+        pic(5, None, "rId2", 8),
+    );
+    let image = |n: u32| {
+        format!(
+            r#"<Relationship Id="rId{n}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image{n}.png"/>"#
+        )
+    };
+    let drels =
+        format!(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}{}</Relationships>"#, image(1), image(2));
+    let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let bytes = minimal(
+        r#"<sheetData/><drawing r:id="rId1"/>"#,
+        &[("xl/worksheets/_rels/sheet1.xml.rels", srels), ("xl/drawings/drawing1.xml", &drawing), ("xl/drawings/_rels/drawing1.xml.rels", &drels)],
+        "",
+        "",
+    );
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut parts: Vec<(String, Vec<u8>)> = vec![];
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut d = vec![];
+        f.read_to_end(&mut d).unwrap();
+        parts.push((f.name().to_string(), d));
+    }
+    for n in 1..=2u8 {
+        parts.push((format!("xl/media/image{n}.png"), [b"\x89PNG\r\n\x1a\nfake".as_slice(), &[n]].concat()));
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    super::make_zip(&refs)
+}
+
+#[test]
+fn a_fallback_name_does_not_collide_with_a_preserved_name() {
+    let (wb, _) = read_xlsx(&workbook_with_a_picture_named_picture_2()).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().images.len(), 2);
+    let saved = write_xlsx(&wb).unwrap();
+    // The preserved name stays, and the unnamed picture gets a different fallback name.
+    assert_eq!(picture_names(&saved), ["Picture 2", "Picture 3"]);
+}
+
 #[test]
 fn a_save_keeps_each_pictures_name() {
     let (wb, _) = read_xlsx(&workbook_with_named_pictures()).unwrap();

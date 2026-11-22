@@ -569,6 +569,15 @@ pub enum Obj<'a> {
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
 pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
+    // Names the file already gave its pictures; a fallback name must not reuse one of them, or a
+    // name-based reference could no longer tell two pictures apart.
+    let mut used_names: std::collections::HashSet<String> = objs
+        .iter()
+        .filter_map(|o| match o {
+            Obj::Image(img, _) if !img.name.is_empty() => Some(img.name.clone()),
+            _ => None,
+        })
+        .collect();
     let mut items = Vec::with_capacity(objs.len());
     for (i, o) in objs.iter().enumerate() {
         let id = i + 2;
@@ -576,8 +585,18 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
             Obj::Image(img, rid) => {
                 let placement = to_placement(sheet, &img.anchor);
                 // The file's own name, so a save doesn't rename the picture (#4544); one made here gets
-                // a name from its position.
-                let name = if img.name.is_empty() { format!("Picture {}", id - 1) } else { img.name.clone() };
+                // a name from its position, moved past any name the file already used.
+                let name = if img.name.is_empty() {
+                    let mut n = id - 1;
+                    let mut candidate = format!("Picture {n}");
+                    while !used_names.insert(candidate.clone()) {
+                        n += 1;
+                        candidate = format!("Picture {n}");
+                    }
+                    candidate
+                } else {
+                    img.name.clone()
+                };
                 let mut anchor = CraftAnchor::picture(placement, id as u32, &name, &img.alt, rid);
                 if let Some(ext) = anchor.object.child_mut("xdr:spPr").and_then(|sp| sp.child_mut("a:xfrm")).and_then(|x| x.child_mut("a:ext")) {
                     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
