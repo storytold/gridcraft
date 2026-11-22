@@ -618,6 +618,9 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         } else {
             gridcraft_engine::Mode::Edit
         };
+    } else if app.session.mode == gridcraft_engine::Mode::Point && !ed.can_point() {
+        // The caret left the pointed reference without a text change (an arrow in Edit mode).
+        app.session.mode = if ed.enter_mode { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
     }
     show_editor_suggestions(ui, EditorSuggestion { app, id, resp: &resp, ed: &mut ed, galley: &output.galley, tokens: &t, mine });
     let lines = output.galley.rows.len().max(1);
@@ -671,18 +674,12 @@ fn editor_shortcuts(
     outcome.cancel = cancel;
     outcome.to_python |= py_trigger;
     // F2 switches the in-cell edit between Edit mode (arrows move the caret) and Enter mode
-    // (arrows point at cells), as in Excel. An F2 pressed before an arrow in the same frame
-    // applies first, so that arrow already follows the new mode.
-    let (f2_before, f2_after) = editor_f2_presses(ui, ed);
-    for _ in 0..f2_before {
-        toggle_enter_mode(app, ed);
-    }
-    let (action, arrow) = editor_arrow_keys(app, ui, ed, outcome.action);
+    // (arrows point at cells), as in Excel. F2 and arrow presses apply in input order, so each
+    // arrow follows the mode the F2 presses before it chose.
+    let (action, arrow) =
+        if editor_has_f2(ui, ed) { editor_f2_and_arrow_keys(app, ui, ed, outcome.action) } else { editor_arrow_keys(app, ui, ed, outcome.action) };
     outcome.action = action;
     outcome.arrow = arrow;
-    for _ in 0..f2_after {
-        toggle_enter_mode(app, ed);
-    }
     editor_other_shortcuts(app, ui, id, ed);
     outcome
 }
@@ -746,66 +743,135 @@ fn editor_arrow_keys(
     app: &mut SheetApp,
     ui: &mut egui::Ui,
     ed: &mut crate::editor::EditState,
-    mut action: Option<EditorAction>,
+    action: Option<EditorAction>,
 ) -> (Option<EditorAction>, bool) {
     // The modifiers come with the key event: an arrow pressed and released within one frame (a
     // control client's or an automation tool's keystroke) has already lost them from `i.modifiers`.
-    let arrow = ui.input(|i| {
-        i.events.iter().find_map(|e| match e {
-            egui::Event::Key { key: key @ (Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight), pressed: true, modifiers, .. } => {
-                Some((*key, *modifiers))
-            }
-            _ => None,
-        })
-    });
-    let (up, down, left, right) = (
-        arrow.is_some_and(|(k, _)| k == Key::ArrowUp),
-        arrow.is_some_and(|(k, _)| k == Key::ArrowDown),
-        arrow.is_some_and(|(k, _)| k == Key::ArrowLeft),
-        arrow.is_some_and(|(k, _)| k == Key::ArrowRight),
-    );
-    let (shift, jump) = arrow.map_or((false, false), |(_, m)| (m.shift, m.command));
+    let arrow = ui.input(|i| i.events.iter().find_map(arrow_press));
+    let Some((key, modifiers)) = arrow else { return (action, false) };
+    match editor_arrow(app, ed, key, modifiers) {
+        ArrowUse::Autocomplete => {
+            ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+                i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+            });
+            (action, false)
+        }
+        ArrowUse::Caret => (action, false),
+        ArrowUse::Pointed => {
+            ui.input_mut(|i| {
+                for key in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight] {
+                    for modifiers in
+                        [egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::COMMAND, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT]
+                    {
+                        i.consume_key(modifiers, key);
+                    }
+                }
+            });
+            (action, false)
+        }
+        ArrowUse::Commit(commit) => (Some(commit), true),
+    }
+}
+
+/// An arrow key press, with the modifiers it came with.
+fn arrow_press(e: &egui::Event) -> Option<(Key, egui::Modifiers)> {
+    match e {
+        egui::Event::Key { key: key @ (Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight), pressed: true, modifiers, .. } => {
+            Some((*key, *modifiers))
+        }
+        _ => None,
+    }
+}
+
+/// What one arrow press did in the editor.
+enum ArrowUse {
+    /// It moved the autocomplete choice.
+    Autocomplete,
+    /// Nothing here: the text field moves the caret with it.
+    Caret,
+    /// It moved the pointed reference.
+    Pointed,
+    /// It commits the edit and moves the selection.
+    Commit(EditorAction),
+}
+
+/// Applies one arrow press: the autocomplete list takes Up and Down, Enter mode points with it
+/// or commits, and Edit mode leaves it to the caret.
+fn editor_arrow(app: &mut SheetApp, ed: &mut crate::editor::EditState, key: Key, m: egui::Modifiers) -> ArrowUse {
+    let (up, down) = (key == Key::ArrowUp, key == Key::ArrowDown);
     if (up || down) && !ed.autocomplete.is_empty() {
-        ui.input_mut(|i| {
-            i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
-            i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
-        });
         let n = ed.autocomplete.len();
         ed.ac_index = if down { (ed.ac_index + 1) % n } else { (ed.ac_index + n - 1) % n };
-        return (action, false);
+        return ArrowUse::Autocomplete;
     }
-    if !ed.enter_mode || (!up && !down && !left && !right) || ed.from_formula_bar {
-        return (action, false);
+    if !ed.enter_mode || ed.from_formula_bar {
+        return ArrowUse::Caret;
     }
-    let (dr, dc) = if up {
-        (-1, 0)
-    } else if down {
-        (1, 0)
-    } else if left {
-        (0, -1)
-    } else {
-        (0, 1)
+    let (dr, dc) = match key {
+        Key::ArrowUp => (-1, 0),
+        Key::ArrowDown => (1, 0),
+        Key::ArrowLeft => (0, -1),
+        _ => (0, 1),
     };
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
     let dc = if rtl { -dc } else { dc };
     if ed.can_point() {
         // Ctrl+arrow (⌘arrow) jumps the pointed cell to the edge of its data, Ctrl+Shift+arrow
         // extends the pointed range there, as the same keys do on the selection.
-        ui.input_mut(|i| {
-            for key in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight] {
-                for modifiers in
-                    [egui::Modifiers::NONE, egui::Modifiers::SHIFT, egui::Modifiers::COMMAND, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT]
-                {
-                    i.consume_key(modifiers, key);
+        crate::grid::point_move(app, ed, dr, dc, m.shift, m.command);
+        ArrowUse::Pointed
+    } else {
+        ArrowUse::Commit((dr, dc, false, false))
+    }
+}
+
+/// Whether the in-cell editor has an F2 press this frame.
+fn editor_has_f2(ui: &egui::Ui, ed: &crate::editor::EditState) -> bool {
+    !ed.from_formula_bar && ui.input(|i| i.events.iter().any(is_f2_press))
+}
+
+fn is_f2_press(e: &egui::Event) -> bool {
+    matches!(e, egui::Event::Key { key: Key::F2, pressed: true, modifiers, .. } if modifiers.is_none())
+}
+
+/// F2 and arrow presses in input order: each F2 flips the mode and each arrow follows the mode
+/// it finds. The presses used here are removed; an arrow left to the caret stays for the text
+/// field. An arrow that commits ends the edit, so the presses after it are dropped.
+fn editor_f2_and_arrow_keys(
+    app: &mut SheetApp,
+    ui: &mut egui::Ui,
+    ed: &mut crate::editor::EditState,
+    mut action: Option<EditorAction>,
+) -> (Option<EditorAction>, bool) {
+    let events = ui.input(|i| i.events.clone());
+    let mut used = Vec::new();
+    let mut committed = false;
+    for (n, e) in events.iter().enumerate() {
+        if is_f2_press(e) {
+            used.push(n);
+            if !committed {
+                toggle_enter_mode(app, ed);
+            }
+        } else if let Some((key, modifiers)) = arrow_press(e)
+            && !committed
+        {
+            match editor_arrow(app, ed, key, modifiers) {
+                ArrowUse::Caret => {}
+                ArrowUse::Autocomplete | ArrowUse::Pointed => used.push(n),
+                ArrowUse::Commit(commit) => {
+                    action = Some(commit);
+                    committed = true;
                 }
             }
-        });
-        crate::grid::point_move(app, ed, dr, dc, shift, jump);
-        (action, false)
-    } else {
-        action = Some((dr, dc, false, false));
-        (action, true)
+        }
     }
+    ui.input_mut(|i| {
+        for n in used.into_iter().rev() {
+            i.events.remove(n);
+        }
+    });
+    (action, committed)
 }
 
 fn editor_other_shortcuts(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, ed: &mut crate::editor::EditState) {
@@ -882,34 +948,6 @@ fn python_editor(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, width: f32
         None => {}
     }
     info
-}
-
-/// The F2 presses in the in-cell editor this frame (consuming them): how many came before the
-/// frame's first arrow press, and how many after it. Each press toggles the mode once.
-fn editor_f2_presses(ui: &mut egui::Ui, ed: &crate::editor::EditState) -> (usize, usize) {
-    if ed.from_formula_bar {
-        return (0, 0);
-    }
-    let (mut before, mut after, mut arrow_seen) = (0, 0, false);
-    ui.input(|i| {
-        for e in &i.events {
-            match e {
-                egui::Event::Key { key: Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, pressed: true, .. } => arrow_seen = true,
-                egui::Event::Key { key: Key::F2, pressed: true, modifiers, .. } if modifiers.is_none() => {
-                    if arrow_seen {
-                        after += 1;
-                    } else {
-                        before += 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-    });
-    if before + after > 0 {
-        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F2));
-    }
-    (before, after)
 }
 
 /// Flips Edit and Enter mode. The pointed reference stays, so pointing resumes from it while the
