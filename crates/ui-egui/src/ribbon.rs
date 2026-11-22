@@ -134,8 +134,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let tab = app.ui.ribbon_tab.clone();
                 let view_w = ui.available_width();
                 let row_id = ui.scope_id().with(("ribbon_row", tab.as_str(), rtl));
-                let (content_w, from_right, last_over) = ui.data(|d| d.get_temp::<(f32, f32, f32)>(row_id)).unwrap_or((0.0, 0.0, 0.0));
-                let row_w = content_w.max(view_w);
+                let width_id = ui.scope_id().with(("ribbon_rtl_width", tab.as_str(), app.ui.language.code(), ui.ctx().pixels_per_point().to_bits()));
+                let (from_right, last_over) = ui.data(|d| d.get_temp::<(f32, f32)>(row_id)).unwrap_or((0.0, 0.0));
+                let cached_w = if rtl { ui.data(|d| d.get_temp::<f32>(width_id)) } else { None };
                 let mut area = egui::ScrollArea::horizontal()
                     .id_salt(("ribbon_scroll", tab.as_str(), rtl))
                     .stick_to_right(rtl)
@@ -149,9 +150,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     area = area.horizontal_scroll_offset(x);
                     applied_target = true;
                 }
-                let mut measured = 0.0;
                 let scroll = area.show(ui, |ui| {
-                    let mut body = |ui: &mut Ui| {
+                    let body = |ui: &mut Ui| {
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),
@@ -170,23 +170,24 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                         }
                     };
                     if rtl {
-                        // Lay out groups right-to-left from `origin.x + row_w` with generous leftward room so
-                        // Frame 0 (before `row_w` is known) never hits `max_rect.min.x` (`fast_midpoint` jump),
-                        // and measure `ui.min_rect().width()` from the child UI directly so `row_w` never ratchets.
-                        let origin = ui.min_rect().min;
-                        let h = ui.available_size_before_wrap().y;
-                        let right = origin.x + row_w;
-                        let span = row_w.max(10_000.0);
-                        let layout_rect = Rect::from_min_max(pos2(right - span, origin.y), pos2(right, origin.y + h));
-                        measured = ui
-                            .scope_builder(
+                        if let Some(content_w) = cached_w {
+                            // Lay out groups right-to-left within the exact cached content width (`[origin.x, origin.x + row_w]`)
+                            // without feeding `right_to_left`'s `min_rect` back across frames.
+                            let row_w = content_w.max(view_w);
+                            let origin = ui.min_rect().min;
+                            let h = ui.available_size_before_wrap().y;
+                            let layout_rect = Rect::from_min_max(origin, pos2(origin.x + row_w, origin.y + h));
+                            ui.scope_builder(
                                 egui::UiBuilder::new().max_rect(layout_rect).layout(egui::Layout::right_to_left(egui::Align::Center)),
-                                |ui| {
-                                    body(ui);
-                                    ui.min_rect().width()
-                                },
-                            )
-                            .inner;
+                                body,
+                            );
+                        } else {
+                            // Measure the tab's natural width once in LTR on the first frame so the RTL layout
+                            // never uses a huge placeholder span or a per-frame width feedback loop.
+                            let measured = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), body).response.rect.width();
+                            ui.data_mut(|d| d.insert_temp(width_id, measured));
+                            ui.ctx().request_repaint();
+                        }
                     } else {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), body);
                     }
@@ -207,9 +208,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     } else {
                         ((last_over - scroll.state.clamped_offset().x).max(0.0), last_over)
                     };
-                    ui.data_mut(|d| d.insert_temp(row_id, (measured, next_from_right, next_over)));
+                    ui.data_mut(|d| d.insert_temp(row_id, (next_from_right, next_over)));
                 }
-                scroll_arrows(ui, &t, tab.as_str(), rtl, row_id, measured, scroll);
+                scroll_arrows(ui, &t, tab.as_str(), rtl, row_id, scroll);
             });
         });
 }
@@ -253,7 +254,7 @@ impl RibbonOverflow {
 
 /// When the tab's groups are wider than the card, arrows at its edges scroll them (horizontal wheel or
 /// trackpad input over the card still does too).
-fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, rtl: bool, row_id: egui::Id, measured: f32, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
+fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, rtl: bool, row_id: egui::Id, scroll: egui::scroll_area::ScrollAreaOutput<()>) {
     let inner = scroll.inner_rect;
     let max = (scroll.content_size.x - inner.width()).max(0.0);
     let overflow = RibbonOverflow {
@@ -293,7 +294,7 @@ fn scroll_arrows(ui: &mut Ui, t: &Tokens, tab: &str, rtl: bool, row_id: egui::Id
         let frame = ui.ctx().cumulative_frame_nr();
         ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab, rtl), (frame, x)));
         if rtl {
-            ui.data_mut(|d| d.insert_temp(row_id, (measured, (max - x).max(0.0), max)));
+            ui.data_mut(|d| d.insert_temp(row_id, ((max - x).max(0.0), max)));
         }
         ui.ctx().request_repaint();
     }

@@ -76,6 +76,8 @@ fn rtl_overflowing_tab_starts_at_right_edge_and_scrolls_left() {
     assert!(o.overflows(), "Home overflows 700 px in Hebrew RTL");
     let max = (o.content - o.visible).max(0.0);
     assert!(o.offset > 0.0 && (o.offset - max).abs() <= 1.0, "expected right-edge start offset ~{max}, got {}", o.offset);
+    let paste = h.get_by_label("Paste").rect();
+    assert!(paste.right() > o.visible * 0.5 && paste.right() <= 700.0, "RTL Paste group starts on the right edge: {paste:?}");
     assert!(h.query_by_label("Scroll ribbon right").is_none(), "already flush at reading-start right edge");
     h.get_by_label("Scroll ribbon left").click();
     h.run_steps(3);
