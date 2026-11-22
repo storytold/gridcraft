@@ -79,7 +79,43 @@ fn rtl_overflowing_tab_starts_at_right_edge_and_scrolls_left() {
     assert!(h.query_by_label("Scroll ribbon right").is_none(), "already flush at reading-start right edge");
     h.get_by_label("Scroll ribbon left").click();
     h.run_steps(3);
-    assert!(RibbonOverflow::get(&h.ctx).offset < o.offset, "Scroll ribbon left moved offset leftward");
+    let after_left = RibbonOverflow::get(&h.ctx).offset;
+    assert!(after_left < o.offset, "Scroll ribbon left moved offset leftward (was {}, now {after_left})", o.offset);
+}
+
+#[test]
+fn switching_ltr_to_rtl_initializes_ribbon_at_right_edge() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut app = crate::common::app(session);
+    app.ui.ribbon_tab = "Home".into();
+    let mut h = crate::common::builder().allow_missing_glyphs().with_size(vec2(700.0, 700.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let ltr = RibbonOverflow::get(&h.ctx);
+    assert!(ltr.overflows(), "Home overflows 700 px in English LTR");
+    assert_eq!(ltr.offset, 0.0, "LTR starts flush at the left edge");
+
+    h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::He;
+    h.run_steps(4);
+    let rtl = RibbonOverflow::get(&h.ctx);
+    assert!(rtl.overflows(), "Home overflows 700 px in Hebrew RTL");
+    let max = (rtl.content - rtl.visible).max(0.0);
+    assert!(rtl.offset > 0.0 && (rtl.offset - max).abs() <= 1.0, "expected RTL reading-start right-edge offset ~{max}, got {}", rtl.offset);
+    assert!(h.query_by_label("Scroll ribbon right").is_none(), "already flush at reading-start right edge");
+
+    h.get_by_label("Scroll ribbon left").click();
+    h.run_steps(3);
+    assert!(RibbonOverflow::get(&h.ctx).offset < rtl.offset, "Scroll ribbon left moves RTL ribbon leftward after language switch");
+
+    h.state_mut().ui.language = gridcraft_ui_egui::i18n::Language::En;
+    h.run_steps(4);
+    assert_eq!(RibbonOverflow::get(&h.ctx).offset, 0.0, "switching back to LTR keeps LTR scroll state at offset 0");
 }
 
 #[test]
