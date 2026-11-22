@@ -93,6 +93,13 @@ impl FileStamp {
     }
 }
 
+/// Whether `a` and `b` name the same file: spelled the same, or, where both exist, resolving to the
+/// same file (`./Budget.xlsx`, a path through `..`, a symbolic link). A path that does not exist or
+/// cannot be resolved is the same only as its own spelling.
+pub(crate) fn same_file(a: &str, b: &str) -> bool {
+    a == b || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
 /// A file on disk against the [`FileStamp`] it had when it was read or written ([`FileStamp::compare`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OnDisk {

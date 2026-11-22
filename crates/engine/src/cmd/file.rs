@@ -148,8 +148,9 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }
-    // The workbook's own file now holds what was just written (a CSV saved over its own file too).
-    if d.path.as_deref() == Some(path.as_str()) {
+    // The workbook's own file now holds what was just written (a CSV saved over its own file too),
+    // however the path was spelled.
+    if d.path.as_deref().is_some_and(|own| crate::io::same_file(own, &path)) {
         d.disk = Some(crate::io::FileStamp::of(&bytes));
     }
     Ok(json!({"path": path, "bytes": bytes.len()}))
@@ -161,7 +162,8 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
 /// again, or a file that is gone, is no reason. The refusal asks: `overwrite: true` replaces the
 /// file anyway.
 fn refuse_changed_on_disk(s: &Session, path: &str) -> Result<()> {
-    let Some(d) = s.active().filter(|d| d.path.as_deref() == Some(path)) else { return Ok(()) };
+    // The workbook's own file however the path is spelled (`./Budget.xlsx`, a symbolic link).
+    let Some(d) = s.active().filter(|d| d.path.as_deref().is_some_and(|own| crate::io::same_file(own, path))) else { return Ok(()) };
     let Some(stamp) = &d.disk else { return Ok(()) };
     if stamp.compare(path)? != crate::io::OnDisk::Changed {
         return Ok(());
@@ -233,7 +235,7 @@ fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
 /// the sheet as CSV or HTML, or the PDF a Save writes for a `.pdf` file): the file holds what this
 /// session wrote, so the next Save finds no change on disk ([`crate::DocState::disk`]).
 pub(crate) fn renew_stamp(s: &mut Session, path: &str, bytes: &[u8]) {
-    if let Some(d) = s.active_mut().filter(|d| d.path.as_deref() == Some(path)) {
+    if let Some(d) = s.active_mut().filter(|d| d.path.as_deref().is_some_and(|own| crate::io::same_file(own, path))) {
         d.disk = Some(crate::io::FileStamp::of(bytes));
     }
 }

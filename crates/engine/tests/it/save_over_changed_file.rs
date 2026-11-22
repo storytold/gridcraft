@@ -231,3 +231,42 @@ fn an_export_over_the_workbooks_own_file_is_no_reason_to_ask() {
     let r = s.execute("file.save", json!({}));
     assert!(!refused(&r), "{r:?}");
 }
+
+/// The workbook's own file is recognised however the path to it is spelled: with `.` or `..` in
+/// it, or (on Unix) through a symbolic link. Changed on disk, a save to it is refused; with
+/// `overwrite` it is written, and the next save goes through. Another file in the same folder is
+/// no reason to ask.
+#[test]
+fn the_own_file_is_recognised_however_its_path_is_spelled() {
+    let dir = folder("spelling");
+    std::fs::create_dir_all(dir.0.join("sub")).unwrap();
+    let mut spellings = vec![dir.0.join(".").join("Budget.xlsx"), dir.0.join("sub").join("..").join("Budget.xlsx")];
+    #[cfg(unix)]
+    {
+        let link = dir.0.join("link.xlsx");
+        std::os::unix::fs::symlink(dir.0.join("Budget.xlsx"), &link).unwrap();
+        spellings.push(link);
+    }
+    for other in spellings {
+        let path = dir.0.join("Budget.xlsx");
+        let mut s = opened(&path);
+        let newer = workbook_bytes(&dir.0, "newer.xlsx", "newer from elsewhere");
+        replace_by_rename(&path, &newer);
+        s.execute("cell.set", json!({"cell": "A1", "input": "mine"})).unwrap();
+        let r = s.execute("file.saveAs", json!({"path": other}));
+        assert!(refused(&r), "{}: {r:?}", other.display());
+        assert_eq!(std::fs::read(&path).unwrap(), newer, "{}: the newer file is untouched", other.display());
+        s.execute("file.saveAs", json!({"path": other, "overwrite": true})).unwrap();
+        assert_eq!(a1_on_disk(&other), text("mine"), "{}", other.display());
+        s.execute("cell.set", json!({"cell": "A1", "input": "mine again"})).unwrap();
+        s.execute("file.save", json!({})).unwrap();
+        assert_eq!(a1_on_disk(&other), text("mine again"), "{}", other.display());
+    }
+    // Another file in the same folder: saved as before, without a question.
+    let path = dir.0.join("Budget.xlsx");
+    let mut s = opened(&path);
+    replace_by_rename(&path, &workbook_bytes(&dir.0, "newer.xlsx", "newer from elsewhere"));
+    let other = dir.0.join(".").join("Other.xlsx");
+    s.execute("file.saveAs", json!({"path": other})).unwrap();
+    assert_eq!(a1_on_disk(&other), text("as opened"));
+}
