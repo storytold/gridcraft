@@ -137,6 +137,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 let row_w = content_w.max(view_w);
                 let mut area = egui::ScrollArea::horizontal()
                     .id_salt(("ribbon_scroll", tab.as_str()))
+                    .stick_to_right(rtl)
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
                 // egui 0.37 keeps `ScrollArea`'s offset private; apply `scroll_offset` one-shot only
                 // when an arrow button is clicked or RTL overflow changes so native touch dragging stays active.
@@ -176,9 +177,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     let over = (scroll.content_size.x - scroll.inner_rect.width()).max(0.0);
                     let (next_from_right, next_over) = if (over - last_over).abs() > 0.5 {
                         let kept = from_right.min(over);
-                        let target_x = (over - kept).max(0.0);
-                        let frame = ui.ctx().cumulative_frame_nr();
-                        ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab.as_str()), (frame, target_x)));
+                        if kept > 0.5 {
+                            let target_x = (over - kept).max(0.0);
+                            let frame = ui.ctx().cumulative_frame_nr();
+                            ui.ctx().data_mut(|d| d.insert_temp(RibbonOverflow::scroll_target_id(tab.as_str()), (frame, target_x)));
+                        }
                         ui.ctx().request_repaint();
                         (kept, over)
                     } else {
