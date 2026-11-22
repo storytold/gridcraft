@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use gridcraft_core::{DateSystem, RangeRef};
+use gridcraft_core::{DateSystem, RangeRef, split_areas};
 use gridcraft_model::{
     CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
 };
@@ -550,7 +550,7 @@ fn strip_sheet(s: &str) -> &str {
 }
 
 pub fn parse_print_area(text: &str) -> Option<RangeRef> {
-    let first = text.split(',').next()?;
+    let first = split_areas(text).first().copied()?;
     let r = strip_sheet(first.trim()).replace('$', "");
     RangeRef::parse(&r)
 }
@@ -561,7 +561,7 @@ type TitleSpan = Option<(u32, u32)>;
 pub fn parse_print_titles(text: &str) -> (TitleSpan, TitleSpan) {
     let mut rows = None;
     let mut cols = None;
-    for part in text.split(',') {
+    for part in split_areas(text) {
         let p = strip_sheet(part.trim()).replace('$', "");
         let Some((a, b)) = p.split_once(':') else { continue };
         if let (Ok(r0), Ok(r1)) = (a.parse::<u32>(), b.parse::<u32>()) {
