@@ -90,6 +90,20 @@ fn workbook_settings_names_and_states() {
 }
 
 #[test]
+fn print_area_parses_a_quoted_sheet_name_with_a_comma() {
+    use crate::read::parse_print_area;
+    assert_eq!(parse_print_area("'Quarter, East'!$A$1:$B$3"), RangeRef::parse("A1:B3"));
+    assert_eq!(parse_print_area("'Quarter, East'!$A$1:$B$3,'Quarter, East'!$D$1:$E$3"), RangeRef::parse("A1:B3"));
+    assert_eq!(parse_print_area("'Quarter''s, East'!$A$1"), RangeRef::parse("A1"));
+}
+
+#[test]
+fn print_titles_parse_a_quoted_sheet_name_with_a_comma() {
+    use crate::read::parse_print_titles;
+    assert_eq!(parse_print_titles("'Quarter, East'!$1:$1,'Quarter, East'!$A:$A"), (Some((0, 0)), Some((0, 0))));
+}
+
+#[test]
 fn styles_theme_and_sizes() {
     let styles = r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
       <numFmts count="1"><numFmt numFmtId="164" formatCode="0.000&quot;kg&quot;"/></numFmts>
