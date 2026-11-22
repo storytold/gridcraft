@@ -7,6 +7,7 @@
   <project_license>MIT OR Apache-2.0</project_license>
   <name>GridCraft</name>
   <summary>Calculate, analyse and chart data in workbooks</summary>
+  <summary xml:lang="ru">Вычисления, анализ данных и диаграммы в книгах</summary>
   <developer id="ai.storyteller">
     <name>Learning Machines LLC</name>
   </developer>
@@ -16,9 +17,19 @@
       CSV/TSV files, evaluates hundreds of worksheet functions, and formats, sorts, filters and
       charts your data.
     </p>
+    <p xml:lang="ru">
+      GridCraft — открытая нативная программа электронных таблиц. Открывает и сохраняет
+      книги .xlsx и файлы CSV/TSV, вычисляет сотни функций листа, форматирует, сортирует и
+      фильтрует данные и строит по ним диаграммы.
+    </p>
     <p>
       Every action is a command that the included gridcraft-cli tool and AI agents (over MCP)
       can run too, so workbooks can be built and checked without opening a window.
+    </p>
+    <p xml:lang="ru">
+      Каждое действие — это команда, которую также могут выполнять входящий в комплект
+      инструмент gridcraft-cli и ИИ-агенты (по протолу MCP), поэтому книги можно
+      создавать и проверять, не открывая окна.
     </p>
   </description>
   <launchable type="desktop-id">ai.storyteller.gridcraft.desktop</launchable>
@@ -34,10 +45,15 @@
   </categories>
   <keywords>
     <keyword>spreadsheet</keyword>
+    <keyword xml:lang="ru">электронная таблица</keyword>
     <keyword>workbook</keyword>
+    <keyword xml:lang="ru">книга</keyword>
     <keyword>formula</keyword>
+    <keyword xml:lang="ru">формула</keyword>
     <keyword>xlsx</keyword>
+    <keyword xml:lang="ru">xlsx</keyword>
     <keyword>csv</keyword>
+    <keyword xml:lang="ru">csv</keyword>
   </keywords>
   <!-- Proposed app colour (GridCraft green #1f9d55 / ink #147a40); see assets/app-icon/README.md. -->
   <branding>
