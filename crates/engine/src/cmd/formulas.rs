@@ -439,8 +439,15 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         None => wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(new)).filter_map(|n| n.scope).collect(),
         Some(_) => Vec::new(),
     };
+    // A call renamed to a worksheet function's name would call the function instead.
+    let new_is_function = gridcraft_functions::lookup(new).is_some();
+    // Set when the rename would change what a formula computes; the rename is then refused.
+    let captured = std::cell::Cell::new(false);
     // The renamed expression, or `None` when the name doesn't occur in it.
     let rename = |e: gridcraft_formula::Expr| {
+        if renamed_use_is_captured(&e, old, new, calls_follow, new_is_function) {
+            captured.set(true);
+        }
         let mut hit = false;
         let out = e.map(&mut |x| match x {
             gridcraft_formula::Expr::Name(n) if n.eq_ignore_ascii_case(old) => {
@@ -477,7 +484,9 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         if n.scope.is_none_or(applies)
             && let Some(e) = gridcraft_formula::parse_name(&n.formula).ok().and_then(rename)
         {
-            redirected |= n.scope.is_some_and(|s| taken_on.contains(&s));
+            // A workbook-level definition is read on whichever sheet uses it, so a sheet with its
+            // own name `new` would read that one there.
+            redirected |= n.scope.map_or(!taken_on.is_empty(), |s| taken_on.contains(&s));
             n.formula = gridcraft_formula::print(&e);
         }
     }
@@ -486,7 +495,53 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
             "The name can't be changed to {new}: a sheet already has its own name {new}, which its formulas would read instead."
         )));
     }
+    if captured.get() {
+        return Err(EngineError::Other(format!(
+            "The name can't be changed to {new}: a formula that uses it would then read a function or a LET or LAMBDA name {new} instead."
+        )));
+    }
     Ok(())
+}
+
+/// Whether renaming `old` to `new` in `e` would make a use of it read something else: a call
+/// renamed to a worksheet function's name (the function is called first), or a use of `old`
+/// inside a LET or LAMBDA that binds `new` (the local is read first).
+fn renamed_use_is_captured(e: &gridcraft_formula::Expr, old: &str, new: &str, calls_follow: bool, new_is_function: bool) -> bool {
+    use gridcraft_formula::Expr;
+    let binds_new = |name: &str, args: &[Expr]| {
+        let bound: Vec<&Expr> = match name {
+            "LET" => args.iter().step_by(2).take(args.len() / 2).collect(),
+            "LAMBDA" => args.iter().take(args.len().saturating_sub(1)).collect(),
+            _ => Vec::new(),
+        };
+        bound.iter().any(|b| matches!(b, Expr::Name(n) if n.trim_start_matches('[').trim_end_matches(']').eq_ignore_ascii_case(new)))
+    };
+    // An explicit stack, with whether a LET or LAMBDA around the node binds `new`.
+    let mut pending: Vec<(&Expr, bool)> = vec![(e, false)];
+    while let Some((x, inside)) = pending.pop() {
+        match x {
+            Expr::Name(n) if inside && n.eq_ignore_ascii_case(old) => return true,
+            Expr::Call(n, args) => {
+                if calls_follow && n.eq_ignore_ascii_case(old) && (new_is_function || inside) {
+                    return true;
+                }
+                let inside = inside || binds_new(n, args);
+                pending.extend(args.iter().map(|a| (a, inside)));
+            }
+            Expr::Array(rows) => pending.extend(rows.iter().flatten().map(|a| (a, inside))),
+            Expr::Unary(_, a) | Expr::Paren(a) => pending.push((a, inside)),
+            Expr::Binary(_, a, b) => {
+                pending.push((a, inside));
+                pending.push((b, inside));
+            }
+            Expr::Invoke(c, args) => {
+                pending.push((c, inside));
+                pending.extend(args.iter().map(|a| (a, inside)));
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Refuses a name of the shape GridCraft keeps its own workbook data in ([`super::stash`]):

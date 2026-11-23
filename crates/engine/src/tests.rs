@@ -7169,3 +7169,47 @@ fn renaming_a_name_leaves_calls_to_a_function_of_that_name() {
     assert_eq!(formula_text(&s, "A1"), "SUM(A2:A3)+Base");
     assert_eq!(v(&s, "A1"), Value::number(17.0));
 }
+
+/// A defined LAMBDA renamed to a worksheet function's name would have its calls run the function
+/// instead, so that rename is refused and changes nothing. A plain name may still take the name.
+#[test]
+fn renaming_a_lambda_to_a_function_name_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=FnOld(4)"})).unwrap();
+    assert!(s.execute("formulas.defineName", json!({"name": "Sum", "oldName": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).is_err());
+    assert_eq!(formula_text(&s, "A1"), "FnOld(4)");
+    assert_eq!(v(&s, "A1"), Value::number(5.0));
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=Rate"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Sum", "oldName": "Rate", "refersTo": "=2"})).unwrap();
+    assert_eq!(formula_text(&s, "A2"), "Sum");
+}
+
+/// A call inside a LET that binds the new name would read the local instead, so the rename is
+/// refused and the formula keeps its result.
+#[test]
+fn renaming_a_lambda_onto_a_let_local_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LET(FnNew, LAMBDA(x, x+100), FnOld(4))"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::number(5.0));
+    assert!(s.execute("formulas.defineName", json!({"name": "FnNew", "oldName": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).is_err());
+    assert_eq!(v(&s, "A1"), Value::number(5.0));
+    assert!(s.doc().unwrap().wb.names.iter().any(|n| n.name == "FnOld"));
+}
+
+/// A workbook-level definition is read on the sheet that uses it, so renaming a name it uses to a
+/// name a sheet defines for itself is refused: that sheet would read its own name instead.
+#[test]
+fn renaming_a_name_a_workbook_definition_uses_onto_a_sheet_name_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Alias", "refersTo": "=Rate"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=9", "scope": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=Alias"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::number(2.0));
+    assert!(s.execute("formulas.defineName", json!({"name": "Total", "oldName": "Rate", "refersTo": "=2"})).is_err());
+    assert_eq!(v(&s, "A1"), Value::number(2.0));
+    assert!(s.doc().unwrap().wb.names.iter().any(|n| n.name == "Alias" && n.formula.contains("Rate")));
+}
