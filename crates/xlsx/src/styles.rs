@@ -61,6 +61,22 @@ fn bool_prop(e: &El, name: &str) -> bool {
     e.child(name).is_some_and(|c| c.flag("val", true))
 }
 
+/// A font's `outline` as the shared SpreadsheetML font (`craft-xlsx`) reads it: `None` when the
+/// element is absent, `Some(false)` when it says `val="0"` (stated off, which a differential
+/// format keeps), `Some(true)` when on.
+fn shared_outline(e: &El) -> Option<bool> {
+    craft_xlsx::Font::read(&crate::chart::to_craft_el(e)).outline
+}
+
+/// The shared SpreadsheetML font's `outline` element for `outline`, written as it writes it:
+/// `<outline/>`, `<outline val="0"/>`, or nothing.
+fn push_shared_outline(s: &mut String, outline: Option<bool>) {
+    let font = craft_xlsx::Font { outline, ..Default::default() }.to_el("font", false);
+    for child in font.elements() {
+        child.write_xml(s);
+    }
+}
+
 const DEFAULT_FONT_FAMILY: u8 = 2;
 const MAX_FONT_FAMILY: u8 = 14;
 
@@ -79,7 +95,7 @@ pub fn read_font(e: &El, palette: &[u32]) -> Font {
     f.bold = bool_prop(e, "b");
     f.italic = bool_prop(e, "i");
     f.strike = bool_prop(e, "strike");
-    f.outline = bool_prop(e, "outline");
+    f.outline = shared_outline(e) == Some(true);
     if let Some(u) = e.child("u") {
         f.underline = match u.attr("val").unwrap_or("single") {
             "double" => Underline::Double,
@@ -415,7 +431,7 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
         st.bold = e.child("b").is_some() && !f.bold;
         st.italic = e.child("i").is_some() && !f.italic;
         st.strike = e.child("strike").is_some() && !f.strike;
-        st.outline = e.child("outline").is_some() && !f.outline;
+        st.outline = shared_outline(e) == Some(false);
         st.underline = e.child("u").is_some() && f.underline == Underline::None;
         st.size = has_size && size == def.size;
         st.name = has_name && name == def.name;
@@ -483,11 +499,8 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
         }
     }
     // Excel's order puts outline after strike (condense and extend aren't modelled).
-    if f.outline {
-        s.push_str("<outline/>");
-    } else if stated.outline {
-        s.push_str("<outline val=\"0\"/>");
-    }
+    let outline = if f.outline { Some(true) } else { stated.outline.then_some(false) };
+    push_shared_outline(&mut s, outline);
     match f.underline {
         Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
         Underline::None => {}
