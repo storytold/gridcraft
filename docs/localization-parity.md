@@ -49,10 +49,17 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
 - **About 2,200 user-visible strings** in all (heuristic source scan: ~1,700 UI and command
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
-- **en-US only formulas and formats.** Function names, `,` argument separator, `.` decimal
-  separator, en-US number and date formats (`crates/numfmt` says "en-US only"). Users ask for
-  localized function names and `;` separators (#45). German with localized numbers and formulas
-  is in PR #163 (open). The `B1` (Gregorian) and `B2` (Hijri) calendar prefixes that Arabic
+- **Formulas: Spanish and French localized; formats en-US only.** Spanish and French formula
+  entry and display use localized function names (`SUMA`/`SOMME`…), `;` argument separator and
+  `,` decimal separator (`FormulaLocale`); the other languages use English names, `,` and `.`
+  (#45). French also reads and shows French error literals (`#VALEUR!`, `#NOM?`…). Number and
+  date formats are en-US in every language (`crates/numfmt` says "en-US only"). German with
+  localized numbers and formulas is in PR #163 (open).
+- **Native macOS menus.** The menu bar uses the shared language catalog (application menu,
+  File/Edit/View… menus, theme choices) and relabels its items in place when the interface
+  language changes, without reinstalling the menu or changing command ids and shortcuts.
+  macOS-owned window-management items follow the system language.
+- **Arabic calendar prefixes in number formats.** The `B1` (Gregorian) and `B2` (Hijri) calendar prefixes that Arabic
   Excel writes at the start of a format section are hidden; under `B2` the year, month number,
   day, month names and weekday names (Arabic; `mmm` and `ddd` show the full name) count in the
   tabular Hijri calendar (leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of each 30-year
@@ -109,7 +116,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Spanish | es | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | shared shaping/bidi; no Arabic UI catalog or mirrored shell; PDF export: shaped and joined, follows cell direction, mirrors RTL sheets; Sheet RTL mirrors the grid (#146) | no | none | 25–35 h |
-| French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
+| French | fr | 1,161 (~53%) + function help | dialogs, messages, function help (all 479 descriptions, 283 argument names), French function names in formulas | Latin: yes | no | every catalog key | 2–4 h |
 | Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
@@ -121,7 +128,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 
-Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
+Other shipped languages: Russian (ru), German (de), Czech (cs) and Turkish (tr), menus only.
 | Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
 
@@ -159,6 +166,8 @@ language (none so far) and of localized function names.
 | 2026-10-27 | minor | Number formats honour the `B1`/`B2` calendar prefixes: never shown; `B2` renders year, month, day and Arabic month and weekday names in the tabular Hijri calendar (1 Jan 2001 = 6 Shawwal 1421; leap years 2, 5, 7, 10, 13, 15, 18, 21, 24, 26 and 29 of the 30-year cycle, which is what Excel shows). Checked against Excel 16.0 (build 20527, en-US) on every serial and about 1,700 format/value pairs: a locale or currency tag before `B2` keeps the date Gregorian, a misplaced `B` and digit or a prefix before a number format is rejected, serial 60 has no Hijri date, serial 0 shows as serial 1, two-word month names use a no-break space. Not matched: Excel's weekday/month-name mix-ups in one `B2` section and its weekday-only quirks |
 | 2026-10-27 | minor | AutoFit column width, wrapped-row height and PivotTable column fit estimate Arabic letters at ~0.48 em (measured 0.36–0.53 em shaped, Noto Sans/Naskh Arabic and DejaVu Sans) instead of 1 em, Arabic-Indic digits as wide as ASCII digits, and give vowel marks and direction marks no width; vowelled Arabic no longer fits ~3.5× too wide |
 | 2026-10-26 | minor | Arabic PDF cells, headers and chart labels support joined letters, combining marks, digits, bold/italic, rotation and grapheme wrapping |
+| 2026-10-27 | minor | From PR #1639 (NaviStorm): native macOS menus use the language catalog and relabel in place on a language change (AppKit test checks French and English titles); French formula error literals read and displayed, storage stays English; French functions passed by name are translated; EXPAND is ETENDRE, TOCOL/TOROW/PERCENTOF get DANSCOL/DANSLIGNE/POURCENTAGEDE; a test checks every registered function has a French row or is spelled alike |
+| 2026-10-26 | minor | French catalog (`i18n/fr.rs`) covers every key of the other catalogs: 433 → 1,161 labels (`cargo xtask i18n-report`: `fr: 0 missing`), Excel's French feature names. French function help (`i18n/fr_functions.rs`): all 479 descriptions and 283 argument names, the first complete help table. French formulas (`FormulaLocale::Fr`: SOMME, MOYENNE, SI…, `;` separator, `,` decimal, VRAI/FAUX) when the interface is French; en-US number formats; AI-assisted draft pending native-speaker review |
 | 2026-10-23 | minor | Missing translations are reported, never a failure: `cargo xtask i18n-report` prints, per language, the strings other catalogs translate and it lacks (plus Spanish function help rows keyed by English the function catalog no longer has) and always passes; `cargo xtask ci` runs it first. Coverage and per-language parity tests and tests of one language's exact wording are gone; UI tests take the expected text from the catalog. Duplicate-key, placeholder, context-prefix and line-shape checks stay |
 | 2026-10-21 | minor | Romanian interface (`ro`, Română): 970 labels covering every key of the other catalogs (`crates/ui-egui/src/i18n/ro.rs`), `ro-*` system locales, the View-tab switcher and `app.language.set`; context keys show no prefix (File › Options test). English formulas and formats; AI-assisted draft pending native-speaker review |
 | 2026-10-20 | minor | Japanese: furigana (`rPh` phonetic runs and `<phoneticPr>` in `xl/sharedStrings.xml`) is no longer deleted by an open + save; it is kept on the workbook and written back (a `<phoneticPr>` without runs is kept too, while duplicate texts with different readings keep only the first, reported on open). Display of the readings is still missing (`crates/xlsx/src/tests/phonetic_tests.rs`) |

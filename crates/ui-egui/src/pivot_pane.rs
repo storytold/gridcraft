@@ -93,9 +93,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     for f in area_with_values(key) {
                         let is_values = f == VALUES_FIELD;
                         let b = ui.add(
-                            egui::Button::new(egui::RichText::new(format!("{f} ▾")).font(theme::ui_font(12.0)))
-                                .fill(t.ribbon)
-                                .min_size(vec2(ui.available_width(), 20.0)),
+                            egui::Button::new(
+                                egui::RichText::new(format!("{} ▾", if is_values { lang.tr(VALUES_FIELD) } else { f.as_str() }))
+                                    .font(theme::ui_font(12.0)),
+                            )
+                            .fill(t.ribbon)
+                            .min_size(vec2(ui.available_width(), 20.0)),
                         );
                         egui::Popup::menu(&b).show(|ui| {
                             for (to, l) in [
