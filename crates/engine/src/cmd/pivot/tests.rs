@@ -1514,7 +1514,7 @@ fn accounting_items_keep_their_labels_without_the_fill() {
 
 /// Older GridCraft read a header as the sheet showed it, so a PivotTable made while Show Formulas
 /// was on saved a formula header by its formula text (`="Region"`). After that workbook is saved
-/// and reopened, a refresh still finds the field and its filter, now under the header's value.
+/// and reopened, the field and its filter are under the header's value from the moment it opens.
 #[test]
 fn a_field_saved_under_a_formula_header_text_survives_reopen_and_refresh() {
     let mut s = sales();
@@ -1534,7 +1534,8 @@ fn a_field_saved_under_a_formula_header_text_survives_reopen_and_refresh() {
     let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
     s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
     s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
-    assert_eq!(pt(&s).filters[0].source_col, "=\"Region\"");
+    assert_eq!(pt(&s).filters[0].source_col, "Region", "named by value as soon as it opens");
+    assert!(pt(&s).names_from_values);
     s.execute("pivot.refresh", json!({})).unwrap();
     let p = pt(&s);
     assert_eq!(p.filters[0].source_col, "Region");
@@ -1616,11 +1617,10 @@ fn an_older_formula_header_field_survives_show_formulas_turned_off() {
 }
 
 /// A formula header `="Region"` (A) beside a text header `Region` (B), and an older PivotTable
-/// with only a filter named `Region`: that name was B's under Show Formulas and A's without, and
-/// nothing saved tells which. The filter isn't moved: it resolves by Show Formulas as before, and
-/// the PivotTable stays an older one.
+/// with only a filter named `Region`: that name was B's under Show Formulas and A's without. The
+/// workbook was saved with Show Formulas on, so the filter is B's: it reads `Region2` now.
 #[test]
-fn an_older_name_both_layouts_place_differently_is_not_moved() {
+fn an_older_name_both_layouts_place_is_read_as_the_sheet_was_saved() {
     let mut s = sales();
     s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
     s.execute("cell.set", json!({"cell": "B1", "input": "Region"})).unwrap();
@@ -1630,11 +1630,15 @@ fn an_older_name_both_layouts_place_differently_is_not_moved() {
     // Apples (column B): 100 + 50 + 90 + 60 + 120.
     assert_eq!(grand_total(&s, 1), Value::Number(420.0));
     reopen_as_older(&mut s, |pt| pt.filters[0].source_col = "Region".into());
-    // Show Formulas is still on, so `Region` is B, as it was.
-    s.execute("pivot.refresh", json!({})).unwrap();
     let p = pt(&s);
-    assert_eq!(p.filters[0].source_col, "Region");
-    assert!(!p.names_from_values);
+    assert_eq!(p.filters[0].source_col, "Region2");
+    assert!(p.names_from_values);
+    // Turning Show Formulas off afterwards changes nothing: the names are settled.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": false})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!(pt(&s).filters[0].source_col, "Region2");
     assert_eq!(grand_total(&s, 1), Value::Number(420.0));
 }
 
@@ -1657,9 +1661,9 @@ fn a_calculated_field_does_not_block_the_older_names() {
 }
 
 /// An older PivotTable with a source field saved as `="Margin"` (a formula header under Show
-/// Formulas) and a calculated field `Margin`: the header now reads `Margin` too. Each value field
-/// keeps its own identity: the calculated field is still its formula, never the column, and the
-/// source field isn't renamed onto the calculated field's name.
+/// Formulas) and a calculated field `Margin`: the header now reads `Margin` too. Excel doesn't let
+/// the two share a name, so the calculated field becomes `Margin2` and the source field takes the
+/// column's name. Each value field keeps what it computed.
 #[test]
 fn an_older_source_field_does_not_take_a_calculated_fields_name() {
     let mut s = sales();
@@ -1675,29 +1679,29 @@ fn an_older_source_field_does_not_take_a_calculated_fields_name() {
     s.execute("pivot.refresh", json!({})).unwrap();
     let p = pt(&s);
     let names: Vec<&str> = p.values.iter().map(|v| v.source_col.as_str()).collect();
-    assert_eq!(names, ["Sales", "Margin", "=\"Margin\""], "nothing is renamed onto the calculated field");
-    assert!(!p.names_from_values);
-    // Sales, then the calculated Margin (a tenth of Sales), not the Units column (72), and the
-    // Units column under its old name, which the report keeps.
+    assert_eq!(names, ["Sales", "Margin2", "Margin"]);
+    assert_eq!(p.calculated_fields[0].name, "Margin2");
+    assert!(p.names_from_values);
+    // Sales, then the calculated field (a tenth of Sales), not the Units column (72), and the
+    // Units column.
     assert_eq!(grand_total(&s, 1), Value::Number(835.0));
     assert_eq!(grand_total(&s, 2), Value::Number(83.5));
     assert_eq!(grand_total(&s, 3), Value::Number(72.0));
-    // The field list shows the source as it is computed: the Units column under its old name in
-    // Values, beside the calculated Margin, and no source column named `Margin`.
+    // The field list shows the same names: the Units column `Margin` in Values, beside the
+    // calculated `Margin2`.
     let r = s.execute("pivot.fields", json!({})).unwrap();
     let fields = r["fields"].as_array().unwrap();
     let areas = |name: &str, calculated: bool| {
         fields.iter().find(|f| f["name"] == name && f["calculated"].as_bool().unwrap_or(false) == calculated).map(|f| f["areas"].clone())
     };
-    assert_eq!(areas("=\"Margin\"", false), Some(json!(["values"])));
-    assert_eq!(areas("Margin", true), Some(json!(["values"])));
-    assert_eq!(areas("Margin", false), None);
+    assert_eq!(areas("Margin", false), Some(json!(["values"])));
+    assert_eq!(areas("Margin2", true), Some(json!(["values"])));
 }
 
 /// A calculated field's formula names a column as the sheet showed it: in an older PivotTable
 /// with a formula header `="Amount"` (A) beside a text header `Amount` (B), `=Amount*2` read B.
-/// Now A reads `Amount` and B `Amount2`, so moving the fields to those names would turn the
-/// formula onto A. The PivotTable stays an older one and is computed as it was.
+/// Now A reads `Amount` and B `Amount2`: the value field takes `Amount` and the formula
+/// `=Amount2*2`, so each still reads the column it read.
 #[test]
 fn a_calculated_formula_keeps_the_column_it_named() {
     let mut s = Session::new();
@@ -1714,8 +1718,9 @@ fn a_calculated_formula_keeps_the_column_it_named() {
     });
     s.execute("pivot.refresh", json!({})).unwrap();
     let p = pt(&s);
-    assert!(!p.names_from_values, "nothing is moved");
-    assert_eq!(p.values[0].source_col, "=\"Amount\"");
+    assert!(p.names_from_values);
+    assert_eq!(p.values[0].source_col, "Amount");
+    assert_eq!(p.calculated_fields[0].formula, "=Amount2*2");
     // Column A (100), and twice column B (10), as the PivotTable was saved.
     assert_eq!(grand_total(&s, 1), Value::Number(100.0));
     assert_eq!(grand_total(&s, 2), Value::Number(10.0));
@@ -1778,4 +1783,44 @@ fn the_field_list_shows_an_older_pivottable_as_it_is_computed() {
     s.execute("pivot.removeField", json!({"field": "Region2", "area": "filters"})).unwrap();
     assert!(pt(&s).filters.is_empty());
     assert_eq!(grand_total(&s, 1), Value::Number(835.0));
+}
+
+/// An edit to an older PivotTable works with the names its report and field list show: adding a
+/// field neither drops the older field beside it nor turns a calculated formula onto another column.
+#[test]
+fn an_edit_to_an_older_pivottable_keeps_its_fields_and_formulas() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x", "Amount", "Key"], [100, 5, "K"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Amount\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Key"], "values": ["Amount"]})).unwrap();
+    s.execute("pivot.calculatedField", json!({"name": "Twice", "formula": "=Amount2*2"})).unwrap();
+    reopen_as_older(&mut s, |pt| {
+        pt.values[0].source_col = "=\"Amount\"".into();
+        pt.calculated_fields[0].formula = "=Amount*2".into();
+    });
+    s.execute("pivot.addField", json!({"field": "Amount2", "area": "values"})).unwrap();
+    let names: Vec<String> = pt(&s).values.iter().map(|v| v.source_col.clone()).collect();
+    assert_eq!(names, ["Amount", "Twice", "Amount2"]);
+    // Column A (100), twice column B (10), column B (5).
+    assert_eq!(grand_total(&s, 1), Value::Number(100.0));
+    assert_eq!(grand_total(&s, 2), Value::Number(10.0));
+    assert_eq!(grand_total(&s, 3), Value::Number(5.0));
+}
+
+/// An older PivotTable saved as XLSX keeps its fields: the file names them as the cache does.
+#[test]
+fn an_older_pivottable_keeps_its_fields_through_xlsx() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    reopen_as_older(&mut s, |pt| pt.rows[0].source_col = "=\"Region\"".into());
+    let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (back, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
+    let p = back.sheets.iter().flat_map(|sh| sh.pivots.iter()).next().unwrap();
+    let rows: Vec<&str> = p.rows.iter().map(|f| f.source_col.as_str()).collect();
+    assert_eq!(rows, ["Region"]);
 }

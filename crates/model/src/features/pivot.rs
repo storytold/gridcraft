@@ -146,8 +146,8 @@ pub struct PivotTable {
     pub values_position: Option<usize>,
     /// The fields name their columns by header value (`Region`, also while Show Formulas is on).
     /// A PivotTable saved by an older GridCraft has no such entry: it named a column by its header
-    /// as the cell showed it then (`="Region"`), which the engine resolves to the column's current
-    /// name before setting this. Written only when set, so older versions still read the file.
+    /// as the cell showed it then (`="Region"`). The engine renames those fields once, when the
+    /// workbook opens, and sets this. Written only when set, so older versions still read the file.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub names_from_values: bool,
 }

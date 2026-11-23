@@ -32,28 +32,17 @@ pub struct Compiled {
     pub refs: Vec<String>,
 }
 
-/// Parses a calculated-field formula. `field` maps a written name to the canonical name of a
-/// source or calculated field.
-pub fn compile(formula: &str, field: &dyn Fn(&str) -> Option<String>) -> Result<Compiled, String> {
-    let text = formula.trim();
-    let text = text.strip_prefix('=').unwrap_or(text).trim();
-    if text.is_empty() {
-        return Err("The formula is empty.".into());
-    }
-    if text.len() > MAX_FORMULA_LEN {
-        return Err("The formula is too long.".into());
-    }
+/// What [`scan`] asks about each field name: its replacement, if any.
+type FieldFn<'a> = dyn FnMut(&str, bool) -> Result<Option<String>, String> + 'a;
+
+/// Walks a formula's text, passing each field name it writes to `field` (with whether it was in
+/// single quotes): a returned text replaces that name, `None` keeps it as written. Text values,
+/// numbers and the names of functions being called are left alone. One reading of a formula for
+/// both compiling it and renaming the fields it uses.
+fn scan(text: &str, field: &mut FieldFn<'_>) -> Result<String, String> {
     let chars: Vec<char> = text.chars().collect();
     let at = |i: usize| chars.get(i).copied();
     let mut out = String::with_capacity(text.len() + 16);
-    let mut refs: Vec<String> = Vec::new();
-    let slot = |name: String, refs: &mut Vec<String>| -> String {
-        let i = refs.iter().position(|r| r.eq_ignore_ascii_case(&name)).unwrap_or_else(|| {
-            refs.push(name);
-            refs.len() - 1
-        });
-        placeholder(i)
-    };
     let mut i = 0;
     while let Some(c) = at(i) {
         match c {
@@ -80,6 +69,7 @@ pub fn compile(formula: &str, field: &dyn Fn(&str) -> Option<String>) -> Result<
                 }
             }
             '\'' => {
+                let start = i;
                 let mut name = String::new();
                 i += 1;
                 loop {
@@ -99,8 +89,10 @@ pub fn compile(formula: &str, field: &dyn Fn(&str) -> Option<String>) -> Result<
                         }
                     }
                 }
-                let canon = field(&name).ok_or_else(|| format!("There's no field named '{name}'."))?;
-                out.push_str(&slot(canon, &mut refs));
+                match field(&name, true)? {
+                    Some(t) => out.push_str(&t),
+                    None => out.extend(chars.get(start..i).unwrap_or_default()),
+                }
             }
             c if c.is_ascii_digit() || (c == '.' && at(i + 1).is_some_and(|d| d.is_ascii_digit())) => {
                 while at(i).is_some_and(|d| d.is_ascii_digit() || d == '.') {
@@ -131,11 +123,8 @@ pub fn compile(formula: &str, field: &dyn Fn(&str) -> Option<String>) -> Result<
                 while at(j).is_some_and(char::is_whitespace) {
                     j += 1;
                 }
-                let is_call = at(j) == Some('(');
-                match field(&word) {
-                    Some(canon) if !is_call => out.push_str(&slot(canon, &mut refs)),
-                    _ => out.push_str(&word),
-                }
+                let replaced = if at(j) == Some('(') { None } else { field(&word, false)? };
+                out.push_str(replaced.as_deref().unwrap_or(&word));
             }
             c => {
                 out.push(c);
@@ -143,6 +132,57 @@ pub fn compile(formula: &str, field: &dyn Fn(&str) -> Option<String>) -> Result<
             }
         }
     }
+    Ok(out)
+}
+
+/// A field name as a formula writes it: bare when it reads back as that one name, otherwise in
+/// single quotes.
+fn written(name: &str) -> String {
+    let mut chars = name.chars();
+    let bare = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || c == '_' || c == '.')
+        && !name.eq_ignore_ascii_case("TRUE")
+        && !name.eq_ignore_ascii_case("FALSE")
+        && gridcraft_core::CellRef::parse(name).is_none();
+    if bare { name.to_string() } else { format!("'{}'", name.replace('\'', "''")) }
+}
+
+/// A calculated-field formula with the field names `rename` maps written as their new names (the
+/// rest as they are). `None` when the formula can't be read; it is then left as it is.
+pub fn rename_fields(formula: &str, rename: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let trimmed = formula.trim();
+    let (prefix, text) = match trimmed.strip_prefix('=') {
+        Some(t) => ("=", t),
+        None => ("", trimmed),
+    };
+    let body = scan(text, &mut |name, _| Ok(rename(name).map(|n| written(&n))));
+    body.ok().map(|b| format!("{prefix}{b}"))
+}
+
+/// Parses a calculated-field formula. `field` maps a written name to the canonical name of a
+/// source or calculated field.
+pub fn compile(formula: &str, field: &dyn Fn(&str) -> Option<String>) -> Result<Compiled, String> {
+    let text = formula.trim();
+    let text = text.strip_prefix('=').unwrap_or(text).trim();
+    if text.is_empty() {
+        return Err("The formula is empty.".into());
+    }
+    if text.len() > MAX_FORMULA_LEN {
+        return Err("The formula is too long.".into());
+    }
+    let mut refs: Vec<String> = Vec::new();
+    let mut slot = |name: String| -> String {
+        let i = refs.iter().position(|r| r.eq_ignore_ascii_case(&name)).unwrap_or_else(|| {
+            refs.push(name);
+            refs.len() - 1
+        });
+        placeholder(i)
+    };
+    let out = scan(text, &mut |name, quoted| match field(name) {
+        Some(canon) => Ok(Some(slot(canon))),
+        None if quoted => Err(format!("There's no field named '{name}'.")),
+        None => Ok(None),
+    })?;
     let body = gridcraft_formula::parse(&out).map_err(|_| "The formula contains an error.".to_string())?;
     let mut problem: Option<String> = None;
     body.walk(&mut |e| {
@@ -318,6 +358,26 @@ mod tests {
 
     fn fields(n: &str) -> Option<String> {
         ["Sales", "Units", "Unit Price", "Q1"].iter().find(|f| f.eq_ignore_ascii_case(n)).map(|f| f.to_string())
+    }
+
+    #[test]
+    fn renames_the_fields_a_formula_names() {
+        let to = |n: &str| match n.to_ascii_lowercase().as_str() {
+            "amount" => Some("Amount2".to_string()),
+            "=\"amount\"" => Some("Amount".to_string()),
+            "unit price" => Some("Unit Cost".to_string()),
+            "sum" => Some("Total".to_string()),
+            _ => None,
+        };
+        // Bare and quoted names follow; text values, numbers and called functions don't.
+        assert_eq!(rename_fields("=Amount*2+'Unit Price'", &to).as_deref(), Some("=Amount2*2+'Unit Cost'"));
+        assert_eq!(rename_fields("='=\"Amount\"'+SUM(1)", &to).as_deref(), Some("=Amount+SUM(1)"));
+        assert_eq!(rename_fields("=IF(Amount>0,\"Amount\",1.5E2)", &to).as_deref(), Some("=IF(Amount2>0,\"Amount\",1.5E2)"));
+        assert_eq!(rename_fields("=Other", &to).as_deref(), Some("=Other"));
+        // A new name that wouldn't read back as one bare name is quoted.
+        let odd = |_: &str| Some("it's A1".to_string());
+        assert_eq!(rename_fields("=Amount", &odd).as_deref(), Some("='it''s A1'"));
+        assert_eq!(rename_fields("='open", &to), None);
     }
 
     #[test]

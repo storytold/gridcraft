@@ -340,6 +340,9 @@ impl DocState {
     fn with_calc(mut wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
         // Equations arrive without a layout (files never store one); painting reads only the cache.
         wb.refresh_equations();
+        // PivotTables an older GridCraft saved take today's field names, once, now that formula
+        // headers have values.
+        pivot::migrate_older_names(&mut wb);
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());

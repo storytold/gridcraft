@@ -207,26 +207,12 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
 
 /// Applies `f` to the targeted pivot and re-renders it, as one undo step.
 pub(super) fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>) -> Result<Json> {
-    update_pinning(s, p, true, f)
-}
-
-/// [`update`]; with `pin` false (a plain refresh), an older PivotTable whose fields can't be
-/// placed for certain keeps its saved names.
-pub(super) fn update_pinning(
-    s: &mut Session,
-    p: &Json,
-    pin: bool,
-    f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>,
-) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let replace = bool_param(p, "replace").unwrap_or(false);
     edit(s, |cx| {
         let pt = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
         let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
         let mut new = pt.clone();
-        // An older PivotTable's fields take their columns' current names first, so an edit made
-        // by those names finds them.
-        pv::settle_field_names(&cx.wb, &mut new, si, pin);
         let mut out = f(&mut new, &src, &cx.wb)?;
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
             *slot = new;
@@ -246,15 +232,9 @@ pub(super) fn update_pinning(
 pub(super) fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let d = s.doc()?;
-    let stored = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
-    // The fields as the report is computed: an older PivotTable's under their columns' current
-    // names, which an edit then settles on.
-    let (effective, src) = match pv::effective_source(&d.wb, stored, si) {
-        Ok((pt, src)) => (pt, Ok(src)),
-        Err(e) => (std::borrow::Cow::Borrowed(stored), Err(e)),
-    };
-    let pt = &*effective;
+    let pt = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
     let mut out = pivot_json(&d.wb, si, pt);
+    let src = pv::read_source(&d.wb, &pt.source, si);
     let list: Vec<Json> = match &src {
         Ok(src) => src
             .headers
