@@ -373,6 +373,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Recent", "最近使ったアイテム"),
     ("No recent workbooks yet.", "最近使ったブックはまだありません。"),
     ("More workbooks", "その他のブック"),
+    ("More entries not shown", "表示されていない項目があります"),
     ("Modified", "更新日時"),
     ("Not available", "利用できません"),
     ("Just now", "たった今"),
@@ -1295,6 +1296,15 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
         "Drag to fill cells. Drag from inside a cell to select a range.",
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
     ),
+    ("Copy Cells", "セルのコピー"),
+    ("Fill Series", "連続データを入力"),
+    ("Fill Formatting Only", "書式のみを入力"),
+    ("Fill Without Formatting", "書式なしで入力"),
+    ("Fill Days", "日単位で入力"),
+    ("Fill Weekdays", "平日単位で入力"),
+    ("Fill Months", "月単位で入力"),
+    ("Fill Years", "年単位で入力"),
+    ("Auto Fill Options", "オートフィル オプション"),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can

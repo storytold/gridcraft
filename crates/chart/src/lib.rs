@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 pub use axis::{Scale, format_number, nice_scale};
 pub use raster::rasterize;
 pub use render::{Swatch, legend_entries, render, supports_trendline};
-pub use resolve::{default_palette, has_volatile_series, resolve, series_color, series_plot_kind};
+pub use resolve::{default_palette, has_volatile_series, resolve, series_color};
 pub use sparkline::render_sparkline;
 
 /// Straight (non-premultiplied) RGBA colour.
@@ -143,7 +143,9 @@ pub struct SeriesData {
     /// Bubble sizes.
     pub sizes: Option<Vec<Option<f64>>>,
     pub color: Rgba,
-    /// Per-series kind (combo charts).
+    /// The kind this series is drawn as. `resolve` sets it from `Chart::series_kind`. `render`
+    /// reads it for every series of a vertical cartesian or scatter chart, so a hand-built
+    /// `ChartData` sets it too (`SeriesData::default()` gives `ColumnClustered`).
     pub kind: ChartKind,
     /// Plotted against the secondary (right) value axis.
     pub secondary: bool,

@@ -373,6 +373,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recent",
         "No recent workbooks yet." => "Nog geen recente werkmappen.",
         "More workbooks" => "Meer werkmappen",
+        "More entries not shown" => "Meer items worden niet weergegeven",
         "Modified" => "Gewijzigd",
         "Not available" => "Niet beschikbaar",
         "Just now" => "Zojuist",
@@ -697,6 +698,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char heeft een niet-numeriek argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char met ongeldig codepunt {code}",
         "Invalid environment name character: {character}" => "Ongeldig teken in de omgevingsnaam: {character}",
+        "Copy Cells" => "Cellen kopiëren",
+        "Fill Series" => "Reeks vullen",
+        "Fill Formatting Only" => "Alleen opmaak vullen",
+        "Fill Without Formatting" => "Vullen zonder opmaak",
+        "Fill Days" => "Dagen vullen",
+        "Fill Weekdays" => "Werkdagen vullen",
+        "Fill Months" => "Maanden vullen",
+        "Fill Years" => "Jaren vullen",
+        "Auto Fill Options" => "Opties voor automatisch vullen",
         _ => return None,
     })
 }

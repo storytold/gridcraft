@@ -366,6 +366,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Ostatnie",
         "No recent workbooks yet." => "Nie masz jeszcze ostatnio używanych skoroszytów.",
         "More workbooks" => "Więcej skoroszytów",
+        "More entries not shown" => "Więcej elementów nie jest wyświetlanych",
         "Modified" => "Zmodyfikowano",
         "Not available" => "Niedostępne",
         "Just now" => "Przed chwilą",
@@ -1133,6 +1134,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char ma nienumeryczny argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char z nieprawidłowym punktem kodowym {code}",
         "Invalid environment name character: {character}" => "Nieprawidłowy znak w nazwie środowiska: {character}",
+        "Copy Cells" => "Kopiuj komórki",
+        "Fill Series" => "Wypełnij serią",
+        "Fill Formatting Only" => "Wypełnij tylko formatami",
+        "Fill Without Formatting" => "Wypełnij bez formatowania",
+        "Fill Days" => "Wypełnij dniami",
+        "Fill Weekdays" => "Wypełnij dniami roboczymi",
+        "Fill Months" => "Wypełnij miesiącami",
+        "Fill Years" => "Wypełnij latami",
+        "Auto Fill Options" => "Opcje autowypełniania",
         _ => return None,
     })
 }
