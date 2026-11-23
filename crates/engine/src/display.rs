@@ -5,7 +5,7 @@ use std::sync::Mutex;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value, format_value_full};
+use gridcraft_numfmt::{Formatted, Locale, NumberFormat, format_value, format_value_full, format_value_in};
 
 /// Parsed number formats are cached by code.
 pub(crate) fn parsed(code: &str) -> NumberFormat {
@@ -41,6 +41,21 @@ pub fn number_format(code: &str) -> NumberFormat {
 /// Formats a value with a format code.
 pub fn format(v: &Value, code: &str, wb: &Workbook) -> Formatted {
     format_value(v, &parsed(code), wb.date_system)
+}
+
+/// Formats a value with a format code in a region's separators and short date, as the grid shows
+/// it. Everything that reads or writes values (files, commands, CSV, TEXT) uses `format`.
+pub fn format_in(v: &Value, code: &str, wb: &Workbook, loc: &Locale) -> Formatted {
+    format_value_in(v, &parsed(code), wb.date_system, loc)
+}
+
+/// Display a stored format, preserving a custom short-date code's literal order.
+pub fn format_num_fmt_in(v: &Value, fmt: &gridcraft_model::NumFmt, wb: &Workbook, loc: &Locale) -> Formatted {
+    if fmt.is_literal_short_date() {
+        gridcraft_numfmt::format_literal_in(v, &parsed(fmt.as_str()), wb.date_system, loc)
+    } else {
+        format_in(v, fmt.as_str(), wb, loc)
+    }
 }
 
 /// Whether typing `t` back into a General cell would not give the text `t` again (it would parse
@@ -119,13 +134,22 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 /// The text a cell shows (General up to the 11-character cell width; the grid narrows General
 /// further to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    cell_text_in(wb, sheet, c, &Locale::EN_US)
+}
+
+/// [`cell_text`] in a region's separators and short date, as the grid shows it.
+pub fn cell_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, loc: &Locale) -> String {
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
         && !formula_hidden(wb, sheet, c)
     {
         return format!("={}", f.text);
     }
-    shown_text(wb, sheet, c)
+    if loc == &Locale::EN_US {
+        return shown_text(wb, sheet, c);
+    }
+    let style = wb.styles.get(sheet.style_id(c));
+    formatted_text(format_num_fmt_in(&sheet.value(c), &style.num_fmt, wb, loc))
 }
 
 /// A cell's value with its number format applied, independent of column width: no `#####`
@@ -136,7 +160,7 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// integer below 1e16 exactly). Excel writes the cell display.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let style = wb.styles.get(sheet.style_id(c));
-    with_fill_space(format_value_full(&sheet.value(c), &parsed(style.num_fmt.as_str()), wb.date_system))
+    formatted_text(format_value_full(&sheet.value(c), &parsed(style.num_fmt.as_str()), wb.date_system))
 }
 
 /// A cell's value through its number format, General at the 11-character cell width.
@@ -149,11 +173,17 @@ fn shown_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// 11-character cell width). Print takes the code from the cell's effective look, which a
 /// conditional format can override.
 pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
-    with_fill_space(format(v, code, wb))
+    value_text_in(wb, v, code, &Locale::EN_US)
 }
 
-/// The formatted text with a single space where a `*x` repeat fill would expand.
-fn with_fill_space(f: Formatted) -> String {
+/// Render a value and format code in the requested display locale without column clipping.
+fn value_text_in(wb: &Workbook, v: &Value, code: &str, loc: &Locale) -> String {
+    formatted_text(format_in(v, code, wb, loc))
+}
+
+/// Flatten formatted output to plain text, replacing an alignment fill with one space
+/// only when its insertion position is a valid text boundary.
+pub(crate) fn formatted_text(f: Formatted) -> String {
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;
@@ -168,6 +198,11 @@ fn with_fill_space(f: Formatted) -> String {
 
 /// Tab-separated text of a range, as the system clipboard gets it.
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
+    range_text_in(wb, sheet, r, &Locale::EN_US)
+}
+
+/// Host clipboard text in its captured region; file and agent exports remain invariant.
+pub fn range_text_in(wb: &Workbook, sheet: usize, r: RangeRef, locale: &Locale) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
     let mut out = String::new();
     let r = clipboard_range(r);
@@ -181,7 +216,7 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
                 out.push('\t');
             }
             first = false;
-            let t = cell_text(wb, sh, CellRef::new(row, col));
+            let t = cell_text_in(wb, sh, CellRef::new(row, col), locale);
             // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
             // `say "hi"` is copied as it is (#2225).
             if t.contains(['\t', '\n', '\r']) {
