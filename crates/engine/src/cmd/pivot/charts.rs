@@ -1,8 +1,9 @@
 use super::create::{insert_pivot, source_param};
 use super::{
-    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, PivotDateGroup, Result, Session, Workbook, anchor_mode_param, bad, cell_param,
-    edit, f64_param, find_pivot, json, other, pv, str_param,
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, PivotDateGroup, Result, Session, Workbook, anchor_mode_param, bad, edit,
+    f64_param, find_pivot, json, other, pv, str_param,
 };
+use crate::cmd::cell_param_on;
 
 // ---------------------------------------------------------------- PivotChart
 
@@ -39,8 +40,8 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let series = pv::chart_series(&sh.name, area.start, &out);
     let t = str_param(p, "type").unwrap_or("column");
     let kind = crate::cmd::insert::chart_kind(t, str_param(p, "subtype").unwrap_or(""));
-    let at =
-        cell_param(s, p, "at")?.unwrap_or_else(|| CellRef::new(area.start.row, area.end.col.saturating_add(2).min(gridcraft_core::MAX_COLS - 1)));
+    let at = cell_param_on(s, p, "at", si)?
+        .unwrap_or_else(|| CellRef::new(area.start.row, area.end.col.saturating_add(2).min(gridcraft_core::MAX_COLS - 1)));
     let title = match p.get("title") {
         Some(Json::String(t)) => Some(t.clone()),
         Some(Json::Null) => None,
