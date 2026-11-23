@@ -18,6 +18,7 @@ const LIMITS: craft_opc::Limits = craft_opc::Limits::new(MAX_ENTRIES, MAX_PART, 
 
 pub struct Package<'a> {
     opc: craft_opc::LazyPackage<'a>,
+    craft: craft_xlsx::Package<'a>,
 }
 
 /// A relationship.
@@ -46,9 +47,25 @@ fn error(e: craft_opc::Error) -> IoError {
     }
 }
 
+/// GridCraft's wording of a `craft-xlsx` error.
+pub(crate) fn craft_error(e: craft_xlsx::Error) -> IoError {
+    match e {
+        craft_xlsx::Error::Zip(m) => IoError::Zip(m),
+        craft_xlsx::Error::Xml(m) => IoError::Xml(m),
+        craft_xlsx::Error::Invalid(m) => IoError::Format(m),
+        craft_xlsx::Error::TooLarge(m) => IoError::TooLarge(m),
+    }
+}
+
 impl<'a> Package<'a> {
     pub fn open(bytes: &'a [u8]) -> Result<Package<'a>, IoError> {
-        Ok(Package { opc: craft_opc::LazyPackage::open(bytes, &LIMITS).map_err(error)? })
+        let opc = craft_opc::LazyPackage::open(bytes, &LIMITS).map_err(error)?;
+        let craft = craft_xlsx::Package::open(bytes, &craft_xlsx::Limits::default()).map_err(craft_error)?;
+        Ok(Package { opc, craft })
+    }
+
+    pub(crate) fn craft_mut(&mut self) -> &mut craft_xlsx::Package<'a> {
+        &mut self.craft
     }
 
     /// Every part's (normalized) name, sorted.
