@@ -31,7 +31,7 @@ fn the_title_bar_and_file_tab_are_drawn_by_default() {
 #[test]
 fn a_host_can_leave_out_the_title_bar_and_the_file_tab() {
     let full = harness(Chrome::default());
-    let h = harness(Chrome { title_bar: false, file_tab: false });
+    let h = harness(Chrome { title_bar: false, file_tab: false, ribbon: true });
     assert!(h.query_by_label("AutoSave").is_none(), "no title bar");
     assert!(h.query_by_label("File").is_none(), "no File tab");
     // The ribbon tabs are painted text, so measure the move with the first ribbon control.
@@ -43,7 +43,7 @@ fn a_host_can_leave_out_the_title_bar_and_the_file_tab() {
 
 #[test]
 fn without_the_file_tab_the_backstage_view_never_opens() {
-    let mut h = harness(Chrome { title_bar: true, file_tab: false });
+    let mut h = harness(Chrome { title_bar: true, file_tab: false, ribbon: true });
     h.state_mut().open_backstage(Page::Home);
     h.run_steps(3);
     assert!(h.state().backstage.is_none(), "opening Backstage directly is ignored");
@@ -62,4 +62,64 @@ fn turning_the_file_tab_off_closes_an_open_backstage() {
     h.state_mut().chrome.file_tab = false;
     h.run_steps(3);
     assert!(h.state().backstage.is_none(), "and closes when the host turns the File tab off");
+}
+
+#[test]
+fn a_host_can_leave_out_the_ribbon_and_keep_the_sheet() {
+    let full = harness(Chrome::default());
+    let h = harness(Chrome { ribbon: false, ..Chrome::default() });
+    assert!(h.query_by_label("Paste").is_none(), "no ribbon groups");
+    assert!(h.query_by_label("AutoSave").is_some(), "the title bar is a separate choice");
+    // The grid moves up into the ribbon's place.
+    let top = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().grid.rect.map(|r| r.min.y).unwrap_or(f32::MAX);
+    assert!(top(&h) + 60.0 < top(&full), "the grid starts higher without the ribbon: {} vs {}", top(&h), top(&full));
+}
+
+#[test]
+fn without_the_ribbon_backstage_still_opens_for_print() {
+    let mut h = harness(Chrome { ribbon: false, ..Chrome::default() });
+    h.state_mut().open_backstage(Page::Print);
+    h.run_steps(3);
+    assert!(h.state().backstage.is_some(), "a host's Print button opens GridCraft's print page");
+}
+
+#[test]
+fn the_control_channel_turns_the_ribbon_off_and_on() {
+    let mut h = harness(Chrome::default());
+    let ctx = h.ctx.clone();
+    let reply = |h: &mut egui_kittest::Harness<'static, SheetApp>, on: bool| match gridcraft_ui_egui::control::handle(
+        h.state_mut(),
+        &ctx,
+        "ui.set",
+        &serde_json::json!({"ribbon": on}),
+    ) {
+        gridcraft_ui_egui::control::Outcome::Done(v) => v,
+        gridcraft_ui_egui::control::Outcome::Screenshot { .. } => serde_json::Value::Null,
+    };
+    let off = reply(&mut h, false);
+    h.run_steps(3);
+    assert_eq!(off["result"]["ribbon"], serde_json::json!(false), "{off}");
+    assert!(!h.state().chrome.ribbon && h.query_by_label("Paste").is_none());
+    reply(&mut h, true);
+    h.run_steps(3);
+    assert!(h.query_by_label("Paste").is_some(), "and back");
+}
+
+#[test]
+fn hiding_the_ribbon_ends_an_open_keytip_sequence() {
+    let mut h = harness(Chrome::default());
+    for key in [egui::Key::F10, egui::Key::H] {
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().keytips.prefix(), Some("H"), "keytips point at the Home tab");
+    // The host hides the ribbon mid-sequence and later shows it again: the next letter is typing,
+    // not the rest of the old sequence.
+    h.state_mut().chrome.ribbon = false;
+    h.run_steps(2);
+    h.state_mut().chrome.ribbon = true;
+    h.run_steps(2);
+    assert_eq!(h.state().keytips.prefix(), None);
 }
