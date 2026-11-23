@@ -1,7 +1,7 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
     Look, MergedArea, cell_text_y, center_across_end, col32, display_text, galley_baseline_bounds, look, merged_edges, paint_border, paint_cf_icon,
-    painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    painted_halign, rotated_text_pos, row_baseline, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -520,38 +520,42 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     } else {
         cp.galley(pos2(x, y), galley.clone(), color);
     }
-    paint_text_decorations(
-        &cp,
-        TextDecoration { x, y: y + text_top, width: w, height: text_height, color, underline: st.font.underline, strike: st.font.strike },
-    );
+    paint_text_decorations(&cp, &galley, pos2(x, y), font.size, color, &st.font);
 }
 
-struct TextDecoration {
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    color: Color32,
-    underline: Underline,
-    strike: bool,
+fn paint_text_decorations(p: &Painter, galley: &egui::Galley, origin: Pos2, size: f32, color: Color32, font: &gridcraft_engine::model::Font) {
+    let (width, lines) = text_decorations(galley, origin, size, font);
+    for points in lines {
+        p.line_segment(points, Stroke::new(width, color));
+    }
 }
 
-fn paint_text_decorations(p: &Painter, decoration: TextDecoration) {
-    let TextDecoration { x, y, width, height, color, underline, strike } = decoration;
-    let baseline = y + height * 0.82;
-    match underline {
-        Underline::None => {}
-        Underline::Double | Underline::DoubleAccounting => {
-            p.line_segment([pos2(x, baseline + 1.0), pos2(x + width, baseline + 1.0)], Stroke::new(1.0, color));
-            p.line_segment([pos2(x, baseline + 3.0), pos2(x + width, baseline + 3.0)], Stroke::new(1.0, color));
-        }
-        _ => {
-            p.line_segment([pos2(x, baseline + 1.0), pos2(x + width, baseline + 1.0)], Stroke::new(1.0, color));
-        }
+/// The underline and strikethrough lines for each row of `galley` painted at `origin`, with their
+/// width. They hang off the row's own baseline: a fraction of the line height misses it, because
+/// the height includes the descent and line gap, which differ by font (Calibri's line gap put the
+/// strike on the baseline, #4401). Offsets and width scale with `size`, the font's pixel size, as
+/// print's do (`print/text.rs`), so the screen and the PDF agree.
+pub(super) fn text_decorations(galley: &egui::Galley, origin: Pos2, size: f32, font: &gridcraft_engine::model::Font) -> (f32, Vec<[Pos2; 2]>) {
+    let underlines: &[f32] = match font.underline {
+        Underline::None => &[],
+        Underline::Single | Underline::SingleAccounting => &[0.12],
+        Underline::Double | Underline::DoubleAccounting => &[0.12, 0.24],
+    };
+    let mut lines = Vec::new();
+    if underlines.is_empty() && !font.strike {
+        return (0.0, lines);
     }
-    if strike {
-        p.line_segment([pos2(x, y + height * 0.55), pos2(x + width, y + height * 0.55)], Stroke::new(1.0, color));
+    for row in &galley.rows {
+        let Some(baseline) = row_baseline(row) else { continue };
+        let span = row.rect().translate(origin.to_vec2());
+        if span.width() <= 0.0 {
+            continue;
+        }
+        let baseline = origin.y + baseline;
+        let offsets = underlines.iter().map(|k| k * size).chain(font.strike.then_some(-0.3 * size));
+        lines.extend(offsets.map(|dy| [pos2(span.left(), baseline + dy), pos2(span.right(), baseline + dy)]));
     }
+    ((size * 0.06).max(1.0), lines)
 }
 
 fn paint_borders(q: &mut QuadrantPaint<'_>, looks: &[(CellRef, Rect, Look, Option<CfLook>)], merges: &[RangeRef]) {
