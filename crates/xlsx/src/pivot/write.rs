@@ -239,31 +239,16 @@ fn range_source_xml(sheet: &str, r: RangeRef) -> String {
     format!("<worksheetSource ref=\"{}\" sheet=\"{}\"/>", r.a1(), esc_attr(&name))
 }
 
-fn header_text(v: &Value) -> String {
-    match v {
-        Value::Empty => String::new(),
-        v => label(v).trim().to_string(),
-    }
-}
-
-fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef) -> Vec<CField> {
+/// The cache's fields: the source's columns, named as the engine names them
+/// ([`gridcraft_model::pivot_source::headers`]); an empty header, which the engine refuses, is
+/// written as `ColumnN`.
+fn cache_fields(wb: &Workbook, si: usize, r: RangeRef) -> Vec<CField> {
+    use gridcraft_model::pivot_source::{header_texts, unique_names};
+    let texts = header_texts(wb, si, r).unwrap_or_default();
+    let texts = texts.into_iter().enumerate().map(|(k, t)| if t.trim().is_empty() { format!("Column{}", k + 1) } else { t });
+    let names = unique_names(texts).unwrap_or_default();
     let mut fields: Vec<CField> = Vec::new();
-    // Lower-case names taken, and the next suffix for each header (linear for repeated headers).
-    let mut taken = std::collections::HashSet::new();
-    let mut next_suffix: HashMap<String, usize> = HashMap::new();
-    for (k, c) in (r.start.col..=r.end.col).enumerate() {
-        let mut h = header_text(&sh.value(CellRef::new(r.start.row, c)).scalar());
-        if h.is_empty() {
-            h = format!("Column{}", k + 1);
-        }
-        let mut n = h.clone();
-        let mut i = next_suffix.get(&h.to_lowercase()).copied().unwrap_or(2);
-        while taken.contains(&n.to_lowercase()) {
-            n = format!("{h}{i}");
-            i += 1;
-        }
-        next_suffix.insert(h.to_lowercase(), i);
-        taken.insert(n.to_lowercase());
+    for (k, n) in names.into_iter().enumerate() {
         fields.push(CField {
             name: n,
             col: Some(k as u32),
@@ -357,7 +342,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         return None;
     }
     let sh = wb.sheet(si)?;
-    let mut fields = cache_fields(sh, r);
+    let mut fields = cache_fields(wb, si, r);
     let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
 
     // Records (rows that aren't entirely blank), read once.

@@ -101,17 +101,24 @@ pub fn column_format(wb: &Workbook, sheet: usize, range: RangeRef, col: u32) -> 
 /// The source's column names: each header as it shows, trimmed, with a repeated one numbered
 /// (`Amount`, `Amount2`). An empty header is an error, as a PivotTable needs labelled columns.
 pub fn headers(wb: &Workbook, sheet: usize, range: RangeRef) -> Result<Vec<String>, String> {
+    unique_names(header_texts(wb, sheet, range)?)
+}
+
+/// The text of each header cell of a source, as [`headers`] reads it before naming the columns:
+/// its value through its number format.
+pub fn header_texts(wb: &Workbook, sheet: usize, range: RangeRef) -> Result<Vec<String>, String> {
     let sh = wb.sheet(sheet).ok_or(INVALID)?;
     // Each style's format is parsed once, however many headers share it.
     let mut formats = HashMap::new();
-    let shown = (range.start.col..=range.end.col).map(|c| {
-        let at = CellRef::new(range.start.row, c);
-        let style = sh.style_id(at);
-        let fmt = formats.entry(style).or_insert_with(|| parse_code(wb.styles.get(style).num_fmt.as_str()));
-        // `format_value` reads an array's first element, and no deeper, as items do.
-        format_value(&sh.value(at), fmt, wb.date_system).plain()
-    });
-    unique_names(shown)
+    Ok((range.start.col..=range.end.col)
+        .map(|c| {
+            let at = CellRef::new(range.start.row, c);
+            let style = sh.style_id(at);
+            let fmt = formats.entry(style).or_insert_with(|| parse_code(wb.styles.get(style).num_fmt.as_str()));
+            // `format_value` reads an array's first element, and no deeper, as items do.
+            format_value(&sh.value(at), fmt, wb.date_system).plain()
+        })
+        .collect())
 }
 
 /// Column names from header texts as [`headers`] makes them: trimmed, a repeated one numbered

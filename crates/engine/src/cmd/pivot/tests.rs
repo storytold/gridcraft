@@ -1824,3 +1824,19 @@ fn an_older_pivottable_keeps_its_fields_through_xlsx() {
     let rows: Vec<&str> = p.rows.iter().map(|f| f.source_col.as_str()).collect();
     assert_eq!(rows, ["Region"]);
 }
+
+/// A header the engine names through its number format (`2026.0`) is the name the XLSX cache
+/// gives it too, so a field on it survives saving as XLSX.
+#[test]
+fn a_formatted_header_keeps_its_field_through_xlsx() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "2026"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.0"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["2026.0"], "values": ["Sales"]})).unwrap();
+    assert_eq!(pt(&s).rows[0].source_col, "2026.0");
+    let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (back, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
+    let p = back.sheets.iter().flat_map(|sh| sh.pivots.iter()).next().unwrap();
+    let rows: Vec<&str> = p.rows.iter().map(|f| f.source_col.as_str()).collect();
+    assert_eq!(rows, ["2026.0"]);
+}
