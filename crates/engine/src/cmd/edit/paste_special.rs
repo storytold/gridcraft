@@ -76,15 +76,27 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("Too many cells to paste as links at once.".into()));
     }
     let same_doc = s.doc()?.uid == clip.doc_uid;
-    let cut_move = clip.cut && same_doc && what == What::All;
-    // A cut empties its cells, so pasting it as links would link to the emptied cells, and a
-    // destination over rows the filter hides would skip cells the cut has taken: both would lose
-    // the cut cells, so both are refused before the source is cleared.
-    if cut_move && link {
-        return Err(EngineError::Other("The cut area can't be pasted as links: paste it without Paste Link.".into()));
-    }
-    if cut_move && skip_rows.range(at.row..at.row.saturating_add(tiles_r.saturating_mul(h))).next().is_some() {
-        return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+    // A cut in this workbook moves its cells: the source is emptied before the destination is
+    // written. As in Excel, it moves only as a plain Paste onto one cell or an area of its own size
+    // and shape. Every other way (a Paste Special option, tiling over a larger or differently shaped
+    // area, a row the filter hides) would write the cut cells somewhere other than one place, or not
+    // at all, after their source was gone, so it is refused here, before anything changes, and the
+    // cut stays pending.
+    let cut_move = clip.cut && same_doc;
+    if cut_move {
+        let plain = what == What::All && !link && !skip_blanks && !transpose && op == "none";
+        if !plain {
+            return Err(EngineError::Other("Cut cells can only be pasted with Paste. To use Paste Special, copy them instead.".into()));
+        }
+        let anchored = cell_param_on(s, p, "at", dest_sheet)?.is_some() || sel.is_single();
+        if !anchored && (sel.height() != h || sel.width() != w) {
+            return Err(EngineError::Other(
+                "The cut cells and the paste area aren't the same size and shape: select one cell, or an area the size of the cut cells.".into(),
+            ));
+        }
+        if skip_rows.range(at.row..at.row.saturating_add(tiles_r.saturating_mul(h))).next().is_some() {
+            return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+        }
     }
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
