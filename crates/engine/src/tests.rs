@@ -7256,3 +7256,120 @@ fn renaming_a_name_a_workbook_definition_uses_onto_a_sheet_name_is_refused() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
     assert!(s.doc().unwrap().wb.names.iter().any(|n| n.name == "Alias" && n.formula.contains("Rate")));
 }
+
+/// The value of `a` on sheet `sheet`.
+fn v_on(s: &Session, sheet: usize, a: &str) -> Value {
+    s.doc().unwrap().wb.sheet(sheet).unwrap().value(CellRef::parse(a).unwrap())
+}
+
+/// The formula text of `a` on sheet `sheet`.
+fn formula_on(s: &Session, sheet: usize, a: &str) -> String {
+    s.doc().unwrap().wb.sheets[sheet].cell(CellRef::parse(a).unwrap()).and_then(|c| c.formula.clone()).map(|f| f.text.clone()).unwrap_or_default()
+}
+
+/// A workbook with Sheet1 and Sheet2, Sheet1 active.
+fn two_sheets() -> Session {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Sheet2"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s
+}
+
+/// A workbook-level definition is read on the sheet that uses it: Sheet2 reads its own `Old`
+/// through it, so renaming the workbook's `Old` leaves the definition and Sheet2's result alone.
+#[test]
+fn renaming_a_name_leaves_a_workbook_definition_a_sheet_reads_its_own_name_through() {
+    let mut s = two_sheets();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=2"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=5", "scope": "Sheet2"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "W", "refersTo": "=Old+1"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=W"})).unwrap();
+    assert_eq!(v_on(&s, 1, "A1"), Value::number(6.0));
+    s.execute("formulas.defineName", json!({"name": "New", "oldName": "Old", "refersTo": "=2"})).unwrap();
+    assert_eq!(v_on(&s, 1, "A1"), Value::number(6.0));
+    assert!(s.doc().unwrap().wb.names.iter().any(|n| n.name == "W" && n.formula == "Old+1"));
+}
+
+/// A rename that also moves the name to one sheet would leave another sheet's uses reading
+/// nothing, so it is refused.
+#[test]
+fn renaming_a_name_into_one_sheets_scope_is_refused_where_another_sheet_uses_it() {
+    let mut s = two_sheets();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=2"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=Old"})).unwrap();
+    assert!(s.execute("formulas.defineName", json!({"name": "New", "oldName": "Old", "refersTo": "=2", "scope": "Sheet1"})).is_err());
+    assert_eq!(v_on(&s, 1, "A1"), Value::number(2.0));
+    assert_eq!(formula_on(&s, 1, "A1"), "Old");
+}
+
+/// A sheet-qualified use (`Sheet1!Old`) follows the rename too.
+#[test]
+fn renaming_a_name_renames_its_sheet_qualified_uses() {
+    let mut s = two_sheets();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=2", "scope": "Sheet1"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=Sheet1!Old*3"})).unwrap();
+    assert_eq!(v_on(&s, 1, "A1"), Value::number(6.0));
+    s.execute("formulas.defineName", json!({"name": "New", "oldName": "Old", "oldScope": "Sheet1", "refersTo": "=2", "scope": "Sheet1"})).unwrap();
+    assert_eq!(formula_on(&s, 1, "A1"), "Sheet1!New*3");
+    assert_eq!(v_on(&s, 1, "A1"), Value::number(6.0));
+}
+
+/// A defined name is read before a table of the same name, so renaming a name to a table's name
+/// would make the table's uses read the name: refused.
+#[test]
+fn renaming_a_name_to_a_tables_name_is_refused() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["k"], [3], [4]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A3", "name": "Tbl"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=100"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=SUM(Tbl)"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::number(7.0));
+    assert!(s.execute("formulas.defineName", json!({"name": "Tbl", "oldName": "Old", "refersTo": "=100"})).is_err());
+    assert_eq!(v(&s, "C1"), Value::number(7.0));
+}
+
+/// `BYROW(A1:B1, SUM)` passes the function SUM. A LAMBDA renamed to `SUM` would be passed
+/// instead, so the rename is refused.
+#[test]
+fn renaming_a_lambda_to_a_function_passed_by_name_is_refused() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "FnOld", "refersTo": "=LAMBDA(r, 99)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=BYROW(A1:B1, SUM)"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::number(3.0));
+    assert!(s.execute("formulas.defineName", json!({"name": "SUM", "oldName": "FnOld", "refersTo": "=LAMBDA(r, 99)"})).is_err());
+    assert_eq!(v(&s, "C1"), Value::number(3.0));
+}
+
+/// Data validation, conditional formatting, charts and PivotTable sources that use a renamed
+/// name follow it, as cell formulas do.
+#[test]
+fn renaming_a_name_renames_it_in_rules_charts_and_pivot_sources() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "C1", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=Sheet1!$C$2:$C$3"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Src", "refersTo": "=Sheet1!$C$1:$D$3"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "=Old"})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "B1", "rule": {"type": "expression", "formula": "=COUNTA(Old)>1", "preset": "greenFill"}}))
+        .unwrap();
+    s.execute("insert.chart", json!({"range": "C1:D3", "type": "line"})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Src", "destination": "Sheet1!F1"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let ch = &mut wb.sheet_mut(0).unwrap().charts[0];
+        ch.series[0].categories = Some("Old".into());
+    }
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Old", "refersTo": "=Sheet1!$C$2:$C$3"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Data", "oldName": "Src", "refersTo": "=Sheet1!$C$1:$D$3"})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(0).unwrap();
+    assert_eq!(sh.validations[0].f1, "Choices");
+    assert_eq!(crate::cmd::data::list_items(&d.wb, 0, CellRef::parse("A1").unwrap(), &sh.validations[0]), vec!["a", "b"]);
+    let gridcraft_model::CfRule::Expression { formula, .. } = &sh.cond_formats[0].rule else { panic!("an expression rule") };
+    assert_eq!(formula, "COUNTA(Choices)>1");
+    assert_eq!(sh.charts[0].series[0].categories.as_deref(), Some("Choices"));
+    assert_eq!(sh.pivots[0].source, "Data");
+}

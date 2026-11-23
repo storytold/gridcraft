@@ -182,7 +182,7 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Whether a list rule's source is a literal list (`"a,b"`, or `a,b` typed without quotes) rather
 /// than a reference or a name to evaluate.
-fn is_literal_list(f: &str) -> bool {
+pub(crate) fn is_literal_list(f: &str) -> bool {
     f.starts_with('"')
         || (!f.contains('!')
             && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))

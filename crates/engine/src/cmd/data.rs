@@ -32,6 +32,7 @@ use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
+pub(crate) use validation::is_literal_list;
 pub use validation::{check_validation, list_items};
 use validation::{circle_invalid, validate_cmd, validation};
 pub(super) use validation::{move_rule_formula, remove_validation_cells};

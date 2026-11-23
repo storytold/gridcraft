@@ -1,13 +1,15 @@
 //! Formulas tab: AutoSum, Insert Function, names, auditing, calculation.
 
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
-use gridcraft_model::{CalcMode, Cell, DefinedName, Formula, Workbook};
+use gridcraft_model::{CalcMode, Cell, DefinedName, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{
     CommandSpec, EngineError, Result, Session, always, bad, bool_param, cell_param, cmd, edit, f64_param, has_doc, ok, stash, str_param,
     target_range, target_ranges, target_sheet, u32_param,
 };
+
+mod rename;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -407,161 +409,35 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         None => None,
     };
     edit(s, |cx| {
-        if let Some((old_name, old_scope)) = &old {
-            cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
-            if !old_name.eq_ignore_ascii_case(&name) {
-                rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name)?;
+        let def = DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false };
+        match &old {
+            // A name given a new name or scope takes the formulas that use it along
+            // ([`rename::rename`]).
+            Some((old_name, old_scope)) => {
+                let Some(i) = cx.wb.names.iter().position(|n| n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope) else {
+                    return Err(bad("formulas.defineName", "no such name to edit"));
+                };
+                if old_name.eq_ignore_ascii_case(&name) && *old_scope == scope {
+                    if let Some(n) = cx.wb.names.get_mut(i) {
+                        *n = def;
+                    }
+                } else {
+                    cx.wb = rename::rename(&cx.wb, i, def)?;
+                }
+                // An edited name moves to the end of the list, as it always has.
+                if i < cx.wb.names.len() {
+                    let edited = cx.wb.names.remove(i);
+                    cx.wb.names.push(edited);
+                }
+            }
+            None => {
+                cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
+                cx.wb.names.push(def);
             }
         }
-        cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
-        cx.wb.names.push(DefinedName { name: name.clone(), scope, formula: refers.clone(), comment: comment.clone(), hidden: false });
         cx.structural = true;
         Ok(json!({"name": name, "refersTo": format!("={refers}")}))
     })
-}
-
-/// Formulas that use a renamed name follow it: cell formulas and other names' definitions, on
-/// the sheets where `old` resolves to the renamed name (its own sheet for a sheet-scoped name;
-/// every sheet without a same-named sheet-level name for a workbook-level one). A call by name
-/// (`Fn(4)` for a defined LAMBDA) follows it too, unless a worksheet function of that name is the
-/// one called. A workbook name renamed to a name a sheet defines for itself would be read as that
-/// sheet's name there, so such a rename is refused (the caller's edit is then dropped).
-fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) -> Result<()> {
-    let shadowed: Vec<usize> = wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(old)).filter_map(|n| n.scope).collect();
-    let applies = |sheet: usize| match old_scope {
-        Some(s) => s == sheet,
-        None => !shadowed.contains(&sheet),
-    };
-    // A worksheet function is called before a defined name of the same name, so such calls stay.
-    let calls_follow = gridcraft_functions::lookup(old).is_none();
-    // Sheets with their own name `new`: there a renamed workbook name would read that name instead.
-    let taken_on: Vec<usize> = match old_scope {
-        None => wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(new)).filter_map(|n| n.scope).collect(),
-        Some(_) => Vec::new(),
-    };
-    // A call renamed to a function's name would call the function instead: a worksheet function,
-    // or one the evaluator handles itself (`ROW`, `OFFSET`), as the evaluator decides.
-    let new_is_function = gridcraft_calc::is_known_function(new);
-    // Set when the rename would change what a formula computes; the rename is then refused.
-    let captured = std::cell::Cell::new(false);
-    // The renamed expression, or `None` when the name doesn't occur in it.
-    let rename = |e: gridcraft_formula::Expr| {
-        if renamed_use_is_captured(&e, old, new, calls_follow, new_is_function) {
-            captured.set(true);
-        }
-        let mut hit = false;
-        let out = e.map(&mut |x| match x {
-            gridcraft_formula::Expr::Name(n) if n.eq_ignore_ascii_case(old) => {
-                hit = true;
-                gridcraft_formula::Expr::Name(new.to_string())
-            }
-            gridcraft_formula::Expr::Call(n, args) if calls_follow && n.eq_ignore_ascii_case(old) => {
-                hit = true;
-                gridcraft_formula::Expr::Call(new.to_string(), args)
-            }
-            o => o,
-        });
-        hit.then_some(out)
-    };
-    let mut redirected = false;
-    for i in 0..wb.sheets.len() {
-        if !applies(i) {
-            continue;
-        }
-        let Some(sh) = wb.sheet_mut(i) else { continue };
-        let formulas: Vec<(CellRef, std::sync::Arc<Formula>)> = sh.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect();
-        for (c, f) in formulas {
-            let Some(e) = f.expr().and_then(rename) else { continue };
-            redirected |= taken_on.contains(&i);
-            let mut nf = Formula::from_expr(e);
-            nf.array = f.array;
-            nf.dynamic = f.dynamic;
-            if let Some(cell) = sh.cells.get_mut(c) {
-                cell.formula = Some(std::sync::Arc::new(nf));
-            }
-        }
-    }
-    for n in wb.names.iter_mut() {
-        if n.scope.is_none_or(applies)
-            && let Some(e) = gridcraft_formula::parse_name(&n.formula).ok().and_then(rename)
-        {
-            // A workbook-level definition is read on whichever sheet uses it, so a sheet with its
-            // own name `new` would read that one there.
-            redirected |= n.scope.map_or(!taken_on.is_empty(), |s| taken_on.contains(&s));
-            n.formula = gridcraft_formula::print(&e);
-        }
-    }
-    if redirected {
-        return Err(EngineError::Other(format!(
-            "The name can't be changed to {new}: a sheet already has its own name {new}, which its formulas would read instead."
-        )));
-    }
-    if captured.get() {
-        return Err(EngineError::Other(format!(
-            "The name can't be changed to {new}: a formula that uses it would then read a function or a LET or LAMBDA name {new} instead."
-        )));
-    }
-    Ok(())
-}
-
-/// Whether renaming `old` to `new` in `e` would make a use of it read something else: a call
-/// renamed to a function's name (the function is called first), or a use of `old` where a LET or
-/// LAMBDA binds `new` (the local is read first). A LET name binds only after its own value, as the
-/// evaluator adds it; names compare as the evaluator compares them ([`gridcraft_formula::same_name`]).
-fn renamed_use_is_captured(e: &gridcraft_formula::Expr, old: &str, new: &str, calls_follow: bool, new_is_function: bool) -> bool {
-    use gridcraft_formula::Expr;
-    let is_new = |b: &Expr| matches!(b, Expr::Name(n) if gridcraft_formula::same_name(n.trim_start_matches('[').trim_end_matches(']'), new));
-    // An explicit stack, with whether a LET or LAMBDA around the node binds `new` there.
-    let mut pending: Vec<(&Expr, bool)> = vec![(e, false)];
-    while let Some((x, inside)) = pending.pop() {
-        match x {
-            Expr::Name(n) if inside && n.eq_ignore_ascii_case(old) => return true,
-            Expr::Call(n, args) => {
-                if calls_follow && n.eq_ignore_ascii_case(old) && (new_is_function || inside) {
-                    return true;
-                }
-                match n.as_str() {
-                    // LET(name1, value1, name2, value2, …, body): each name binds from the next
-                    // value on, so a value is read with only the names before it bound.
-                    "LET" if args.len() >= 3 => {
-                        let mut bound = inside;
-                        let pairs = args.len() / 2;
-                        for (i, a) in args.iter().enumerate() {
-                            if i % 2 == 0 && i / 2 < pairs {
-                                pending.push((a, bound));
-                                // The value after this name is read before it binds.
-                                if let Some(v) = args.get(i + 1) {
-                                    pending.push((v, bound));
-                                }
-                                bound = bound || is_new(a);
-                            } else if i == args.len() - 1 && args.len() % 2 == 1 {
-                                pending.push((a, bound));
-                            }
-                        }
-                    }
-                    // LAMBDA(params…, body): every parameter is bound in the body.
-                    "LAMBDA" => {
-                        let params = args.len().saturating_sub(1);
-                        let bound = inside || args.iter().take(params).any(is_new);
-                        pending.extend(args.iter().map(|a| (a, bound)));
-                    }
-                    _ => pending.extend(args.iter().map(|a| (a, inside))),
-                }
-            }
-            Expr::Array(rows) => pending.extend(rows.iter().flatten().map(|a| (a, inside))),
-            Expr::Unary(_, a) | Expr::Paren(a) => pending.push((a, inside)),
-            Expr::Binary(_, a, b) => {
-                pending.push((a, inside));
-                pending.push((b, inside));
-            }
-            Expr::Invoke(c, args) => {
-                pending.push((c, inside));
-                pending.extend(args.iter().map(|a| (a, inside)));
-            }
-            _ => {}
-        }
-    }
-    false
 }
 
 /// Refuses a name of the shape GridCraft keeps its own workbook data in ([`super::stash`]):

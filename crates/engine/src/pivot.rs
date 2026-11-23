@@ -110,13 +110,26 @@ fn resolve_inner(wb: &Workbook, text: &str, default_sheet: usize, depth: u32) ->
         };
         return Ok((si, r));
     }
-    if sheet.is_none()
-        && let Some(n) = wb.name(t, default_sheet)
-    {
+    if let Some(n) = source_name(wb, t, default_sheet).and_then(|i| wb.names.get(i)) {
         let f = n.formula.clone();
         return resolve_inner(wb, &f, default_sheet, depth + 1);
     }
     Err(INVALID.into())
+}
+
+/// The defined name a PivotTable source names, as [`resolve_source`] reads it: its index in the
+/// workbook's names. A table or a range of that spelling is read first, and a name is only read
+/// unqualified, on `default_sheet`.
+pub fn source_name(wb: &Workbook, text: &str, default_sheet: usize) -> Option<usize> {
+    let t = text.trim().trim_start_matches('=').trim();
+    if t.is_empty() || wb.table(t).is_some() {
+        return None;
+    }
+    let (sheet, body) = split_sheet(t);
+    if sheet.is_some() || RangeRef::parse(body).is_some() {
+        return None;
+    }
+    wb.name_index(t, default_sheet)
 }
 
 const FIELD_NAME_ERR: &str =
