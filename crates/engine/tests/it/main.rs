@@ -23,6 +23,7 @@ mod offset_overflow;
 mod percent_entry;
 mod pivot_unknown_func;
 mod pivotchart_link;
+mod print_scaling;
 mod range_fill_formats;
 mod recently_used;
 mod row_autofit;

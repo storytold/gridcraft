@@ -2,19 +2,16 @@ use super::{
     Align2, Backstage, Icon, Json, Outcome, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, json, pos2, square_button, theme, vec2,
 };
 
-/// Builds the print scope and fit-to-page parameters, caches `file.printPreview` per document revision/options, and draws page thumbnails with navigation plus the print settings and Print action.
+/// Builds the print scope and scaling parameters, caches `file.printPreview` per document revision, active sheet and options, and draws page thumbnails with navigation plus the print settings and Print action.
 pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
-    let Some((uid, revision)) = app.session.active().map(|d| (d.uid, d.revision)) else {
+    let Some((uid, revision, active_sheet)) = app.session.active().map(|d| (d.uid, d.revision, d.wb.active_sheet())) else {
         dim(ui, lang.tr("No workbook is open."));
         return;
     };
-    let mut params = json!({"sheets": if bs.print_all { "all" } else { "active" }});
-    if bs.fit_to_page {
-        params["fitToPage"] = json!(true);
-    }
-    let key = (uid, revision, bs.print_all, bs.fit_to_page);
+    let params = bs.print_params();
+    let key = super::PrintPreviewKey { document: uid, revision, active_sheet, all_sheets: bs.print_all, scaling: bs.scaling };
     if bs.preview.as_ref().is_none_or(|(k, _)| *k != key) {
         let preview = app.session.run("file.printPreview", params.clone()).unwrap_or(Json::Null);
         bs.preview = Some((key, preview));
@@ -49,9 +46,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 .response
                 .accessible_name(lang.tr("Print What"));
             ui.add_space(8.0);
-            if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
-                bs.preview_page = 0;
-            }
+            scaling_picker(ui, lang, bs);
             ui.add_space(8.0);
             if ui.link(lang.tr("Page Setup…")).clicked() {
                 app.open_dialog("pageSetup", json!({}));
@@ -98,6 +93,36 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             });
         });
     });
+}
+
+/// Familiar scaling choices, with an explicit way to preserve the saved page setup.
+fn scaling_picker(ui: &mut Ui, lang: super::Language, bs: &mut Backstage) {
+    use gridcraft_engine::cmd::print::PrintScaling;
+    craft_ui::ComboBox::from_id_salt("backstage_print_scaling")
+        .width(230.0)
+        .selected_text(lang.tr(scaling_label(bs.scaling)))
+        .show_ui(ui, |ui| {
+            for scaling in [PrintScaling::PageSetup, PrintScaling::NoScaling, PrintScaling::Sheet, PrintScaling::Columns, PrintScaling::Rows] {
+                if ui.selectable_label(bs.scaling == scaling, lang.tr(scaling_label(scaling))).clicked() {
+                    bs.scaling = scaling;
+                    bs.preview_page = 0;
+                }
+            }
+        })
+        .response
+        .accessible_name(lang.tr("Print Scaling"));
+}
+
+/// Source labels for the print-job scaling choices.
+fn scaling_label(scaling: gridcraft_engine::cmd::print::PrintScaling) -> &'static str {
+    use gridcraft_engine::cmd::print::PrintScaling;
+    match scaling {
+        PrintScaling::PageSetup => "Use Page Setup",
+        PrintScaling::NoScaling => "No Scaling",
+        PrintScaling::Sheet => "Fit Sheet on One Page",
+        PrintScaling::Columns => "Fit All Columns on One Page",
+        PrintScaling::Rows => "Fit All Rows on One Page",
+    }
 }
 
 /// Most rows and columns one preview page draws (a page holds far fewer at any readable scale).

@@ -1,5 +1,6 @@
 # GridCraft roadmap
 
+> **PR update:** 2026-11-20 · Integrate per-job print scaling with main 61ebc0e3; preserve current Print controls and upstream progress history. Readiness estimates unchanged.
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
 > **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (a selected chart outlines its names, categories and values in Excel's colours, and dragging the values outline's corner changes the chart's data, #4389, #4390; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
@@ -139,6 +140,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
 | 2026-11-02 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver (including the Model Range of Load/Save) and Data Analysis; while collapsed, the arrow keys move the selection and Shift+arrow extends it, and F4 cycles a reference's anchors |
+| 2026-10-30 | File > Print scaling modes share preview and submission parameters without changing saved workbook settings (#2353). |
 | 2026-11-02 | Python mode in the formula bar: Ctrl+Alt+Shift+P, `=PY` then Tab, or editing a Python cell edits its code in the formula bar, with Enter for a new line, Tab to indent and Ctrl+Enter to commit through `python.set`. The code still doesn't run |
 | 2026-11-02 | Python cells as data: `python.set` stores code in a cell, Python cells copy, move, fill and undo like formulas, and `.xlsx` reads and writes Python cells as [MS-XLSX] specifies (`_xlfn._xlws.PY(index,0 or 1)`, the code in the workbook's Python part) with cached values and spills, so such workbooks open with their results; nothing runs Python (new code shows `#BLOCKED!`), and opening a file limits code size, result size and spill ranges |
 | 2026-11-02 | Equations: Insert › Equation (a split button with a gallery of examples) and an editor with quick-insert buttons, the error underlined at its position and a live preview; `insert.equation` and `equation.edit`; LaTeX laid out by RaTeX inside the new `gridcraft-math` crate, capped and panic-guarded, and cached on the shape so that painting never runs the layout engine; xlsx writes Office Math with a plain-text fallback and the source in `descr`, and reads Office Math back into LaTeX; PDF prints equations with the standard Symbol font and `[?]` for anything else |
@@ -284,6 +286,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
 | 2026-11-02 | minor | Progress log: RefEdit reference boxes in dialogs |
+| 2026-11-02 | minor | Print scaling (#2353): preserve upstream page order, verify rotated paper, manual-break precedence and unchanged XLSX settings; readiness unchanged. |
 | 2026-11-02 | minor | Progress log: Python mode in the formula bar |
 | 2026-11-02 | minor | Progress log: Python cells as data |
 | 2026-11-02 | minor | Progress log: equations (Insert › Equation, the editor, gridcraft-math) |
