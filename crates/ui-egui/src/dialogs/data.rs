@@ -1,7 +1,7 @@
 #[cfg(test)]
 use super::show::build_params;
 use super::show::{form_fields, ok_cancel};
-use super::{Dialog, Field, Icon, Json, SheetApp, json, vec2};
+use super::{Dialog, Field, Json, SheetApp, json, vec2};
 
 /// Initial values of the Data Validation form: the rule stored on the active cell, so OK without
 /// edits keeps it; a plain list rule when the cell has none.
@@ -180,109 +180,8 @@ pub(super) fn advanced_filter_form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Di
     ui.allocate_ui(vec2(ui.available_width(), ui.spacing().interact_size.y + 8.0), |ui| ok_cancel(ui, confirm, open));
 }
 
-/// Draws the sort-level editor: header toggle, column/by/order controls, add/remove level, and `data.sort` on confirmation.
-pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let lang = app.ui.language;
-    let mut header = d.values.get("header").and_then(Json::as_bool).unwrap_or(true);
-    ui.checkbox(&mut header, "My list has headers");
-    d.values.insert("header".into(), json!(header));
-    let mut levels: Vec<Json> = d.values.get("levels").and_then(Json::as_array).cloned().unwrap_or_default();
-    // Columns of the region around the active cell, labelled with their header (or first value).
-    let columns: Vec<(String, String)> = app
-        .session
-        .active()
-        .and_then(|d| {
-            let sh = d.wb.active()?;
-            let region = gridcraft_engine::selection::current_region(sh, d.selection.active);
-            Some(
-                (region.start.col..=region.end.col)
-                    .map(|c| {
-                        let letter = gridcraft_engine::core::col_to_letters(c);
-                        // The region starts at the header row when one is present, so the
-                        // label always comes from start.row: header text with headers on,
-                        // first data value with them off.
-                        let label_row = region.start.row;
-                        let text = gridcraft_engine::display::cell_text(&d.wb, sh, gridcraft_engine::core::CellRef::new(label_row, c));
-                        let text: String = text.chars().take(24).collect();
-                        (letter.clone(), if text.is_empty() { letter } else { format!("{letter}: {text}") })
-                    })
-                    .collect(),
-            )
-        })
-        .unwrap_or_default();
-    let mut remove = None;
-    for (i, lv) in levels.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            let label = ui.label(lang.tr(if i == 0 { "Sort by" } else { "Then by" }));
-            let mut col = lv["column"].as_str().unwrap_or("A").to_string();
-            if columns.is_empty() {
-                ui.add(egui::TextEdit::singleline(&mut col).desired_width(50.0)).labelled_by(label.id);
-            } else {
-                // The closed box shows the same "B: Revenue" label as the list, not the bare letter (#3446).
-                let shown =
-                    columns.iter().find(|(letter, _)| letter.eq_ignore_ascii_case(&col)).map_or_else(|| col.clone(), |(_, label)| label.clone());
-                craft_ui::ComboBox::from_id_salt(("sort_col", i))
-                    .selected_text(shown)
-                    .show_ui(ui, |ui| {
-                        for (letter, label) in &columns {
-                            ui.selectable_value(&mut col, letter.clone(), label.as_str());
-                        }
-                    })
-                    .response
-                    .labelled_by(label.id);
-            }
-            lv["column"] = json!(col.to_ascii_uppercase());
-            let mut by = lv["by"].as_str().unwrap_or("values").to_string();
-            craft_ui::ComboBox::from_id_salt(("by", i))
-                .selected_text(match by.as_str() {
-                    "cellColor" => "Cell Color",
-                    "fontColor" => "Font Color",
-                    _ => "Cell Values",
-                })
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut by, "values".into(), "Cell Values");
-                    ui.selectable_value(&mut by, "cellColor".into(), "Cell Color");
-                    ui.selectable_value(&mut by, "fontColor".into(), "Font Color");
-                })
-                .response
-                .accessible_name(lang.tr("Sort On"));
-            lv["by"] = json!(by);
-            let mut desc = lv["order"].as_str() == Some("desc");
-            ui.radio_value(&mut desc, false, "A to Z");
-            ui.radio_value(&mut desc, true, "Z to A");
-            lv["order"] = json!(if desc { "desc" } else { "asc" });
-            if crate::widgets::icon_button(ui, Icon::Close, crate::theme::Tokens::get(ui.ctx()).text_dim, "Remove level", vec2(18.0, 18.0)).clicked()
-            {
-                remove = Some(i);
-            }
-        });
-    }
-    if let Some(i) = remove
-        && levels.len() > 1
-    {
-        levels.remove(i);
-    }
-    if ui.button("+ Add Level").clicked() {
-        let used: Vec<String> = levels.iter().filter_map(|l| l.get("column").and_then(Json::as_str).map(str::to_string)).collect();
-        let next = columns
-            .iter()
-            .map(|(l, _)| l)
-            .find(|l| !used.contains(l))
-            .cloned()
-            .or_else(|| columns.last().map(|(l, _)| l.clone()))
-            .unwrap_or_else(|| "B".into());
-        levels.push(json!({"column": next, "order": "asc"}));
-    }
-    d.values.insert("levels".into(), Json::Array(levels.clone()));
-    let mut open = true;
-    ok_cancel(ui, confirm, &mut open);
-    if *confirm {
-        app.run_or_alert("data.sort", json!({"header": header, "keys": levels}));
-    }
-    if !open {
-        *confirm = true;
-    }
-}
+// Custom Sort lives in its own module; `show` reaches it from here.
+pub(super) use super::sort_dialog::sort;
 
 #[cfg(test)]
 mod data_validation_tests {
