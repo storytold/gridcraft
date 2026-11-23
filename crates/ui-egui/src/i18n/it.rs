@@ -770,7 +770,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Colore cella",
         "A to Z" => "Dalla A alla Z",
         "Z to A" => "Dalla Z alla A",
-        "+ Add Level" => "+ Aggiungi livello",
+        "Add Level" => "Aggiungi livello",
+        "Delete Level" => "Elimina livello",
+        "Copy Level" => "Copia livello",
+        "Move Up" => "Sposta su",
+        "Move Down" => "Sposta giù",
+        "Order" => "Ordine",
+        "Sort On" => "Ordina in base a",
+        "Sort|Column" => "Colonna",
+        "Column {letters}" => "Colonna {letters}",
+        "Smallest to Largest" => "Dal più piccolo al più grande",
+        "Largest to Smallest" => "Dal più grande al più piccolo",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Chiudi la finestra di dialogo Ordina prima di cambiare o modificare i fogli di lavoro."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Torna al foglio di lavoro originale per ordinare oppure annulla.",
         "New…" => "Nuovo…",
         "Edit…" => "Modifica…",
         "Name" => "Nome",
@@ -1021,6 +1035,119 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostra",
         "Collapse dialog" => "Comprimi finestra di dialogo",
         "Expand dialog" => "Espandi finestra di dialogo",
+        "Numerical Count" => "Conteggio numeri",
+        "Minimum" => "Minimo",
+        "Maximum" => "Massimo",
+        "Circular References: {cell}" => "Riferimenti circolari: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Larghezza: {chars} ({pixels} pixel)",
+        "Height: {points} ({pixels} pixels)" => "Altezza: {points} ({pixels} pixel)",
+        "Picture in cell" => "Immagine nella cella",
+        "Picture: {alt}" => "Immagine: {alt}",
+        "Format Control: {name}" => "Formato controllo: {name}",
+        "Error at character {position}: {message}" => "Errore al carattere {position}: {message}",
+        "Macro definitions are not supported in equations." => "Le definizioni di macro non sono supportate nelle equazioni.",
+        "A % can't be combined with a link in an equation." => "Un % non può essere combinato con un collegamento in un'equazione.",
+        "Equations can nest at most 32 levels deep." => "Le equazioni possono essere annidate al massimo su 32 livelli.",
+        "An equation can be at most 4096 bytes long." => "Un'equazione può essere lunga al massimo 4096 byte.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Un'equazione può avere al massimo 2500 celle di matrice (righe per la riga più larga)."
+        }
+        "This equation is too large to draw." => "Questa equazione è troppo grande per essere disegnata.",
+        "This equation could not be laid out." => "Impossibile impaginare questa equazione.",
+        "Saved macro “{name}” ({steps} step)" => "Macro “{name}” salvata ({steps} passaggio)",
+        "Saved macro “{name}” ({steps} steps)" => "Macro “{name}” salvata ({steps} passaggi)",
+        "without {key}: another macro took it while recording" => "senza {key}: un’altra macro l’ha preso durante la registrazione",
+        "Recording stopped" => "Registrazione interrotta",
+        "Macro “{name}” stopped: {message}" => "Macro “{name}” interrotta: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Macro “{name}” eseguita ({steps} passaggio)",
+        "Ran macro “{name}” ({steps} steps)" => "Macro “{name}” eseguita ({steps} passaggi)",
+        "Double superscript" => "Apice doppio",
+        "Double subscript" => "Pedice doppio",
+        "Extra }" => "} in eccesso",
+        "Unexpected end of input in a macro argument" => "Fine imprevista dell'input in un argomento di macro",
+        "Expected \\right after \\left" => "Previsto \\right dopo \\left",
+        "\\middle must be within \\left and \\right" => "\\middle deve trovarsi tra \\left e \\right",
+        "Invalid environment name" => "Nome di ambiente non valido",
+        "Expected \\end after environment body" => "Previsto \\end dopo il corpo dell'ambiente",
+        "Expected URL" => "Previsto un URL",
+        "\\tag requires an argument" => "\\tag richiede un argomento",
+        "only one infix operator per group" => "Un solo operatore infisso per gruppo",
+        "Expected color token" => "Previsto un colore",
+        "Expected size for \\raisebox" => "Prevista una dimensione per \\raisebox",
+        "Expected size for \\rule width" => "Prevista una dimensione per la larghezza di \\rule",
+        "Expected size for \\rule height" => "Prevista una dimensione per l'altezza di \\rule",
+        "Cannot use both \\tag and \\nonumber in the same row" => "Non si possono usare \\tag e \\nonumber nella stessa riga",
+        "Multiple \\tag in a row" => "Più \\tag in una riga",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag deve trovarsi alla fine della riga, dopo il corpo dell'equazione",
+        "Multiple \\nonumber in a row" => "Più \\nonumber in una riga",
+        "\\nonumber must appear at the end of the row" => "\\nonumber deve trovarsi alla fine della riga",
+        "Too many tab characters: &" => "Troppi caratteri di tabulazione: &",
+        "Invalid column alignment for array" => "Allineamento di colonna non valido per array",
+        "Expected column alignment character" => "Previsto un carattere di allineamento di colonna",
+        "Expected l or c or r" => "Previsto l, c o r",
+        "Expected ]" => "Prevista ]",
+        "Unexpected end of CD row after @" => "Fine imprevista della riga CD dopo @",
+        "Invalid column alignment for subarray" => "Allineamento di colonna non valido per subarray",
+        "{subarray} can contain only one column" => "{subarray} può contenere una sola colonna",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "prooftree ha un \\LeftLabel o \\RightLabel senza un comando di inferenza successivo"
+        }
+        "Recursion limit exceeded" => "Limite di ricorsione superato",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Troppe espansioni di macro: ciclo infinito o impostazione maxExpand troppo bassa"
+        }
+        "Expected raw style for \\htmlStyle" => "Previsto uno stile grezzo per \\htmlStyle",
+        "\\verb assertion failed" => "Verifica di \\verb non riuscita",
+        "Undefined control sequence: {name}" => "Sequenza di controllo non definita: {name}",
+        "Expected '{expected}', got '{got}'" => "Previsto '{expected}', trovato '{got}'",
+        "Expected group after '{symbol}'" => "Previsto un gruppo dopo '{symbol}'",
+        "Expected delimiter as argument to '{function}'" => "Previsto un delimitatore come argomento di '{function}'",
+        "Expected group as argument to '{function}'" => "Previsto un gruppo come argomento di '{function}'",
+        "Got function '{function}' with no arguments as superscript" => "Funzione '{function}' senza argomenti usata come apice",
+        "Got function '{function}' with no arguments as subscript" => "Funzione '{function}' senza argomenti usata come pedice",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Funzione '{function}' senza argomenti usata come argomento di '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Funzione '{function}' senza argomenti usata come \\tag",
+        "Can't use function '{function}' in text mode" => "La funzione '{function}' non si può usare in modalità testo",
+        "Can't use function '{function}' in math mode" => "La funzione '{function}' non si può usare in modalità matematica",
+        "Invalid color: '{color}'" => "Colore non valido: '{color}'",
+        "Invalid size: '{size}'" => "Dimensione non valida: '{size}'",
+        "Invalid unit: '{unit}'" => "Unità non valida: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Delimitatore '{delimiter}' non valido dopo '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Tipo di delimitatore '{type}' non valido dopo '{function}'",
+        "Invalid delimiter type '{type}'" => "Tipo di delimitatore '{type}' non valido",
+        "No such environment: {name}" => "Ambiente sconosciuto: {name}",
+        "Expected argument to \\begin{{name}}" => "Previsto un argomento per \\begin{{name}}",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Mancata corrispondenza: \\begin{{begin}} chiuso da \\end{{end}}",
+        "{command} valid only within array environment" => "{command} è valido solo in un ambiente array",
+        "Mismatched {command}" => "{command} senza corrispondenza",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "Previsto &, \\\\, \\cr o \\end, trovato '{got}'",
+        "Unknown column alignment: {alignment}" => "Allineamento di colonna sconosciuto: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Troppe formule in una riga: previste {expected}, trovate {got}",
+        "Unknown CD directive: @{directive}" => "Direttiva CD sconosciuta: @{directive}",
+        "Expected argument for {command}" => "Previsto un argomento per {command}",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "{command} richiede {count} premessa/e, ma ne sono disponibili solo {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} è valido solo come comando bussproofs supportato in prooftree"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "prooftree è terminato con {count} elemento/i nella pila di dimostrazione, previsto 1"
+        }
+        "\\@char has non-numeric argument {argument}" => "\\@char ha un argomento non numerico {argument}",
+        "\\@char with invalid code point {code}" => "\\@char con punto di codice non valido {code}",
+        "Invalid environment name character: {character}" => "Carattere non valido nel nome dell'ambiente: {character}",
+        "Copy Cells" => "Copia celle",
+        "Fill Series" => "Riempi serie",
+        "Fill Formatting Only" => "Riempi solo formattazione",
+        "Fill Without Formatting" => "Riempi senza formattazione",
+        "Fill Days" => "Riempi giorni",
+        "Fill Weekdays" => "Riempi giorni feriali",
+        "Fill Months" => "Riempi mesi",
+        "Fill Years" => "Riempi anni",
+        "Auto Fill Options" => "Opzioni di riempimento automatico",
         _ => return None,
     })
 }
