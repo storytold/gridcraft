@@ -313,6 +313,33 @@ fn a_row_wider_than_the_grid_is_refused() {
     assert!(rep.warnings.iter().any(|w| w.contains("damaged")), "{:?}", rep.warnings);
 }
 
+#[test]
+fn partial_sheet_read_retains_rows_and_pre_damage_layout() {
+    let mut body = String::from(
+        r#"<sheetFormatPr defaultRowHeight="24" customHeight="1"/><cols><col min="1" max="1" width="20" customWidth="1"/></cols><sheetData><row r="1"><c r="A1"><v>5</v></c></row></sheetData><extLst>"#,
+    );
+    for _ in 0..5000 {
+        body.push_str("<x>");
+    }
+    let (wb, rep) = read_xlsx(&minimal(&body, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(gridcraft_core::CellRef::new(0, 0)), gridcraft_core::Value::Number(5.0));
+    assert!((s.default_row_height - 32.0).abs() < 0.01, "{}", s.default_row_height);
+    assert!(s.cols.contains_key(&0), "pre-damage column width should be retained");
+    assert!(rep.warnings.iter().any(|w| w.contains("damaged") && w.contains("kept 1 rows")), "{:?}", rep.warnings);
+
+    // Oversized mergeCells drops the merges without discarding earlier rows.
+    let merges = format!(
+        r#"<sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData><mergeCells>{}</mergeCells>"#,
+        r#"<mergeCell ref="A1:B2"/>"#.repeat(crate::xml::MAX_XML_NODES + 1)
+    );
+    let (wb, rep) = read_xlsx(&minimal(&merges, &[], "", "")).unwrap();
+    let s = wb.sheet(0).unwrap();
+    assert_eq!(s.value(gridcraft_core::CellRef::new(0, 0)), gridcraft_core::Value::Number(7.0));
+    assert!(s.merges.is_empty());
+    assert!(rep.warnings.iter().any(|w| w.contains("damaged")), "{:?}", rep.warnings);
+}
+
 /// #2159: overlapping `<col min=1 max=16384>` entries share one budget of column writes.
 #[test]
 fn overlapping_column_entries_have_a_budget() {
