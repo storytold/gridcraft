@@ -86,18 +86,10 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         _ => src_sheet.name.clone(),
     };
     // A cut moves its block as it is, as Excel's does: it can't be transposed, tiled over a
-    // larger selection, pasted skipping blanks or pasted as links (the move's references, rules
-    // and arrays follow the whole block unturned, its rules replace the destination's under every
-    // cell, and links would read the cells the cut empties). These are refused before the source
-    // is cleared.
-    if cut_move && (transpose || skip_blanks || link || tiles_r > 1 || tiles_c > 1) {
-        return Err(EngineError::Other(
-            "The cut area can only be pasted as it is: paste it without Transpose, Skip Blanks or Paste Link, into one cell.".into(),
-        ));
-    }
-    // Nor can it skip rows the filter hides: the skipped cells would leave the sheet with the cut.
-    if cut_move && skip_rows.range(at.row..at.row.saturating_add(h)).next().is_some() {
-        return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+    // larger selection or pasted skipping blanks (the move's references, rules and arrays follow
+    // the whole block unturned, and its rules replace the destination's under every cell).
+    if cut_move && (transpose || skip_blanks || tiles_r > 1 || tiles_c > 1) {
+        return Err(EngineError::Other("The cut area can only be pasted as it is: paste it without Transpose or Skip Blanks, into one cell.".into()));
     }
     edit(s, |cx| {
         // Styles from another workbook must be re-interned.

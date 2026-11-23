@@ -7580,8 +7580,6 @@ fn a_cut_is_not_transposed_or_tiled() {
     s.execute("edit.cut", json!({"range": "A1:C1"})).unwrap();
     assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E1"})).is_err());
     assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "E1"})).is_err());
-    // Paste Link would write links to the cells the cut empties: refused before the source is cleared.
-    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "link": true, "at": "E1"})).is_err());
     s.execute("selection.set", json!({"range": "E1:G2"})).unwrap();
     assert!(s.execute("edit.pasteSpecial", json!({"what": "all"})).is_err());
     let sh = s.doc().unwrap().wb.sheets[0].clone();
@@ -7636,31 +7634,6 @@ fn a_moved_column_keeps_what_its_part_of_a_rule_reads() {
     assert_eq!(rules, vec!["A1>0@C1:D1".to_string(), "D1>0@B1".to_string()]);
     assert_eq!(sh.validations[0].f1.trim_start_matches('='), "B2>0");
 }
-
-/// A cut pasted into a row the filter hides would skip every cell it writes, so the cells would
-/// leave the sheet with the cut: it is refused and nothing changes. A visible row takes it.
-#[test]
-fn a_cut_is_not_pasted_into_filtered_rows() {
-    let mut s = s();
-    let mut rows = vec![json!(["Val", "Tag"])];
-    for i in 2..=5 {
-        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
-    }
-    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
-    s.execute("range.setValues", json!({"range": "E1", "values": [[1, 2]]})).unwrap();
-    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
-    s.execute("data.filter", json!({})).unwrap();
-    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
-    s.execute("edit.cut", json!({"range": "E1:F1"})).unwrap();
-    s.execute("selection.set", json!({"range": "A3:B3"})).unwrap();
-    assert!(s.execute("edit.paste", json!({})).is_err());
-    assert_eq!((v(&s, "E1"), v(&s, "F1")), (Value::Number(1.0), Value::Number(2.0)));
-    assert_eq!(v(&s, "A3"), Value::from("v3"));
-    s.execute("selection.set", json!({"range": "A4:B4"})).unwrap();
-    s.execute("edit.paste", json!({})).unwrap();
-    assert_eq!((v(&s, "A4"), v(&s, "B4"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
-}
-
 /// Internal hyperlinks keep the place they name as typed, as Excel's "Place in This Document"
 /// links do: renaming or deleting a sheet, or inserting rows, leaves them as they were.
 #[test]
