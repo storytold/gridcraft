@@ -149,6 +149,18 @@ fn stock_with_volume_keeps_its_stock_group() {
     assert_eq!((1..5).map(|i| back.series_kind(i)).collect::<Vec<_>>(), vec![ChartKind::Stock; 4]);
 }
 
+/// A stock series too few for a stock group is saved as a line in the line group already on its
+/// axes: the stacked lines after it stay stacked.
+#[test]
+fn a_lone_stock_series_does_not_unstack_the_lines_beside_it() {
+    use ChartKind::*;
+    let chart = chart_of(Combo, &[(Some(Stock), false), (Some(LineStacked), false), (Some(LineStacked), false)]);
+    let (xml, back) = round_trip(&chart);
+    assert_eq!(xml.matches("<c:lineChart>").count(), 1, "{xml}");
+    assert!(xml.contains("<c:grouping val=\"stacked\"/>"), "{xml}");
+    assert_eq!((back.series_kind(1), back.series_kind(2)), (LineStacked, LineStacked), "{xml}");
+}
+
 /// The primary axes are the pair whose value axis is on the left, whichever group the file
 /// lists first.
 #[test]

@@ -1022,17 +1022,16 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             out.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None)
         };
         // A stock group holds 3 or 4 series (high-low-close, open-high-low-close); others are
-        // lines.
-        let out: Vec<(G, Vec<(usize, &Series)>)> = out
-            .into_iter()
-            .map(|(g, m)| if g == G::Stock && !(3..=4).contains(&m.len()) { (G::Line { stacked: false, markers: false }, m) } else { (g, m) })
-            .collect();
+        // lines, which join a line group already there rather than setting its grouping.
+        let (out, stock_lines): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, m)| *g != G::Stock || (3..=4).contains(&m.len()));
+        let stock_lines = stock_lines.into_iter().map(|(_, m)| (G::Line { stacked: false, markers: false }, m));
         // One group per type on a pair of axes (as Excel keeps them; `Chart::series_kind` gives
         // the series of one type one grouping). Groups that fit the axes come first, so a group
         // moved onto them joins one of its type there rather than setting its grouping.
         let (fits, moved): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, _)| fit_axes(*g, family) == *g);
         let mut fitted: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
-        for (g, members) in fits.into_iter().chain(moved.into_iter().map(|(g, m)| (fit_axes(g, family), m))) {
+        let moved = moved.into_iter().chain(stock_lines).map(|(g, m)| (fit_axes(g, family), m));
+        for (g, members) in fits.into_iter().chain(moved) {
             match fitted.iter_mut().find(|(k, _)| std::mem::discriminant(k) == std::mem::discriminant(&g)) {
                 Some((_, m)) => m.extend(members),
                 None => fitted.push((g, members)),
