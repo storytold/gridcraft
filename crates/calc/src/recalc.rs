@@ -248,6 +248,11 @@ impl Calc {
 
     /// Rebuilds the graph from scratch.
     pub fn rebuild(&mut self, wb: &Workbook) {
+        // A rebuild is also the panic-recovery path (`Session::execute`): a calculation that
+        // panicked mid-run never cleared its sheet scope or standing spill state, and neither
+        // may leak into later calculations on other sheets.
+        self.scope = None;
+        self.standing = Standing::default();
         self.graph = Graph::default();
         let mut circ = Vec::new();
         self.spill_errors.clear();
@@ -1324,6 +1329,42 @@ pub(crate) mod tests {
         assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));
         assert!(host.cycles.is_empty());
         assert!(host.suspensions <= 3, "{} suspensions", host.suspensions);
+    }
+
+    /// A Calculate Sheet run that panics leaves its sheet scope and standing spill state
+    /// behind (`recalc_every` clears them only when its run returns). `Session::execute`
+    /// recovers by rebuilding, so the rebuild must clear both: a later edit's spill
+    /// follow-up round on another sheet must not be filtered to the failed command's sheet.
+    #[test]
+    fn a_panicked_calculate_sheet_does_not_scope_later_calculations() {
+        let mut wb = Workbook::new();
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet2")));
+        let mut calc = Calc::new();
+        fn set(wb: &mut Workbook, calc: &mut Calc, at: &str, input: &str) {
+            let cell = if input.starts_with('=') {
+                Cell::formula(Formula::new(input))
+            } else {
+                Cell::value(gridcraft_core::parse::parse_input(input, wb.date_system).value)
+            };
+            let at = CellRef::parse(at).unwrap();
+            wb.sheet_mut(0).unwrap().cells.set(at, cell);
+            calc.cells_changed(wb, &[(0, at)]);
+        }
+        set(&mut wb, &mut calc, "A1", "3");
+        set(&mut wb, &mut calc, "B1", "=SEQUENCE(A1)");
+        set(&mut wb, &mut calc, "C1", "=SUM(B1#)");
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C1").unwrap()), Value::Number(6.0));
+        // The state a panicked Calculate Sheet on Sheet2 leaves behind.
+        calc.scope = Some(1);
+        calc.standing.held = true;
+        calc.standing.keys.insert((1, CellRef::new(0, 0)));
+        // The recovery `Session::execute` performs after a panicked command.
+        calc.rebuild(&wb);
+        assert_eq!(calc.scope, None);
+        assert!(!calc.standing.held && calc.standing.keys.is_empty() && calc.standing.areas.is_empty());
+        // Growing the spill on Sheet1 still recalculates the formula reading it.
+        set(&mut wb, &mut calc, "A1", "5");
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C1").unwrap()), Value::Number(15.0));
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the
