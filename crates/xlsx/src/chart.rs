@@ -8,10 +8,12 @@ use craft_drawingml::color::SchemeSlot;
 use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, TrendlineLabelFormat, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
-use crate::xml::{El, esc, num};
+use crate::xml::{El, esc, esc_attr, num};
 
 // ---------------------------------------------------------------- reading
 
@@ -113,6 +115,11 @@ fn map_trendline(t: &DmlTrendline, el: Option<&El>) -> Trendline {
     let forecast = |name: &str, dml: Option<f64>| {
         Trendline::clamp_forecast(el.and_then(|e| e.child(name)).and_then(|c| c.attr_f64("val")).or(dml).unwrap_or(0.0))
     };
+    let label_format = el.and_then(|e| e.path(&["trendlineLbl", "numFmt"])).and_then(|format| {
+        let code = format.attr("formatCode")?;
+        let source_linked = format.flag("sourceLinked", false);
+        (code != "General" || source_linked).then(|| TrendlineLabelFormat { code: code.to_string(), source_linked })
+    });
     Trendline {
         kind,
         name: t.name.clone(),
@@ -121,6 +128,7 @@ fn map_trendline(t: &DmlTrendline, el: Option<&El>) -> Trendline {
         intercept: t.intercept,
         display_equation: el.and_then(|e| e.child("dispEq")).map_or(t.disp_eq, |c| c.flag("val", true)),
         display_r_squared: el.and_then(|e| e.child("dispRSqr")).map_or(t.disp_r_sqr, |c| c.flag("val", true)),
+        label_format,
         color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
         width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0),
         dash: ln.and_then(|l| l.child("prstDash")).and_then(|d| d.attr("val")).and_then(|v| DASHES.iter().find(|(_, n)| *n == v).map(|(d, _)| *d)),
@@ -679,8 +687,9 @@ fn trendline_xml(t: &Trendline, wb: &Workbook) -> String {
         let _ = write!(x, "<c:intercept val=\"{}\"/>", num(i));
     }
     let _ = write!(x, "<c:dispRSqr val=\"{}\"/><c:dispEq val=\"{}\"/>", t.display_r_squared as u8, t.display_equation as u8);
-    if t.display_r_squared || t.display_equation {
-        x.push_str("<c:trendlineLbl><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/></c:trendlineLbl>");
+    if t.display_r_squared || t.display_equation || t.label_format.is_some() {
+        let (code, linked) = t.label_format.as_ref().map_or(("General", false), |format| (format.code.as_str(), format.source_linked));
+        let _ = write!(x, "<c:trendlineLbl><c:numFmt formatCode=\"{}\" sourceLinked=\"{}\"/></c:trendlineLbl>", esc_attr(code), u8::from(linked));
     }
     x.push_str("</c:trendline>");
     x
