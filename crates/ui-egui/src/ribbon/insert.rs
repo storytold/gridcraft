@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep};
+use super::controls::{act, anchor_keytip, control_keytip, group_column, invoke, popup_command, sep};
 use super::{
     Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
 };
@@ -72,7 +72,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         // Menu-style: with no chart type, run_or_alert opens the Insert Chart dialog.
         act(app, "insert.recommendedCharts", json!({}));
     }
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         ui.horizontal(|ui| {
             for (icon, tip, cid, subs) in [
                 (
@@ -171,7 +171,7 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     // default size). Their key tips run the command at the active cell.
     use gridcraft_engine::model::ControlKind;
     let placing = app.grid.placing;
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         for (icon, kind, label, tip, id) in [
             (Icon::Button, ControlKind::Button, "Button", "Draw a button that runs a macro or a command", "insert.button"),
             (Icon::Slider, ControlKind::Slider, "Slider", "Draw a slider that sets a whole number in a linked cell", "insert.slider"),

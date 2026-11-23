@@ -152,6 +152,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                 }
                 let scroll = area.show(ui, |ui| {
                     let body = |ui: &mut Ui| {
+                        controls::reset_column_seq(ui);
                         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                         match app.ui.ribbon_tab.as_str() {
                             "Home" => home(app, ui),

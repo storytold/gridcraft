@@ -1,5 +1,47 @@
 use super::{Rect, Sense, SheetApp, Stroke, StrokeKind, Style, Tokens, Ui, keytip_table, pos2, theme, vec2};
 
+/// Resets the per-frame ribbon column counter before drawing an RTL ribbon tab body.
+pub(super) fn reset_column_seq(ui: &Ui) {
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique("ribbon_col_seq"), 0usize));
+}
+
+/// Draws a vertical ribbon group. When laying out right-to-left, bounds the group to its measured
+/// LTR width so `ui.vertical` / nested `ui.horizontal` cannot anchor to the scroll area's far-left
+/// `origin.x` instead of advancing cleanly from the right edge.
+#[track_caller]
+pub(super) fn group_column(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
+    let lang = crate::i18n::current(ui.ctx());
+    if !lang.is_rtl() {
+        ui.vertical(body);
+        return;
+    }
+    let seq_id = egui::Id::unique("ribbon_col_seq");
+    let seq = ui.data_mut(|d| {
+        let n = d.get_temp::<usize>(seq_id).unwrap_or(0);
+        d.insert_temp(seq_id, n + 1);
+        n
+    });
+    let loc = std::panic::Location::caller();
+    let col_id = ui.scope_id().with(("ribbon_col", seq, loc.file(), loc.line(), loc.column(), lang.code(), ui.ctx().pixels_per_point().to_bits()));
+    if ui.layout().prefer_right_to_left() {
+        if let Some(w) = ui.data(|d| d.get_temp::<f32>(col_id)) {
+            let h = ui.available_size_before_wrap().y;
+            let r = ui.allocate_ui_with_layout(vec2(w, h), egui::Layout::top_down(egui::Align::Max), body).response;
+            if (r.rect.width() - w).abs() > 0.5 {
+                ui.data_mut(|d| d.insert_temp(col_id, r.rect.width()));
+                ui.ctx().request_repaint();
+            }
+        } else {
+            let r = ui.vertical(body).response;
+            ui.data_mut(|d| d.insert_temp(col_id, r.rect.width()));
+            ui.ctx().request_repaint();
+        }
+    } else {
+        let r = ui.vertical(body).response;
+        ui.data_mut(|d| d.insert_temp(col_id, r.rect.width()));
+    }
+}
+
 pub(super) fn sep(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());

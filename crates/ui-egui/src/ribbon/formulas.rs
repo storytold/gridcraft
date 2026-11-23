@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, invoke, keytip, menu_items, popup_command, sep};
+use super::controls::{act, anchor_keytip, control_keytip, group_column, invoke, keytip, menu_items, popup_command, sep};
 use super::{Cat, Icon, SheetApp, Tokens, Ui, big_button, big_split_button, json, keytip_table, small_button, small_split_button};
 use crate::function_library;
 use crate::icons::FnGlyph;
@@ -91,7 +91,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     let forced = invoke(app, "formulas.autoSum");
     egui::Popup::menu(&sum_arrow).open_memory(popup_command(forced, sum_arrow.clicked())).show(|ui| function_library::auto_sum_menu(app, ui));
     for column in LIBRARY.chunks(3) {
-        ui.vertical(|ui| {
+        group_column(ui, |ui| {
             for item in column {
                 library_button(app, ui, item);
             }
@@ -103,7 +103,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.open_dialog("nameManager", json!({}));
     }
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         let __k = small_button(ui, Icon::Name, "Define Name", "Define Name", false);
         control_keytip(app, ui, &__k, "dialog:defineName");
         if __k.clicked() {
@@ -149,7 +149,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         if small_button(ui, Icon::Trace, "Trace Precedents", "Trace Precedents", false).clicked()
             && let Ok(r) = app.run("formulas.tracePrecedents", json!({}))
         {
@@ -164,7 +164,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             app.grid.trace = None;
         }
     });
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         let __k = small_button(ui, Icon::Fx, "Show Formulas", "Show Formulas", false);
         control_keytip(app, ui, &__k, "formulas.showFormulas");
         if __k.clicked() {
@@ -227,7 +227,7 @@ pub(super) fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         let __k = small_button(ui, Icon::Calc, "Calculate Now", "Calculate Now (F9)", false);
         control_keytip(app, ui, &__k, "formulas.calculateNow");
         if __k.clicked() {

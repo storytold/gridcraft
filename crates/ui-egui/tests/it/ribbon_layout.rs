@@ -77,7 +77,9 @@ fn rtl_overflowing_tab_starts_at_right_edge_and_scrolls_left() {
     let max = (o.content - o.visible).max(0.0);
     assert!(o.offset > 0.0 && (o.offset - max).abs() <= 1.0, "expected right-edge start offset ~{max}, got {}", o.offset);
     let paste = h.get_by_label("Paste").rect();
-    assert!(paste.right() > o.visible * 0.5 && paste.right() <= 700.0, "RTL Paste group starts on the right edge: {paste:?}");
+    assert!(paste.right() > 640.0 && paste.right() <= 700.0, "RTL Paste group starts on the right edge: {paste:?}");
+    let fp = h.get_by_label("Format Painter").rect();
+    assert!(fp.right() <= paste.left() && paste.left() - fp.right() <= 16.0, "RTL Format Painter sits beside Paste: paste={paste:?}, fp={fp:?}");
     assert!(h.query_by_label("Scroll ribbon right").is_none(), "already flush at reading-start right edge");
     h.get_by_label("Scroll ribbon left").click();
     h.run_steps(3);
@@ -110,6 +112,13 @@ fn switching_ltr_to_rtl_initializes_ribbon_at_right_edge() {
     assert!(rtl.overflows(), "Home overflows 700 px in Hebrew RTL");
     let max = (rtl.content - rtl.visible).max(0.0);
     assert!(rtl.offset > 0.0 && (rtl.offset - max).abs() <= 1.0, "expected RTL reading-start right-edge offset ~{max}, got {}", rtl.offset);
+    let paste = h.get_by_label("Paste").rect();
+    assert!(paste.right() > 640.0 && paste.right() <= 700.0, "RTL Paste group starts at right edge after switch: {paste:?}");
+    let fp = h.get_by_label("Format Painter").rect();
+    assert!(
+        fp.right() <= paste.left() && paste.left() - fp.right() <= 16.0,
+        "RTL Format Painter sits beside Paste after switch: paste={paste:?}, fp={fp:?}"
+    );
     assert!(h.query_by_label("Scroll ribbon right").is_none(), "already flush at reading-start right edge");
 
     h.get_by_label("Scroll ribbon left").click();

@@ -1,4 +1,4 @@
-use super::controls::{act, anchor_keytip, control_keytip, menu_items, sep};
+use super::controls::{act, anchor_keytip, control_keytip, group_column, menu_items, sep};
 use super::{Icon, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, json, small_button};
 
 pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
@@ -28,7 +28,7 @@ pub(super) fn review(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "review.deleteComment", json!({}));
     }
-    ui.vertical(|ui| {
+    group_column(ui, |ui| {
         for (icon, label, tip, id) in
             [(Icon::Left, "Previous", "Previous Comment", "review.previousComment"), (Icon::Right, "Next", "Next Comment", "review.nextComment")]
         {
