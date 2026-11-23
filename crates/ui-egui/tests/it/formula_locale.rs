@@ -229,14 +229,27 @@ fn user_defined_prefix_is_hidden_while_editing_and_kept_on_commit() {
 }
 
 #[test]
-fn turkish_interface_retains_its_canonical_formula_fallback() {
+fn turkish_interface_takes_its_regional_separators() {
+    // Tr joins Es as a comma-decimal formula locale: `;` arguments, `,` decimals, `\` array
+    // columns, Excel's tr-TR syntax. Names and TRUE/FALSE stay English.
     let mut app = app();
     app.run("app.language.set", json!({"code":"tr-TR"})).unwrap();
     assert_eq!(app.ui.language, Language::Tr);
-    assert!(enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=SUM(1,5;2,25)"));
+    assert_eq!(formula(&app), "SUM(1.5,2.25)");
     app.begin_edit(None, true);
-    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1.5,2.25)");
-    assert!(!enter(&mut app, "=TOPLA(1;2)"));
+    assert_eq!(app.editor.as_ref().unwrap().text, "=SUM(1,5;2,25)");
+    assert!(enter(&mut app, "0,29"));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(0.29));
+    // A plain comma decimal becomes a number; a comma inside text does not rewrite it.
+    assert!(enter(&mut app, "Evet, hayır"));
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::text("Evet, hayır"));
+    // English separators no longer parse; a function name is not translated but the name error
+    // only surfaces at evaluation, so the edit commits.
+    assert!(!enter(&mut app, "=SUM(1.5,2.25)"));
+    assert!(enter(&mut app, "=TOPLA(1;2)"));
+    assert_eq!(formula(&app), "TOPLA(1,2)");
+    assert_eq!(app.session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0)), Value::Error(CellError::Name));
     let restored: UiState = serde_json::from_str(&serde_json::to_string(&app.ui).unwrap()).unwrap();
     assert_eq!(restored.language, Language::Tr);
 }
