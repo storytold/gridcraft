@@ -1,7 +1,8 @@
 use super::active_row::paint_active_row;
 use super::cell_paint::{
-    Look, MergedArea, cell_text_y, cell_text_y_below_reading, center_across_end, col32, display_text, furigana_is_shown, galley_baseline_bounds,
-    layout_cell_furigana, look, merged_edges, paint_border, paint_cf_icon, painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
+    CellFurigana, Look, MergedArea, cell_text_y, cell_text_y_below_reading, center_across_end, col32, display_text, furigana_is_shown,
+    galley_baseline_bounds, layout_cell_furigana, look, merged_edges, paint_border, paint_cf_icon, painted_halign, rotated_text_pos, shrink_font,
+    wrapped_cell_text_y,
 };
 use super::geo::Geo;
 use super::tables::{filter_button_rect, paint_filter_button};
@@ -9,6 +10,7 @@ use super::{
     CellRef, CfCache, CfLook, Color32, FontId, HAlign, MAX_COLS, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, Underline, VAlign,
     Value, Workbook, pos2, theme, vec2,
 };
+use egui::epaint::text::TextDirection;
 
 /// Mirror what the grid painted into `layer` (the shape indices in `range`) for a right-to-left
 /// sheet. Geometry is reflected; text and meshes (glyphs, pictures) keep their reading direction
@@ -312,6 +314,74 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
     filter_space == 0.0 && (overflows || across_end > col) && !in_merge
 }
 
+/// Paints a conditional format's icon at the left of the cell and returns the width it takes from
+/// the text (`0` without an icon).
+fn paint_cf_icon_at(p: &Painter, rect: Rect, cf: Option<&CfLook>, z: f32) -> f32 {
+    let Some((set, idx)) = cf.and_then(|l| l.icon.as_ref()) else { return 0.0 };
+    let r = Rect::from_min_size(pos2(rect.left() + 2.0, rect.center().y - 6.0 * z), vec2(12.0 * z, 12.0 * z));
+    paint_cf_icon(p, r, set, *idx);
+    15.0 * z
+}
+
+/// The phonetic (ふりがな) reading a cell shows, when View › Show › Furigana is on: the workbook's
+/// reading for the cell's string. Rotated and vertical stacked (255) cells show none, because the
+/// reading would have to follow the rotation.
+fn cell_reading<'a>(q: &QuadrantPaint<'a>, sh: &Sheet, c: CellRef, rotation: i16) -> Option<&'a str> {
+    if !furigana_is_shown(rotation) {
+        return None;
+    }
+    q.phonetics?.reading(sh, c)
+}
+
+/// A cell's wrapped text, ready to lay out: the galley job's settings, the cell's content area,
+/// and the furigana reading drawn above the text, if any.
+struct WrappedText<'a> {
+    text: &'a str,
+    font: &'a FontId,
+    color: Color32,
+    direction: TextDirection,
+    halign: HAlign,
+    text_left: f32,
+    indent: f32,
+    pad: f32,
+    valign: VAlign,
+    z: f32,
+    rtl: bool,
+    furigana: Option<&'a CellFurigana>,
+}
+
+/// Paints a cell's wrapped text (Wrap Text and Justify wrap the same way): the galley is wrapped
+/// at the cell's content width, placed by the cell's alignment, clipped to the cell, and the
+/// furigana reading is painted above it. Rotated text never takes this path.
+fn paint_wrapped_text(p: &Painter, rect: Rect, w: &WrappedText<'_>) {
+    let wrap_w = (rect.width() - 2.0 * w.pad - w.indent).max(4.0);
+    let mut job = egui::text::LayoutJob::simple(w.text.to_string(), w.font.clone(), w.color, wrap_w);
+    job.direction = w.direction;
+    job.halign_min_is_start = false;
+    job.halign = match painted_halign(w.halign, w.rtl) {
+        HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
+        HAlign::Right => egui::Align::RIGHT,
+        _ => egui::Align::LEFT,
+    };
+    let galley = p.layout_job(job);
+    let x = match w.halign {
+        HAlign::Center | HAlign::CenterAcross => rect.center().x - galley.rect.center().x,
+        HAlign::Right => rect.right() - w.pad - galley.rect.right(),
+        _ => w.text_left + w.pad + w.indent - galley.rect.left(),
+    };
+    let (text_top, text_bottom) = galley_baseline_bounds(&galley);
+    let text_height = text_bottom - text_top;
+    let y = match w.furigana {
+        Some(f) => cell_text_y_below_reading(w.valign, rect, text_height, w.z, f.bottom, true),
+        None => wrapped_cell_text_y(w.valign, rect, text_height, w.z),
+    } - text_top;
+    let text_clip = wrapped_text_clip(p, rect, &galley, y, w.valign);
+    p.with_clip_rect(text_clip).galley(pos2(x, y), galley, w.color);
+    if let Some(f) = w.furigana {
+        f.paint(p, rect);
+    }
+}
+
 /// Paint one worksheet cell using its computed appearance and visible geometry.
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
@@ -335,14 +405,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         return;
     }
     let v = sh.value(c);
-    let mut text_left = rect.left();
-    if let Some(l) = cfl
-        && let Some((set, idx)) = &l.icon
-    {
-        let r = Rect::from_min_size(pos2(rect.left() + 2.0, rect.center().y - 6.0 * z), vec2(12.0 * z, 12.0 * z));
-        paint_cf_icon(p, r, set, *idx);
-        text_left += 15.0 * z;
-    }
+    let text_left = rect.left() + paint_cf_icon_at(p, *rect, cfl.as_ref(), z);
     if cfl.as_ref().is_some_and(|l| l.hide_value) || v.is_empty() {
         return;
     }
@@ -382,36 +445,28 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     // ふりがな表示: the phonetic reading XLSX keeps for the cell's string, drawn above its
     // text. Rotated and vertical (255) cells are out of scope (the reading would need to
     // follow the rotation), so only horizontal cells show it.
-    let reading = if furigana_is_shown(st.align.rotation) { q.phonetics.and_then(|index| index.reading(sh, c)) } else { None };
-    let cell_furigana = reading.and_then(|r| layout_cell_furigana(p, *rect, size, z, &font, color, halign, r));
+    let reading = cell_reading(q, sh, c, st.align.rotation);
+    let cell_furigana = reading.and_then(|r| layout_cell_furigana(p, *rect, z, &font, color, halign, r));
     // Rotated text wraps along its own direction (below), not across the column width.
     if !rotated && (st.align.wrap || st.align.h == HAlign::Justify) {
-        let wrap_w = (rect.width() - 2.0 * pad - indent).max(4.0);
-        let mut job = egui::text::LayoutJob::simple(text.clone(), font.clone(), color, wrap_w);
-        job.direction = direction;
-        job.halign_min_is_start = false;
-        job.halign = match painted_halign(halign, geo.rtl) {
-            HAlign::Center | HAlign::CenterAcross => egui::Align::Center,
-            HAlign::Right => egui::Align::RIGHT,
-            _ => egui::Align::LEFT,
-        };
-        let galley = p.layout_job(job);
-        let x = match halign {
-            HAlign::Center | HAlign::CenterAcross => rect.center().x - galley.rect.center().x,
-            HAlign::Right => rect.right() - pad - galley.rect.right(),
-            _ => text_left + pad + indent - galley.rect.left(),
-        };
-        let (text_top, text_bottom) = galley_baseline_bounds(&galley);
-        let text_height = text_bottom - text_top;
-        let y = match &cell_furigana {
-            Some(f) => cell_text_y_below_reading(st.align.v, *rect, text_height, z, f.bottom, true),
-            None => wrapped_cell_text_y(st.align.v, *rect, text_height, z),
-        } - text_top;
-        let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
-        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
-        if let Some(f) = &cell_furigana {
-            f.paint(p, *rect);
-        }
+        paint_wrapped_text(
+            p,
+            *rect,
+            &WrappedText {
+                text: &text,
+                font: &font,
+                color,
+                direction,
+                halign,
+                text_left,
+                indent,
+                pad,
+                valign: st.align.v,
+                z,
+                rtl: geo.rtl,
+                furigana: cell_furigana.as_ref(),
+            },
+        );
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.

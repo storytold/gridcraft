@@ -223,13 +223,13 @@ impl CellFurigana {
 pub(crate) fn layout_cell_furigana(
     p: &Painter,
     rect: Rect,
-    text_size: f32,
     z: f32,
     font: &FontId,
     color: Color32,
     h_align: HAlign,
     reading: &str,
 ) -> Option<CellFurigana> {
+    let text_size = font.size;
     if reading.is_empty() || !rect.width().is_finite() || rect.width() <= 0.0 {
         return None;
     }
