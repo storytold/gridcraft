@@ -433,6 +433,7 @@ fn remove_duplicates_without_a_valid_column_is_refused() {
     assert_eq!(sh.value(CellRef::new(2, 0)), Value::text("c"));
 }
 
+/// Typed list normalization stays literal while formula references drive validation and dropdown items.
 #[test]
 fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     // In a file an inline list is a string literal (`"a,b"`); unquoted it reads as a formula.
@@ -464,6 +465,7 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
         ("F1", "Blue"),
         ("G1", "Red"),
         ("H1", "Green"),
+        ("I1", "Blue"),
     ];
     let check = |wb: &Workbook| {
         for (cell, input) in accepted {
@@ -528,6 +530,63 @@ fn a_list_source_that_takes_in_the_cell_does_not_list_the_value_being_typed() {
             assert!(check_validation(wb, 0, at, v).is_some(), "{cell} accepts {v}");
         }
     }
+}
+
+#[test]
+fn list_validation_shifts_relative_references_for_each_cell() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["K1:K2"], ["M1:M2"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "K1:K2", "values": [["Alpha"], ["Shared"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "M1:M2", "values": [["Beta"], ["Shared"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "list", "formula1": "=INDIRECT(B1)"})).unwrap();
+
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.first().unwrap();
+    let a1 = CellRef::parse("A1").unwrap();
+    let a2 = CellRef::parse("A2").unwrap();
+    assert_eq!(list_items(&wb, 0, a1, dv), ["Alpha", "Shared"]);
+    assert_eq!(list_items(&wb, 0, a2, dv), ["Beta", "Shared"]);
+    assert!(check_validation(&wb, 0, a1, "Alpha").is_none());
+    assert!(check_validation(&wb, 0, a1, "Beta").is_some());
+    assert!(check_validation(&wb, 0, a2, "Beta").is_none());
+    assert!(check_validation(&wb, 0, a2, "Alpha").is_some());
+
+    s.execute("data.validation", json!({"range": "A1", "clear": true})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.first().unwrap();
+    assert_eq!(dv.ranges.first().unwrap().start, a2);
+    assert_eq!(list_items(&wb, 0, a2, dv), ["Beta", "Shared"]);
+    assert!(check_validation(&wb, 0, a2, "Beta").is_none());
+    assert!(check_validation(&wb, 0, a2, "Alpha").is_some());
+}
+
+#[test]
+fn list_validation_disjoint_ranges_keep_their_formula_anchors_when_first_is_cleared() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["Alpha", "Beta", "Gamma"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "C1,D1,E1", "type": "list", "formula1": "=B1"})).unwrap();
+
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.first().unwrap();
+    let c1 = CellRef::parse("C1").unwrap();
+    let d1 = CellRef::parse("D1").unwrap();
+    let e1 = CellRef::parse("E1").unwrap();
+    assert_eq!(list_items(&wb, 0, c1, dv), ["Alpha"]);
+    assert_eq!(list_items(&wb, 0, d1, dv), ["Beta"]);
+    assert_eq!(list_items(&wb, 0, e1, dv), ["Gamma"]);
+
+    s.execute("data.validation", json!({"range": "C1", "clear": true})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(d1))).unwrap();
+    assert_eq!(dv.ranges.len(), 1);
+    assert_eq!(dv.ranges.first().copied(), Some(RangeRef::new(d1, d1)));
+    assert_eq!(list_items(&wb, 0, d1, dv), ["Beta"]);
+    let ev = wb.active().unwrap().validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(e1))).unwrap();
+    assert_eq!(list_items(&wb, 0, e1, ev), ["Gamma"]);
+    assert!(check_validation(&wb, 0, d1, "Beta").is_none());
+    assert!(check_validation(&wb, 0, d1, "Alpha").is_some());
 }
 
 #[test]
