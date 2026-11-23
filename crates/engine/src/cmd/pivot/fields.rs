@@ -246,7 +246,11 @@ pub(super) fn update_pinning(
 pub(super) fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let d = s.doc()?;
-    let pt = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
+    let stored = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
+    // The fields as the report is computed: an older PivotTable's under their columns' current
+    // names, which an edit then settles on.
+    let effective = pv::effective(&d.wb, stored, si);
+    let pt = &*effective;
     let mut out = pivot_json(&d.wb, si, pt);
     let src = pv::read_source(&d.wb, &pt.source, si);
     let list: Vec<Json> = match &src {

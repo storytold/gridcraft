@@ -1655,3 +1655,52 @@ fn a_calculated_field_does_not_block_the_older_names() {
     assert!(p.values.iter().any(|v| v.source_col == "Margin"));
     assert!(p.names_from_values);
 }
+
+/// An older PivotTable with a source field saved as `="Margin"` (a formula header under Show
+/// Formulas) and a calculated field `Margin`: the header now reads `Margin` too. Each value field
+/// keeps its own identity: the calculated field is still its formula, never the column, and the
+/// source field isn't renamed onto the calculated field's name.
+#[test]
+fn an_older_source_field_does_not_take_a_calculated_fields_name() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=\"Margin\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    reopen_as_older(&mut s, |pt| {
+        let sales = pt.values[0].clone();
+        pt.calculated_fields.push(gridcraft_model::PivotCalcField { name: "Margin".into(), formula: "=Sales*0.1".into() });
+        pt.values.push(gridcraft_model::PivotValue { source_col: "Margin".into(), name: "Sum of Margin".into(), ..sales.clone() });
+        pt.values.push(gridcraft_model::PivotValue { source_col: "=\"Margin\"".into(), name: "Sum of Units".into(), ..sales });
+    });
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    let names: Vec<&str> = p.values.iter().map(|v| v.source_col.as_str()).collect();
+    assert_eq!(names, ["Sales", "Margin", "=\"Margin\""], "nothing is renamed onto the calculated field");
+    assert!(!p.names_from_values);
+    // Sales, then the calculated Margin (a tenth of Sales), not the Units column (72).
+    assert_eq!(grand_total(&s, 1), Value::Number(835.0));
+    assert_eq!(grand_total(&s, 2), Value::Number(83.5));
+}
+
+/// The field list shows an older PivotTable's fields as its report is computed. With a formula
+/// header `="Region"` (A) beside a text header `Region` (B) and Show Formulas on, a filter saved
+/// as `Region` filters column B, which reads `Region2` now, so the list puts `Region2` under
+/// Filters, and removing it by that name works.
+#[test]
+fn the_field_list_shows_an_older_pivottable_as_it_is_computed() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "Region"})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Date"], "values": ["Sales"], "filters": ["Region2"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region2", "selected": ["Apples"]})).unwrap();
+    reopen_as_older(&mut s, |pt| pt.filters[0].source_col = "Region".into());
+    let r = s.execute("pivot.fields", json!({})).unwrap();
+    let areas = |name: &str| r["fields"].as_array().unwrap().iter().find(|f| f["name"] == name).unwrap()["areas"].clone();
+    assert_eq!(areas("Region"), json!([]));
+    assert_eq!(areas("Region2"), json!(["filters"]));
+    assert_eq!(r["filters"][0]["field"], "Region2");
+    s.execute("pivot.removeField", json!({"field": "Region2", "area": "filters"})).unwrap();
+    assert!(pt(&s).filters.is_empty());
+    assert_eq!(grand_total(&s, 1), Value::Number(835.0));
+}

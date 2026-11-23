@@ -505,13 +505,16 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let rows: Vec<(usize, &PivotField)> = pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
     let cols: Vec<(usize, &PivotField)> = pt.columns.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
     // Value fields: a source column, or a calculated field evaluated on sums (see `pivot_calc`).
+    // In a PivotTable saved by an older GridCraft, a calculated field may share its name with a
+    // header as it reads now (not as it read then), so there the calculated field comes first.
     let calc = CalcSet::new(pt, &src.headers);
     let vals: Vec<(ValSrc, &PivotValue)> = pt
         .values
         .iter()
-        .filter_map(|v| match src.col(&v.source_col) {
-            Some(c) => Some((ValSrc::Col(c), v)),
-            None => calc.index(&v.source_col).map(|i| (ValSrc::Calc(i), v)),
+        .filter_map(|v| match (src.col(&v.source_col), calc.index(&v.source_col)) {
+            (_, Some(i)) if !pt.names_from_values => Some((ValSrc::Calc(i), v)),
+            (Some(c), _) => Some((ValSrc::Col(c), v)),
+            (None, i) => i.map(|i| (ValSrc::Calc(i), v)),
         })
         .collect();
     // Source columns summed for the calculated fields, accumulated after the value fields.

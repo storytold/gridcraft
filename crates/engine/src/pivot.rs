@@ -121,15 +121,21 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
 /// Computes a PivotTable report from the workbook.
 pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Output, String> {
     let src = read_source(wb, &pt.source, pivot_sheet)?;
-    let mut resolved = None;
-    if let Some(older) = older_field_names(wb, pt, pivot_sheet)
-        && !older.names.is_empty()
-    {
-        let mut copy = pt.clone();
-        rename_fields(&mut copy, &older.names);
-        resolved = Some(copy);
+    compute_from(wb, &effective(wb, pt, pivot_sheet), &src, None)
+}
+
+/// The definition a PivotTable is computed from: one saved by an older GridCraft with its fields
+/// under their columns' current names (see [`older_field_names`]), as the report and the field
+/// list show them; anything else as it is. The renamed names aren't stored here.
+pub fn effective<'a>(wb: &Workbook, pt: &'a PivotTable, pivot_sheet: usize) -> std::borrow::Cow<'a, PivotTable> {
+    match older_field_names(wb, pt, pivot_sheet) {
+        Some(older) if !older.names.is_empty() => {
+            let mut copy = pt.clone();
+            rename_fields(&mut copy, &older.names);
+            std::borrow::Cow::Owned(copy)
+        }
+        _ => std::borrow::Cow::Borrowed(pt),
     }
-    compute_from(wb, resolved.as_ref().unwrap_or(pt), &src, None)
 }
 
 /// How the fields of a PivotTable saved by an older GridCraft find their columns.
@@ -157,6 +163,11 @@ struct OlderNames {
 /// - Both place every field, on different columns: the saved names can't tell, so the fields
 ///   resolve as they did before, by the sheet's Show Formulas setting now, and nothing is settled.
 /// - Neither does: when every name is a current header they stay; otherwise nothing changes.
+///
+/// A calculated field whose name is now also a header (`="Margin"` was a header's old name, so a
+/// calculated field could be named `Margin`) would be read as that column once the PivotTable
+/// names its fields by value, so such a PivotTable stays an older one: nothing moves, and its
+/// value fields name the calculated field first (see `compute_from`).
 fn older_field_names(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<OlderNames> {
     use gridcraft_model::pivot_source::{headers, unique_names};
     if pt.names_from_values {
@@ -166,6 +177,9 @@ fn older_field_names(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Opti
     let sh = wb.sheet(si)?;
     let current = headers(wb, si, r).ok()?;
     let calculated = |n: &str| pt.calculated_fields.iter().any(|c| c.name.eq_ignore_ascii_case(n));
+    if current.iter().any(|h| calculated(h)) {
+        return Some(OlderNames { names: HashMap::new(), settled: false, placed: false });
+    }
     let saved: Vec<&String> = pt
         .rows
         .iter()
