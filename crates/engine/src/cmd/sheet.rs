@@ -740,7 +740,8 @@ pub(crate) fn map_range(r: RangeRef, e: &Edit) -> Option<RangeRef> {
 /// another cell, they are re-hosted at that cell where it stood before the edit; rewriting the
 /// workbook's references for the edit then moves them as it moves a formula there. A range
 /// moved whole keeps its cells in step, so its top-left stood where the range's offset says;
-/// only one cut short (its first cells deleted) takes the cell that moved into its place.
+/// one cut short (its first cells deleted), or one whose own cells an insert or delete of cells
+/// shifted only in part into its top-left, takes the cell that moved into its place.
 /// `before` is every range the rule had before the edit (the formulas are written for their
 /// top-left cell, which may lie in a range the edit removed).
 fn rehost_rule(formulas: Vec<&mut String>, before: &[RangeRef], moves: &[(RangeRef, RangeRef)], e: &Edit) {
@@ -760,7 +761,14 @@ fn rehost_rule(formulas: Vec<&mut String>, before: &[RangeRef], moves: &[(RangeR
             [a, b] => back(to, a) == back(to, b),
             _ => true,
         });
+    // Inserting or deleting cells can shift part of a range and keep its size (cells deleted in
+    // its first column only, say): when the cell the shift put at its top-left was one of the
+    // rule's own cells, the formulas follow that cell.
+    let shifted_in = matches!(e, Edit::InsertCells { .. } | Edit::DeleteCells { .. })
+        .then(|| pre_image(e, to))
+        .filter(|p| *p != to && before.iter().any(|r| r.contains(*p)));
     let at = match holder {
+        Some(_) if shifted_in.is_some() => shifted_in.unwrap_or(to),
         Some(p) if whole(p) => back(to, p),
         Some(_) => pre_image(e, to),
         None if same_shift => moves.first().map_or(to, |p| back(to, p)),

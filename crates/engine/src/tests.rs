@@ -7626,6 +7626,25 @@ fn a_cut_ends_when_the_tabs_change() {
     assert!(s.clipboard.is_some());
 }
 
+/// Deleting cells in only the first column of a rule's range shifts its top-left cell and keeps the
+/// range's size: the rule's formula follows the cell now there, not the deleted one.
+#[test]
+fn a_rule_follows_its_top_left_through_a_partial_cell_delete() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:C3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "A1:C3", "type": "custom", "formula1": "=A1<>B1"})).unwrap();
+    s.execute("home.deleteCells", json!({"range": "A1", "shift": "up"})).unwrap();
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    let rule = match &sh.cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.trim_start_matches('=').to_string(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rule, "A1>0");
+    // The cell now at A1 came from A2, which compared itself with B2 (column B didn't move).
+    assert_eq!(sh.validations[0].f1.trim_start_matches('='), "A1<>B2");
+}
+
 /// A cut pasted into a row the filter hides would skip every cell it writes, so the cells would
 /// leave the sheet with the cut: it is refused and nothing changes. A visible row takes it.
 #[test]
