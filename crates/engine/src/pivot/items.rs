@@ -98,7 +98,7 @@ pub fn distinct_labels(wb: &Workbook, src: &Source, col: usize, group: PivotDate
         if let Some(v) = r.get(col) {
             fi.intern(wb, v, group, fmt, i);
         }
-        if fi.items.len() > 100_000 {
+        if fi.items.len() > limit {
             break;
         }
     }
