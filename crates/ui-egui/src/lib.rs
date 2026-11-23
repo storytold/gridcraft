@@ -326,6 +326,10 @@ pub struct SheetApp {
     /// Linux/BSD: the window has no system frame; the title bar draws minimize, maximize and
     /// close, and the window resizes from its edges (`ribbon::window_frame`).
     pub window_controls: bool,
+    #[cfg(target_os = "linux")]
+    pub captions: Option<craft_window::policy::Captions>,
+    #[cfg(target_os = "linux")]
+    pub caption_icon_theme: Option<String>,
     viewport_commands: Vec<egui::ViewportCommand>,
     /// A quit question is waiting in the active window: [`doc_windows`] brings its native window
     /// to the front, also when the app is hidden or the window minimized (a Dock quit).

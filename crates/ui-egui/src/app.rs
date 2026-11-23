@@ -79,6 +79,10 @@ impl SheetApp {
             started: now_ms(),
             allow_close: false,
             window_controls: false,
+            #[cfg(target_os = "linux")]
+            captions: None,
+            #[cfg(target_os = "linux")]
+            caption_icon_theme: None,
             viewport_commands: Vec::new(),
             bring_forward: false,
             open_switch_windows: false,

@@ -40,8 +40,9 @@ impl DocWindows {
     /// Takes over `app`'s windows. `base` is the root window's builder, used for new windows.
     pub fn new(app: &mut SheetApp, base: egui::ViewportBuilder, quit_with_last_window: bool) -> DocWindows {
         app.native_windows = true;
-        // The root window keeps the desktop's frame, so every window does.
-        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, root_hidden: false }
+        // Viewports decorates child builders after cloning `base`; give it the root's choice.
+        let frame = if app.window_controls { Frame::App(Default::default()) } else { Frame::Desktop };
+        DocWindows { list: WindowList::new(), viewports: Viewports::new(frame), base, quit_with_last_window, root_hidden: false }
     }
 
     /// The platform default for the last window closing: macOS keeps running, others quit.
