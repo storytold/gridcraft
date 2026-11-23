@@ -77,6 +77,15 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let same_doc = s.doc()?.uid == clip.doc_uid;
     let cut_move = clip.cut && same_doc && what == What::All;
+    // A cut empties its cells, so pasting it as links would link to the emptied cells, and a
+    // destination over rows the filter hides would skip cells the cut has taken: both would lose
+    // the cut cells, so both are refused before the source is cleared.
+    if cut_move && link {
+        return Err(EngineError::Other("The cut area can't be pasted as links: paste it without Paste Link.".into()));
+    }
+    if cut_move && skip_rows.range(at.row..at.row.saturating_add(tiles_r.saturating_mul(h))).next().is_some() {
+        return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+    }
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
     let src_sheet_name = src_sheet.name.clone();
