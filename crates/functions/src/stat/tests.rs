@@ -1,4 +1,6 @@
+use super::descriptive::{kth, median, percentile_exc, percentile_inc, sorted};
 use super::{MAX_REGRESSORS, aggregate_values, aggregate_values_k, check_regression_size};
+use crate::util::R;
 use crate::util::testutil::*;
 use gridcraft_core::{CellError, Value};
 
@@ -200,6 +202,126 @@ fn min_max_order() {
     close(ev("RANK.AVG", vec![n(3.5), r2, n(1.0)]), 3.5);
 }
 
+// Reference implementations: the previous full-sort versions, as the oracle for the selection ones.
+fn old_interp(s: &[f64], pos: f64) -> R<f64> {
+    let i = pos.floor();
+    let frac = pos - i;
+    let i = i as usize;
+    let lo = *s.get(i).ok_or(CellError::Num)?;
+    match s.get(i + 1) {
+        Some(hi) if frac > 0.0 => Ok(lo + frac * (hi - lo)),
+        _ => Ok(lo),
+    }
+}
+
+fn old_median(v: Vec<f64>) -> R<f64> {
+    if v.is_empty() {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    let n = s.len();
+    let hi = s.get(n / 2).copied().unwrap_or(0.0);
+    if n % 2 == 1 { Ok(hi) } else { Ok(s.get(n / 2 - 1).copied().unwrap_or(0.0).midpoint(hi)) }
+}
+
+fn old_kth(v: Vec<f64>, k: f64, largest: bool) -> R<f64> {
+    let k = k.ceil();
+    if k.is_nan() || k < 1.0 || k > v.len() as f64 {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    let k = k as usize;
+    let idx = if largest { s.len() - k } else { k - 1 };
+    s.get(idx).copied().ok_or(CellError::Num)
+}
+
+fn old_percentile_inc(v: Vec<f64>, k: f64) -> R<f64> {
+    if v.is_empty() || !(0.0..=1.0).contains(&k) {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    old_interp(&s, k * (s.len() - 1) as f64)
+}
+
+fn old_percentile_exc(v: Vec<f64>, k: f64) -> R<f64> {
+    let n = v.len() as f64;
+    if v.is_empty() || !(k > 0.0 && k < 1.0) {
+        return Err(CellError::Num);
+    }
+    let pos = k * (n + 1.0);
+    if pos < 1.0 || pos > n {
+        return Err(CellError::Num);
+    }
+    let s = sorted(v);
+    old_interp(&s, pos - 1.0)
+}
+
+/// Same Ok bit pattern or same error.
+fn same(a: R<f64>, b: R<f64>) -> bool {
+    match (a, b) {
+        (Ok(x), Ok(y)) => x.to_bits() == y.to_bits(),
+        (Err(x), Err(y)) => x == y,
+        _ => false,
+    }
+}
+
+#[test]
+fn selection_matches_full_sort_bit_for_bit() {
+    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let specials = [0.0, -0.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN, -f64::NAN, f64::MAX, f64::MIN_POSITIVE, 1.0, -1.0];
+    for len in (0..=40).chain([63, 64, 65, 100, 257, 1000, 4096]) {
+        for round in 0..24 {
+            let mut v: Vec<f64> = (0..len)
+                .map(|_| match (round % 4, next() % 8) {
+                    // Few distinct values: many ties.
+                    (0, r) => (r % 3) as f64,
+                    // Specials, including both zeros and NaNs.
+                    (1, r) => specials[(next() as usize).wrapping_add(r as usize) % specials.len()],
+                    // Wide random range.
+                    (2, _) => (next() as i64 as f64) / 1e3,
+                    // Integers with some specials mixed in.
+                    (_, 0) => specials[next() as usize % specials.len()],
+                    _ => (next() % 50) as f64,
+                })
+                .collect();
+            // Rounds 12..24 repeat the data as already ascending, already descending and nearly
+            // ascending (ends swapped): the monotone shortcut and its fallback to selection.
+            match round / 4 {
+                3 => v.sort_by(f64::total_cmp),
+                4 => {
+                    v.sort_by(f64::total_cmp);
+                    v.reverse();
+                }
+                5 => {
+                    v.sort_by(f64::total_cmp);
+                    if let Some(last) = v.len().checked_sub(1) {
+                        v.swap(0, last);
+                    }
+                }
+                _ => {}
+            }
+            assert!(same(median(v.clone()), old_median(v.clone())), "median len={len} round={round}");
+            let ks = [-1.0, 0.0, 0.2, 1.0, 1.5, 2.0, len as f64 / 2.0, len as f64 - 0.5, len as f64, len as f64 + 1.0, f64::NAN];
+            for &k in &ks {
+                for largest in [true, false] {
+                    assert!(same(kth(v.clone(), k, largest), old_kth(v.clone(), k, largest)), "kth len={len} k={k}");
+                }
+            }
+            let ps = [-0.1, 0.0, 0.01, 0.1, 0.25, 0.3, 0.5, 0.75, 0.9, 0.99, 1.0, 1.1, f64::NAN, (next() % 1001) as f64 / 1000.0];
+            for &p in &ps {
+                assert!(same(percentile_inc(v.clone(), p), old_percentile_inc(v.clone(), p)), "pinc len={len} p={p}");
+                assert!(same(percentile_exc(v.clone(), p), old_percentile_exc(v.clone(), p)), "pexc len={len} p={p}");
+            }
+        }
+    }
+}
+
 #[test]
 fn percentiles() {
     close(ev("PERCENTILE.INC", vec![c(&[1.0, 3.0, 2.0, 4.0]), n(0.3)]), 1.9);
@@ -309,6 +431,185 @@ fn linest_family() {
     close(fitted[1][0].clone(), 9.0);
     is_err(ev("LOGEST", vec![c(&[1.0, -2.0])]), CellError::Num);
     is_err(ev("LINEST", vec![c(&[1.0, 2.0]), c(&[1.0, 2.0, 3.0])]), CellError::Ref);
+}
+
+/// LINEST on columns of predictors, `stats` on, as rows of numbers (`None` for an error cell).
+fn linest_rows(y: &[f64], xs: &[Vec<f64>], constant: bool) -> Vec<Vec<Option<f64>>> {
+    let x = arr((0..y.len()).map(|i| xs.iter().map(|col| nv(col[i])).collect()).collect());
+    let r = rows_of(&ev("LINEST", vec![c(y), av(x), b(constant), b(true)]));
+    r.iter().map(|row| row.iter().map(Value::as_f64).collect()).collect()
+}
+
+fn rel_close(got: Option<f64>, want: f64, tol: f64, what: &str) {
+    let got = got.unwrap_or(f64::NAN);
+    assert!((got - want).abs() <= tol * want.abs().max(1e-300), "{what}: got {got:e}, want {want:e}, rel tol {tol:e}");
+}
+
+// B2: LINEST solved the normal equations, whose condition number is the square of the data's.
+// Expected values below come from exact rational arithmetic: the normal equations solved with
+// Python `fractions.Fraction` (no rounding at all), rounded once to f64 (script in the PR text).
+#[test]
+fn linest_ill_conditioned_polynomial_is_exact() {
+    // y = 1 + x + x² + x³ + x⁴ + x⁵ on x = 1..12: every coefficient is exactly 1. The normal
+    // equations were off by up to 2.6e-6.
+    let xs: Vec<f64> = (1..=12).map(f64::from).collect();
+    let ys: Vec<f64> = xs.iter().map(|x| (0..=5).map(|j| x.powi(j)).sum()).collect();
+    let cols: Vec<Vec<f64>> = (1..=5).map(|j| xs.iter().map(|x| x.powi(j)).collect()).collect();
+    let r = linest_rows(&ys, &cols, true);
+    for (i, v) in r[0].iter().enumerate() {
+        rel_close(*v, 1.0, 1e-9, &format!("coefficient {i}"));
+    }
+}
+
+#[test]
+fn linest_large_offset_regressors_recover_the_line() {
+    // y = 3x + 7 exactly with x = 1e6 + i and regressors [x, x²]: the true fit has x² coefficient
+    // 0, x coefficient 3, intercept 7. The normal equations returned 2.99976 and 251.14.
+    let xs: Vec<f64> = (0..12).map(|i| 1_000_000.0 + f64::from(i)).collect();
+    let ys: Vec<f64> = xs.iter().map(|x| 3.0 * x + 7.0).collect();
+    let r = linest_rows(&ys, &[xs.clone(), xs.iter().map(|x| x * x).collect()], true);
+    assert!(r[0][0].unwrap().abs() < 1e-12, "x² coefficient {:?}", r[0][0]);
+    rel_close(r[0][1], 3.0, 1e-9, "x coefficient");
+    // The intercept subtracts 3e6 from 3e6 + 7 and carries the x² coefficient times 1e12, so
+    // it is good to about 1e-4 in absolute terms, not better.
+    assert!((r[0][2].unwrap() - 7.0).abs() < 1e-3, "intercept {:?}", r[0][2]);
+    // One regressor: exact.
+    let one = linest_rows(&ys, std::slice::from_ref(&xs), true);
+    rel_close(one[0][0], 3.0, 1e-12, "slope");
+    rel_close(one[0][1], 7.0, 1e-9, "intercept");
+}
+
+#[test]
+fn linest_noisy_fits_match_exact_rational_least_squares() {
+    // Two predictors with noise, constant fitted. Order of each row: x2, x1, intercept.
+    let x1 = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let x2 = [2.0, 1.0, 4.0, 3.0, 7.0, 5.0, 9.0, 6.0];
+    let y = [5.0, 6.0, 11.0, 12.0, 20.0, 19.0, 30.0, 28.0];
+    let r = linest_rows(&y, &[x1.to_vec(), x2.to_vec()], true);
+    let (coef, se) = ([1.4270152505446623, 2.452069716775599, -1.2592592592592593], [0.3376442444771937, 0.3679392851360571, 1.0847489958915801]);
+    for i in 0..3 {
+        rel_close(r[0][i], coef[i], 1e-12, "coef");
+        rel_close(r[1][i], se[i], 1e-12, "se");
+    }
+    rel_close(r[2][0], 0.985070139277778, 1e-12, "r2");
+    rel_close(r[2][1], 1.367057173604725, 1e-12, "sey");
+    rel_close(r[3][0], 164.94965318256004, 1e-11, "F");
+    assert_eq!(r[3][1], Some(5.0));
+    rel_close(r[4][0], 616.5307734204792, 1e-12, "ssreg");
+    rel_close(r[4][1], 9.344226579520697, 1e-11, "ssresid");
+    assert_eq!(r[2][2], None);
+    // const = FALSE: through the origin, R² and F from the uncentred sums.
+    let r = linest_rows(&y, &[x1.to_vec(), x2.to_vec()], false);
+    rel_close(r[0][0], 1.3529411764705883, 1e-12, "coef");
+    rel_close(r[0][1], 2.303921568627451, 1e-12, "coef");
+    assert_eq!(r[0][2], Some(0.0));
+    rel_close(r[1][0], 0.34102994374364876, 1e-12, "se");
+    rel_close(r[1][1], 0.35495521934550084, 1e-12, "se");
+    assert_eq!(r[1][2], None);
+    rel_close(r[2][0], 0.995718966041848, 1e-12, "r2");
+    rel_close(r[2][1], 1.4061024795535124, 1e-12, "sey");
+    rel_close(r[3][0], 697.7652892561983, 1e-11, "F");
+    assert_eq!(r[3][1], Some(6.0));
+    rel_close(r[4][0], 2759.1372549019607, 1e-12, "ssreg");
+    rel_close(r[4][1], 11.862745098039216, 1e-11, "ssresid");
+    // Cubic and quintic with noise on x = 1..12; order x^k .. x, intercept.
+    let xs: Vec<f64> = (1..=12).map(f64::from).collect();
+    let noise = [3.0, -2.0, 4.0, -1.0, 2.0, -3.0, 1.0, -4.0, 2.0, 3.0, -2.0, 1.0];
+    let cub: Vec<f64> = xs.iter().zip(noise).map(|(x, e)| 1.0 + x + x * x + x.powi(3) + e).collect();
+    let r = linest_rows(&cub, &(1..=3).map(|j| xs.iter().map(|x| x.powi(j)).collect()).collect::<Vec<Vec<f64>>>(), true);
+    let coef = [0.9955969955969955, 1.1452991452991452, -0.33514633514633513, 4.373737373737374];
+    let se = [0.02755463331301788, 0.5434124199147191, 3.102549978874372, 4.851885058051787];
+    for i in 0..4 {
+        rel_close(r[0][i], coef[i], 1e-11, "cubic coef");
+        rel_close(r[1][i], se[i], 1e-10, "cubic se");
+    }
+    rel_close(r[2][0], 0.9999837292113533, 1e-12, "cubic r2");
+    rel_close(r[4][1], 70.35586635586635, 1e-9, "cubic ssresid");
+    let quint: Vec<f64> = xs.iter().zip(noise).map(|(x, e)| (0..=5).map(|j| x.powi(j)).sum::<f64>() + 50.0 * e).collect();
+    let r = linest_rows(&quint, &(1..=5).map(|j| xs.iter().map(|x| x.powi(j)).collect()).collect::<Vec<Vec<f64>>>(), true);
+    let coef = [0.9330693815987934, 3.022273070067188, -20.97398190045249, 108.20489681886741, -250.24940010969422, 271.45454545454544];
+    let se = [0.20046539191103213, 6.538253746916523, 78.39635356777087, 421.2608646012634, 976.3504976093745, 736.5866411764556];
+    for i in 0..6 {
+        rel_close(r[0][i], coef[i], 1e-8, "quintic coef");
+        rel_close(r[1][i], se[i], 1e-8, "quintic se");
+    }
+    rel_close(r[2][1], 168.58174051770763, 1e-9, "quintic sey");
+    rel_close(r[4][1], 170518.81941587824, 1e-7, "quintic ssresid");
+}
+
+#[test]
+fn linest_drops_collinear_columns() {
+    // x2 = 2·x1: the later column is dropped (coefficient and standard error 0), the fit is the
+    // one on x1 alone, and the degrees of freedom count only the kept column.
+    let x1 = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let y = [2.0, 4.0, 5.0, 4.0, 5.0];
+    let x2: Vec<f64> = x1.iter().map(|v| 2.0 * v).collect();
+    let r = linest_rows(&y, &[x1.to_vec(), x2], true);
+    // Exact: slope 0.6, intercept 2.2, ssresid 2.4, ssreg 3.6, df 3 (Fraction arithmetic).
+    assert_eq!(r[0][0], Some(0.0));
+    rel_close(r[0][1], 0.6, 1e-12, "slope");
+    rel_close(r[0][2], 2.2, 1e-12, "intercept");
+    assert_eq!(r[1][0], Some(0.0));
+    rel_close(r[1][1], (0.8f64 / 10.0).sqrt(), 1e-12, "se slope");
+    assert_eq!(r[3][1], Some(3.0));
+    rel_close(r[4][0], 3.6, 1e-12, "ssreg");
+    rel_close(r[4][1], 2.4, 1e-12, "ssresid");
+    // A constant column is collinear with the intercept and dropped as well.
+    let r = linest_rows(&y, &[vec![7.0; 5], x1.to_vec()], true);
+    assert_eq!(r[0][1], Some(0.0));
+    assert_eq!(r[1][1], Some(0.0));
+    rel_close(r[0][0], 0.6, 1e-12, "slope");
+    rel_close(r[0][2], 2.2, 1e-12, "intercept");
+    // A constant column whose mean does not centre to exactly 0 (the mean of three 0.1 is
+    // 0.10000000000000002) is just as collinear with the intercept: dropped, not scaled up to a
+    // unit vector. Some length hits a rounding mean for each constant.
+    for c in [0.1, 1.1, 1e6 + 0.3] {
+        for n in 3..=12 {
+            let xs: Vec<f64> = (1..=n).map(f64::from).collect();
+            let ys: Vec<f64> = (1..=n).map(|i| f64::from(i * i % 7) + 0.5 * f64::from(i)).collect();
+            let r = linest_rows(&ys, &[vec![c; n as usize], xs], true);
+            assert_eq!(r[0][1], Some(0.0), "coefficient of the constant {c}, n={n}");
+            assert_eq!(r[1][1], Some(0.0), "standard error of the constant {c}, n={n}");
+            assert_eq!(r[3][1], Some(f64::from(n) - 2.0), "df with the constant {c}, n={n}");
+        }
+    }
+    // A column that merely sits far from zero is not noise and is kept.
+    let off: Vec<f64> = x1.iter().map(|v| 1e9 + v).collect();
+    let r = linest_rows(&y, &[off], true);
+    rel_close(r[0][0], 0.6, 1e-6, "slope on an offset column");
+    assert_eq!(r[3][1], Some(3.0));
+    // Distinct values far from zero, whose spread is below 1e-12 of the offset, still vary.
+    let r = linest_rows(&[0.0, 1.0, 2.0], &[vec![1e13, 1e13 + 1.0, 1e13 + 2.0]], true);
+    rel_close(r[0][0], 1.0, 1e-9, "slope on a predictor with a 1e13 offset");
+    assert_eq!(r[3][1], Some(1.0), "df: the predictor is kept");
+    // Same at 1e15, where the spread is only a few ulps of the offset: still distinct doubles.
+    let x15 = [1e15, 1e15 + 1.0, 1e15 + 2.0];
+    let r = linest_rows(&[0.0, 1.0, 2.0], &[x15.to_vec()], true);
+    rel_close(r[0][0], 1.0, 1e-9, "slope on a predictor with a 1e15 offset");
+    rel_close(r[0][1], -1e15, 1e-9, "intercept on a predictor with a 1e15 offset");
+    assert_eq!(r[3][1], Some(1.0), "df: the 1e15 predictor is kept");
+    assert!(r[4][1].is_some_and(|v| v.abs() < 1e-9), "ssresid: the 1e15 line is exact, got {:?}", r[4][1]);
+    let fitted = rows_of(&ev("TREND", vec![c(&[0.0, 1.0, 2.0]), c(&x15)]));
+    close(fitted[2][0].clone(), 2.0);
+    // More predictors than observations: the surplus columns drop, no panic.
+    let r = linest_rows(&[1.0, 2.0], &[vec![1.0, 2.0], vec![2.0, 1.0], vec![0.0, 5.0]], true);
+    assert_eq!(r[0].len(), 4);
+}
+
+#[test]
+fn logest_is_linest_of_ln_y() {
+    // y = 5·2^x: m = 2, b = 5.
+    let x = [0.0, 1.0, 2.0, 3.0, 4.0];
+    let y: Vec<f64> = x.iter().map(|v| 5.0 * 2f64.powf(*v)).collect();
+    let l = rows_of(&ev("LOGEST", vec![c(&y), c(&x)]));
+    close_tol(l[0][0].clone(), 2.0, 1e-12);
+    close_tol(l[0][1].clone(), 5.0, 1e-12);
+    // The statistics are those of the fit on ln y, untransformed.
+    let ln: Vec<f64> = y.iter().map(|v| v.ln()).collect();
+    let ls = rows_of(&ev("LOGEST", vec![c(&y), c(&x), b(true), b(true)]));
+    let ns = rows_of(&ev("LINEST", vec![c(&ln), c(&x), b(true), b(true)]));
+    assert_eq!(ls[1..], ns[1..]);
+    close_tol(ls[0][0].clone(), ns[0][0].as_f64().unwrap().exp(), 1e-14);
 }
 
 // #2177: one predictor row of 16,384 columns built three 16,384² matrices (6 GB) and an O(k³)
@@ -616,4 +917,266 @@ fn aggregate_helper() {
     close(aggregate_values_k(19, &vals, &nv(2.0)), 2.0);
     close(aggregate_values_k(9, &vals, &nv(2.0)), 9.0);
     is_err(aggregate_values_k(14, &vals, &nv(10.0)), CellError::Num);
+}
+
+// B1: BINOM.DIST and POISSON.DIST went through ln_gamma differences (relative error 1.1e-13 at
+// n = 100, 1.5e-11 at n = 10,000). Reference values: 70-digit Decimal arithmetic on the exact
+// double `p` (mass by the neighbour-ratio recurrence from q^n, cdf as the running sum), rounded
+// once to f64. Columns: k, n, p, mass, cdf.
+#[rustfmt::skip]
+const BINOM_REF: &[(f64, f64, f64, f64, f64)] = &[
+    (0.0, 10.0, 0.5, 0.0009765625, 0.0009765625),
+    (1.0, 10.0, 0.5, 0.009765625, 0.0107421875),
+    (3.0, 10.0, 0.5, 0.1171875, 0.171875),
+    (5.0, 10.0, 0.5, 0.24609375, 0.623046875),
+    (7.0, 10.0, 0.5, 0.1171875, 0.9453125),
+    (9.0, 10.0, 0.5, 0.009765625, 0.9990234375),
+    (0.0, 10.0, 0.3, 0.028247524900000005, 0.028247524900000005),
+    (1.0, 10.0, 0.3, 0.12106082100000001, 0.14930834590000003),
+    (2.0, 10.0, 0.3, 0.23347444050000002, 0.3827827864),
+    (3.0, 10.0, 0.3, 0.266827932, 0.6496107184000001),
+    (4.0, 10.0, 0.3, 0.200120949, 0.8497316674000001),
+    (5.0, 10.0, 0.3, 0.10291934519999998, 0.9526510126),
+    (7.0, 10.0, 0.3, 0.009001691999999999, 0.9984096136),
+    (9.0, 10.0, 0.3, 0.00013778099999999996, 0.9999940951),
+    (0.0, 10.0, 0.999, 1.0000000000000088e-30, 1.0000000000000088e-30),
+    (1.0, 10.0, 0.999, 9.99000000000008e-27, 9.99100000000008e-27),
+    (5.0, 10.0, 0.999, 2.507425174812609e-13, 2.50951798425701e-13),
+    (9.0, 10.0, 0.999, 0.00991035916125875, 0.009955119790251798),
+    (0.0, 100.0, 0.5, 7.888609052210118e-31, 7.888609052210118e-31),
+    (1.0, 100.0, 0.5, 7.888609052210118e-29, 7.967495142732219e-29),
+    (35.0, 100.0, 0.5, 0.0008638556657416528, 0.0017588208614850792),
+    (45.0, 100.0, 0.5, 0.048474296626430755, 0.18410080866334813),
+    (50.0, 100.0, 0.5, 0.07958923738717877, 0.5397946186935894),
+    (55.0, 100.0, 0.5, 0.048474296626430755, 0.8643734879630827),
+    (65.0, 100.0, 0.5, 0.0008638556657416528, 0.9991050348042566),
+    (99.0, 100.0, 0.5, 7.888609052210118e-29, 1.0),
+    (0.0, 100.0, 0.01, 0.3660323412732295, 0.3660323412732295),
+    (1.0, 100.0, 0.01, 0.3697296376497268, 0.7357619789229563),
+    (2.0, 100.0, 0.01, 0.1848648188248634, 0.9206267977478196),
+    (4.0, 100.0, 0.01, 0.014941714856895142, 0.9965676784122455),
+    (50.0, 100.0, 0.01, 6.103987557173001e-72, 1.0),
+    (99.0, 100.0, 0.01, 9.900000000000021e-197, 1.0),
+    (0.0, 100.0, 0.7, 5.15377520732019e-53, 5.15377520732019e-53),
+    (1.0, 100.0, 0.7, 1.2025475483747105e-50, 1.207701323582031e-50),
+    (50.0, 100.0, 0.7, 1.302622713144541e-05, 2.2060913327166086e-05),
+    (56.0, 100.0, 0.7, 0.001028871216633018, 0.0021146172813184595),
+    (65.0, 100.0, 0.7, 0.04677968235272982, 0.16285828837178737),
+    (70.0, 100.0, 0.7, 0.08678386475342809, 0.5376602639846381),
+    (75.0, 100.0, 0.7, 0.04955992276217012, 0.8864298182958186),
+    (84.0, 100.0, 0.7, 0.0005638655029474704, 0.9995950004580563),
+    (99.0, 100.0, 0.7, 1.3862042184106021e-14, 0.9999999999999997),
+    (0.0, 1000.0, 0.5, 9.332636185032189e-302, 9.332636185032189e-302),
+    (1.0, 1000.0, 0.5, 9.332636185032189e-299, 9.341968821217221e-299),
+    (453.0, 1000.0, 0.5, 0.00030353498700958767, 0.00162629990658169),
+    (484.0, 1000.0, 0.5, 0.015123665829158384, 0.1634683412157977),
+    (500.0, 1000.0, 0.5, 0.0252250181783608, 0.5126125090891804),
+    (516.0, 1000.0, 0.5, 0.015123665829158384, 0.8516553246133607),
+    (547.0, 1000.0, 0.5, 0.00030353498700958767, 0.9986772350804279),
+    (999.0, 1000.0, 0.5, 9.332636185032189e-299, 1.0),
+    (0.0, 1000.0, 0.3, 1.2532566399657381e-155, 1.2532566399657381e-155),
+    (1.0, 1000.0, 0.3, 5.371099885567449e-153, 5.383632451967106e-153),
+    (257.0, 1000.0, 0.3, 0.00030959977077928017, 0.0014835731103312242),
+    (286.0, 1000.0, 0.3, 0.0174263984921581, 0.1759288949498673),
+    (300.0, 1000.0, 0.3, 0.027521003821268385, 0.5155935198141203),
+    (314.0, 1000.0, 0.3, 0.017109129819617666, 0.8414952343056957),
+    (343.0, 1000.0, 0.3, 0.00036310112605077133, 0.9985016810663147),
+    (500.0, 1000.0, 0.3, 3.4791609391626546e-40, 1.0),
+    (999.0, 1000.0, 0.3, 0.0, 1.0),
+    (0.0, 1000.0, 0.001, 0.36769542477096406, 0.36769542477096406),
+    (1.0, 1000.0, 0.001, 0.36806348825922325, 0.7357589130301873),
+    (2.0, 1000.0, 0.001, 0.18403174412961162, 0.9197906571597989),
+    (4.0, 1000.0, 0.001, 0.01528995542083862, 0.9963631219704782),
+    (500.0, 1000.0, 0.001, 0.0, 1.0),
+    (999.0, 1000.0, 0.001, 0.0, 1.0),
+    (0.0, 10000.0, 0.5, 0.0, 0.0),
+    (1.0, 10000.0, 0.5, 0.0, 0.0),
+    (4850.0, 10000.0, 0.5, 8.861480551702583e-05, 0.0013939837588563594),
+    (4950.0, 10000.0, 0.5, 0.004839495142316416, 0.161087099897656),
+    (5000.0, 10000.0, 0.5, 0.007978646139382154, 0.5039893230696911),
+    (5050.0, 10000.0, 0.5, 0.004839495142316416, 0.8437523952446604),
+    (5150.0, 10000.0, 0.5, 8.861480551702583e-05, 0.9986946310466607),
+    (9999.0, 10000.0, 0.5, 0.0, 1.0),
+    (0.0, 10000.0, 0.3, 0.0, 0.0),
+    (1.0, 10000.0, 0.3, 0.0, 0.0),
+    (2863.0, 10000.0, 0.3, 9.71726742023389e-05, 0.0013927715709303387),
+    (2954.0, 10000.0, 0.3, 0.0052756073908582085, 0.16038574844431697),
+    (3000.0, 10000.0, 0.3, 0.008705361365067056, 0.504932983819298),
+    (3046.0, 10000.0, 0.3, 0.005244996814931252, 0.8448693061622872),
+    (3137.0, 10000.0, 0.3, 0.00010232641238302388, 0.9986013755801396),
+    (5000.0, 10000.0, 0.3, 0.0, 1.0),
+    (9999.0, 10000.0, 0.3, 0.0, 1.0),
+    (0.0, 10000.0, 0.0001, 0.3678610464329299, 0.3678610464329299),
+    (1.0, 10000.0, 0.0001, 0.3678978362165516, 0.7357588826494815),
+    (2.0, 10000.0, 0.0001, 0.1839489181082758, 0.9197078007577573),
+    (4.0, 10000.0, 0.0001, 0.015324477632794846, 0.996342452182816),
+    (5000.0, 10000.0, 0.0001, 0.0, 1.0),
+    (9999.0, 10000.0, 0.0001, 0.0, 1.0),
+    (0.0, 10000.0, 0.999, 0.0, 0.0),
+    (1.0, 10000.0, 0.999, 0.0, 0.0),
+    (5000.0, 10000.0, 0.999, 0.0, 0.0),
+    (9981.0, 10000.0, 0.999, 0.0037205945263045544, 0.007158161342006954),
+    (9987.0, 10000.0, 0.999, 0.07292252318084555, 0.20834867055478343),
+    (9990.0, 10000.0, 0.999, 0.12517263665023892, 0.5421328760209826),
+    (9993.0, 10000.0, 0.999, 0.09007019224850273, 0.8699847268232276),
+    (9999.0, 10000.0, 0.999, 0.00045218564541589875, 0.9999548266540229),
+    (0.0, 100000.0, 0.5, 0.0, 0.0),
+    (1.0, 100000.0, 0.5, 0.0, 0.0),
+    (49526.0, 100000.0, 0.5, 2.821098952769392e-05, 0.00137358872189177),
+    (49842.0, 100000.0, 0.5, 0.0015314620321580088, 0.15959653953914368),
+    (50000.0, 100000.0, 0.5, 0.00252312621419674, 0.5012615631070984),
+    (50158.0, 100000.0, 0.5, 0.0015314620321580088, 0.8419349224930143),
+    (50474.0, 100000.0, 0.5, 2.821098952769392e-05, 0.9986546222676359),
+    (99999.0, 100000.0, 0.5, 0.0, 1.0),
+    (0.0, 100000.0, 0.3, 0.0, 0.0),
+    (1.0, 100000.0, 0.3, 0.0, 0.0),
+    (29565.0, 100000.0, 0.3, 3.016598258904529e-05, 0.0013408650955754554),
+    (29855.0, 100000.0, 0.3, 0.0016703029966719045, 0.15934769308464344),
+    (30000.0, 100000.0, 0.3, 0.002752954648397428, 0.5015600059172672),
+    (30145.0, 100000.0, 0.3, 0.0016672321665529399, 0.8423208126454166),
+    (30435.0, 100000.0, 0.3, 3.067097885268188e-05, 0.9986570625478413),
+    (50000.0, 100000.0, 0.3, 0.0, 1.0),
+    (99999.0, 100000.0, 0.3, 0.0, 1.0),
+    (0.0, 100000.0, 0.99, 0.0, 0.0),
+    (1.0, 100000.0, 0.99, 0.0, 0.0),
+    (50000.0, 100000.0, 0.99, 0.0, 0.0),
+    (98906.0, 100000.0, 0.99, 0.00015962501729101418, 0.001680685850467731),
+    (98969.0, 100000.0, 0.99, 0.007723834924565287, 0.1660975153530963),
+    (99000.0, 100000.0, 0.99, 0.012678161323544589, 0.5042686879721229),
+    (99031.0, 100000.0, 0.99, 0.007885853372194001, 0.8416321140066325),
+    (99094.0, 100000.0, 0.99, 0.00013276363518518057, 0.9988439452168577),
+    (99999.0, 100000.0, 0.99, 0.0, 1.0),
+    // Small k where (1 - p)^(n - k) underflows although the mass is a normal number.
+    (10.0, 1100.0, 0.5, 5.050689010687844e-308, 5.097367491037505e-308),
+    (14.0, 1100.0, 0.5, 2.9513324041838846e-300, 2.989803284040754e-300),
+    (15.0, 1100.0, 0.5, 2.1367646606291324e-298, 2.16666269346954e-298),
+    (16.0, 1100.0, 0.5, 1.4489935354891303e-296, 1.4706601624238258e-296),
+    (20.0, 1100.0, 0.5, 1.711087104904223e-289, 1.7433098849775326e-289),
+    (25.0, 1100.0, 0.5, 3.906996229178926e-281, 3.999839082741416e-281),
+];
+
+// Columns: x, mean, mass, cdf. The last block has x > 1000, which takes the incomplete-gamma branch.
+#[rustfmt::skip]
+const POISSON_REF: &[(f64, f64, f64, f64)] = &[
+    (0.0, 0.5, 0.6065306597126334, 0.6065306597126334),
+    (1.0, 0.5, 0.3032653298563167, 0.9097959895689501),
+    (3.0, 0.5, 0.012636055410679864, 0.9982483774437092),
+    (0.0, 5.0, 0.006737946999085467, 0.006737946999085467),
+    (2.0, 5.0, 0.08422433748856833, 0.12465201948308115),
+    (5.0, 5.0, 0.1754673697678507, 0.6159606548330632),
+    (10.0, 5.0, 0.018132788707821874, 0.986304731401617),
+    (25.0, 5.0, 1.294589320478486e-10, 0.9999999999695003),
+    (70.0, 100.0, 0.00031056089812001654, 0.0009714440282773882),
+    (100.0, 100.0, 0.039860996809147134, 0.5265621985299984),
+    (130.0, 100.0, 0.000575252683815463, 0.9982931596294985),
+    (900.0, 1000.0, 7.516954352125952e-05, 0.0006977673277963068),
+    (1000.0, 1000.0, 0.012614611348721499, 0.508409367168506),
+    (1100.0, 1000.0, 9.498944242299507e-05, 0.9991323590365564),
+    (1050.0, 1000.0, 0.003599490404803648, 0.9439711616363267),
+    (1200.0, 1000.0, 7.992642848843571e-11, 0.9999999996115061),
+    (1500.0, 2000.0, 1.878037542328086e-32, 7.468034373687017e-32),
+    (2000.0, 2000.0, 0.00892024889598624, 0.5059467004517837),
+    (2100.0, 2000.0, 0.0007442234118916615, 0.9872092799080792),
+    (2300.0, 2000.0, 4.011826753210622e-12, 0.999999999973895),
+    (4800.0, 5000.0, 9.987733294132511e-05, 0.002269403878343364),
+    (5000.0, 5000.0, 0.005641801804664022, 0.5037611677708467),
+];
+
+fn rel_err(got: Value, want: f64) -> f64 {
+    // An error or a non-finite result is the worst possible miss, not a skipped one.
+    let Some(g) = got.as_f64().filter(|g| g.is_finite()) else { return f64::INFINITY };
+    if want == 0.0 { g.abs() } else { ((g - want) / want).abs() }
+}
+
+/// Error bound the grid below must meet: 1e-13, plus 2e-16 per unit of |ln value| for far-tail
+/// results (an exp of a sum of large logs cannot do better in double precision). Measured: at
+/// most 9e-14 on the grid (the n = 100,000 cumulative cases), 2e-14 for n <= 10,000 away from the
+/// far tails, 2e-15 on the Excel-sized central cases. The log-gamma code was off by 1.5e-11.
+fn allowed(want: f64) -> f64 {
+    // A reference that underflows to 0 must come back as (almost) 0, not as any finite value.
+    if want == 0.0 {
+        return 1e-300;
+    }
+    1e-13 + 2e-16 * want.abs().ln().abs()
+}
+
+#[test]
+fn binom_and_poisson_match_exact_decimal_references() {
+    // Worst error relative to the allowance (above 1 is a failure) and plain worst error.
+    let (mut worst, mut worst_plain) = (0.0f64, 0.0f64);
+    let mut check = |what: &str, got: Value, want: f64| {
+        let e = rel_err(got, want);
+        let ratio = e / allowed(want);
+        if ratio > 1.0 {
+            println!("{what}: error {e:e}, allowed {:e}", allowed(want));
+        }
+        worst = worst.max(ratio);
+        if want > 1e-3 {
+            worst_plain = worst_plain.max(e);
+        }
+    };
+    for &(k, nn, p, pmf, cdf) in BINOM_REF {
+        check(&format!("BINOM.DIST({k},{nn},{p},FALSE)"), ev("BINOM.DIST", vec![n(k), n(nn), n(p), b(false)]), pmf);
+        check(&format!("BINOM.DIST({k},{nn},{p},TRUE)"), ev("BINOM.DIST", vec![n(k), n(nn), n(p), b(true)]), cdf);
+    }
+    for &(x, m, pmf, cdf) in POISSON_REF {
+        check(&format!("POISSON.DIST({x},{m},FALSE)"), ev("POISSON.DIST", vec![n(x), n(m), b(false)]), pmf);
+        check(&format!("POISSON.DIST({x},{m},TRUE)"), ev("POISSON.DIST", vec![n(x), n(m), b(true)]), cdf);
+    }
+    println!("worst error / allowance {worst:.3}; worst relative error where the result is above 1e-3: {worst_plain:e}");
+    assert!(worst <= 1.0);
+    assert!(worst_plain < 1e-13);
+}
+
+#[test]
+fn binom_and_poisson_edge_cases() {
+    for cum in [false, true] {
+        let pm = |k: f64, nn: f64, p: f64| ev("BINOM.DIST", vec![n(k), n(nn), n(p), b(cum)]);
+        // p = 0 and p = 1
+        close(pm(0.0, 50.0, 0.0), 1.0);
+        close(pm(3.0, 50.0, 1.0), 0.0);
+        close(pm(50.0, 50.0, 1.0), 1.0);
+        // n = 0
+        close(pm(0.0, 0.0, 0.3), 1.0);
+        // k = n is certain when cumulative and p^n otherwise
+        close(pm(20.0, 20.0, 0.5), if cum { 1.0 } else { 0.5f64.powi(20) });
+        close_tol(pm(10_000.0, 10_000.0, 0.999), if cum { 1.0 } else { 0.999f64.powi(10_000) }, 1e-12);
+        // k = 0 is q^n
+        close_tol(pm(0.0, 1000.0, 0.001), 0.999f64.powi(1000), 1e-12);
+        close_tol(pm(0.0, 100_000.0, 0.00001), (1.0f64 - 1e-5).powi(100_000), 1e-9);
+    }
+    close(ev("POISSON.DIST", vec![n(0.0), n(0.0), b(false)]), 1.0);
+    close(ev("POISSON.DIST", vec![n(4.0), n(0.0), b(false)]), 0.0);
+    close(ev("POISSON.DIST", vec![n(4.0), n(0.0), b(true)]), 1.0);
+    close_tol(ev("POISSON.DIST", vec![n(0.0), n(3.0), b(true)]), (-3.0f64).exp(), 1e-15);
+    // Fractions truncate as before.
+    close(ev("BINOM.DIST", vec![n(6.9), n(10.9), n(0.5), b(false)]), 0.205078125);
+    // The 10,000 trial switch of the method no longer shows: neighbours agree to 1e-14.
+    let lo = ev("BINOM.DIST", vec![n(5000.0), n(10_000.0), n(0.5), b(true)]).as_f64().unwrap();
+    let hi = ev("BINOM.DIST", vec![n(5000.0), n(10_001.0), n(0.5), b(true)]).as_f64().unwrap();
+    let pmf = ev("BINOM.DIST", vec![n(5000.0), n(10_000.0), n(0.5), b(false)]).as_f64().unwrap();
+    // cdf(5000; 10,001) = cdf(5000; 10,000) - p * mass(5000; 10,000) by the recurrence on n
+    assert!(((hi - (lo - 0.5 * pmf)) / hi).abs() < 1e-13, "{lo} {hi}");
+    // Inverse stays consistent: the smallest k with cdf >= alpha.
+    close(ev("BINOM.INV", vec![n(10_000.0), n(0.5), n(0.5)]), 5000.0);
+}
+
+/// Security: FREQUENCY finds each value's bin by binary search, and MODE counts distinct numbers
+/// through an index, so neither is quadratic in its inputs. Results are as before: unsorted and
+/// duplicate bins keep their positions (a value goes to the first of equal bins), and tied modes
+/// come in first-occurrence order.
+#[test]
+fn frequency_and_mode_scale_with_their_inputs() {
+    let f = ev("FREQUENCY", vec![c(&[1.0, 2.0, 2.0, 3.0, 5.0, 9.0, -1.0]), c(&[3.0, 2.0, 2.0, 0.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(1.0)], vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    // NaN data goes to the overflow bin, and a NaN bin takes nothing
+    let f = ev("FREQUENCY", vec![c(&[f64::NAN, 0.5, 2.0]), c(&[f64::NAN, 1.0])]);
+    assert_eq!(rows_of(&f), vec![vec![nv(0.0)], vec![nv(1.0)], vec![nv(2.0)]]);
+    let data: Vec<f64> = (0..200_000).map(|i| f64::from(i) + 1e6).collect();
+    let bins: Vec<f64> = (0..200_000).map(f64::from).collect();
+    let f = ev("FREQUENCY", vec![c(&data), c(&bins)]);
+    assert_eq!(rows_of(&f).last(), Some(&vec![nv(200_000.0)]));
+    let distinct = ev("MODE", vec![c(&data)]);
+    is_err(distinct, CellError::NA);
+    assert_eq!(rows_of(&ev("MODE.MULT", vec![c(&[3.0, 0.0, 1.0, -0.0, 3.0, 1.0])])), vec![vec![nv(3.0)], vec![nv(0.0)], vec![nv(1.0)]]);
 }

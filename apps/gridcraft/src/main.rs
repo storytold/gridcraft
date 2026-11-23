@@ -17,6 +17,9 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+// Windows opens links through the shell (`launch`), so only the tests use its explorer.exe opener.
+#[cfg_attr(windows, allow(dead_code))]
+mod opener;
 mod print;
 
 use std::cell::RefCell;
@@ -64,6 +67,9 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
         save_prefs(&self.0);
+        // A ready update installs once the process has exited. The macOS exit below skips
+        // dropping the app, so the helper is started here.
+        self.0.start_pending_update();
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -154,7 +160,7 @@ fn read_clipboard<T>(
 fn services() -> Services {
     // Keep the owner alive: X11/Wayland serve clipboard data from this handle.
     let clipboard: Rc<RefCell<Option<arboard::Clipboard>>> = Rc::default();
-    let (html_clipboard, text_clipboard) = (clipboard.clone(), clipboard.clone());
+    let (html_clipboard, text_clipboard, image_clipboard) = (clipboard.clone(), clipboard.clone(), clipboard.clone());
     Services {
         copy_html: Some(Box::new(move |html, text| {
             let mut clipboard = clipboard.borrow_mut();
@@ -165,9 +171,13 @@ fn services() -> Services {
         })),
         paste_html: Some(Box::new(move || read_clipboard(&html_clipboard, |clipboard| clipboard.get().html()))),
         paste_text: Some(Box::new(move || read_clipboard(&text_clipboard, |clipboard| clipboard.get_text()))),
+        paste_image: Some(Box::new(move || {
+            let image = read_clipboard(&image_clipboard, |clipboard| clipboard.get_image())?;
+            image::RgbaImage::from_raw(u32::try_from(image.width).ok()?, u32::try_from(image.height).ok()?, image.bytes.into_owned())
+        })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "json"])
+                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
                 .add_filter("Excel Workbook", &["xlsx", "xlsm"])
                 .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
                 .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
@@ -217,7 +227,8 @@ fn open_with_system(target: &str) {
 /// Hands an address to the shell (ShellExecuteExW), which opens it in the default browser or mail
 /// app. Not through explorer.exe: it reads its own command line, so an `=` (any query, `?id=1`)
 /// made it open the Documents folder instead, a `,` cut the address there, and it kept only the
-/// first 259 characters, which loses a long share link's query (#2085).
+/// first 259 characters, which loses a long share link's query (#2085). The shell takes the
+/// address as one argument, so there is no command line for it to be read as an option of.
 #[cfg(windows)]
 fn launch(target: &str) {
     if let Err(e) = open::that_detached(target) {
@@ -225,12 +236,17 @@ fn launch(target: &str) {
     }
 }
 
-/// Hands an address to `open` (macOS) or `xdg-open`.
+/// Hands an address to `/usr/bin/open` (macOS) or `xdg-open`.
 #[cfg(not(windows))]
 fn launch(target: &str) {
-    let cmd = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-    if let Err(e) = std::process::Command::new(cmd).arg(target).spawn() {
-        log::warn!("{cmd} {target}: {e}");
+    // By absolute path where the platform has one (#2176). The Windows directory only matters to
+    // the explorer.exe opener, which Windows no longer uses.
+    let Some((program, arg)) = opener::opener_command(opener::Os::current(), target, None, None) else {
+        log::warn!("refused to open {target:?}: it could be read as an option");
+        return;
+    };
+    if let Err(e) = std::process::Command::new(&program).arg(&arg).spawn() {
+        log::warn!("{} {arg}: {e}", program.display());
     }
 }
 
@@ -244,6 +260,12 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    // A confined launcher run (`gridcraft_sandbox::launch_command`) comes before everything else:
+    // it opens no window, writes no log, and becomes the program it confines.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        std::process::exit(code);
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
@@ -337,12 +359,16 @@ fn main() -> eframe::Result<()> {
     for f in &files {
         app.open_path(f);
     }
+    // Linux/BSD: Excel's layout — no window-manager title bar above ours; our title bar carries the
+    // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
+    app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([640.0, 420.0])
         .with_app_id("ai.storyteller.gridcraft")
-        .with_drag_and_drop(true);
+        .with_drag_and_drop(true)
+        .with_decorations(!app.window_controls);
     if cfg!(target_os = "macos") {
         viewport = viewport.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false);
     }
@@ -351,21 +377,11 @@ fn main() -> eframe::Result<()> {
     }
     let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     let mut options = options;
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && std::env::var_os("GRIDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
-    }
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]

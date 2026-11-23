@@ -61,3 +61,51 @@ fn down_then_over_writes_no_page_order() {
     wb.sheet_mut(0).unwrap().print.page_order = PageOrder::DownThenOver;
     assert!(!sheet_xml(&write_xlsx(&wb).unwrap()).contains("pageOrder"));
 }
+
+#[test]
+fn page_margins_are_written_as_their_decimals() {
+    // #1609 item 7: the f32 margins were widened to f64, so 0.3 came out as 0.30000001192092896.
+    let body = r#"<sheetData/><pageMargins left="0.3" right="0.25" top="1.1" bottom="0.75" header="0.3" footer="0.3"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let xml = sheet_xml(&write_xlsx(&wb).unwrap());
+    assert!(xml.contains(r#"<pageMargins left="0.3" right="0.25" top="1.1" bottom="0.75" header="0.3" footer="0.3"/>"#), "{xml}");
+    // The default sheet writes Excel's default margins exactly.
+    let xml = sheet_xml(&write_xlsx(&Workbook::new()).unwrap());
+    assert!(xml.contains(r#"<pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>"#), "{xml}");
+}
+
+#[test]
+fn first_page_number_is_read_and_written_back() {
+    // #4293: Excel writes Page Setup's First page number 7 as these two attributes; both were lost.
+    let body = r#"<sheetData/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/><pageSetup paperSize="9" firstPageNumber="7" orientation="portrait" useFirstPageNumber="1"/>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().print.first_page_number, Some(7));
+    let bytes = write_xlsx(&wb).unwrap();
+    let xml = sheet_xml(&bytes);
+    assert_eq!(page_setup(&xml), r#"<pageSetup paperSize="9" firstPageNumber="7" orientation="portrait" useFirstPageNumber="1"/>"#);
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheet(0).unwrap().print.first_page_number, Some(7));
+    // In the schema's order with the other attributes: after the scale, before Fit To.
+    let mut wb = back;
+    wb.sheet_mut(0).unwrap().print.scale = 80;
+    wb.sheet_mut(0).unwrap().print.fit_to = Some((1, 2));
+    let xml = sheet_xml(&write_xlsx(&wb).unwrap());
+    assert!(page_setup(&xml).contains(r#"scale="80" firstPageNumber="7" fitToWidth="1""#), "{xml}");
+    // Automatic: no number, a number Excel keeps without using it, and `useFirstPageNumber="0"`.
+    for body in [
+        r#"<sheetData/><pageSetup paperSize="9" orientation="portrait"/>"#,
+        r#"<sheetData/><pageSetup paperSize="9" firstPageNumber="5" orientation="portrait"/>"#,
+        r#"<sheetData/><pageSetup paperSize="9" firstPageNumber="5" orientation="portrait" useFirstPageNumber="0"/>"#,
+        "<sheetData/>",
+    ] {
+        let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+        assert_eq!(wb.sheet(0).unwrap().print.first_page_number, None, "{body}");
+        let xml = sheet_xml(&write_xlsx(&wb).unwrap());
+        assert!(!xml.contains("irstPageNumber"), "{body}: {xml}");
+    }
+    // 1 is a number of its own (Excel's field shows 1, not Automatic) and is kept too.
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().print.first_page_number = Some(1);
+    let xml = sheet_xml(&write_xlsx(&wb).unwrap());
+    assert!(xml.contains(r#"firstPageNumber="1""#) && xml.contains(r#"useFirstPageNumber="1""#), "{xml}");
+}
