@@ -14,6 +14,28 @@ fn thai_catalog() -> Option<(FontCatalog, PdfFont)> {
 }
 
 #[test]
+fn turkish_letters_export_with_embedded_fonts() {
+    let catalog = FontCatalog::bundled();
+    let text = "ğ ş ı İ Â û";
+    for ch in ['ğ', 'ş', 'ı', 'İ'] {
+        let face = catalog.face_for("Calibri", false, false, &ch.to_string());
+        if face.is_err() && std::env::var_os("CRAFT_FONTS_REQUIRED").is_none() {
+            eprintln!("skipping Turkish font regression; no bundled face covers {ch}");
+            return;
+        }
+        assert!(face.is_ok(), "bundled fonts must cover {ch}");
+    }
+    let mut session = s();
+    session.execute("cell.set", json!({"cell": "A1", "input": text})).unwrap();
+    for command in ["file.exportPdf", "file.print"] {
+        let response = session.execute(command, json!({})).expect("Turkish text renders to PDF");
+        let pdf = crate::io::base64_decode(response["base64"].as_str().unwrap()).unwrap();
+        assert!(contains(&pdf, "/FontFile2"), "{command}: Turkish letters use an embedded font");
+        assert!(contains(&pdf, "/ActualText <FEFF011F0020015F0020013100200130002000C2002000FB>"), "{command}: the source text remains searchable");
+    }
+}
+
+#[test]
 fn rotated_shape_preserves_thai_shaping() {
     let Some(_) = thai_catalog() else { return };
     let mut s = s();
