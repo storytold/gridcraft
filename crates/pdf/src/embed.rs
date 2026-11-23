@@ -954,8 +954,12 @@ mod tests {
         assert_eq!(tag.len(), 6);
         assert!(tag.chars().all(|c| c.is_ascii_uppercase()), "{tag}");
         usage.insert(2, 'ạ');
-        assert_ne!(subset_tag("ArialMT", &usage), tag);
-        assert_ne!(subset_tag("TimesNewRomanPSMT", &usage), tag, "a second face subsetting the same glyphs needs its own tag");
+        assert_ne!(subset_tag("ArialMT", &usage), tag, "adding a glyph changes the tag");
+        assert_ne!(
+            subset_tag("TimesNewRomanPSMT", &usage),
+            subset_tag("ArialMT", &usage),
+            "a second face subsetting the same glyphs needs its own tag"
+        );
     }
 
     #[test]
