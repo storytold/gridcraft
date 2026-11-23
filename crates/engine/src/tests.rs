@@ -196,39 +196,6 @@ fn renaming_a_name_onto_a_let_local_is_refused() {
     assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1.trim_start_matches('='), "LET(Total, 1, Rate*Total)>0");
 }
 
-/// A workbook name renamed to a name a sheet already defines for itself would be read as the
-/// sheet's own name there: the rename is refused and changes nothing.
-#[test]
-fn renaming_a_workbook_name_onto_a_sheet_level_name_is_refused() {
-    let mut s = s();
-    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
-    s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=9", "scope": "Sheet1"})).unwrap();
-    s.execute("cell.set", json!({"cell": "A1", "input": "=Rate"})).unwrap();
-    assert!(s.execute("formulas.defineName", json!({"name": "Total", "oldName": "Rate", "refersTo": "=2"})).is_err());
-    assert_eq!(v(&s, "A1"), Value::number(2.0));
-    assert!(s.doc().unwrap().wb.names.iter().any(|n| n.name == "Rate" && n.scope.is_none()));
-    // Where no sheet defines the new name, the rename goes ahead.
-    s.execute("formulas.defineName", json!({"name": "Fee", "oldName": "Rate", "refersTo": "=2"})).unwrap();
-    assert_eq!(v(&s, "A1"), Value::number(2.0));
-}
-
-/// A call to a defined LAMBDA by its name follows a rename of the name; a LAMBDA local of the
-/// old name that is called stays as it is.
-#[test]
-fn renaming_a_lambda_name_renames_calls_to_it() {
-    let mut s = s();
-    s.execute("formulas.defineName", json!({"name": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
-    s.execute("cell.set", json!({"cell": "A1", "input": "=FnOld(4)"})).unwrap();
-    s.execute("cell.set", json!({"cell": "A2", "input": "=LET(FnOld, LAMBDA(y, y*10), FnOld(4))+FnOld(1)"})).unwrap();
-    s.execute("formulas.defineName", json!({"name": "FnNew", "oldName": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
-    let formula =
-        |s: &Session, at: &str| s.doc().unwrap().wb.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).unwrap().text.clone();
-    assert_eq!(formula(&s, "A1"), "FnNew(4)");
-    assert_eq!(v(&s, "A1"), Value::number(5.0));
-    assert_eq!(formula(&s, "A2"), "LET(FnOld,LAMBDA(y,y*10),FnOld(4))+FnNew(1)");
-    assert_eq!(v(&s, "A2"), Value::number(42.0));
-}
-
 /// A sheet-level name's unqualified references are read on its sheet, so they move with edits
 /// there, and stay put for edits on other sheets.
 #[test]
@@ -7634,6 +7601,7 @@ fn a_moved_column_keeps_what_its_part_of_a_rule_reads() {
     assert_eq!(rules, vec!["A1>0@C1:D1".to_string(), "D1>0@B1".to_string()]);
     assert_eq!(sh.validations[0].f1.trim_start_matches('='), "B2>0");
 }
+
 /// Internal hyperlinks keep the place they name as typed, as Excel's "Place in This Document"
 /// links do: renaming or deleting a sheet, or inserting rows, leaves them as they were.
 #[test]

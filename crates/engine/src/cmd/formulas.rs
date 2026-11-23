@@ -432,41 +432,20 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         Some(s) => s == sheet,
         None => !shadowed.contains(&sheet),
     };
-    // A sheet-level name `new` wins over a workbook-level one on its sheet, so a workbook name
-    // renamed to it would read that sheet's name there instead.
-    let taken_on: Vec<usize> = match old_scope {
-        None => wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(new)).filter_map(|n| n.scope).collect(),
-        Some(_) => Vec::new(),
-    };
-    // Set when an occurrence would be captured by a LET or LAMBDA local of the new name, or by a
-    // sheet-level name of the new name on the sheet that holds it.
+    // Set when an occurrence would be captured by a LET or LAMBDA local of the new name.
     let captured = std::cell::Cell::new(false);
-    let redirected = std::cell::Cell::new(false);
-    let rename = |sheet: Option<usize>, e: gridcraft_formula::Expr| {
-        if sheet.is_some_and(|i| taken_on.contains(&i)) {
-            // Every free occurrence here would be read as the sheet's own name `new`.
-            let mut bound = vec![new.to_string()];
-            rename_free_name(e, old, new, &mut bound, &redirected, 0)
-        } else {
-            let mut bound = Vec::new();
-            rename_free_name(e, old, new, &mut bound, &captured, 0)
-        }
+    let rename = |e: gridcraft_formula::Expr| {
+        let mut bound = Vec::new();
+        rename_free_name(e, old, new, &mut bound, &captured, 0)
     };
     // Every reference held where the renamed name is the one meant: on its sheet (or, for a
     // workbook name, every sheet without one of its own), and in workbook names.
-    wb.rewrite_references(&|host, e| if host.sheet.is_none_or(applies) { rename(host.sheet, e) } else { e });
+    wb.rewrite_references(&|host, e| if host.sheet.is_none_or(applies) { rename(e) } else { e });
     // Python cells' `xl("…")` references too.
     let sheet_of: std::collections::HashMap<String, usize> = wb.sheets.iter().enumerate().map(|(i, s)| (s.name.to_ascii_lowercase(), i)).collect();
     crate::cmd::edit::rewrite_python_refs(wb, &|host, e| {
-        let sheet = sheet_of.get(&host.to_ascii_lowercase()).copied();
-        if sheet.is_none_or(applies) { rename(sheet, e) } else { e }
+        if sheet_of.get(&host.to_ascii_lowercase()).copied().is_none_or(applies) { rename(e) } else { e }
     })?;
-    // (The command's edit is dropped on an error, so a refused rename changes nothing.)
-    if redirected.get() {
-        return Err(EngineError::Other(format!(
-            "The name can't be changed to {new}: a sheet already has its own name {new}, which its formulas would read instead."
-        )));
-    }
     if captured.get() {
         return Err(EngineError::Other(format!(
             "The name can't be changed to {new}: a LET or LAMBDA in a formula that uses it already has a local name {new}."
@@ -539,19 +518,7 @@ fn rename_free_name(
             bound.truncate(saved);
             Expr::Call(name, out)
         }
-        Expr::Call(name, args) => {
-            // A call by name to a defined LAMBDA (`Fn(4)`) follows the name, unless a local of that
-            // name is the one called.
-            let name = if name.eq_ignore_ascii_case(old) && !is_bound(bound, &name) {
-                if is_bound(bound, new) {
-                    captured.set(true);
-                }
-                new.to_string()
-            } else {
-                name
-            };
-            Expr::Call(name, args.into_iter().map(|a| walk(a, bound)).collect())
-        }
+        Expr::Call(name, args) => Expr::Call(name, args.into_iter().map(|a| walk(a, bound)).collect()),
         Expr::Invoke(callee, args) => Expr::Invoke(Box::new(walk(*callee, bound)), args.into_iter().map(|a| walk(a, bound)).collect()),
         Expr::Array(rows) => Expr::Array(rows.into_iter().map(|r| r.into_iter().map(|x| walk(x, bound)).collect()).collect()),
         Expr::Unary(op, x) => Expr::Unary(op, Box::new(walk(*x, bound))),
