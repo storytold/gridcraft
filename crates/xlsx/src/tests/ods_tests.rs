@@ -310,6 +310,8 @@ fn ods_pre_1900_dates_keep_raw_while_other_fallbacks_stay() {
         <table:table-cell office:value-type="date" office:date-value="1900-03-01"/>
         <table:table-cell office:value-type="date" office:date-value="10000-01-01"><text:p>10000</text:p></table:table-cell>
         <table:table-cell office:value-type="date" office:date-value="abcd-01-01"><text:p>abcd</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="1750-02-03T14:30:00Z"><text:p>1750 zoned</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="1750-02-30"><text:p>1750 invalid</text:p></table:table-cell>
     "#);
     let (wb, report) = read_ods(&bytes).unwrap();
     let s = &wb.sheets[0];
@@ -322,6 +324,8 @@ fn ods_pre_1900_dates_keep_raw_while_other_fallbacks_stay() {
     assert_eq!(s.value(CellRef::new(0, 6)), Value::Number(61.0));
     assert_eq!(s.value(CellRef::new(0, 7)), text("10000"));
     assert_eq!(s.value(CellRef::new(0, 8)), text("abcd"));
+    assert_eq!(s.value(CellRef::new(0, 9)), text("1750 zoned"));
+    assert_eq!(s.value(CellRef::new(0, 10)), text("1750 invalid"));
     assert!(s.cell(CellRef::new(0, 2)).unwrap().formula.is_none());
     assert!(report.warnings.iter().any(|w| w.contains("unsupported or missing")));
 }

@@ -4,6 +4,7 @@
 use std::io::{Cursor, Read};
 use std::sync::Arc;
 
+use gridcraft_core::date::days_in_month;
 use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
@@ -118,17 +119,42 @@ fn map_error(e: craft_ods::Error) -> IoError {
 }
 
 /// The complete `office:date-value` of a Date cell before 1900, whose serial
-/// `date_serial` cannot represent, else `None`.
+/// `date_serial` cannot represent, else `None`. The whole unzoned value must parse:
+/// a zoned or invalid date keeps the old display-text fallback.
 fn pre_1900_date_raw(cell: &craft_ods::Cell) -> Option<&str> {
     if cell.value_type != Some(craft_ods::ValueType::Date) {
         return None;
     }
     let raw = cell.raw.as_deref().filter(|s| !s.is_empty())?;
-    let year = raw.get(..4)?;
-    if !year.bytes().all(|b| b.is_ascii_digit()) || raw.as_bytes().get(4) != Some(&b'-') {
+    let (date, time) = raw.split_once('T').map_or((raw, None), |(d, t)| (d, Some(t)));
+    let bytes = date.as_bytes();
+    if bytes.len() != 10 || bytes.get(4) != Some(&b'-') || bytes.get(7) != Some(&b'-') {
         return None;
     }
-    (year.parse::<u16>().ok()? < 1900).then_some(raw)
+    let year: i32 = date.get(..4)?.parse().ok()?;
+    let month: u32 = date.get(5..7)?.parse().ok()?;
+    let day: u32 = date.get(8..10)?.parse().ok()?;
+    if year >= 1900 || !(1..=12).contains(&month) || day == 0 || day > days_in_month(year, month) {
+        return None;
+    }
+    if let Some(time) = time {
+        let (hms, fraction) = time.split_once('.').map_or((time, None), |(h, f)| (h, Some(f)));
+        if hms.len() != 8 || hms.as_bytes().get(2) != Some(&b':') || hms.as_bytes().get(5) != Some(&b':') {
+            return None;
+        }
+        let hour: u32 = hms.get(..2)?.parse().ok()?;
+        let minute: u32 = hms.get(3..5)?.parse().ok()?;
+        let second: u32 = hms.get(6..8)?.parse().ok()?;
+        if hour >= 24 || minute >= 60 || second >= 60 {
+            return None;
+        }
+        if let Some(fraction) = fraction
+            && (fraction.is_empty() || !fraction.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return None;
+        }
+    }
+    Some(raw)
 }
 
 /// What an unsupported cell keeps: a pre-1900 date's complete value, else what it
