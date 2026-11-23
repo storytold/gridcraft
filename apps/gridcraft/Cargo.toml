@@ -54,10 +54,13 @@ muda = { version = "0.21", default-features = false }
 # by PdfCraft and PhotoCraft) registers the handler (Objective-C interop needs unsafe, which our
 # workspace forbids) behind a safe API. Pinned exactly: review the diff before bumping.
 fmv-macos-events = "=0.1.0"
-# apple_events.rs brings the app forward for a Dock quit's question. Already in Cargo.lock (muda,
-# winit); pinned exactly to the same versions.
+# apple_events.rs brings the app forward for a Dock quit's question; open_panel.rs shows File ›
+# Open's panel with a completion block. Already in Cargo.lock (muda, winit, rfd); pinned exactly to
+# the same versions.
 objc2 = "=0.6.5"
-objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow"] }
+objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSWindow", "NSOpenPanel", "NSSavePanel", "NSPanel", "block2"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSString", "NSURL"] }
+block2 = "=0.6.2"
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back. Already in Cargo.lock (muda, winit);
 # pinned exactly to the same versions.
@@ -67,4 +70,8 @@ objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std
 
 [[test]]
 name = "mac_menu_appkit"
+harness = false
+
+[[test]]
+name = "mac_open_panel"
 harness = false
