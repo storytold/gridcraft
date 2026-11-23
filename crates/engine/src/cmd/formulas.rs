@@ -410,7 +410,7 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some((old_name, old_scope)) = &old {
             cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(old_name) && n.scope == *old_scope));
             if !old_name.eq_ignore_ascii_case(&name) {
-                rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name);
+                rename_name_in_formulas(&mut cx.wb, old_name, *old_scope, &name)?;
             }
         }
         cx.wb.names.retain(|n| !(n.name.eq_ignore_ascii_case(&name) && n.scope == scope));
@@ -422,12 +422,22 @@ fn define_name(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Formulas that use a renamed name follow it: cell formulas and other names' definitions, on
 /// the sheets where `old` resolves to the renamed name (its own sheet for a sheet-scoped name;
-/// every sheet without a same-named sheet-level name for a workbook-level one).
-fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) {
+/// every sheet without a same-named sheet-level name for a workbook-level one). A call by name
+/// (`Fn(4)` for a defined LAMBDA) follows it too, unless a worksheet function of that name is the
+/// one called. A workbook name renamed to a name a sheet defines for itself would be read as that
+/// sheet's name there, so such a rename is refused (the caller's edit is then dropped).
+fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_scope: Option<usize>, new: &str) -> Result<()> {
     let shadowed: Vec<usize> = wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(old)).filter_map(|n| n.scope).collect();
     let applies = |sheet: usize| match old_scope {
         Some(s) => s == sheet,
         None => !shadowed.contains(&sheet),
+    };
+    // A worksheet function is called before a defined name of the same name, so such calls stay.
+    let calls_follow = gridcraft_functions::lookup(old).is_none();
+    // Sheets with their own name `new`: there a renamed workbook name would read that name instead.
+    let taken_on: Vec<usize> = match old_scope {
+        None => wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(new)).filter_map(|n| n.scope).collect(),
+        Some(_) => Vec::new(),
     };
     // The renamed expression, or `None` when the name doesn't occur in it.
     let rename = |e: gridcraft_formula::Expr| {
@@ -437,10 +447,15 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
                 hit = true;
                 gridcraft_formula::Expr::Name(new.to_string())
             }
+            gridcraft_formula::Expr::Call(n, args) if calls_follow && n.eq_ignore_ascii_case(old) => {
+                hit = true;
+                gridcraft_formula::Expr::Call(new.to_string(), args)
+            }
             o => o,
         });
         hit.then_some(out)
     };
+    let mut redirected = false;
     for i in 0..wb.sheets.len() {
         if !applies(i) {
             continue;
@@ -449,6 +464,7 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         let formulas: Vec<(CellRef, std::sync::Arc<Formula>)> = sh.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect();
         for (c, f) in formulas {
             let Some(e) = f.expr().and_then(rename) else { continue };
+            redirected |= taken_on.contains(&i);
             let mut nf = Formula::from_expr(e);
             nf.array = f.array;
             nf.dynamic = f.dynamic;
@@ -461,9 +477,16 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         if n.scope.is_none_or(applies)
             && let Some(e) = gridcraft_formula::parse_name(&n.formula).ok().and_then(rename)
         {
+            redirected |= n.scope.is_some_and(|s| taken_on.contains(&s));
             n.formula = gridcraft_formula::print(&e);
         }
     }
+    if redirected {
+        return Err(EngineError::Other(format!(
+            "The name can't be changed to {new}: a sheet already has its own name {new}, which its formulas would read instead."
+        )));
+    }
+    Ok(())
 }
 
 /// Refuses a name of the shape GridCraft keeps its own workbook data in ([`super::stash`]):

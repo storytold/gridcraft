@@ -7124,3 +7124,48 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
+
+/// A workbook name renamed to a name a sheet already defines for itself would be read as the
+/// sheet's own name there: the rename is refused and changes nothing.
+#[test]
+fn renaming_a_workbook_name_onto_a_sheet_level_name_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=9", "scope": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=Rate"})).unwrap();
+    assert!(s.execute("formulas.defineName", json!({"name": "Total", "oldName": "Rate", "refersTo": "=2"})).is_err());
+    assert_eq!(v(&s, "A1"), Value::number(2.0));
+    assert!(s.doc().unwrap().wb.names.iter().any(|n| n.name == "Rate" && n.scope.is_none()));
+    // Where no sheet defines the new name, the rename goes ahead.
+    s.execute("formulas.defineName", json!({"name": "Fee", "oldName": "Rate", "refersTo": "=2"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::number(2.0));
+}
+
+fn formula_text(s: &Session, at: &str) -> String {
+    s.doc().unwrap().wb.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).map(|f| f.text.clone()).unwrap_or_default()
+}
+
+/// A call to a defined LAMBDA by its name follows a rename of the name.
+#[test]
+fn renaming_a_lambda_name_renames_calls_to_it() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=FnOld(4)"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "FnNew", "oldName": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
+    assert_eq!(formula_text(&s, "A1"), "FnNew(4)");
+    assert_eq!(v(&s, "A1"), Value::number(5.0));
+}
+
+/// A worksheet function is called before a defined name of the same name, so renaming a defined
+/// name `Sum` leaves `SUM(…)` calls alone and renames only the name's own uses.
+#[test]
+fn renaming_a_name_leaves_calls_to_a_function_of_that_name() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A2", "values": [[3], [4]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Sum", "refersTo": "=10"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SUM(A2:A3)+Sum"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::number(17.0));
+    s.execute("formulas.defineName", json!({"name": "Base", "oldName": "Sum", "refersTo": "=10"})).unwrap();
+    assert_eq!(formula_text(&s, "A1"), "SUM(A2:A3)+Base");
+    assert_eq!(v(&s, "A1"), Value::number(17.0));
+}
