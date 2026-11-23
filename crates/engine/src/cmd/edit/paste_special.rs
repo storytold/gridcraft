@@ -34,6 +34,21 @@ fn check_tiled_size(tiles_r: u32, tiles_c: u32, h: u32, w: u32, cleared: u64) ->
     }
 }
 
+/// Refuses a tiled paste whose merged areas would cover more than [`MAX_TILED_PASTE_CELLS`]
+/// cells across its tiles: every tile gets every merged area in the copied block, and a merged
+/// area changes every cell it covers. Without `skipBlanks` the block's own count in
+/// [`check_tiled_size`] already covers them, but with it only the non-blank source cells count,
+/// so one value beside many merged rows would otherwise build millions of merges.
+fn check_tiled_merges(tiles_r: u32, tiles_c: u32, merged_cells: u64) -> Result<()> {
+    let covered = u64::from(tiles_r).checked_mul(u64::from(tiles_c)).and_then(|n| n.checked_mul(merged_cells));
+    match covered {
+        Some(n) if n <= MAX_TILED_PASTE_CELLS => Ok(()),
+        _ => Err(EngineError::Other(format!(
+            "The paste is too large: repeating the copied merged cells over this selection would merge more than {MAX_TILED_PASTE_CELLS} cells, so nothing was pasted. Select a smaller area."
+        ))),
+    }
+}
+
 /// Ranges sorted by start row, then start column, answering "does any range
 /// here intersect this one?" without scanning every candidate.
 ///
@@ -385,6 +400,15 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             (used_h, used_w)
         };
         check_tiled_size(tiles_r, tiles_c, used_h, used_w, cleared)?;
+        // The copy's merged areas travel to every tile (as `copy_merges_tiled` copies them),
+        // whatever `skipBlanks` leaves out of the cell count above.
+        let merged_cells = match clip.wb.sheet(clip.sheet) {
+            Some(ssh) if matches!(what, What::All | What::Formats) && !transpose => {
+                ssh.merges.iter().filter(|m| src.contains_range(m)).fold(0u64, |n, m| n.saturating_add(m.count()))
+            }
+            _ => 0,
+        };
+        check_tiled_merges(tiles_r, tiles_c, merged_cells)?;
     }
     let tiled = u64::from(tiles_r).saturating_mul(u64::from(tiles_c)) > 1;
     // A single cell or row repeated down a filtered selection skips the rows the filter hides; a

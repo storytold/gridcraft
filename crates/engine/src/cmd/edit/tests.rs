@@ -1167,3 +1167,44 @@ fn a_tiled_skip_blanks_paste_walks_only_the_cells_it_writes() {
     assert_eq!(value_at(&s, "B2"), Value::Empty, "a blank source cell writes nothing");
     assert!(took < std::time::Duration::from_secs(2), "{took:?}");
 }
+
+#[test]
+fn a_tiled_skip_blanks_paste_bounds_the_merged_areas_it_copies() {
+    // #4425 review (CodeRabbit, 2026-11-23): the skipBlanks bound counts only the non-blank
+    // source cells, but every tile still gets every merged area in the copy. One value beside
+    // merged rows passed as a few thousand writes and then built hundreds of thousands of
+    // merges (millions, at the size the review gave), enough to run out of memory.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    for r in 1..=100 {
+        s.execute("home.mergeCells", json!({"range": format!("B{r}:J{r}")})).unwrap();
+    }
+    let merge_count = |s: &Session| s.doc().unwrap().wb.sheet(0).unwrap().merges.len();
+    // A small merged paste still lands its merges at every tile.
+    s.execute("edit.copy", json!({"range": "A1:J100"})).unwrap();
+    s.execute("selection.set", json!({"range": "L1:U1000"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).unwrap();
+    assert_eq!(value_at(&s, "L901"), Value::Number(7.0));
+    assert_eq!(merge_count(&s), 1100);
+    // 6,000 tiles of 900 merged cells each is past the write bound, though only 6,000 cells get values.
+    s.execute("edit.copy", json!({"range": "A1:J100"})).unwrap();
+    s.execute("selection.set", json!({"range": "L1:U600000"})).unwrap();
+    let err = s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true}));
+    assert!(err.is_err(), "the paste would build 600,000 merges");
+    assert_eq!(merge_count(&s), 1100, "nothing was merged");
+    assert_eq!(value_at(&s, "L1001"), Value::Empty, "nothing was written");
+
+    // The review's own case: A1 and 999 merged rows, over 100,000 tiles.
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    for r in 2..=1000 {
+        s.execute("home.mergeCells", json!({"range": format!("A{r}:B{r}")})).unwrap();
+    }
+    s.execute("edit.copy", json!({"range": "A1:B1000"})).unwrap();
+    s.execute("selection.set", json!({"range": "D1:GU1000000"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true})).is_err());
+    assert_eq!(merge_count(&s), 999, "nothing was merged");
+    assert_eq!(value_at(&s, "D1"), Value::Empty, "nothing was written");
+}
