@@ -32,9 +32,10 @@ The `apps/gridcraft` and `apps/gridcraft-web` crates are workspace members, and
 - **Version information:** `gridcraft --version`, `gridcraft-cli --version` and the About dialog
   use `env!("CARGO_PKG_VERSION")` from `[workspace.package]`. `packaging/env.sh` also exports
   `GRIDCRAFT_BUILD_SHA` and `GRIDCRAFT_BUILD_DATE` for artifact metadata.
-- **Runtime icon:** `apps/gridcraft/src/main.rs` embeds
-  `assets/app-icon/gridcraft-macos-512.png` (macOS Dock) and
-  `hicolor/256x256/apps/ai.storyteller.gridcraft.png` (Windows/Linux) as the window icon, and
+- **Runtime icon:** `apps/gridcraft/src/app_icon.rs` embeds
+  `assets/app-icon/gridcraft-macos-512.png` (macOS Dock, unbundled runs only) and
+  `hicolor/256x256/apps/ai.storyteller.gridcraft.png` (Windows/Linux) as the window icon. Inside a
+  macOS app bundle it passes an empty `IconData`, so the Dock keeps the bundle's `.icns`. `main.rs`
   uses `ai.storyteller.gridcraft` as the Wayland app id / `StartupWMClass`.
 
 ## Cutting a release
