@@ -4048,9 +4048,14 @@ fn a_chart_source_already_broken_survives_an_unrelated_edit() {
     s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
     s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
     set_chart_source(&mut s, "#REF!");
-    // Renaming a name the source doesn't use leaves the broken source as it was.
+    // A series reads the name, so the rename rewrites this chart; the source it doesn't use is
+    // left broken as it was.
+    let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.sheet_mut(0).unwrap().charts[0].series[0].values = "=Rate".into();
     s.execute("formulas.defineName", json!({"name": "Fee", "oldName": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
-    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().charts[0].source.as_deref(), Some("#REF!"));
+    let chart = s.doc().unwrap().wb.sheet(0).unwrap().charts[0].clone();
+    assert_eq!(chart.series[0].values, "=Fee");
+    assert_eq!(chart.source.as_deref(), Some("#REF!"));
 }
 
 #[test]
