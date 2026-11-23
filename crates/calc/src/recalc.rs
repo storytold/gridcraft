@@ -1353,7 +1353,11 @@ pub(crate) mod tests {
         set(&mut wb, &mut calc, "A1", "3");
         set(&mut wb, &mut calc, "B1", "=SEQUENCE(A1)");
         set(&mut wb, &mut calc, "C1", "=SUM(B1#)");
+        // D1 reads cells the spill only reaches once it grows, so only the spill follow-up round
+        // (the one a Calculate Sheet scope filters) recalculates it.
+        set(&mut wb, &mut calc, "D1", "=SUM(B4:B5)");
         assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C1").unwrap()), Value::Number(6.0));
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("D1").unwrap()), Value::Number(0.0));
         // The state a panicked Calculate Sheet on Sheet2 leaves behind.
         calc.scope = Some(1);
         calc.standing.held = true;
@@ -1365,6 +1369,7 @@ pub(crate) mod tests {
         // Growing the spill on Sheet1 still recalculates the formula reading it.
         set(&mut wb, &mut calc, "A1", "5");
         assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C1").unwrap()), Value::Number(15.0));
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("D1").unwrap()), Value::Number(9.0));
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the
