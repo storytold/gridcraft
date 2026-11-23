@@ -384,6 +384,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "最近",
         "No recent workbooks yet." => "还没有最近使用的工作簿。",
         "More workbooks" => "更多工作簿",
+        "More entries not shown" => "还有更多项未显示",
         "Modified" => "修改时间",
         "Not available" => "不可用",
         "Just now" => "刚刚",
