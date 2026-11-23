@@ -28,7 +28,7 @@ pub(crate) fn start(app: &mut SheetApp, manual: bool) {
     if manual {
         app.updates_rt.manual = true;
     } else {
-        app.updates_rt.startup = true;
+        app.updates_rt.startup = crate::build_config::startup_update_check();
     }
 }
 
@@ -82,6 +82,17 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compiled_policy_controls_startup_but_manual_requests_still_work() {
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), crate::Services::default());
+        assert!(!app.updates_rt.startup);
+        app.start_update_check();
+        assert_eq!(app.updates_rt.startup, crate::build_config::startup_update_check());
+        app.check_for_updates();
+        assert!(app.updates_rt.manual);
+        assert_eq!(app.updates_rt.startup, crate::build_config::startup_update_check());
+    }
 
     #[test]
     fn result_window_shows_every_status_but_idle() {
