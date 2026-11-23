@@ -13,9 +13,8 @@
 //!   File › Open or dropped on the window; a file over [`MAX_OPEN_BYTES`] is refused before it is
 //!   copied.
 //! - `gridcraft:save` (to the host): `{ name, saveAs, bytes, export }` for every file GridCraft
-//!   would otherwise download. With `export: false`, the host stores the XLSX workbook; with
-//!   `export: true`, it stores a separate file (such as a PDF) without replacing the workbook.
-//!   `saveAs` remains `false`; it does not distinguish Save from Save As here.
+//!   would otherwise download: Save and Save As (an .xlsx workbook, `export: false`) and exports
+//!   such as PDF (`export: true`). `saveAs` is `true` for Save As and `false` for Save and exports.
 //! - `gridcraft:dirty` whenever unsaved changes appear or go away, `gridcraft:failed` when the
 //!   app couldn't start.
 //!
@@ -27,12 +26,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use craft_web_host::web::{FileData, Host, Message};
-use craft_web_host::{Mode, Outgoing, file_name, message_type};
+use craft_web_host::{Mode, Outgoing, message_type};
 use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 use wasm_bindgen::JsValue;
 
-use crate::host_save::{SaveMessage, sync_saved};
-use crate::hostmode::open_name;
+use crate::host_save::SaveMessage;
+use crate::hostmode::{apply_saved, open_name, wire_save_services};
 
 /// The app id in the host messages (`gridcraft:ready`).
 const APP: &str = "gridcraft";
@@ -75,12 +74,10 @@ impl Bridge {
     /// from it.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
         self.listen(inbox, ctx);
-        let bridge = self.clone();
-        services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
-            if let Err(e) = bridge.post_save(name, bytes) {
-                log::error!("couldn't hand {name} to the page: {e}");
-            }
-        }));
+        let save_target = self.save_target.clone();
+        wire_save_services(services, self.saved.clone(), move |name, bytes, save_as| {
+            save_target.post(SaveMessage::new(name, bytes), save_as).map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+        });
     }
 
     /// `?author=`: the host's name for the user signs new notes and comments.
@@ -103,16 +100,8 @@ impl Bridge {
     /// name it was saved as, and the host hears when unsaved changes appear or go away (the
     /// crate does not repeat a state it already reported).
     pub fn sync(&self, app: &mut SheetApp) {
-        let saved = std::mem::take(&mut *self.saved.borrow_mut());
-        sync_saved(&saved, app);
+        apply_saved(app, &self.saved);
         self.host.post_dirty(app.session.documents().iter().any(|d| d.is_dirty()));
-    }
-
-    fn post_save(&self, path: &str, bytes: &[u8]) -> Result<(), String> {
-        let name = file_name(Some(path), "document");
-        self.save_target.post(SaveMessage::new(&name, bytes)).map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))?;
-        self.saved.borrow_mut().push(name);
-        Ok(())
     }
 
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
@@ -132,14 +121,14 @@ enum SaveTarget {
 }
 
 impl SaveTarget {
-    fn post(&self, save: SaveMessage<'_>) -> Result<(), JsValue> {
+    fn post(&self, save: SaveMessage<'_>, save_as: bool) -> Result<(), JsValue> {
         let buffer = js_sys::Uint8Array::from(save.bytes).buffer();
         let kind = message_type(APP, Outgoing::Save.kind());
         let payload = js_sys::Object::new();
         let set = |key, value: JsValue| js_sys::Reflect::set(&payload, &JsValue::from_str(key), &value);
         set("name", save.name.into())?;
         set("bytes", buffer.clone().into())?;
-        set("saveAs", JsValue::FALSE)?;
+        set("saveAs", JsValue::from_bool(save_as && !save.export))?;
         set("export", JsValue::from_bool(save.export))?;
         match self {
             Self::Parent { parent, origin } => {

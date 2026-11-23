@@ -23,6 +23,7 @@ fn is_workbook(name: &str) -> bool {
 }
 
 /// Preserve the bridge's existing rule: only a workbook receipt marks the document saved.
+#[allow(dead_code)]
 pub fn sync_saved(saved: &[String], app: &mut SheetApp) {
     if let Some(name) = saved.iter().rev().find(|name| is_workbook(name))
         && let Some(doc) = app.session.active_mut()
