@@ -53,11 +53,13 @@ impl ListPicker {
                 && v.in_cell_dropdown
                 && v.ranges.iter().any(|r| r.contains(c))
         })?;
-        let items = list_items(&d.wb, d.wb.active_sheet(), c, dv);
 
         // A covered cell of a merge can't hold a value: writes go to its anchor.
         let anchor = sh.merge_at(c).map(|m| m.start).unwrap_or(c);
-        Some(
+        // Resolve the items at the anchor — the cell the picked value is written to —  
+        // so a relative list source offers the entries the anchor's rule checks.  
+        let items = list_items(&d.wb, d.wb.active_sheet(), anchor, dv);
+       Some(
            Self { cell: c, anchor, items, sel: 0 }
         )
     }
@@ -155,13 +157,16 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
     let response = egui::Area::new(egui::Id::unique("dv_list")).fixed_pos(at).pivot(pivot).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
+
             egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
                 // Hover takes the highlight only when the pointer moved this frame: a
                 // stationary pointer over a row would undo ArrowDown/ArrowUp every repaint.
                 let pointer_moved = ui.ctx().input(|i| {
                     i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_)))
                 });
-                let mut chosen: Option<&str> = None;
+                // Enter's choice is fixed at input time: a same-frame hover may move `sel`,  
+                // but it must not change what Enter picked. Only an explicit click overrides.  
+                let mut chosen = input.picked.as_deref();  
                 for (i, it) in p.items.iter().enumerate() {
                     let row = ui.add(
                         egui::Button::selectable(i == p.sel, it.as_str())
@@ -173,8 +178,8 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
                     if pointer_moved && row.hovered() {
                         p.sel = i;
                     }
-                    // Enter picks by index, not by text: duplicate items must not dispatch twice.
-                    if row.clicked() || (input.picked.is_some() && i == p.sel) {
+                    
+                    if row.clicked() {
                         chosen = Some(it.as_str());
                     }
                 }
