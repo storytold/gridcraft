@@ -572,6 +572,8 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
 /// [`rewrite_all_formulas`] for several edits applied in order, visiting each formula once.
 pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, target: &str, edits: &[gridcraft_formula::adjust::Edit]) -> Result<()> {
     use gridcraft_formula::adjust::Edit;
+    let target_index = wb.sheet_index(target);
+    let order: Vec<_> = wb.sheets.iter().map(|sheet| sheet.name.clone()).collect();
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
     let moves_arrays = |e: &Edit| matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
@@ -582,7 +584,7 @@ pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, targ
         if keys.is_empty() {
             continue;
         }
-        let on_target = host.eq_ignore_ascii_case(target);
+        let on_target = Some(si) == target_index;
         let Some(sheet) = wb.sheet_mut(si) else { continue };
         for (c, f) in keys {
             // Borrows the tree and copies and prints only the formulas the edits change. A formula
@@ -590,7 +592,7 @@ pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, targ
             let Some(new) = f.with_expr(|x| {
                 let mut cur: Option<gridcraft_formula::Expr> = None;
                 for e in edits {
-                    if let Some(n) = gridcraft_formula::adjust::adjust_if_changed(cur.as_ref().unwrap_or(x), &host, target, e) {
+                    if let Some(n) = gridcraft_formula::adjust::adjust_if_changed_in(cur.as_ref().unwrap_or(x), &host, target, e, &order) {
                         cur = Some(n);
                     }
                 }
@@ -618,12 +620,12 @@ pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, targ
     for n in wb.names.iter_mut() {
         if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
             // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
-            let new = edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e));
+            let new = edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust_in(expr, "\u{0}", target, e, &order));
             n.formula = gridcraft_formula::print(&new);
         }
     }
-    rewrite_cell_links(wb, |host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e)));
-    rewrite_python_refs(wb, &|host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e)))
+    rewrite_cell_links(wb, |host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust_in(expr, host, target, e, &order)));
+    rewrite_python_refs(wb, &|host, expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust_in(expr, host, target, e, &order)))
 }
 
 /// Runs `f` over every reference a floating object holds (a chart's series values, categories,

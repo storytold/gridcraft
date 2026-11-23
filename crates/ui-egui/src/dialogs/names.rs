@@ -1,42 +1,58 @@
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
 
+/// Shows scope captions without translating user sheet names or confusing them with the book option.
+pub(super) fn scope_caption(scope: &Json, language: crate::i18n::Language) -> String {
+    let sheet = scope.get("sheet").and_then(Json::as_str).or_else(|| scope.as_str().filter(|s| *s != "Workbook"));
+    let workbook = language.tr("Workbook");
+    match sheet {
+        Some(sheet) if sheet == "Workbook" || sheet == workbook => format!("{sheet} ({})", language.tr("Sheet")),
+        Some(sheet) => sheet.to_string(),
+        None => workbook.to_string(),
+    }
+}
+
+/// Displays workbook-defined names and dispatches create, edit and delete actions while preserving their identities.
 pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
     let names = list.as_array().cloned().unwrap_or_default();
     let selected = names.get(d.list_index).cloned();
     let field = |n: &Json, k: &str| n.get(k).and_then(Json::as_str).unwrap_or("").to_string();
+    let identity = |n: &Json| n.get("scopeIdentity").cloned().unwrap_or_else(|| json!(field(n, "scope")));
     ui.horizontal(|ui| {
-        if ui.button("New…").clicked() {
+        if ui.button(crate::i18n::current(ui.ctx()).tr("New…")).clicked() {
             app.open_dialog("defineName", json!({}));
         }
-        if ui.add_enabled(selected.is_some(), egui::Button::new("Edit…")).clicked()
+        if ui.add_enabled(selected.is_some(), egui::Button::new(crate::i18n::current(ui.ctx()).tr("Edit…"))).clicked()
             && let Some(n) = &selected
         {
             app.open_dialog(
                 "defineName",
                 json!({
-                    "name": field(n, "name"), "scope": field(n, "scope"), "comment": field(n, "comment"),
-                    "refersTo": field(n, "refersTo"), "oldName": field(n, "name"), "oldScope": field(n, "scope"),
+                    "name": field(n, "name"), "scope": identity(n), "comment": field(n, "comment"),
+                    "refersTo": field(n, "refersTo"), "oldName": field(n, "name"), "oldScope": identity(n),
                 }),
             );
         }
-        if ui.add_enabled(selected.is_some(), egui::Button::new("Delete")).clicked()
+        if ui.add_enabled(selected.is_some(), egui::Button::new(crate::i18n::current(ui.ctx()).tr("Delete"))).clicked()
             && let Some(n) = &selected
         {
-            app.run_or_alert("formulas.deleteName", json!({"name": field(n, "name"), "scope": field(n, "scope")}));
+            // The delete command treats an absent/null scope as every scope for legacy callers.
+            let scope = identity(n);
+            let scope = if scope.is_null() { json!("Workbook") } else { scope };
+            app.run_or_alert("formulas.deleteName", json!({"name": field(n, "name"), "scope": scope}));
         }
     });
     ui.add_space(4.0);
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         egui::Grid::new("names").striped(true).num_columns(4).show(ui, |ui| {
-            ui.strong("Name");
-            ui.strong("Value");
-            ui.strong("Refers To");
-            ui.strong("Scope");
+            ui.strong(crate::i18n::current(ui.ctx()).tr("Name"));
+            ui.strong(crate::i18n::current(ui.ctx()).tr("Value"));
+            ui.strong(crate::i18n::current(ui.ctx()).tr("Refers To"));
+            ui.strong(crate::i18n::current(ui.ctx()).tr("Scope"));
             ui.end_row();
             if names.is_empty() {
-                ui.label(egui::RichText::new("No names defined").italics());
+                ui.label(egui::RichText::new(crate::i18n::current(ui.ctx()).tr("No names defined")).italics());
                 ui.end_row();
             }
             for (i, n) in names.iter().enumerate() {
@@ -45,14 +61,14 @@ pub(super) fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                 }
                 ui.label(n.get("value").map(|v| v.to_string()).unwrap_or_default().chars().take(30).collect::<String>());
                 ui.label(field(n, "refersTo"));
-                ui.label(field(n, "scope"));
+                ui.label(scope_caption(&identity(n), crate::i18n::current(ui.ctx())));
                 ui.end_row();
             }
         });
     });
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.button(" Close ").clicked() {
+        if ui.button(crate::i18n::current(ui.ctx()).tr("Close")).clicked() {
             *open = false;
         }
     });
