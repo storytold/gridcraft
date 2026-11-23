@@ -2987,7 +2987,7 @@ fn saving_a_csv_with_unmappable_text_keeps_it_or_reports_the_loss() {
     assert!(r["warnings"][0].as_str().unwrap().contains("shift_jis"), "{:?}", r["warnings"]);
     let r = s.execute("file.save", json!({"encoding": "shift_jis"})).unwrap();
     let saved = std::fs::read(&jp).unwrap();
-    let expected: Vec<u8> = japanese_cp932_csv().into_iter().chain([b'?', b',', b',', b'\r', b'\n']).collect();
+    let expected: Vec<u8> = japanese_cp932_csv().into_iter().chain(*b"?,, \r\n").collect();
     assert_eq!(saved, expected);
     assert!(r["warnings"][0].as_str().unwrap().contains("1 character"), "{:?}", r["warnings"]);
     // A save that fits reports nothing and keeps its code page.
