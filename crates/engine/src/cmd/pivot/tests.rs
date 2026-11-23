@@ -1511,3 +1511,32 @@ fn accounting_items_keep_their_labels_without_the_fill() {
     assert_eq!(text(&s, "B1"), " $120 ");
     assert_eq!(grand_total(&s, 1), Value::Number(20.0));
 }
+
+/// Older GridCraft read a header as the sheet showed it, so a PivotTable made while Show Formulas
+/// was on saved a formula header by its formula text (`="Region"`). After that workbook is saved
+/// and reopened, a refresh still finds the field and its filter, now under the header's value.
+#[test]
+fn a_field_saved_under_a_formula_header_text_survives_reopen_and_refresh() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+    // East: 100 + 120 + 60 + 60 + 75.
+    assert_eq!(grand_total(&s, 1), Value::Number(415.0));
+    // The PivotTable as an older GridCraft saved it, named by the header as the sheet showed it.
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let si = wb.active_sheet();
+    let saved = wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap();
+    saved.filters[0].source_col = "=\"Region\"".into();
+    let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
+    let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(pt(&s).filters[0].source_col, "=\"Region\"");
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert_eq!(p.filters[0].source_col, "Region");
+    assert_eq!(p.filters[0].selected, Some(vec!["East".to_string()]));
+    assert_eq!(grand_total(&s, 1), Value::Number(415.0));
+}

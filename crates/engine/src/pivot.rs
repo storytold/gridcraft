@@ -121,13 +121,72 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
 /// Computes a PivotTable report from the workbook.
 pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Output, String> {
     let src = read_source(wb, &pt.source, pivot_sheet)?;
-    compute_from(wb, pt, &src, None)
+    let mut migrated = None;
+    if older_field_names(wb, pt, pivot_sheet).is_some_and(|names| !names.is_empty()) {
+        let mut copy = pt.clone();
+        migrate_field_names(wb, &mut copy, pivot_sheet);
+        migrated = Some(copy);
+    }
+    compute_from(wb, migrated.as_ref().unwrap_or(pt), &src, None)
+}
+
+/// The fields a PivotTable saved by an older GridCraft names by header text it no longer reads,
+/// each with its column's current name. GridCraft read a header as the cell showed it: its
+/// formula under Show Formulas (`="Region"`), a long General number narrowed to the cell width.
+/// Now a header is its value through its number format, so such a saved name matches no column;
+/// it is renamed when it matches no current header and exactly one header as it showed then
+/// (numbered alike, so at most one). `None` when the source can't be read.
+fn older_field_names(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<HashMap<String, String>> {
+    use gridcraft_model::pivot_source::{headers, unique_names};
+    let (si, r) = resolve_source(wb, &pt.source, pivot_sheet).ok()?;
+    let current = headers(wb, si, r).ok()?;
+    let known = |n: &str| current.iter().any(|h| h.eq_ignore_ascii_case(n));
+    let saved = pt
+        .rows
+        .iter()
+        .chain(&pt.columns)
+        .map(|f| &f.source_col)
+        .chain(pt.values.iter().map(|v| &v.source_col))
+        .chain(pt.filters.iter().map(|f| &f.source_col));
+    let unknown: Vec<&String> = saved.filter(|n| !known(n)).collect();
+    if unknown.is_empty() {
+        return Some(HashMap::new());
+    }
+    let sh = wb.sheet(si)?;
+    let shown = (r.start.col..=r.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)));
+    let older = unique_names(shown).ok()?;
+    let mut out = HashMap::new();
+    for n in unknown {
+        if let Some(i) = older.iter().position(|o| o.eq_ignore_ascii_case(n))
+            && let Some(h) = current.get(i)
+        {
+            out.insert(n.to_ascii_lowercase(), h.clone());
+        }
+    }
+    Some(out)
+}
+
+/// Renames the fields [`older_field_names`] finds to their columns' current names. Whether any was.
+fn migrate_field_names(wb: &Workbook, pt: &mut PivotTable, pivot_sheet: usize) -> bool {
+    let Some(names) = older_field_names(wb, pt, pivot_sheet).filter(|n| !n.is_empty()) else { return false };
+    let rename = |n: &mut String| {
+        if let Some(h) = names.get(&n.to_ascii_lowercase()) {
+            *n = h.clone();
+        }
+    };
+    pt.rows.iter_mut().chain(pt.columns.iter_mut()).for_each(|f| rename(&mut f.source_col));
+    pt.values.iter_mut().for_each(|v| rename(&mut v.source_col));
+    pt.filters.iter_mut().for_each(|f| rename(&mut f.source_col));
+    true
 }
 
 /// Recomputes a pivot and writes its report. With `replace` false, refuses when the target area
 /// holds other data. Returns the written area.
 pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Result<RangeRef, String> {
-    let pt = wb.sheet(sheet).and_then(|s| s.pivots.get(idx)).cloned().ok_or("There's no such PivotTable.")?;
+    let mut pt = wb.sheet(sheet).and_then(|s| s.pivots.get(idx)).cloned().ok_or("There's no such PivotTable.")?;
+    // A field saved under a header text older GridCraft read keeps its place: it takes its
+    // column's current name, which the refreshed PivotTable keeps.
+    let migrated = migrate_field_names(wb, &mut pt, sheet);
     let out = compute(wb, &pt, sheet)?;
     let h = out.height().max(1);
     let w = out.width.max(1);
@@ -243,6 +302,12 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = Some(area);
+        if migrated {
+            p.rows = pt.rows.clone();
+            p.columns = pt.columns.clone();
+            p.values = pt.values.clone();
+            p.filters = pt.filters.clone();
+        }
     }
     let sheet_name = shm.name.clone();
     rebind_charts(wb, &sheet_name, &pt.name, origin, &out);

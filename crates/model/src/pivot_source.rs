@@ -102,19 +102,28 @@ pub fn column_format(wb: &Workbook, sheet: usize, range: RangeRef, col: u32) -> 
 /// (`Amount`, `Amount2`). An empty header is an error, as a PivotTable needs labelled columns.
 pub fn headers(wb: &Workbook, sheet: usize, range: RangeRef) -> Result<Vec<String>, String> {
     let sh = wb.sheet(sheet).ok_or(INVALID)?;
+    // Each style's format is parsed once, however many headers share it.
+    let mut formats = HashMap::new();
+    let shown = (range.start.col..=range.end.col).map(|c| {
+        let at = CellRef::new(range.start.row, c);
+        let style = sh.style_id(at);
+        let fmt = formats.entry(style).or_insert_with(|| parse_code(wb.styles.get(style).num_fmt.as_str()));
+        // `format_value` reads an array's first element, and no deeper, as items do.
+        format_value(&sh.value(at), fmt, wb.date_system).plain()
+    });
+    unique_names(shown)
+}
+
+/// Column names from header texts as [`headers`] makes them: trimmed, a repeated one numbered
+/// (`Amount`, `Amount2`), an empty one an error.
+pub fn unique_names(texts: impl IntoIterator<Item = String>) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     // Names taken so far (lower-case), and the next suffix to try for each repeated header, so
     // that thousands of equal headers don't take cubic time.
     let mut taken: HashSet<String> = HashSet::new();
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
-    // Each style's format is parsed once, however many headers share it.
-    let mut formats = HashMap::new();
-    for c in range.start.col..=range.end.col {
-        let at = CellRef::new(range.start.row, c);
-        let style = sh.style_id(at);
-        let fmt = formats.entry(style).or_insert_with(|| parse_code(wb.styles.get(style).num_fmt.as_str()));
-        // `format_value` reads an array's first element, and no deeper, as items do.
-        let h = format_value(&sh.value(at), fmt, wb.date_system).plain().trim().to_string();
+    for t in texts {
+        let h = t.trim().to_string();
         if h.is_empty() {
             return Err(
                 "The PivotTable field name is not valid. To create a PivotTable, you must use data that is organized as a list with labeled columns."
