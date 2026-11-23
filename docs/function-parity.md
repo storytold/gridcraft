@@ -111,7 +111,10 @@ assertions each, but there is no conformance suite against Excel-computed result
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
 (#137, and past 16,384 cells #1010, fixed 10-14 for bounded references), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
 10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
-XIRR, YIELD) are the highest-risk for last-digit differences.
+XIRR, YIELD) are the highest-risk for last-digit differences. RATE follows Excel's own iteration, reconstructed from observation (secant from the guess and the guess ± 0.001, at most 200 steps,
+stop within 1e-7 by step and value, a looser 1e-4 check after 200 steps), so it returns the same
+iterate as Excel where convergence is slow (about -100% for `RATE(n,0,-pv,0)`) and `#NUM!` where
+Excel's solver gives up (very large rates); roots at 0% differ only by rounding noise (under 1e-7).
 
 TEXT() and cell display share `crates/numfmt`; checked against Excel-cached results in
 number- and text-format test workbooks (352 TEXT cells), all match:
@@ -179,6 +182,7 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 | 2026-10-14 | minor | Set precision as displayed: results, spills and typed or reformatted numbers are stored as their format shows them when the option is on (#1343) |
 | 2026-10-14 | minor | Number-to-text (`&`, CONCAT, TEXTJOIN, VALUETOTEXT, the IM functions' complex text, and also formula printing, pivot and chart labels) rounds to 15 significant digits before choosing decimal or scientific, so `=(1E15-0.5)&""` is `1E+15`, not `1000000000000000`; and below 1 it switches to scientific when the decimal would be longer than 21 characters (sign not counted), as Excel caches IMCSCH/IMEXP/IMTAN results: `1.28233995888454E-06`, so `9.99999999999999E-09` (was `0.00000001`), but `0.0000692361330972509`. Only 15-digit positive mantissas are Excel-verified; the limit for shorter mantissas and for negatives is inferred |
 | 2026-10-14 | minor | Bounded references up to 1,048,576 cells (`D3:AZ400`) keep their full shape instead of stopping at the used range, so `SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=x)*(D1:AZ1=y))` broadcasts like Excel and `ROWS`, `COUNTBLANK` and `--(r="")` count the blanks; references that run to the edge of the sheet (`A:A`) still stop at the used range (#1010) |
+| 2026-10-14 | minor | RATE follows Excel's iteration (secant, 200 steps, 1e-7 by step and value): `RATE(5,0,-100,0)` is -0.999999409145182 like Excel instead of `#NUM!`, `RATE(4,0,-0.0001,100)` is `#NUM!` like Excel instead of 30.62 |
 | 2026-10-13 | minor | Legacy formulas from files (no dynamic-array metadata) evaluate with implicit intersection: cells differing from Excel's cached values 68,964 → 49,866 across 4,224 test-corpus workbooks (none gets more) |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-12 | minor | GETPIVOTDATA added: 514 / 523 by name, 505 working |
