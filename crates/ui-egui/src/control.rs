@@ -264,6 +264,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("app.checkForUpdates", "Check for Updates…", ""),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 (
+                    "insert.library",
+                    "Library",
+                    "{on?: bool} (toggles without it) → {on}: the Library pane, pictures from your own folders (library.* commands)",
+                ),
+                (
                     "view.expandFormulaBar",
                     "Expand Formula Bar",
                     "{on?: bool} (toggles without it) → {on}; {lines: int} sets the expanded height (1 collapses) → {on, lines}",

@@ -29,6 +29,8 @@ const DENIED_PREFIXES: &[(&str, &str)] = &[
     ("window.", "macros don't switch windows"),
     ("automate.", "macros don't record or run scripts or other macros"),
     ("macro.", "macros don't record or run other macros"),
+    // The Library reads the person's own folders of pictures and keeps them in the preferences.
+    ("library.", "macros don't browse or change the Library's folders"),
 ];
 
 /// Single commands that never run in a macro.
@@ -114,6 +116,9 @@ mod tests {
             "view.hideWindow",
             "view.unhideWindow",
             "control.press",
+            "library.insert",
+            "library.addFolder",
+            "library.list",
         ] {
             assert!(matches!(macro_policy(id, &none, Trust::Local), Policy::Deny(_)), "{id}");
             assert!(matches!(macro_policy(id, &path, Trust::FromFile), Policy::Deny(_)), "{id}");

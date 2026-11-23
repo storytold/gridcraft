@@ -200,6 +200,17 @@ impl SheetApp {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 Ok(Json::Null)
             }
+            "insert.library" => {
+                let open = self.grid.pane.as_deref() == Some(crate::library_pane::PANE);
+                let on = p.get("on").and_then(Json::as_bool).unwrap_or(!open);
+                if on {
+                    // One task pane shows at a time; the Comments pane closes as `panes::show` closes it.
+                    self.grid.pane = Some(crate::library_pane::PANE.into());
+                } else if open {
+                    self.grid.pane = None;
+                }
+                Ok(json!({"on": on}))
+            }
             "view.expandFormulaBar" => {
                 // `lines` is where a drag of the bar's bottom edge left it: one line collapses it,
                 // more expands it to that height, which expanding returns to afterwards.

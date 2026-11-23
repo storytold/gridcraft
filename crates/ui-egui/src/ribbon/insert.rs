@@ -3,7 +3,7 @@ use super::{
     Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
 };
 
-/// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
+/// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, Library, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
 pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
     control_keytip(app, ui, &__k, "insert.pivotTable");
@@ -65,6 +65,15 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
             }
         });
     });
+    // Insert ▸ Library: the task pane of pictures from the person's own folders.
+    let open = app.grid.pane.as_deref() == Some(crate::library_pane::PANE);
+    let lib = big_button(ui, Icon::Library, "Library", "Pictures from your own folders", false);
+    if open {
+        ui.painter().rect_stroke(lib.rect, 5.0, Stroke::new(2.0, Tokens::get(ui.ctx()).accent), StrokeKind::Inside);
+    }
+    if lib.clicked() {
+        act(app, "insert.library", json!({"on": !open}));
+    }
     sep(ui);
     let __k = big_button(ui, Icon::Chart, "Recommended\nCharts", "Recommended Charts", false);
     control_keytip(app, ui, &__k, "insert.recommendedCharts");

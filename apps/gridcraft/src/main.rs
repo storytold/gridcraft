@@ -81,17 +81,9 @@ impl eframe::App for App {
     }
 }
 
+/// The settings folder, which the CLI also reads the Library folders from.
 fn config_dir() -> Option<std::path::PathBuf> {
-    if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/GridCraft"))
-    } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("GridCraft"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-            .map(|c| c.join("gridcraft"))
-    }
+    gridcraft_engine::settings_dir()
 }
 
 /// Runs without preferences (`GRIDCRAFT_NO_PREFS`, agents' test runs) neither read nor write
@@ -122,7 +114,7 @@ fn load_prefs(app: &mut SheetApp) {
         app.ui = ui.at_startup();
         app.ui.language = language;
     }
-    if let Ok(b) = std::fs::read(dir.join("prefs.json"))
+    if let Ok(b) = std::fs::read(dir.join(gridcraft_engine::PREFS_FILE))
         && let Ok(p) = serde_json::from_slice(&b)
     {
         app.session.prefs = p;
@@ -139,7 +131,7 @@ fn save_prefs(app: &SheetApp) {
         let _ = std::fs::write(dir.join("ui.json"), b);
     }
     if let Ok(b) = serde_json::to_vec_pretty(&app.session.prefs) {
-        let _ = std::fs::write(dir.join("prefs.json"), b);
+        let _ = std::fs::write(dir.join(gridcraft_engine::PREFS_FILE), b);
     }
 }
 
@@ -183,6 +175,9 @@ fn services() -> Services {
                 .add_filter("CSV", &["csv"])
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
+        })),
+        pick_folder: Some(Box::new(|| {
+            rfd::FileDialog::new().set_title("Add a Library Folder").pick_folder().and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()

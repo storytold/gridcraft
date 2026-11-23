@@ -952,6 +952,11 @@ dependencies = [
 [[package]]
 name = "craft-fonts-build"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb#3bce146e933ae119a56e405a806ae3ced36dc3bb"
+
+[[package]]
+name = "craft-fonts-build"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
 
 [[package]]
@@ -962,6 +967,29 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "craft-i18n"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb#3bce146e933ae119a56e405a806ae3ced36dc3bb"
+dependencies = [
+ "fixed_decimal",
+ "icu_decimal",
+ "icu_locale_core",
+ "icu_locale_fallback",
+ "icu_normalizer",
+ "icu_plurals",
+ "icu_properties",
+ "icu_provider",
+ "icu_provider_adapters",
+ "icu_provider_blob",
+ "log",
+ "objc2-foundation 0.3.2",
+ "sys-locale",
+ "unicode-bidi",
+ "windows-registry",
+ "writeable",
 ]
 
 [[package]]
@@ -985,6 +1013,27 @@ dependencies = [
  "unicode-bidi",
  "windows-registry",
  "writeable",
+]
+
+[[package]]
+name = "craft-library"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb#3bce146e933ae119a56e405a806ae3ced36dc3bb"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "craft-library-egui"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb#3bce146e933ae119a56e405a806ae3ced36dc3bb"
+dependencies = [
+ "craft-library",
+ "craft-ui 0.1.0 (git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb)",
+ "egui",
+ "image",
+ "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -1109,10 +1158,30 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb#3bce146e933ae119a56e405a806ae3ced36dc3bb"
+dependencies = [
+ "craft-fonts-build 0.1.0 (git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb)",
+ "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=3bce146e933ae119a56e405a806ae3ced36dc3bb)",
+ "egui",
+ "epaint",
+ "js-sys",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "skrifa",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "craft-ui"
+version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9#aa84415bae3b765fef6b7ef42404f66ad1cff9d9"
 dependencies = [
- "craft-fonts-build",
- "craft-i18n",
+ "craft-fonts-build 0.1.0 (git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9)",
+ "craft-i18n 0.1.0 (git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9)",
  "egui",
  "epaint",
  "js-sys",
@@ -2346,6 +2415,7 @@ version = "0.19.1"
 dependencies = [
  "craft-csv",
  "craft-gridcraft-format",
+ "craft-library",
  "gridcraft-calc",
  "gridcraft-chart",
  "gridcraft-core",
@@ -2450,7 +2520,8 @@ dependencies = [
 name = "gridcraft-ui-egui"
 version = "0.19.1"
 dependencies = [
- "craft-ui",
+ "craft-library-egui",
+ "craft-ui 0.1.0 (git+https://github.com/storytold/craft-libs?rev=aa84415bae3b765fef6b7ef42404f66ad1cff9d9)",
  "craft-update",
  "craft-window",
  "egui",

@@ -70,6 +70,7 @@ mod interface_scale;
 mod keyboard_shortcuts;
 mod keytips_generated;
 mod legacy_keytips;
+mod library_pane;
 mod macro_editor;
 mod macros_ui;
 mod menu_hover;

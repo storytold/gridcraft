@@ -40,13 +40,24 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("insertPicture".into(), json!({"placement": placement})));
         return ok();
     };
+    place_picture(s, p, data, "insert.picture")
+}
+
+/// Put the picture in `data` on the active sheet as Insert ▸ Pictures does, with `p`'s
+/// `placement`, `at`, size, `mode` and `alt` (one undo step). `cmd` names the command in errors:
+/// `library.insert` places a Library picture through here too.
+pub(crate) fn place_picture(s: &mut Session, p: &Json, data: Vec<u8>, cmd: &str) -> Result<Json> {
+    let placement = str_param(p, "placement").unwrap_or("overCells");
+    if !matches!(placement, "cell" | "overCells") {
+        return Err(bad(cmd, "placement must be cell or overCells"));
+    }
     if placement == "cell" {
-        let mime = validate_cell_picture(&data)?;
+        let mime = validate_cell_picture(&data, cmd)?;
         let d = s.doc()?;
         let sheet = d.wb.active_sheet();
         let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
         let at = match str_param(p, "at") {
-            Some(a) => CellRef::parse(a).ok_or_else(|| bad("insert.picture", "invalid cell address"))?,
+            Some(a) => CellRef::parse(a).ok_or_else(|| bad(cmd, "invalid cell address"))?,
             None => d.selection.active,
         };
         let at = sh.merge_at(at).map(|r| r.start).unwrap_or(at);
@@ -62,7 +73,7 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
         });
     }
     if data.len() > 64 * 1024 * 1024 {
-        return Err(bad("insert.picture", "image larger than 64 MB"));
+        return Err(bad(cmd, "image larger than 64 MB"));
     }
     let mime = str_param(p, "mime")
         .map(str::to_string)
@@ -99,21 +110,20 @@ pub(super) fn insert_picture(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 /// Validate before mutating the workbook; header dimensions alone do not prove the pixels decode.
-fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
+fn validate_cell_picture(data: &[u8], cmd: &str) -> Result<&'static str> {
     if data.len() > 16 * 1024 * 1024 {
-        return Err(bad("insert.picture", "cell pictures must be at most 16 MiB"));
+        return Err(bad(cmd, "cell pictures must be at most 16 MiB"));
     }
-    let format = image::guess_format(data).map_err(|_| bad("insert.picture", "choose a valid PNG or JPEG picture"))?;
+    let format = image::guess_format(data).map_err(|_| bad(cmd, "choose a valid PNG or JPEG picture"))?;
     let mime = match format {
         image::ImageFormat::Png => "image/png",
         image::ImageFormat::Jpeg => "image/jpeg",
-        _ => return Err(bad("insert.picture", "cell pictures support PNG and JPEG")),
+        _ => return Err(bad(cmd, "cell pictures support PNG and JPEG")),
     };
-    let (width, height) = image::ImageReader::with_format(std::io::Cursor::new(data), format)
-        .into_dimensions()
-        .map_err(|_| bad("insert.picture", "invalid image dimensions"))?;
+    let (width, height) =
+        image::ImageReader::with_format(std::io::Cursor::new(data), format).into_dimensions().map_err(|_| bad(cmd, "invalid image dimensions"))?;
     if width == 0 || height == 0 || width > 8192 || height > 8192 || u64::from(width) * u64::from(height) > 16_000_000 {
-        return Err(bad("insert.picture", "cell pictures are limited to 8192 pixels per side and 16 million pixels"));
+        return Err(bad(cmd, "cell pictures are limited to 8192 pixels per side and 16 million pixels"));
     }
     let mut reader = image::ImageReader::with_format(std::io::Cursor::new(data), format);
     let mut limits = image::Limits::default();
@@ -121,7 +131,7 @@ fn validate_cell_picture(data: &[u8]) -> Result<&'static str> {
     limits.max_image_height = Some(8192);
     limits.max_alloc = Some(64 * 1024 * 1024);
     reader.limits(limits);
-    reader.decode().map_err(|_| bad("insert.picture", "picture cannot be decoded within the 64 MiB limit"))?;
+    reader.decode().map_err(|_| bad(cmd, "picture cannot be decoded within the 64 MiB limit"))?;
     Ok(mime)
 }
 

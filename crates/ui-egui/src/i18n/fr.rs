@@ -486,6 +486,46 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afficher",
         "Collapse dialog" => "Réduire la boîte de dialogue",
         "Expand dialog" => "Développer la boîte de dialogue",
+        // Insert ▸ Library: the pane's own words and GridCraft's, keyed `Library|`.
+        "Library|All folders" => "Tous les dossiers",
+        "Library|Library folder" => "Dossier de la bibliothèque",
+        "Library|Add Folder…" => "Ajouter un dossier…",
+        "Library|Remove" => "Retirer",
+        "Library|Stop showing this folder in the Library (its files stay where they are)" => {
+            "Ne plus afficher ce dossier dans la bibliothèque (ses fichiers restent où ils sont)"
+        }
+        "Library|Refresh" => "Actualiser",
+        "Library|Read the folders again" => "Relire les dossiers",
+        "Library|Folder path" => "Chemin du dossier",
+        "Library|Add" => "Ajouter",
+        "Library|Reading {read} of {total} files…" => "Lecture de {read} fichiers sur {total}…",
+        "Library|Nothing matches \"{query}\"." => "Aucun résultat pour « {query} ».",
+        "Library|Nothing in this folder yet." => "Ce dossier est encore vide.",
+        "Library|Showing the first {shown} of {total} files: choose a folder or search to see the others." => {
+            "Affichage des {shown} premiers fichiers sur {total} : choisissez un dossier ou lancez une recherche pour voir les autres."
+        }
+        "Library|Nothing in this file." => "Ce fichier est vide.",
+        "Library|Hidden" => "Masqué",
+        "Library|Click to insert" => "Cliquer pour insérer",
+        "Library|{item} {number}: {title}" => "{item} {number}: {title}",
+        "Library|{item} {number}" => "{item} {number}",
+        "Library|{item}: {title}" => "{item}: {title}",
+        "Library|Put this element in the same place" => "Placer cet élément au même endroit",
+        "Library|{name} (×{count})" => "{name} (×{count})",
+        "Library|and {count} more" => "et {count} de plus",
+        "Library|Pictures" => "Images",
+        "Library|Picture" => "Image",
+        "Library|Insert picture" => "Insérer l’image",
+        "Library|Search pictures" => "Rechercher des images",
+        "Library|Show the pictures in a folder of PNG and JPEG files" => "Afficher les images d’un dossier de fichiers PNG et JPEG",
+        "Library|Add a folder of PNG or JPEG pictures to see them here. Click a picture to put it on the sheet." => {
+            "Ajoutez un dossier d’images PNG ou JPEG pour les voir ici. Cliquez sur une image pour la placer sur la feuille."
+        }
+        "Library|The Library shows the pictures in folders on this computer, which the browser version can't read. Use the desktop app to browse a Library." => {
+            "La bibliothèque affiche les images des dossiers de cet ordinateur, que la version navigateur ne peut pas lire. Utilisez l’application de bureau pour parcourir une bibliothèque."
+        }
+        "Library" => "Bibliothèque",
+        "Pictures from your own folders" => "Images de vos propres dossiers",
         "My list has headers" => "Mes données ont des en-têtes",
         "Sort by" => "Trier par",
         "Then by" => "Puis par",
