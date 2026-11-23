@@ -1,5 +1,5 @@
 use super::create::source_param;
-use super::fields::{canonical, in_axes, shift_values, update};
+use super::fields::{canonical, in_axes, shift_values, update, update_pinning};
 use super::params::{group_param, layout_name};
 use super::{
     Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
@@ -205,7 +205,7 @@ pub(super) fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 pub(super) fn refresh(s: &mut Session, p: &Json) -> Result<Json> {
-    update(s, p, |_, src, _| Ok(json!({"records": src.rows.len()})))
+    update_pinning(s, p, false, |_, src, _| Ok(json!({"records": src.rows.len()})))
 }
 
 pub(super) fn refresh_all(s: &mut Session, p: &Json) -> Result<Json> {

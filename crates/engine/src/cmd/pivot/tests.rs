@@ -1529,6 +1529,7 @@ fn a_field_saved_under_a_formula_header_text_survives_reopen_and_refresh() {
     let si = wb.active_sheet();
     let saved = wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap();
     saved.filters[0].source_col = "=\"Region\"".into();
+    saved.names_from_values = false;
     let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
     let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
     s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
@@ -1565,6 +1566,7 @@ fn older_fields_keep_their_columns_when_an_old_name_is_also_a_current_header() {
     let saved = wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap();
     saved.rows[0].source_col = "=\"Region\"".into();
     saved.filters[0].source_col = "Region".into();
+    saved.names_from_values = false;
     let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
     let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
     s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
@@ -1574,4 +1576,82 @@ fn older_fields_keep_their_columns_when_an_old_name_is_also_a_current_header() {
     assert_eq!((p.rows[0].source_col.as_str(), p.filters[0].source_col.as_str()), ("Region", "Region2"));
     assert_eq!(p.filters[0].selected, Some(vec!["Apples".to_string()]));
     assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+}
+
+/// The active PivotTable as an older GridCraft saved it (no `names_from_values` entry), with `edit`
+/// applied, saved as JSON and reopened; its sheet is made active.
+fn reopen_as_older(s: &mut Session, edit: impl FnOnce(&mut gridcraft_model::PivotTable)) {
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let si = wb.active_sheet();
+    let sheet = wb.sheet(si).unwrap().name.clone();
+    let saved = wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap();
+    edit(saved);
+    saved.names_from_values = false;
+    let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
+    assert!(!String::from_utf8_lossy(&bytes).contains("names_from_values"), "an older save has no entry");
+    let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    s.execute("sheet.activate", json!({"sheet": sheet})).unwrap();
+}
+
+/// A field saved under a formula header's text keeps its column even when Show Formulas is turned
+/// off before the refresh: the older name is matched whatever the sheet shows now.
+#[test]
+fn an_older_formula_header_field_survives_show_formulas_turned_off() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+    reopen_as_older(&mut s, |pt| pt.filters[0].source_col = "=\"Region\"".into());
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": false})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert_eq!(p.filters[0].source_col, "Region");
+    assert!(p.names_from_values);
+    assert_eq!(p.filters[0].selected, Some(vec!["East".to_string()]));
+    assert_eq!(grand_total(&s, 1), Value::Number(415.0));
+}
+
+/// A formula header `="Region"` (A) beside a text header `Region` (B), and an older PivotTable
+/// with only a filter named `Region`: that name was B's under Show Formulas and A's without, and
+/// nothing saved tells which. The filter isn't moved: it resolves by Show Formulas as before, and
+/// the PivotTable stays an older one.
+#[test]
+fn an_older_name_both_layouts_place_differently_is_not_moved() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "Region"})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Date"], "values": ["Sales"], "filters": ["Region2"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region2", "selected": ["Apples"]})).unwrap();
+    // Apples (column B): 100 + 50 + 90 + 60 + 120.
+    assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+    reopen_as_older(&mut s, |pt| pt.filters[0].source_col = "Region".into());
+    // Show Formulas is still on, so `Region` is B, as it was.
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert_eq!(p.filters[0].source_col, "Region");
+    assert!(!p.names_from_values);
+    assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+}
+
+/// A calculated field in Values isn't a source column, so it doesn't stop the older fields
+/// beside it from finding their columns, and it keeps its own name.
+#[test]
+fn a_calculated_field_does_not_block_the_older_names() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.calculatedField", json!({"name": "Margin", "formula": "=Sales*0.1"})).unwrap();
+    assert!(pt(&s).values.iter().any(|v| v.source_col == "Margin"));
+    reopen_as_older(&mut s, |pt| pt.rows[0].source_col = "=\"Region\"".into());
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert_eq!(p.rows[0].source_col, "Region");
+    assert!(p.values.iter().any(|v| v.source_col == "Margin"));
+    assert!(p.names_from_values);
 }

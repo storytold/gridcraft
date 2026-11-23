@@ -119,7 +119,12 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 /// The text a cell shows (General up to the 11-character cell width; the grid narrows General
 /// further to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
-    if sheet.show_formulas
+    cell_text_with(wb, sheet, c, sheet.show_formulas)
+}
+
+/// [`cell_text`] with Show Formulas taken as `formulas`, whatever the sheet's setting is now.
+pub fn cell_text_with(wb: &Workbook, sheet: &Sheet, c: CellRef, formulas: bool) -> String {
+    if formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
         && !formula_hidden(wb, sheet, c)
     {

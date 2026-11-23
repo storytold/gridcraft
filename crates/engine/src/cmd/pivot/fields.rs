@@ -207,12 +207,26 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
 
 /// Applies `f` to the targeted pivot and re-renders it, as one undo step.
 pub(super) fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>) -> Result<Json> {
+    update_pinning(s, p, true, f)
+}
+
+/// [`update`]; with `pin` false (a plain refresh), an older PivotTable whose fields can't be
+/// placed for certain keeps its saved names.
+pub(super) fn update_pinning(
+    s: &mut Session,
+    p: &Json,
+    pin: bool,
+    f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>,
+) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let replace = bool_param(p, "replace").unwrap_or(false);
     edit(s, |cx| {
         let pt = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).cloned().ok_or_else(|| other("There's no such PivotTable."))?;
         let src = pv::read_source(&cx.wb, &pt.source, si).map_err(other)?;
         let mut new = pt.clone();
+        // An older PivotTable's fields take their columns' current names first, so an edit made
+        // by those names finds them.
+        pv::settle_field_names(&cx.wb, &mut new, si, pin);
         let mut out = f(&mut new, &src, &cx.wb)?;
         if let Some(slot) = cx.sheet_mut(si)?.pivots.get_mut(pi) {
             *slot = new;

@@ -121,64 +121,107 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
 /// Computes a PivotTable report from the workbook.
 pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Output, String> {
     let src = read_source(wb, &pt.source, pivot_sheet)?;
-    let mut migrated = None;
-    if older_field_names(wb, pt, pivot_sheet).is_some_and(|names| !names.is_empty()) {
+    let mut resolved = None;
+    if let Some(older) = older_field_names(wb, pt, pivot_sheet)
+        && !older.names.is_empty()
+    {
         let mut copy = pt.clone();
-        migrate_field_names(wb, &mut copy, pivot_sheet);
-        migrated = Some(copy);
+        rename_fields(&mut copy, &older.names);
+        resolved = Some(copy);
     }
-    compute_from(wb, migrated.as_ref().unwrap_or(pt), &src, None)
+    compute_from(wb, resolved.as_ref().unwrap_or(pt), &src, None)
 }
 
-/// The fields of a PivotTable saved by an older GridCraft, each with its column's current name.
-/// GridCraft read a header as the cell showed it: its formula under Show Formulas (`="Region"`), a
-/// long General number narrowed to the cell width. Now a header is its value through its number
-/// format. The decision is made for the whole PivotTable, so that two fields never land on one
-/// column: when every saved name matches a current header, nothing changes; otherwise, when every
-/// saved name matches a header as it showed then (numbered alike), each field moves to that
-/// column's current name, even one whose name also matches some current header (a text header
-/// `Region` beside a formula header `="Region"` is now `Region2`). Empty when nothing is renamed;
-/// `None` when the source can't be read.
-fn older_field_names(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<HashMap<String, String>> {
+/// How the fields of a PivotTable saved by an older GridCraft find their columns.
+struct OlderNames {
+    /// Saved name (lower case) → its column's current name, for the names that change.
+    names: HashMap<String, String>,
+    /// Whether the columns are certain, so the PivotTable can keep the current names for good.
+    settled: bool,
+    /// Whether every field found a column (certain or not).
+    placed: bool,
+}
+
+/// The fields of a PivotTable saved by an older GridCraft, each with its column's current name;
+/// `None` for a PivotTable that already names its fields by header value, or whose source can't
+/// be read.
+///
+/// GridCraft read a header as the cell showed it: its formula under Show Formulas (`="Region"`),
+/// a long General number narrowed to the cell width. Now a header is its value through its number
+/// format. Which way the sheet showed its headers when the PivotTable was saved isn't stored, so
+/// both are tried, whatever Show Formulas is now; the decision is made for the whole PivotTable,
+/// so two fields never land on one column. Calculated fields aren't columns and take no part.
+/// - Exactly one way places every saved field (or both place them on the same columns): each
+///   field moves to its column's current name, even one whose old name is also some current
+///   header (a text header `Region` beside a formula header `="Region"` is now `Region2`).
+/// - Both place every field, on different columns: the saved names can't tell, so the fields
+///   resolve as they did before, by the sheet's Show Formulas setting now, and nothing is settled.
+/// - Neither does: when every name is a current header they stay; otherwise nothing changes.
+fn older_field_names(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<OlderNames> {
     use gridcraft_model::pivot_source::{headers, unique_names};
+    if pt.names_from_values {
+        return None;
+    }
     let (si, r) = resolve_source(wb, &pt.source, pivot_sheet).ok()?;
+    let sh = wb.sheet(si)?;
     let current = headers(wb, si, r).ok()?;
+    let calculated = |n: &str| pt.calculated_fields.iter().any(|c| c.name.eq_ignore_ascii_case(n));
     let saved: Vec<&String> = pt
         .rows
         .iter()
         .chain(&pt.columns)
         .map(|f| &f.source_col)
-        .chain(pt.values.iter().map(|v| &v.source_col))
+        .chain(pt.values.iter().map(|v| &v.source_col).filter(|n| !calculated(n)))
         .chain(pt.filters.iter().map(|f| &f.source_col))
         .collect();
-    let index_in = |list: &[String], n: &str| list.iter().position(|h| h.eq_ignore_ascii_case(n));
-    if saved.iter().all(|n| index_in(&current, n).is_some()) {
-        return Some(HashMap::new());
+    let shown = |formulas: bool| {
+        unique_names((r.start.col..=r.end.col).map(|c| crate::display::cell_text_with(wb, sh, CellRef::new(r.start.row, c), formulas))).ok()
+    };
+    // Each saved field's column, when the list places them all.
+    let columns = |list: &[String]| -> Option<Vec<usize>> { saved.iter().map(|n| list.iter().position(|h| h.eq_ignore_ascii_case(n))).collect() };
+    let with_formulas = shown(true).and_then(|l| columns(&l));
+    let without = shown(false).and_then(|l| columns(&l));
+    let (cols, settled) = match (with_formulas, without) {
+        (Some(a), Some(b)) if a != b => (if sh.show_formulas { a } else { b }, false),
+        (Some(a), _) | (None, Some(a)) => (a, true),
+        (None, None) => {
+            let settled = columns(&current).is_some();
+            return Some(OlderNames { names: HashMap::new(), settled, placed: settled });
+        }
+    };
+    let mut names = HashMap::new();
+    for (n, c) in saved.iter().zip(cols) {
+        let h = current.get(c)?;
+        if !h.eq_ignore_ascii_case(n) {
+            names.insert(n.to_ascii_lowercase(), h.clone());
+        }
     }
-    let sh = wb.sheet(si)?;
-    let shown = (r.start.col..=r.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)));
-    let older = unique_names(shown).ok()?;
-    let mut out = HashMap::new();
-    for n in saved {
-        // A name the older layout doesn't hold either: the PivotTable isn't one it saved.
-        let Some(h) = index_in(&older, n).and_then(|i| current.get(i)) else { return Some(HashMap::new()) };
-        out.insert(n.to_ascii_lowercase(), h.clone());
-    }
-    out.retain(|k, h| !h.eq_ignore_ascii_case(k));
-    Some(out)
+    Some(OlderNames { names, settled, placed: true })
 }
 
-/// Renames the fields [`older_field_names`] finds to their columns' current names. Whether any was.
-fn migrate_field_names(wb: &Workbook, pt: &mut PivotTable, pivot_sheet: usize) -> bool {
-    let Some(names) = older_field_names(wb, pt, pivot_sheet).filter(|n| !n.is_empty()) else { return false };
+/// Renames the fields named in `names` (calculated fields keep theirs).
+fn rename_fields(pt: &mut PivotTable, names: &HashMap<String, String>) {
+    let calculated: HashSet<String> = pt.calculated_fields.iter().map(|c| c.name.to_ascii_lowercase()).collect();
     let rename = |n: &mut String| {
         if let Some(h) = names.get(&n.to_ascii_lowercase()) {
             *n = h.clone();
         }
     };
     pt.rows.iter_mut().chain(pt.columns.iter_mut()).for_each(|f| rename(&mut f.source_col));
-    pt.values.iter_mut().for_each(|v| rename(&mut v.source_col));
+    pt.values.iter_mut().filter(|v| !calculated.contains(&v.source_col.to_ascii_lowercase())).for_each(|v| rename(&mut v.source_col));
     pt.filters.iter_mut().for_each(|f| rename(&mut f.source_col));
+}
+
+/// Moves the fields of a PivotTable saved by an older GridCraft to their columns' current names
+/// for good, when [`older_field_names`] is certain of the columns; with `pin`, also when it isn't
+/// (an edit made now pins the columns the fields show now). Whether the PivotTable changed.
+pub fn settle_field_names(wb: &Workbook, pt: &mut PivotTable, pivot_sheet: usize, pin: bool) -> bool {
+    let Some(older) = older_field_names(wb, pt, pivot_sheet) else { return false };
+    if !older.settled && !(pin && older.placed) {
+        return false;
+    }
+    rename_fields(pt, &older.names);
+    pt.names_from_values = true;
     true
 }
 
@@ -188,7 +231,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     let mut pt = wb.sheet(sheet).and_then(|s| s.pivots.get(idx)).cloned().ok_or("There's no such PivotTable.")?;
     // A field saved under a header text older GridCraft read keeps its place: it takes its
     // column's current name, which the refreshed PivotTable keeps.
-    let migrated = migrate_field_names(wb, &mut pt, sheet);
+    let migrated = settle_field_names(wb, &mut pt, sheet, false);
     let out = compute(wb, &pt, sheet)?;
     let h = out.height().max(1);
     let w = out.width.max(1);
@@ -309,6 +352,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
             p.columns = pt.columns.clone();
             p.values = pt.values.clone();
             p.filters = pt.filters.clone();
+            p.names_from_values = true;
         }
     }
     let sheet_name = shm.name.clone();

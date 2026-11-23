@@ -144,6 +144,12 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// The fields name their columns by header value (`Region`, also while Show Formulas is on).
+    /// A PivotTable saved by an older GridCraft has no such entry: it named a column by its header
+    /// as the cell showed it then (`="Region"`), which the engine resolves to the column's current
+    /// name before setting this. Written only when set, so older versions still read the file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub names_from_values: bool,
 }
 
 impl PivotTable {
@@ -325,6 +331,7 @@ impl Default for PivotTable {
             data_index: PivotLookup::default(),
             values_on_rows: false,
             values_position: None,
+            names_from_values: true,
         }
     }
 }
