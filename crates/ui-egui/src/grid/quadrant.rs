@@ -4,6 +4,7 @@ use super::cell_paint::{
     painted_halign, rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
+use super::selection::gridline_centre;
 use super::tables::{filter_button_rect, paint_filter_button};
 use super::{
     CellRef, CfCache, CfLook, Color32, FontId, HAlign, MAX_COLS, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, Underline, VAlign,
@@ -152,12 +153,12 @@ fn paint_gridlines(q: &QuadrantPaint<'_>) {
         let right = geo.x_end(sh, c1);
         let xs = geo.shown_cols(c0, c1).map(|c| geo.x(sh, c)).chain([right]);
         for x in xs {
-            let x = x.round() - 0.5;
+            let x = gridline_centre(x);
             p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
         }
         let ys = geo.shown_rows(r0, r1).map(|r| geo.y(sh, r)).chain([bottom]);
         for y in ys {
-            let y = y.round() - 0.5;
+            let y = gridline_centre(y);
             p.line_segment([pos2(left, y), pos2(right, y)], stroke);
         }
     }
