@@ -5,7 +5,9 @@ use std::fmt::Write as _;
 
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
-use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+use gridcraft_model::{
+    CalcMode, CalcSettings, MAX_SHEET_NAME_UNITS, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView, sheet_name_prefix,
+};
 use sha2::Digest as _;
 
 use crate::package::ZipOut;
@@ -214,8 +216,8 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
         let name = &sheet.name;
         let bad = if name.is_empty() {
             Some("is blank")
-        } else if name.chars().count() > 31 {
-            Some("is longer than 31 characters")
+        } else if name.encode_utf16().count() > MAX_SHEET_NAME_UNITS {
+            Some("is longer than 31 characters (most emoji count as two)")
         } else if name.chars().any(|c| matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')) {
             Some("contains one of : \\ / ? * [ ]")
         } else if !seen.insert(name.to_ascii_lowercase()) {
@@ -531,9 +533,9 @@ fn write_sheets(
             Visibility::Hidden => " state=\"hidden\"",
             Visibility::VeryHidden => " state=\"veryHidden\"",
         };
-        let name: String = sheet.name.chars().take(31).collect();
+        let name = sheet_name_prefix(&sheet.name, MAX_SHEET_NAME_UNITS);
         let sheet_id = ids.take(sheet.file_id);
-        let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(&name));
+        let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(name));
     }
     sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
 

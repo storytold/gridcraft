@@ -814,6 +814,100 @@ fn a_chart_sheet_whose_name_a_worksheet_took_is_dropped() {
     chart_sheet_chain(&u, "Chart1");
 }
 
+/// A dropped chart-sheet entry that shares its relationship with a kept one leaves that
+/// relationship, so the kept chart sheet is still written with its chart (#4454).
+#[test]
+fn a_dropped_chart_sheet_entry_keeps_a_relationship_another_still_uses() {
+    let bytes = chartsheet_package_with(&[(
+        "xl/workbook.xml",
+        r#"<sheet name="Last" sheetId="9" state="hidden" r:id="rId5"/>"#,
+        r#"<sheet name="Last" sheetId="9" state="hidden" r:id="rId5"/><sheet name="data" sheetId="10" r:id="rId2"/>"#,
+    )]);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let names = written_sheets(&u);
+    assert!(names.iter().any(|s| s.0 == "Chart1"), "{names:?}");
+    assert!(!names.iter().any(|s| s.0 == "data"), "{names:?}");
+    chart_sheet_chain(&u, "Chart1");
+    assert!(!u.find(PRINTER).is_empty(), "the kept chart sheet's printer settings are written");
+}
+
+/// A kept chart sheet's name is cut like a worksheet name, so 15 emoji and `'a` are written as the
+/// 15 emoji: a cut that ends in an apostrophe would be a name Excel refuses (#4454).
+#[test]
+fn a_cut_chart_sheet_name_does_not_end_with_an_apostrophe() {
+    let e15 = "😀".repeat(15);
+    let bytes = chartsheet_package_with(&[("xl/workbook.xml", r#"<sheet name="Chart1""#, &format!(r#"<sheet name="{e15}'a""#))]);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let names = written_sheets(&u);
+    assert!(names.iter().any(|s| s.0 == e15), "{names:?}");
+    chart_sheet_chain(&u, &e15);
+}
+
+/// [`chartsheet_package`] with each `(part, from, to)` replacement made in that part's text.
+fn chartsheet_package_with(edits: &[(&str, &str, &str)]) -> Vec<u8> {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(chartsheet_package())).unwrap();
+    for (part, ..) in edits {
+        assert!(z.by_name(part).is_ok(), "the package has no {part}");
+    }
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        let name = f.name().to_string();
+        for (part, from, to) in edits.iter().filter(|e| e.0 == name) {
+            let text = String::from_utf8(data).unwrap();
+            assert!(text.contains(from), "{part} has no {from}");
+            data = text.replace(from, to).into_bytes();
+        }
+        parts.push((name, data));
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    make_zip(&refs)
+}
+
+/// A series must name a worksheet as it is written. A worksheet name cut to 31 UTF-16 units on
+/// open no longer matches the longer name the chart still uses, so its chart sheet is dropped; a
+/// series that names the cut name keeps it (#4454).
+#[test]
+fn a_chart_sheet_plotting_a_longer_name_than_its_cut_worksheet_is_dropped() {
+    let (e15, e16) = ("😀".repeat(15), "😀".repeat(16));
+    for (series, kept) in [(&e16, false), (&e15, true)] {
+        let bytes = chartsheet_package_with(&[
+            ("xl/workbook.xml", r#"name="Data""#, &format!(r#"name="{e16}""#)),
+            ("xl/charts/chart1.xml", "Data!$A$1:$A$3", &format!("'{series}'!$A$1:$A$3")),
+        ]);
+        let (wb, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(wb.sheets[0].name, e15);
+        let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+        u.assert_valid();
+        assert_eq!(written_sheets(&u).iter().any(|s| s.0 == "Chart1"), kept, "{series}");
+    }
+}
+
+/// Two chart sheets whose names differ only past 31 UTF-16 units would be written under one name;
+/// the later one is dropped, as when a worksheet takes a chart sheet's name (#4454).
+#[test]
+fn chart_sheets_whose_cut_names_match_keep_only_the_first() {
+    let e15 = "😀".repeat(15);
+    let bytes = chartsheet_package_with(&[
+        ("xl/workbook.xml", r#"name="Chart1""#, &format!(r#"name="{e15}😀""#)),
+        ("xl/workbook.xml", r#"name="Last""#, &format!(r#"name="{e15}😁""#)),
+    ]);
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let names: Vec<String> = written_sheets(&u).into_iter().map(|s| s.0).collect();
+    assert_eq!(names, ["Data", e15.as_str(), "More", "Spare"]);
+    // The dropped chart sheet's chart goes with it; the first one's stays.
+    assert!(u.find(chart_xml("'More'!$A$1").as_bytes()).is_empty());
+    assert!(!u.find(chart_xml("Data!$A$1:$A$3").as_bytes()).is_empty());
+}
+
 #[test]
 fn formulas_name_the_sheets_a_chart_plots() {
     use crate::passthrough::sheet_names_in;

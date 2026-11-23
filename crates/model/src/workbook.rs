@@ -18,6 +18,43 @@ pub const MAX_EQUATION_LAYOUT_BYTES: usize = 128 * 1024;
 /// Why an equation past [`MAX_EQUATION_LAYOUT_BYTES`] has no layout.
 pub const EQUATION_BUDGET_MESSAGE: &str = "This workbook has more equations than are laid out at once; edit this equation to lay it out.";
 
+/// The longest sheet name Excel accepts, in UTF-16 code units: a character outside the Basic
+/// Multilingual Plane, such as most emoji, counts as two. Excel refuses an XLSX whose sheet name
+/// is longer, even when it has no more than 31 characters (#4454).
+pub const MAX_SHEET_NAME_UNITS: usize = 31;
+
+/// The longest start of `name` that fits in `units` UTF-16 code units, without splitting a
+/// character.
+pub fn sheet_name_prefix(name: &str, units: usize) -> &str {
+    let mut used = 0;
+    for (i, c) in name.char_indices() {
+        used += c.len_utf16();
+        if used > units {
+            return name.get(..i).unwrap_or_default();
+        }
+    }
+    name
+}
+
+/// A sheet name made from any text, such as a file name or a sheet name read from a file: without
+/// the characters a sheet name can't hold (`: \ / ? * [ ]`), cut to [`MAX_SHEET_NAME_UNITS`], and
+/// without apostrophes at either end, which the cut can expose. Empty when nothing is left; the
+/// caller picks a default name then.
+pub fn sheet_name_from(text: &str) -> String {
+    let clean: String = text.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).collect();
+    sheet_name_prefix(&clean, MAX_SHEET_NAME_UNITS).trim_matches('\'').to_string()
+}
+
+/// `base` followed by `suffix` (such as ` (2)`), with `base` shortened so the whole suffix fits in
+/// [`MAX_SHEET_NAME_UNITS`] and stripped of trailing spaces. The suffix is kept as it is, so the
+/// caller passes one without the characters a sheet name can't hold; the result is then no longer
+/// than [`MAX_SHEET_NAME_UNITS`] UTF-16 units when the suffix is no longer than that. Whether the
+/// name is free in a workbook is the caller's check.
+pub fn sheet_name_with_suffix(base: &str, suffix: &str) -> String {
+    let keep = MAX_SHEET_NAME_UNITS.saturating_sub(suffix.encode_utf16().count());
+    format!("{}{suffix}", sheet_name_prefix(base, keep).trim_end())
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CalcMode {
     #[default]
@@ -399,15 +436,15 @@ impl Workbook {
     pub fn next_sheet_name(&self) -> String {
         (1..).map(|n| format!("Sheet{n}")).find(|n| self.sheet_index(n).is_none()).unwrap_or_else(|| "Sheet".into())
     }
-    /// Validates a sheet name like Excel: 1–31 chars, none of `: \ / ? * [ ]`, not starting or
-    /// ending with `'`, unique (case-insensitive) unless it is `except`'s own name.
+    /// Validates a sheet name like Excel: 1–31 UTF-16 units ([`MAX_SHEET_NAME_UNITS`]), none of
+    /// `: \ / ? * [ ]`, not starting or ending with `'`, unique (case-insensitive) unless it is
+    /// `except`'s own name.
     pub fn check_sheet_name(&self, name: &str, except: Option<usize>) -> Result<(), String> {
-        let n = name.chars().count();
-        if n == 0 {
+        if name.is_empty() {
             return Err("A sheet name can't be blank.".into());
         }
-        if n > 31 {
-            return Err("A sheet name can't be longer than 31 characters.".into());
+        if name.encode_utf16().count() > MAX_SHEET_NAME_UNITS {
+            return Err("A sheet name can't be longer than 31 characters; most emoji count as two.".into());
         }
         if name.chars().any(|c| matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')) {
             return Err("A sheet name can't contain any of these characters: : \\ / ? * [ ]".into());
@@ -609,6 +646,36 @@ mod tests {
         assert!(wb.check_sheet_name("a/b", None).is_err());
         assert!(wb.check_sheet_name(&"x".repeat(32), None).is_err());
         assert!(wb.check_sheet_name("Budget 2026", None).is_ok());
+    }
+
+    /// Excel counts a sheet name's length in UTF-16 units, so an emoji takes two of the 31 (#4454).
+    #[test]
+    fn sheet_name_length_counts_utf16_units() {
+        let wb = Workbook::new();
+        assert!(wb.check_sheet_name(&"😀".repeat(16), None).is_err());
+        assert!(wb.check_sheet_name(&format!("{}a", "😀".repeat(15)), None).is_ok());
+        assert!(wb.check_sheet_name(&"é".repeat(31), None).is_ok());
+        assert_eq!(sheet_name_prefix(&"😀".repeat(16), MAX_SHEET_NAME_UNITS), "😀".repeat(15));
+        assert_eq!(sheet_name_prefix(&format!("{}ab", "😀".repeat(15)), MAX_SHEET_NAME_UNITS), format!("{}a", "😀".repeat(15)));
+        assert_eq!(sheet_name_prefix("Data", MAX_SHEET_NAME_UNITS), "Data");
+        assert_eq!(sheet_name_prefix("😀", 1), "");
+    }
+
+    /// A name made from other text loses what a sheet name can't hold and the apostrophes a cut
+    /// leaves at its ends; a suffix always fits whole (#4454).
+    #[test]
+    fn sheet_names_made_from_text_or_with_a_suffix_are_valid() {
+        let wb = Workbook::new();
+        let e15 = "😀".repeat(15);
+        assert_eq!(sheet_name_from(&format!("{e15}'a")), e15);
+        assert_eq!(sheet_name_from("'Q1: [draft]'"), "Q1 draft");
+        assert_eq!(sheet_name_from("it's"), "it's");
+        assert_eq!(sheet_name_from("'''"), "");
+        let copy = sheet_name_with_suffix(&"😀".repeat(14), " (2)");
+        assert_eq!(copy, format!("{} (2)", "😀".repeat(13)));
+        assert!(wb.check_sheet_name(&copy, None).is_ok());
+        assert_eq!(sheet_name_with_suffix("Data", " (2)"), "Data (2)");
+        assert_eq!(sheet_name_with_suffix("Long name of a sheet 31 chars!", " (10)"), "Long name of a sheet 31 ch (10)");
     }
 
     #[test]

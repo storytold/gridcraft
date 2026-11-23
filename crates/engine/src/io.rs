@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{LineIndex, Sheet, Workbook};
+use gridcraft_model::{LineIndex, Sheet, Workbook, sheet_name_from};
 
 use crate::{EngineError, Result};
 
@@ -477,11 +477,10 @@ fn rename_first_sheet(wb: &mut Workbook, path: &str) {
     set_first_sheet_name(wb, stem);
 }
 
-/// Names the first sheet `name`, without the characters a sheet name can't hold and cut to 31
-/// characters; an empty or reserved result keeps the default name.
+/// Names the first sheet after `stem` (see [`sheet_name_from`]); an empty or reserved result keeps
+/// the default name.
 fn set_first_sheet_name(wb: &mut Workbook, stem: &str) {
-    let clean: String = stem.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
-    let clean = clean.trim_matches('\'').to_string();
+    let clean = sheet_name_from(stem);
     // "History" is reserved (see `Workbook::check_sheet_name`): keep the default name instead.
     if !clean.is_empty()
         && !clean.eq_ignore_ascii_case("History")

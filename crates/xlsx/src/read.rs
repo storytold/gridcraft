@@ -5,7 +5,8 @@ use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
 use gridcraft_model::{
-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+    CalcMode, CellPicture, DefinedName, MAX_SHEET_NAME_UNITS, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook,
+    WorkbookView, sheet_name_from, sheet_name_prefix, sheet_name_with_suffix,
 };
 
 use crate::package::{Package, Rel};
@@ -57,7 +58,8 @@ const MAX_SHEETS: usize = 4096;
 const MAX_STRINGS: usize = 4_000_000;
 
 /// Sheet names taken while reading, compared as `Workbook::sheet_index` compares them (ASCII case
-/// folded), with the next `(n)` suffix to try for each base, so renaming duplicates stays linear.
+/// folded), with the next `(n)` suffix to try for each stem (the base cut to 25 UTF-16 units and
+/// trimmed), so renaming duplicates stays linear.
 #[derive(Default)]
 pub(crate) struct SheetNames {
     taken: HashSet<String>,
@@ -71,22 +73,22 @@ impl SheetNames {
     }
 
     /// A valid name for the `i`-th sheet based on `name`, not yet taken; it is recorded as taken.
+    /// Lengths are UTF-16 units, as Excel counts them (#4454).
     pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
-        let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
+        let mut base = sheet_name_from(name);
         if base.trim().is_empty() {
             base = format!("Sheet{}", i + 1);
         }
         if self.taken.insert(base.to_ascii_lowercase()) {
             return base;
         }
-        let key: String = base.chars().take(25).collect::<String>().to_ascii_lowercase();
+        // 25 units of the base, fewer once the suffix grows past ` (999)`, so the name stays
+        // within 31 units however many duplicates there are.
+        let stem = sheet_name_prefix(&base, MAX_SHEET_NAME_UNITS - 6).trim_end().to_string();
+        let key = stem.to_ascii_lowercase();
         let mut n = self.next_suffix.get(&key).copied().unwrap_or(2);
         loop {
-            // 25 characters of the base, fewer once the suffix grows past ` (999)`, so the name
-            // stays within 31 characters however many duplicates there are.
-            let suffix = format!(" ({n})");
-            let short: String = base.chars().take(31usize.saturating_sub(suffix.len()).min(25)).collect();
-            let candidate = format!("{short}{suffix}");
+            let candidate = sheet_name_with_suffix(&stem, &format!(" ({n})"));
             n = n.saturating_add(1);
             if self.taken.insert(candidate.to_ascii_lowercase()) {
                 self.next_suffix.insert(key, n);
@@ -97,6 +99,22 @@ impl SheetNames {
             }
         }
     }
+}
+
+/// The worksheets whose names are already valid, by name (ASCII-lowercased), each name held by the
+/// first worksheet with it; the names are taken in `names`. Such a sheet keeps its name, so a name
+/// another sheet is repaired to can't take it from a sheet that formulas name (#4454).
+fn valid_name_owners(sheet_els: &[&El], rel_by_id: &HashMap<&str, &Rel>, names: &mut SheetNames) -> HashMap<String, usize> {
+    let mut owners = HashMap::new();
+    for (i, se) in sheet_els.iter().enumerate() {
+        let name = se.attr("name").unwrap_or("");
+        let worksheet = se.attr("id").and_then(|id| rel_by_id.get(id)).is_some_and(|r| r.kind == "worksheet");
+        if worksheet && !name.trim().is_empty() && sheet_name_from(name) == name && !owners.contains_key(&name.to_ascii_lowercase()) {
+            owners.insert(name.to_ascii_lowercase(), i);
+            names.insert(name);
+        }
+    }
+    owners
 }
 
 impl Ctx<'_> {
@@ -385,6 +403,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         rel_by_id.entry(r.id.as_str()).or_insert(r);
     }
     let mut names = SheetNames::default();
+    let owners = valid_name_owners(&sheet_els, &rel_by_id, &mut names);
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
         let rel = se.attr("id").and_then(|id| rel_by_id.get(id).copied()).cloned();
@@ -403,7 +422,11 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             file_to_model.push(None);
             continue;
         }
-        let name = names.unique(&name, i);
+        let unique = if owners.get(&name.to_ascii_lowercase()) == Some(&i) { name.clone() } else { names.unique(&name, i) };
+        if unique != name {
+            cx.warn(format!("sheet \"{name}\" was renamed \"{unique}\": sheet names must be unique and fit Excel's limits"));
+        }
+        let name = unique;
         cx.legacy_formulas.clear();
         let (mut sheet, read_controls) = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,

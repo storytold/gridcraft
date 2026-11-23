@@ -2579,6 +2579,34 @@ fn copies_of_a_long_named_sheet_get_unique_names() {
     assert_eq!(names, ["Long name of a sheet 31 chars!", "Long name of a sheet 31 cha (2)", "Long name of a sheet 31 cha (3)"]);
 }
 
+/// Excel counts a sheet name in UTF-16 units: 16 emoji (32 units) are refused, and a copy of a
+/// 14-emoji sheet is shortened so ` (2)` still fits in 31 units (#4454).
+#[test]
+fn sheet_names_with_emoji_stay_within_31_utf16_units() {
+    let mut s = s();
+    assert!(s.execute("sheet.rename", json!({"sheet": 0, "name": "😀".repeat(16)})).is_err());
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "😀".repeat(14)})).unwrap();
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets[1].name, format!("{} (2)", "😀".repeat(13)));
+    assert!(gridcraft_xlsx::write_xlsx(&d.wb).is_ok());
+}
+
+/// A new sheet named after a file or with ` (2)` gets a name Excel holds: the cut doesn't leave an
+/// apostrophe at the end, and the whole suffix fits (#4454).
+#[test]
+fn imported_sheet_names_with_emoji_end_validly() {
+    let mut s = s();
+    let e15 = "😀".repeat(15);
+    let r = s.execute("data.fromTextCsv", json!({"text": "a\n1\n", "path": format!("/data/{e15}'a.csv")})).unwrap();
+    assert_eq!(r["sheet"], json!(e15));
+    let mut s = self::s();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "😀".repeat(14)})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1]]})).unwrap();
+    let r = s.execute("data.fromTableRange", json!({"range": "A1:A2"})).unwrap();
+    assert_eq!(r["sheet"], json!(format!("{} (2)", "😀".repeat(13))));
+}
+
 #[test]
 fn row_and_column_inserts_move_legacy_array_ranges() {
     // Found by the command-sequence fuzzer: the formula cell moved but its array range stayed,
