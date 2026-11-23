@@ -1,6 +1,6 @@
 use super::cell_paint::ink_on;
 use super::geo::Geo;
-use super::{Align2, CellRef, Color32, FontId, PatternType, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
+use super::{Align2, CellRef, Color32, FontId, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, Workbook, json, pos2, theme, vec2};
 
 /// Room the in-cell editor keeps right of its text. It is sized from the text of the last frame, so
 /// the next typed character must still fit: a fixed 14 px was less than one glyph at high zoom,
@@ -16,7 +16,7 @@ pub(super) fn editor_width(text_w: f32, cell_w: f32, size: f32) -> f32 {
 }
 
 /// Draws the in-cell editor, growing and wrapping with its text, mirroring for right-to-left sheets, choosing contrasting caret ink and clipping cells hidden under frozen panes.
-pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook, cf: &mut gridcraft_engine::cf::CfCache) {
     let Some(ed) = app.editor.as_ref() else { return };
     if app.view_key() != Some((ed.doc, ed.sheet)) {
         return;
@@ -49,10 +49,11 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     };
     // Grows to the left on a right-to-left sheet.
     let erect = geo.mirror_rect(Rect::from_min_size(rect.min, vec2(w, h)));
-    let fill = match st.fill.pattern {
-        PatternType::Solid => st.fill.fg.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE),
-        _ => Color32::WHITE,
-    };
+    // The cell's look as the grid paints it (table style, pattern and conditional fills), so the
+    // text the editor shows in the cell's font colour stays readable on the same backdrop.
+    // `cf` is the cache the grid painted with this frame: its statistics are already gathered.
+    let (look, _) = super::cell_paint::look(wb, wb.active_sheet(), sh, cell, cf);
+    let fill = look.fill.unwrap_or(Color32::WHITE);
     let split = pos2(geo.cells.left() + geo.frozen_w, geo.cells.top() + geo.frozen_h);
     let quadrant = Rect::from_min_max(
         pos2(if cell.col >= geo.fc { split.x } else { geo.cells.left() }, if cell.row >= geo.fr { split.y } else { geo.cells.top() }),
@@ -79,6 +80,11 @@ pub(super) fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, s
     // The theme's caret is meant for the UI chrome and vanishes on some fills (and, in the dark
     // theme, on the white paper): pick black or white against the fill, like Excel.
     child.visuals_mut().text_cursor.stroke.color = ink_on(fill);
+    // The text takes the cell's font colour as it is typed, not only once it is entered (#3011):
+    // white text on a black fill must be readable while editing. Automatic keeps the theme's ink.
+    if look.style.font.color != super::Color::Auto {
+        child.visuals_mut().override_text_color = Some(look.text_color);
+    }
     crate::formula_bar::editor_widget(app, &mut child, id, font, wrap, erect.width() - 4.0, erect.height() - 2.0);
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("gridcraft.cell_editor.rect"), erect));
 }
