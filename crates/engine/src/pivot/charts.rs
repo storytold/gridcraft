@@ -1,5 +1,5 @@
 use super::output::Output;
-use super::{CellRef, Chart, Series, Workbook, quote_sheet};
+use super::{CellRef, Chart, PivotLookup, Series, Workbook, quote_sheet};
 
 // ---------------------------------------------------------------- PivotCharts
 
@@ -109,6 +109,7 @@ pub fn clear_output(wb: &mut Workbook, sheet: usize, idx: usize) {
     shm.take_cells(r);
     if let Some(p) = shm.pivots.get_mut(idx) {
         p.last_range = None;
+        p.data_index = PivotLookup::default();
     }
 }
 
@@ -126,6 +127,7 @@ mod tests {
             chart_rows: vec![1, 2, 3],
             chart_cols: (1..1000).map(|c| (c, format!("S{c}"))).collect(),
             label_col: Some(0),
+            data: vec![],
         };
         assert_eq!(chart_series("Sheet1", CellRef::new(0, 0), &out).len(), MAX_CHART_SERIES);
     }
