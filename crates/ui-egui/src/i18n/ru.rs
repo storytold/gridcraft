@@ -1193,6 +1193,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "У \\@char нечисловой аргумент {argument}",
         "\\@char with invalid code point {code}" => "\\@char с недопустимой кодовой точкой {code}",
         "Invalid environment name character: {character}" => "Недопустимый символ в имени окружения: {character}",
+        "Copy Cells" => "Копировать ячейки",
+        "Fill Series" => "Заполнить ряд",
+        "Fill Formatting Only" => "Заполнить только форматы",
+        "Fill Without Formatting" => "Заполнить без форматирования",
+        "Fill Days" => "Заполнить по дням",
+        "Fill Weekdays" => "Заполнить по рабочим дням",
+        "Fill Months" => "Заполнить по месяцам",
+        "Fill Years" => "Заполнить по годам",
+        "Auto Fill Options" => "Параметры автозаполнения",
         _ => return None,
     })
 }
