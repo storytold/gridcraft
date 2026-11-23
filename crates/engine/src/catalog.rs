@@ -255,6 +255,8 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("view.formulaBar", "View", "Show", "Formula Bar"),
     ("view.gridlines", "View", "Show", "Gridlines"),
     ("view.headings", "View", "Show", "Headings"),
+    ("view.focusCell", "View", "Show", "Focus Cell"),
+    ("view.focusCellColor", "View", "Show", "Focus Cell Color"),
     ("view.zoom", "View", "Zoom", "Zoom"),
     ("view.zoom100", "View", "Zoom", "100%"),
     ("view.zoomToSelection", "View", "Zoom", "Zoom to Selection"),

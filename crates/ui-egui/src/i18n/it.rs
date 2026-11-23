@@ -231,6 +231,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Font Size" => "Dimensione carattere",
         "Gridlines" => "Griglia",
         "Headings" => "Intestazioni",
+        "Focus Cell" => "Evidenzia cella",
         "Zoom" => "Zoom",
         "100%" => "100%",
         "Zoom to\nSelection" => "Zoom sulla\nselezione",

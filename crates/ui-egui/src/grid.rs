@@ -27,6 +27,7 @@ pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
 mod editor;
+mod focus;
 mod geo;
 mod interact;
 mod keyboard;
@@ -44,6 +45,8 @@ use cell_paint::{center_across_end, display_text, look, numfmt_color, painted_ha
 pub use editor::validation_arrow;
 #[cfg(test)]
 use editor::{editor_slack, editor_width, list_picker_height};
+pub use focus::focus_bands;
+pub(crate) use focus::paint_focus_bands;
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};

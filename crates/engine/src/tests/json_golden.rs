@@ -53,6 +53,19 @@ fn a_save_writes_the_golden_workbook_bytes() {
 }
 
 #[test]
+fn focus_cell_survives_the_json_workbook() {
+    let mut s = book();
+    s.execute("view.focusCell", json!({"on": true})).unwrap();
+    s.execute("view.focusCellColor", json!({"color": "#5FC8D8"})).unwrap();
+    let bytes = save(&mut s);
+    let mut back = super::s();
+    open(&mut back, "book.json", &bytes);
+    let wb = &back.doc().unwrap().wb;
+    assert!(wb.sheets[0].focus_cell, "the tint stays on");
+    assert_eq!(wb.sheets[0].focus_cell_color, Some(gridcraft_model::Color::Rgb(0x5FC8D8)), "and keeps its color");
+}
+
+#[test]
 fn the_golden_workbook_opens_and_saves_back_unchanged() {
     let bytes = std::fs::read(golden("book.json")).unwrap();
     for name in ["book.json", "book.scjson"] {
