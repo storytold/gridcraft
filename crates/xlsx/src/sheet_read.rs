@@ -562,7 +562,7 @@ fn apply_craft_print(print: &craft_xlsx::Print, fit_to_page: bool, sheet: &mut S
             sheet.print.orientation = Orientation::Landscape;
         }
         sheet.print.page_order = ps.page_order.as_deref().and_then(PageOrder::parse).unwrap_or_default();
-        sheet.print.first_page_number = if ps.use_first_page_number.unwrap_or(false) { ps.first_page_number } else { None };
+        sheet.print.first_page_number = ps.use_first_page_number.unwrap_or(false).then(|| ps.first_page_number.unwrap_or(1));
         if let Some(p) = ps.paper_size.and_then(paper_name) {
             sheet.print.paper = p.to_string();
         }
