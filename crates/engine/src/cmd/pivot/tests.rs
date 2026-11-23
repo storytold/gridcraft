@@ -1445,3 +1445,21 @@ fn a_table_rename_moves_a_pivot_source_a_defined_name_shadows() {
     let gt = find_row(&s, "Grand Total").unwrap();
     assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
 }
+
+/// A PivotTable source that is a table's name reads the table before a defined name of that name,
+/// so renaming the defined name leaves it on the table; a source that is the defined name's own
+/// follows the rename.
+#[test]
+fn renaming_a_defined_name_leaves_a_table_source_on_its_table() {
+    let mut s = sales();
+    s.execute("insert.table", json!({"range": "A1:E13", "name": "Data"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Data", "refersTo": "=Sheet1!$A$1:$E$3"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    s.execute("table.summarizePivot", json!({"rows": ["Product"], "values": ["Units"]})).unwrap();
+    assert_eq!(pt(&s).source, "Data");
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Data", "refersTo": "=Sheet1!$A$1:$E$3"})).unwrap();
+    assert_eq!(pt(&s).source, "Data");
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
+}

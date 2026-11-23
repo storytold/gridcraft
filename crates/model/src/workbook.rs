@@ -381,7 +381,8 @@ impl Workbook {
     /// place: cell formulas (keeping their array and spill kind), defined names, conditional
     /// formats and data validation (written for their range's top-left cell, so they move as
     /// a cell formula there does), chart series (a chart's source block
-    /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources and form controls'
+    /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources
+    /// (not one that is a table's name alone, which reads the table first) and form controls'
     /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
     /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
     /// visited: table calculated-column and totals formulas, a PivotChart's link to its
@@ -401,6 +402,10 @@ impl Workbook {
         // sheet (`!`) or is a defined name its sheet sees; anything else (a word, a table's
         // name, `Q1`) is a label and is left as written.
         let names: Vec<(String, Option<usize>)> = self.names.iter().map(|n| (n.name.to_lowercase(), n.scope)).collect();
+        // A PivotTable source that is a table's name alone reads the table before any defined
+        // name of that name (`pivot::resolve_source`), so a name's edit doesn't reach it.
+        let tables: Vec<String> = self.sheets.iter().flat_map(|s| s.tables.iter().map(|t| t.name.to_lowercase())).collect();
+        let table_source = |t: &str| tables.contains(&t.trim().trim_start_matches('=').trim().to_lowercase());
         let label = |t: &str, si: usize| {
             let t = t.trim();
             let defined = || names.iter().any(|(n, scope)| scope.is_none_or(|s| s == si) && *n == t.to_lowercase());
@@ -489,9 +494,9 @@ impl Workbook {
                 });
                 v
             });
-            let pivots = sh.pivots.iter().any(|pt| changes(&pt.source)).then(|| {
+            let pivots = sh.pivots.iter().any(|pt| !table_source(&pt.source) && changes(&pt.source)).then(|| {
                 let mut v = sh.pivots.clone();
-                v.iter_mut().for_each(|pt| {
+                v.iter_mut().filter(|pt| !table_source(&pt.source)).for_each(|pt| {
                     rewrite_text(&mut pt.source, &f);
                 });
                 v
