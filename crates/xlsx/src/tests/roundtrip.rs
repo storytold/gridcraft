@@ -310,6 +310,7 @@ fn sample() -> Workbook {
         hf_scale_with_doc: false,
         hf_align_with_margins: true,
         page_order: PageOrder::OverThenDown,
+        first_page_number: Some(7),
     };
     s.sparklines.push(Sparkline { cell: at("J2"), source: "B2:B3".into(), kind: SparklineKind::WinLoss, color: Color::Rgb(0x112233), markers: true });
     s.tables.push(Table {
@@ -368,6 +369,7 @@ fn sample() -> Workbook {
         line: Color::Rgb(0x000000),
         text: "Hi\nthere".into(),
         format: Default::default(),
+        rotation: 30.0,
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -378,6 +380,7 @@ fn sample() -> Workbook {
         line: Color::Rgb(0xFF0000),
         text: String::new(),
         format: Default::default(),
+        rotation: 0.0,
     });
     s.shapes.push(Shape {
         math: Default::default(),
@@ -400,6 +403,7 @@ fn sample() -> Workbook {
             anchor: Some(ShapeTextAnchor::Bottom),
             rtl: true,
         },
+        rotation: 0.0,
     });
     let base_chart = Chart {
         id: 20,
@@ -1040,6 +1044,139 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
     assert_eq!(rules, [3, 4, 5]);
 }
 
+const X14_CF_SHEET: &str = r#"<sheetData/>
+  <conditionalFormatting sqref="B1:B5"><cfRule type="dataBar" priority="2"><dataBar><cfvo type="min"/><cfvo type="max"/><color rgb="FF638EC6"/></dataBar><extLst><ext uri="{B025F937-C7B1-47D3-B67F-A62EFF666E3E}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:id>{00000000-0000-0000-0000-00000000000A}</x14:id></ext></extLst></cfRule></conditionalFormatting>
+  <extLst><ext uri="{78C0D931-6437-407d-A8EE-F0AAD7539E65}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><x14:conditionalFormattings>
+    <x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+      <x14:cfRule type="cellIs" priority="3" operator="between" id="{00000000-0000-0000-0000-000000000001}"><xm:f>Lists!$A$1</xm:f><xm:f>Lists!$A$2</xm:f><x14:dxf><font><b/><color rgb="FF4F5051"/></font><numFmt numFmtId="170" formatCode="0.0%"/><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill><border><left style="thin"><color rgb="FF000000"/></left></border></x14:dxf></x14:cfRule>
+      <x14:cfRule type="expression" priority="1" stopIfTrue="1" id="{00000000-0000-0000-0000-000000000002}"><xm:f>A1=Lists!$B$1</xm:f><x14:dxf><fill><patternFill><bgColor rgb="FFFFEB9C"/></patternFill></fill></x14:dxf></x14:cfRule>
+      <xm:sqref>A1:A10 C1</xm:sqref></x14:conditionalFormatting>
+    <x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="dataBar" id="{00000000-0000-0000-0000-00000000000A}"><x14:dataBar minLength="0" maxLength="100" gradient="0"><x14:cfvo type="autoMin"/><x14:cfvo type="autoMax"/></x14:dataBar></x14:cfRule><xm:sqref>B1:B5</xm:sqref></x14:conditionalFormatting>
+    <x14:conditionalFormatting xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><x14:cfRule type="iconSet" priority="4" id="{00000000-0000-0000-0000-000000000003}"><x14:iconSet iconSet="3Stars"><x14:cfvo type="percent"><xm:f>0</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>33</xm:f></x14:cfvo><x14:cfvo type="percent"><xm:f>67</xm:f></x14:cfvo></x14:iconSet></x14:cfRule><xm:sqref>D1:D3</xm:sqref></x14:conditionalFormatting>
+  </x14:conditionalFormattings></ext></extLst>"#;
+
+/// Rules in the `x14:conditionalFormattings` extension (such as those referring to other sheets)
+/// carry `xm:f` formulas and an inline `x14:dxf`; their priorities interleave with the main
+/// section's. A data bar's linked extension adds no rule, only the bar's solid fill (its other
+/// settings are skipped with a warning); x14 icon sets are skipped with a warning.
+#[test]
+fn x14_conditional_formats_are_read() {
+    let (wb, rep) = read_xlsx(&super::minimal(X14_CF_SHEET, &[], "", "")).unwrap();
+    let mut cfs = wb.sheet(0).unwrap().cond_formats.clone();
+    cfs.sort_by_key(|cf| cf.priority);
+    assert_eq!(cfs.iter().map(|cf| cf.priority).collect::<Vec<_>>(), [1, 2, 3], "{cfs:?}");
+    let [expr, bar, cell] = &cfs[..] else { panic!("{cfs:?}") };
+    assert_eq!(expr.ranges, [rr("A1:A10"), rr("C1")]);
+    assert!(expr.stop_if_true);
+    match &expr.rule {
+        CfRule::Expression { formula, style } => {
+            assert_eq!(formula, "A1=Lists!$B$1");
+            assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFFEB9C)));
+        }
+        r => panic!("{r:?}"),
+    }
+    assert!(matches!(bar.rule, CfRule::DataBar { gradient: false, .. }), "{bar:?}");
+    assert_eq!(bar.ranges, [rr("B1:B5")]);
+    match &cell.rule {
+        CfRule::CellIs { op, a, b, style } => {
+            assert_eq!((*op, a.as_str(), b.as_deref()), (CfOperator::Between, "Lists!$A$1", Some("Lists!$A$2")));
+            assert!(style.font.bold);
+            assert_eq!(style.font.color, Color::Rgb(0x4F5051));
+            assert_eq!(style.num_fmt.as_str(), "0.0%");
+            assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFFC7CE)));
+            assert_eq!(style.borders.left.style, BorderStyle::Thin);
+        }
+        r => panic!("{r:?}"),
+    }
+    // Unsupported x14 kinds still warn, by name; nothing else does.
+    assert!(rep.warnings.iter().any(|w| w.contains("\"dataBar\"")), "{:?}", rep.warnings);
+    assert!(rep.warnings.iter().any(|w| w.contains("\"iconSet\"")), "{:?}", rep.warnings);
+    assert_eq!(rep.warnings.iter().filter(|w| w.contains("conditional format")).count(), 2, "{:?}", rep.warnings);
+}
+
+/// A rule referring to another sheet is written in the x14 extension (as the LibreOffice-saved
+/// file that motivated this places it), ahead of the sparklines in the one `extLst`; other rules
+/// stay in the main section, and so does a rule with a 3-D span, which MS-XLSX 2.6.27 forbids in
+/// `xm:f`.
+#[test]
+fn cross_sheet_rules_are_written_in_the_x14_extension() {
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(Sheet::new("Vehicle Range")));
+    let grey = Style { font: Font { color: Color::Rgb(0x4F5051), ..Style::default().font }, num_fmt: NumFmt::new("0.0%"), ..Style::default() };
+    let s = wb.sheet_mut(0).unwrap();
+    let rules = [
+        (CfRule::Expression { formula: "E1>Sheet1!$B$1".into(), style: Box::new(grey.clone()) }, false),
+        (CfRule::CellIs { op: CfOperator::Equal, a: "'Vehicle Range'!$A$8".into(), b: None, style: Box::new(grey.clone()) }, true),
+        (CfRule::CellIs { op: CfOperator::Greater, a: "5".into(), b: None, style: Box::new(grey.clone()) }, false),
+        (CfRule::Expression { formula: "SUM('Sheet1:Vehicle Range'!$A$1)>0".into(), style: Box::new(grey) }, false),
+    ];
+    for (i, (rule, stop_if_true)) in rules.into_iter().enumerate() {
+        s.cond_formats.push(CondFormat { ranges: vec![rr("E1:E20")], rule, priority: i as u32 + 1, stop_if_true });
+    }
+    s.sparklines.push(Sparkline { cell: at("J2"), source: "B2:B3".into(), kind: SparklineKind::Line, color: Color::Auto, markers: false });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    let (main, ext) = xml.split_once("<extLst>").unwrap();
+    assert_eq!(main.matches("<cfRule ").count(), 3, "{main}");
+    assert!(!main.contains("$A$8"), "{main}");
+    assert!(main.contains("<formula>E1&gt;Sheet1!$B$1</formula>"), "{main}");
+    assert!(main.contains("<formula>SUM('Sheet1:Vehicle Range'!$A$1)&gt;0</formula>"), "{main}");
+    assert_eq!(ext.matches("<x14:cfRule ").count(), 1, "{ext}");
+    assert_eq!(ext.matches("<extLst>").count(), 0, "one extLst: {ext}");
+    let cf = ext.find("{78C0D931-6437-407d-A8EE-F0AAD7539E65}").unwrap();
+    assert!(cf < ext.find("{05C60535-1F16-4fd2-B633-F4F36F0B64E0}").unwrap(), "conditional formats before sparklines: {ext}");
+    assert!(ext.contains("xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\""), "{ext}");
+    assert!(ext.contains("<x14:conditionalFormatting xmlns:xm=\"http://schemas.microsoft.com/office/excel/2006/main\">"), "{ext}");
+    assert!(ext.contains("<x14:cfRule type=\"cellIs\" priority=\"2\" stopIfTrue=\"1\" operator=\"equal\" id=\"{"), "{ext}");
+    assert!(ext.contains("<xm:f>'Vehicle Range'!$A$8</xm:f><x14:dxf><font><color rgb=\"FF4F5051\"/></font><numFmt numFmtId=\""), "{ext}");
+    assert!(ext.contains("</x14:dxf></x14:cfRule><xm:sqref>E1:E20</xm:sqref></x14:conditionalFormatting>"), "{ext}");
+    // The inline number format's id is the one `styles.xml` declares for its code.
+    let id = ext.split("<numFmt numFmtId=\"").nth(1).and_then(|r| r.split('"').next()).unwrap();
+    let mut styles = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/styles.xml").unwrap().read_to_string(&mut styles).unwrap();
+    assert!(styles.contains(&format!("<numFmt numFmtId=\"{id}\" formatCode=\"0.0%\"/>")), "{styles}");
+
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let mut got = back.sheet(0).unwrap().cond_formats.clone();
+    got.sort_by_key(|cf| cf.priority);
+    assert_eq!(got, wb.sheet(0).unwrap().cond_formats);
+}
+
+/// A differential format's protection is written after its alignment and border (the CT_Dxf
+/// order: font, numFmt, fill, alignment, border, protection), both inline in an `x14:dxf` and in `styles.xml`, and reads back.
+#[test]
+fn dxf_protection_is_written_in_schema_order() {
+    let mut wb = Workbook::new();
+    wb.sheets.push(Arc::new(Sheet::new("Other")));
+    let mut st = Style { fill: Fill::solid(Color::Rgb(0xFFC7CE)), ..Style::default() };
+    st.align.h = HAlign::Center;
+    st.protection = gridcraft_model::style::Protection { locked: false, hidden: true };
+    st.borders.left.style = BorderStyle::Thin;
+    let s = wb.sheet_mut(0).unwrap();
+    let rules = [
+        CfRule::Expression { formula: "A1=Other!$A$1".into(), style: Box::new(st.clone()) },
+        CfRule::Expression { formula: "A1>5".into(), style: Box::new(st) },
+    ];
+    for (i, rule) in rules.into_iter().enumerate() {
+        s.cond_formats.push(CondFormat { ranges: vec![rr("A1:A5")], rule, priority: i as u32 + 1, stop_if_true: false });
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    let mut styles = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/styles.xml").unwrap().read_to_string(&mut styles).unwrap();
+    let dxfs = &styles[styles.find("<dxfs").unwrap()..];
+    for part in [xml.as_str(), dxfs] {
+        let p = part.find("<protection locked=\"0\" hidden=\"1\"/>").unwrap_or_else(|| panic!("{part}"));
+        assert!(part.find("<alignment").unwrap() < part.find("<border>").unwrap() && part.find("<border>").unwrap() < p, "{part}");
+    }
+    let (back, rep) = read_xlsx(&bytes).unwrap();
+    assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
+    let mut got = back.sheet(0).unwrap().cond_formats.clone();
+    got.sort_by_key(|cf| cf.priority);
+    assert_eq!(got, wb.sheet(0).unwrap().cond_formats);
+}
+
 /// Files have no `@` operator. An `@` that legacy Excel implies is written without it in a
 /// legacy formula (no dynamic-array metadata); any other `@x` is written as `_xlfn.SINGLE(x)`
 /// in a dynamic-array formula. Both read back as written in the model.
@@ -1085,12 +1222,14 @@ fn legacy_and_dynamic_formulas_keep_their_kind() {
     let (xml, _) = sheet1_xml(&bytes);
     assert!(xml.contains("<c r=\"B2\"><f>TANH(A1:A3)+A1:A3</f>"), "{xml}");
     assert!(xml.contains("<c r=\"B3\"><f>SUM(A1:A3)</f>"), "{xml}");
-    // Uncalculated, the spill range is not known yet; the formula stays dynamic.
-    assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2\">TANH(A1:A3)</f>"), "{xml}");
+    // Uncalculated, the dynamic array keeps the area the file says it spilled over.
+    assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2:C4\">TANH(A1:A3)</f>"), "{xml}");
     assert!(xml.contains("<c r=\"D2\"><f t=\"array\" ref=\"D2:D4\">TANH(A1:A3)</f>"), "{xml}");
     let (back, _) = read_xlsx(&bytes).unwrap();
-    for a in ["B2", "B3", "C2", "D2"] {
+    for (a, dynamic) in [("B2", false), ("B3", false), ("C2", true), ("D2", false)] {
         assert_eq!(text(&back, a), text(&wb, a), "{a}");
+        let formula = back.sheet(0).unwrap().cell(at(a)).unwrap().formula.as_ref().unwrap();
+        assert_eq!(formula.dynamic, dynamic, "{a}: dynamic-array metadata survives saving");
     }
 }
 
@@ -1433,6 +1572,76 @@ fn table_newline_column_and_backslash_name_survive() {
     assert!(gridcraft_formula::parse("COUNTA(\\_Prime.1[Name])").is_ok(), "backslash table name parses as a structured reference");
 }
 
+/// #4296: a table whose Total Row is turned off keeps each column's calculation in the file, as
+/// Excel writes it, so turning the row back on in Excel restores a custom formula or Average.
+#[test]
+fn hidden_total_row_keeps_its_calculations() {
+    let col = |name: &str, totals: TotalsFn, label: Option<&str>| TableColumn {
+        name: name.into(),
+        totals,
+        totals_label: label.map(str::to_string),
+        formula: None,
+        unique_name: None,
+        xml: None,
+    };
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.tables.push(Table {
+        id: 1,
+        name: "Table1".into(),
+        range: rr("A1:C3"),
+        header_row: true,
+        totals_row: false,
+        columns: vec![
+            col("Group", TotalsFn::None, Some("Total")),
+            col("Amount", TotalsFn::Custom, Some("SUM(B2:B3)+10")),
+            col("Mean", TotalsFn::Average, None),
+        ],
+        style: "TableStyleMedium2".into(),
+        banded_rows: true,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: true,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut xml = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/tables/table1.xml").unwrap().read_to_string(&mut xml).unwrap();
+    // Still a table without a total row: no totalsRowCount, and its range unchanged.
+    assert!(xml.contains(r#"ref="A1:C3""#) && xml.contains(r#"totalsRowShown="0""#) && !xml.contains("totalsRowCount"), "{xml}");
+    for part in [
+        r#"name="Group" totalsRowLabel="Total"/>"#,
+        r#"name="Amount" totalsRowFunction="custom"><totalsRowFormula>SUM(B2:B3)+10</totalsRowFormula></tableColumn>"#,
+        r#"name="Mean" totalsRowFunction="average"/>"#,
+    ] {
+        assert!(xml.contains(part), "{part}: {xml}");
+    }
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let t = &back.sheet(0).unwrap().tables[0];
+    assert!(!t.totals_row);
+    assert_eq!(t.range.a1(), "A1:C3");
+    let got: Vec<_> = t.columns.iter().map(|c| (c.totals, c.totals_label.clone())).collect();
+    assert_eq!(got, vec![(TotalsFn::None, Some("Total".into())), (TotalsFn::Custom, Some("SUM(B2:B3)+10".into())), (TotalsFn::Average, None)]);
+    // A table that never had a total row writes no calculation.
+    let mut plain = wb.clone();
+    plain.sheet_mut(0).unwrap().tables[0].columns =
+        vec![col("Group", TotalsFn::None, None), col("Amount", TotalsFn::None, None), col("Mean", TotalsFn::None, None)];
+    let mut xml = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(write_xlsx(&plain).unwrap()))
+        .unwrap()
+        .by_name("xl/tables/table1.xml")
+        .unwrap()
+        .read_to_string(&mut xml)
+        .unwrap();
+    for attr in ["totalsRowFunction", "totalsRowLabel", "totalsRowFormula"] {
+        assert!(!xml.contains(attr), "{attr}: {xml}");
+    }
+}
+
 /// A table that is only a header row and a totals row (Insert Table on one row, then Total
 /// Row) is written like the header-only and one-data-row shapes, not dropped on save.
 #[test]
@@ -1652,6 +1861,11 @@ fn solid_data_bar_survives_with_sparklines_and_gradient_neighbours() {
     // x14 cfvo values are `xm:f` children; a `val` attribute there is not valid x14.
     let (xml, _) = sheet1_xml(&bytes);
     assert!(xml.contains("<x14:cfvo type=\"num\"><xm:f>9</xm:f></x14:cfvo>"), "{xml}");
+    // Both solid bars sit in the one x14 conditional format extension, under its MS-XLSX uri.
+    assert_eq!(xml.matches("<ext uri=\"{78C0D931-6437-407d-A8EE-F0AAD7539E65}\"").count(), 1, "{xml}");
+    assert_eq!(xml.matches("<x14:cfRule type=\"dataBar\"").count(), 2, "{xml}");
+    // As drawn here: negatives in the bar's colour, no axis (Excel's x14 defaults differ), and read back without a warning.
+    assert_eq!(xml.matches("<x14:dataBar gradient=\"0\" negativeBarColorSameAsPositive=\"1\" axisPosition=\"none\">").count(), 2, "{xml}");
     let (back, rep) = read_xlsx(&bytes).unwrap();
     assert!(rep.warnings.is_empty(), "{:?}", rep.warnings);
     let b = &back.sheets[0];
@@ -2025,4 +2239,193 @@ fn remove_personal_information_is_kept_and_honoured() {
     let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
+}
+
+#[test]
+fn issue_778_xlsx_xml_import_save_reopen_roundtrip() {
+    let mut wb = Workbook::new();
+    let mut s = Sheet::new("Delegated");
+    s.cells.set(at("A1"), Cell { value: Value::text("Item"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("B1"), Cell { value: Value::text("Amount"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("A2"), Cell { value: Value::text("Alpha"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("B2"), Cell { value: Value::Number(42.5), formula: None, style: StyleId::DEFAULT, py: None });
+    let mut f = Cell::formula(Formula::new("=B2*2"));
+    f.value = Value::Number(85.0);
+    s.cells.set(at("B3"), f);
+    s.merges.push(rr("A4:B4"));
+    s.hyperlinks.insert(at("A2"), Hyperlink { target: "https://example.com".into(), tooltip: Some("Example".into()), external: true });
+    s.comments.insert(
+        at("B2"),
+        Comment {
+            author: "Reviewer".into(),
+            text: "Checked".into(),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: true,
+            dates: vec![],
+            note_box: None,
+        },
+    );
+    s.shapes.push(Shape {
+        id: 1,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor { cell: at("D2"), dx: 4.0, dy: 4.0, width: 120.0, height: 60.0, mode: AnchorMode::MoveAndSize },
+        fill: Color::Rgb(0x336699),
+        line: Color::Rgb(0x112233),
+        text: "Box".into(),
+        format: Default::default(),
+        rotation: 0.0,
+        math: Default::default(),
+    });
+    s.charts.push(Chart {
+        id: 2,
+        kind: ChartKind::ColumnClustered,
+        anchor: Anchor { cell: at("D6"), dx: 0.0, dy: 0.0, width: 320.0, height: 200.0, mode: AnchorMode::MoveAndSize },
+        title: Some("Sales".into()),
+        series: vec![Series {
+            name: Some("Delegated!$B$1".into()),
+            categories: Some("Delegated!$A$2:$A$2".into()),
+            values: "Delegated!$B$2:$B$2".into(),
+            ..Default::default()
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: true,
+        data_table: Some(ChartDataTable::default()),
+        gridlines: true,
+        style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    wb.sheets[0] = Arc::new(s);
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let (reopened, _) = read_xlsx(&bytes).unwrap();
+    let bytes2 = write_xlsx(&reopened).unwrap();
+    let (again, _) = read_xlsx(&bytes2).unwrap();
+
+    let sh = &again.sheets[0];
+    assert_eq!(sh.cells.get(at("A2")).unwrap().value, Value::text("Alpha"));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().value, Value::Number(85.0));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("B2*2"));
+    assert_eq!(sh.merges, vec![rr("A4:B4")]);
+    assert_eq!(sh.hyperlinks.get(&at("A2")).map(|h| h.target.as_str()), Some("https://example.com"));
+    assert_eq!(sh.comments.get(&at("B2")).map(|c| c.text.as_str()), Some("Checked"));
+    assert_eq!(sh.shapes.len(), 1);
+    assert_eq!(sh.shapes[0].text, "Box");
+    assert_eq!(sh.charts.len(), 1);
+    assert_eq!(sh.charts[0].title.as_deref(), Some("Sales"));
+    assert_eq!(sh.charts[0].data_table, Some(ChartDataTable::default()));
+}
+
+#[test]
+fn issue_778_full_workbook_import_save_reopen_roundtrip() {
+    const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const NS_XDR: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+    const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+
+    let png = b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec();
+    let external_link = format!(
+        r#"<?xml version="1.0"?><externalLink xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><externalBook r:id="rId1"><sheetNames><sheetName val="Sheet1"/></sheetNames><sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>10</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>"#
+    );
+    let external_link_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/externalLinkPath" Target="file:///C:/never/opened/Book2.xlsx" TargetMode="External"/></Relationships>"#
+    );
+    let types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/xl/externalLinks/externalLink1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/></Types>"#;
+    let root_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#
+    );
+    let wb_xml = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Notes" sheetId="2" state="hidden" r:id="rId2"/></sheets><externalReferences><externalReference r:id="rId3"/></externalReferences></workbook>"#
+    );
+    let wb_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="{NS_REL}/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="{NS_REL}/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>"#
+    );
+    let sheet1 = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><sheetData><row r="1"><c r="A1" t="str"><v>Item</v></c><c r="B1" t="str"><v>Amount</v></c></row><row r="2"><c r="A2" t="str"><v>Alpha</v></c><c r="B2"><v>42.5</v></c><c r="C2"><f>[1]Sheet1!$A$1</f><v>10</v></c></row><row r="3"><c r="B3"><f>B2*2</f><v>85</v></c><c r="C3"><f>SUM([1]Sheet1!A1:A3)*2</f><v>60</v></c></row></sheetData><drawing r:id="rId1"/></worksheet>"#
+    );
+    let sheet1_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#
+    );
+    let sheet2 =
+        format!(r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}"><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>"#);
+    let drawing1 = format!(
+        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{NS_XDR}" xmlns:a="{NS_A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>9</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>13</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="10" name="Picture 1" descr="Logo"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill><xdr:spPr/></xdr:pic><xdr:clientData/></xdr:twoCellAnchor><xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="11" name="Rect 1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Box</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor><xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="12" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="{NS_C}" r:id="rId2"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
+    );
+    let drawing1_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/image" Target="../media/image1.png"/><Relationship Id="rId2" Type="{NS_REL}/chart" Target="../charts/chart1.xml"/></Relationships>"#
+    );
+    let chart1 = format!(
+        r#"<?xml version="1.0"?><c:chartSpace xmlns:c="{NS_C}" xmlns:a="{NS_A}"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Data!$B$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Data!$A$2:$A$2</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Data!$B$2:$B$2</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>42.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart><c:dTable><c:showKeys/><c:showHorzBorder/><c:showVertBorder/><c:showOutline/></c:dTable></c:plotArea></c:chart></c:chartSpace>"#
+    );
+
+    let input = super::make_zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", wb_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet1.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet1_rels.as_bytes()),
+        ("xl/worksheets/sheet2.xml", sheet2.as_bytes()),
+        ("xl/drawings/drawing1.xml", drawing1.as_bytes()),
+        ("xl/drawings/_rels/drawing1.xml.rels", drawing1_rels.as_bytes()),
+        ("xl/media/image1.png", &png),
+        ("xl/charts/chart1.xml", chart1.as_bytes()),
+        ("xl/externalLinks/externalLink1.xml", external_link.as_bytes()),
+        ("xl/externalLinks/_rels/externalLink1.xml.rels", external_link_rels.as_bytes()),
+    ]);
+
+    let (imported, rep1) = read_xlsx(&input).unwrap();
+    assert!(!rep1.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep1.warnings);
+    let saved1 = write_xlsx(&imported).unwrap();
+    let (reopened, rep2) = read_xlsx(&saved1).unwrap();
+    assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
+    let saved2 = write_xlsx(&reopened).unwrap();
+    let (again, _) = read_xlsx(&saved2).unwrap();
+
+    assert_eq!(again.sheets.len(), 2);
+    assert_eq!(again.sheets[0].name, "Data");
+    assert_eq!(again.sheets[0].visibility, Visibility::Visible);
+    assert_eq!(again.sheets[1].name, "Notes");
+    assert_eq!(again.sheets[1].visibility, Visibility::Hidden);
+    assert_eq!(again.sheets[1].value(at("A1")), Value::Number(7.0));
+
+    let sh = &again.sheets[0];
+    assert_eq!(sh.cells.get(at("B3")).unwrap().value, Value::Number(85.0));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("B2*2"));
+    assert_eq!(sh.cells.get(at("C2")).unwrap().value, Value::Number(10.0));
+    assert_eq!(sh.cells.get(at("C2")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("[1]Sheet1!$A$1"));
+    assert_eq!(sh.cells.get(at("C3")).unwrap().value, Value::Number(60.0));
+    assert_eq!(sh.cells.get(at("C3")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("SUM([1]Sheet1!A1:A3)*2"));
+
+    assert_eq!(sh.images.len(), 1);
+    assert_eq!(sh.images[0].data.as_ref(), png.as_slice());
+    assert_eq!(sh.images[0].anchor.mode, AnchorMode::MoveOnly);
+    assert_eq!(sh.shapes.len(), 1);
+    assert_eq!(sh.shapes[0].text, "Box");
+    assert_eq!(sh.charts.len(), 1);
+    assert_eq!(sh.charts[0].title.as_deref(), Some("Sales"));
+    assert_eq!(sh.charts[0].data_table, Some(ChartDataTable::default()));
+
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved2)).unwrap();
+    let mut read_part = |name: &str| {
+        let mut s = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+    let out_wb = read_part("xl/workbook.xml");
+    assert!(out_wb.contains("<externalReferences"), "{out_wb}");
+    let out_ext = read_part("xl/externalLinks/externalLink1.xml");
+    assert!(out_ext.contains("<sheetName val=\"Sheet1\"/>"), "{out_ext}");
+    let out_ext_rels = read_part("xl/externalLinks/_rels/externalLink1.xml.rels");
+    assert!(out_ext_rels.contains("file:///C:/never/opened/Book2.xlsx") && out_ext_rels.contains("TargetMode=\"External\""), "{out_ext_rels}");
+    let out_chart = read_part("xl/charts/chart1.xml");
+    assert!(out_chart.contains("<c:numCache>") && out_chart.contains("<c:v>42.5</c:v>"), "{out_chart}");
 }
