@@ -381,6 +381,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recentes",
         "No recent workbooks yet." => "Ainda não há pastas de trabalho recentes.",
         "More workbooks" => "Mais pastas de trabalho",
+        "More entries not shown" => "Mais itens não exibidos",
         "Modified" => "Modificado",
         "Not available" => "Indisponível",
         "Just now" => "Agora mesmo",
@@ -1143,6 +1144,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char tem um argumento não numérico {argument}",
         "\\@char with invalid code point {code}" => "\\@char com ponto de código inválido {code}",
         "Invalid environment name character: {character}" => "Caractere inválido no nome do ambiente: {character}",
+        "Copy Cells" => "Copiar Células",
+        "Fill Series" => "Preencher Série",
+        "Fill Formatting Only" => "Preencher Somente Formatos",
+        "Fill Without Formatting" => "Preencher Sem Formatação",
+        "Fill Days" => "Preencher Dias",
+        "Fill Weekdays" => "Preencher Dias Úteis",
+        "Fill Months" => "Preencher Meses",
+        "Fill Years" => "Preencher Anos",
+        "Auto Fill Options" => "Opções de Autopreenchimento",
         _ => return None,
     })
 }
