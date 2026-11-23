@@ -1136,7 +1136,10 @@ fn explicit_rtl_standard_text_reorders_without_an_arabic_font() {
     let page = doc.add_page(300.0, 100.0);
     page.text_with_direction(Point::new(10.0, 30.0), 12.0, Font::Helvetica, [0, 0, 0], source, TextDirection::RightToLeft);
     assert!(page.content.contains("(! ABC) Tj"), "{}", page.content);
-    assert!(page.arabic.write_objects(&mut 4, &mut Vec::new(), &mut Vec::new()).is_empty());
+    let mut objects = craft_pdf::classic::Writer::with_capacity(0).unwrap();
+    let mut next = 4;
+    assert!(page.arabic.write_objects(&mut next, &mut objects).unwrap().is_empty());
+    assert_eq!(next, 4, "Latin-only RTL text must not allocate Arabic font objects");
     assert_eq!(text_width_with_direction(Font::Helvetica, 12.0, source, TextDirection::RightToLeft), text_width(Font::Helvetica, 12.0, source));
     let pdf = doc.finish().unwrap();
     assert_eq!(utf16_entry(&pdf, "/ActualText").unwrap(), source);
@@ -1238,4 +1241,22 @@ fn symbol_text_is_never_shaped_as_arabic() -> Result<(), Box<dyn Error>> {
     assert!(find(&pdf, b"/ActualText").is_none());
     assert_eq!(text_width(Font::Symbol, 10.0, "\u{03B1}ب"), f32::from(Font::Symbol.char_width('\u{03B1}') + Font::Symbol.char_width('ب')) / 100.0);
     Ok(())
+}
+
+#[test]
+fn shared_run_length_preserves_pixels_at_packet_boundaries() {
+    for len in [0, 1, 2, 3, 127, 128, 129, 255, 256, 257, 1024] {
+        for seed in [0u8, 127, 128, 255] {
+            let repeats = vec![seed; len];
+            let literals: Vec<u8> = (0..len).map(|i| seed.wrapping_add(i as u8)).collect();
+            let pairs: Vec<u8> = (0..len).map(|i| (i / 2) as u8).collect();
+            for pixels in [repeats, literals, pairs] {
+                let encoded = run_length(&pixels);
+                assert_eq!(encoded.last(), Some(&128));
+                assert_eq!(rle_decode(&encoded), pixels);
+            }
+        }
+    }
+    // Two equal bytes may now terminate a literal packet. PDF pixel values stay exact.
+    assert_eq!(run_length(&[1, 2, 2, 3]), [0, 1, 255, 2, 0, 3, 128]);
 }
