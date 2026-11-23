@@ -361,19 +361,12 @@ fn tokenize(src: &str) -> Raw {
                 push_lit(toks, c.encode_utf8(&mut [0; 4]));
             }
             '"' => {
-                let mut s = String::new();
-                i += 1;
-                while let Some(&d) = cs.get(i) {
-                    i += 1;
-                    if d == '"' {
-                        break;
-                    }
-                    s.push(d);
-                }
+                let (s, next) = quoted_literal(&cs, i);
                 if s.chars().any(is_currency_char) {
                     raw.currency = true;
                 }
                 push_lit(toks, &s);
+                i = next;
                 continue;
             }
             '\\' => {
@@ -403,11 +396,10 @@ fn tokenize(src: &str) -> Raw {
                 continue;
             }
             '[' => {
-                let close = if last_close.is_some_and(|l| l > i) { cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']')) } else { None };
-                if let Some(p) = close {
-                    let content: String = cs.get(i + 1..i + 1 + p).unwrap_or(&[]).iter().collect();
+                if let Some(next) = bracket_end(&cs, i, last_close) {
+                    let content: String = cs.get(i + 1..next - 1).unwrap_or(&[]).iter().collect();
                     bracket(&mut raw_parts(toks, &mut raw.color, &mut raw.cond, &mut raw.currency, &mut raw.japanese, &mut raw.gannen), &content);
-                    i += p + 2;
+                    i = next;
                 } else {
                     push_lit(toks, "[");
                     i += 1;
@@ -420,19 +412,7 @@ fn tokenize(src: &str) -> Raw {
             '%' => toks.push(Tok::Percent),
             '@' => toks.push(Tok::At),
             '/' => {
-                toks.push(Tok::Slash);
-                i += 1;
-                if matches!(cs.get(i), Some('1'..='9')) {
-                    let mut s = String::new();
-                    while let Some(&d) = cs.get(i) {
-                        if !d.is_ascii_digit() {
-                            break;
-                        }
-                        s.push(d);
-                        i += 1;
-                    }
-                    toks.push(Tok::FixedDenom(s));
-                }
+                i = slash_token(&cs, i, toks);
                 continue;
             }
             'e' | 'E' if matches!(cs.get(i + 1), Some('+' | '-')) => {
@@ -446,17 +426,9 @@ fn tokenize(src: &str) -> Raw {
                 continue;
             }
             'G' | 'g' => {
-                // A run of `g`: an era name in a Japanese-calendar section, the letters as typed
-                // anywhere else (`analyze` decides once the whole section, tag included, is read).
-                let mut s = String::new();
-                while let Some(&d) = cs.get(i) {
-                    if !matches!(d, 'g' | 'G') {
-                        break;
-                    }
-                    s.push(d);
-                    i += 1;
-                }
-                toks.push(Tok::EraName(s));
+                let (tok, next) = era_name_run(&cs, i);
+                toks.push(tok);
+                i = next;
                 continue;
             }
             'A' | 'a' if starts_with_ci(&cs, i, "am/pm") => {
@@ -471,25 +443,9 @@ fn tokenize(src: &str) -> Raw {
                 continue;
             }
             'y' | 'Y' | 'm' | 'M' | 'd' | 'D' | 'h' | 'H' | 's' | 'S' | 'e' | 'E' => {
-                let lc = c.to_ascii_lowercase();
-                let mut n = 0usize;
-                while cs.get(i + n).is_some_and(|d| d.to_ascii_lowercase() == lc) {
-                    n += 1;
-                }
-                let n8 = n.min(255) as u8;
-                if lc == 'e' {
-                    // An era year in a Japanese-calendar section, today's 4-digit year otherwise.
-                    toks.push(Tok::EraYear(n8));
-                } else {
-                    toks.push(Tok::Date(match lc {
-                        'y' => DatePart::Year(n8),
-                        'm' => DatePart::Month(n8),
-                        'd' => DatePart::Day(n8),
-                        'h' => DatePart::Hour(n8),
-                        _ => DatePart::Second(n8),
-                    }));
-                }
-                i += n.max(1);
+                let (tok, next) = date_run(&cs, i, c);
+                toks.push(tok);
+                i = next;
                 continue;
             }
             _ => {
@@ -507,6 +463,89 @@ fn tokenize(src: &str) -> Raw {
         raw.calendar = Calendar::Hijri;
     }
     raw
+}
+
+/// The `"`-quoted literal starting at `i`: its text without the quotes, and the index after it.
+/// Excel treats an unterminated quote as running to the end of the format.
+fn quoted_literal(cs: &[char], mut i: usize) -> (String, usize) {
+    let mut s = String::new();
+    i += 1;
+    while let Some(&d) = cs.get(i) {
+        i += 1;
+        if d == '"' {
+            break;
+        }
+        s.push(d);
+    }
+    (s, i)
+}
+
+/// The run of `y`/`m`/`d`/`h`/`s`/`e` at `i` (any case): its token before `analyze` resolves a
+/// Japanese calendar's era year, and the index after the run.
+fn date_run(cs: &[char], i: usize, c: char) -> (Tok, usize) {
+    let lc = c.to_ascii_lowercase();
+    let mut n = 0usize;
+    while cs.get(i + n).is_some_and(|d| d.to_ascii_lowercase() == lc) {
+        n += 1;
+    }
+    let n8 = n.min(255) as u8;
+    let tok = if lc == 'e' {
+        // An era year in a Japanese-calendar section, today's 4-digit year otherwise.
+        Tok::EraYear(n8)
+    } else {
+        Tok::Date(match lc {
+            'y' => DatePart::Year(n8),
+            'm' => DatePart::Month(n8),
+            'd' => DatePart::Day(n8),
+            'h' => DatePart::Hour(n8),
+            _ => DatePart::Second(n8),
+        })
+    };
+    (tok, i + n.max(1))
+}
+
+/// The `/` at `i`: pushes it, and any run of digits after it as the fixed denominator, and
+/// returns the index after them.
+fn slash_token(cs: &[char], i: usize, toks: &mut Vec<Tok>) -> usize {
+    toks.push(Tok::Slash);
+    let mut j = i + 1;
+    if matches!(cs.get(j), Some('1'..='9')) {
+        let mut s = String::new();
+        while let Some(&d) = cs.get(j) {
+            if !d.is_ascii_digit() {
+                break;
+            }
+            s.push(d);
+            j += 1;
+        }
+        toks.push(Tok::FixedDenom(s));
+    }
+    j
+}
+
+/// The run of `g`/`G` at `i` as typed: an era name in a Japanese-calendar section, the letters as
+/// typed anywhere else (`analyze` decides once the whole section, tag included, is read).
+fn era_name_run(cs: &[char], i: usize) -> (Tok, usize) {
+    let mut j = i;
+    let mut s = String::new();
+    while let Some(&d) = cs.get(j) {
+        if !matches!(d, 'g' | 'G') {
+            break;
+        }
+        s.push(d);
+        j += 1;
+    }
+    (Tok::EraName(s), j)
+}
+
+/// The index just past the `]` that closes the `[` tag at `i`, when a `]` stands at or after `i`
+/// (`last_close` is the last `]` in `cs`); `None` means the `[` is literal text.
+fn bracket_end(cs: &[char], i: usize, last_close: Option<usize>) -> Option<usize> {
+    if !last_close.is_some_and(|l| l > i) {
+        return None;
+    }
+    let p = cs.get(i + 1..).and_then(|r| r.iter().position(|&d| d == ']'))?;
+    Some(i + p + 2)
 }
 
 struct RawParts<'a> {
