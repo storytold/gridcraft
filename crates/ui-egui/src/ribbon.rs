@@ -1,7 +1,7 @@
 //! Title bar (Quick Access Toolbar), ribbon tabs and ribbon groups, and keyboard shortcuts.
 
 use egui::{Align2, Color32, Key, Modifiers, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use gridcraft_engine::model::{HAlign, Style, VAlign};
+use gridcraft_engine::model::{HAlign, ObjKind, Style, VAlign};
 use serde_json::json;
 
 use crate::SheetApp;
@@ -27,7 +27,7 @@ mod title_bar;
 mod view;
 
 use automate::automate;
-use contextual::{chart_design, table_design};
+use contextual::{chart_design, picture_format, shape_format, slicer_tools, table_design};
 pub(crate) use controls::{ComboResult, editable_combo};
 use controls::{act, keytip};
 use data::data;
@@ -155,6 +155,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Automate" => automate(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
+                            "Picture Format" => picture_format(app, ui),
+                            "Shape Format" => shape_format(app, ui),
+                            "Slicer" => slicer_tools(app, ui),
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
@@ -274,8 +277,12 @@ fn theme_choices(app: &mut SheetApp, ui: &mut Ui) {
     }
 }
 
-const CONTEXTUAL_TABS: [&str; 3] = ["Table Design", "Chart Design", crate::paper_view::TAB];
+const CONTEXTUAL_TABS: [&str; 6] = ["Table Design", "Chart Design", "Picture Format", "Shape Format", "Slicer", crate::paper_view::TAB];
 
+/// Lists the tabs available for the active table, selected object and header/footer editor.
+///
+/// Object tabs require a live canonical kind/id pair. Equations and form controls keep their
+/// own editing surfaces rather than inheriting shape actions from their backing storage.
 fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     let mut v = Vec::new();
     if let Some(d) = app.session.active()
@@ -284,8 +291,15 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if sh.table_at(d.selection.active).is_some() {
             v.push("Table Design");
         }
-        if app.selected_chart().is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
-            v.push("Chart Design");
+        if let Some(obj) = app.selected_object.filter(|obj| sh.object_ref(obj.id) == Some(*obj)) {
+            match obj.kind {
+                ObjKind::Chart => v.push("Chart Design"),
+                ObjKind::Image => v.push("Picture Format"),
+                ObjKind::Shape => v.push("Shape Format"),
+                ObjKind::Slicer => v.push("Slicer"),
+                // Form controls keep upstream's own control actions, not shape palettes.
+                ObjKind::Equation | ObjKind::Control => {}
+            }
         }
         if app.grid.hf_edit.is_some() {
             v.push(crate::paper_view::TAB);
