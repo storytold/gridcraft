@@ -7382,6 +7382,33 @@ fn a_cut_moves_the_rules_its_cells_hold_at_paste() {
     assert_eq!(dv, vec!["D1:D3".to_string()]);
 }
 
+/// A cut whose sheet is renamed before the paste still moves its rules and the references to
+/// its cells: the move is made on the sheet as it is now named, not as the clipboard saw it.
+#[test]
+fn a_cut_pasted_after_its_sheet_is_renamed_moves_its_rules() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B5", "input": "=A1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A3"})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let sh = &s.doc().unwrap().wb.sheets[0];
+    let cf: Vec<String> = sh
+        .cond_formats
+        .iter()
+        .map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => format!("{}@{}", formula.trim_start_matches('='), c.ranges[0].a1()),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(cf, vec!["D1>0@D1:D3".to_string()]);
+    let dv: Vec<String> = sh.validations.iter().map(|v| format!("{}@{}", v.f1.trim_start_matches('='), v.ranges[0].a1())).collect();
+    assert_eq!(dv, vec!["D1>0@D1:D3".to_string()]);
+    assert_eq!(s.execute("cell.get", json!({"cell": "B5"})).unwrap()["formula"], "=D1");
+}
+
 /// Moving a column out of a wider rule takes its part of the rule with it, as a cut does: every
 /// cell, moved or not, still checks itself.
 #[test]

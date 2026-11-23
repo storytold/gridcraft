@@ -79,7 +79,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let cut_move = clip.cut && same_doc && what == What::All;
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
-    let src_sheet_name = src_sheet.name.clone();
+    // The source sheet's name now: a cut whose sheet was renamed after it moves its cells,
+    // rules and the references to them on the sheet as it is named, not as the clipboard saw it.
+    let src_sheet_name = match s.doc()?.wb.sheet(clip.sheet) {
+        Some(live) if clip.cut && same_doc => live.name.clone(),
+        _ => src_sheet.name.clone(),
+    };
     // A cut moves its block as it is, as Excel's does: it can't be transposed, tiled over a
     // larger selection or pasted skipping blanks (the move's references, rules and arrays follow
     // the whole block unturned, and its rules replace the destination's under every cell).
