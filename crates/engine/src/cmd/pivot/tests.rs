@@ -1540,3 +1540,38 @@ fn a_field_saved_under_a_formula_header_text_survives_reopen_and_refresh() {
     assert_eq!(p.filters[0].selected, Some(vec!["East".to_string()]));
     assert_eq!(grand_total(&s, 1), Value::Number(415.0));
 }
+
+/// A formula header `="Region"` beside a text header `Region`: an older GridCraft saved the fields
+/// as `="Region"` and `Region`; now the columns are `Region` and `Region2`. Each saved field keeps
+/// its own column, even the one whose old name is also a current header. A PivotTable already
+/// saved with the current names keeps them.
+#[test]
+fn older_fields_keep_their_columns_when_an_old_name_is_also_a_current_header() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "Region"})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"], "filters": ["Region2"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region2", "selected": ["Apples"]})).unwrap();
+    // Apples: 100 + 50 + 90 + 60 + 120.
+    assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+    // Saved with the current names: a refresh keeps them.
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!((pt(&s).rows[0].source_col.as_str(), pt(&s).filters[0].source_col.as_str()), ("Region", "Region2"));
+    assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+    // As an older GridCraft saved it: named by the headers as the sheet showed them.
+    let mut wb = (*s.doc().unwrap().wb).clone();
+    let si = wb.active_sheet();
+    let saved = wb.sheet_mut(si).unwrap().pivots.last_mut().unwrap();
+    saved.rows[0].source_col = "=\"Region\"".into();
+    saved.filters[0].source_col = "Region".into();
+    let bytes = crate::io::save_bytes(&wb, "book.json").unwrap();
+    let (back, _) = crate::io::open_bytes("book.json", &bytes).unwrap();
+    s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert_eq!((p.rows[0].source_col.as_str(), p.filters[0].source_col.as_str()), ("Region", "Region2"));
+    assert_eq!(p.filters[0].selected, Some(vec!["Apples".to_string()]));
+    assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+}

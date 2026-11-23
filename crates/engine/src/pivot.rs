@@ -130,39 +130,41 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     compute_from(wb, migrated.as_ref().unwrap_or(pt), &src, None)
 }
 
-/// The fields a PivotTable saved by an older GridCraft names by header text it no longer reads,
-/// each with its column's current name. GridCraft read a header as the cell showed it: its
-/// formula under Show Formulas (`="Region"`), a long General number narrowed to the cell width.
-/// Now a header is its value through its number format, so such a saved name matches no column;
-/// it is renamed when it matches no current header and exactly one header as it showed then
-/// (numbered alike, so at most one). `None` when the source can't be read.
+/// The fields of a PivotTable saved by an older GridCraft, each with its column's current name.
+/// GridCraft read a header as the cell showed it: its formula under Show Formulas (`="Region"`), a
+/// long General number narrowed to the cell width. Now a header is its value through its number
+/// format. The decision is made for the whole PivotTable, so that two fields never land on one
+/// column: when every saved name matches a current header, nothing changes; otherwise, when every
+/// saved name matches a header as it showed then (numbered alike), each field moves to that
+/// column's current name, even one whose name also matches some current header (a text header
+/// `Region` beside a formula header `="Region"` is now `Region2`). Empty when nothing is renamed;
+/// `None` when the source can't be read.
 fn older_field_names(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<HashMap<String, String>> {
     use gridcraft_model::pivot_source::{headers, unique_names};
     let (si, r) = resolve_source(wb, &pt.source, pivot_sheet).ok()?;
     let current = headers(wb, si, r).ok()?;
-    let known = |n: &str| current.iter().any(|h| h.eq_ignore_ascii_case(n));
-    let saved = pt
+    let saved: Vec<&String> = pt
         .rows
         .iter()
         .chain(&pt.columns)
         .map(|f| &f.source_col)
         .chain(pt.values.iter().map(|v| &v.source_col))
-        .chain(pt.filters.iter().map(|f| &f.source_col));
-    let unknown: Vec<&String> = saved.filter(|n| !known(n)).collect();
-    if unknown.is_empty() {
+        .chain(pt.filters.iter().map(|f| &f.source_col))
+        .collect();
+    let index_in = |list: &[String], n: &str| list.iter().position(|h| h.eq_ignore_ascii_case(n));
+    if saved.iter().all(|n| index_in(&current, n).is_some()) {
         return Some(HashMap::new());
     }
     let sh = wb.sheet(si)?;
     let shown = (r.start.col..=r.end.col).map(|c| crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)));
     let older = unique_names(shown).ok()?;
     let mut out = HashMap::new();
-    for n in unknown {
-        if let Some(i) = older.iter().position(|o| o.eq_ignore_ascii_case(n))
-            && let Some(h) = current.get(i)
-        {
-            out.insert(n.to_ascii_lowercase(), h.clone());
-        }
+    for n in saved {
+        // A name the older layout doesn't hold either: the PivotTable isn't one it saved.
+        let Some(h) = index_in(&older, n).and_then(|i| current.get(i)) else { return Some(HashMap::new()) };
+        out.insert(n.to_ascii_lowercase(), h.clone());
     }
+    out.retain(|k, h| !h.eq_ignore_ascii_case(k));
     Some(out)
 }
 
