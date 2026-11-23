@@ -249,10 +249,12 @@ pub(super) fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     let stored = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
     // The fields as the report is computed: an older PivotTable's under their columns' current
     // names, which an edit then settles on.
-    let effective = pv::effective(&d.wb, stored, si);
+    let (effective, src) = match pv::effective_source(&d.wb, stored, si) {
+        Ok((pt, src)) => (pt, Ok(src)),
+        Err(e) => (std::borrow::Cow::Borrowed(stored), Err(e)),
+    };
     let pt = &*effective;
     let mut out = pivot_json(&d.wb, si, pt);
-    let src = pv::read_source(&d.wb, &pt.source, si);
     let list: Vec<Json> = match &src {
         Ok(src) => src
             .headers

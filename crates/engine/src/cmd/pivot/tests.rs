@@ -1677,9 +1677,66 @@ fn an_older_source_field_does_not_take_a_calculated_fields_name() {
     let names: Vec<&str> = p.values.iter().map(|v| v.source_col.as_str()).collect();
     assert_eq!(names, ["Sales", "Margin", "=\"Margin\""], "nothing is renamed onto the calculated field");
     assert!(!p.names_from_values);
-    // Sales, then the calculated Margin (a tenth of Sales), not the Units column (72).
+    // Sales, then the calculated Margin (a tenth of Sales), not the Units column (72), and the
+    // Units column under its old name, which the report keeps.
     assert_eq!(grand_total(&s, 1), Value::Number(835.0));
     assert_eq!(grand_total(&s, 2), Value::Number(83.5));
+    assert_eq!(grand_total(&s, 3), Value::Number(72.0));
+    // The field list shows the source as it is computed: the Units column under its old name in
+    // Values, beside the calculated Margin, and no source column named `Margin`.
+    let r = s.execute("pivot.fields", json!({})).unwrap();
+    let fields = r["fields"].as_array().unwrap();
+    let areas = |name: &str, calculated: bool| {
+        fields.iter().find(|f| f["name"] == name && f["calculated"].as_bool().unwrap_or(false) == calculated).map(|f| f["areas"].clone())
+    };
+    assert_eq!(areas("=\"Margin\"", false), Some(json!(["values"])));
+    assert_eq!(areas("Margin", true), Some(json!(["values"])));
+    assert_eq!(areas("Margin", false), None);
+}
+
+/// A calculated field's formula names a column as the sheet showed it: in an older PivotTable
+/// with a formula header `="Amount"` (A) beside a text header `Amount` (B), `=Amount*2` read B.
+/// Now A reads `Amount` and B `Amount2`, so moving the fields to those names would turn the
+/// formula onto A. The PivotTable stays an older one and is computed as it was.
+#[test]
+fn a_calculated_formula_keeps_the_column_it_named() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x", "Amount", "Key"], [100, 5, "K"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Amount\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Key"], "values": ["Amount"]})).unwrap();
+    s.execute("pivot.calculatedField", json!({"name": "Twice", "formula": "=Amount2*2"})).unwrap();
+    reopen_as_older(&mut s, |pt| {
+        pt.values[0].source_col = "=\"Amount\"".into();
+        pt.calculated_fields[0].formula = "=Amount*2".into();
+    });
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert!(!p.names_from_values, "nothing is moved");
+    assert_eq!(p.values[0].source_col, "=\"Amount\"");
+    // Column A (100), and twice column B (10), as the PivotTable was saved.
+    assert_eq!(grand_total(&s, 1), Value::Number(100.0));
+    assert_eq!(grand_total(&s, 2), Value::Number(10.0));
+}
+
+/// Show Details reads the records the report is computed from: an older filter `Region`, which
+/// filters column B (`Region2` now), takes B's Apples records, and the refreshed report is current.
+#[test]
+fn show_details_on_an_older_pivottable_takes_the_records_it_shows() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "Region"})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Date"], "values": ["Sales"], "filters": ["Region2"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region2", "selected": ["Apples"]})).unwrap();
+    reopen_as_older(&mut s, |pt| pt.filters[0].source_col = "Region".into());
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    let col = pt(&s).last_range.unwrap().start.col + 1;
+    let r = s.execute("pivot.showDetails", json!({"cell": CellRef::new(gt, col).a1()})).unwrap();
+    assert_eq!(r["records"], 5, "the five Apples records");
 }
 
 /// The field list shows an older PivotTable's fields as its report is computed. With a formula
