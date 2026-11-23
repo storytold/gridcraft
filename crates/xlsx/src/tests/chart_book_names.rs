@@ -46,6 +46,7 @@ fn series(name: &str, values: &str) -> Series {
         kind: None,
         smooth: false,
         trendlines: Vec::new(),
+        label_number_format: None,
         quartiles: Default::default(),
     }
 }
@@ -76,15 +77,17 @@ fn chart_names_are_written_qualified() {
         legend: LegendPos::Bottom,
         data_labels: false,
         data_table: None,
-        gridlines: true,
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
         x_title: None,
-        y_title: None,
+        gridlines: true,
         source: None,
+        y_title: None,
         by_rows: false,
         pivot: None,
+        axis_number_formats: Default::default(),
+        pivot_label_formats: Vec::new(),
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new("My Data"))];
     wb.names = vec![
@@ -166,6 +169,8 @@ fn chart_names_keep_spaces_around_a_quoted_sheet_name() {
         source: None,
         by_rows: false,
         pivot: None,
+        axis_number_formats: Default::default(),
+        pivot_label_formats: Vec::new(),
     });
     wb.sheets = vec![Arc::new(s), Arc::new(Sheet::new(" Sales "))];
     wb.names = vec![

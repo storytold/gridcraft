@@ -167,6 +167,8 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         source: None,
         by_rows: false,
         pivot: None,
+        axis_number_formats: Default::default(),
+        pivot_label_formats: Vec::new(),
     })
 }
 
