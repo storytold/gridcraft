@@ -368,6 +368,24 @@ fn iterative_calculation_of_text_and_errors() {
     assert_eq!(t.get("B1"), Value::Error(CellError::Div0));
 }
 
+/// `&`, CONCAT and TEXTJOIN turn a number into at most 15 significant digits, decimal unless that
+/// would need 16 integer digits or more than 21 characters below 1.
+#[test]
+fn text_joins_convert_numbers_to_15_significant_digits() {
+    let mut t = T::new();
+    for (formula, text) in [
+        ("=(1E15-0.5)&\"\"", "1E+15"),
+        ("=(999999999999999)&\"\"", "999999999999999"),
+        ("=1234567890123456&\"\"", "1.23456789012346E+15"),
+        ("=(9.99999999999999E-9)&\"\"", "9.99999999999999E-09"),
+        ("=CONCAT(1/3*1E-5)", "3.33333333333333E-06"),
+        ("=TEXTJOIN(\",\",TRUE,1/3*1E-4,0.1+0.2)", "0.0000333333333333333,0.3"),
+    ] {
+        t.set("A1", formula);
+        assert_eq!(t.get("A1"), Value::from(text), "{formula}");
+    }
+}
+
 #[test]
 fn circular_references_without_iterative_calculation() {
     let mut t = T::new();
@@ -704,6 +722,53 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
     t.set("C8", "=SEQUENCE(2,2)");
     assert_eq!(t.get("C7"), Value::Error(CellError::Spill));
     assert_eq!([t.num("C8"), t.num("D8"), t.num("C9"), t.num("D9")], [1.0, 2.0, 3.0, 4.0]);
+}
+
+#[test]
+fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
+    // Both arrays spill; in manual calculation F13 then grows over F14:G14, which C14's array
+    // fills. A full recalculation gives what an automatic one would: C14 keeps its cells and F13
+    // is #SPILL!, although F13 comes first in reading order.
+    let mut t = T::new();
+    t.set("J1", "1");
+    t.set("C14", "=SEQUENCE(1,7)");
+    t.set("F13", "=SEQUENCE(J1,2)");
+    assert_eq!([t.num("F13"), t.num("G13")], [1.0, 2.0]);
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("J1", "5");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C14"), t.num("F14"), t.num("G14"), t.num("I14")], [1.0, 4.0, 5.0, 7.0]);
+}
+
+#[test]
+fn a_full_recalc_lays_out_arrays_as_an_automatic_one_when_one_shrinks_for_another() {
+    // C1 grows into C3, which A3's array fills, and A3 grows into E3, which E1's array leaves.
+    // Automatic recalculation lays them out in reading order with each former area still filled:
+    // C1 is #SPILL! and A3 takes A3:E3. A full recalculation after the same edit in manual
+    // calculation gives the same sheet.
+    let build = |manual: bool| {
+        let mut t = T::new();
+        t.set("J1", "2");
+        t.set("C1", "=SEQUENCE(J1)");
+        t.set("A3", "=SEQUENCE(1,J1+1)");
+        t.set("E1", "=SEQUENCE(5-J1)");
+        assert_eq!([t.num("C2"), t.num("C3"), t.num("E3")], [2.0, 3.0, 3.0]);
+        if manual {
+            t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+        }
+        t.set("J1", "4");
+        if manual {
+            t.calc.recalc_all(&mut t.wb);
+        }
+        t
+    };
+    let (automatic, full) = (build(false), build(true));
+    assert_eq!(automatic.get("C1"), Value::Error(CellError::Spill));
+    assert_eq!([automatic.num("A3"), automatic.num("C3"), automatic.num("E3")], [1.0, 3.0, 5.0]);
+    for cell in ["A1", "C1", "C2", "C3", "C4", "E1", "E2", "A3", "B3", "C3", "D3", "E3"] {
+        assert_eq!(full.get(cell), automatic.get(cell), "{cell}");
+    }
 }
 
 #[test]
@@ -2958,6 +3023,105 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     t.set("B2", "");
     assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
+}
+
+#[test]
+fn disjoint_spills_do_not_scan_every_spill_owner() {
+    // Many independent two-cell arrays: write-back must not walk all earlier owners for each one.
+    let mut t = T::new();
+    for i in 1..=2000 {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{}", i * 2 - 1)), Cell::formula(Formula::new("=SEQUENCE(2)")));
+    }
+    crate::recalc::OWNER_SCANS.with(|n| n.set(0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A2"), t.num("A4000")), (2.0, 2.0));
+    let scans = crate::recalc::OWNER_SCANS.with(|n| n.get());
+    assert!(scans < 10, "{scans} owner scans for 2000 disjoint spills");
+}
+
+#[test]
+fn overlapping_spill_edit_sequences_match_a_full_recalc() {
+    // Random short edit sequences on a small grid of arrays that run into each other (sizes from
+    // shared cells, so one edit resizes several at once), with constants and clears in their way.
+    // After every edit the incremental result must equal a full recalc of the same workbook.
+    let seeds: u64 = std::env::var("GRIDCRAFT_SPILL_SEEDS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let steps: usize = std::env::var("GRIDCRAFT_SPILL_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let only: Option<u64> = std::env::var("GRIDCRAFT_SPILL_SEED").ok().and_then(|v| v.parse().ok());
+    let next = |state: &mut u64| {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let seeds: Vec<u64> = match only {
+        Some(s) => vec![s],
+        None => (0..seeds).collect(),
+    };
+    for seed in seeds {
+        let mut state = seed;
+        let mut t = T::new();
+        // Sizes in J1:J4.
+        for (i, n) in [2, 3, 1, 4].iter().enumerate() {
+            t.set(&format!("J{}", i + 1), &n.to_string());
+        }
+        let mut log: Vec<(String, String)> = Vec::new();
+        for step in 0..steps {
+            let r = next(&mut state);
+            let at = format!("{}{}", (b'A' + (r % 6) as u8) as char, 1 + (r >> 8) % 6);
+            let kind = (r >> 16) % 14;
+            let (at, input) = match kind {
+                0..=3 => {
+                    let a = 1 + (r >> 24) % 4;
+                    let b = 1 + (r >> 28) % 4;
+                    (at, format!("=SEQUENCE($J${a},$J${b})"))
+                }
+                4 => (at, format!("=SEQUENCE({},{})", 1 + (r >> 24) % 3, 1 + (r >> 28) % 3)),
+                5 => (format!("J{}", 1 + (r >> 24) % 4), (1 + (r >> 28) % 4).to_string()),
+                6 => (at, "x".to_string()),
+                7 | 8 => (at, String::new()),
+                9 => (format!("K{}", 1 + (r >> 24) % 6), "=SUM(A1:F6)".to_string()),
+                10 => {
+                    // An earlier edit again (often putting back what a cell held before, as undo does).
+                    match log.len() {
+                        0 => (at, String::new()),
+                        n => log[(r >> 24) as usize % n].clone(),
+                    }
+                }
+                11 => (format!("{}{}", (b'A' + ((r >> 24) % 6) as u8) as char, 1 + (r >> 32) % 6), (1 + (r >> 40) % 3).to_string()),
+                // Several cells in one edit (a fill, or clearing a range): a 2x2 block from `at`.
+                12 => (format!("{at}+"), String::new()),
+                _ => (format!("{at}+"), format!("=SEQUENCE($J${},$J${})", 1 + (r >> 24) % 4, 1 + (r >> 28) % 4)),
+            };
+            log.push((at.clone(), input.clone()));
+            if let Some(from) = at.strip_suffix('+') {
+                let from = c(from);
+                let keys: Vec<(usize, CellRef)> =
+                    (0..2).flat_map(|dr| (0..2).map(move |dc| (0, CellRef { row: from.row + dr, col: from.col + dc }))).collect();
+                for k in &keys {
+                    let cell = if input.is_empty() { Cell::value(Value::Empty) } else { Cell::formula(Formula::new(&input)) };
+                    t.wb.sheet_mut(0).unwrap().cells.set(k.1, cell);
+                }
+                t.calc.cells_changed(&mut t.wb, &keys);
+            } else {
+                t.set(&at, &input);
+            }
+            let mut fresh = t.wb.clone();
+            Calc::new().recalc_all(&mut fresh);
+            let (a, b) = (t.wb.sheet(0).unwrap(), fresh.sheet(0).unwrap());
+            for row in 0..12 {
+                for col in 0..12 {
+                    let cell = CellRef { row, col };
+                    assert_eq!(a.value(cell), b.value(cell), "seed {seed} step {step}: {cell} incremental vs full recalc after {log:?}");
+                }
+            }
+            let mut ka: Vec<_> = a.spill_ranges.iter().map(|(k, v)| (*k, *v)).collect();
+            let mut kb: Vec<_> = b.spill_ranges.iter().map(|(k, v)| (*k, *v)).collect();
+            ka.sort_by_key(|(k, _)| (k.row, k.col));
+            kb.sort_by_key(|(k, _)| (k.row, k.col));
+            assert_eq!(ka, kb, "seed {seed} step {step}: spill layout after {log:?}");
+        }
+    }
 }
 
 /// A computed criterion whose formula runs a database function over the same criteria counts as

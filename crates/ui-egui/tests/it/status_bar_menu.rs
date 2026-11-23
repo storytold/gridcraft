@@ -92,7 +92,7 @@ fn statistics_that_do_not_fit_stay_clear_of_the_mode_text() {
 fn all_six_statistics_clear_the_mode_text_at_boundary_widths() {
     let all = ["Average: 4", "Count: 3", "Numerical Count: 3", "Minimum: -1", "Maximum: 9", "Sum: 12"];
     let mut drawn_total = 0;
-    for width in (800..=920).step_by(4) {
+    for width in (800..=920).step_by(4).chain([1200]) {
         let mut session = Session::new();
         session.new_workbook();
         for (cell, input) in [("A1", "4"), ("A2", "-1"), ("A3", "9")] {
@@ -115,6 +115,9 @@ fn all_six_statistics_clear_the_mode_text_at_boundary_widths() {
                 drawn += 1;
                 assert!(!label.rect().intersects(ready), "at {width} points {text:?} overlaps the mode text: {:?} vs {ready:?}", label.rect());
             }
+        }
+        if width == 1200 {
+            assert_eq!(drawn, all.len(), "all six statistics fit when there is room");
         }
         drawn_total += drawn;
     }
