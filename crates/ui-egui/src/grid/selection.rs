@@ -1,3 +1,4 @@
+use super::fill_preview::fill_preview_text;
 use super::geo::Geo;
 #[cfg(test)]
 use super::interact::{hidden_col_edge, hidden_row_edge};
@@ -137,7 +138,8 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
         p.rect_filled(h, 0.0, t.sel_border);
     }
     // Fill-handle drag preview.
-    if let crate::grid::Drag::Fill { target: Some(tr), .. } = &app.grid.drag
+    if let crate::grid::Drag::Fill { origin, target: Some(tr), .. } = &app.grid.drag
+        && origin.is_current(app)
         && range_in_pane(*tr, rows, cols)
     {
         let rr = geo.range_rect(sh, *tr);
@@ -147,6 +149,19 @@ pub(crate) fn paint_selection(input: SelectionPaintInput<'_>) {
             4.0,
             3.0,
         ));
+        if let crate::grid::Drag::Fill { menu: false, .. } = &app.grid.drag
+            && let Some(pointer) = p.ctx().pointer_hover_pos()
+            && p.clip_rect().contains(pointer)
+            && let Some(document) = app.session.active()
+            && let Some(preview) = fill_preview_text(&document.wb, sh, origin.source, *tr, p.ctx().input(|i| i.modifiers.command))
+        {
+            egui::Area::new(egui::Id::unique("fill_preview_tooltip")).order(egui::Order::Tooltip).fixed_pos(pointer + vec2(14.0, 18.0)).show(
+                p.ctx(),
+                |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(preview));
+                },
+            );
+        }
     }
     if let crate::grid::Drag::Move { to: Some(to), .. } = &app.grid.drag {
         let r = sel.current();
