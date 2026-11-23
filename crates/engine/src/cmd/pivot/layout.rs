@@ -2,8 +2,8 @@ use super::create::source_param;
 use super::fields::{canonical, in_axes, shift_values, update};
 use super::params::{group_param, layout_name};
 use super::{
-    Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
-    json, other, pv, str_param,
+    Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotNumberGroup, PivotSort, PivotTable, Result, Session, bad, bool_param,
+    edit, find_pivot, json, other, pv, str_param,
 };
 
 pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
@@ -77,25 +77,84 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {
+/// What `pivot.group` sets a field's grouping to.
+enum GroupBy {
+    Dates(PivotDateGroup),
+    /// Number ranges; unset bounds default to the field's smallest and largest number.
+    Numbers {
+        start: Option<f64>,
+        end: Option<f64>,
+        interval: f64,
+    },
+}
+
+/// The grouping a `pivot.group` call asks for: a date part, or number ranges with their bounds and
+/// interval (checked here; the bounds default later, from the field's numbers).
+fn group_by_param(p: &Json) -> Result<GroupBy> {
     const C: &str = "pivot.group";
-    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
     let raw = str_param(p, "by").unwrap_or("months");
-    let by = group_param(Some(raw)).ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|none)")))?;
-    update(s, p, |pt, src, _| {
-        if by != PivotDateGroup::None {
-            let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
-            if !src.numeric.get(c).copied().unwrap_or(false) {
-                return Err(other("Cannot group that selection."));
-            }
+    if raw.eq_ignore_ascii_case("numbers") {
+        let number = |key: &str| match p.get(key) {
+            None | Some(Json::Null) => Ok(None),
+            Some(v) => v.as_f64().filter(|n| n.is_finite()).map(Some).ok_or_else(|| bad(C, format!("`{key}` is a number"))),
+        };
+        let interval = number("interval")?.unwrap_or(10.0);
+        if interval <= 0.0 {
+            return Err(bad(C, "`interval` must be greater than 0"));
         }
-        let f = axis_field(C, pt, &field)?;
-        f.date_group = by;
-        f.collapsed_items.clear();
-        Ok(json!({}))
+        return Ok(GroupBy::Numbers { start: number("start")?, end: number("end")?, interval });
+    }
+    group_param(Some(raw))
+        .map(GroupBy::Dates)
+        .ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|hours|minutes|seconds|numbers|none)")))
+}
+
+/// The smallest and largest number in a source column.
+fn number_bounds(src: &pv::Source, column: usize) -> Option<(f64, f64)> {
+    src.rows.iter().filter_map(|r| r.get(column)?.as_f64()).fold(None, |acc, n| match acc {
+        None => Some((n, n)),
+        Some((lo, hi)) => Some((lo.min(n), hi.max(n))),
     })
 }
 
+/// `pivot.group`: sets a row or column field's grouping, replacing any other kind, and clears the
+/// field's collapsed and hidden items, whose labels no longer exist.
+pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.group";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
+    let by = group_by_param(p)?;
+    update(s, p, |pt, src, _| {
+        let grouped = !matches!(by, GroupBy::Dates(PivotDateGroup::None));
+        let column = src.col(&field);
+        if grouped && !column.and_then(|c| src.numeric.get(c).copied()).unwrap_or(false) {
+            return Err(other("Cannot group that selection."));
+        }
+        let (dates, numbers) = match by {
+            GroupBy::Dates(d) => (d, None),
+            GroupBy::Numbers { start, end, interval } => {
+                let (lo, hi) = column.and_then(|c| number_bounds(src, c)).ok_or_else(|| other("Cannot group that selection."))?;
+                let (start, end) = (start.unwrap_or(lo), end.unwrap_or(hi));
+                if end < start {
+                    return Err(other("The ending number must be greater than the starting number."));
+                }
+                let group = PivotNumberGroup::new(start, end, interval)
+                    .ok_or_else(|| bad(C, format!("at most {} ranges: choose a larger `interval`", PivotNumberGroup::MAX_RANGES)))?;
+                (PivotDateGroup::None, Some(group))
+            }
+        };
+        let f = axis_field(C, pt, &field)?;
+        f.date_group = dates;
+        f.number_group = numbers;
+        // Items change their labels: collapsed items and the field's hidden items name old ones.
+        f.collapsed_items.clear();
+        let source_col = f.source_col.clone();
+        pt.filters.retain(|filter| !filter.source_col.eq_ignore_ascii_case(&source_col));
+        Ok(json!({"field": source_col}))
+    })
+}
+
+/// `pivot.collapse`: collapses or expands items of a row or column field (by default all of them,
+/// as its grouping labels them).
 pub(super) fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     const C: &str = "pivot.collapse";
     let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
@@ -107,7 +166,7 @@ pub(super) fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
             Some(v) => v.clone(),
             None => {
                 let f = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field));
-                let g = f.map(|f| f.date_group).unwrap_or_default();
+                let g = f.map(pv::Grouping::of).unwrap_or_default();
                 match src.col(&field) {
                     Some(c) => pv::distinct_labels(wb, src, c, g, 100_000),
                     None => vec![],

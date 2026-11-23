@@ -75,6 +75,7 @@ pub(super) fn layout_name(l: PivotLayout) -> &'static str {
     }
 }
 
+/// The `group` name of a date grouping, as `pivot.fields` reports it.
 pub(super) fn group_name(g: PivotDateGroup) -> &'static str {
     match g {
         PivotDateGroup::None => "none",
@@ -82,6 +83,9 @@ pub(super) fn group_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
     }
 }
 
@@ -99,12 +103,16 @@ pub(super) fn position_param(p: &Json) -> Option<usize> {
     u32_param(p, "position").map(|v| v as usize)
 }
 
+/// The date grouping a `by`/`group` parameter names (singular or plural, ignoring case).
 pub(super) fn group_param(v: Option<&str>) -> Option<PivotDateGroup> {
     Some(match v?.to_ascii_lowercase().as_str() {
         "years" | "year" => PivotDateGroup::Years,
         "quarters" | "quarter" => PivotDateGroup::Quarters,
         "months" | "month" => PivotDateGroup::Months,
         "days" | "day" => PivotDateGroup::Days,
+        "hours" | "hour" => PivotDateGroup::Hours,
+        "minutes" | "minute" => PivotDateGroup::Minutes,
+        "seconds" | "second" => PivotDateGroup::Seconds,
         "none" | "ungroup" => PivotDateGroup::None,
         _ => return None,
     })
