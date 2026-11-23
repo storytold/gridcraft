@@ -798,7 +798,11 @@ fn read_craft_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &c
     }
     let dynamic = c.cell_metadata.is_some();
     st.shared_copy_refused = false;
-    let formula = c.formula.as_ref().and_then(|f| read_craft_formula(cx, st, f, pos, dynamic));
+    let formula = c.formula.as_ref().and_then(|f| read_craft_formula(cx, st, f, pos, dynamic)).map(|f| Formula { legacy: !dynamic, ..f });
+    // A `PY(index,0|1)` formula is a Python cell whose code is a script of the Python part. The
+    // older `PY("…",0|1)` form is read from the formula's own text: the formula parser would fold
+    // line breaks in the code. A formula naming a script the part lacks keeps only its cached
+    // values, its own and its spill's, as plain values.
     let py = match (&formula, &c.formula) {
         (Some(fm), Some(f)) => crate::python_part::cell_code(&mut cx.python, fm, &f.text),
         _ => crate::python_part::PyFormula::Not,

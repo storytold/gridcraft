@@ -89,7 +89,7 @@ pub(crate) enum Export {
 }
 
 pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo, names: &mut NameCache) -> Export {
-    let Some(expr) = formula.expr_arc() else { return Export::Unchanged };
+    let Some(expr) = formula.expr_arc().filter(|_| !crate::external::saved_as_read(formula)) else { return Export::Unchanged };
     let mut explicit = false;
     expr.walk(&mut |e| explicit |= matches!(e, Expr::Unary(UnOp::At, _)));
     let mut legacy = Legacy::new(wb, at, functions, names);
@@ -165,7 +165,7 @@ pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>,
 
 /// The dynamic-array reading of a legacy formula, when it differs.
 fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo, names: &mut NameCache) -> Option<Formula> {
-    if formula.array.is_some() {
+    if formula.array.is_some() || crate::external::saved_as_read(formula) {
         return None;
     }
     let expr = formula.expr_arc()?;

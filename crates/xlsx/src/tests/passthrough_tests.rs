@@ -209,6 +209,10 @@ fn unmodelled_parts_survive_a_round_trip() {
     assert!(data.preserved.is_some(), "{:?}", rep.warnings);
     assert!(!rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
     assert_eq!(data.comments.len(), 1, "the note is modelled");
+    // The values saved with the link are read, for formulas into the linked workbook.
+    let book = &wb.external_books;
+    assert_eq!(book.len(), 1);
+    assert_eq!(book[0].sheet("sheet1").map(|s| s.value(gridcraft_core::CellRef::new(0, 0))), Some(gridcraft_core::Value::Number(7.0)));
 
     let out = write_xlsx(&wb).unwrap();
     let u = Unpacked::new(&out);
