@@ -610,6 +610,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char ima nenumerički argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char sa nevažećom kodnom tačkom {code}",
         "Invalid environment name character: {character}" => "Nevažeći znak u nazivu okruženja: {character}",
+        "Copy Cells" => "Kopiraj ćelije",
+        "Fill Series" => "Popuni niz",
+        "Fill Formatting Only" => "Popuni samo oblikovanja",
+        "Fill Without Formatting" => "Popuni bez oblikovanja",
+        "Fill Days" => "Popuni dane",
+        "Fill Weekdays" => "Popuni radne dane",
+        "Fill Months" => "Popuni mesece",
+        "Fill Years" => "Popuni godine",
+        "Auto Fill Options" => "Opcije automatskog popunjavanja",
+        "Series…" => "Niz…",
+        "Down" => "Nadole",
+        "Up" => "Nagore",
         _ => return None,
     })
 }

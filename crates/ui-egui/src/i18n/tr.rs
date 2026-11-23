@@ -582,6 +582,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char sayısal olmayan bir bağımsız değişkene sahip: {argument}",
         "\\@char with invalid code point {code}" => "\\@char geçersiz bir kod noktası içeriyor: {code}",
         "Invalid environment name character: {character}" => "Ortam adında geçersiz karakter: {character}",
+        "Copy Cells" => "Hücreleri Kopyala",
+        "Fill Series" => "Seriyi Doldur",
+        "Fill Formatting Only" => "Yalnızca Biçimleri Doldur",
+        "Fill Without Formatting" => "Biçimlendirmeden Doldur",
+        "Fill Days" => "Günleri Doldur",
+        "Fill Weekdays" => "İş Günlerini Doldur",
+        "Fill Months" => "Ayları Doldur",
+        "Fill Years" => "Yılları Doldur",
+        "Auto Fill Options" => "Otomatik Doldurma Seçenekleri",
+        "Series…" => "Seri…",
+        "Down" => "Aşağı",
+        "Up" => "Yukarı",
         _ => return None,
     })
 }

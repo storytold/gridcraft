@@ -1190,6 +1190,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char are un argument nenumeric {argument}",
         "\\@char with invalid code point {code}" => "\\@char cu punct de cod nevalid {code}",
         "Invalid environment name character: {character}" => "Caracter nevalid în numele mediului: {character}",
+        "Copy Cells" => "Copiere celule",
+        "Fill Series" => "Umplere serie",
+        "Fill Formatting Only" => "Umplere doar formate",
+        "Fill Without Formatting" => "Umplere fără formatare",
+        "Fill Days" => "Umplere zile",
+        "Fill Weekdays" => "Umplere zile lucrătoare",
+        "Fill Months" => "Umplere luni",
+        "Fill Years" => "Umplere ani",
+        "Auto Fill Options" => "Opțiuni de umplere automată",
         _ => return None,
     })
 }

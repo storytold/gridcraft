@@ -651,6 +651,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char hat ein nicht numerisches Argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char mit ungültigem Codepunkt {code}",
         "Invalid environment name character: {character}" => "Ungültiges Zeichen im Umgebungsnamen: {character}",
+        "Copy Cells" => "Zellen kopieren",
+        "Fill Series" => "Datenreihe ausfüllen",
+        "Fill Formatting Only" => "Nur Formate ausfüllen",
+        "Fill Without Formatting" => "Ohne Formatierung ausfüllen",
+        "Fill Days" => "Tage ausfüllen",
+        "Fill Weekdays" => "Wochentage ausfüllen",
+        "Fill Months" => "Monate ausfüllen",
+        "Fill Years" => "Jahre ausfüllen",
+        "Auto Fill Options" => "Optionen für automatisches Ausfüllen",
+        "Series…" => "Reihe…",
+        "Down" => "Nach unten",
+        "Up" => "Nach oben",
         _ => return None,
     })
 }

@@ -729,6 +729,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char má nečíselný argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char s neplatným kódovým bodem {code}",
         "Invalid environment name character: {character}" => "Neplatný znak v názvu prostředí: {character}",
+        "Copy Cells" => "Kopírovat buňky",
+        "Fill Series" => "Vyplnit řady",
+        "Fill Formatting Only" => "Vyplnit pouze formáty",
+        "Fill Without Formatting" => "Vyplnit bez formátování",
+        "Fill Days" => "Vyplnit dny",
+        "Fill Weekdays" => "Vyplnit pracovní dny",
+        "Fill Months" => "Vyplnit měsíce",
+        "Fill Years" => "Vyplnit roky",
+        "Auto Fill Options" => "Možnosti automatického vyplnění",
         _ => return None,
     })
 }

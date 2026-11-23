@@ -617,6 +617,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char 의 인수 {argument} 이(가) 숫자가 아닙니다",
         "\\@char with invalid code point {code}" => "\\@char 의 코드 포인트 {code} 이(가) 잘못되었습니다",
         "Invalid environment name character: {character}" => "환경 이름에 잘못된 문자가 있습니다: {character}",
+        "Copy Cells" => "셀 복사",
+        "Fill Series" => "연속 데이터 채우기",
+        "Fill Formatting Only" => "서식만 채우기",
+        "Fill Without Formatting" => "서식 없이 채우기",
+        "Fill Days" => "일 단위 채우기",
+        "Fill Weekdays" => "평일 단위 채우기",
+        "Fill Months" => "월 단위 채우기",
+        "Fill Years" => "연 단위 채우기",
+        "Auto Fill Options" => "자동 채우기 옵션",
+        "Series…" => "연속 데이터…",
+        "Down" => "아래쪽",
+        "Up" => "위쪽",
         _ => return None,
     })
 }

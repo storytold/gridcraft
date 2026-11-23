@@ -578,6 +578,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char có đối số không phải số {argument}",
         "\\@char with invalid code point {code}" => "\\@char có điểm mã không hợp lệ {code}",
         "Invalid environment name character: {character}" => "Ký tự không hợp lệ trong tên môi trường: {character}",
+        "Copy Cells" => "Sao chép ô",
+        "Fill Series" => "Điền chuỗi",
+        "Fill Formatting Only" => "Chỉ điền định dạng",
+        "Fill Without Formatting" => "Điền không kèm định dạng",
+        "Fill Days" => "Điền theo ngày",
+        "Fill Weekdays" => "Điền theo ngày làm việc",
+        "Fill Months" => "Điền theo tháng",
+        "Fill Years" => "Điền theo năm",
+        "Auto Fill Options" => "Tùy chọn tự động điền",
+        "Series…" => "Chuỗi…",
+        "Down" => "Xuống",
+        "Up" => "Lên",
         _ => return None,
     })
 }
