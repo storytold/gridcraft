@@ -341,3 +341,136 @@ fn scenario_summary_counts_result_rows_in_its_cell_limit() {
     let err = s.execute("data.scenarioSummary", json!({"resultCells": "C1:C255"})).unwrap_err().to_string();
     assert!(err.contains("too many cells"), "{err}");
 }
+
+/// The #4178 fixture: three records, header-only output at F1:G1 and a count over the output.
+fn stale_extract_fixture() -> Session {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Label", "ID"], ["Keep", 101], ["Other", 102], ["Other", 103]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "F1", "values": [["Label", "ID"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "Label"})).unwrap();
+    s.execute("cell.set", json!({"cell": "J1", "input": "=COUNT(G2:G4)"})).unwrap();
+    s
+}
+
+fn extract_to_f1(s: &mut Session) -> serde_json::Value {
+    s.execute("data.advancedFilter", json!({"range": "A1:B4", "criteria": "D1:D2", "copyTo": "F1:G1", "unique": false})).unwrap()
+}
+
+#[test]
+fn advanced_filter_copy_clears_rows_a_shorter_repeat_no_longer_fills() {
+    let mut s = stale_extract_fixture();
+    assert_eq!(extract_to_f1(&mut s)["matched"], 3);
+    assert_eq!(n(&s, "J1"), 3.0);
+    s.execute("cell.set", json!({"cell": "D2", "input": "=\"=Keep\""})).unwrap();
+    let r = extract_to_f1(&mut s);
+    assert_eq!((r["matched"].clone(), r["range"].clone()), (json!(1), json!("F1:G2")));
+    assert_eq!(n(&s, "G2"), 101.0);
+    for a in ["F3", "G3", "F4", "G4"] {
+        assert_eq!(v(&s, a), Value::Empty, "{a} held a row of the earlier extract");
+    }
+    assert_eq!(n(&s, "J1"), 1.0);
+    s.execute("cell.set", json!({"cell": "D2", "input": "=\"=Missing\""})).unwrap();
+    assert_eq!(extract_to_f1(&mut s)["range"], "F1:G1");
+    assert_eq!(v(&s, "F1"), Value::from("Label"));
+    assert_eq!(v(&s, "G2"), Value::Empty);
+    assert_eq!(n(&s, "J1"), 0.0);
+}
+
+fn copy_list_to_f1(s: &mut Session, range: &str) {
+    s.execute("data.advancedFilter", json!({"range": range, "copyTo": "F1", "unique": false})).unwrap();
+}
+
+#[test]
+fn advanced_filter_stale_clear_follows_a_list_made_shorter() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    assert_eq!(n(&s, "J1"), 3.0);
+    copy_list_to_f1(&mut s, "A1:B2");
+    assert_eq!(n(&s, "G2"), 101.0);
+    for a in ["F3", "G3", "F4", "G4"] {
+        assert_eq!(v(&s, a), Value::Empty, "{a} held a row of the taller extract");
+    }
+    assert_eq!(n(&s, "J1"), 1.0);
+}
+
+#[test]
+fn advanced_filter_stale_clear_follows_a_list_made_narrower() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    copy_list_to_f1(&mut s, "A1:A4");
+    assert_eq!(v(&s, "F4"), Value::from("Other"));
+    for a in ["G1", "G2", "G3", "G4"] {
+        assert_eq!(v(&s, a), Value::Empty, "{a} held a column of the wider extract");
+    }
+    assert_eq!(n(&s, "J1"), 0.0);
+}
+
+#[test]
+fn advanced_filter_stale_clear_leaves_criteria_inside_the_recorded_range() {
+    let mut s = stale_extract_fixture();
+    copy_list_to_f1(&mut s, "A1:B4");
+    s.execute("range.setValues", json!({"range": "F6", "values": [["Label"], ["Keep"]]})).unwrap();
+    let names = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names;
+    names.iter_mut().find(|n| n.name == "_xlnm.Extract").unwrap().formula = "Sheet1!$F$1:$G$9".into();
+    s.execute("data.advancedFilter", json!({"range": "A1:B4", "criteria": "F6:F7", "copyTo": "F1", "unique": false})).unwrap();
+    assert_eq!(v(&s, "F7"), Value::from("Keep"), "the criteria survive");
+    assert_eq!(n(&s, "G2"), 101.0);
+}
+
+#[test]
+fn advanced_filter_stale_clear_keeps_cells_no_extract_wrote() {
+    let mut s = stale_extract_fixture();
+    extract_to_f1(&mut s);
+    for (cell, text) in [("F5", "Below"), ("H2", "Beside")] {
+        s.execute("cell.set", json!({"cell": cell, "input": text})).unwrap();
+    }
+    s.execute("cell.set", json!({"cell": "D2", "input": "=\"=Keep\""})).unwrap();
+    extract_to_f1(&mut s);
+    assert_eq!(v(&s, "F3"), Value::Empty);
+    assert_eq!(v(&s, "F5"), Value::from("Below"));
+    assert_eq!(v(&s, "H2"), Value::from("Beside"));
+    // Another destination leaves the earlier extract alone.
+    s.execute("data.advancedFilter", json!({"range": "A1:B4", "criteria": "D1:D2", "copyTo": "L1"})).unwrap();
+    assert_eq!(n(&s, "G2"), 101.0);
+    assert_eq!(v(&s, "F1"), Value::from("Label"));
+}
+
+#[test]
+fn advanced_filter_stale_clear_undoes_and_survives_an_xlsx_reopen() {
+    let mut s = stale_extract_fixture();
+    extract_to_f1(&mut s);
+    s.execute("cell.set", json!({"cell": "D2", "input": "=\"=Keep\""})).unwrap();
+    extract_to_f1(&mut s);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(n(&s, "G4"), 103.0, "undo brings the earlier rows back");
+    // Saved after the three-row extract and reopened, the shorter repeat still clears.
+    let wb = (*s.doc().unwrap().wb).clone();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let mut t = Session::new();
+    t.add_document(crate::DocState::new(back, None, "Book".into(), crate::Trust::FromFile));
+    extract_to_f1(&mut t);
+    assert_eq!(n(&t, "G2"), 101.0);
+    assert_eq!(v(&t, "G3"), Value::Empty);
+    assert_eq!(n(&t, "J1"), 1.0);
+}
+
+#[test]
+fn advanced_filter_ignores_a_recorded_extract_an_extract_here_could_not_have_written() {
+    for recorded in ["Sheet1!$F$2:$G$4", "Other!$F$1:$G$4", "Sheet1!F1:", "Sheet1!$F$1:$Q"] {
+        let mut s = stale_extract_fixture();
+        s.execute("range.setValues", json!({"range": "F2", "values": [["Mine", 1], ["Mine", 2], ["Mine", 3]]})).unwrap();
+        s.execute("cell.set", json!({"cell": "H3", "input": "Mine"})).unwrap();
+        let names = &mut std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).names;
+        names.push(gridcraft_model::DefinedName {
+            name: "_xlnm.Extract".into(),
+            scope: Some(0),
+            formula: recorded.into(),
+            comment: String::new(),
+            hidden: true,
+        });
+        s.execute("cell.set", json!({"cell": "D2", "input": "=\"=Keep\""})).unwrap();
+        extract_to_f1(&mut s);
+        assert_eq!(n(&s, "G3"), 2.0, "{recorded}: a recorded range that doesn't fit is not cleared");
+        assert_eq!(v(&s, "H3"), Value::from("Mine"), "{recorded}");
+    }
+}
