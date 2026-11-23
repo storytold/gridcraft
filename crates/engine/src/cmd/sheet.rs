@@ -420,19 +420,37 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|sh| sh.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
+        // The moved columns' rules go with them as a cut's do, so a rule wider than them stays on
+        // its other cells and checks what it did. Their parts are taken from the sheet before the
+        // columns are made room for: a rule's formulas are written for its top-left cell, and
+        // after the insert they no longer say what the moved cells read (a reference between the
+        // rule's top-left and the moved columns has moved, the top-left has not).
+        let insert = Edit::Insert { axis: Axis::Cols, at: before, count };
+        let original = cx.wb.sheets.get(sheet).cloned().ok_or_else(|| bad("sheet.moveColumns", "no such sheet"))?;
+        let at = CellRef::new(0, destination);
+        let block = RangeRef::cols(from, end - 1);
+        let mut cfs: Vec<gridcraft_model::CondFormat> = crate::cmd::data::moved_rule_parts(&original.cond_formats, block, at);
+        let mut dvs: Vec<gridcraft_model::Validation> = crate::cmd::data::moved_rule_parts(&original.validations, block, at);
+        // Each part's formulas, written for the moved cells where they stood, follow the insert
+        // as those cells' formulas do; the move and delete below then rewrite them in place.
+        let follow_insert = |t: &mut String| {
+            if let Ok(e) = gridcraft_formula::parse(t.trim_start_matches('=')) {
+                let e = gridcraft_formula::adjust::adjust(e, &name, &name, &insert);
+                *t = format!("{}{}", if t.starts_with('=') { "=" } else { "" }, gridcraft_formula::print(&e));
+            }
+        };
+        cfs.iter_mut().flat_map(|r| r.rule.formulas_mut()).for_each(follow_insert);
+        dvs.iter_mut().flat_map(|r| r.formulas_mut()).for_each(follow_insert);
 
         {
             let sh = cx.sheet_mut(sheet)?;
             sh.cells.shift_cols(before, count as i64);
             shift_sheet_features(sh, Axis::Cols, before, count, true);
         }
-        rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
+        rewrite(cx, &name, &insert)?;
 
         let mut touched = Vec::new();
-        // The moved columns' rules go with them as a cut's do, so a rule wider than them
-        // stays on its other cells and checks what it did.
-        let snapshot = cx.wb.sheets.get(sheet).cloned().ok_or_else(|| bad("sheet.moveColumns", "no such sheet"))?;
-        crate::cmd::edit::move_cut_rules(cx, &snapshot, (sheet, sheet), source, CellRef::new(0, destination))?;
+        crate::cmd::edit::place_moved_rules(cx, (sheet, sheet), source, at, (cfs, dvs))?;
         {
             let sh = cx.sheet_mut(sheet)?;
             let pictures: Vec<_> =

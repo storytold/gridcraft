@@ -7645,6 +7645,32 @@ fn a_rule_follows_its_top_left_through_a_partial_cell_delete() {
     assert_eq!(sh.validations[0].f1.trim_start_matches('='), "A1<>B2");
 }
 
+/// A column moved out of a rule's range takes its part of the rule reading what the column read:
+/// a rule on B1:D1 testing the cell to its left, with D moved before B, still tests old C (now D)
+/// at the moved cell, and a rule on the moved column alone still tests that column.
+#[test]
+fn a_moved_column_keeps_what_its_part_of_a_rule_reads() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "B1:D1", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "D2", "type": "custom", "formula1": "=D2>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 1})).unwrap();
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    let mut rules: Vec<String> = sh
+        .cond_formats
+        .iter()
+        .map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => {
+                format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+            }
+            other => format!("{other:?}"),
+        })
+        .collect();
+    rules.sort();
+    assert_eq!(rules, vec!["A1>0@C1:D1".to_string(), "D1>0@B1".to_string()]);
+    assert_eq!(sh.validations[0].f1.trim_start_matches('='), "B2>0");
+}
+
 /// A cut pasted into a row the filter hides would skip every cell it writes, so the cells would
 /// leave the sheet with the cut: it is refused and nothing changes. A visible row takes it.
 #[test]

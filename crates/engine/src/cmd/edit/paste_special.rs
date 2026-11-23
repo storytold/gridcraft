@@ -600,8 +600,8 @@ pub(crate) fn move_cut_rules(
     src: RangeRef,
     at: CellRef,
 ) -> Result<()> {
-    let mut cfs = crate::cmd::data::moved_rule_parts(&snapshot.cond_formats, src, at);
-    let mut dvs = crate::cmd::data::moved_rule_parts(&snapshot.validations, src, at);
+    let mut cfs: Vec<gridcraft_model::CondFormat> = crate::cmd::data::moved_rule_parts(&snapshot.cond_formats, src, at);
+    let mut dvs: Vec<gridcraft_model::Validation> = crate::cmd::data::moved_rule_parts(&snapshot.validations, src, at);
     if from != to {
         let name = |t: &mut String| {
             if let Ok(e) = gridcraft_formula::parse(t.trim_start_matches('=')) {
@@ -619,6 +619,19 @@ pub(crate) fn move_cut_rules(
         cfs.iter_mut().flat_map(|r| r.rule.formulas_mut()).for_each(name);
         dvs.iter_mut().flat_map(|r| r.formulas_mut()).for_each(name);
     }
+    place_moved_rules(cx, (from, to), src, at, (cfs, dvs))
+}
+
+/// Takes the rules off the cells of `src` on sheet `from` and puts `parts` (the moved parts of
+/// them, as [`move_cut_rules`] builds them) on the block at `at` on sheet `to`, in place of the
+/// rules there.
+pub(crate) fn place_moved_rules(
+    cx: &mut crate::cmd::Ctx,
+    (from, to): (usize, usize),
+    src: RangeRef,
+    at: CellRef,
+    (cfs, dvs): (Vec<gridcraft_model::CondFormat>, Vec<gridcraft_model::Validation>),
+) -> Result<()> {
     let source = cx.sheet_mut(from)?;
     crate::cmd::data::remove_rule_cells(&mut source.cond_formats, &[src]);
     crate::cmd::data::remove_rule_cells(&mut source.validations, &[src]);
