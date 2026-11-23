@@ -7592,45 +7592,6 @@ fn a_cut_is_not_transposed_or_tiled() {
     assert_eq!(s.doc().unwrap().wb.sheets[0].cond_formats[0].ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), vec!["E1:G1".to_string()]);
 }
 
-/// A cut names its sheet by its place among the tabs: inserting, deleting or moving a sheet that
-/// puts another sheet in that place ends it, so a paste never takes cells (and rules) from
-/// whichever sheet has that place now. A copy stays, and so does a cut whose sheet kept its place.
-#[test]
-fn a_cut_ends_when_the_tabs_change() {
-    let mut s = s();
-    s.execute("home.insertSheet", json!({"name": "Other", "before": 1})).unwrap();
-    s.execute("range.setValues", json!({"range": "Sheet1!A1", "values": [[1]]})).unwrap();
-    s.execute("range.setValues", json!({"range": "Other!A1", "values": [[7]]})).unwrap();
-    let at = |s: &Session, sheet: &str, a1: &str| {
-        let d = s.doc().unwrap();
-        d.wb.sheet(d.wb.sheet_index(sheet).unwrap()).unwrap().value(CellRef::parse(a1).unwrap())
-    };
-    for step in [json!(["sheet.move", {"sheet": 0, "to": 1}]), json!(["home.insertSheet", {"name": "New", "before": 0}])] {
-        s.execute("sheet.activate", json!({"sheet": s.doc().unwrap().wb.sheet_index("Sheet1").unwrap()})).unwrap();
-        s.execute("edit.cut", json!({"range": "A1"})).unwrap();
-        s.execute(step[0].as_str().unwrap(), step[1].clone()).unwrap();
-        assert!(s.clipboard.is_none(), "{step}");
-        let other = s.doc().unwrap().wb.sheet_index("Other").unwrap();
-        s.execute("sheet.activate", json!({"sheet": other})).unwrap();
-        assert!(s.execute("edit.paste", json!({"at": "C1"})).is_err(), "{step}");
-        assert_eq!((at(&s, "Sheet1", "A1"), at(&s, "Other", "A1")), (Value::Number(1.0), Value::Number(7.0)), "{step}");
-    }
-    let new = s.doc().unwrap().wb.sheet_index("New").unwrap();
-    s.execute("sheet.activate", json!({"sheet": s.doc().unwrap().wb.sheet_index("Sheet1").unwrap()})).unwrap();
-    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
-    s.execute("home.deleteSheet", json!({"sheet": new})).unwrap();
-    assert!(s.clipboard.is_none());
-    // A copy stays, and so does a cut whose sheet keeps its place.
-    s.execute("edit.copy", json!({"range": "A1"})).unwrap();
-    s.execute("home.insertSheet", json!({"name": "More", "before": 0})).unwrap();
-    assert!(s.clipboard.is_some());
-    let last = s.doc().unwrap().wb.sheets.len();
-    s.execute("sheet.activate", json!({"sheet": s.doc().unwrap().wb.sheet_index("Sheet1").unwrap()})).unwrap();
-    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
-    s.execute("home.insertSheet", json!({"name": "After", "before": last})).unwrap();
-    assert!(s.clipboard.is_some());
-}
-
 /// Deleting cells in only the first column of a rule's range shifts its top-left cell and keeps the
 /// range's size: the rule's formula follows the cell now there, not the deleted one.
 #[test]

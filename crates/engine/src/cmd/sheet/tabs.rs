@@ -29,24 +29,7 @@ pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         Ok(at)
     })?;
     d.sheet_selections.insert(idx.min(d.sheet_selections.len()), crate::Selection::default());
-    end_cut(s);
     Ok(json!({"index": idx, "name": name}))
-}
-
-/// A pending cut names its sheet by its place among the tabs, so when inserting, deleting or
-/// moving a sheet puts another sheet (or none) in that place, the cut ends, rather than letting a
-/// paste take cells and rules from whichever sheet has the place now. A copy reads its own
-/// snapshot and stays, and so does a cut whose sheet kept its place.
-fn end_cut(s: &mut Session) {
-    let Ok(d) = s.doc() else { return };
-    let moved = s.clipboard.as_ref().is_some_and(|c| {
-        let then = c.wb.sheet(c.sheet).map(|sh| sh.uid.get());
-        let now = d.wb.sheet(c.sheet).map(|sh| sh.uid.get());
-        c.cut && c.doc_uid == d.uid && (then.is_none() || then != now)
-    });
-    if moved {
-        s.clipboard = None;
-    }
 }
 
 fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
@@ -88,7 +71,6 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     if i < d.sheet_selections.len() {
         d.sheet_selections.remove(i);
     }
-    end_cut(s);
     ok()
 }
 
@@ -133,7 +115,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     let copy = bool_param(p, "copy").unwrap_or(false);
     let to = p.get("to").and_then(Json::as_u64).map(|v| v as usize).ok_or_else(|| bad("sheet.move", "missing `to`"))?;
-    let out = edit(s, |cx| {
+    edit(s, |cx| {
         let n = cx.wb.sheets.len();
         let Some(src) = cx.wb.sheets.get(i).cloned() else { return Err(bad("sheet.move", "no such sheet")) };
         if copy {
@@ -234,9 +216,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         }
         cx.structural = true;
         Ok(Json::Null)
-    })?;
-    end_cut(s);
-    Ok(out)
+    })
 }
 
 pub(super) fn tab_color(s: &mut Session, p: &Json) -> Result<Json> {
