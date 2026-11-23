@@ -25,6 +25,13 @@ fn emu_px(v: Option<i64>) -> f32 {
     v.map(|e| (e as f64 / EMU_PER_PX).clamp(-1e7, 1e7) as f32).unwrap_or(0.0)
 }
 
+fn ext_px(e: Option<&El>) -> (f32, f32) {
+    match e {
+        Some(x) => (emu_px(x.attr_i64("cx")).max(0.0), emu_px(x.attr_i64("cy")).max(0.0)),
+        None => (0.0, 0.0),
+    }
+}
+
 fn emu_to_px(v: i64) -> f32 {
     (v as f64 / EMU_PER_PX).clamp(-1e7, 1e7) as f32
 }
@@ -220,6 +227,7 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                                     ch.id = cx.next_object_id();
                                     ch.anchor = anchor;
                                     sheet.charts.push(ch);
+                                    read_user_shapes(cx, &target, &cx_xml, anchor, sheet)?;
                                 }
                                 None => cx.warn(format!("chart {target} has no supported plot and was skipped")),
                             }
@@ -239,6 +247,121 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     }
                 }
                 "grpSp" => cx.warn(format!("grouped shapes are not supported and were skipped ({part}, object {n})")),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
+const MAX_ANNOTATION_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_ANNOTATION_RELS_BYTES: u64 = 4 * 1024 * 1024;
+
+fn optional_annotation_rels(cx: &mut Ctx<'_>, part: &str) -> Result<Option<Vec<crate::package::Rel>>, IoError> {
+    let rels_part = craft_opc::rels_path(part);
+    match cx.pkg.read_optional_limited(&rels_part, MAX_ANNOTATION_RELS_BYTES) {
+        Ok(Some(bytes)) => {
+            let rels = craft_opc::Rels::parse_in(&bytes, part, |n| cx.pkg.has(n).then(|| n.to_string()));
+            Ok(Some(
+                rels.list
+                    .into_iter()
+                    .map(|r| {
+                        let kind = r.kind().to_string();
+                        crate::package::Rel { id: r.id, kind, target: r.target, external: r.external }
+                    })
+                    .collect(),
+            ))
+        }
+        Ok(None) => Ok(Some(Vec::new())),
+        Err(IoError::TooLarge(m)) => Err(IoError::TooLarge(m)),
+        Err(e) => {
+            cx.warn(format!("skipped {rels_part}: {e}"));
+            Ok(None)
+        }
+    }
+}
+
+fn optional_annotation_xml(cx: &mut Ctx<'_>, part: &str) -> Result<Option<El>, IoError> {
+    match cx.pkg.read_optional_limited(part, MAX_ANNOTATION_BYTES) {
+        Ok(Some(b)) => match crate::xml::parse(&b) {
+            Ok(e) => Ok(Some(e)),
+            Err(e) => {
+                cx.warn(format!("skipped {part}: {part}: {e}"));
+                Ok(None)
+            }
+        },
+        Ok(None) => {
+            cx.warn(format!("missing part {part}"));
+            Ok(None)
+        }
+        Err(IoError::TooLarge(m)) => Err(IoError::TooLarge(m)),
+        Err(e) => {
+            cx.warn(format!("skipped {part}: {e}"));
+            Ok(None)
+        }
+    }
+}
+
+fn read_user_shapes(cx: &mut Ctx<'_>, chart_part: &str, chart_xml: &El, chart_anchor: Anchor, sheet: &mut Sheet) -> Result<(), IoError> {
+    let Some(rid) = chart_xml.child("userShapes").and_then(|u| u.attr("id")) else { return Ok(()) };
+    let Some(chart_rels) = optional_annotation_rels(cx, chart_part)? else { return Ok(()) };
+    let Some(rel) = chart_rels.iter().find(|r| r.id == rid && !r.external) else { return Ok(()) };
+    let us_part = rel.target.clone();
+    let Some(us_xml) = optional_annotation_xml(cx, &us_part)? else { return Ok(()) };
+    let Some(us_rels) = optional_annotation_rels(cx, &us_part)? else { return Ok(()) };
+    let chart_x = sheet.col_left(chart_anchor.cell.col) + chart_anchor.dx as f64;
+    let chart_y = sheet.row_top(chart_anchor.cell.row) + chart_anchor.dy as f64;
+    let chart_w = chart_anchor.width.max(0.0) as f64;
+    let chart_h = chart_anchor.height.max(0.0) as f64;
+    for a in &us_xml.children {
+        let frac = |parent: &str, child: &str, def: f64| {
+            a.path(&[parent, child]).and_then(|e| e.text.trim().parse::<f64>().ok()).filter(|v| v.is_finite()).unwrap_or(def).clamp(0.0, 1.0)
+        };
+        let (fx1, fy1) = (frac("from", "x", 0.0), frac("from", "y", 0.0));
+        let (width, height) = match a.name.as_str() {
+            "relSizeAnchor" => {
+                let fx2 = frac("to", "x", 1.0).max(fx1);
+                let fy2 = frac("to", "y", 1.0).max(fy1);
+                (((fx2 - fx1) * chart_w) as f32, ((fy2 - fy1) * chart_h) as f32)
+            }
+            "absSizeAnchor" => ext_px(a.child("ext")),
+            _ => continue,
+        };
+        let x = chart_x + fx1 * chart_w;
+        let y = chart_y + fy1 * chart_h;
+        let col = sheet.col_at(x);
+        let row = sheet.row_at(y);
+        let sub_anchor = Anchor {
+            cell: CellRef::new(row, col),
+            dx: (x - sheet.col_left(col)).max(0.0) as f32,
+            dy: (y - sheet.row_top(row)).max(0.0) as f32,
+            width,
+            height,
+            mode: chart_anchor.mode,
+        };
+        for obj in &a.children {
+            match obj.name.as_str() {
+                "pic" => {
+                    let Some(prid) = obj.path(&["blipFill", "blip"]).and_then(|b| b.attr("embed")) else { continue };
+                    let Some(prel) = us_rels.iter().find(|r| r.id == prid && !r.external) else {
+                        cx.warn("a picture with a missing or external relationship in a chart drawing was skipped");
+                        continue;
+                    };
+                    let target = prel.target.clone();
+                    let Some(data) = cx.pkg.read(&target)? else {
+                        cx.warn(format!("missing picture {target}"));
+                        continue;
+                    };
+                    let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
+                    let id = cx.next_object_id();
+                    sheet.images.push(Image { id, anchor: sub_anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
+                }
+                "sp" | "cxnSp" => {
+                    if let Some(s) = read_shape(obj, sub_anchor) {
+                        let id = cx.next_object_id();
+                        sheet.shapes.push(Shape { id, ..s });
+                    }
+                }
                 _ => {}
             }
         }
