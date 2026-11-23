@@ -69,21 +69,14 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
 
         for (coord, src_cell) in src_sheet.cells {
             // A typed value that cannot be read (an unparsable number or date, an error cache,
-            // a formula without a result) keeps what the cell showed, else its raw value.
+            // a formula without a result) keeps a pre-1900 date's complete raw value, else what
+            // the cell showed, else its raw value.
             let Some(value) = src_cell.value().map(map_value) else {
                 if !warned_unavailable {
                     warned_unavailable = true;
                     report.warn("Some ODS values or formula caches were unsupported or missing; their displayed text (or raw value) was kept as text. A formula without either is marked [Unavailable ODS formula result].");
                 }
-                let text = if !src_cell.text.is_empty() {
-                    src_cell.text.as_str()
-                } else if let Some(raw) = src_cell.raw.as_deref() {
-                    raw
-                } else if src_cell.formula.is_some() {
-                    "[Unavailable ODS formula result]"
-                } else {
-                    "[Unsupported ODS value]"
-                };
+                let text = fallback_text(&src_cell);
                 sheet.set_cell(CellRef::new(coord.row, coord.col), Cell::styled(Value::Text(Arc::from(text)), StyleId::DEFAULT));
                 continue;
             };
@@ -122,6 +115,38 @@ fn map_error(e: craft_ods::Error) -> IoError {
         craft_ods::Error::Invalid(msg) => IoError::Format(msg),
         other => IoError::Format(other.to_string()),
     }
+}
+
+/// The complete `office:date-value` of a Date cell before 1900, whose serial
+/// `date_serial` cannot represent, else `None`.
+fn pre_1900_date_raw(cell: &craft_ods::Cell) -> Option<&str> {
+    if cell.value_type != Some(craft_ods::ValueType::Date) {
+        return None;
+    }
+    let raw = cell.raw.as_deref().filter(|s| !s.is_empty())?;
+    let year = raw.get(..4)?;
+    if !year.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    (year.parse::<u16>().ok()? < 1900).then_some(raw)
+}
+
+/// What an unsupported cell keeps: a pre-1900 date's complete value, else what it
+/// showed, else its raw value, else a marker.
+fn fallback_text(cell: &craft_ods::Cell) -> &str {
+    if let Some(raw) = pre_1900_date_raw(cell) {
+        return raw;
+    }
+    if !cell.text.is_empty() {
+        return cell.text.as_str();
+    }
+    if let Some(raw) = cell.raw.as_deref() {
+        return raw;
+    }
+    if cell.formula.is_some() {
+        return "[Unavailable ODS formula result]";
+    }
+    "[Unsupported ODS value]"
 }
 
 fn map_value(v: craft_ods::Value) -> Value {
