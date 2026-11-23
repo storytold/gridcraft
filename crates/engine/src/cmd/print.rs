@@ -273,6 +273,7 @@ pub(crate) fn export_pdf(s: &mut Session, p: &Json) -> Result<Json> {
     match str_param(p, "path").filter(|x| !x.is_empty()) {
         Some(path) => {
             crate::io::write_file(path, &bytes)?;
+            super::file::renew_stamp(s, path, &bytes);
             Ok(json!({"pages": pages, "bytes": bytes.len(), "path": path}))
         }
         None => Ok(json!({"pages": pages, "bytes": bytes.len(), "base64": crate::io::base64_encode(&bytes)})),

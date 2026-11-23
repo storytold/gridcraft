@@ -105,14 +105,26 @@ impl SheetApp {
     /// `logic` so a hidden or logic-only frame still saves; the monotonic timestamp check keeps a
     /// forced hidden UI pass from saving the same change twice.
     pub(super) fn autosave(&mut self, ctx: &egui::Context) {
-        let dirty_xlsx = self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
+        // A workbook AutoSave stopped for whose own file was saved since, by whatever way, gets it
+        // back (`changed_on_disk`).
+        if !self.autosave_held.is_empty() {
+            self.resume_autosave();
+        }
+        // Not a workbook whose file was changed on disk: AutoSave stopped for it (`changed_on_disk`).
+        let dirty_xlsx = self.session.active().is_some_and(|d| {
+            d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")) && !self.autosave_held.iter().any(|h| h.doc == d.uid)
+        });
         let now = crate::monotonic_ms();
         let autosave_due =
             self.ui.autosave && self.editor.is_none() && self.text_box_editor.is_none() && now - self.grid.last_autosave > 2000.0 && dirty_xlsx;
         if autosave_due {
             self.grid.last_autosave = now;
             self.store_view_state();
-            let _ = self.session.run("file.save", json!({}));
+            if let Err(e) = self.session.run("file.save", json!({}))
+                && super::changed_on_disk::is_changed_on_disk(&e)
+            {
+                self.stop_autosave();
+            }
         } else if self.ui.autosave && dirty_xlsx {
             // Keep checking even when no input arrives while the window is hidden.
             ctx.request_repaint_after(std::time::Duration::from_secs(2));

@@ -1117,6 +1117,10 @@ impl Dialog {
             "controlQuestion" => return crate::control_ui::open_question(&params),
             "saveCopy" => Dialog::custom("saveCopy", "Save a Copy", json!({"format": p("format")})),
             "saveChanges" => Dialog::custom("saveChanges", "Save Changes?", json!({"title": p("title"), "quit": p("quit")})),
+            // A Save found the workbook's file changed on disk (`app::changed_on_disk`).
+            "fileChanged" => {
+                Dialog::custom("fileChanged", "File Changed on Disk", json!({"name": p("name"), "params": p("params"), "then": p("then")}))
+            }
             "start" => Dialog::custom("start", "GridCraft", json!({})),
             "comments" => {
                 app.grid.pane = None;

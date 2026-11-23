@@ -81,7 +81,7 @@ mod state;
 
 pub use clock::{monotonic_ms, now_ms};
 pub use services::{Chrome, Inbox, Services};
-pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
+pub use state::{ChangedAnswer, NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 
 fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
@@ -217,6 +217,15 @@ impl UiState {
     }
 }
 
+/// A workbook AutoSave stopped for (`app::changed_on_disk`): its `DocState::uid`, and its own file's
+/// stamp and saved snapshot when it stopped. Once either has changed, a save of the workbook's own
+/// file went through, whoever ran it, and AutoSave goes on.
+pub(crate) struct AutosaveHold {
+    pub(crate) doc: u64,
+    pub(crate) disk: Option<gridcraft_engine::io::FileStamp>,
+    pub(crate) saved: std::sync::Arc<gridcraft_engine::model::Workbook>,
+}
+
 /// A dismissible bar under the ribbon, in the spirit of Excel's message bar. Used to tell the
 /// user what an opened file carried that GridCraft handled differently (e.g. preserved macros).
 #[derive(Clone, Debug, PartialEq)]
@@ -252,6 +261,9 @@ pub struct SheetApp {
     pub toast: Option<(String, f64)>,
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
+    /// The workbooks AutoSave stopped for: their file was changed on disk since it was opened here
+    /// (see `app::changed_on_disk`).
+    pub(crate) autosave_held: Vec<AutosaveHold>,
     pub services: Services,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,

@@ -27,6 +27,7 @@ gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
 image = { workspace = true }
+sha2 = { workspace = true }
 unicode-segmentation = "=1.13.3"
 
 [dev-dependencies]

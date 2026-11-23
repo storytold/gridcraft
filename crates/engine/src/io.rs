@@ -55,6 +55,67 @@ impl FileKind {
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
+
+/// The SHA-256 of `bytes`.
+pub fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(bytes).into()
+}
+
+/// What a workbook's own file held when this session read or wrote it: its size and the SHA-256 of
+/// its bytes. A file that no longer holds them was replaced since (#4078).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    pub len: u64,
+    pub sha256: [u8; 32],
+}
+
+impl FileStamp {
+    /// The stamp of a file whose bytes are `bytes`.
+    pub fn of(bytes: &[u8]) -> FileStamp {
+        FileStamp { len: bytes.len() as u64, sha256: sha256(bytes) }
+    }
+
+    /// What the file at `path` holds now, against this stamp: the same bytes, other bytes, or no
+    /// file. Only the bytes count: a file written again with the same content (a new modification
+    /// time, a new file renamed over the old one) is the same. The file is read only when its size
+    /// is the stamp's.
+    pub fn compare(&self, path: &str) -> Result<OnDisk> {
+        let meta = match std::fs::metadata(path) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(OnDisk::Gone),
+            Err(e) => return Err(EngineError::Other(format!("{path}: {e}"))),
+        };
+        if meta.len() != self.len {
+            return Ok(OnDisk::Changed);
+        }
+        Ok(if sha256(&read_file(path)?) == self.sha256 { OnDisk::Same } else { OnDisk::Changed })
+    }
+}
+
+/// Whether `a` and `b` name the same file: spelled the same, or, where both exist, resolving to the
+/// same file (`./Budget.xlsx`, a path through `..`, a symbolic link). A path that does not exist or
+/// cannot be resolved is the same only as its own spelling.
+pub(crate) fn same_file(a: &str, b: &str) -> bool {
+    a == b || matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(x), Ok(y)) if x == y)
+}
+
+/// A file on disk against the [`FileStamp`] it had when it was read or written ([`FileStamp::compare`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnDisk {
+    /// It holds the same bytes.
+    Same,
+    /// It holds other bytes: another program replaced it since.
+    Changed,
+    /// There is no file at that path any more.
+    Gone,
+}
+
+/// Save's refusal to replace a workbook's own file that was changed on disk since this session read
+/// or wrote it ([`crate::DocState::disk`]) says this, after the file's name. The refusal is an
+/// [`EngineError::Confirm`]: `overwrite: true` replaces the file anyway.
+pub const CHANGED_ON_DISK: &str = "was changed on disk since it was opened here";
+
 /// The first open warning of a workbook decrypted with its password.
 pub const DECRYPTED_NOTICE: &str = "This workbook was password-protected. GridCraft saves it without the password.";
 

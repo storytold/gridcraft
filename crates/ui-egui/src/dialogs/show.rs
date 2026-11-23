@@ -351,6 +351,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                "fileChanged" => file_changed(app, ui, &d, &mut open),
                 "start" => {
                     ui.heading("Start a new workbook");
                     ui.horizontal_wrapped(|ui| {
@@ -540,6 +541,50 @@ pub(super) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) 
             }
         })
     });
+}
+
+/// The question a Save asks when the workbook's own file was changed on disk since it was opened
+/// here (`app::changed_on_disk`): what that means, then Overwrite, Cancel and Save a Copy, the main
+/// button, which Enter takes.
+fn file_changed(app: &mut SheetApp, ui: &mut egui::Ui, d: &Dialog, open: &mut bool) {
+    let lang = app.ui.language;
+    let name = d.values.get("name").and_then(Json::as_str).unwrap_or_default();
+    let lines = [
+        lang.tr("{name} on disk is newer than what is on your screen: another program changed it after you opened it here.").replace("{name}", name),
+        lang.tr("Save a Copy keeps both: what is on your screen goes into a new file, and the newer file stays as it is.").to_string(),
+        lang.tr("Overwrite replaces the newer file with what is on your screen: what the newer file holds is thrown away.").to_string(),
+    ];
+    for line in lines {
+        ui.label(line);
+        ui.add_space(4.0);
+    }
+    ui.add_space(4.0);
+    let t = crate::theme::Tokens::get(ui.ctx());
+    let mut answer = None;
+    ui.horizontal(|ui| {
+        for (label, choice) in [
+            ("Overwrite", crate::ChangedAnswer::Overwrite),
+            ("Cancel", crate::ChangedAnswer::Cancel),
+            ("Save a Copy", crate::ChangedAnswer::SaveCopy),
+        ] {
+            let label = lang.tr(label);
+            let button = if choice == crate::ChangedAnswer::SaveCopy {
+                egui::Button::new(egui::RichText::new(label).color(t.on_accent)).fill(t.accent)
+            } else {
+                egui::Button::new(label)
+            };
+            if ui.add(button).clicked() {
+                answer = Some(choice);
+            }
+        }
+    });
+    if answer.is_none() && ui.input(|i| i.key_pressed(Key::Enter)) {
+        answer = Some(crate::ChangedAnswer::SaveCopy);
+    }
+    if let Some(choice) = answer {
+        *open = false;
+        app.answer_changed_on_disk(choice, &d.values, ui.ctx());
+    }
 }
 
 fn form(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool) {

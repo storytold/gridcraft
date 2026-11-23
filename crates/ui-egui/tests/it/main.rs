@@ -99,6 +99,7 @@ mod python_mode;
 mod ref_edit;
 mod ribbon_layout;
 mod right_to_left;
+mod save_over_changed_file;
 mod scroll_position;
 mod scrollbar_column_fill;
 mod selection;
