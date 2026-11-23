@@ -33,7 +33,7 @@ pub(super) fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) 
 pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
     if let Some(t) = sh.table_at(c) {
-        style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
+        style = gridcraft_engine::tables::table_cell_shown_style(wb, si, t, cf.table_edges(sh, t), c);
     }
     let cfl = cf.look(wb, si, c);
     if let Some(l) = &cfl
@@ -60,6 +60,9 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
         // In a differential style General means "not set" (#1163).
         if st.num_fmt.as_str() != "General" {
             style.num_fmt = st.num_fmt.clone();
+        }
+        if st.align.reading_order.is_some() {
+            style.align.reading_order = st.align.reading_order;
         }
         for (dst, src) in [
             (&mut style.borders.left, st.borders.left),
@@ -132,11 +135,10 @@ pub(super) fn display_text(
 }
 
 pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let pad_v = 1.5 * z;
-    let y_top = rect.top() + pad_v;
+    let y_top = rect.top() + 1.5 * z;
     // Not clamped to `y_top`: text taller than the row overflows upward (Bottom) or both ways
     // (Center), and the cell's clip rect trims it, so Middle and Bottom stay distinct from Top.
-    let y_bottom = rect.bottom() - gh - pad_v;
+    let y_bottom = rect.bottom() - gh - 0.5 * z;
     match valign {
         VAlign::Top => y_top,
         VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
@@ -144,15 +146,29 @@ pub(crate) fn wrapped_cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -
     }
 }
 
+/// Bounds of the primary font's line boxes, excluding extra row height added only for fallbacks.
+/// Centered fallbacks do not identify that baseline; empty or centered-only rows use their layout bounds.
+pub(crate) fn galley_baseline_bounds(galley: &egui::Galley) -> (f32, f32) {
+    let row_bounds = |row: &egui::epaint::text::PlacedRow| {
+        row.glyphs
+            .iter()
+            .find(|glyph| {
+                glyph.font_face_align == egui::epaint::text::FallbackAlign::Baseline
+                    || (glyph.font_face_ascent == glyph.font_ascent && glyph.font_face_height == glyph.font_height)
+            })
+            .map_or((row.rect().top(), row.rect().bottom()), |glyph| {
+                let top = row.pos.y + glyph.pos.y - glyph.font_ascent;
+                (top, top + glyph.font_height)
+            })
+    };
+    let first = galley.rows.first().map(|row| row_bounds(row).0);
+    let last = galley.rows.last().map(|row| row_bounds(row).1);
+    first.zip(last).unwrap_or((0.0, galley.size().y))
+}
+
 pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
-    let top_inset = 1.0 * z;
-    let y_top = rect.top() - top_inset;
-    let y_bottom = (rect.bottom() - gh - 0.5 * z).max(y_top);
-    match valign {
-        VAlign::Top => y_top,
-        VAlign::Center | VAlign::Justify | VAlign::Distributed => (y_top + y_bottom) / 2.0,
-        VAlign::Bottom => y_bottom,
-    }
+    let y_top = wrapped_cell_text_y(VAlign::Top, rect, gh, z);
+    wrapped_cell_text_y(valign, rect, gh, z).max(y_top)
 }
 
 /// The galley top for a cell's text when a reading is drawn in a strip at the top of the cell:
@@ -415,15 +431,17 @@ mod furigana_tests {
                 assert!(y >= reading_bottom, "{valign:?} wrapped={wrapped}: text starts at {y}, over the reading's bottom {reading_bottom}");
             }
         }
-        // Top alignment starts the text right below the reading; the wrapped path keeps its inset.
-        assert!((cell_text_y_below_reading(VAlign::Top, rect, 20.0, 1.0, reading_bottom, false) - 9.0).abs() < 1e-6);
+        // Top alignment starts the text right below the reading, with the cell's 1.5 px inset on
+        // screen: the wrapped path and the single-line one share `wrapped_cell_text_y`'s top.
+        assert!((cell_text_y_below_reading(VAlign::Top, rect, 20.0, 1.0, reading_bottom, false) - 10.5).abs() < 1e-6);
         assert!((cell_text_y_below_reading(VAlign::Top, rect, 20.0, 1.0, reading_bottom, true) - 10.5).abs() < 1e-6);
         // A row too short for both keeps the text below the reading (the cell clips its bottom)
         // instead of moving Center or Bottom up into the reading.
         let short = Rect::from_min_max(pos2(0.0, 0.0), pos2(100.0, 16.0));
         for valign in [VAlign::Center, VAlign::Bottom] {
             let y = cell_text_y_below_reading(valign, short, 20.0, 1.0, reading_bottom, false);
-            assert!((y - reading_bottom).abs() < 1e-6, "{valign:?}: {y}");
+            // `cell_text_y` keeps its top inset, so the text sits at the reading's bottom plus it.
+            assert!((y - (reading_bottom + 1.5)).abs() < 1e-6, "{valign:?}: {y}");
         }
     }
 

@@ -35,7 +35,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::{rewrite_all_formulas, rewrite_cell_links, rewrite_python_refs};
+pub(crate) use paste_special::{rewrite_all_formulas_many, rewrite_cell_links, rewrite_python_refs};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_next_corner, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -239,7 +239,12 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
 fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
-    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && sh.is_row_filtered(**r)).map(|(r, _)| *r).collect()
+    let spans = sh.filter_row_spans();
+    if spans.is_empty() {
+        return Default::default();
+    }
+    let filtered = |row: u32| spans.iter().any(|&(first, last)| row >= first && row <= last);
+    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && filtered(**r)).map(|(r, _)| *r).collect()
 }
 
 /// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
