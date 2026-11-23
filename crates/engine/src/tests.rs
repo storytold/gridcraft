@@ -7199,6 +7199,49 @@ fn renaming_a_lambda_onto_a_let_local_is_refused() {
     assert!(s.doc().unwrap().wb.names.iter().any(|n| n.name == "FnOld"));
 }
 
+/// A function the evaluator handles itself (`ROW`, `OFFSET`) is called before a defined LAMBDA of
+/// the same name, as a worksheet function is, so renaming a called LAMBDA to one is refused.
+#[test]
+fn renaming_a_lambda_to_an_evaluator_function_name_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=FnOld(4)"})).unwrap();
+    for f in ["ROW", "OFFSET"] {
+        assert!(s.execute("formulas.defineName", json!({"name": f, "oldName": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).is_err(), "{f}");
+    }
+    assert_eq!(formula_text(&s, "A1"), "FnOld(4)");
+    assert_eq!(v(&s, "A1"), Value::number(5.0));
+}
+
+/// A LET local matches a name case-insensitively in any script, as the evaluator reads it, so a
+/// rename onto `DŁUG` is refused where a LET binds `dług`.
+#[test]
+fn renaming_onto_a_let_local_compares_names_in_any_script() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LET(dług, LAMBDA(x, x+100), FnOld(4))"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::number(5.0));
+    assert!(s.execute("formulas.defineName", json!({"name": "DŁUG", "oldName": "FnOld", "refersTo": "=LAMBDA(x, x+1)"})).is_err());
+    assert_eq!(v(&s, "A1"), Value::number(5.0));
+}
+
+/// A LET name binds only after its own value, so a use in that value still reads the defined
+/// name: renaming `Rate` to `Total` in `LET(Total, Rate, Total)` is allowed and keeps the result.
+#[test]
+fn a_let_value_is_read_before_its_own_name_binds() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LET(Total, Rate, Total)"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::number(2.0));
+    s.execute("formulas.defineName", json!({"name": "Total", "oldName": "Rate", "refersTo": "=2"})).unwrap();
+    assert_eq!(formula_text(&s, "A1"), "LET(Total,Total,Total)");
+    assert_eq!(v(&s, "A1"), Value::number(2.0));
+    // A later value is read with the earlier name bound, so there the rename is still refused.
+    s.execute("formulas.defineName", json!({"name": "Rate2", "refersTo": "=3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=LET(Local, 1, Local+Rate2)"})).unwrap();
+    assert!(s.execute("formulas.defineName", json!({"name": "Local", "oldName": "Rate2", "refersTo": "=3"})).is_err());
+}
+
 /// A workbook-level definition is read on the sheet that uses it, so renaming a name it uses to a
 /// name a sheet defines for itself is refused: that sheet would read its own name instead.
 #[test]

@@ -439,8 +439,9 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
         None => wb.names.iter().filter(|n| n.name.eq_ignore_ascii_case(new)).filter_map(|n| n.scope).collect(),
         Some(_) => Vec::new(),
     };
-    // A call renamed to a worksheet function's name would call the function instead.
-    let new_is_function = gridcraft_functions::lookup(new).is_some();
+    // A call renamed to a function's name would call the function instead: a worksheet function,
+    // or one the evaluator handles itself (`ROW`, `OFFSET`), as the evaluator decides.
+    let new_is_function = gridcraft_calc::is_known_function(new);
     // Set when the rename would change what a formula computes; the rename is then refused.
     let captured = std::cell::Cell::new(false);
     // The renamed expression, or `None` when the name doesn't occur in it.
@@ -504,19 +505,13 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
 }
 
 /// Whether renaming `old` to `new` in `e` would make a use of it read something else: a call
-/// renamed to a worksheet function's name (the function is called first), or a use of `old`
-/// inside a LET or LAMBDA that binds `new` (the local is read first).
+/// renamed to a function's name (the function is called first), or a use of `old` where a LET or
+/// LAMBDA binds `new` (the local is read first). A LET name binds only after its own value, as the
+/// evaluator adds it; names compare as the evaluator compares them ([`gridcraft_formula::same_name`]).
 fn renamed_use_is_captured(e: &gridcraft_formula::Expr, old: &str, new: &str, calls_follow: bool, new_is_function: bool) -> bool {
     use gridcraft_formula::Expr;
-    let binds_new = |name: &str, args: &[Expr]| {
-        let bound: Vec<&Expr> = match name {
-            "LET" => args.iter().step_by(2).take(args.len() / 2).collect(),
-            "LAMBDA" => args.iter().take(args.len().saturating_sub(1)).collect(),
-            _ => Vec::new(),
-        };
-        bound.iter().any(|b| matches!(b, Expr::Name(n) if n.trim_start_matches('[').trim_end_matches(']').eq_ignore_ascii_case(new)))
-    };
-    // An explicit stack, with whether a LET or LAMBDA around the node binds `new`.
+    let is_new = |b: &Expr| matches!(b, Expr::Name(n) if gridcraft_formula::same_name(n.trim_start_matches('[').trim_end_matches(']'), new));
+    // An explicit stack, with whether a LET or LAMBDA around the node binds `new` there.
     let mut pending: Vec<(&Expr, bool)> = vec![(e, false)];
     while let Some((x, inside)) = pending.pop() {
         match x {
@@ -525,8 +520,33 @@ fn renamed_use_is_captured(e: &gridcraft_formula::Expr, old: &str, new: &str, ca
                 if calls_follow && n.eq_ignore_ascii_case(old) && (new_is_function || inside) {
                     return true;
                 }
-                let inside = inside || binds_new(n, args);
-                pending.extend(args.iter().map(|a| (a, inside)));
+                match n.as_str() {
+                    // LET(name1, value1, name2, value2, …, body): each name binds from the next
+                    // value on, so a value is read with only the names before it bound.
+                    "LET" if args.len() >= 3 => {
+                        let mut bound = inside;
+                        let pairs = args.len() / 2;
+                        for (i, a) in args.iter().enumerate() {
+                            if i % 2 == 0 && i / 2 < pairs {
+                                pending.push((a, bound));
+                                // The value after this name is read before it binds.
+                                if let Some(v) = args.get(i + 1) {
+                                    pending.push((v, bound));
+                                }
+                                bound = bound || is_new(a);
+                            } else if i == args.len() - 1 && args.len() % 2 == 1 {
+                                pending.push((a, bound));
+                            }
+                        }
+                    }
+                    // LAMBDA(params…, body): every parameter is bound in the body.
+                    "LAMBDA" => {
+                        let params = args.len().saturating_sub(1);
+                        let bound = inside || args.iter().take(params).any(is_new);
+                        pending.extend(args.iter().map(|a| (a, bound)));
+                    }
+                    _ => pending.extend(args.iter().map(|a| (a, inside))),
+                }
             }
             Expr::Array(rows) => pending.extend(rows.iter().flatten().map(|a| (a, inside))),
             Expr::Unary(_, a) | Expr::Paren(a) => pending.push((a, inside)),
