@@ -308,6 +308,8 @@ fn ods_pre_1900_dates_keep_raw_while_other_fallbacks_stay() {
         <table:table-cell office:value-type="time" office:time-value="PT14H30M"/>
         <table:table-cell office:value-type="date" office:date-value="1900-01-01"/>
         <table:table-cell office:value-type="date" office:date-value="1900-03-01"/>
+        <table:table-cell office:value-type="date" office:date-value="10000-01-01"><text:p>10000</text:p></table:table-cell>
+        <table:table-cell office:value-type="date" office:date-value="abcd-01-01"><text:p>abcd</text:p></table:table-cell>
     "#);
     let (wb, report) = read_ods(&bytes).unwrap();
     let s = &wb.sheets[0];
@@ -318,6 +320,8 @@ fn ods_pre_1900_dates_keep_raw_while_other_fallbacks_stay() {
     assert_eq!(s.value(CellRef::new(0, 4)), Value::Number(14.5 / 24.0));
     assert_eq!(s.value(CellRef::new(0, 5)), Value::Number(1.0));
     assert_eq!(s.value(CellRef::new(0, 6)), Value::Number(61.0));
+    assert_eq!(s.value(CellRef::new(0, 7)), text("10000"));
+    assert_eq!(s.value(CellRef::new(0, 8)), text("abcd"));
     assert!(s.cell(CellRef::new(0, 2)).unwrap().formula.is_none());
     assert!(report.warnings.iter().any(|w| w.contains("unsupported or missing")));
 }

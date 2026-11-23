@@ -6,7 +6,8 @@ imports worksheet data into a new workbook and shows a warning describing the co
 The import reads sheets, numbers, text, booleans, supported dates/times, repeated cells/rows and
 merged cells. Formula cells become their **last saved results**, not live formulas. These results
 may be out of date if the source application did not recalculate before saving. Unsupported or
-missing values retain available display text and produce a warning.
+missing values retain available display text and produce a warning; dates before 1900 keep their
+complete `office:date-value`, because spreadsheet serials cannot represent them.
 
 This is data import, not full ODS compatibility. Source formatting, formulas, charts, images,
 names and other workbook features are not preserved. GridCraft does not write ODS files.

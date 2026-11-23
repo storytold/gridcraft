@@ -125,7 +125,7 @@ fn pre_1900_date_raw(cell: &craft_ods::Cell) -> Option<&str> {
     }
     let raw = cell.raw.as_deref().filter(|s| !s.is_empty())?;
     let year = raw.get(..4)?;
-    if !year.bytes().all(|b| b.is_ascii_digit()) {
+    if !year.bytes().all(|b| b.is_ascii_digit()) || raw.as_bytes().get(4) != Some(&b'-') {
         return None;
     }
     (year.parse::<u16>().ok()? < 1900).then_some(raw)
