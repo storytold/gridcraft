@@ -155,6 +155,47 @@ fn editing_a_name_renames_it_in_formulas() {
     assert!(s.execute("formulas.defineName", json!({"name": "X", "oldName": "Missing"})).is_err());
 }
 
+/// A LET or LAMBDA local is not the defined name: renaming the name leaves a local of the same
+/// name alone, in cells and in rules.
+#[test]
+fn renaming_a_name_leaves_let_and_lambda_locals_alone() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LET(Rate, 3, Rate*10)+Rate"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=LAMBDA(Rate, Rate+1)(Rate)"})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "B1:B3", "rule": {"type": "expression", "formula": "=LET(Rate, 1, Rate)<Rate"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("formulas.defineName", json!({"name": "Fee", "refersTo": "=2", "oldName": "Rate"})).unwrap();
+    let formula =
+        |s: &Session, at: &str| s.doc().unwrap().wb.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).unwrap().text.clone();
+    assert_eq!(formula(&s, "A1"), "LET(Rate,3,Rate*10)+Fee");
+    assert_eq!(formula(&s, "A2"), "LAMBDA(Rate,Rate+1)(Fee)");
+    assert_eq!(v(&s, "A1"), Value::number(32.0));
+    let rule = match &s.doc().unwrap().wb.sheets[0].cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.trim_start_matches('=').to_string(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rule, "LET(Rate,1,Rate)<Fee");
+}
+
+/// Renaming a name to one a LET local already uses where the name occurs would make the local
+/// capture it: the rename is refused and changes nothing.
+#[test]
+fn renaming_a_name_onto_a_let_local_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:C3", "type": "custom", "formula1": "=LET(Total, 1, Rate*Total)>0"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let err = s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=2", "oldName": "Rate"}));
+    assert!(err.is_err(), "the LET local would capture the renamed name");
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before) || *s.doc().unwrap().wb == *before);
+    assert_eq!(s.doc().unwrap().wb.names[0].name, "Rate");
+    assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1.trim_start_matches('='), "LET(Total, 1, Rate*Total)>0");
+}
+
 #[test]
 fn chart_recommendations_follow_the_data_shape() {
     // #215: Recommended Charts lists chart types for the data; programmatic insert stays dialog-free.
