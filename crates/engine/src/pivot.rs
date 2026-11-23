@@ -175,9 +175,10 @@ struct OlderNames {
 /// format. Which way the sheet showed its headers when the PivotTable was saved isn't stored, so
 /// both are tried, whatever Show Formulas is now; the decision is made for the whole PivotTable,
 /// so two fields never land on one column. Calculated fields aren't columns and take no part.
-/// - Exactly one way places every saved field (or both place them on the same columns): each
-///   field moves to its column's current name, even one whose old name is also some current
-///   header (a text header `Region` beside a formula header `="Region"` is now `Region2`).
+/// - Exactly one way places every saved field (or both place them on the same columns, the way
+///   the sheet's Show Formulas setting now picks): each field moves to its column's current name,
+///   even one whose old name is also some current header (a text header `Region` beside a
+///   formula header `="Region"` is now `Region2`).
 /// - Both place every field, on different columns: the saved names can't tell, so the fields
 ///   resolve as they did before, by the sheet's Show Formulas setting now, and nothing is settled.
 /// - Neither does: when every name is a current header they stay; otherwise nothing changes.
@@ -212,7 +213,12 @@ fn older_field_names(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Opti
     let placed: Vec<Option<(Vec<usize>, &Vec<String>)>> = lists.iter().map(|l| l.as_ref().and_then(|l| columns(l).map(|c| (c, l)))).collect();
     let pick = |i: usize| placed.get(i).cloned().flatten();
     let ((cols, list), settled) = match (pick(0), pick(1)) {
-        (Some(a), Some(b)) if a.0 != b.0 => (if sh.show_formulas { a } else { b }, false),
+        // Both place every field: by the sheet's Show Formulas setting now. On the same columns the
+        // fields are settled, but the headers still differ, so calculated formulas read this list.
+        (Some(a), Some(b)) => {
+            let same = a.0 == b.0;
+            (if sh.show_formulas { a } else { b }, same)
+        }
         (Some(a), _) | (None, Some(a)) => (a, true),
         (None, None) => {
             let settled = columns(&current).is_some() && !current.iter().any(|h| calculated(h));

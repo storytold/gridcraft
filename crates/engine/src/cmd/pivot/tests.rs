@@ -1721,6 +1721,24 @@ fn a_calculated_formula_keeps_the_column_it_named() {
     assert_eq!(grand_total(&s, 2), Value::Number(10.0));
 }
 
+/// When both ways of reading the headers put the saved fields on the same columns, the sheet's
+/// Show Formulas setting picks the layout a calculated field's formula reads, as it does when
+/// they differ. With Show Formulas off, `Amount` is column A (100), so `Twice` is 200, not twice
+/// column B (10).
+#[test]
+fn equal_placements_follow_show_formulas_for_calculated_formulas() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x", "Amount", "Key"], [100, 5, "K"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Amount\""})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Key"], "values": ["Key"]})).unwrap();
+    s.execute("pivot.calculatedField", json!({"name": "Twice", "formula": "=Amount*2"})).unwrap();
+    reopen_as_older(&mut s, |_| {});
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!(grand_total(&s, 2), Value::Number(200.0));
+}
+
 /// Show Details reads the records the report is computed from: an older filter `Region`, which
 /// filters column B (`Region2` now), takes B's Apples records, and the refreshed report is current.
 #[test]
