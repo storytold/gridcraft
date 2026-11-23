@@ -63,6 +63,12 @@ pub fn start() {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
                     let mut app = SheetApp::new(session, services);
+                    // No `cloud::CloudBackend` is wired up yet. The contract is in craft-cloud
+                    // and the pages are in craft-ui, so connecting one is this app's own commit,
+                    // and the cloud UI stays hidden until it lands. `app.sharing.connect(..)` (a
+                    // `craft_ui::share::ShareBackend`) belongs in that same commit: `ShareDialog::
+                    // show` already runs every frame, so sharing works as soon as a backend is
+                    // connected here.
                     app.ui.system_theme = true;
                     // `?chrome=none|notitlebar|nofiletab`: a host that embeds the sheet in its own window and owns the files
                     // can leave the title bar and/or the File tab undrawn (`Chrome`, #1877). An unknown value keeps

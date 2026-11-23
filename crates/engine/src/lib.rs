@@ -596,6 +596,13 @@ impl Session {
     pub fn active_mut(&mut self) -> Option<&mut DocState> {
         self.docs.get_mut(self.active)
     }
+    /// One document by its uid, whether or not it is the active one.
+    ///
+    /// A cloud save finishes after the user has moved to another document, so
+    /// what it clears has to be named rather than assumed.
+    pub fn document_mut(&mut self, uid: u64) -> Option<&mut DocState> {
+        self.docs.iter_mut().find(|d| d.uid == uid)
+    }
     pub fn doc(&self) -> Result<&DocState> {
         self.active().ok_or(EngineError::NoDocument)
     }
