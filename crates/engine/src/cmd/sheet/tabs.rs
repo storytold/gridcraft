@@ -164,6 +164,16 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 .find(|nm| cx.wb.sheet_index(nm).is_none())
                 .unwrap_or(base.clone());
             sh.name = name;
+            // Formulas on the copy that name the sheet it was copied from refer to the copy (#3763).
+            let own: Vec<(CellRef, Arc<gridcraft_model::Formula>)> = sh.cells.iter().filter_map(|(c, x)| x.formula.clone().map(|f| (c, f))).collect();
+            for (c, f) in own {
+                if let Some(Some(ne)) = f.with_expr(|e| gridcraft_formula::adjust::retarget_self_refs(e, &base, &sh.name))
+                    && let Some(cell) = sh.cells.get_mut(c)
+                {
+                    cell.formula =
+                        Some(Arc::new(gridcraft_model::Formula { array: f.array, dynamic: f.dynamic, ..gridcraft_model::Formula::from_expr(ne) }));
+                }
+            }
             sh.tables.clear(); // table names must be unique
             sh.preserved = None; // kept file content (form controls, OLE objects…) stays with the original
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands
