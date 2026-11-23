@@ -707,6 +707,8 @@ impl Chart {
                 let Some(t) = grouped(k) else { return k };
                 let secondary = self.series.get(i).is_some_and(|s| s.secondary);
                 let first = self.series.iter().enumerate().take(i).find_map(|(j, s)| {
+                    #[cfg(any(test, feature = "test-support"))]
+                    work::visit();
                     let kj = combo_series_kind(s.kind, j);
                     (s.secondary == secondary && grouped(kj) == Some(t)).then_some(kj)
                 });
@@ -727,6 +729,8 @@ impl Chart {
             .iter()
             .enumerate()
             .map(|(i, s)| {
+                #[cfg(any(test, feature = "test-support"))]
+                work::visit();
                 let k = combo_series_kind(s.kind, i);
                 let Some(t) = grouped(k) else { return k };
                 match firsts.iter().find(|(ft, sec, _)| *ft == t && *sec == s.secondary) {
@@ -1262,6 +1266,25 @@ pub struct Slicer {
     pub selected: Option<Vec<String>>,
     /// Number of button columns in the layout (Excel default 1).
     pub columns: u32,
+}
+
+/// Work counters for growth tests here and in other crates (`test-support`; never in a shipped
+/// build): a test compares the counts at two input sizes instead of timing the work.
+#[cfg(any(test, feature = "test-support"))]
+pub mod work {
+    thread_local! {
+        /// Series a combo chart's kind lookups have visited on this thread.
+        static SERIES_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(crate) fn visit() {
+        SERIES_VISITS.with(|n| n.set(n.get().saturating_add(1)));
+    }
+
+    /// The series visited since the last call, and starts counting again.
+    pub fn take_series_visits() -> usize {
+        SERIES_VISITS.with(|n| n.replace(0))
+    }
 }
 
 #[cfg(test)]

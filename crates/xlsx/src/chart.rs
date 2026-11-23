@@ -287,6 +287,13 @@ fn axis_title(t: &El) -> String {
     rich_title(t).unwrap_or_else(|| "Axis Title".into())
 }
 
+// Value axes looked at (and looked up) while finding a chart's primary axes, so a test can check
+// the work grows with the file, not with its square.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static VAL_AXIS_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
     let groups: Vec<&El> = plot.map(|p| p.children.iter().filter(|g| g.name.ends_with("Chart")).collect()).unwrap_or_default();
@@ -303,6 +310,8 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     // the right or top), else the first group's; series on other axes are secondary.
     let mut val_sides: HashMap<&str, &str> = HashMap::new();
     for a in plot.into_iter().flat_map(|p| p.kids("valAx")) {
+        #[cfg(test)]
+        VAL_AXIS_VISITS.with(|n| n.set(n.get().saturating_add(1)));
         if let (Some(id), Some(pos)) = (a.child_val("axId"), a.child_val("axPos")) {
             val_sides.entry(id).or_insert(pos);
         }
@@ -310,7 +319,11 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let pairs: Vec<Vec<&str>> = drawing.iter().map(|(g, _)| ax_ids(g)).collect();
     let primary_axes: Vec<&str> = pairs
         .iter()
-        .find(|ids| ids.get(1).is_some_and(|id| matches!(val_sides.get(id).copied(), Some("l" | "b"))))
+        .find(|ids| {
+            #[cfg(test)]
+            VAL_AXIS_VISITS.with(|n| n.set(n.get().saturating_add(1)));
+            ids.get(1).is_some_and(|id| matches!(val_sides.get(id).copied(), Some("l" | "b")))
+        })
         .or_else(|| pairs.iter().find(|ids| !ids.is_empty()))
         .cloned()
         .unwrap_or_default();
