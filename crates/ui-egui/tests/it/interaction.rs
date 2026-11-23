@@ -427,6 +427,110 @@ fn shift_arrows_in_point_mode_extend_from_the_pointed_cell() {
 }
 
 #[test]
+fn f2_during_an_edit_switches_arrows_between_caret_and_pointing() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    key(&mut h, Key::F2, Modifiers::NONE);
+    text(&mut h, "=SUM(");
+    key(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=SUM("), "after F2 the arrows move the caret, not point");
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=SUM(A10"), "a second F2 lets the arrows point at cells");
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=SUM(A10"), "a third F2 gives the arrows back to the caret");
+}
+
+#[test]
+fn f2_twice_after_pointing_keeps_pointing_from_the_pointed_cell() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    text(&mut h, "=");
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=A10"));
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=A9"), "the arrow moves the pointed reference, it doesn't commit");
+}
+
+#[test]
+fn f2_and_an_arrow_in_one_frame_apply_in_input_order() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    text(&mut h, "abc");
+    let press = |k: Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([press(Key::F2), press(Key::ArrowLeft)]);
+    h.run_steps(2);
+    assert_eq!(edited(&h).as_deref(), Some("abc"), "the arrow after F2 moves the caret instead of committing the entry");
+}
+
+#[test]
+fn two_f2_presses_in_one_frame_toggle_twice() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    text(&mut h, "=");
+    let press = |k: Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    let release = |k: Key| Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([press(Key::F2), release(Key::F2), press(Key::F2), release(Key::F2)]);
+    h.run_steps(2);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(edited(&h).as_deref(), Some("=A10"), "two F2 presses return to pointing, so Up inserts a reference");
+}
+
+#[test]
+fn f2_and_arrows_alternating_in_one_frame_apply_in_input_order() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let edited = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().editor.as_ref().map(|e| e.text.clone());
+    text(&mut h, "=");
+    let press = |k: Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    // F2 (Edit), Right (the caret), F2 (Enter), Up (points).
+    h.input_mut().events.extend([press(Key::F2), press(Key::ArrowRight), press(Key::F2), press(Key::ArrowUp)]);
+    h.run_steps(2);
+    assert_eq!(edited(&h).as_deref(), Some("=A10"), "the Up after the second F2 points");
+}
+
+#[test]
+fn two_f2_presses_on_the_grid_in_one_frame_open_the_editor_in_enter_mode() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    let press = |k: Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([press(Key::F2), press(Key::F2)]);
+    h.run_steps(2);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.enter_mode), Some(true), "the first F2 opens the editor, the second switches it to Enter mode");
+}
+
+#[test]
+fn the_status_bar_leaves_point_when_the_caret_leaves_the_pointed_reference() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "A11"})).unwrap();
+    let mut h = harness(s);
+    text(&mut h, "=");
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    key(&mut h, Key::F2, Modifiers::NONE);
+    key(&mut h, Key::F2, Modifiers::NONE);
+    assert_eq!(h.state().session.mode, gridcraft_engine::Mode::Point, "back in Enter mode with the caret after `A10`");
+    let press = |k: Key| Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+    // F2 (Edit), Left (the caret goes into `A10`), F2 (Enter): the caret is no longer after a
+    // reference, so the status bar must not show Point.
+    h.input_mut().events.extend([press(Key::F2), press(Key::ArrowLeft), press(Key::F2)]);
+    h.run_steps(2);
+    assert_ne!(h.state().session.mode, gridcraft_engine::Mode::Point);
+}
+
+#[test]
 fn ctrl_arrows_in_point_mode_jump_to_the_edge_of_the_data() {
     // Typing `=COUNTIF(`, clicking the top of a column and pressing Ctrl+Shift+Down (⌘⇧↓) points
     // at the whole column of data, as the same keys select it outside an edit.

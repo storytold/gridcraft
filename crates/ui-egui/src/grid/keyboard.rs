@@ -136,7 +136,22 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                         }
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
-                    Key::F2 => app.begin_edit(None, false),
+                    Key::F2 => {
+                        // The rest of the frame's input goes to the new editor, in order. This F2
+                        // and the events before it, which the grid has handled, must not reach it:
+                        // there F2 switches to Enter mode.
+                        ctx.input_mut(|i| {
+                            if let Some(at) = i
+                                .events
+                                .iter()
+                                .position(|e| matches!(e, egui::Event::Key { key: Key::F2, pressed: true, modifiers, .. } if *modifiers == m))
+                            {
+                                i.events.drain(..=at);
+                            }
+                        });
+                        app.begin_edit(None, false);
+                        return;
+                    }
                     // With an object selected, Delete and Backspace delete it, not the cells.
                     Key::Delete if app.delete_selected_object() => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
