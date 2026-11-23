@@ -104,6 +104,7 @@ mod scrollbar_column_fill;
 mod selection;
 mod selection_fill;
 mod selection_glide;
+mod selection_outline;
 mod selection_scroll;
 mod sheet_navigator;
 mod sheet_tab_rename;
