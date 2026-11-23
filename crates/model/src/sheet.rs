@@ -951,6 +951,7 @@ mod tests {
                 fill: Color::default(),
                 line: Color::default(),
                 text: String::new(),
+                rotation: 0.0,
                 format: ShapeFormat::default(),
                 math: EquationCache::default(),
             }),
