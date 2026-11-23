@@ -47,7 +47,12 @@ impl ListPicker {
     /// open the dropdown.
     pub fn open(d: &DocState, c: CellRef) -> Option<Self> {
         let sh = d.wb.active()?;
-        let dv = sh.validations.iter().find(|v| v.ranges.iter().any(|r| r.contains(c)))?;
+        // let dv = sh.validations.iter().find(|v| v.ranges.iter().any(|r| r.contains(c)))?;
+        let dv = sh.validations.iter().find(|v| {
+            v.kind == gridcraft_engine::model::ValidationKind::List
+                && v.in_cell_dropdown
+                && v.ranges.iter().any(|r| r.contains(c))
+        })?;
         let items = list_items(&d.wb, d.wb.active_sheet(), c, dv);
 
         // A covered cell of a merge can't hold a value: writes go to its anchor.
@@ -119,26 +124,16 @@ pub(super) fn list_picker_height(n: usize, row_h: f32, gap: f32) -> f32 {
 /// Draws the validation list popup, choosing above/below and left/right placement for RTL,
 /// and applies the picked item with `cell.set` on the merge anchor.
 ///
-/// The picker state (`ListPicker`) is resolved once when the dropdown opens — on the arrow
-/// click (`interact`) or Alt+Down (`keymap`) — so this function does no validation scan and
-/// no `list_items` call per frame: `list_items` evaluates the list's source formula, far too
-/// slow to repeat every repaint (same rule as `GridState::pivot_fields`, #2113).
-///
-/// `p.cell` is the cell the dropdown opened on; `p.anchor` is the top-left of its merge,
-/// where `cell.set` writes — a covered cell of a merge never holds the value. The popup
-/// anchors to `merge_rect`, the rect of the whole merged range, so a merged cell gets one
-/// dropdown spanning it, not one per covered cell.
-///
 /// The picker is `take()`n out of `app.grid` — not cloned — so the `egui::Area` closure can
 /// borrow `app` mutably for `run_or_alert` while `p` stays a local value: no `Vec<String>`
-/// copy per frame. `take()` leaves `None` behind, so closing needs no write; the picker is
-/// put back only while the popup stays open (early exits restore it too), which also keeps
-/// the `sel` moved by `input()` or row hover.
+/// copy per frame. It is put back only if the popup stays open, which is also what persists
+/// the `sel` moved by `input()` or by hover.
 pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
     let Some(mut p) = app.grid.list_picker.take() else { return };
     let Some(d) = app.session.active() else { return };
     let Some(sh) = d.wb.sheet(d.wb.active_sheet()) else { return };
 
+    // ↑/↓ move the highlight, Enter picks it; the grid's keyboard() already yielded these keys.
     let input = p.input(ui);
 
     // Rect of the whole merge (or the single cell): one popup anchored to the merged range.
@@ -161,27 +156,38 @@ pub(super) fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_
         egui::Frame::popup(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_min_width(r.width().max(100.0));
             egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).show(ui, |ui| {
+                // Hover takes the highlight only when the pointer moved this frame: a
+                // stationary pointer over a row would undo ArrowDown/ArrowUp every repaint.
+                let pointer_moved = ui.ctx().input(|i| {
+                    i.events.iter().any(|e| matches!(e, egui::Event::PointerMoved(_)))
+                });
+                let mut chosen: Option<&str> = None;
                 for (i, it) in p.items.iter().enumerate() {
                     let row = ui.add(
                         egui::Button::selectable(i == p.sel, it.as_str())
-                        .frame_when_inactive(false)
-                        .min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)));
+                            .frame_when_inactive(false)
+                            .min_size(vec2(r.width().max(100.0), LIST_PICKER_ROW_H)));
                     if (input.down || input.up) && i == p.sel && !ui.clip_rect().contains_rect(row.rect) {
                         row.scroll_to_me(Some(if input.down { egui::Align::Max } else { egui::Align::Min }));
                     }
-                    if row.hovered() { p.sel = i; }
-                    if row.clicked() || (input.picked.as_ref() == Some(it)) {
-                        app.run_or_alert("cell.set", json!({"cell": p.anchor.a1(), "input": it}));
-                        close = true;
+                    if pointer_moved && row.hovered() {
+                        p.sel = i;
+                    }
+                    // Enter picks by index, not by text: duplicate items must not dispatch twice.
+                    if row.clicked() || (input.picked.is_some() && i == p.sel) {
+                        chosen = Some(it.as_str());
                     }
                 }
-
+                if let Some(it) = chosen {
+                    app.run_or_alert("cell.set", json!({"cell": p.anchor.a1(), "input": it}));
+                    close = true;
+                }
             });
         });
     });
     if close || popup_dismissed(&response.response, was_open) {
         app.grid.list_picker = None;
     } else {
-        app.grid.list_picker = Some(p);   // Save the item selected by the keyboard/hover
+        app.grid.list_picker = Some(p); // Save the item selected by the keyboard/hover
     }
 }

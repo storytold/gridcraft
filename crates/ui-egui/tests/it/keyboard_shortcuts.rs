@@ -185,7 +185,11 @@ fn alt_down_keeps_validation_priority_and_plain_down_navigation() {
     session.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"First,Second\""})).unwrap();
     let mut h = harness(session);
     key(&mut h, Key::ArrowDown, Modifiers::ALT);
-    assert_eq!(h.state().grid.list_picker, Some(CellRef::parse("A1").unwrap()));
+    assert_eq!(
+        h.state().grid.list_picker.as_ref().map(|p| p.cell), 
+        Some(CellRef::parse("A1").unwrap()),
+        "Alt+Down open the list on the active cell"
+    );
     assert!(h.state().grid.filter_menu.is_none());
     key(&mut h, Key::Escape, Modifiers::NONE);
     key(&mut h, Key::ArrowDown, Modifiers::NONE);

@@ -43,9 +43,11 @@ pub(crate) use cell_paint::{cell_text_y, rotated_text_pos, wrapped_cell_text_y};
 #[cfg(test)]
 use cell_paint::{center_across_end, display_text, look, numfmt_color, painted_halign};
 pub(crate) use list_picker::ListPicker;
-
+pub use list_picker::validation_arrow;
 #[cfg(test)]
 use editor::{editor_slack, editor_width};
+#[cfg(test)]
+use list_picker::list_picker_height;
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
