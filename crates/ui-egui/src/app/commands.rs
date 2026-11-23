@@ -244,6 +244,13 @@ impl SheetApp {
                 self.ui.highlight_active_row = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.highlight_active_row);
                 Ok(json!({"on": self.ui.highlight_active_row}))
             }
+            "options.personalTemplatesLocation" => {
+                let Some(location) = p.get("location").and_then(Json::as_str) else {
+                    return Some(Err("personal templates location must be text".into()));
+                };
+                self.ui.personal_templates_location = location.to_string();
+                Ok(json!({"location": self.ui.personal_templates_location}))
+            }
             "view.interfaceScale" => {
                 // `{"percent": 125}` or `{"percent": "auto"}`; out-of-range values are clamped.
                 let percent = match p.get("percent") {
@@ -419,7 +426,14 @@ impl SheetApp {
                 }
             }
             "saveAs" => {
-                let suggested = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                let suggested = self
+                    .session
+                    .active()
+                    .map(|d| {
+                        let title = d.display_title();
+                        if d.is_template_instance() { format!("{title}.xlsx") } else { title }
+                    })
+                    .unwrap_or_else(|| "Book1".into());
                 if let Some(pick) = &self.services.pick_save {
                     if let Some(path) = pick(&suggested) {
                         let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };

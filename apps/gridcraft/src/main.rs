@@ -28,6 +28,20 @@ use gridcraft_ui_egui::doc_windows::DocWindows;
 use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
+const SAVE_TYPES: [(&str, &str); 4] =
+    [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
+
+fn save_suggestion(suggested: &str) -> (String, String) {
+    let path = std::path::Path::new(suggested);
+    let ext = path
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .map(str::to_ascii_lowercase)
+        .filter(|ext| SAVE_TYPES.iter().any(|(_, known)| known == ext));
+    let stem = if ext.is_some() { path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1") } else { suggested };
+    (if stem.is_empty() { "Book1".into() } else { stem.into() }, ext.unwrap_or_else(|| "xlsx".into()))
+}
+
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
 struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
 
@@ -175,7 +189,7 @@ fn services() -> Services {
         })),
         pick_open: Some(Box::new(|| {
             rfd::FileDialog::new()
-                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
+                .add_filter("Spreadsheets", &["xlsx", "xlsm", "xltx", "xltm", "xls", "xlsb", "ods", "csv", "tsv", "txt", "slk", "json"])
                 .add_filter("Excel Workbook", &["xlsx", "xlsm"])
                 .add_filter("Excel 97-2003 Workbook (import)", &["xls"])
                 .add_filter("Excel Binary Workbook (data import)", &["xlsb"])
@@ -184,6 +198,7 @@ fn services() -> Services {
                 .pick_file()
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
+        pick_folder: Some(Box::new(|| rfd::FileDialog::new().pick_folder().and_then(|p| p.to_str().map(str::to_string)))),
         pick_picture: Some(Box::new(|| {
             rfd::FileDialog::new()
                 .add_filter("Pictures (PNG, JPEG)", &["png", "jpg", "jpeg"])
@@ -191,15 +206,10 @@ fn services() -> Services {
                 .and_then(|p| p.to_str().map(str::to_string))
         })),
         pick_save: Some(Box::new(|suggested: &str| {
-            let path = std::path::Path::new(suggested);
-            let stem = path.file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
+            let (stem, ext) = save_suggestion(suggested);
             // The suggested name's type (an export asks for .pdf, .csv or .html) comes first.
-            const TYPES: [(&str, &str); 4] =
-                [("Excel Workbook (.xlsx)", "xlsx"), ("CSV UTF-8 (.csv)", "csv"), ("Web Page (.html)", "html"), ("PDF (.pdf)", "pdf")];
-            let ext = path.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase).filter(|e| TYPES.iter().any(|(_, x)| x == e));
-            let ext = ext.unwrap_or_else(|| "xlsx".to_string());
             let mut dialog = rfd::FileDialog::new().set_file_name(format!("{stem}.{ext}"));
-            for (label, x) in TYPES.iter().filter(|(_, x)| *x == ext).chain(TYPES.iter().filter(|(_, x)| *x != ext)) {
+            for (label, x) in SAVE_TYPES.iter().filter(|(_, x)| *x == ext).chain(SAVE_TYPES.iter().filter(|(_, x)| *x != ext)) {
                 dialog = dialog.add_filter(*label, &[*x]);
             }
             dialog.save_file().and_then(|p| p.to_str().map(str::to_string))
@@ -431,7 +441,15 @@ fn main() -> eframe::Result<()> {
 
 #[cfg(test)]
 mod packaging_tests {
+    use super::save_suggestion;
     use gridcraft_engine::io::FileKind;
+
+    #[test]
+    fn save_suggestions_preserve_dotted_unsaved_titles() {
+        assert_eq!(save_suggestion("budget.2026"), ("budget.2026".into(), "xlsx".into()));
+        assert_eq!(save_suggestion("legacy.xlsx"), ("legacy".into(), "xlsx".into()));
+        assert_eq!(save_suggestion("report.pdf"), ("report".into(), "pdf".into()));
+    }
 
     /// The text between `start` and `end` that follows each `marker` in `text`, sorted (e.g. the
     /// `xlsb` in `Classes\.xlsb\OpenWithProgids`).
