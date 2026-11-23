@@ -624,18 +624,26 @@ pub(crate) fn move_cut_rules(
 ///
 /// [`Workbook::rewrite_references`]: gridcraft_model::Workbook::rewrite_references
 pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) -> Result<()> {
+    rewrite_all_formulas_many(wb, target, std::slice::from_ref(e))
+}
+
+/// [`rewrite_all_formulas`] for several edits applied in order, visiting each formula once.
+pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, target: &str, edits: &[gridcraft_formula::adjust::Edit]) -> Result<()> {
     use gridcraft_formula::adjust::Edit;
-    wb.rewrite_references(&|host, expr| gridcraft_formula::adjust::adjust(expr, host.name, target, e));
+    let adjust_all =
+        |host: &str, expr: gridcraft_formula::Expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e));
+    wb.rewrite_references(&|host, expr| adjust_all(host.name, expr));
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
-    if matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. })
+    let moves_arrays = |e: &&Edit| matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
+    if edits.iter().any(|e| moves_arrays(&e))
         && let Some(si) = wb.sheet_index(target)
         && let Some(sheet) = wb.sheet_mut(si)
     {
         let arrays: Vec<(CellRef, std::sync::Arc<Formula>)> =
             sheet.cells.iter().filter_map(|(c, cell)| cell.formula.clone().filter(|f| f.array.is_some()).map(|f| (c, f))).collect();
         for (c, f) in arrays {
-            let array = f.array.and_then(|a| crate::cmd::sheet::map_range(a, e));
+            let array = edits.iter().filter(moves_arrays).fold(f.array, |a, e| a.and_then(|a| crate::cmd::sheet::map_range(a, e)));
             if array != f.array
                 && let Some(cell) = sheet.cells.get_mut(c)
             {
@@ -643,7 +651,7 @@ pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &
             }
         }
     }
-    rewrite_python_refs(wb, &|host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e))
+    rewrite_python_refs(wb, &adjust_all)
 }
 
 /// Rewrites the `xl("…")` literals in every Python cell with `f`, which maps a reference held on

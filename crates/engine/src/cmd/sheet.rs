@@ -247,8 +247,13 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
 
 /// Rewrites every reference the workbook holds for a structural edit on `target`.
 pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
-    cx.edits.push((target.to_string(), e.clone()));
-    super::edit::rewrite_all_formulas(&mut cx.wb, target, e)
+    rewrite_many(cx, target, std::slice::from_ref(e))
+}
+
+/// [`rewrite`] for several edits applied in order, parsing each reference once.
+fn rewrite_many(cx: &mut Ctx, target: &str, edits: &[Edit]) -> Result<()> {
+    cx.edits.extend(edits.iter().map(|e| (target.to_string(), e.clone())));
+    super::edit::rewrite_all_formulas_many(&mut cx.wb, target, edits)
 }
 
 /// Inserting or deleting cells moves the copied block away from the stored source range, so, like
@@ -356,23 +361,21 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
-        // Last area first, so the earlier ones keep their positions.
-        for (at, count) in areas {
-            {
-                let sh = cx.sheet_mut(sheet)?;
-                let block = match axis {
-                    Axis::Rows => RangeRef::rows(at, (at + count - 1).min(MAX_ROWS - 1)),
-                    Axis::Cols => RangeRef::cols(at, (at + count - 1).min(MAX_COLS - 1)),
-                };
-                sh.take_cells(block);
-                match axis {
-                    Axis::Rows => sh.cells.shift_rows(at + count, -(count as i64)),
-                    Axis::Cols => sh.cells.shift_cols(at + count, -(count as i64)),
-                }
+        {
+            let sh = cx.sheet_mut(sheet)?;
+            // Cells move once, past every deleted area above or left of them.
+            let ascending: Vec<(u32, u32)> = areas.iter().rev().copied().collect();
+            match axis {
+                Axis::Rows => sh.cells.delete_rows(&ascending),
+                Axis::Cols => sh.cells.delete_cols(&ascending),
+            }
+            // Last area first, so the earlier ones keep their positions.
+            for &(at, count) in &areas {
                 shift_sheet_features(sh, axis, at, count, false);
             }
-            rewrite(cx, &name, &Edit::Delete { axis, at, count })?;
         }
+        let edits: Vec<Edit> = areas.iter().map(|&(at, count)| Edit::Delete { axis, at, count }).collect();
+        rewrite_many(cx, &name, &edits)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
