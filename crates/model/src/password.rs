@@ -19,6 +19,7 @@ pub const MAX_SPIN_COUNT: u32 = 10_000_000;
 const MAX_STORED_BYTES: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "StoredHash", into = "StoredHash")]
 pub enum PasswordHash {
     /// The legacy 16-bit hash.
     Legacy(u16),
@@ -32,6 +33,63 @@ pub enum PasswordHash {
     /// A password set in GridCraft, kept in the form each file format stores: Excel's hash
     /// (which verifies it) and the SHA-256 digest.
     Both { excel: Box<PasswordHash>, odf: String },
+}
+
+/// How a [`PasswordHash`] is saved in a GridCraft JSON workbook. A password set in GridCraft
+/// (`Both` with an iterated Excel form, the usual case) is saved in the `Iterated` shape older
+/// GridCraft versions read, with the SHA-256 digest in an extra `odf` field they ignore, so an
+/// ordinary Protect Sheet or Protect Workbook doesn't make a workbook unreadable to them. The
+/// shapes older versions don't know (`Sha256Digest`, and `Both` over a legacy hash) come only
+/// from OpenDocument files, which those versions can't open either.
+#[derive(Serialize, Deserialize)]
+enum StoredHash {
+    Legacy(u16),
+    Iterated {
+        algorithm: String,
+        hash: String,
+        salt: String,
+        spin_count: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        odf: Option<String>,
+    },
+    Sha256Digest(String),
+    Both {
+        excel: Box<PasswordHash>,
+        odf: String,
+    },
+}
+
+impl From<StoredHash> for PasswordHash {
+    fn from(s: StoredHash) -> PasswordHash {
+        match s {
+            StoredHash::Legacy(h) => PasswordHash::Legacy(h),
+            StoredHash::Iterated { algorithm, hash, salt, spin_count, odf } => {
+                let iterated = PasswordHash::Iterated { algorithm, hash, salt, spin_count };
+                match odf {
+                    Some(odf) => PasswordHash::Both { excel: Box::new(iterated), odf },
+                    None => iterated,
+                }
+            }
+            StoredHash::Sha256Digest(k) => PasswordHash::Sha256Digest(k),
+            StoredHash::Both { excel, odf } => PasswordHash::Both { excel, odf },
+        }
+    }
+}
+
+impl From<PasswordHash> for StoredHash {
+    fn from(h: PasswordHash) -> StoredHash {
+        match h {
+            PasswordHash::Legacy(h) => StoredHash::Legacy(h),
+            PasswordHash::Iterated { algorithm, hash, salt, spin_count } => StoredHash::Iterated { algorithm, hash, salt, spin_count, odf: None },
+            PasswordHash::Sha256Digest(k) => StoredHash::Sha256Digest(k),
+            PasswordHash::Both { excel, odf } => match *excel {
+                PasswordHash::Iterated { algorithm, hash, salt, spin_count } => {
+                    StoredHash::Iterated { algorithm, hash, salt, spin_count, odf: Some(odf) }
+                }
+                excel => StoredHash::Both { excel: Box::new(excel), odf },
+            },
+        }
+    }
 }
 
 impl PasswordHash {
@@ -229,6 +287,37 @@ mod tests {
         // The JSON form round-trips.
         let back: PasswordHash = serde_json::from_str(&serde_json::to_string(&h)?)?;
         assert_eq!(back, h);
+        Ok(())
+    }
+
+    /// An ordinary password set in GridCraft is saved in the shape an older GridCraft reads (its
+    /// `PasswordHash` had only `Legacy` and `Iterated`), and reads back with both forms.
+    #[test]
+    fn a_gridcraft_password_is_saved_so_older_versions_read_it() -> Result<(), Box<dyn std::error::Error>> {
+        #[derive(Debug, PartialEq, Deserialize)]
+        enum OlderPasswordHash {
+            Legacy(u16),
+            Iterated { algorithm: String, hash: String, salt: String, spin_count: u32 },
+        }
+        let both = PasswordHash::new_for_files("pa55", b"0123456789abcdef");
+        let saved = serde_json::to_string(&both)?;
+        let older: OlderPasswordHash = serde_json::from_str(&saved)?;
+        let Some(PasswordHash::Iterated { algorithm, hash, salt, spin_count }) = both.excel().cloned() else {
+            return Err("no Excel form".into());
+        };
+        assert_eq!(older, OlderPasswordHash::Iterated { algorithm, hash, salt, spin_count });
+        // This version reads both forms back.
+        let back: PasswordHash = serde_json::from_str(&saved)?;
+        assert_eq!(back, both);
+        assert!(back.verify("pa55")?);
+        // What an older version saved still opens.
+        let excel_only = PasswordHash::new_sha512("pa55", b"0123456789abcdef");
+        let back: PasswordHash = serde_json::from_str(&serde_json::to_string(&excel_only)?)?;
+        assert_eq!(back, excel_only);
+        assert_eq!(serde_json::from_str::<PasswordHash>("{\"Legacy\":52250}")?, PasswordHash::Legacy(52250));
+        // A legacy hash with a digest has no older shape and keeps its own.
+        let legacy_both = PasswordHash::Both { excel: Box::new(PasswordHash::Legacy(52250)), odf: "AA==".into() };
+        assert_eq!(serde_json::from_str::<PasswordHash>(&serde_json::to_string(&legacy_both)?)?, legacy_both);
         Ok(())
     }
 }
