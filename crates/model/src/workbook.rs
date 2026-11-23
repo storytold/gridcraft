@@ -348,13 +348,14 @@ impl std::fmt::Debug for ActiveSheet {
 pub struct RefHost<'a> {
     /// The sheet holding it, or a defined name's scope (`None`: the workbook).
     pub sheet: Option<usize>,
-    /// The name unqualified references in it are on: its sheet's, or [`NAME_HOST`] for a
-    /// defined name (which has none).
+    /// The name unqualified references in it are on: its sheet's (a sheet-level defined name's
+    /// scope sheet, where they are read), or [`NAME_HOST`] for a workbook-level defined name
+    /// (read on whichever sheet uses it).
     pub name: &'a str,
 }
 
-/// [`RefHost::name`] for a defined name: `[` and `]` can't be in a sheet's name, so no sheet's
-/// references are taken for a name's.
+/// [`RefHost::name`] for a workbook-level defined name: `[` and `]` can't be in a sheet's name, so
+/// no sheet's references are taken for a name's.
 pub const NAME_HOST: &str = "[]";
 
 /// Formula text with `f` applied to its references; text that isn't a formula, or that `f`
@@ -390,8 +391,10 @@ impl Workbook {
     /// hyperlinks keep the place they name as typed, as Excel's do. A sheet nothing changes on
     /// stays shared.
     pub fn rewrite_references(&mut self, f: &dyn Fn(RefHost<'_>, Expr) -> Expr) {
+        let sheet_names: Vec<String> = self.sheets.iter().map(|s| s.name.clone()).collect();
         for n in &mut self.names {
-            let host = RefHost { sheet: n.scope, name: NAME_HOST };
+            let name = n.scope.and_then(|i| sheet_names.get(i)).map_or(NAME_HOST, String::as_str);
+            let host = RefHost { sheet: n.scope, name };
             rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
         }
         // A series name is read by the chart as a reference when it starts with `=`, names a

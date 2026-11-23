@@ -229,6 +229,24 @@ fn renaming_a_lambda_name_renames_calls_to_it() {
     assert_eq!(v(&s, "A2"), Value::number(42.0));
 }
 
+/// A sheet-level name's unqualified references are read on its sheet, so they move with edits
+/// there, and stay put for edits on other sheets.
+#[test]
+fn a_sheet_level_name_follows_edits_on_its_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Other", "before": 1})).unwrap();
+    s.execute("range.setValues", json!({"range": "Sheet1!A2", "values": [[5]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "LocalRef", "refersTo": "=$A$2", "scope": "Sheet1"})).unwrap();
+    let formula = |s: &Session| s.doc().unwrap().wb.names.iter().find(|n| n.name == "LocalRef").unwrap().formula.clone();
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Other"})).unwrap();
+    assert_eq!(formula(&s), "$A$2");
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    assert_eq!(formula(&s), "$A$3");
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=LocalRef"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::number(5.0));
+}
+
 #[test]
 fn chart_recommendations_follow_the_data_shape() {
     // #215: Recommended Charts lists chart types for the data; programmatic insert stays dialog-free.
