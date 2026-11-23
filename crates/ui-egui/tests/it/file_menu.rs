@@ -765,3 +765,189 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// macOS asks Save Changes as a sheet on the workbook's window (`Services::save_prompt`): the
+/// built-in dialog isn't drawn while the sheet is up, the close waits on its answer, and each
+/// unsaved workbook gets a sheet of its own. A host with no sheet for the window falls back to the
+/// built-in dialog.
+#[test]
+fn closing_the_window_asks_each_unsaved_workbook_in_a_sheet() {
+    type Asked = Arc<Mutex<Vec<(String, std::sync::mpsc::Sender<String>)>>>;
+    let asked: Asked = Arc::default();
+    let log = asked.clone();
+    let services = Services {
+        save_prompt: Some(Box::new(move |_id, _window, question, _detail| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            log.lock().unwrap().push((question.to_string(), tx));
+            Some(rx)
+        })),
+        ..Default::default()
+    };
+    let mut h = harness(services);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "B2", "input": "7"})).unwrap();
+    h.run_steps(2);
+
+    request_window_close(&mut h);
+    assert_eq!(asked.lock().unwrap().len(), 1, "one sheet at a time");
+    assert!(h.query_by_label("Don't Save").is_none(), "the built-in dialog isn't drawn under the sheet");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "the close waits on the sheet");
+    let (_, answer) = asked.lock().unwrap().remove(0);
+    answer.send("cancel".into()).unwrap();
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "Cancel keeps the app open");
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().session.documents().len(), 2);
+
+    request_window_close(&mut h);
+    let (_, answer) = asked.lock().unwrap().remove(0);
+    answer.send("dontSave".into()).unwrap();
+    step_commands(&mut h);
+    assert_eq!(h.state().session.documents().len(), 1);
+    assert_eq!(asked.lock().unwrap().len(), 1, "then a sheet about the next workbook");
+    let (question, answer) = asked.lock().unwrap().remove(0);
+    assert!(question.starts_with("Do you want to save the changes you made to "), "{question}");
+    answer.send("dontSave".into()).unwrap();
+    let sent = step_commands(&mut h);
+    assert!(sent.contains(&egui::ViewportCommand::Close), "once every workbook is answered the window closes: {sent:?}");
+
+    // No sheet for the window: the built-in dialog asks.
+    let mut h = harness(Services { save_prompt: Some(Box::new(|_, _, _, _| None)), ..Default::default() });
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.run_steps(2);
+    request_window_close(&mut h);
+    assert!(h.query_by_label("Don't Save").is_some(), "the built-in dialog asks");
+}
+
+/// A Save Changes sheet belongs to its window: while one window's sheet is up, closing another
+/// window's workbook asks in a sheet of its own, and each answer closes only its own workbook.
+#[test]
+fn each_window_waits_on_its_own_save_sheet() {
+    type Asked = Arc<Mutex<Vec<std::sync::mpsc::Sender<String>>>>;
+    let asked: Asked = Arc::default();
+    let log = asked.clone();
+    let services = Services {
+        save_prompt: Some(Box::new(move |_, _, _, _| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            log.lock().unwrap().push(tx);
+            Some(rx)
+        })),
+        ..Default::default()
+    };
+    let mut h = harness(services);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "7"})).unwrap();
+    h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
+    h.run_steps(2);
+    choose(&mut h, "Close");
+    h.run_steps(2);
+    assert_eq!(asked.lock().unwrap().len(), 1);
+
+    h.state_mut().run("window.activate", serde_json::json!({"index": 1})).unwrap();
+    h.run_steps(2);
+    choose(&mut h, "Close");
+    h.run_steps(2);
+    assert_eq!(asked.lock().unwrap().len(), 2, "the second window asks in a sheet of its own");
+    asked.lock().unwrap()[1].send("dontSave".into()).unwrap();
+    h.run_steps(3);
+    let docs = h.state().session.documents();
+    assert_eq!(docs.len(), 1, "the second window's answer closes its workbook");
+    assert_eq!(docs[0].wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(42.0), "and not the first window's");
+}
+
+/// With a sheet up on each of two windows, cancelling one window's question takes down only
+/// that window's sheet; the other still waits for its answer.
+#[test]
+fn cancelling_one_windows_question_takes_down_only_its_sheet() {
+    type Asked = Arc<Mutex<Vec<(u64, String, std::sync::mpsc::Sender<String>)>>>;
+    let asked: Asked = Arc::default();
+    let log = asked.clone();
+    let ends: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let ended = ends.clone();
+    let services = Services {
+        save_prompt: Some(Box::new(move |id, window, _, _| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            log.lock().unwrap().push((id, window.to_string(), tx));
+            Some(rx)
+        })),
+        end_save_prompt: Some(Box::new(move |id| ended.lock().unwrap().push(id))),
+        ..Default::default()
+    };
+    // Two workbooks both named Book.xlsx, in two folders: their windows have the same title.
+    let dir = std::env::temp_dir().join(format!("gridcraft-same-title-{}", std::process::id()));
+    let mut h = harness(services);
+    for (n, input) in [("a", "42"), ("b", "7")] {
+        if n == "b" {
+            h.state_mut().run("file.new", serde_json::json!({})).unwrap();
+        }
+        let path = dir.join(n).join("Book.xlsx");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        h.state_mut().run("file.save", serde_json::json!({"path": path.to_string_lossy()})).unwrap();
+        h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": input})).unwrap();
+    }
+    for index in [0, 1] {
+        h.state_mut().run("window.activate", serde_json::json!({"index": index})).unwrap();
+        h.run_steps(2);
+        choose(&mut h, "Close");
+        h.run_steps(2);
+    }
+    let ids: Vec<u64> = asked.lock().unwrap().iter().map(|(id, ..)| *id).collect();
+    assert_eq!(ids.len(), 2, "each window asks in a sheet of its own");
+    let titles: Vec<String> = asked.lock().unwrap().iter().map(|(_, w, _)| w.clone()).collect();
+    assert_eq!(titles[0], titles[1], "both windows have the same title");
+    assert_ne!(ids[0], ids[1], "with its own id, whatever the windows are titled");
+    let ctx = h.ctx.clone();
+    gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.dialog.cancel", &serde_json::json!({}));
+    assert_eq!(*ends.lock().unwrap(), vec![ids[1]], "only the second window's sheet is taken down");
+    // The first window's sheet still answers its own question.
+    asked.lock().unwrap()[0].2.send("dontSave".into()).unwrap();
+    h.state_mut().run("window.activate", serde_json::json!({"index": 0})).unwrap();
+    h.run_steps(4);
+    let docs = h.state().session.documents();
+    assert_eq!(docs.len(), 1, "the first window's answer closes its workbook");
+    assert_eq!(docs[0].wb.active().unwrap().value(CellRef::new(0, 0)), Value::Number(7.0), "and not the second one");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A sheet's answer belongs to its question: after `ui.dialog.cancel` takes the question away, a
+/// late answer from the sheet does nothing, and the next close asks again. A host that drops the
+/// sheet without an answer leaves the question to the built-in dialog.
+#[test]
+fn a_cancelled_or_abandoned_save_sheet_closes_nothing() {
+    type Asked = Arc<Mutex<Vec<std::sync::mpsc::Sender<String>>>>;
+    let asked: Asked = Arc::default();
+    let log = asked.clone();
+    let ends: Arc<Mutex<usize>> = Arc::default();
+    let ended = ends.clone();
+    let services = Services {
+        save_prompt: Some(Box::new(move |_, _, _, _| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            log.lock().unwrap().push(tx);
+            Some(rx)
+        })),
+        end_save_prompt: Some(Box::new(move |_| *ended.lock().unwrap() += 1)),
+        ..Default::default()
+    };
+    let mut h = harness(services);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "42"})).unwrap();
+    h.run_steps(2);
+    request_window_close(&mut h);
+    let ctx = h.ctx.clone();
+    gridcraft_ui_egui::control::handle(h.state_mut(), &ctx, "ui.dialog.cancel", &serde_json::json!({}));
+    assert_eq!(*ends.lock().unwrap(), 1, "the cancelled question's sheet is taken down");
+    // The sheet still answers; nothing listens any more.
+    let _ = asked.lock().unwrap()[0].send("dontSave".into());
+    h.run_steps(3);
+    request_window_close(&mut h);
+    let sent = step_commands(&mut h);
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "the late answer closed nothing: {sent:?}");
+    assert_eq!(asked.lock().unwrap().len(), 2, "the next close asks again");
+
+    // The host drops the sheet without answering.
+    asked.lock().unwrap().clear();
+    h.run_steps(3);
+    assert!(h.query_by_label("Don't Save").is_some(), "the built-in dialog asks instead");
+    assert_eq!(h.state().session.documents().len(), 1);
+}

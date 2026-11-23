@@ -80,7 +80,7 @@ mod services;
 mod state;
 
 pub use clock::{monotonic_ms, now_ms};
-pub use services::{Chrome, Inbox, Services};
+pub use services::{Chrome, Inbox, SavePrompt, Services};
 pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
 pub mod desktop_theme;
 
@@ -253,6 +253,8 @@ pub struct SheetApp {
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
+    /// The id the host's Save Changes sheet was asked with, and its answer (`Services::save_prompt`).
+    save_sheet: Option<(u64, std::sync::mpsc::Receiver<String>)>,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).

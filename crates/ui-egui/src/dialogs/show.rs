@@ -140,6 +140,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
         return;
     }
+    let Some(mut d) = save_sheet(app, ctx, d) else { return };
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
@@ -494,6 +495,64 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     } else if let Some(back) = d.back.take() {
         app.dialog = Some(*back);
     }
+}
+
+/// Save Changes as a sheet on the workbook's own window, when the host shows one
+/// (`Services::save_prompt`), in place of the built-in dialog; gives the dialog back when the
+/// built-in one asks instead, and every other dialog untouched. The dialog stays in `app.dialog` while the sheet is up, so quitting
+/// and closing still wait on it.
+fn save_sheet(app: &mut SheetApp, ctx: &egui::Context, mut d: crate::dialogs::Dialog) -> Option<crate::dialogs::Dialog> {
+    use std::sync::mpsc::TryRecvError;
+    if d.name != "saveChanges" || d.values.get("builtin").and_then(Json::as_bool) == Some(true) {
+        return Some(d);
+    }
+    if app.save_sheet.is_none() {
+        let Some(ask) = &app.services.save_prompt else { return Some(d) };
+        let window = match app.native_windows {
+            #[cfg(not(target_arch = "wasm32"))]
+            true => app.ui_window().map(|w| crate::doc_windows::window_title(app, w)).unwrap_or_default(),
+            _ => app.grid.last_title.clone().unwrap_or_default(),
+        };
+        let name = d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook");
+        let question = format!("Do you want to save the changes you made to {name}?");
+        let detail = "Your changes will be lost if you don't save them.";
+        // No window that is surely the workbook's: the built-in dialog asks.
+        // Each question its own id: two windows can carry the same title.
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let Some(rx) = ask(id, &window, &question, detail) else { return Some(d) };
+        app.save_sheet = Some((id, rx));
+    }
+    let reply = match app.save_sheet.as_ref().map(|(_, rx)| rx.try_recv()) {
+        Some(Err(TryRecvError::Empty)) => {
+            app.dialog = Some(d);
+            return None;
+        }
+        Some(Ok(reply)) => reply,
+        _ => {
+            // The host gave up without an answer: the built-in dialog asks instead.
+            app.save_sheet = None;
+            d.values.insert("builtin".into(), json!(true));
+            return Some(d);
+        }
+    };
+    app.save_sheet = None;
+    let answer = match reply.as_str() {
+        "save" => crate::SaveAnswer::Save,
+        "dontSave" => crate::SaveAnswer::DontSave,
+        _ => crate::SaveAnswer::Cancel,
+    };
+    let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
+    if !app.answer_save_changes(answer, quitting, ctx) {
+        // Save couldn't enter the cell being edited: the built-in dialog asks again beside the reason.
+        d.values.insert("builtin".into(), json!(true));
+        return Some(d);
+    }
+    if app.dialog.is_none() {
+        // The next workbook's question (while quitting) opened its own dialog; else back to whatever waited.
+        app.dialog = d.back.take().map(|b| *b);
+    }
+    None
 }
 
 /// OK in Open Hyperlink; returns whether the prompt closes. A pass that carries control-channel

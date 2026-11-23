@@ -41,6 +41,7 @@ impl SheetApp {
             toast: None,
             notice: None,
             services,
+            save_sheet: None,
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),

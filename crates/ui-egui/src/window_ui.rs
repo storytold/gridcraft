@@ -16,6 +16,8 @@ pub struct WindowUi {
     editor: Option<editor::EditState>,
     text_box_editor: Option<text_box::EditState>,
     dialog: Option<dialogs::Dialog>,
+    /// The answer to this window's Save Changes sheet, which belongs with its dialog.
+    save_sheet: Option<(u64, std::sync::mpsc::Receiver<String>)>,
     backstage: Option<backstage::Backstage>,
     message: Option<(String, String)>,
     toast: Option<(String, f64)>,
@@ -60,6 +62,7 @@ impl SheetApp {
             editor,
             text_box_editor,
             dialog,
+            save_sheet,
             backstage,
             message,
             toast,
@@ -77,6 +80,7 @@ impl SheetApp {
         std::mem::swap(&mut self.editor, editor);
         std::mem::swap(&mut self.text_box_editor, text_box_editor);
         std::mem::swap(&mut self.dialog, dialog);
+        std::mem::swap(&mut self.save_sheet, save_sheet);
         std::mem::swap(&mut self.backstage, backstage);
         std::mem::swap(&mut self.message, message);
         std::mem::swap(&mut self.toast, toast);

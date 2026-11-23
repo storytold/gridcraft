@@ -19,6 +19,8 @@ mod logging;
 mod native_menu;
 mod opener;
 mod print;
+#[cfg(target_os = "macos")]
+mod save_sheet;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -399,6 +401,11 @@ fn main() -> eframe::Result<()> {
                         Ok(rx) => app.control_rx = Some(rx),
                         Err(e) => log::error!("control channel on port {port}: {e}"),
                     }
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    app.services.save_prompt = Some(save_sheet::hook(&cc.egui_ctx));
+                    app.services.end_save_prompt = Some(Box::new(save_sheet::end));
                 }
                 let windows = DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window());
                 Ok(Box::new(App(
