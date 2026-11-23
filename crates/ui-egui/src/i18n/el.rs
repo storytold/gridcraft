@@ -1135,6 +1135,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "Το \\@char έχει μη αριθμητικό όρισμα {argument}",
         "\\@char with invalid code point {code}" => "\\@char με μη έγκυρο σημείο κώδικα {code}",
         "Invalid environment name character: {character}" => "Μη έγκυρος χαρακτήρας στο όνομα περιβάλλοντος: {character}",
+        "Copy Cells" => "Αντιγραφή κελιών",
+        "Fill Series" => "Συμπλήρωση σειράς",
+        "Fill Formatting Only" => "Συμπλήρωση μόνο μορφοποίησης",
+        "Fill Without Formatting" => "Συμπλήρωση χωρίς μορφοποίηση",
+        "Fill Days" => "Συμπλήρωση ημερών",
+        "Fill Weekdays" => "Συμπλήρωση εργάσιμων ημερών",
+        "Fill Months" => "Συμπλήρωση μηνών",
+        "Fill Years" => "Συμπλήρωση ετών",
+        "Auto Fill Options" => "Επιλογές αυτόματης συμπλήρωσης",
         _ => return None,
     })
 }
