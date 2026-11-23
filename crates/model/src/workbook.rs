@@ -380,7 +380,7 @@ impl Workbook {
     /// place: cell formulas (keeping their array and spill kind), defined names, conditional
     /// formats and data validation (written for their range's top-left cell, so they move as
     /// a cell formula there does), chart series (a chart's source block
-    /// that no longer exists is dropped), sparklines, PivotTable sources and form controls'
+    /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources and form controls'
     /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
     /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
     /// visited: table calculated-column and totals formulas, a PivotChart's link to its
@@ -448,8 +448,7 @@ impl Workbook {
                 .charts
                 .iter()
                 .any(|ch| {
-                    dead(ch.source.as_deref())
-                        || ch.source.as_deref().is_some_and(changes)
+                    ch.source.as_deref().is_some_and(changes)
                         || ch.series.iter().any(|se| {
                             changes(&se.values)
                                 || [&se.categories, &se.bubble_sizes].into_iter().flatten().any(|t| changes(t))
@@ -468,10 +467,13 @@ impl Workbook {
                                 rewrite_text(t, &f);
                             }
                         }
+                        // A source this edit breaks is dropped; one already broken before it
+                        // (from a file, or an earlier edit) is kept as it was.
+                        let was_dead = dead(ch.source.as_deref());
                         if let Some(src) = &mut ch.source {
                             rewrite_text(src, &f);
                         }
-                        if dead(ch.source.as_deref()) {
+                        if !was_dead && dead(ch.source.as_deref()) {
                             ch.source = None;
                         }
                     }

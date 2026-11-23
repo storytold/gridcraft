@@ -3943,6 +3943,36 @@ fn switch_row_column_follows_inserted_and_deleted_lines() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].source, None);
 }
 
+/// Sets the first chart's source on Sheet1 as a file might have left it.
+fn set_chart_source(s: &mut Session, source: &str) {
+    let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.sheet_mut(0).unwrap().charts[0].source = Some(source.into());
+}
+
+#[test]
+fn a_chart_source_already_broken_survives_an_unrelated_edit() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "Q1", "Q2"], ["North", 1, 2], ["South", 3, 4]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    set_chart_source(&mut s, "#REF!");
+    // Renaming a name the source doesn't use leaves the broken source as it was.
+    s.execute("formulas.defineName", json!({"name": "Fee", "oldName": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().charts[0].source.as_deref(), Some("#REF!"));
+}
+
+#[test]
+fn deleting_a_chart_source_sheet_drops_the_source() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "Q1", "Q2"], ["North", 1, 2], ["South", 3, 4]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    set_chart_source(&mut s, "Sheet2!A1:C3");
+    // The edit breaks the source, so it goes.
+    s.execute("home.deleteSheet", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().charts[0].source, None);
+}
+
 #[test]
 fn ink_strokes_and_ink_to_shape() {
     let mut s = s();
