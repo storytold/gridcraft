@@ -246,13 +246,19 @@ fn header_text(v: &Value) -> String {
     }
 }
 
-fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef) -> Vec<CField> {
+fn cache_fields(sh: &gridcraft_model::Sheet, r: RangeRef, cached: &[String]) -> Vec<CField> {
+    let col_count = (r.end.col - r.start.col + 1) as usize;
+    let use_cached = !cached.is_empty() && cached.len() == col_count;
     let mut fields: Vec<CField> = Vec::new();
     // Lower-case names taken, and the next suffix for each header (linear for repeated headers).
     let mut taken = std::collections::HashSet::new();
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
     for (k, c) in (r.start.col..=r.end.col).enumerate() {
-        let mut h = header_text(&sh.value(CellRef::new(r.start.row, c)).scalar());
+        let mut h = if use_cached {
+            cached.get(k).map(|s| s.trim().to_string()).unwrap_or_default()
+        } else {
+            header_text(&sh.value(CellRef::new(r.start.row, c)).scalar())
+        };
         if h.is_empty() {
             h = format!("Column{}", k + 1);
         }
@@ -357,7 +363,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
         return None;
     }
     let sh = wb.sheet(si)?;
-    let mut fields = cache_fields(sh, r);
+    let mut fields = cache_fields(sh, r, &pt.cache_fields);
     let find = |fields: &[CField], name: &str| fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
 
     // Records (rows that aren't entirely blank), read once.

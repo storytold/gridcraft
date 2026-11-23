@@ -119,6 +119,7 @@ fn workbook() -> Workbook {
         data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
+        cache_fields: vec![],
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -180,6 +181,7 @@ fn workbook() -> Workbook {
         data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
+        cache_fields: vec![],
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
