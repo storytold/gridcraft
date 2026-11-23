@@ -745,13 +745,23 @@ impl Chart {
     /// chart's kind when it has no series. Series of one family make a chart of the first's
     /// kind, a series keeping its own kind only where it differs (a line's own markers, a
     /// scatter's own lines); series of other families make a combination chart, every series
-    /// keeping its kind. [`Chart::series_kinds`] then draws each series as `drawn` gives it.
+    /// keeping its kind, except that the series of one type on one pair of axes share the first
+    /// one's grouping, as [`Chart::series_kinds`] draws and every format saves them (a stacked
+    /// column after a clustered one on the same axes is kept clustered; on the other axes it
+    /// stays stacked). Each series' own kind is then the kind it is drawn as. Set the series'
+    /// axes (`secondary`) first.
     pub fn set_drawn_kinds(&mut self, drawn: &[ChartKind], empty: ChartKind) {
         let first = drawn.first().copied().unwrap_or(empty);
         let combo = drawn.iter().any(|k| !same_family(*k, first));
         self.kind = if combo { ChartKind::Combo } else { first };
         for (s, k) in self.series.iter_mut().zip(drawn) {
             s.kind = (combo || *k != first).then_some(*k);
+        }
+        if combo {
+            let kinds = self.series_kinds();
+            for (s, k) in self.series.iter_mut().zip(kinds) {
+                s.kind = Some(k);
+            }
         }
     }
 
@@ -1345,6 +1355,27 @@ mod series_kind_tests {
         let mut empty = chart(ColumnClustered, &[]);
         empty.set_drawn_kinds(&[], Radar);
         assert_eq!(empty.kind, Radar);
+    }
+
+    /// Series of one type on one pair of axes keep the first one's grouping, so the kinds a
+    /// file gives them are stored as they are drawn and saved; on the other axes they keep their
+    /// own.
+    #[test]
+    fn drawn_kinds_of_one_type_share_a_grouping_per_pair_of_axes() {
+        use ChartKind::*;
+        let mut c = chart(ColumnClustered, &[None, None, None, None]);
+        c.set_drawn_kinds(&[ColumnClustered, ColumnStacked, ColumnStacked, Line], ColumnClustered);
+        assert_eq!(
+            c.series.iter().map(|s| s.kind).collect::<Vec<_>>(),
+            vec![Some(ColumnClustered); 3].into_iter().chain([Some(Line)]).collect::<Vec<_>>()
+        );
+        assert_eq!(c.series.iter().map(|s| s.kind).collect::<Vec<_>>(), c.series_kinds().into_iter().map(Some).collect::<Vec<_>>());
+        let mut c = chart(ColumnClustered, &[None, None, None, None]);
+        c.series[1].secondary = true;
+        c.series[2].secondary = true;
+        c.set_drawn_kinds(&[ColumnClustered, ColumnStacked, ColumnStacked, Line], ColumnClustered);
+        assert_eq!(c.series_kinds(), vec![ColumnClustered, ColumnStacked, ColumnStacked, Line]);
+        assert_eq!(c.series.iter().map(|s| s.kind).collect::<Vec<_>>(), c.series_kinds().into_iter().map(Some).collect::<Vec<_>>());
     }
 
     #[test]
