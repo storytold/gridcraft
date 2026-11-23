@@ -369,6 +369,39 @@ mod tests {
         assert_eq!(chart(&s).series[1].kind, Some(ChartKind::LineMarkers));
     }
 
+    /// Adding a trendline to every series of a combo chart works out the series' kinds in one
+    /// pass, however many series it holds (a stored chart isn't held to the renderer's limit).
+    #[test]
+    #[allow(clippy::disallowed_methods)] // a native-only timing test: the clock is read off wasm
+    fn trendlines_for_every_series_are_checked_in_linear_time() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "combo"})).unwrap();
+        // Many line series, then as many column series: asked one at a time, each column series
+        // looks back past every line series for the first column series of its group.
+        const N: usize = 60_000;
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let active = wb.active_sheet();
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            let one = c.series[0].clone();
+            c.series = (0..2 * N)
+                .map(|i| {
+                    let mut se = one.clone();
+                    se.kind = Some(if i < N { ChartKind::Line } else { ChartKind::ColumnClustered });
+                    se
+                })
+                .collect();
+        }
+        let t0 = std::time::Instant::now();
+        s.execute("chart.addElement", json!({"element": "trendline"})).unwrap();
+        let took = t0.elapsed();
+        let c = s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        assert!(c.series.iter().all(|se| se.trendlines.len() == 1));
+        // Well under a second in a debug build; asking each series' kind on its own took far longer.
+        assert!(took < std::time::Duration::from_secs(4), "{took:?}");
+    }
+
     #[test]
     fn chart_data_table_refuses_unsupported_types_without_changing_history() {
         let mut s = Session::new();
