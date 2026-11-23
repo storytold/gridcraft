@@ -289,8 +289,9 @@ impl<'h> Evaluator<'h> {
     }
 
     pub(super) fn builtin(&mut self, name: &str, args: &[Expr]) -> Ev {
+        // A worksheet function is called before a name ([`super::resolve::is_function_call`]).
         let Some(spec) = gridcraft_functions::lookup(name) else {
-            // A defined name holding a LAMBDA, or a LET-bound lambda.
+            // A defined name holding a LAMBDA, or a LET-bound lambda, as [`super::resolve`] finds it.
             return match self.name(name) {
                 Ev::L(l) => self.apply_lambda(&l, args),
                 Ev::V(Value::Error(x)) => err(x),
@@ -463,7 +464,11 @@ impl<'h> Evaluator<'h> {
     /// that name.
     pub(super) fn function_by_name(&self, e: &Expr) -> Option<String> {
         let Expr::Name(n) = e else { return None };
-        if self.env.iter().any(|(k, _)| gridcraft_formula::same_name(k, n)) || self.host.workbook().name(n, self.sheet).is_some() {
+        let local = |n: &str| self.env.iter().any(|(k, _)| gridcraft_formula::same_name(k, n)).then_some(());
+        if matches!(
+            super::resolve::resolve_name(self.host.workbook(), self.sheet, n, local),
+            super::resolve::Target::Local(()) | super::resolve::Target::Defined(_)
+        ) {
             return None;
         }
         let u = n.to_ascii_uppercase();

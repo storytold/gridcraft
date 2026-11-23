@@ -16,6 +16,7 @@ mod call;
 mod format;
 mod lambda;
 mod reference_fns;
+pub mod resolve;
 mod special;
 
 use array::map_unary;
@@ -447,54 +448,47 @@ impl<'h> Evaluator<'h> {
     }
 
     fn name(&mut self, n: &str) -> Ev {
-        if let Some((_, v)) = self.env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)) {
-            return v.clone();
-        }
+        let env = &self.env;
         let wb = self.host.workbook();
-        // Sheet-qualified `Sheet1!Name`. The parser stores the sheet unquoted, so it is used as
-        // is (`' Sales '` keeps its spaces) and split at the last `!` (`'a!b'!Name`).
-        let (scope_sheet, bare) = match n.rsplit_once('!') {
-            Some((s, b)) => match wb.sheet_index(s) {
-                Some(i) => (i, b),
+        let local = |n: &str| env.iter().rev().find(|(k, _)| gridcraft_formula::same_name(k, n)).map(|(_, v)| v.clone());
+        let def = match resolve::resolve_name(wb, self.sheet, n, local) {
+            resolve::Target::Local(v) => return v,
+            resolve::Target::Table(si, ti) => {
+                return match wb.sheet(si).and_then(|s| s.tables.get(ti)).and_then(|t| t.data_range()) {
+                    Some(d) => Ev::R(vec![Area { sheet: si, range: d }]),
+                    None => err(CellError::Name),
+                };
+            }
+            resolve::Target::Unresolved => return err(CellError::Name),
+            resolve::Target::Defined(i) => match wb.names.get(i) {
+                Some(def) => (def.formula.clone(), def.scope.unwrap_or(self.sheet)),
                 None => return err(CellError::Name),
             },
-            None => (self.sheet, n),
         };
-        if let Some(def) = wb.name(bare, scope_sheet) {
-            let text = def.formula.clone();
-            let scope = def.scope.unwrap_or(self.sheet);
-            // Each use parses and evaluates the definition again: names that each use the one
-            // before twice double the work per name, so it is charged.
-            if !self.spend(text.len() as u64) {
-                return err(CellError::Calc);
+        let (text, scope) = def;
+        // Each use parses and evaluates the definition again: names that each use the one
+        // before twice double the work per name, so it is charged.
+        if !self.spend(text.len() as u64) {
+            return err(CellError::Calc);
+        }
+        match gridcraft_formula::parse_name(&text) {
+            Ok(expr) => {
+                // Relative references in a name are relative to A1: used here, they move by
+                // this cell's offset from it.
+                let expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
+                    gridcraft_formula::adjust::shift_relative_wrapping(expr, self.at.row as i64, self.at.col as i64)
+                } else {
+                    expr
+                };
+                let saved = self.sheet;
+                // Unqualified references in a name refer to the scope sheet.
+                self.sheet = scope;
+                let r = self.eval(&expr);
+                self.sheet = saved;
+                r
             }
-            return match gridcraft_formula::parse_name(&text) {
-                Ok(expr) => {
-                    // Relative references in a name are relative to A1: used here, they move by
-                    // this cell's offset from it.
-                    let expr = if gridcraft_formula::adjust::has_relative_refs(&expr) {
-                        gridcraft_formula::adjust::shift_relative_wrapping(expr, self.at.row as i64, self.at.col as i64)
-                    } else {
-                        expr
-                    };
-                    let saved = self.sheet;
-                    // Unqualified references in a name refer to the scope sheet.
-                    self.sheet = scope;
-                    let r = self.eval(&expr);
-                    self.sheet = saved;
-                    r
-                }
-                Err(_) => err(CellError::Name),
-            };
+            Err(_) => err(CellError::Name),
         }
-        // A table name alone means its data body.
-        if let Some((si, ti)) = wb.table(bare)
-            && let Some(t) = wb.sheet(si).and_then(|s| s.tables.get(ti))
-            && let Some(d) = t.data_range()
-        {
-            return Ev::R(vec![Area { sheet: si, range: d }]);
-        }
-        err(CellError::Name)
     }
 
     fn structured(&mut self, s: &StructRef) -> Ev {
