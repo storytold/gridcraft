@@ -557,3 +557,144 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+fn finds(item: &str, typed: &str) -> bool {
+    search_matches(&search_fold(item), &search_term(typed))
+}
+
+#[test]
+fn list_search_matches_from_a_word_start() {
+    let la = "Los Angeles - United States of America";
+    for ok in ["Los an", " Los an", "Ange", "United St", "united st", "of America", "- United", "", "L"] {
+        assert!(finds(la, ok), "{ok:?} should match");
+    }
+    for bad in ["United Amer", "geles", "os", "States America", "Los Angeles  -"] {
+        assert!(!finds(la, bad), "{bad:?} should not match");
+    }
+    // A word start can hide behind an earlier, overlapping occurrence.
+    assert!(finds("xa-a-a", "a-a"));
+    assert!(finds("(USA)", "usa"));
+    assert!(finds("2024 report", "202"));
+}
+
+#[test]
+fn list_search_ignores_case_and_accents() {
+    assert!(finds("États-Unis", "etats"));
+    assert!(finds("États-Unis", "UNIS"));
+    assert!(finds("Etats-Unis", "États"));
+    assert!(finds("Straße", "strasse"));
+    assert!(finds("Œuvre", "oe"));
+    assert!(finds("Łódź", "lodz"));
+    // Decomposed accents (e + combining acute) fold the same and don't start a word.
+    assert!(finds("Cafe\u{301} noir", "café n"));
+    assert!(!finds("Cafe\u{301}s", "s"));
+    assert!(finds("東京", "東"));
+    // Vietnamese (Latin Extended Additional, with ơ/ư from Latin Extended-B), any case.
+    assert!(finds("Hà Nội - Vietnam", "ha noi"));
+    assert!(finds("Đà Nẵng", "da nang"));
+    assert!(finds("Thừa Thiên Huế", "thua thien hue"));
+    assert!(finds("HỒ CHÍ MINH", "ho chi"));
+    assert!(finds("Hồ Chí Minh", "HỒ CHÍ"));
+    assert!(finds("Phường Bến Nghé", "phuong ben"));
+    // Pinyin tone marks, transliterations with dots below.
+    assert!(finds("Běijīng", "beijing"));
+    assert!(finds("Lǜ", "lu"));
+    assert!(finds("Ḥaifa", "haifa"));
+    assert_eq!(search_fold("ỆỢỰẠẞ"), "eouass");
+}
+
+#[test]
+fn filter_list_items_keeps_order_and_cap() {
+    let items: Vec<String> = ["Dubai - United Arab Emirates", "Paris - France", "London - United Kingdom", "Boston - United States"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(filter_list_items(&items, "United", 100), [0, 2, 3]);
+    assert_eq!(filter_list_items(&items, "United St", 100), [3]);
+    assert_eq!(filter_list_items(&items, "United", 2), [0, 2]);
+    assert!(filter_list_items(&items, "zzz", 100).is_empty());
+}
+
+#[test]
+fn validation_list_command_returns_filtered_items() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute(
+        "range.setValues",
+        json!({"range": "E1", "values": [["Paris - France"], ["Dubai - United Arab Emirates"], ["New York - United States"]]}),
+    )
+    .unwrap();
+    s.execute("data.validation", json!({"range": "B2:B5", "type": "list", "formula1": "=$E$1:$E$3"})).unwrap();
+    let all = s.execute("data.validationList", json!({"cell": "B3"})).unwrap();
+    assert_eq!(all["items"].as_array().map(Vec::len), Some(3));
+    assert_eq!(all["truncated"], json!(false));
+    let some = s.execute("data.validationList", json!({"cell": "B3", "search": "united s"})).unwrap();
+    assert_eq!(some["items"], json!(["New York - United States"]));
+    assert!(s.execute("data.validationList", json!({"cell": "A1"})).is_err(), "no list validation on A1");
+    s.execute("data.validation", json!({"range": "C1", "type": "list", "formula1": "\"Été,Hiver\""})).unwrap();
+    let lit = s.execute("data.validationList", json!({"cell": "C1", "search": "ete"})).unwrap();
+    assert_eq!(lit["items"], json!(["Été"]));
+}
+
+#[test]
+fn validation_list_search_reads_a_huge_source_within_its_budget() {
+    // A list from a whole column used far past the source budget: a search with no match must
+    // stop at the budget (and say so) rather than read and fold every cell first.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = LIST_SOURCE_BUDGET + 5_000;
+    {
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        for r in 0..rows {
+            sh.cells.set(CellRef::new(r as u32, 4), Cell::value(Value::Text(format!("Item {r}").into())));
+        }
+    }
+    s.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=$E:$E"})).unwrap();
+    let none = s.execute("data.validationList", json!({"cell": "B2", "search": "zzz"})).unwrap();
+    assert_eq!(none["items"], json!([]));
+    assert_eq!(none["truncated"], json!(true), "the source was not read to its end");
+    let first = s.execute("data.validationList", json!({"cell": "B2", "search": "item 1"})).unwrap();
+    assert_eq!(first["items"][0], json!("Item 1"));
+
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations[0].clone();
+    let src = list_search_source(&wb, 0, CellRef::new(1, 1), &dv, LIST_SOURCE_BUDGET);
+    assert!(src.truncated);
+    assert_eq!(src.items.len(), LIST_SOURCE_BUDGET, "exactly the budget's worth of cells read");
+    // The membership check still sees the whole column.
+    let last = format!("Item {}", rows - 1);
+    assert!(check_validation(&wb, 0, CellRef::new(1, 1), &last).is_none(), "{last} is in the list");
+    // A computed source (a name for a formula) over the same column runs out of formula work instead.
+    s.execute("formulas.defineName", json!({"name": "Sorted", "refersTo": "=SORT(Sheet1!$E:$E)"})).unwrap();
+    s.execute("data.validation", json!({"range": "C2", "type": "list", "formula1": "=Sorted"})).unwrap();
+    let sorted = s.execute("data.validationList", json!({"cell": "C2", "search": "zzz"})).unwrap();
+    assert_eq!(sorted["truncated"], json!(true));
+}
+
+#[test]
+fn list_search_source_matches_list_items_within_budget() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1:B5", "values": [["a"], [null], ["c"], ["d"], ["e"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(4)"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "list", "formula1": "=$B1:$B4"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1", "type": "list", "formula1": "=$D$1:$D$9"})).unwrap();
+    s.execute("data.validation", json!({"range": "F1", "type": "list", "formula1": "\"x,y,z\""})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Upper", "refersTo": "=UPPER(Sheet1!$B$1:$B$5)"})).unwrap();
+    s.execute("data.validation", json!({"range": "G1", "type": "list", "formula1": "=Upper"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let rules = wb.active().unwrap().validations.clone();
+    for (dv, cell) in rules.iter().zip(["A2", "C1", "F1", "G1"]) {
+        let at = CellRef::parse(cell).unwrap();
+        let full = list_items(&wb, 0, at, dv);
+        assert!(!full.is_empty(), "{cell}");
+        let src = list_search_source(&wb, 0, at, dv, LIST_SOURCE_BUDGET);
+        assert_eq!(src, ListSource { items: full.clone(), truncated: false }, "{cell}");
+        // A tiny budget keeps the beginning and says the rest was not read.
+        let cut = list_search_source(&wb, 0, at, dv, 1);
+        assert!(cut.truncated, "{cell}: {cut:?}");
+        assert!(full.starts_with(&cut.items), "{cell}: {cut:?}");
+    }
+    // The spilled SEQUENCE is read cell by cell like stored values.
+    assert_eq!(list_search_source(&wb, 0, CellRef::new(0, 2), &rules[1], 100).items, ["1", "2", "3", "4"]);
+}
