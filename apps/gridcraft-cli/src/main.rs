@@ -305,7 +305,7 @@ fn convert(args: &[String]) -> Result<(), String> {
         eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
         return Ok(());
     }
-    for warning in gridcraft_engine::cmd::file::save_losses(&s, &json!({"path": out})) {
+    for warning in gridcraft_engine::cmd::file::save_losses(&s, "file.save", &json!({"path": out})).messages() {
         eprintln!("Warning: {warning}");
     }
     let d = s.doc().map_err(|e| e.to_string())?;

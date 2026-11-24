@@ -1,4 +1,6 @@
-use super::{Json, SaveAnswer, SaveLossAnswer, SheetApp, json};
+use gridcraft_engine::cmd::file::{SaveLosses, save_losses, xlsx_save_losses};
+
+use super::{AfterSave, Json, PendingSave, SaveAnswer, SaveLossAnswer, SaveRequest, SheetApp, json};
 
 impl SheetApp {
     /// Holds back a window close (the close button, Alt+F4, the OS quitting the app) while a
@@ -69,14 +71,8 @@ impl SheetApp {
                 if !self.commit_edit(0, 0, false, false) {
                     return false;
                 }
-                self.run_or_alert("file.save", json!({}));
-                // The save may ask about what it would lose: the close goes on once that is answered.
-                if let Some(d) = self.dialog.as_mut().filter(|d| d.name() == "saveLoss") {
-                    d.values.insert("close".into(), json!(true));
-                    d.values.insert("quit".into(), json!(quitting));
-                    return true;
-                }
-                self.close_if_saved(quitting, ctx);
+                let request = SaveRequest::Command { id: "file.save".into(), params: json!({}) };
+                self.save_then(request, AfterSave { close: true, quit: quitting }, ctx);
             }
         }
         true
@@ -91,41 +87,66 @@ impl SheetApp {
         }
     }
 
-    /// Asks before a save that would lose something the user hasn't agreed to losing. Returns
-    /// whether the save is held back for the answer. `download` is the web's Save, which hands the
-    /// file to the browser.
-    pub(super) fn ask_about_save_losses(&mut self, params: &Json, download: bool) -> bool {
-        if self.save_losses_to_ask(params).is_empty() {
-            return false;
+    /// Runs a save and then `after`. When the save (or the Save As it leads to) has to ask what it
+    /// may lose, the question takes `after` along and the answer goes on with it.
+    fn save_then(&mut self, request: SaveRequest, after: AfterSave, ctx: &egui::Context) {
+        self.after_save = Some(after);
+        match request {
+            SaveRequest::Command { id, params } => self.run_or_alert(&id, params),
+            SaveRequest::Download => {
+                if !self.hold_save(SaveRequest::Download) {
+                    self.download_workbook("xlsx");
+                }
+            }
         }
-        self.open_dialog("saveLoss", json!({"params": params, "download": download}));
+        if let Some(after) = self.after_save.take()
+            && after.close
+        {
+            self.close_if_saved(after.quit, ctx);
+        }
+    }
+
+    /// Holds back a save that would lose something the user hasn't agreed to losing, and asks.
+    /// Returns whether it was held: the answer runs it ([`Self::answer_save_loss`]).
+    pub(super) fn hold_save(&mut self, request: SaveRequest) -> bool {
+        let losses = self.save_losses_to_ask(&request);
+        let Some(doc) = self.session.active().map(|d| d.uid).filter(|_| !losses.is_empty()) else { return false };
+        let pending = PendingSave { doc, request, losses, after: self.after_save.take().unwrap_or_default() };
+        if let Err(e) = self.commit_text_box_edit() {
+            self.message = Some(("Text Box".into(), super::clean_error(&e)));
+        } else {
+            self.replace_dialog(|_| Some(crate::dialogs::Dialog::save_loss(pending)));
+        }
         true
     }
 
     /// What the save would lose, unless the user already agreed to exactly that for this document.
-    pub(super) fn save_losses_to_ask(&self, params: &Json) -> Vec<String> {
-        let losses = gridcraft_engine::cmd::file::save_losses(&self.session, params);
+    pub(super) fn save_losses_to_ask(&self, request: &SaveRequest) -> SaveLosses {
+        let losses = match request {
+            SaveRequest::Command { id, params } => save_losses(&self.session, id, params),
+            SaveRequest::Download => xlsx_save_losses(&self.session),
+        };
         let agreed = self.session.active().and_then(|d| self.accepted_losses.get(&d.uid));
-        if agreed == Some(&losses) { vec![] } else { losses }
+        if agreed == Some(&losses) { SaveLosses::default() } else { losses }
     }
 
-    /// Answers the question [`Self::ask_about_save_losses`] asked, with the dialog's values.
-    /// Returns whether it is settled: a cancelled file picker keeps it open.
-    pub fn answer_save_loss(&mut self, answer: SaveLossAnswer, values: &serde_json::Map<String, Json>, ctx: &egui::Context) -> bool {
-        let flag = |k: &str| values.get(k).and_then(Json::as_bool) == Some(true);
-        let params = values.get("params").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({}));
+    /// Answers the question [`Self::hold_save`] asked. Returns whether it is settled: a cancelled
+    /// file picker keeps it open.
+    pub(crate) fn answer_save_loss(&mut self, answer: SaveLossAnswer, pending: PendingSave, ctx: &egui::Context) -> bool {
+        if answer == SaveLossAnswer::Cancel {
+            return true;
+        }
+        // The question stays in its window, so its workbook is the active one; should another be,
+        // nothing is saved that the user wasn't asked about.
+        if self.session.active().map(|d| d.uid) != Some(pending.doc) {
+            self.message = Some(("GridCraft".into(), "The workbook this question was about is no longer in front, so nothing was saved.".into()));
+            return true;
+        }
         match answer {
-            SaveLossAnswer::Cancel => return true,
+            SaveLossAnswer::Cancel => {}
             SaveLossAnswer::Anyway => {
-                if let Some(uid) = self.session.active().map(|d| d.uid) {
-                    let losses = gridcraft_engine::cmd::file::save_losses(&self.session, &params);
-                    self.accepted_losses.insert(uid, losses);
-                }
-                if flag("download") {
-                    self.download_workbook("xlsx");
-                } else {
-                    self.run_or_alert("file.save", params);
-                }
+                self.accepted_losses.insert(pending.doc, pending.losses);
+                self.save_then(pending.request, pending.after, ctx);
             }
             SaveLossAnswer::Json => {
                 let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
@@ -135,18 +156,18 @@ impl SheetApp {
                     // The picked name is kept (the picker asked about replacing that file): another
                     // type goes by its extension, and asks again if it loses something.
                     let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.json") } else { path };
-                    self.run_or_alert("file.save", json!({"path": path}));
+                    self.save_then(SaveRequest::Command { id: "file.save".into(), params: json!({"path": path}) }, pending.after, ctx);
                 } else if self.services.download.is_some() {
                     self.download_workbook("json");
+                    if pending.after.close {
+                        self.close_if_saved(pending.after.quit, ctx);
+                    }
                 } else {
                     self.message =
                         Some(("GridCraft".into(), "Saving under another name needs a file picker, which this window doesn't have.".into()));
                     return false;
                 }
             }
-        }
-        if flag("close") {
-            self.close_if_saved(flag("quit"), ctx);
         }
         true
     }
@@ -195,5 +216,39 @@ impl SheetApp {
             return;
         }
         self.continue_quit(ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    /// Save Anyway answers for the workbook that asked: with another one active, nothing is
+    /// written and nothing is agreed to for it.
+    #[test]
+    fn a_save_loss_answer_never_acts_on_another_workbook() {
+        let dir = std::env::temp_dir().join(format!("gridcraft-loss-owner-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let at = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, crate::Services::default());
+        app.run("file.save", json!({"path": at("First.xlsx")})).unwrap();
+        app.run("pageLayout.pageSetup", json!({"excluded": true})).unwrap();
+        let first = app.session.active().unwrap().uid;
+        app.run_or_alert("file.save", json!({}));
+        let pending = app.dialog.as_ref().and_then(|d| d.pending_save()).unwrap();
+        assert_eq!(pending.doc, first);
+
+        app.run("file.new", json!({})).unwrap();
+        app.run("file.save", json!({"path": at("Second.xlsx")})).unwrap();
+        app.run("pageLayout.pageSetup", json!({"excluded": true})).unwrap();
+        let (second, before) = (app.session.active().unwrap().uid, std::fs::read(at("Second.xlsx")).unwrap());
+        assert!(app.answer_save_loss(SaveLossAnswer::Anyway, pending, &egui::Context::default()));
+        assert_eq!(std::fs::read(at("Second.xlsx")).unwrap(), before);
+        assert!(app.session.active().is_some_and(|d| d.uid == second && d.is_dirty()));
+        assert!(!app.accepted_losses.contains_key(&second) && app.message.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

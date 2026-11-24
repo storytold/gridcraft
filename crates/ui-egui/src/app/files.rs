@@ -1,4 +1,4 @@
-use super::{Json, Notice, NoticeKind, OpenWindow, SheetApp, clean_error, json};
+use super::{Json, Notice, NoticeKind, OpenWindow, SaveRequest, SheetApp, clean_error, json};
 
 impl SheetApp {
     pub fn open_path(&mut self, path: &str) {
@@ -112,11 +112,11 @@ impl SheetApp {
         if autosave_due {
             self.grid.last_autosave = now;
             // AutoSave never drops something on its own: it waits for a Save, which asks.
-            let losses = self.save_losses_to_ask(&json!({}));
+            let losses = self.save_losses_to_ask(&SaveRequest::Command { id: "file.save".into(), params: json!({}) });
             if !losses.is_empty() {
                 let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
                 if self.held_losses.get(&uid) != Some(&losses) {
-                    let text = format!("AutoSave is on hold for this workbook. {}", losses.join(" "));
+                    let text = format!("AutoSave is on hold for this workbook. {}", losses.messages().join(" "));
                     self.notice = Some(Notice { text, kind: NoticeKind::Warning, action: Some(("Save…".into(), "saveLoss".into())) });
                     self.held_losses.insert(uid, losses);
                 }

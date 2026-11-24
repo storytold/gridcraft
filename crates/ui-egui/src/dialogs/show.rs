@@ -352,8 +352,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 "saveLoss" => {
                     let lang = app.ui.language;
-                    let params = d.values.get("params").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({}));
-                    for loss in gridcraft_engine::cmd::file::save_losses(&app.session, &params) {
+                    let pending = d.pending_save();
+                    for loss in pending.iter().flat_map(|p| p.losses.messages()) {
                         ui.add(egui::Label::new(loss).wrap());
                     }
                     ui.horizontal(|ui| {
@@ -362,7 +362,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                             ("Save Anyway", crate::SaveLossAnswer::Anyway),
                             ("Save as GridCraft Workbook…", crate::SaveLossAnswer::Json),
                         ] {
-                            if ui.button(lang.tr(label)).clicked() && app.answer_save_loss(answer, &d.values, ui.ctx()) {
+                            if ui.button(lang.tr(label)).clicked() && pending.clone().is_none_or(|p| app.answer_save_loss(answer, p, ui.ctx())) {
                                 open = false;
                             }
                         }

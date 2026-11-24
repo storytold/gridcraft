@@ -314,9 +314,11 @@ pub struct SheetApp {
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
     /// Save losses the user said yes to, per document uid: saving asks again only about others.
-    accepted_losses: std::collections::HashMap<u64, Vec<String>>,
+    accepted_losses: std::collections::HashMap<u64, gridcraft_engine::cmd::file::SaveLosses>,
     /// The losses AutoSave last held back for, per document uid, so it says so once.
-    held_losses: std::collections::HashMap<u64, Vec<String>>,
+    held_losses: std::collections::HashMap<u64, gridcraft_engine::cmd::file::SaveLosses>,
+    /// What follows the save being run, until a question holds that save back and takes it along.
+    after_save: Option<state::AfterSave>,
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,
