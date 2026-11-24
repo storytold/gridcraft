@@ -57,6 +57,10 @@ pub struct Calc {
     spill_errors: SpillErrors,
     /// The only sheet the current calculation may evaluate (Calculate Sheet), or `None` for all.
     scope: Option<usize>,
+    /// Set while a run evaluates and cleared when it returns. Still set means a run panicked
+    /// partway, so the graph, the spill errors, `scope` and `standing` may be half-updated: the
+    /// next Calculate Sheet then rebuilds first, as a full calculation always does.
+    unfinished: bool,
 }
 
 /// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
@@ -166,6 +170,7 @@ impl Default for Calc {
             standing: Standing::default(),
             spill_errors: SpillErrors::default(),
             scope: None,
+            unfinished: false,
         }
     }
 }
@@ -253,6 +258,7 @@ impl Calc {
         // may leak into later calculations on other sheets.
         self.scope = None;
         self.standing = Standing::default();
+        self.unfinished = false;
         self.graph = Graph::default();
         let mut circ = Vec::new();
         self.spill_errors.clear();
@@ -351,7 +357,13 @@ impl Calc {
     /// Recalculates every formula on `only`, or on every sheet when it is `None`.
     fn recalc_every(&mut self, wb: &mut Workbook, only: Option<usize>) {
         let in_scope = |sheet: usize| only.is_none_or(|s| s == sheet);
-        self.rebuild(wb);
+        // A full calculation rebuilds the graph from every sheet. Calculate Sheet uses the graph
+        // as it stands: `cells_changed`, undo, redo and the panic recovery in `Session::execute`
+        // keep it up to date, so scanning every sheet again would only repeat that work. Only a
+        // run that never finished leaves it in doubt, and then this rebuilds too.
+        if only.is_none() || self.unfinished {
+            self.rebuild(wb);
+        }
         // The layout the sheets hold now decides who keeps cells two arrays both want.
         // (A Python cell that holds a spill counts too, as it does in the incremental pass.)
         let mut areas: HashMap<Key, RangeRef> = HashMap::default();
@@ -578,6 +590,7 @@ impl Calc {
 
     /// Evaluates the dirty set and writes results (and spills) back.
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+        self.unfinished = true;
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         let mut seen: HashSet<Key> = HashSet::default();
@@ -676,6 +689,7 @@ impl Calc {
         } else {
             self.circular.retain(|k| self.graph.nodes.contains_key(k));
         }
+        self.unfinished = false;
     }
 
     fn write_back(
@@ -1370,6 +1384,54 @@ pub(crate) mod tests {
         set(&mut wb, &mut calc, "A1", "5");
         assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("C1").unwrap()), Value::Number(15.0));
         assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("D1").unwrap()), Value::Number(9.0));
+    }
+
+    /// A workbook whose two sheets each hold a formula, calculated once, then given a formula on
+    /// Sheet1 that the graph has not been told about (only a rebuild reads it in) and a new input
+    /// on Sheet2.
+    fn two_sheets_with_an_untold_formula() -> (Workbook, Calc, Key) {
+        let mut wb = Workbook::new();
+        wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet2")));
+        let a1 = CellRef::parse("A1").unwrap();
+        let b1 = CellRef::parse("B1").unwrap();
+        for si in 0..2 {
+            let sh = wb.sheet_mut(si).unwrap();
+            sh.cells.set(a1, Cell::value(Value::Number(2.0)));
+            sh.cells.set(b1, Cell::formula(Formula::new("=A1*10")));
+        }
+        let mut calc = Calc::new();
+        calc.recalc_all(&mut wb);
+        let c1 = CellRef::parse("C1").unwrap();
+        wb.sheet_mut(0).unwrap().cells.set(c1, Cell::formula(Formula::new("=A1+1")));
+        wb.sheet_mut(1).unwrap().cells.set(a1, Cell::value(Value::Number(3.0)));
+        (wb, calc, (0, c1))
+    }
+
+    /// Calculate Sheet evaluates one sheet, so it no longer rebuilds the graph of every sheet
+    /// first (CodeRabbit on PR #4579): the formula on Sheet1 stays unknown to the graph, and
+    /// Sheet2 still calculates from the graph it has.
+    #[test]
+    fn calculate_sheet_does_not_rebuild_the_whole_graph() {
+        let (mut wb, mut calc, untold) = two_sheets_with_an_untold_formula();
+        calc.recalc_sheet(&mut wb, 1);
+        assert!(!calc.graph.nodes.contains_key(&untold), "Calculate Sheet rebuilt the graph of every sheet");
+        assert_eq!(wb.sheet(1).unwrap().value(CellRef::parse("B1").unwrap()), Value::Number(30.0));
+        assert_eq!(wb.sheet(0).unwrap().value(CellRef::parse("B1").unwrap()), Value::Number(20.0));
+    }
+
+    /// A run that panicked never cleared `unfinished`, so the graph may be half-updated: the next
+    /// Calculate Sheet rebuilds first, and the rebuild clears the mark.
+    #[test]
+    fn calculate_sheet_rebuilds_after_a_run_that_never_finished() {
+        let (mut wb, mut calc, untold) = two_sheets_with_an_untold_formula();
+        // The state a run that panicked partway leaves behind.
+        calc.unfinished = true;
+        calc.scope = Some(0);
+        calc.recalc_sheet(&mut wb, 1);
+        assert!(calc.graph.nodes.contains_key(&untold));
+        assert!(!calc.unfinished);
+        assert_eq!(calc.scope, None);
+        assert_eq!(wb.sheet(1).unwrap().value(CellRef::parse("B1").unwrap()), Value::Number(30.0));
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the
