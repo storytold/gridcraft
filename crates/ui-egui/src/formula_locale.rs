@@ -41,9 +41,13 @@ pub(crate) fn canonical(
     Ok(text.to_string())
 }
 
-/// `+ÍNDICE(A1;1)`: after the sign, a localized function name that starts with an accented
-/// letter and is followed by `(`. Any other accented word (`+Árbol`, `-Ótimo`) stays text.
+/// `+ÍNDICE(A1;1)`: after the sign, a Brazilian Portuguese function name that starts with an
+/// accented letter and is followed by `(`. Any other accented word (`+Árbol`, `-Ótimo`) stays
+/// text, and so does every non-ASCII start in Spanish, whose names are all ASCII (`+ſUMA(1;2)`).
 fn signed_localized_call(body: &str, locale: FormulaLocale) -> bool {
+    if locale != FormulaLocale::PtBr {
+        return false;
+    }
     let rest = body.get(1..).unwrap_or("");
     let name_len: usize = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
     let (Some(name), Some(after)) = (rest.get(..name_len), rest.get(name_len..)) else { return false };

@@ -187,7 +187,7 @@ fn spanish_signed_accented_text_stays_text() {
     let mut app = app();
     app.run("app.language.set", json!({"language":"es"})).unwrap();
     assert_eq!(app.ui.language, Language::Es);
-    for text in ["+Árbol", "-Árbol"] {
+    for text in ["+Árbol", "-Árbol", "+ſUMA(1;2)"] {
         assert!(enter(&mut app, text), "{text}");
         let cell = app.session.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).unwrap().clone();
         assert!(cell.formula.is_none(), "{text} became a formula");
