@@ -17,6 +17,7 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod opener;
 mod print;
 
 use std::cell::RefCell;
@@ -218,16 +219,16 @@ fn open_with_system(target: &str) {
         log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
         return;
     };
-    let target = target.as_str();
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(windows) {
-        "explorer"
-    } else {
-        "xdg-open"
+    // By absolute path where the platform has one (#2176): a bare `explorer` would be looked up
+    // in the application's directory first.
+    let env = |key: &str| std::env::var(key).ok();
+    let (system_root, windir) = (env("SystemRoot"), env("windir"));
+    let Some((program, arg)) = opener::opener_command(opener::Os::current(), &target, system_root.as_deref(), windir.as_deref()) else {
+        log::warn!("refused to open {target:?}: it could be read as an option");
+        return;
     };
-    if let Err(e) = std::process::Command::new(cmd).arg(target).spawn() {
-        log::warn!("{cmd} {target}: {e}");
+    if let Err(e) = std::process::Command::new(&program).arg(&arg).spawn() {
+        log::warn!("{} {arg}: {e}", program.display());
     }
 }
 
@@ -357,21 +358,11 @@ fn main() -> eframe::Result<()> {
     }
     let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     let mut options = options;
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && std::env::var_os("GRIDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
-    }
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]

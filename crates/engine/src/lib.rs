@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod cf;
+pub mod chart_data;
 mod chart_svg;
 mod clip_html;
 pub mod cmd;
@@ -226,6 +227,9 @@ pub struct DocState {
     pub go_to_recent: Vec<String>,
     /// Opened with [`Session::defer_row_fit`]: its rows wait for [`Session::fit_deferred_rows`].
     pub rows_unfit: bool,
+    /// The Distinct Count PivotTable value fields (sheet, pivot, value) an .xlsx save has already
+    /// told the user about (#3336), so only a field not yet disclosed raises the notice again.
+    pub distinct_disclosed: Vec<(usize, usize, usize)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -364,6 +368,7 @@ impl DocState {
             edits: None,
             go_to_recent: vec![],
             rows_unfit: false,
+            distinct_disclosed: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {
