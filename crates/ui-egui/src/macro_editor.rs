@@ -1880,7 +1880,7 @@ fn step_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) {
                 (CompareOp::Contains, "contains"),
             ];
             let label = ops.iter().find(|(o, _)| *o == op).map_or("", |x| x.1);
-            craft_ui::ComboBox::from_id_salt(("me_op", &path)).selected_text(label).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt(("me_op", &path)).selected_text(label).show_ui(ui, |ui| {
                 for (o, l) in ops {
                     ui.selectable_value(&mut op2, o, l);
                 }
@@ -2120,7 +2120,7 @@ fn inputs_tab(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, ed: &mut Editor) 
                 ui.label(label);
                 let mut ty = i.col_types.get(c).copied().unwrap_or(ColType::Any);
                 let before_ty = ty;
-                craft_ui::ComboBox::from_id_salt(("me_ty", c)).selected_text(type_name(ty)).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt(("me_ty", c)).selected_text(type_name(ty)).show_ui(ui, |ui| {
                     for x in [ColType::Any, ColType::Number, ColType::Text, ColType::Date, ColType::Bool] {
                         ui.selectable_value(&mut ty, x, type_name(x));
                     }
