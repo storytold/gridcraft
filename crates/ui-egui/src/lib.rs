@@ -80,7 +80,7 @@ mod state;
 
 pub use clock::{monotonic_ms, now_ms};
 pub use services::{Chrome, Inbox, Services};
-pub use state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
+pub use state::{NoticeKind, OpenWindow, SaveAnswer, SaveLossAnswer, SheetView};
 pub mod desktop_theme;
 
 fn parse_resize_direction(value: &str) -> Option<egui::ResizeDirection> {
@@ -313,6 +313,10 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// Save losses the user said yes to, per document uid: saving asks again only about others.
+    accepted_losses: std::collections::HashMap<u64, Vec<String>>,
+    /// The losses AutoSave last held back for, per document uid, so it says so once.
+    held_losses: std::collections::HashMap<u64, Vec<String>>,
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,

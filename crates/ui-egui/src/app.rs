@@ -2,7 +2,7 @@
 use super::clock::monotonic_ms;
 use super::clock::now_ms;
 use super::services::{Chrome, Services};
-use super::state::{NoticeKind, OpenWindow, SaveAnswer, SheetView};
+use super::state::{NoticeKind, OpenWindow, SaveAnswer, SaveLossAnswer, SheetView};
 #[cfg(not(target_arch = "wasm32"))]
 use super::updates_ui;
 use super::{
@@ -74,6 +74,8 @@ impl SheetApp {
             chart_cache: Default::default(),
             clipboard_text_at_copy: None,
             cut_text: None,
+            accepted_losses: Default::default(),
+            held_losses: Default::default(),
             tab_run: None,
             macros: macro_ui::MacroUi::default(),
             started: now_ms(),

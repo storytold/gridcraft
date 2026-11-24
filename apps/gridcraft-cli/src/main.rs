@@ -164,7 +164,7 @@ impl Args {
 
 fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     let r = s.execute_headless(id, params).map_err(|e| e.to_string());
-    if id == "file.open"
+    if matches!(id, "file.open" | "file.save" | "file.saveAs")
         && let Ok(value) = &r
         && let Some(warnings) = value.get("warnings").and_then(Value::as_array)
     {
@@ -304,6 +304,9 @@ fn convert(args: &[String]) -> Result<(), String> {
         let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
         eprintln!("wrote {out} ({} bytes, {} pages)", result["bytes"], result["pages"]);
         return Ok(());
+    }
+    for warning in gridcraft_engine::cmd::file::save_losses(&s, &json!({"path": out})) {
+        eprintln!("Warning: {warning}");
     }
     let d = s.doc().map_err(|e| e.to_string())?;
     let bytes = gridcraft_engine::io::save_file_bytes(&d.wb, out).map_err(|e| e.to_string())?;

@@ -1,4 +1,4 @@
-use super::{SaveAnswer, SheetApp, json};
+use super::{Json, SaveAnswer, SaveLossAnswer, SheetApp, json};
 
 impl SheetApp {
     /// Holds back a window close (the close button, Alt+F4, the OS quitting the app) while a
@@ -70,15 +70,99 @@ impl SheetApp {
                     return false;
                 }
                 self.run_or_alert("file.save", json!({}));
-                if self.session.active().is_some_and(|x| !x.is_dirty()) {
-                    self.run_or_alert("file.close", json!({"force": true, "document": true}));
-                    if quitting {
-                        self.continue_quit(ctx);
-                    }
+                // The save may ask about what it would lose: the close goes on once that is answered.
+                if let Some(d) = self.dialog.as_mut().filter(|d| d.name() == "saveLoss") {
+                    d.values.insert("close".into(), json!(true));
+                    d.values.insert("quit".into(), json!(quitting));
+                    return true;
                 }
+                self.close_if_saved(quitting, ctx);
             }
         }
         true
+    }
+
+    fn close_if_saved(&mut self, quitting: bool, ctx: &egui::Context) {
+        if self.session.active().is_some_and(|x| !x.is_dirty()) {
+            self.run_or_alert("file.close", json!({"force": true, "document": true}));
+            if quitting {
+                self.continue_quit(ctx);
+            }
+        }
+    }
+
+    /// Asks before a save that would lose something the user hasn't agreed to losing. Returns
+    /// whether the save is held back for the answer. `download` is the web's Save, which hands the
+    /// file to the browser.
+    pub(super) fn ask_about_save_losses(&mut self, params: &Json, download: bool) -> bool {
+        if self.save_losses_to_ask(params).is_empty() {
+            return false;
+        }
+        self.open_dialog("saveLoss", json!({"params": params, "download": download}));
+        true
+    }
+
+    /// What the save would lose, unless the user already agreed to exactly that for this document.
+    pub(super) fn save_losses_to_ask(&self, params: &Json) -> Vec<String> {
+        let losses = gridcraft_engine::cmd::file::save_losses(&self.session, params);
+        let agreed = self.session.active().and_then(|d| self.accepted_losses.get(&d.uid));
+        if agreed == Some(&losses) { vec![] } else { losses }
+    }
+
+    /// Answers the question [`Self::ask_about_save_losses`] asked, with the dialog's values.
+    /// Returns whether it is settled: a cancelled file picker keeps it open.
+    pub fn answer_save_loss(&mut self, answer: SaveLossAnswer, values: &serde_json::Map<String, Json>, ctx: &egui::Context) -> bool {
+        let flag = |k: &str| values.get(k).and_then(Json::as_bool) == Some(true);
+        let params = values.get("params").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({}));
+        match answer {
+            SaveLossAnswer::Cancel => return true,
+            SaveLossAnswer::Anyway => {
+                if let Some(uid) = self.session.active().map(|d| d.uid) {
+                    let losses = gridcraft_engine::cmd::file::save_losses(&self.session, &params);
+                    self.accepted_losses.insert(uid, losses);
+                }
+                if flag("download") {
+                    self.download_workbook("xlsx");
+                } else {
+                    self.run_or_alert("file.save", params);
+                }
+            }
+            SaveLossAnswer::Json => {
+                let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
+                let name = std::path::Path::new(&title).with_extension("json").to_string_lossy().into_owned();
+                if let Some(pick) = &self.services.pick_save {
+                    let Some(path) = pick(&name) else { return false };
+                    // The picked name is kept (the picker asked about replacing that file): another
+                    // type goes by its extension, and asks again if it loses something.
+                    let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.json") } else { path };
+                    self.run_or_alert("file.save", json!({"path": path}));
+                } else if self.services.download.is_some() {
+                    self.download_workbook("json");
+                } else {
+                    self.message =
+                        Some(("GridCraft".into(), "Saving under another name needs a file picker, which this window doesn't have.".into()));
+                    return false;
+                }
+            }
+        }
+        if flag("close") {
+            self.close_if_saved(flag("quit"), ctx);
+        }
+        true
+    }
+
+    /// Hands the workbook, encoded as `format`, to the browser.
+    pub(super) fn download_workbook(&mut self, format: &str) {
+        match self.run("file.saveBytes", json!({"format": format})) {
+            Ok(r) => {
+                if let Some(dl) = &self.services.download
+                    && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
+                {
+                    dl(r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx"), &b);
+                }
+            }
+            Err(e) => self.alert(e),
+        }
     }
 
     /// Quit (the macOS app menu, ⌘Q): commits every window's cell draft as Enter would, lets the

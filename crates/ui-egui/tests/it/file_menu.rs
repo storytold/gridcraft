@@ -715,3 +715,102 @@ fn control_requests_route_to_a_window_and_list_windows() {
     let r = call(&mut h, "engine.execute", serde_json::json!({"command": "cell.get", "params": {"cell": "A1"}, "window": 999}));
     assert_eq!(r["ok"], false, "{r}");
 }
+
+/// A workbook with a sheet left out of whole-workbook printing, saved as `path` before it was marked.
+fn marked_after_saving(services: Services, path: &str) -> egui_kittest::Harness<'static, SheetApp> {
+    let mut h = harness(services);
+    h.state_mut().run("file.save", serde_json::json!({"path": path})).unwrap();
+    h.state_mut().run("pageLayout.pageSetup", serde_json::json!({"excluded": true})).unwrap();
+    h.run_steps(2);
+    h
+}
+
+fn dialog(h: &egui_kittest::Harness<'static, SheetApp>) -> Option<String> {
+    h.state().dialog.as_ref().map(|d| d.name().to_string())
+}
+
+#[test]
+fn saving_asks_before_it_drops_a_print_exclusion() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (path, kept) = (dir.join("Book.xlsx").to_string_lossy().into_owned(), dir.join("Kept.json").to_string_lossy().into_owned());
+    let target = kept.clone();
+    let mut h = marked_after_saving(Services { pick_save: Some(Box::new(move |_| Some(target.clone()))), ..Default::default() }, &path);
+    let before = std::fs::read(&path).unwrap();
+
+    // Cancel: nothing is written and the workbook stays unsaved.
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    click(&mut h, "Cancel");
+    assert_eq!(dialog(&h), None);
+    assert!(h.state().session.active().unwrap().is_dirty());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+
+    // The other format keeps the mark and becomes the workbook's file.
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    click(&mut h, "Save as GridCraft Workbook…");
+    assert_eq!(dialog(&h), None);
+    let d = h.state().session.active().unwrap();
+    assert!(!d.is_dirty() && d.path.as_deref() == Some(kept.as_str()));
+    let (wb, _) = gridcraft_engine::io::open_bytes("Kept.json", &std::fs::read(&kept).unwrap()).unwrap();
+    assert!(wb.active().unwrap().print.excluded);
+
+    // Going ahead saves the .xlsx, and the same loss isn't asked about again.
+    h.state_mut().run_or_alert("file.save", serde_json::json!({"path": &path}));
+    h.run_steps(3);
+    click(&mut h, "Save Anyway");
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    assert_ne!(std::fs::read(&path).unwrap().len(), 0);
+    h.state_mut().run("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h), None);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+
+    // A script is never asked: the result carries the loss.
+    let r = h.state_mut().run("file.save", serde_json::json!({})).unwrap();
+    assert!(r["warnings"][0].is_string() && dialog(&h).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn closing_goes_on_once_the_save_loss_is_answered() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-close-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = marked_after_saving(Services::default(), &path);
+    request_window_close(&mut h);
+    let sent = click_commands(&mut h, "Save");
+    assert!(!sent.contains(&egui::ViewportCommand::Close), "the question comes first: {sent:?}");
+    assert_eq!(dialog(&h).as_deref(), Some("saveLoss"));
+    click_commands(&mut h, "Cancel");
+    assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the workbook open");
+    request_window_close(&mut h);
+    click_commands(&mut h, "Save");
+    let sent = click_commands(&mut h, "Save Anyway");
+    assert!(sent.contains(&egui::ViewportCommand::Close), "{sent:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn autosave_waits_instead_of_dropping_a_print_exclusion() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-autosave-loss-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = marked_after_saving(Services::default(), &path);
+    let before = std::fs::read(&path).unwrap();
+    h.state_mut().ui.autosave = true;
+    for _ in 0..40 {
+        h.run_steps(1);
+        if h.state().notice.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    assert!(h.state().notice.is_some(), "it says AutoSave is on hold");
+    assert!(h.state().session.active().unwrap().is_dirty());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let _ = std::fs::remove_dir_all(&dir);
+}

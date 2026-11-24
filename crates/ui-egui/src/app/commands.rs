@@ -141,6 +141,11 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
+        // A menu-style save that would lose something asks first; programmatic callers of `run`
+        // get `warnings` in the result instead.
+        if matches!(id, "file.save" | "file.saveAs") && self.ask_about_save_losses(&params, false) {
+            return;
+        }
         match self.run(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
@@ -422,13 +427,8 @@ impl SheetApp {
                         let path = if std::path::Path::new(&path).extension().is_none() { format!("{path}.xlsx") } else { path };
                         self.run_or_alert("file.save", json!({"path": path}));
                     }
-                } else if self.services.download.is_some()
-                    && let Ok(r) = self.run("file.saveBytes", json!({"format": "xlsx"}))
-                    && let Some(dl) = &self.services.download
-                    && let Some(b) = r.get("base64").and_then(Json::as_str).and_then(gridcraft_engine::io::base64_decode)
-                {
-                    let name = r.get("name").and_then(Json::as_str).unwrap_or("Book.xlsx").to_string();
-                    dl(&name, &b);
+                } else if self.services.download.is_some() && !self.ask_about_save_losses(&json!({"path": "Book.xlsx"}), true) {
+                    self.download_workbook("xlsx");
                 }
             }
             // File › Options (`file.options`) and the File tab itself open the Backstage view.

@@ -350,6 +350,24 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
+                "saveLoss" => {
+                    let lang = app.ui.language;
+                    let params = d.values.get("params").filter(|p| p.is_object()).cloned().unwrap_or_else(|| json!({}));
+                    for loss in gridcraft_engine::cmd::file::save_losses(&app.session, &params) {
+                        ui.add(egui::Label::new(loss).wrap());
+                    }
+                    ui.horizontal(|ui| {
+                        for (label, answer) in [
+                            ("Cancel", crate::SaveLossAnswer::Cancel),
+                            ("Save Anyway", crate::SaveLossAnswer::Anyway),
+                            ("Save as GridCraft Workbook…", crate::SaveLossAnswer::Json),
+                        ] {
+                            if ui.button(lang.tr(label)).clicked() && app.answer_save_loss(answer, &d.values, ui.ctx()) {
+                                open = false;
+                            }
+                        }
+                    });
+                }
                 "start" => {
                     ui.heading("Start a new workbook");
                     ui.horizontal_wrapped(|ui| {

@@ -19,6 +19,16 @@ pub enum SaveAnswer {
     Cancel,
 }
 
+/// An answer to the question a save that would lose something asks first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveLossAnswer {
+    /// Save in the format asked for, without what it can't keep.
+    Anyway,
+    /// Save as a GridCraft workbook (.json), which keeps it.
+    Json,
+    Cancel,
+}
+
 /// One open window, as View › Switch Windows and the macOS Window menu list it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OpenWindow {

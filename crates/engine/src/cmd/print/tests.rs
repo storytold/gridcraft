@@ -1305,3 +1305,40 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
+
+/// Saving as .xlsx, which can't hold the `excluded` mark, says so in the result; the format that
+/// keeps it, a plain copy, and a workbook without the mark save quietly.
+#[test]
+fn saving_reports_an_excluded_mark_the_format_drops() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-save-losses-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let at = |name: &str| dir.join(name).to_string_lossy().into_owned();
+    let excluded = |path: &str| {
+        let mut s = Session::new();
+        s.execute("file.open", json!({"path": path})).unwrap();
+        s.doc().unwrap().wb.sheets.iter().any(|sh| sh.print.excluded)
+    };
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "one"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    for r in [s.execute("file.saveAs", json!({"path": at("plain.xlsx")})), s.execute("file.save", json!({})), s.execute("file.saveBytes", json!({}))]
+    {
+        assert!(r.unwrap().get("warnings").is_none(), "nothing is lost");
+    }
+    s.execute("pageLayout.pageSetup", json!({"sheet": "Two", "excluded": true})).unwrap();
+    let saved = s.execute("file.save", json!({})).unwrap();
+    assert!(saved["warnings"][0].as_str().is_some_and(|w| w.contains("Two")), "{saved}");
+    assert!(!excluded(&at("plain.xlsx")), "the mark is gone once the file is reopened");
+    for r in [
+        s.execute("file.saveAs", json!({"path": at("marked.xlsm")})),
+        s.execute("file.saveBytes", json!({"format": "xlsx"})),
+        s.execute_headless("file.save", json!({"path": at("headless.xlsx")})),
+    ] {
+        assert!(r.unwrap()["warnings"][0].as_str().is_some_and(|w| w.contains("Two")));
+    }
+    assert!(s.take_ui_requests().is_empty(), "a programmatic save never asks");
+    assert!(s.execute("file.saveAs", json!({"path": at("copy.csv")})).unwrap().get("warnings").is_none());
+    assert!(s.execute("file.saveAs", json!({"path": at("kept.json")})).unwrap().get("warnings").is_none());
+    assert!(excluded(&at("kept.json")), "GridCraft's own format keeps it");
+    let _ = std::fs::remove_dir_all(&dir);
+}
