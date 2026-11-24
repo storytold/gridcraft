@@ -400,7 +400,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open_url(&u);
         }
     }
-    if crate::framework::escape_pressed(&ctx) || !win_open {
+    if crate::framework::escape_pressed(ctx) || !win_open {
         // In Solver Options, Escape (or closing the window) cancels the options only.
         if in_solver_options(&d) {
             cancel_solver_options(&mut d);

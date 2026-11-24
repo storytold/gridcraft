@@ -186,7 +186,7 @@ pub(super) fn place_window<'a>(
         // Escape and Enter are used up either way: left in the frame's input, the dialog would
         // read them as its own and close or confirm. When another field owned them, that field
         // (drawn before the dialogs) has read them already, and nothing more happens here.
-        if crate::framework::consume_escape(&ctx) | ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        if crate::framework::consume_escape(ctx) | ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
             if !other_field {
                 d.refs.collapsed = None;
             }

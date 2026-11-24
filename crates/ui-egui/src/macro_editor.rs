@@ -959,7 +959,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             *open = false;
         }
     }
-    if crate::framework::escape_pressed(&ctx) && ed.picker.is_some() {
+    if crate::framework::escape_pressed(ctx) && ed.picker.is_some() {
         ed.picker = None;
     }
     prompts(app, ctx, &mut ed, open);
