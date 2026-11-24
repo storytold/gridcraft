@@ -3,6 +3,60 @@ use super::*;
 use gridcraft_core::{MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_model::{Anchor, AnchorMode, Sheet};
 
+#[test]
+fn reorder_rules_split_rows_keep_self_validation_and_undo() {
+    for (range, formula, rows, before, cells) in
+        [("A1:C3", "=A1>0", "1:1", 4, ["A1", "B2", "C4"]), ("A2:C2,A4:C4", "=A2>0", "4:4", 1, ["A2", "B3", "C3"])]
+    {
+        let mut s = s();
+        s.execute("data.validation", json!({"range":range,"type":"custom","formula1":formula})).unwrap();
+        let original = s.doc().unwrap().wb.clone();
+        s.execute("sheet.moveRows", json!({"rows":rows,"before":before})).unwrap();
+        for at in cells {
+            let cell = CellRef::parse(at).unwrap();
+            assert!(crate::cmd::data::check_validation(&s.doc().unwrap().wb, 0, cell, "5").is_none(), "{at} takes 5");
+            assert!(crate::cmd::data::check_validation(&s.doc().unwrap().wb, 0, cell, "-5").is_some(), "{at} refuses -5");
+        }
+        let moved = s.doc().unwrap().wb.clone();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(*s.doc().unwrap().wb, *original);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(*s.doc().unwrap().wb, *moved);
+    }
+}
+
+#[test]
+fn reorder_rules_moved_row_keeps_relative_reads_and_other_sheet_ranges() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range":"A2:A4","rule":{"type":"expression","formula":"=A1>0"},"style":{"fill":"#FFC7CE"}})).unwrap();
+    s.execute("data.validation", json!({"range":"B4","type":"custom","formula1":"=B4>0"})).unwrap();
+    s.execute("home.insertSheet", json!({"name":"Other"})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range":"A1","rule":{"type":"expression","formula":"=SUM(Sheet1!A1:A4)>0"},"style":{"fill":"#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("data.validation", json!({"range":"A1","type":"custom","formula1":"=SUM(Sheet1!A1:A4)>0"})).unwrap();
+    let other = s.doc().unwrap().wb.sheets[1].clone();
+    s.execute("sheet.moveRows", json!({"sheet":0,"rows":"4:4","before":1})).unwrap();
+    let sh = &s.doc().unwrap().wb.sheets[0];
+    let mut rules: Vec<String> = sh
+        .cond_formats
+        .iter()
+        .map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => {
+                format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+            }
+            other => format!("{other:?}"),
+        })
+        .collect();
+    rules.sort();
+    assert_eq!(rules, ["A1>0@A3:A4", "A4>0@A2"]);
+    assert_eq!(sh.validations[0].f1.trim_start_matches('='), "B2>0");
+    assert_eq!(s.doc().unwrap().wb.sheets[1].cond_formats, other.cond_formats);
+    assert_eq!(s.doc().unwrap().wb.sheets[1].validations, other.validations);
+}
+
 fn assert_move_refused(s: &mut Session, command: &str, params: serde_json::Value, message: &str) {
     let before = s.doc().unwrap().wb.clone();
     let undo = s.doc().unwrap().undo.len();
