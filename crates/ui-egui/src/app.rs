@@ -376,6 +376,7 @@ mod lifecycle_tests {
     /// A font-gated early-returning pass does not lose the queued step; the hook offers it again and a later real pass applies it.
     fn a_font_gated_pass_offers_the_synthetic_step_again() {
         let ctx = egui::Context::default();
+        crate::framework::install_headless(&ctx);
         ctx.set_fonts(theme::font_definitions());
         let mut app = app();
         app.fonts_ready = true;

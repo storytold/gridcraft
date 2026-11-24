@@ -97,7 +97,10 @@ impl SheetApp {
     /// interface scale is the Interface Size preference: the runtime is the one writer of egui's zoom factor.
     fn frame_input(&mut self, _output: FrameOutput) -> FrameInput {
         let mode = if self.effective_dark { craft_theme::Mode::Dark } else { craft_theme::Mode::Light };
-        let root = RootEnv::new().mode(mode).scale(Scale::new(self.ui.zoom_factor()));
+        let mut root = RootEnv::new().mode(mode).scale(Scale::new(self.ui.zoom_factor()));
+        // GridCraft's rule for every text field, the framework's ones included (the print page's Copies): Escape
+        // leaves the field, and only the next Escape reaches the view (it closes File).
+        root.escape_leaves_fields = true;
         FrameInput::new(root).commands(CommandInput::new().overrides(command_overrides())).host(Arc::clone(&self.framework_host))
     }
 
