@@ -228,13 +228,9 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Whether a list rule's source is a literal list (`"a,b"`, or `a,b` typed without quotes) rather
-/// than a reference or a name to evaluate.
-pub(crate) fn is_literal_list(f: &str) -> bool {
-    f.starts_with('"')
-        || (!f.contains('!')
-            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
-}
+/// Whether a list rule's source is a literal list: the model's rule
+/// ([`gridcraft_model::features::is_literal_list`]), which reference edits also follow.
+pub(crate) use gridcraft_model::features::is_literal_list;
 
 /// A list rule's source as a file stores it. A literal list typed without quotes, as in Excel's
 /// Source box (`Open,In progress,Closed`), becomes the quoted string Excel saves

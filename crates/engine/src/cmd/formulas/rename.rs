@@ -1,202 +1,87 @@
 //! Renaming a defined name (Name Manager › Edit…) without changing what any formula means.
 //!
-//! Every place a formula lives is read twice with [`gridcraft_calc::resolve`], the rules the
-//! evaluator reads names by: with the names as they are, and with the edited name. The uses that
-//! read the edited name are renamed, and the edit is made only if afterwards every use in every
-//! formula reads exactly what it read before. Otherwise it is refused and nothing changes. A
-//! rename can therefore never send a use to another name, a LET or LAMBDA variable, a table or
-//! a function, nor make another use read the renamed name. Names built from text while
-//! calculating (`INDIRECT("Old")`) can't be followed.
+//! Every reference the workbook holds is visited once, by the same walk every reference-moving
+//! edit uses ([`Workbook::rewrite_references`], plus Python cells' `xl()` references), and each is
+//! read twice with [`gridcraft_calc::resolve`], the rules the evaluator reads names by: with the
+//! names as they are, and with the edited name. The uses that read the edited name are renamed,
+//! and the edit is made only if afterwards every use in every formula reads exactly what it read
+//! before. Otherwise it is refused and nothing changes. A rename can therefore never send a use to
+//! another name, a LET or LAMBDA variable, a table or a function, nor make another use read the
+//! renamed name. Names built from text while calculating (`INDIRECT("Old")`) can't be followed.
 
+use std::cell::RefCell;
 use std::collections::BTreeSet;
 
 use gridcraft_calc::resolve::{self, Site, Use};
-use gridcraft_core::CellRef;
 use gridcraft_formula::Expr;
-use gridcraft_model::{CfRule, CfValueKind, DefinedName, Formula, ValidationKind, Workbook};
+use gridcraft_model::{DefinedName, RefPlace, Workbook};
 
 use crate::{EngineError, Result};
 
-/// A place that holds a formula, other than a cell, a name, a PivotTable source or Python code.
-#[derive(Clone, Copy)]
-enum Holder {
-    /// A conditional format's formula: (sheet, rule, slot in [`rule_formulas`] order).
-    Cf(usize, usize, usize),
-    /// A validation's first (`false`) or second formula: (sheet, rule).
-    Dv(usize, usize, bool),
-    /// A chart's source block: (sheet, chart).
-    Source(usize, usize),
-    /// A chart series' values, categories, name or bubble sizes (0–3): (sheet, chart, series).
-    Series(usize, usize, usize, u8),
-    /// A form control's linked cell: (sheet, control).
-    Control(usize, usize),
-    /// A sparkline's source: (sheet, sparkline).
-    Sparkline(usize, usize),
-}
+/// A reference `wb` holds: its tree, its holder (`None` for Python code) and the sheet it is read
+/// on (a defined name's scope).
+type Reference = (Expr, Option<RefPlace>, Option<usize>);
 
-impl Holder {
-    fn sheet(self) -> usize {
-        match self {
-            Holder::Cf(s, ..)
-            | Holder::Dv(s, ..)
-            | Holder::Source(s, _)
-            | Holder::Series(s, ..)
-            | Holder::Control(s, _)
-            | Holder::Sparkline(s, _) => s,
-        }
-    }
-    fn what(self) -> &'static str {
-        match self {
-            Holder::Cf(..) => "a conditional formatting rule",
-            Holder::Dv(..) => "a data validation rule",
-            Holder::Source(..) | Holder::Series(..) => "a chart",
-            Holder::Control(..) => "a form control",
-            Holder::Sparkline(..) => "a sparkline",
-        }
-    }
-}
-
-/// A conditional format's formulas, in a fixed order.
-fn rule_formulas(rule: &mut CfRule) -> Vec<&mut String> {
-    fn value(v: &mut CfValueKind) -> Option<&mut String> {
-        match v {
-            CfValueKind::Formula(f) => Some(f),
-            _ => None,
-        }
-    }
-    match rule {
-        CfRule::CellIs { a, b, .. } => std::iter::once(a).chain(b.as_mut()).collect(),
-        CfRule::Expression { formula, .. } => vec![formula],
-        CfRule::ColorScale { stops } => stops.iter_mut().filter_map(|(v, _)| value(v)).collect(),
-        CfRule::DataBar { min, max, .. } => [min, max].into_iter().filter_map(value).collect(),
-        CfRule::IconSet { thresholds, .. } => thresholds.iter_mut().filter_map(value).collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn text_mut(wb: &mut Workbook, h: Holder) -> Option<&mut String> {
-    let sh = wb.sheet_mut(h.sheet())?;
-    match h {
-        Holder::Cf(_, r, k) => sh.cond_formats.get_mut(r).and_then(|cf| rule_formulas(&mut cf.rule).into_iter().nth(k)),
-        Holder::Dv(_, r, second) => sh.validations.get_mut(r).and_then(|dv| if second { dv.f2.as_mut() } else { Some(&mut dv.f1) }),
-        Holder::Source(_, c) => sh.charts.get_mut(c).and_then(|ch| ch.source.as_mut()),
-        Holder::Series(_, c, i, field) => sh.charts.get_mut(c).and_then(|ch| ch.series.get_mut(i)).and_then(|se| match field {
-            0 => Some(&mut se.values),
-            1 => se.categories.as_mut(),
-            2 => se.name.as_mut(),
-            _ => se.bubble_sizes.as_mut(),
-        }),
-        Holder::Control(_, c) => sh.controls.get_mut(c).and_then(|c| c.link.as_mut()),
-        Holder::Sparkline(_, i) => sh.sparklines.get_mut(i).map(|sp| &mut sp.source),
-    }
-}
-
-/// Every formula a [`Holder`] holds in `wb`, with its text.
-fn holders(wb: &Workbook) -> Vec<(Holder, String)> {
-    let mut out = Vec::new();
-    for (si, sh) in wb.sheets.iter().enumerate() {
-        for (r, cf) in sh.cond_formats.iter().enumerate() {
-            let mut rule = cf.rule.clone();
-            out.extend(rule_formulas(&mut rule).into_iter().enumerate().map(|(k, f)| (Holder::Cf(si, r, k), f.clone())));
-        }
-        for (r, dv) in sh.validations.iter().enumerate() {
-            // A literal list (`"a,b"`, `Open,Closed`) is no formula.
-            let formula = match dv.kind {
-                ValidationKind::Any => false,
-                ValidationKind::List => !crate::cmd::data::is_literal_list(dv.f1.trim()),
-                _ => true,
-            };
-            if formula {
-                out.push((Holder::Dv(si, r, false), dv.f1.clone()));
-            }
-            if let Some(f2) = &dv.f2 {
-                out.push((Holder::Dv(si, r, true), f2.clone()));
-            }
-        }
-        for (c, ch) in sh.charts.iter().enumerate() {
-            out.extend(ch.source.iter().map(|t| (Holder::Source(si, c), t.clone())));
-            for (i, se) in ch.series.iter().enumerate() {
-                out.push((Holder::Series(si, c, i, 0), se.values.clone()));
-                for (field, t) in [(1, &se.categories), (2, &se.name), (3, &se.bubble_sizes)] {
-                    out.extend(t.iter().map(|t| (Holder::Series(si, c, i, field), t.clone())));
-                }
-            }
-        }
-        for (i, c) in sh.controls.iter().enumerate() {
-            out.extend(c.link.iter().map(|t| (Holder::Control(si, i), t.clone())));
-        }
-        for (i, sp) in sh.sparklines.iter().enumerate() {
-            out.push((Holder::Sparkline(si, i), sp.source.clone()));
-        }
-    }
-    out
-}
-
-/// A formula written as text, with or without a leading `=`: its tree, and the `=` to keep.
-fn parse_text(t: &str) -> Option<(Expr, &'static str)> {
-    let body = t.trim_start_matches('=');
-    let eq = if body.len() < t.len() { "=" } else { "" };
-    gridcraft_formula::parse(body).ok().map(|e| (e, eq))
-}
-
-/// The xl("…") references in Python code.
-fn python_refs(code: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    gridcraft_model::python::rewrite_xl(code, |r| {
-        out.push(r.to_string());
-        None
+/// Every reference `wb` holds. Visited, not changed.
+fn references(wb: &Workbook) -> Result<Vec<Reference>> {
+    let seen: RefCell<Vec<Reference>> = RefCell::new(Vec::new());
+    let mut copy = wb.clone();
+    copy.rewrite_references(&|host, e| {
+        seen.borrow_mut().push((e.clone(), Some(host.place), host.sheet));
+        e
     });
-    out
+    let sheet_of = |name: &str| wb.sheets.iter().position(|s| s.name == name);
+    crate::cmd::edit::rewrite_python_refs(&mut copy, &|host, e| {
+        seen.borrow_mut().push((e.clone(), None, sheet_of(host)));
+        e
+    })?;
+    Ok(seen.into_inner())
 }
 
 /// The sheets each workbook-level name's definition is read on: those whose formulas (or
 /// names read there) use it. The evaluator reads a workbook-level name's definition on the sheet
 /// that uses it, and a sheet-level one's on its own sheet. A workbook-level name nothing uses is
 /// checked on every sheet, as any sheet may come to use it.
-fn name_hosts(wb: &Workbook, renamed: usize) -> Vec<Vec<usize>> {
+fn name_hosts(wb: &Workbook, renamed: usize) -> Result<Vec<Vec<usize>>> {
     let mut hosts: Vec<BTreeSet<usize>> = vec![BTreeSet::new(); wb.names.len()];
+    let workbook_def = |d: usize| wb.names.get(d).filter(|n| n.scope.is_none()).and_then(|n| gridcraft_formula::parse_name(&n.formula).ok());
     let mut work: Vec<(Expr, usize)> = Vec::new();
-    for (si, sh) in wb.sheets.iter().enumerate() {
-        work.extend(sh.cells.iter().filter_map(|(_, c)| c.formula.as_ref()?.expr()).map(|e| (e, si)));
-        for py in sh.cells.iter().filter_map(|(_, c)| c.py.as_ref()) {
-            work.extend(python_refs(&py.code).iter().filter_map(|r| gridcraft_formula::parse(r).ok()).map(|e| (e, si)));
-        }
-        for pt in &sh.pivots {
-            if let Some(d) = crate::pivot::source_name(wb, &pt.source, si).filter(|&d| d != renamed)
-                && let Some(set) = hosts.get_mut(d)
-                && let Some(e) = wb.names.get(d).filter(|n| n.scope.is_none()).and_then(|n| gridcraft_formula::parse_name(&n.formula).ok())
-                && set.insert(si)
-            {
-                work.push((e, si));
+    for (e, place, sheet) in references(wb)? {
+        let Some(si) = sheet else { continue };
+        match place {
+            // A workbook-level name's own definition is read where it is used: reached below.
+            Some(RefPlace::Name(i)) if i == renamed => {}
+            // A PivotTable reads its source by its own rules (a table first, then a range, then a
+            // name): the name it reads is read on its sheet.
+            Some(RefPlace::Pivot(pi)) => {
+                let Some(pt) = wb.sheet(si).and_then(|sh| sh.pivots.get(pi)) else { continue };
+                if let Some(d) = crate::pivot::source_name(wb, &pt.source, si).filter(|&d| d != renamed)
+                    && let Some(def) = workbook_def(d)
+                    && hosts.get_mut(d).is_some_and(|set| set.insert(si))
+                {
+                    work.push((def, si));
+                }
             }
-        }
-    }
-    work.extend(holders(wb).into_iter().filter_map(|(h, t)| parse_text(&t).map(|(e, _)| (e, h.sheet()))));
-    for (i, n) in wb.names.iter().enumerate() {
-        if i != renamed
-            && let Some(s) = n.scope
-            && let Ok(e) = gridcraft_formula::parse_name(&n.formula)
-        {
-            work.push((e, s));
+            _ => work.push((e, si)),
         }
     }
     // Each (name, sheet) is added once, so this ends after at most names × sheets steps.
     while let Some((e, h)) = work.pop() {
         for u in resolve::uses(wb, h, &e) {
             let Use::Defined(d) = u else { continue };
-            if d == renamed || wb.names.get(d).is_none_or(|n| n.scope.is_some()) {
+            if d == renamed {
                 continue;
             }
-            if let Some(set) = hosts.get_mut(d)
-                && set.insert(h)
-                && let Some(e) = wb.names.get(d).and_then(|n| gridcraft_formula::parse_name(&n.formula).ok())
+            if let Some(def) = workbook_def(d)
+                && hosts.get_mut(d).is_some_and(|set| set.insert(h))
             {
-                work.push((e, h));
+                work.push((def, h));
             }
         }
     }
     let all: Vec<usize> = (0..wb.sheets.len()).collect();
-    wb.names
+    Ok(wb
+        .names
         .iter()
         .zip(hosts)
         .map(|(n, set)| match n.scope {
@@ -204,7 +89,7 @@ fn name_hosts(wb: &Workbook, renamed: usize) -> Vec<Vec<usize>> {
             None if set.is_empty() => all.clone(),
             None => set.into_iter().collect(),
         })
-        .collect()
+        .collect())
 }
 
 struct Renamer<'a> {
@@ -249,126 +134,78 @@ impl Renamer<'_> {
 /// Renames the defined name at `index` in `wb` to `def` (its new name, scope and definition),
 /// with every formula that uses it: the workbook as it is after, or the reason the rename is
 /// refused. The renamed name keeps its place in the list.
+/// Renames the defined name at `index` in `wb` to `def` (its new name, scope and definition),
+/// with every formula that uses it: the workbook as it is after, or the reason the rename is
+/// refused. The renamed name keeps its place in the list.
 pub(super) fn rename(wb: &Workbook, index: usize, def: DefinedName) -> Result<Workbook> {
     let new = def.name.clone();
+    // The names as they are after the edit, for reading uses.
     let mut after = wb.clone();
     match after.names.get_mut(index) {
-        Some(n) => *n = def,
+        Some(n) => *n = def.clone(),
         None => return Err(EngineError::Other("no such name to edit".into())),
     }
-    let refuse = |place: String| {
-        EngineError::Other(format!(
-            "The name can't be changed to {new}: {place} would then read something else (another name, a LET or LAMBDA variable, a table or a function), or stop finding it."
-        ))
-    };
-    let hosts = name_hosts(wb, index);
+    let hosts = name_hosts(wb, index)?;
     let r = Renamer { before: wb, after: &after, index, new: &new };
     let sheet_name = |si: usize| wb.sheet(si).map(|s| gridcraft_formula::quote_sheet(&s.name)).unwrap_or_default();
+    // The first place that would read something else, named as the refusal says it.
+    let refused: RefCell<Option<String>> = RefCell::new(None);
+    let refuse_at = |place: String| {
+        refused.borrow_mut().get_or_insert(place);
+    };
+    let follow = |e: Expr, hosts: &[usize], place: &dyn Fn() -> String| match r.rewrite(&e, hosts) {
+        Ok(renamed) => renamed.unwrap_or(e),
+        Err(()) => {
+            refuse_at(place());
+            e
+        }
+    };
 
-    let mut cells: Vec<(usize, CellRef, Formula)> = Vec::new();
-    let mut texts: Vec<(Holder, String)> = Vec::new();
-    let mut names: Vec<(usize, String)> = Vec::new();
-    let mut pivots: Vec<(usize, usize, String)> = Vec::new();
-    let mut python: Vec<(usize, CellRef, String)> = Vec::new();
-
-    for (si, sh) in wb.sheets.iter().enumerate() {
-        for (c, cell) in sh.cells.iter() {
-            if let Some(f) = &cell.formula
-                && let Some(e) = f.expr()
-            {
-                match r.rewrite(&e, &[si]) {
-                    Ok(Some(e)) => cells.push((si, c, Formula { array: f.array, dynamic: f.dynamic, ..Formula::from_expr(e) })),
-                    Ok(None) => {}
-                    Err(()) => return Err(refuse(format!("the formula in {}!{}", sheet_name(si), c.a1()))),
+    // Visited while the old name is still defined, so a chart series named by it is still read
+    // as a reference; the edited definition goes in afterwards.
+    let mut out = wb.clone();
+    out.rewrite_references(&|host, e| {
+        let si = host.sheet.unwrap_or_default();
+        match host.place {
+            // The renamed name's own definition is the one the edit gives.
+            RefPlace::Name(i) if i == index => e,
+            RefPlace::Name(i) => {
+                let label = || wb.names.get(i).map(|n| format!("the name {}", n.name)).unwrap_or_default();
+                follow(e, hosts.get(i).map_or(&[][..], Vec::as_slice), &label)
+            }
+            // A PivotTable reads its source by its own rules (a table first, then a range, then a
+            // name), not a formula's: the source must read the same before and after.
+            RefPlace::Pivot(pi) => {
+                let Some(pt) = wb.sheet(si).and_then(|sh| sh.pivots.get(pi)) else { return e };
+                let read = crate::pivot::source_name(wb, &pt.source, si);
+                let renamed = read == Some(index);
+                let text = if renamed { new.clone() } else { pt.source.trim_start_matches('=').to_string() };
+                if crate::pivot::source_name(&after, &text, si) != read {
+                    refuse_at(format!("the source of the PivotTable {} on {}", pt.name, sheet_name(si)));
+                    return e;
                 }
+                if renamed { Expr::Name(new.clone()) } else { e }
             }
-            if let Some(py) = &cell.py {
-                let mut failed = false;
-                let code = gridcraft_model::python::rewrite_xl(&py.code, |reference| {
-                    let e = gridcraft_formula::parse(reference).ok()?;
-                    match r.rewrite(&e, &[si]) {
-                        Ok(e) => e.map(|e| gridcraft_formula::print(&e)),
-                        Err(()) => {
-                            failed = true;
-                            None
-                        }
-                    }
-                });
-                if failed {
-                    return Err(refuse(format!("the Python code in {}!{}", sheet_name(si), c.a1())));
-                }
-                if let Some(code) = code {
-                    crate::cmd::edit::check_python_fits(
-                        &gridcraft_model::PyCode { code: code.clone(), object: py.object, ..Default::default() },
-                        &sh.name,
-                        c,
-                    )?;
-                    python.push((si, c, code));
-                }
-            }
+            RefPlace::Cell(c) => follow(e, &[si], &|| format!("the formula in {}!{}", sheet_name(si), c.a1())),
+            RefPlace::CondFormat(_) => follow(e, &[si], &|| format!("a conditional formatting rule on {}", sheet_name(si))),
+            RefPlace::Validation(_) => follow(e, &[si], &|| format!("a data validation rule on {}", sheet_name(si))),
+            RefPlace::Chart(_) => follow(e, &[si], &|| format!("a chart on {}", sheet_name(si))),
+            RefPlace::Sparkline(_) => follow(e, &[si], &|| format!("a sparkline on {}", sheet_name(si))),
+            RefPlace::Control(_) => follow(e, &[si], &|| format!("a form control on {}", sheet_name(si))),
         }
-        // A PivotTable reads its source by its own rules (a table first, then a range, then a name).
-        for (pi, pt) in sh.pivots.iter().enumerate() {
-            let read = crate::pivot::source_name(wb, &pt.source, si);
-            let text = if read == Some(index) {
-                let eq = if pt.source.trim_start().starts_with('=') { "=" } else { "" };
-                format!("{eq}{new}")
-            } else {
-                pt.source.clone()
-            };
-            if crate::pivot::source_name(&after, &text, si) != read {
-                return Err(refuse(format!("the source of the PivotTable {} on {}", pt.name, sheet_name(si))));
-            }
-            if text != pt.source {
-                pivots.push((si, pi, text));
-            }
-        }
+    });
+    let sheet_of = |name: &str| wb.sheets.iter().position(|s| s.name == name);
+    crate::cmd::edit::rewrite_python_refs(&mut out, &|host, e| match sheet_of(host) {
+        Some(si) => follow(e, &[si], &|| format!("the Python code on {}", sheet_name(si))),
+        None => e,
+    })?;
+    if let Some(place) = refused.into_inner() {
+        return Err(EngineError::Other(format!(
+            "The name can't be changed to {new}: {place} would then read something else (another name, a LET or LAMBDA variable, a table or a function), or stop finding it."
+        )));
     }
-    for (h, t) in holders(wb) {
-        let Some((e, eq)) = parse_text(&t) else { continue };
-        match r.rewrite(&e, &[h.sheet()]) {
-            Ok(Some(e)) => texts.push((h, format!("{eq}{}", gridcraft_formula::print(&e)))),
-            Ok(None) => {}
-            Err(()) => return Err(refuse(format!("{} on {}", h.what(), sheet_name(h.sheet())))),
-        }
+    if let Some(slot) = out.names.get_mut(index) {
+        *slot = def;
     }
-    for (i, n) in wb.names.iter().enumerate() {
-        // The renamed name's own definition is the one the edit gives.
-        if i == index {
-            continue;
-        }
-        let Ok(e) = gridcraft_formula::parse_name(&n.formula) else { continue };
-        match r.rewrite(&e, hosts.get(i).map_or(&[][..], Vec::as_slice)) {
-            Ok(Some(e)) => names.push((i, gridcraft_formula::print(&e))),
-            Ok(None) => {}
-            Err(()) => return Err(refuse(format!("the name {}", n.name))),
-        }
-    }
-
-    for (si, c, f) in cells {
-        if let Some(cell) = after.sheet_mut(si).and_then(|sh| sh.cells.get_mut(c)) {
-            cell.formula = Some(std::sync::Arc::new(f));
-        }
-    }
-    for (si, c, code) in python {
-        if let Some(py) = after.sheet_mut(si).and_then(|sh| sh.cells.get_mut(c)).and_then(|cell| cell.py.as_mut()) {
-            std::sync::Arc::make_mut(py).code = code;
-        }
-    }
-    for (si, pi, text) in pivots {
-        if let Some(pt) = after.sheet_mut(si).and_then(|sh| sh.pivots.get_mut(pi)) {
-            pt.source = text;
-        }
-    }
-    for (h, t) in texts {
-        if let Some(slot) = text_mut(&mut after, h) {
-            *slot = t;
-        }
-    }
-    for (i, t) in names {
-        if let Some(n) = after.names.get_mut(i) {
-            n.formula = t;
-        }
-    }
-    Ok(after)
+    Ok(out)
 }

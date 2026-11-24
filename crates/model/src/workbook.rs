@@ -352,6 +352,23 @@ pub struct RefHost<'a> {
     /// scope sheet, where they are read), or [`NAME_HOST`] for a workbook-level defined name
     /// (read on whichever sheet uses it).
     pub name: &'a str,
+    /// What holds it, for a caller that must tell holders apart (the name rename reads each one
+    /// as the evaluator would, and names the one it refuses at).
+    pub place: RefPlace,
+}
+
+/// What holds a reference visited by [`Workbook::rewrite_references`]: a defined name (its index
+/// in [`Workbook::names`]), or a cell or the object at an index in its sheet's list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefPlace {
+    Name(usize),
+    Cell(gridcraft_core::CellRef),
+    CondFormat(usize),
+    Validation(usize),
+    Chart(usize),
+    Sparkline(usize),
+    Pivot(usize),
+    Control(usize),
 }
 
 /// [`RefHost::name`] for a workbook-level defined name: `[` and `]` can't be in a sheet's name, so
@@ -379,7 +396,7 @@ fn rewrite_text(t: &mut String, f: &dyn Fn(Expr) -> Expr) -> bool {
 impl Workbook {
     /// Rewrites every reference the workbook holds with `f`, given where each is held, in one
     /// place: cell formulas (keeping their array and spill kind), defined names, conditional
-    /// formats and data validation (written for their range's top-left cell, so they move as
+    /// formats and data validation (a list rule's literal list is text, not references; written for their range's top-left cell, so they move as
     /// a cell formula there does), chart series (a chart's source block
     /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources
     /// (not one that is a table's name alone, which reads the table first) and form controls'
@@ -393,9 +410,9 @@ impl Workbook {
     /// stays shared.
     pub fn rewrite_references(&mut self, f: &dyn Fn(RefHost<'_>, Expr) -> Expr) {
         let sheet_names: Vec<String> = self.sheets.iter().map(|s| s.name.clone()).collect();
-        for n in &mut self.names {
+        for (i, n) in self.names.iter_mut().enumerate() {
             let name = n.scope.and_then(|i| sheet_names.get(i)).map_or(NAME_HOST, String::as_str);
-            let host = RefHost { sheet: n.scope, name };
+            let host = RefHost { sheet: n.scope, name, place: RefPlace::Name(i) };
             rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
         }
         // A series name is read by the chart as a reference when it starts with `=`, names a
@@ -415,9 +432,12 @@ impl Workbook {
             // Worked out on the shared sheet; a list is copied only when something in it
             // changes, and a sheet nothing changes on stays shared with undo snapshots.
             let sh: &Sheet = shared;
-            let host = RefHost { sheet: Some(si), name: &sh.name };
-            let f = |e: Expr| f(host, e);
-            let changes = |t: &str| rewrite_with(&mut t.to_string(), &f, gridcraft_formula::parse);
+            let sheet_name: &str = &sh.name;
+            let at = |place: RefPlace| RefHost { sheet: Some(si), name: sheet_name, place };
+            let changes = |place: RefPlace, t: &str| rewrite_with(&mut t.to_string(), &|e| f(at(place), e), gridcraft_formula::parse);
+            let rewrite = |place: RefPlace, t: &mut String| {
+                rewrite_text(t, &|e| f(at(place), e));
+            };
             let cells: Vec<(gridcraft_core::CellRef, Formula)> = sh
                 .cells
                 .iter()
@@ -425,24 +445,32 @@ impl Workbook {
                     // Trees are compared, not printed text: a formula the edit leaves alone keeps
                     // its stored text, even text that isn't canonical, and isn't printed.
                     let old = cell.formula.as_ref()?;
-                    let new = old.with_expr(|e| Some(f(e.clone())).filter(|n| n != e))??;
+                    let new = old.with_expr(|e| Some(f(at(RefPlace::Cell(c)), e.clone())).filter(|n| n != e))??;
                     Some((c, Formula { array: old.array, dynamic: old.dynamic, ..Formula::from_expr(new) }))
                 })
                 .collect();
-            let cond_formats = sh.cond_formats.iter().any(|cf| cf.rule.formulas().into_iter().any(|t| changes(t))).then(|| {
-                let mut v = sh.cond_formats.clone();
-                v.iter_mut().flat_map(|cf| cf.rule.formulas_mut()).for_each(|t| {
-                    rewrite_text(t, &f);
+            let cond_formats =
+                sh.cond_formats.iter().enumerate().any(|(i, cf)| cf.rule.formulas().into_iter().any(|t| changes(RefPlace::CondFormat(i), t))).then(
+                    || {
+                        let mut v = sh.cond_formats.clone();
+                        for (i, cf) in v.iter_mut().enumerate() {
+                            cf.rule.formulas_mut().into_iter().for_each(|t| rewrite(RefPlace::CondFormat(i), t));
+                        }
+                        v
+                    },
+                );
+            let validations = sh
+                .validations
+                .iter()
+                .enumerate()
+                .any(|(i, dv)| dv.reference_formulas().into_iter().any(|t| changes(RefPlace::Validation(i), t)))
+                .then(|| {
+                    let mut v = sh.validations.clone();
+                    for (i, dv) in v.iter_mut().enumerate() {
+                        dv.reference_formulas_mut().into_iter().for_each(|t| rewrite(RefPlace::Validation(i), t));
+                    }
+                    v
                 });
-                v
-            });
-            let validations = sh.validations.iter().any(|dv| dv.formulas().into_iter().any(|t| changes(t))).then(|| {
-                let mut v = sh.validations.clone();
-                v.iter_mut().flat_map(|dv| dv.formulas_mut()).for_each(|t| {
-                    rewrite_text(t, &f);
-                });
-                v
-            });
             // A chart's source block that no longer exists is dropped.
             // (Read from the tree: a sheet may be named `#REF!`.)
             let dead = |src: Option<&str>| {
@@ -455,7 +483,9 @@ impl Workbook {
             let charts = sh
                 .charts
                 .iter()
-                .any(|ch| {
+                .enumerate()
+                .any(|(ci, ch)| {
+                    let changes = |t: &str| changes(RefPlace::Chart(ci), t);
                     ch.source.as_deref().is_some_and(changes)
                         || ch.series.iter().any(|se| {
                             changes(&se.values)
@@ -465,21 +495,22 @@ impl Workbook {
                 })
                 .then(|| {
                     let mut v = sh.charts.clone();
-                    for ch in &mut v {
+                    for (ci, ch) in v.iter_mut().enumerate() {
+                        let place = RefPlace::Chart(ci);
                         for se in &mut ch.series {
-                            rewrite_text(&mut se.values, &f);
+                            rewrite(place, &mut se.values);
                             for t in [&mut se.categories, &mut se.bubble_sizes].into_iter().flatten() {
-                                rewrite_text(t, &f);
+                                rewrite(place, t);
                             }
                             if let Some(t) = se.name.as_mut().filter(|t| !label(t, si)) {
-                                rewrite_text(t, &f);
+                                rewrite(place, t);
                             }
                         }
                         // A source this edit breaks is dropped; one already broken before it
                         // (from a file, or an earlier edit) is kept as it was.
                         let was_dead = dead(ch.source.as_deref());
                         if let Some(src) = &mut ch.source {
-                            rewrite_text(src, &f);
+                            rewrite(place, src);
                         }
                         if !was_dead && dead(ch.source.as_deref()) {
                             ch.source = None;
@@ -487,28 +518,32 @@ impl Workbook {
                     }
                     v
                 });
-            let sparklines = sh.sparklines.iter().any(|sp| changes(&sp.source)).then(|| {
+            let sparklines = sh.sparklines.iter().enumerate().any(|(i, sp)| changes(RefPlace::Sparkline(i), &sp.source)).then(|| {
                 let mut v = sh.sparklines.clone();
-                v.iter_mut().for_each(|sp| {
-                    rewrite_text(&mut sp.source, &f);
-                });
+                for (i, sp) in v.iter_mut().enumerate() {
+                    rewrite(RefPlace::Sparkline(i), &mut sp.source);
+                }
                 v
             });
-            let pivots = sh.pivots.iter().any(|pt| !table_source(&pt.source) && changes(&pt.source)).then(|| {
-                let mut v = sh.pivots.clone();
-                v.iter_mut().filter(|pt| !table_source(&pt.source)).for_each(|pt| {
-                    rewrite_text(&mut pt.source, &f);
+            let pivots =
+                sh.pivots.iter().enumerate().any(|(i, pt)| !table_source(&pt.source) && changes(RefPlace::Pivot(i), &pt.source)).then(|| {
+                    let mut v = sh.pivots.clone();
+                    for (i, pt) in v.iter_mut().enumerate().filter(|(_, pt)| !table_source(&pt.source)) {
+                        rewrite(RefPlace::Pivot(i), &mut pt.source);
+                    }
+                    v
                 });
-                v
-            });
             // A form control's linked cell.
-            let controls = sh.controls.iter().any(|c| c.link.as_deref().is_some_and(changes)).then(|| {
-                let mut v = sh.controls.clone();
-                v.iter_mut().flat_map(|c| c.link.as_mut()).for_each(|t| {
-                    rewrite_text(t, &f);
+            let controls =
+                sh.controls.iter().enumerate().any(|(i, c)| c.link.as_deref().is_some_and(|t| changes(RefPlace::Control(i), t))).then(|| {
+                    let mut v = sh.controls.clone();
+                    for (i, c) in v.iter_mut().enumerate() {
+                        if let Some(t) = c.link.as_mut() {
+                            rewrite(RefPlace::Control(i), t);
+                        }
+                    }
+                    v
                 });
-                v
-            });
             if cells.is_empty()
                 && cond_formats.is_none()
                 && validations.is_none()

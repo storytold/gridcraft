@@ -32,7 +32,6 @@ use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub(crate) use validation::is_literal_list;
 pub use validation::{
     LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,
     search_term,

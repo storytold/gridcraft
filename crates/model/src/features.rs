@@ -317,6 +317,27 @@ impl Validation {
     pub fn formulas(&self) -> Vec<&String> {
         std::iter::once(&self.f1).chain(self.f2.as_ref()).collect()
     }
+
+    /// The formulas whose references are read: [`Validation::formulas`] without a list rule's
+    /// literal list (`"a,b"`, or `Open-Closed` typed without quotes), which is text, not names.
+    pub fn reference_formulas_mut(&mut self) -> Vec<&mut String> {
+        let literal = self.kind == ValidationKind::List && is_literal_list(self.f1.trim());
+        (!literal).then_some(&mut self.f1).into_iter().chain(self.f2.as_mut()).collect()
+    }
+
+    /// [`Validation::reference_formulas_mut`], read only.
+    pub fn reference_formulas(&self) -> Vec<&String> {
+        let literal = self.kind == ValidationKind::List && is_literal_list(self.f1.trim());
+        (!literal).then_some(&self.f1).into_iter().chain(self.f2.as_ref()).collect()
+    }
+}
+
+/// Whether a list rule's source is a literal list (`"a,b"`, or `a,b` typed without quotes) rather
+/// than a reference or a name to evaluate.
+pub fn is_literal_list(f: &str) -> bool {
+    f.starts_with('"')
+        || (!f.contains('!')
+            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
 }
 
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.

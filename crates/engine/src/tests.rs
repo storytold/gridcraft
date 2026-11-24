@@ -7906,3 +7906,17 @@ fn renaming_a_name_renames_it_in_rules_charts_and_pivot_sources() {
     assert_eq!(sh.charts[0].series[0].categories.as_deref(), Some("Choices"));
     assert_eq!(sh.pivots[0].source, "Data");
 }
+
+/// A list rule's literal list is text, not names: renaming a defined name spelled like part of
+/// it leaves the list as typed.
+#[test]
+fn renaming_a_name_leaves_a_literal_validation_list_alone() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Open", "refersTo": "=Sheet1!$C$1"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "Open,Closed"})).unwrap();
+    // Unquoted, as a file or an older save may hold it: still read as a literal list (one
+    // entry), though it parses as a formula naming `Open`.
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().validations[0].f1 = "Open-Closed".into();
+    s.execute("formulas.defineName", json!({"name": "Shut", "oldName": "Open", "refersTo": "=Sheet1!$C$1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1, "Open-Closed");
+}
