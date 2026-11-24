@@ -124,10 +124,11 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     compute_from(wb, pt, &src, None)
 }
 
-/// Brings the PivotTables an older GridCraft saved to how fields are named now, once, as a
-/// workbook is opened (after its formulas have values). Every reader of a PivotTable (the report,
-/// edits, the field list, Show Details, GETPIVOTDATA, file writers) then sees one set of names.
-/// A PivotTable is left for a later open only when its source can't be read now.
+/// Brings the PivotTables an older GridCraft saved to how fields are named now, each once. Every
+/// reader of a PivotTable (the report, edits, the field list, Show Details, GETPIVOTDATA, file
+/// writers) then sees one set of names. It runs wherever cells have just taken their values: as a
+/// workbook is opened, and after each edit and recalculation, so a PivotTable whose source can't
+/// be read (a blank header) is renamed as soon as it can. One already renamed costs a flag test.
 pub fn migrate_older_names(wb: &mut Workbook) {
     let mut updates: Vec<(usize, usize, PivotTable)> = Vec::new();
     for (si, sh) in wb.sheets.iter().enumerate() {
@@ -153,15 +154,15 @@ pub fn migrate_older_names(wb: &mut Workbook) {
 /// Formulas (`="Region"`), a long General number narrowed to the cell width. Now a header is its
 /// value through its number format. The saved names are read against the headers as the sheet
 /// showed them, both ways (with and without Show Formulas), by one rule for each name:
-/// - the layout that places more of the saved fields is read first, the sheet's saved Show
-///   Formulas setting on a tie;
+/// - the layout that places more of the saved names (the fields', and those calculated fields'
+///   formulas use) is read first, the sheet's own Show Formulas setting on a tie;
 /// - a name it places takes that column;
-/// - a name only the other layout places takes that layout's column, unless a field the first
-///   layout placed already has it (then two fields would read one column);
+/// - a name only the other layout places takes that layout's column, unless a name the first
+///   layout placed already has it (then two names would read one column);
 /// - a name neither places is left as it is.
 ///
 /// Each field then takes the current name of its column, and so does each field a calculated
-/// formula names. A calculated field whose name is now also a header is renamed (`Margin2`),
+/// formula or GETPIVOTDATA's saved index names. A calculated field whose name is now also a header is renamed (`Margin2`),
 /// with the values that show it, as Excel doesn't allow the two to share a name.
 fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotTable> {
     use gridcraft_model::pivot_source::{headers, unique_names};
@@ -172,22 +173,21 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
         unique_names((r.start.col..=r.end.col).map(|c| crate::display::cell_text_with(wb, sh, CellRef::new(r.start.row, c), formulas))).ok()
     };
     let calc_name = |n: &str| pt.calculated_fields.iter().any(|c| c.name.trim().eq_ignore_ascii_case(n.trim()));
-    // A value names a source column before a calculated field, as the report reads it.
-    let fields: Vec<&str> = pt
-        .rows
-        .iter()
-        .chain(&pt.columns)
-        .map(|f| f.source_col.as_str())
-        .chain(pt.filters.iter().map(|f| f.source_col.as_str()))
-        .chain(pt.values.iter().map(|v| v.source_col.as_str()).filter(|n| !calc_name(n)))
-        .collect();
+    let axes = pt.rows.iter().chain(&pt.columns).map(|f| f.source_col.clone());
+    let filters = pt.filters.iter().map(|f| f.source_col.clone());
+    let values = pt.values.iter().map(|v| v.source_col.clone());
+    let formulas = pt.calculated_fields.iter().flat_map(|c| crate::pivot_calc::field_names(&c.formula));
+    // Each saved name that can only be a column's, once however often it is used.
+    let mut seen = HashSet::new();
+    let fields: Vec<String> =
+        axes.chain(filters).chain(values.chain(formulas).filter(|n| !calc_name(n))).filter(|n| seen.insert(n.trim().to_ascii_lowercase())).collect();
     let saved_way = sh.show_formulas;
     let lists = [shown(saved_way), shown(!saved_way)];
     let pos = |l: &Option<Vec<String>>, n: &str| l.as_ref()?.iter().position(|h| h.trim().eq_ignore_ascii_case(n.trim()));
     let placed = |l: &Option<Vec<String>>| fields.iter().filter(|n| pos(l, n).is_some()).count();
     let [saved_list, other_list] = &lists;
     let (first, second) = if placed(other_list) > placed(saved_list) { (other_list, saved_list) } else { (saved_list, other_list) };
-    // Columns the first layout gives the saved fields: the second layout can't give them again.
+    // Columns the first layout gives the saved names: the second layout can't give them again.
     let claimed: Vec<usize> = fields.iter().filter_map(|n| pos(first, n)).collect();
 
     // Calculated fields keep their own names unless a header now has one of them.
@@ -234,6 +234,20 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
             c.formula = f;
         }
         c.name = name.clone();
+    }
+    // The index describes the report as it is stored, so only its names change.
+    if let Some(cells) = pt.data_index.cells() {
+        let mut cells = cells.to_vec();
+        for c in &mut cells {
+            let named = std::iter::once(&mut c.source_col).chain(c.items.iter_mut().map(|i| &mut i.field));
+            for n in named {
+                if let Some(to) = rename(n) {
+                    *n = to;
+                }
+            }
+        }
+        new.data_index = PivotLookup::default();
+        new.data_index.set_cells(cells);
     }
     new.names_from_values = true;
     Some(new)

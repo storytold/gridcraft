@@ -147,6 +147,16 @@ fn written(name: &str) -> String {
     if bare { name.to_string() } else { format!("'{}'", name.replace('\'', "''")) }
 }
 
+/// The names a calculated-field formula may use as fields, as written; none when it can't be read.
+pub fn field_names(formula: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let read = scan(formula, &mut |name, _| {
+        names.push(name.to_string());
+        Ok(None)
+    });
+    if read.is_ok() { names } else { Vec::new() }
+}
+
 /// A calculated-field formula with the field names `rename` maps written as their new names (the
 /// rest as they are). `None` when the formula can't be read; it is then left as it is.
 pub fn rename_fields(formula: &str, rename: &dyn Fn(&str) -> Option<String>) -> Option<String> {

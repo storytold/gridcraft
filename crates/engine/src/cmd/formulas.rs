@@ -1009,6 +1009,7 @@ fn calc_now(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     let mut wb = (*d.wb).clone();
     d.calc.recalc_all(&mut wb);
+    crate::pivot::migrate_older_names(&mut wb);
     d.wb = std::sync::Arc::new(wb);
     Ok(json!({"cells": d.calc.last_recalc_cells}))
 }

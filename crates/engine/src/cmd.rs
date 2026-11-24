@@ -448,6 +448,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         d.calc.cells_changed(&mut wb, &changed);
     }
     controls::sync_linked_values(&mut wb);
+    crate::pivot::migrate_older_names(&mut wb);
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }
