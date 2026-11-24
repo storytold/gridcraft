@@ -698,3 +698,32 @@ fn list_search_source_matches_list_items_within_budget() {
     // The spilled SEQUENCE is read cell by cell like stored values.
     assert_eq!(list_search_source(&wb, 0, CellRef::new(0, 2), &rules[1], 100).items, ["1", "2", "3", "4"]);
 }
+
+/// One rule reads a stored list source for the dropdown: quoted is a literal list, `=` or a
+/// reference, name or function call is a formula, other bare text (an older save's) is literal.
+#[test]
+fn list_items_read_formula_and_literal_sources_by_one_rule() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "C1:C3", "values": [["x"], ["y"], ["z"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "Open,Closed"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let base = wb.active().unwrap().validations[0].clone();
+    let at = CellRef::parse("A1").unwrap();
+    let items = |f1: &str| list_items(&wb, 0, at, &gridcraft_model::features::Validation { f1: f1.into(), ..base.clone() });
+    assert_eq!(base.f1, "\"Open,Closed\"");
+    assert_eq!(items("\"Open,Closed\""), ["Open", "Closed"]);
+    assert_eq!(items("Open-Closed"), ["Open-Closed"]);
+    assert_eq!(items("Open,Closed"), ["Open", "Closed"]);
+    assert_eq!(items("$C$1:$C$2"), ["x", "y"]);
+    assert_eq!(items("=$C$1:$C$2"), ["x", "y"]);
+    assert_eq!(items("OFFSET($C$1,0,0,3,1)"), ["x", "y", "z"]);
+    assert_eq!(items("=OFFSET($C$1,0,0,2,1)"), ["x", "y"]);
+    // Typed with `=`, a formula that bare would read as literal text keeps its `=`.
+    s.execute("data.validation", json!({"range": "B1", "type": "list", "formula1": "=OFFSET($C$1,0,0,2,1)"})).unwrap();
+    s.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "=C1&\",\"&C2"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let f1s: Vec<String> = wb.active().unwrap().validations.iter().map(|v| v.f1.clone()).collect();
+    assert!(f1s.contains(&"OFFSET($C$1,0,0,2,1)".to_string()), "{f1s:?}");
+    assert!(f1s.contains(&"=C1&\",\"&C2".to_string()), "{f1s:?}");
+}

@@ -7921,6 +7921,30 @@ fn renaming_a_name_leaves_a_literal_validation_list_alone() {
     assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1, "Open-Closed");
 }
 
+/// A list source that is a formula (`OFFSET(Old,…)`, stored without `=` by the command or with it
+/// by the XLSX reader) is read for references, so a name rename reaches it; a literal list is not.
+#[test]
+fn renaming_a_name_renames_a_formula_list_source() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "C1:C2", "values": [["x"], ["y"]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=Sheet1!$C$1"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "=OFFSET(Old,0,0,2,1)"})).unwrap();
+    s.execute("data.validation", json!({"range": "A2", "type": "list", "formula1": "Old,Closed"})).unwrap();
+    // As the XLSX reader stores an unquoted `formula1`: with `=`.
+    let read = gridcraft_model::features::Validation {
+        ranges: vec![gridcraft_core::RangeRef::parse("A3").unwrap()],
+        f1: "=OFFSET(Old,0,0,2,1)".into(),
+        ..s.doc().unwrap().wb.sheets[0].validations[0].clone()
+    };
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().validations.push(read);
+    s.execute("formulas.defineName", json!({"name": "New", "oldName": "Old", "refersTo": "=Sheet1!$C$1"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let f1 = |i: usize| wb.sheets[0].validations[i].f1.clone();
+    assert_eq!(f1(0), "OFFSET(New,0,0,2,1)");
+    assert_eq!(f1(1), "\"Old,Closed\"");
+    assert_eq!(f1(2), "=OFFSET(New,0,0,2,1)");
+}
+
 /// A chart series name that is a bare word is a label; it would read as a reference once a
 /// defined name has that word. A rename onto that word would change what the series shows, so it
 /// is refused.

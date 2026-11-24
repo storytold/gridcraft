@@ -228,18 +228,33 @@ pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
-/// Whether a list rule's source is a literal list: the model's rule
+/// Whether a stored list rule's source is a literal list: the model's rule
 /// ([`gridcraft_model::features::is_literal_list`]), which reference edits also follow.
 pub(crate) use gridcraft_model::features::is_literal_list;
 
-/// A list rule's source as a file stores it. A literal list typed without quotes, as in Excel's
-/// Source box (`Open,In progress,Closed`), becomes the quoted string Excel saves
-/// (`"Open,In progress,Closed"`, inner quotes doubled); unquoted, the file would read it as a
-/// formula. A formula (`=…`), a reference, a name or an already quoted list is kept as before.
+/// Whether a list source typed in the Source box (without `=`) is a literal list, as in Excel:
+/// anything but a bare reference or name (`Open,In progress,Closed`, `Open-Closed`, and also
+/// `OFFSET(A1,0,0,2,1)` typed without `=`). Only for input; a stored source is read with
+/// [`is_literal_list`].
+fn typed_is_literal(t: &str) -> bool {
+    !t.contains('!')
+        && gridcraft_formula::parse(t).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true)
+}
+
+/// A list rule's source as it is stored. A literal list typed without quotes, as in Excel's Source
+/// box (`Open,In progress,Closed`), becomes the quoted string Excel saves (`"Open,In progress,Closed"`,
+/// inner quotes doubled); unquoted, the file would read it as a formula. A formula typed with `=`
+/// is stored without it, unless the bare text would then read as a literal list
+/// ([`is_literal_list`]), as `=Open-Closed` would: that keeps its `=`. A reference, a name or an
+/// already quoted list is kept as typed.
 fn list_source(f: &str) -> String {
     let t = f.trim();
-    if t.is_empty() || t.starts_with('=') || t.starts_with('"') || !is_literal_list(t) {
-        return f.trim_start_matches('=').to_string();
+    if let Some(body) = t.strip_prefix('=') {
+        let body = body.trim_start_matches('=');
+        return if is_literal_list(body) && !body.starts_with('"') { format!("={body}") } else { body.to_string() };
+    }
+    if t.is_empty() || t.starts_with('"') || !typed_is_literal(t) {
+        return f.to_string();
     }
     format!("\"{}\"", t.replace('"', "\"\""))
 }

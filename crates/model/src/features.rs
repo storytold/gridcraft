@@ -346,12 +346,35 @@ impl Validation {
     }
 }
 
-/// Whether a list rule's source is a literal list (`"a,b"`, or `a,b` typed without quotes) rather
-/// than a reference or a name to evaluate.
+/// Whether a stored list rule's source is a literal list rather than a formula to evaluate. One
+/// rule for the dropdown and for reference edits, following how sources are stored:
+/// - quoted (`"a,b"`): a literal list, as Excel saves one and as typed lists are stored;
+/// - starting with `=`: a formula, as the XLSX reader stores an unquoted `formula1`;
+/// - otherwise, a source stored bare (a reference, a name or a formula entered with `=` and kept
+///   without it, or an older save's unquoted text): a formula when it is a reference, a name, a
+///   structured reference, a sheet-qualified reference or a function call (`OFFSET(Old,0,0,2,1)`);
+///   any other text (`Open-Closed`, `a,b`, `Yes`) is a literal list.
 pub fn is_literal_list(f: &str) -> bool {
-    f.starts_with('"')
-        || (!f.contains('!')
-            && gridcraft_formula::parse(f).map(|e| !matches!(e, gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_))).unwrap_or(true))
+    let f = f.trim();
+    if f.starts_with('"') {
+        return true;
+    }
+    if f.starts_with('=') {
+        return false;
+    }
+    !f.contains('!')
+        && gridcraft_formula::parse(f)
+            .map(|e| {
+                !matches!(
+                    e,
+                    gridcraft_formula::Expr::Ref(_)
+                        | gridcraft_formula::Expr::Name(_)
+                        | gridcraft_formula::Expr::Struct(_)
+                        | gridcraft_formula::Expr::Call(..)
+                        | gridcraft_formula::Expr::Invoke(..)
+                )
+            })
+            .unwrap_or(true)
 }
 
 /// Number of icons in an icon set (`3Arrows` → 3, `5Quarters` → 5), always 3 to 5.
