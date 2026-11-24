@@ -295,6 +295,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Naposledy použité",
         "No recent workbooks yet." => "Zatím žádné naposledy použité sešity.",
         "More workbooks" => "Další sešity",
+        "More entries not shown" => "Další položky nejsou zobrazeny",
         "Modified" => "Změněno",
         "Not available" => "Nedostupné",
         "Just now" => "Právě teď",
@@ -602,6 +603,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Zobrazit",
         "Collapse dialog" => "Sbalit dialogové okno",
         "Expand dialog" => "Rozbalit dialogové okno",
+        "Distinct Count" => "Počet různých",
+        "Summarize by Distinct Count" => "Shrnout podle počtu různých",
+        "A calculated field can't use Distinct Count." => "Počítané pole nemůže používat počet různých.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Tento sešit obsahuje kontingenční tabulku s hodnotovým polem „Počet různých“. V souboru .xlsx se ukládá jako obyčejný Počet spolu se značkou, kterou čte jen GridCraft, takže Aktualizovat v Excelu z něj udělá obyčejný počet."
+        }
         "My list has headers" => "Data obsahují záhlaví",
         "Sort by" => "Seřadit podle",
         "Then by" => "Potom podle",
@@ -730,6 +737,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char má nečíselný argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char s neplatným kódovým bodem {code}",
         "Invalid environment name character: {character}" => "Neplatný znak v názvu prostředí: {character}",
+        "Copy Cells" => "Kopírovat buňky",
+        "Fill Series" => "Vyplnit řady",
+        "Fill Formatting Only" => "Vyplnit pouze formáty",
+        "Fill Without Formatting" => "Vyplnit bez formátování",
+        "Fill Days" => "Vyplnit dny",
+        "Fill Weekdays" => "Vyplnit pracovní dny",
+        "Fill Months" => "Vyplnit měsíce",
+        "Fill Years" => "Vyplnit roky",
+        "Auto Fill Options" => "Možnosti automatického vyplnění",
         _ => return None,
     })
 }

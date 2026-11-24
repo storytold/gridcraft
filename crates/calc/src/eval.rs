@@ -265,6 +265,17 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// Gives this evaluation `work` units instead of [`EVAL_WORK`] (never more than that).
+    pub fn with_work(mut self, work: u64) -> Self {
+        self.work = work.min(EVAL_WORK);
+        self
+    }
+
+    /// Whether a spend found too little work left (the formula stopped with `#CALC!`).
+    pub fn is_exhausted(&self) -> bool {
+        self.exhausted
+    }
+
     /// Spends `units` of this cell's work; `false` (and nothing left) when there isn't enough.
     pub(crate) fn spend(&mut self, units: u64) -> bool {
         match self.work.checked_sub(units) {
