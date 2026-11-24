@@ -7160,6 +7160,28 @@ fn a_cut_is_not_pasted_into_filtered_rows() {
     assert_eq!((v(&s, "A4"), v(&s, "B4"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
 }
 
+/// A taller cut, or one pasted at an explicit cell, goes straight down: refused when a row the
+/// filter hides is among the rows it would land on, and nothing changes. A visible place takes it.
+#[test]
+fn an_anchored_cut_is_not_pasted_over_filtered_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=5 {
+        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "A10", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A10:B11"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "A2"})).is_err());
+    assert_eq!((v(&s, "A10"), v(&s, "B11")), (Value::Number(1.0), Value::Number(4.0)));
+    assert_eq!((v(&s, "A2"), v(&s, "A3")), (Value::from("v2"), Value::from("v3")));
+    s.execute("edit.paste", json!({"at": "A4"})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B5"), v(&s, "A10")), (Value::Number(1.0), Value::Number(4.0), Value::Empty));
+}
+
 /// Skip Blanks would empty a cut's blank cells along with their note and format, then skip them:
 /// a cut takes no Paste Special option, and nothing changes.
 #[test]

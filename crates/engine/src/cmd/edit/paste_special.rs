@@ -94,8 +94,14 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 "The cut cells and the paste area aren't the same size and shape: select one cell, or an area the size of the cut cells.".into(),
             ));
         }
-        if skip_rows.range(at.row..at.row.saturating_add(tiles_r.saturating_mul(h))).next().is_some() {
-            return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+        // The rows the cut itself would land on, whatever the paste would skip: an anchored or
+        // taller block is pasted straight down, so `skip_rows` (which only a tiled single row uses)
+        // can't tell whether it would write into a hidden row.
+        if let Some(end) = at.offset(i64::from(h) - 1, i64::from(w) - 1) {
+            let dest = RangeRef::new(at, end);
+            if s.doc()?.wb.sheet(dest_sheet).is_some_and(|sh| !super::filtered_rows(sh, dest).is_empty()) {
+                return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+            }
         }
     }
     let src_wb = clip.wb.clone();
