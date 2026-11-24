@@ -113,13 +113,25 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             }
                             if *key == "values" {
                                 ui.separator();
+                                // A calculated field is evaluated on the summed fields, so it has no Distinct Count.
+                                let calculated = info["values"]
+                                    .as_array()
+                                    .and_then(|vs| vs.iter().find(|x| x["name"].as_str() == Some(f.as_str())))
+                                    .and_then(|x| x["field"].as_str())
+                                    .is_some_and(|src| {
+                                        fields.iter().any(|c| c["calculated"].as_bool() == Some(true) && c["name"].as_str() == Some(src))
+                                    });
                                 for (func, l) in [
                                     ("sum", "Summarize by Sum"),
                                     ("count", "Summarize by Count"),
+                                    ("distinctCount", "Summarize by Distinct Count"),
                                     ("average", "Summarize by Average"),
                                     ("max", "Summarize by Max"),
                                     ("min", "Summarize by Min"),
                                 ] {
+                                    if calculated && func == "distinctCount" {
+                                        continue;
+                                    }
                                     if ui.button(lang.tr(l)).clicked() {
                                         app.run_or_alert("pivot.valueSettings", json!({"pivot": name, "field": f, "func": func}));
                                     }

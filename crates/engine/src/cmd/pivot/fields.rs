@@ -106,6 +106,10 @@ fn auto_name(f: PivotFunc, field: &str) -> String {
     format!("{} of {field}", pv::func_caption(f))
 }
 
+/// A calculated field is evaluated on the report's totals, not per source record, so there is
+/// no set of values to count the distinct members of.
+const NO_CALC_DISTINCT: &str = "A calculated field can't use Distinct Count.";
+
 /// Adds `field` to an area (moving it out of the other axis areas).
 pub(super) struct AreaPlacement<'a> {
     pub cmd: &'a str,
@@ -140,6 +144,9 @@ pub(super) fn add_to_area(pt: &mut PivotTable, src: &pv::Source, placement: Area
             }
             let numeric = is_calc || src.col(&field).and_then(|c| src.numeric.get(c).copied()).unwrap_or(false);
             let f = func.unwrap_or(if numeric { PivotFunc::Sum } else { PivotFunc::Count });
+            if is_calc && f == PivotFunc::DistinctCount {
+                return Err(other(NO_CALC_DISTINCT));
+            }
             let base = match name {
                 Some(n) if !n.trim().is_empty() => {
                     if src.col(n).is_some() {
@@ -506,6 +513,9 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         let cur = pt.values.get(i).cloned().ok_or_else(|| bad(C, "no value field at that index"))?;
         let mut v = cur.clone();
         if let Some(f) = func {
+            if f == PivotFunc::DistinctCount && src.col(&cur.source_col).is_none() && calc_field(pt, &cur.source_col).is_some() {
+                return Err(other(NO_CALC_DISTINCT));
+            }
             v.func = f;
             // An automatic caption follows the function. Count Numbers was captioned "Count
             // Numbers of …" before it took Excel's "Count of …", and saved workbooks still carry it.
