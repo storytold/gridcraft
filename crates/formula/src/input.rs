@@ -58,8 +58,13 @@ impl FormulaLocale {
         self.table().iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, local)| *local).unwrap_or(canonical)
     }
     /// The canonical English name of a localized function (any case), or `localized` unchanged.
+    /// Brazilian Portuguese also accepts the name without accents (`MEDIA`, `INDICE`, `ENDERECO`).
     pub fn canonical_name(self, localized: &str) -> &str {
-        self.table().iter().find(|(_, local)| crate::same_name(local, localized)).map(|(en, _)| *en).unwrap_or(localized)
+        self.table().iter().find(|(_, local)| self.typed_as(local, localized)).map(|(en, _)| *en).unwrap_or(localized)
+    }
+    /// Whether `typed` spells the localized name `local`.
+    fn typed_as(self, local: &str, typed: &str) -> bool {
+        crate::same_name(local, typed) || (self == Self::PtBr && !local.is_ascii() && fold_accents(local) == fold_accents(typed))
     }
 }
 
@@ -128,10 +133,26 @@ pub fn print_input(expr: &Expr, locale: FormulaLocale, known_name: impl Fn(&str)
     Ok(out)
 }
 
+/// `name` case-folded with Portuguese accents and the cedilla removed: `Média` -> `media`.
+fn fold_accents(name: &str) -> String {
+    crate::fold_name(name)
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            c => c,
+        })
+        .collect()
+}
+
 /// `VERDADERO` / `VERDADEIRO` -> `true`: the localized spelling of a boolean literal.
 pub(crate) fn boolean_alias(name: &str, locale: FormulaLocale) -> Option<bool> {
     // Only the localized spelling: an English `TRUE` reaching here (`TRUE[...]`) stays a name.
-    match locale.table().iter().find(|(_, local)| crate::same_name(local, name)).map(|(en, _)| *en) {
+    match locale.table().iter().find(|(_, local)| locale.typed_as(local, name)).map(|(en, _)| *en) {
         Some("TRUE") => Some(true),
         Some("FALSE") => Some(false),
         _ => None,

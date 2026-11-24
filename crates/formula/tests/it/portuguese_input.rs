@@ -87,3 +87,23 @@ fn portuguese_input_preserves_defined_and_local_names() {
     let expr = parse("SUM(1,2)").unwrap();
     assert_eq!(print_input(&expr, PT, known).unwrap(), "SUM(1;2)");
 }
+
+#[test]
+fn portuguese_names_are_accepted_without_accents() {
+    for (src, expected) in [
+        ("MEDIA(1;3)", "AVERAGE(1,3)"),
+        ("media(1;3)", "AVERAGE(1,3)"),
+        ("CONT.NUM(A1:A9)", "COUNT(A1:A9)"),
+        ("INDICE(A1:B9;2;1)", "INDEX(A1:B9,2,1)"),
+        ("MAXIMO(1;2)-MINIMO(1;2)", "MAX(1,2)-MIN(1,2)"),
+        ("NAO(VERDADEIRO)", "NOT(TRUE)"),
+        ("ENDERECO(1;1)", "ADDRESS(1,1)"),
+    ] {
+        assert_eq!(input(src), expected, "{src}");
+    }
+    // Shown with the accents.
+    let expr = parse("AVERAGE(INDEX(A1:B2,1,1),NOT(TRUE))").unwrap();
+    assert_eq!(print_input(&expr, PT, |_| false).unwrap(), "MÉDIA(ÍNDICE(A1:B2;1;1);NÃO(VERDADEIRO))");
+    // Spanish keeps exact spellings.
+    assert_eq!(print(&parse_input("PROMEDIO(1;2)", FormulaLocale::Es, |_| false).unwrap()), "AVERAGE(1,2)");
+}
