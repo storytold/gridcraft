@@ -37,6 +37,7 @@ nightly_compile_gui() {
   # `build.rs` reads GRIDCRAFT_VERSION (it bakes it as GRIDCRAFT_BUILT_VERSION, the value the
   # binary answers `--version` with), so the prepared identity is passed explicitly here as well as
   # through the inherited environment; VERSION is that same value (see env.sh).
+  nightly_refuse_signing_env
   (cd "$ROOT" && GRIDCRAFT_VERSION="$VERSION" GRIDCRAFT_OVERRIDE_VERSION="$VERSION" cargo build --release --locked -p gridcraft --target "$NIGHTLY_RUST_TARGET")
   NIGHTLY_GUI="$CARGO_TARGET_DIR/$NIGHTLY_RUST_TARGET/release/gridcraft"
   [[ -f "$NIGHTLY_GUI" && ! -L "$NIGHTLY_GUI" ]] || nightly_die 'the owned GUI build did not produce a regular executable'
