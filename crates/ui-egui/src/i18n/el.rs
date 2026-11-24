@@ -281,6 +281,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Πρόσφατα",
         "No recent workbooks yet." => "Δεν υπάρχουν ακόμη πρόσφατα βιβλία εργασίας.",
         "More workbooks" => "Περισσότερα βιβλία εργασίας",
+        "More entries not shown" => "Περισσότερα στοιχεία δεν εμφανίζονται",
         "Modified" => "Τροποποιήθηκε",
         "Not available" => "Μη διαθέσιμο",
         "Just now" => "Μόλις τώρα",

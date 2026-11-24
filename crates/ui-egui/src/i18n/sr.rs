@@ -380,6 +380,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Nedavno",
         "No recent workbooks yet." => "Još nema nedavnih radnih svezaka.",
         "More workbooks" => "Više radnih svezaka",
+        "More entries not shown" => "Još stavki nije prikazano",
         "Modified" => "Izmenjeno",
         "Not available" => "Nije dostupno",
         "Just now" => "Upravo sada",

@@ -377,6 +377,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Gần đây",
         "No recent workbooks yet." => "Chưa có sổ làm việc gần đây.",
         "More workbooks" => "Sổ làm việc khác",
+        "More entries not shown" => "Còn mục khác chưa được hiển thị",
         "Modified" => "Đã sửa đổi",
         "Not available" => "Không khả dụng",
         "Just now" => "Vừa xong",

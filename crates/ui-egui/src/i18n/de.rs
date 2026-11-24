@@ -311,6 +311,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Zuletzt verwendet",
         "No recent workbooks yet." => "Noch keine zuletzt verwendeten Arbeitsmappen.",
         "More workbooks" => "Weitere Arbeitsmappen",
+        "More entries not shown" => "Weitere Elemente werden nicht angezeigt",
         "Modified" => "Geändert",
         "Not available" => "Nicht verfügbar",
         "Just now" => "Gerade eben",
