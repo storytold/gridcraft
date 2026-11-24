@@ -175,7 +175,7 @@ pub(crate) fn preview(app: &mut SheetApp, ctx: &egui::Context, text: &str) -> Op
     if cache.wb != wb || cache.values.len() > 256 {
         cache = Cache { wb, values: HashMap::new() };
     }
-    let key = format!("{sheet:?}|{}|{formula}", cell.a1());
+    let key = format!("{}|{sheet:?}|{}|{formula}", doc.revision, cell.a1());
     if let Some(v) = cache.values.get(&key) {
         return v.clone();
     }
@@ -230,6 +230,11 @@ fn labels(fields: &[params::Param], language: crate::i18n::Language) -> Vec<Stri
         fields.iter().map(|p| language.function_argument(p.base()).map(|t| format!("{t}{}", p.name.get(p.base().len()..).unwrap_or("")))).collect();
     let names = translated.unwrap_or_else(|| fields.iter().map(|p| p.name.clone()).collect());
     names.into_iter().map(|n| capitalise(&n)).collect()
+}
+
+/// What argument `param` of `function` is for, in the interface language (English while untranslated).
+fn help_text(language: crate::i18n::Language, function: &str, param: &str) -> String {
+    params::describe(function, param).map(|english| language.tr(english).to_string()).unwrap_or_default()
 }
 
 fn capitalise(s: &str) -> String {
@@ -291,7 +296,7 @@ pub(super) fn function_arguments(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
     ui.separator();
     ui.label(crate::formula_locale::description(&canonical, FormulaLocale::En, language).unwrap_or_default());
     if let (Some(field), Some(label)) = (fields.get(active), shown.get(active)) {
-        let help = params::describe(&canonical, &field.name).unwrap_or("");
+        let help = help_text(language, &canonical, &field.name);
         ui.horizontal_wrapped(|ui| {
             ui.label(egui::RichText::new(format!("{label}:")).strong());
             ui.label(help);
@@ -342,6 +347,25 @@ mod tests {
 
     fn args(c: &Call) -> Vec<&str> {
         c.args.iter().map(String::as_str).collect()
+    }
+
+    #[test]
+    fn the_argument_help_is_looked_up_in_the_translation_catalog() {
+        use egui_kittest::kittest::Queryable as _;
+        let english = params::describe("SUM", "number").unwrap();
+        crate::i18n::set_test_catalog(&[(english, "Catalog help for the number argument")]);
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        let d = open(&mut app, &json!({"name": "SUM"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(520.0, 400.0)).build_ui_state(
+            |ui, (app, d, confirm, open): &mut (SheetApp, Dialog, bool, bool)| function_arguments(app, ui, d, confirm, open),
+            (app, d, false, true),
+        );
+        h.run();
+        assert!(h.query_by_label("Catalog help for the number argument").is_some());
+        assert!(h.query_by_label(english).is_none());
+        crate::i18n::set_test_catalog(&[]);
     }
 
     #[test]
