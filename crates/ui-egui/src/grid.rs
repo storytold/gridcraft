@@ -26,7 +26,7 @@ mod active_row;
 pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
-mod editor;
+pub(crate) mod editor;
 mod geo;
 mod interact;
 mod keyboard;
@@ -252,6 +252,16 @@ impl Trace {
     }
 }
 
+/// The entries of an open list-validation dropdown, read within the list search budget
+/// ([`gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET`]).
+pub struct ListPickerItems {
+    /// The workbook version they were read from: any edit makes a new one.
+    pub(crate) wb: std::sync::Arc<Workbook>,
+    pub(crate) sheet: usize,
+    pub(crate) cell: CellRef,
+    pub source: gridcraft_engine::cmd::data::ListSource,
+}
+
 #[derive(Default)]
 pub struct GridState {
     /// The active sheet's line positions and outlines, kept with a weak reference to the sheet
@@ -305,6 +315,9 @@ pub struct GridState {
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
+    /// The open dropdown's entries, read once for the workbook, sheet and cell they came from, so
+    /// an open list doesn't read its source again every frame.
+    pub list_picker_items: Option<ListPickerItems>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
