@@ -480,6 +480,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Mover a valores",
         "Summarize by Sum" => "Resumir por suma",
         "Summarize by Count" => "Resumir por cuenta",
+        "Summarize by Distinct Count" => "Resumir por recuento distinto",
         "Summarize by Average" => "Resumir por promedio",
         "Summarize by Max" => "Resumir por máximo",
         "Summarize by Min" => "Resumir por mínimo",
@@ -527,6 +528,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Contraer diálogo",
         "Expand dialog" => "Expandir diálogo",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Este libro tiene una tabla dinámica con un campo de valor «Recuento distinto». En el archivo .xlsx se guarda como un Recuento normal con una marca que solo lee GridCraft; Actualizar en Excel lo convierte en un recuento normal."
+        }
+        "Distinct Count" => "Recuento distinto",
+        "A calculated field can't use Distinct Count." => "Un campo calculado no puede usar «Recuento distinto».",
         "My list has headers" => "Mis datos tienen encabezados",
         "Sort by" => "Ordenar por",
         "Then by" => "Luego por",
