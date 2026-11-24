@@ -5,9 +5,9 @@ name: Packaging lint
 on:
   push:
     branches: [main, release]
-    paths: [".github/workflows/**", ".github/actionlint.yaml", ".github/nightly-linux-signing-key.asc", "packaging/**", "assets/app-icon/**", "docs/nightly-signing-policy.example.json", "sonar-project.properties"]
+    paths: [".github/workflows/**", ".github/nightly-linux-signing-key.asc", "packaging/**", "assets/app-icon/**", "sonar-project.properties"]
   pull_request:
-    paths: [".github/workflows/**", ".github/actionlint.yaml", ".github/nightly-linux-signing-key.asc", "packaging/**", "assets/app-icon/**", "docs/nightly-signing-policy.example.json", "sonar-project.properties"]
+    paths: [".github/workflows/**", ".github/nightly-linux-signing-key.asc", "packaging/**", "assets/app-icon/**", "sonar-project.properties"]
   workflow_dispatch:
 
 permissions:

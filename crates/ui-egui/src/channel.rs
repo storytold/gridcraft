@@ -6,8 +6,8 @@
 //! and titles byte for byte; the nightly build carries its own app id so docks, window managers
 //! and the taskbar keep the two channels apart.
 
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// The stable window/Wayland app id, matching the `.desktop` file and the hicolor icon name.
 pub const APP_ID: &str = "ai.storyteller.gridcraft";
@@ -34,9 +34,7 @@ pub fn select(channel: Channel, version: &'static str) -> Result<(), String> {
         Channel::Stable => 1,
         Channel::NightlyV1 => 2,
     };
-    SELECTED
-        .compare_exchange(0, value, Ordering::AcqRel, Ordering::Acquire)
-        .map_err(|_| "the channel was already selected".to_string())?;
+    SELECTED.compare_exchange(0, value, Ordering::AcqRel, Ordering::Acquire).map_err(|_| "the channel was already selected".to_string())?;
     VERSION.set(version).map_err(|_| "the channel version was already selected".to_string())
 }
 

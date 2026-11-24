@@ -4,10 +4,20 @@
 # accepts, so this is what keeps a Nightly run out of the stable app's settings, prefs and logs.
 set -eu
 here="$(cd "$(dirname "$0")" && pwd)"
-real="$here/usr/bin/gridcraft"
-[ -x "$real" ] || real="$here/gridcraft"
-if [ ! -x "$real" ]; then
-  echo "gridcraft-nightly: no GridCraft binary beside $0" >&2
+# Where each placement keeps the GUI it starts: the AppImage (and any installed tree) has it in
+# usr/bin/gridcraft; the flat nightly tar names it gridcraft-bin beside this launcher; a plain
+# tree tarball keeps it beside its bin/gridcraft-nightly. A candidate that is this same file is
+# never started, so a launcher can not recurse into itself.
+self="$here/$(basename "$0")"
+real=""
+for candidate in "$here/usr/bin/gridcraft" "$here/gridcraft-bin" "$here/gridcraft"; do
+  if [ -x "$candidate" ] && [ ! "$candidate" -ef "$self" ]; then
+    real="$candidate"
+    break
+  fi
+done
+if [ -z "$real" ]; then
+  echo "gridcraft-nightly: no GridCraft binary beside $0 (usr/bin/gridcraft, gridcraft-bin)" >&2
   exit 2
 fi
 if [ -z "${XDG_DATA_HOME:-}" ] && [ -z "${HOME:-}" ]; then

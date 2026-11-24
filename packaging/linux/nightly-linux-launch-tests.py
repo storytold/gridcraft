@@ -40,16 +40,24 @@ class MovedTreeLauncher(unittest.TestCase):
         self.env = {"PATH": os.environ["PATH"], "XDG_DATA_HOME": str(self.data)}
 
     def install(self, layout):
-        """AppImage layout: launcher at the root; tar layout: launcher beside the binary."""
+        """Each placement puts the GUI and this launcher where its format does.
+
+        appdir: AppRun at the root, GUI in usr/bin (also usr/bin/gridcraft-nightly).
+        tar: the kit's flat tar, `gridcraft` launcher beside the `gridcraft-bin` GUI.
+        tree: a plain tree tarball, bin/gridcraft-nightly beside bin/gridcraft.
+        """
         tree = self.root / layout
-        binary = tree / ("usr/bin/gridcraft" if layout == "appdir" else "gridcraft")
+        binary, launcher_name = {
+            "appdir": (tree / "usr/bin/gridcraft", tree / "AppRun"),
+            "tar": (tree / "gridcraft-bin", tree / "gridcraft"),
+            "tree": (tree / "bin/gridcraft", tree / "bin/gridcraft-nightly"),
+        }[layout]
         binary.parent.mkdir(parents=True)
         binary.write_text(RECORDER)
         binary.chmod(0o755)
-        launcher = tree / ("AppRun" if layout == "appdir" else "gridcraft-nightly")
-        shutil.copy2(LAUNCHER, launcher)
-        launcher.chmod(0o755)
-        return launcher
+        shutil.copy2(LAUNCHER, launcher_name)
+        launcher_name.chmod(0o755)
+        return launcher_name
 
     def query(self, launcher, *args):
         return run([str(launcher), *args], cwd=self.root, env=self.env)
@@ -57,8 +65,8 @@ class MovedTreeLauncher(unittest.TestCase):
     def tokens(self):
         return ["<--launch-profile>", "<nightly-v1>", "<--profile-root>", f"<{self.data / PROFILE}>", "<-->"]
 
-    def test_both_layouts_start_the_gui_through_the_launch_profile(self):
-        for layout in ("appdir", "tar"):
+    def test_every_layout_starts_the_gui_through_the_launch_profile(self):
+        for layout in ("appdir", "tar", "tree"):
             with self.subTest(layout=layout):
                 launcher = self.install(layout)
                 self.assertEqual(self.query(launcher).stdout.splitlines(), self.tokens())
@@ -84,9 +92,31 @@ class MovedTreeLauncher(unittest.TestCase):
         self.assertIn("no GridCraft binary", missing.stderr)
         self.assertFalse(self.data.exists(), "a refused launch creates no data folder")
 
+    def test_a_flat_tar_launcher_never_starts_itself(self):
+        launcher = self.install("tar")
+        (self.root / "tar/gridcraft-bin").unlink()
+        refused = run([str(launcher)], cwd=self.root, env=self.env, check=False)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("no GridCraft binary", refused.stderr)
+
     def test_the_launcher_is_portable_shell(self):
         run(["sh", "-n", str(LAUNCHER)], cwd=self.root, env=self.env)
         self.assertTrue(LAUNCHER.read_text().startswith("#!/bin/sh\n"))
+
+
+class FlatNightlyTar(unittest.TestCase):
+    """nightly.sh needs a release build, so its staging and the archive policy are source-guarded."""
+
+    def test_the_flat_tar_stages_the_kit_layout(self):
+        source = (ROOT / "packaging/linux/nightly.sh").read_text()
+        self.assertIn('cp "$NIGHTLY_GUI" "$STAGE/gridcraft-bin"', source, "the GUI is <app>-bin")
+        self.assertIn('"$ROOT/packaging/linux/nightly-launch.sh" "$STAGE/gridcraft"', source, "the launcher is <app>")
+        self.assertNotIn('"$STAGE/gridcraft-nightly"', source, "the flat tar's launcher is gridcraft")
+        policy = (ROOT / "packaging/nightly-archive.py").read_text()
+        self.assertIn('{"gridcraft", "gridcraft-bin", "gridcraft-nightly.png"}', policy)
+        self.assertIn('required = {"gridcraft", "gridcraft-bin", "gridcraft-nightly.png"', policy)
+        launcher = LAUNCHER.read_text()
+        self.assertIn('"$here/gridcraft-bin"', launcher, "the launcher starts the GUI the tar ships")
 
 
 class StagedFormats(unittest.TestCase):

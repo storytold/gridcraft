@@ -30,9 +30,14 @@ mod tests {
     #[test]
     fn explicit_feed_identity_is_required_for_a_nightly_build() {
         assert!(is_nightly_version("0.19.1-nightly.20261124.7.1.gabcdef012345"));
-        for invalid in
-            ["", "0.19.1", "0.19.1-nightly", "0.19.1-nightly.20261124", "0.19.1-nightly.20261124.7.1.gABCDEF012345", "0.19.1-nightly.20261124.7.1.gabcdef012345\n"]
-        {
+        for invalid in [
+            "",
+            "0.19.1",
+            "0.19.1-nightly",
+            "0.19.1-nightly.20261124",
+            "0.19.1-nightly.20261124.7.1.gABCDEF012345",
+            "0.19.1-nightly.20261124.7.1.gabcdef012345\n",
+        ] {
             assert!(!is_nightly_version(invalid), "{invalid:?}");
         }
     }

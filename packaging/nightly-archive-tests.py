@@ -29,11 +29,12 @@ class ArchivePolicy(unittest.TestCase):
         self.stage = self.root / "stage"
         self.stage.mkdir()
         self.output = self.root / "nightly.tar.gz"
-        self.required = {"gridcraft", "gridcraft-nightly", "gridcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
+        # The kit's tar layout: `gridcraft` runs, `gridcraft-bin` is the GUI it starts.
+        self.required = {"gridcraft", "gridcraft-bin", "gridcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
         for name in self.required:
             (self.stage / name).write_bytes(b"generated fixture: " + name.encode())
         (self.stage / "gridcraft").chmod(0o755)
-        (self.stage / "gridcraft-nightly").chmod(0o755)
+        (self.stage / "gridcraft-bin").chmod(0o755)
 
     def test_flat_regular_ustar_with_all_notices(self):
         (self.stage / "OFL-Font.txt").write_text("generated fixture license", encoding="utf-8")
@@ -61,7 +62,7 @@ class ArchivePolicy(unittest.TestCase):
                 (self.stage / name).write_bytes(content)
 
     def test_unexpected_cli_portable_or_installer_member_refuses(self):
-        for name in ["gridcraft-cli", "portable.txt", "gridcraft.desktop"]:
+        for name in ["gridcraft-cli", "portable.txt", "gridcraft.desktop", "gridcraft-nightly"]:
             with self.subTest(name=name):
                 bad = self.stage / name
                 bad.write_bytes(b"generated fixture")

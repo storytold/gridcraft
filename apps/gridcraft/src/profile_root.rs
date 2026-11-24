@@ -206,11 +206,6 @@ fn validate_for(
     writable: impl FnOnce(&Path) -> std::io::Result<()>,
 ) -> Result<PathBuf, String> {
     absolute(root.to_path_buf(), "the nightly profile root")?;
-    if env("GRIDCRAFT_CONFIG_DIR").is_some_and(|v| !v.is_empty()) {
-        // The distro wrappers may point a stable build at its own data folder; a nightly launch
-        // takes its root from the Launcher only, so there is never a second candidate.
-        return Err("nightly-v1 cannot be combined with GRIDCRAFT_CONFIG_DIR".into());
-    }
     if platform != Platform::Windows
         && let Some(id) = env("FLATPAK_ID").filter(|value| !value.is_empty())
         && id.to_string_lossy().as_ref() != gridcraft_ui_egui::channel::NIGHTLY_PACKAGE_ID
@@ -268,7 +263,8 @@ mod tests {
         fn new() -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let root = loop {
-                let candidate = std::env::temp_dir().join(format!("gridcraft-profile-policy-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+                let candidate =
+                    std::env::temp_dir().join(format!("gridcraft-profile-policy-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
                 match std::fs::create_dir(&candidate) {
                     Ok(()) => break std::fs::canonicalize(candidate).unwrap(),
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -280,15 +276,10 @@ mod tests {
             std::fs::create_dir_all(&home).unwrap();
             std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
             std::fs::write(&exe, b"fixture executable, never run").unwrap();
-            let env = [
-                ("HOME", home.clone()),
-                ("USERPROFILE", home),
-                ("APPDATA", root.join("roaming")),
-                ("LOCALAPPDATA", root.join("local")),
-            ]
-            .into_iter()
-            .map(|(key, value)| (key.into(), value.into_os_string()))
-            .collect();
+            let env = [("HOME", home.clone()), ("USERPROFILE", home), ("APPDATA", root.join("roaming")), ("LOCALAPPDATA", root.join("local"))]
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into_os_string()))
+                .collect();
             Self { root, env, exe }
         }
 
@@ -328,7 +319,11 @@ mod tests {
             }
             assert!(!stable.exists());
         }
-        assert!(fixture.check(Platform::Windows, &PathBuf::from(fixture.get("LOCALAPPDATA").unwrap()).join("Programs/ArtCraft/GridCraft/nightly")).is_err());
+        assert!(
+            fixture
+                .check(Platform::Windows, &PathBuf::from(fixture.get("LOCALAPPDATA").unwrap()).join("Programs/ArtCraft/GridCraft/nightly"))
+                .is_err()
+        );
         assert!(fixture.check(Platform::Windows, &fixture.home().join(".gridcraft/nightly")).is_err());
         for key in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
             let base = fixture.root.join(format!("machine {key}"));
@@ -353,7 +348,12 @@ mod tests {
         assert!(fixture.check(Platform::Linux, &fixture.home().join(".var/app/ai.storyteller.launcher/nightly")).is_ok());
         assert!(fixture.check(Platform::Linux, Path::new("/usr/bin/gridcraft/../gridcraft-nightly")).is_err(), "parent traversal is refused");
         // macOS: the four Library rows and the bundle itself.
-        for suffix in ["Application Support/GridCraft", "Caches/GridCraft", "Preferences/GridCraft", "Saved Application State/ai.storyteller.gridcraft.savedState"] {
+        for suffix in [
+            "Application Support/GridCraft",
+            "Caches/GridCraft",
+            "Preferences/GridCraft",
+            "Saved Application State/ai.storyteller.gridcraft.savedState",
+        ] {
             assert!(fixture.check(Platform::Mac, &fixture.home().join("Library").join(suffix).join("nightly")).is_err(), "{suffix}");
         }
     }
@@ -365,7 +365,15 @@ mod tests {
         for platform in [Platform::Windows, Platform::Linux, Platform::Mac] {
             assert_eq!(fixture.check(platform, &data).unwrap(), data);
         }
-        assert!(fixture.check(Platform::Linux, &PathBuf::from(fixture.get("LOCALAPPDATA").unwrap()).join("Programs/ArtCraft/ArtCraftLauncher/nightly/gridcraft")).is_ok(), "the Launcher's own folder is not GridCraft's install");
+        assert!(
+            fixture
+                .check(
+                    Platform::Linux,
+                    &PathBuf::from(fixture.get("LOCALAPPDATA").unwrap()).join("Programs/ArtCraft/ArtCraftLauncher/nightly/gridcraft")
+                )
+                .is_ok(),
+            "the Launcher's own folder is not GridCraft's install"
+        );
     }
 
     #[test]
@@ -406,9 +414,6 @@ mod tests {
         fixture.env.insert("XDG_CACHE_HOME".into(), "relative/cache".into());
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("absolute"));
         fixture.env.remove("XDG_CACHE_HOME");
-        fixture.env.insert("GRIDCRAFT_CONFIG_DIR".into(), fixture.home().join("custom-stable").into_os_string());
-        assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("GRIDCRAFT_CONFIG_DIR"));
-        fixture.env.remove("GRIDCRAFT_CONFIG_DIR");
         fixture.env.insert("FLATPAK_ID".into(), "ai.storyteller.gridcraft".into());
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("Flatpak"));
         fixture.env.remove("FLATPAK_ID");

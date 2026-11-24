@@ -108,8 +108,8 @@ impl eframe::App for App {
     }
 }
 
-/// The settings folder: the validated nightly profile, else `GRIDCRAFT_CONFIG_DIR`, else the
-/// platform's own (`app_dirs`). Every writer of user state goes through it.
+/// The settings folder: the validated nightly profile, else the platform's own folder
+/// (`app_dirs`). Every writer of user state goes through it.
 fn config_dir() -> Option<std::path::PathBuf> {
     app_dirs::config_dir()
 }
@@ -311,14 +311,19 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
             Ok(launch)
         })
         .and_then(|launch| {
-            launch_profile::prepare(launch, |root| launch_profile::validate_root(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref()))
+            launch_profile::prepare(launch, |root| {
+                launch_profile::validate_root(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref())
+            })
         })
         .unwrap_or_else(|error| {
             report_launch_profile_error(&error);
             std::process::exit(2)
         });
-    let channel = if early.profile.is_nightly() { gridcraft_ui_egui::channel::Channel::NightlyV1 } else { gridcraft_ui_egui::channel::Channel::Stable };
-    if let Err(error) = launch_profile::install(early.profile).and_then(|()| gridcraft_ui_egui::channel::select(channel, env!("GRIDCRAFT_BUILT_VERSION"))) {
+    let channel =
+        if early.profile.is_nightly() { gridcraft_ui_egui::channel::Channel::NightlyV1 } else { gridcraft_ui_egui::channel::Channel::Stable };
+    if let Err(error) =
+        launch_profile::install(early.profile).and_then(|()| gridcraft_ui_egui::channel::select(channel, env!("GRIDCRAFT_BUILT_VERSION")))
+    {
         report_launch_profile_error(&error);
         std::process::exit(2);
     }
@@ -391,8 +396,7 @@ fn main() -> eframe::Result<()> {
         eprintln!("GridCraft Nightly: the control channel is not part of the nightly channel");
         std::process::exit(2);
     }
-    let mut control_port: Option<u16> =
-        (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok())).flatten();
+    let mut control_port: Option<u16> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok())).flatten();
     let mut control_token: Option<String> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok()).flatten();
     let mut sample: Option<String> = None;
     let mut files: Vec<String> = Vec::new();
@@ -423,7 +427,9 @@ fn main() -> eframe::Result<()> {
     if let Some(logger) = logger {
         match log_dir().filter(|_| prefs_enabled()) {
             Some(dir) => match logger.attach_dir(&dir) {
-                Ok(path) => log::info!("{} {}, log file {}", gridcraft_ui_egui::channel::name(), gridcraft_ui_egui::channel::version(), path.display()),
+                Ok(path) => {
+                    log::info!("{} {}, log file {}", gridcraft_ui_egui::channel::name(), gridcraft_ui_egui::channel::version(), path.display())
+                }
                 // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
                 Err(e) => log::warn!("no log file: {e}"),
             },
@@ -486,10 +492,8 @@ fn main() -> eframe::Result<()> {
     // The window carries its channel's name and OS app id: a nightly window is never mistaken for
     // the stable one by a dock, a window manager rule or the taskbar (Windows AUMID above). A
     // Flatpak package carries its own id instead, which is what its .desktop file and portal name.
-    let window_app_id = std::env::var("FLATPAK_ID")
-        .ok()
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| gridcraft_ui_egui::channel::app_id().to_string());
+    let window_app_id =
+        std::env::var("FLATPAK_ID").ok().filter(|id| !id.is_empty()).unwrap_or_else(|| gridcraft_ui_egui::channel::app_id().to_string());
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(gridcraft_ui_egui::channel::default_title())
         .with_inner_size([1440.0, 900.0])

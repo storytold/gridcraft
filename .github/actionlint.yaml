@@ -1,7 +1,0 @@
-# actionlint 1.7.12 predates GitHub's `queue:` key on `concurrency`. Only this exact false
-# positive is suppressed for the nightly signer; Packaging lint's independent source-contract job
-# (packaging/nightly-release-tests.py) enforces the group, `max` queue and no cancellation.
-paths:
-  .github/workflows/nightly-sign.yml:
-    ignore:
-      - '^unexpected key "queue" for "concurrency" section\. expected one of "cancel-in-progress", "group"$'

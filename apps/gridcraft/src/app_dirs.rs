@@ -1,16 +1,14 @@
-//! The one place a GridCraft data root is resolved, so the nightly profile, a distro wrapper's
-//! `GRIDCRAFT_CONFIG_DIR` and the platform default can never disagree.
+//! The one place a GridCraft data root is resolved, so the nightly profile and the platform
+//! default can never disagree.
 //!
 //! Everything the desktop writes about the user lives under [`config_dir`]: `ui.json`,
 //! `prefs.json` and `logs/` (see `logging`). The control channel's token folder is resolved by
 //! `gridcraft_mcp` from the same root at start-up. Nothing else in the app persists user state.
+//! A nightly takes its root from the Launcher's validated profile and nothing else, so stable has
+//! no environment override of its own: the platform's published folder is the whole story.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
-
-/// A wrapper's explicit data folder (a distro package that must not share the installed app's).
-/// It must be absolute. Nightly refuses it: the Launcher alone names a nightly root.
-pub const CONFIG_DIR_ENV: &str = "GRIDCRAFT_CONFIG_DIR";
 
 fn default_config_dir(platform: &str, env: &impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
     match platform {
@@ -26,14 +24,9 @@ fn default_config_dir(platform: &str, env: &impl Fn(&str) -> Option<OsString>) -
 
 /// The folder the settings and the log files live in.
 pub fn config_dir_for(platform: &str, env: &impl Fn(&str) -> Option<OsString>, nightly_root: Option<&std::path::Path>) -> Option<PathBuf> {
-    if let Some(root) = nightly_root {
+    match nightly_root {
         // The profile was already validated (absolute, fenced, writable) before this runs.
-        return Some(root.to_path_buf());
-    }
-    match env(CONFIG_DIR_ENV).filter(|v| !v.is_empty()).map(PathBuf::from) {
-        // A relative folder would resolve against the working directory, which is not the user's.
-        Some(custom) if custom.is_absolute() => Some(custom),
-        Some(_) => None,
+        Some(root) => Some(root.to_path_buf()),
         None => default_config_dir(platform, env),
     }
 }
@@ -60,33 +53,27 @@ mod tests {
     #[test]
     fn each_platform_keeps_its_published_folder() {
         let home = if cfg!(windows) { ("HOME", r"C:\Users\u") } else { ("HOME", "/home/u") };
+        assert_eq!(config_dir_for("macos", &env(&[home]), None), Some(PathBuf::from("/home/u/Library/Application Support/GridCraft")));
         assert_eq!(
-            config_dir_for("macos", &env(&[home]), None),
-            Some(PathBuf::from("/home/u/Library/Application Support/GridCraft"))
+            config_dir_for("windows", &env(&[("APPDATA", r"C:\Users\u\AppData\Roaming")]), None),
+            Some(PathBuf::from(r"C:\Users\u\AppData\Roaming\GridCraft"))
         );
-        assert_eq!(config_dir_for("windows", &env(&[("APPDATA", r"C:\Users\u\AppData\Roaming")]), None), Some(PathBuf::from(r"C:\Users\u\AppData\Roaming\GridCraft")));
         assert_eq!(config_dir_for("linux", &env(&[home]), None), Some(PathBuf::from("/home/u/.config/gridcraft")));
         assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "/xdg"), home]), None), Some(PathBuf::from("/xdg/gridcraft")));
         assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "")]), None), None);
     }
 
     #[test]
-    fn an_absolute_wrapper_folder_is_honoured_and_a_relative_one_is_not() {
-        let base = [("HOME", "/home/u")];
-        assert_eq!(
-            config_dir_for("linux", &env(&[("GRIDCRAFT_CONFIG_DIR", "/opt/gridcraft-nightly"), base[0]]), None),
-            Some(PathBuf::from("/opt/gridcraft-nightly"))
-        );
-        assert_eq!(config_dir_for("linux", &env(&[("GRIDCRAFT_CONFIG_DIR", "gridcraft-data"), base[0]]), None), None, "a relative folder is not the user's");
+    fn an_empty_xdg_config_home_falls_back_to_the_home_folder() {
+        let home = [("HOME", "/home/u")];
+        assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", ""), home[0]]), None), Some(PathBuf::from("/home/u/.config/gridcraft")));
+        assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "/xdg"), home[0]]), None), Some(PathBuf::from("/xdg/gridcraft")));
     }
 
     #[test]
-    fn the_nightly_profile_wins_and_never_consults_the_environment() {
+    fn the_nightly_profile_is_the_whole_answer() {
         let profile = std::path::Path::new("/var/lib/gridcraft-nightly/profile");
-        assert_eq!(
-            config_dir_for("linux", &env(&[("GRIDCRAFT_CONFIG_DIR", "/opt/stable"), ("HOME", "/home/u")]), Some(profile)),
-            Some(profile.to_path_buf())
-        );
+        assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "/xdg"), ("HOME", "/home/u")]), Some(profile)), Some(profile.to_path_buf()));
         assert_eq!(config_dir_for("linux", &env(&[("HOME", "/home/u")]), Some(profile)).unwrap().join("logs"), profile.join("logs"));
     }
 }

@@ -165,11 +165,9 @@ directives, e.g. `RUST_LOG=debug` or `RUST_LOG=warn,gridcraft_engine=debug` (a t
 matches a prefix: `gridcraft*=debug`). Runs with `GRIDCRAFT_NO_PREFS` set (no saved settings)
 log to standard error only.
 
-`GRIDCRAFT_CONFIG_DIR` (an absolute path) moves that whole settings folder — `ui.json`,
-`prefs.json` and `logs/` — somewhere else, for a distribution package or a test harness that must
-not share the installed app's settings. A relative value is ignored. The `nightly-v1` channel is
-the one exception: it refuses this variable and takes its root from the Launcher only
-(`--launch-profile nightly-v1 --profile-root <dir>`), so a profile is never ambiguous.
+The `nightly-v1` channel keeps all of that in its own profile instead, which the Launcher names
+(`--launch-profile nightly-v1 --profile-root <dir>`); a nightly build refuses to start without one,
+so a Nightly run never touches the stable app's settings, prefs or logs.
 
 ## For agents: MCP, CLI and the control channel
 

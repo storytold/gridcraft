@@ -33,7 +33,9 @@ def checked_entries(root, stage):
     total = 0
     for entry in entries:
         name = entry.name
-        if name not in {"gridcraft", "gridcraft-nightly", "gridcraft-nightly.png"} and not notice(name):
+        # `gridcraft` is the launcher and `gridcraft-bin` the GUI it starts (nightly.sh); the icon
+        # and the notices are the rest of the flat archive.
+        if name not in {"gridcraft", "gridcraft-bin", "gridcraft-nightly.png"} and not notice(name):
             raise ValueError(f"unexpected nightly member: {name}")
         if len(name.encode("utf-8")) > 100:
             raise ValueError(f"nightly member must be a short regular file: {name}")
@@ -44,7 +46,7 @@ def checked_entries(root, stage):
         if name.casefold() in folded:
             raise ValueError(f"case-colliding nightly member: {name}")
         folded.add(name.casefold())
-    required = {"gridcraft", "gridcraft-nightly", "gridcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
+    required = {"gridcraft", "gridcraft-bin", "gridcraft-nightly.png", "README.md", "LICENSE-MIT", "LICENSE-APACHE", "NOTICE", "ATTRIBUTION.md"}
     if not required.issubset({item.name for item in entries}):
         raise ValueError("required GUI/icon/notices missing")
     return entries

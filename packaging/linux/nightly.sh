@@ -18,12 +18,13 @@ OUTPUT="$DIST/gridcraft-$VERSION-linux-x86_64-nightly.tar.gz"
 nightly_build_gui
 STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
-cp "$NIGHTLY_GUI" "$STAGE/gridcraft"
+# The kit's tar layout: `gridcraft` is the launcher people run and `gridcraft-bin` is the GUI it
+# starts. An unpacked archive is isolated too, because the GUI refuses to start without a launch
+# profile and the launcher is the only thing that supplies one.
+cp "$NIGHTLY_GUI" "$STAGE/gridcraft-bin"
+chmod 755 "$STAGE/gridcraft-bin"
+cp "$ROOT/packaging/linux/nightly-launch.sh" "$STAGE/gridcraft"
 chmod 755 "$STAGE/gridcraft"
-# An unpacked archive is isolated too: the GUI refuses to start without a launch profile, so the
-# launcher beside it is how a user starts it.
-cp "$ROOT/packaging/linux/nightly-launch.sh" "$STAGE/gridcraft-nightly"
-chmod 755 "$STAGE/gridcraft-nightly"
 # The nightly channel's own icon (deeper field); the archive member name stays as the helper requires.
 cp "$ROOT/assets/app-icon/gridcraft-nightly.png" "$STAGE/gridcraft-nightly.png"
 nightly_copy_notices "$STAGE"
