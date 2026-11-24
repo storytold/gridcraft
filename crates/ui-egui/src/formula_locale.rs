@@ -21,11 +21,11 @@ pub(crate) fn canonical(
     if locale == FormulaLocale::En || wb.sheet(sheet).is_some_and(|sh| wb.styles.get(sh.style_id(cell)).num_fmt.as_str() == "@") {
         return Ok(text.to_string());
     }
-    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text),
-    // except that a localized name may start with an accented letter (`+ÍNDICE(A1;1)`).
+    // Same formula detection as the engine's `input_to_cell` (no trimming: " =1" is text).
     let body = text;
     if body.starts_with('=')
-        || ((body.starts_with('+') || body.starts_with('-')) && body.chars().nth(1).is_some_and(|c| c.is_alphabetic() || c == '('))
+        || ((body.starts_with('+') || body.starts_with('-'))
+            && body.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '(' || signed_localized_call(body, locale)))
     {
         let known = |name: &str| wb.name(name, sheet).is_some() || wb.table(name).is_some();
         // Match the engine's existing convenience for missing closing parentheses.
@@ -39,6 +39,15 @@ pub(crate) fn canonical(
         return Ok(normalized);
     }
     Ok(text.to_string())
+}
+
+/// `+ÍNDICE(A1;1)`: after the sign, a localized function name that starts with an accented
+/// letter and is followed by `(`. Any other accented word (`+Árbol`, `-Ótimo`) stays text.
+fn signed_localized_call(body: &str, locale: FormulaLocale) -> bool {
+    let rest = body.get(1..).unwrap_or("");
+    let name_len: usize = rest.chars().take_while(|c| c.is_alphanumeric() || *c == '.' || *c == '_').map(char::len_utf8).sum();
+    let (Some(name), Some(after)) = (rest.get(..name_len), rest.get(name_len..)) else { return false };
+    after.starts_with('(') && locale.canonical_name(name) != name
 }
 
 pub(crate) fn display(text: &str, locale: FormulaLocale, wb: &Workbook, sheet: usize) -> String {
