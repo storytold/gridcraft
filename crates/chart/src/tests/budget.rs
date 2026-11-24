@@ -195,6 +195,10 @@ fn stacked_hairline_bars_do_not_fill_the_gap_between_disjoint_spans() {
     c.data_labels = false;
     c.legend = LegendPos::None;
     let mut d = data_of(2, 20_000);
+    // Resolved series carry the kind they are drawn as (`Chart::series_kind`): stacked columns.
+    for s in &mut d.series {
+        s.kind = ChartKind::ColumnStacked;
+    }
     for v in d.series[0].values.iter_mut() {
         *v = Some(100.0);
     }
@@ -317,6 +321,8 @@ fn series_lines_of_a_dense_stack_stay_within_the_pixel_columns() {
         c.legend = LegendPos::None;
         let mut d = data_of(4, 20_000);
         for (s, series) in d.series.iter_mut().enumerate() {
+            // Resolved series carry the kind they are drawn as (`Chart::series_kind`).
+            series.kind = kind;
             for (i, v) in series.values.iter_mut().enumerate() {
                 *v = Some(10.0 + ((i * 7 + s) % 5) as f64);
             }
