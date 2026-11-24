@@ -12,6 +12,7 @@ impl SheetApp {
         self.fonts_ready = true;
         self.fonts_set = true;
         self.fonts_rebind = false;
+        self.fonts_bound_next = None;
         self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
         self.fonts_bound = self.used_fonts();
         self.fonts_seen = self.fonts_key();
@@ -50,7 +51,8 @@ impl SheetApp {
     }
 
     /// Applies the font gates: a language Han-order change, startup/prepared fonts and workbook
-    /// font binding. Every branch keeps its one-frame paint gate.
+    /// font binding. Startup and a language change skip one frame's paint (`fonts_ready`); a
+    /// workbook-font change paints in the active set and binds its new families a frame later.
     pub(super) fn apply_font_state(&mut self, ctx: &egui::Context) {
         // A pending synthetic step owns the next real `ui` pass: `ui` returns at the font gate
         // before it handles input, so a font change requested now would consume the step without
@@ -63,8 +65,11 @@ impl SheetApp {
         if !self.fonts_ready {
             self.start_font_setup(ctx);
         } else if self.fonts_rebind {
-            // A font-set change made last frame is active now.
+            // A font-set change made last frame is active now: its families may be named.
             self.fonts_rebind = false;
+            if let Some(bound) = self.fonts_bound_next.take() {
+                fonts::set_bound(bound);
+            }
             self.chart_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         } else if !defer_font_change && !self.prepared_fonts && fonts::scan_done() {
             self.rebind_workbook_fonts(ctx);
@@ -90,14 +95,18 @@ impl SheetApp {
         // The rebuilt set has no workbook fonts yet: bind them again once it is active.
         self.fonts_bound.clear();
         self.fonts_seen = (0, 0);
+        // A workbook-font change still waiting is superseded by this whole new set.
+        self.fonts_rebind = false;
+        self.fonts_bound_next = None;
         self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
         ctx.request_repaint();
     }
 
     /// Binds the workbook's installed fonts once the background scan has finished. Adding fonts
-    /// re-applies the font set, which egui activates at the next pass, so skip this frame's paint
-    /// (same one-frame cost as startup). Only when an open workbook changed.
-    fn rebind_workbook_fonts(&mut self, ctx: &egui::Context) {
+    /// re-applies the font set, which egui activates at the next pass: this frame still paints in
+    /// the active set (its bound families stay as they were) and the new families count as bound
+    /// from the next pass (`apply_font_state`). Only when an open workbook changed.
+    pub(super) fn rebind_workbook_fonts(&mut self, ctx: &egui::Context) {
         let seen = self.fonts_key();
         if seen == self.fonts_seen {
             return;
@@ -107,7 +116,12 @@ impl SheetApp {
         if used == self.fonts_bound {
             return;
         }
-        ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
+        // Building the set records its families as bound; keep the active set's until it is live.
+        let active = fonts::bound_families();
+        let defs = theme::font_definitions_with(self.ui.language, &used);
+        self.fonts_bound_next = Some(fonts::bound_families());
+        fonts::set_bound(active);
+        ctx.set_fonts(defs);
         self.fonts_bound = used;
         self.fonts_rebind = true;
         ctx.request_repaint();

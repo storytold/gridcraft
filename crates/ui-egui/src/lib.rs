@@ -277,9 +277,13 @@ pub struct SheetApp {
     /// The open workbooks' (uid, revision), folded, that `fonts_bound` was computed for, so the
     /// style tables are walked only when a workbook changes.
     fonts_seen: (u64, u64),
-    /// Set while a font-set change is pending activation: skip this frame's paint, like the
-    /// startup `fonts_ready` gate (egui applies new definitions at the next pass).
+    /// Set while a workbook-font change is pending activation (egui applies new definitions at
+    /// the next pass). The frame still paints, in the font set that is active: the families the
+    /// new set binds wait in `fonts_bound_next` and count as bound (`fonts::is_bound`) only once
+    /// that set is live, so nothing names a family egui hasn't been given.
     fonts_rebind: bool,
+    /// The bound families of the font set `fonts_rebind` waits for.
+    fonts_bound_next: Option<Vec<String>>,
     /// Han face order the installed fonts were built with; a language switch rebuilds the fonts
     /// only when it changes this (see `theme::HanOrder`).
     fonts_han: Option<theme::HanOrder>,

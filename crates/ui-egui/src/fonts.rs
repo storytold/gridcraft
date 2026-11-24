@@ -384,6 +384,11 @@ pub fn set_bound(keys: impl IntoIterator<Item = String>) {
     *bound().write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys.into_iter().collect();
 }
 
+/// The role families bound right now (see [`set_bound`]).
+pub fn bound_families() -> Vec<String> {
+    bound().read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().cloned().collect()
+}
+
 /// Is this exact role family bound to font data?
 pub fn is_bound(role: &str) -> bool {
     bound().read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(role)
