@@ -229,6 +229,9 @@ pub struct DocState {
     /// Opened from a password-protected file: it gets no recovery copy ([`recovery`]), which
     /// would sit on disk without the password.
     pub from_encrypted: bool,
+    /// The Distinct Count PivotTable value fields (sheet, pivot, value) an .xlsx save has already
+    /// told the user about (#3336), so only a field not yet disclosed raises the notice again.
+    pub distinct_disclosed: Vec<(usize, usize, usize)>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -367,6 +370,7 @@ impl DocState {
             edits: None,
             go_to_recent: vec![],
             from_encrypted: false,
+            distinct_disclosed: vec![],
         }
     }
     pub fn is_dirty(&self) -> bool {

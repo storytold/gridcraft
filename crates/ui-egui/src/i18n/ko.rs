@@ -491,6 +491,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "표시",
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
+        "Distinct Count" => "고유 개수",
+        "Summarize by Distinct Count" => "고유 개수로 요약",
+        "A calculated field can't use Distinct Count." => "계산 필드에는 고유 개수를 사용할 수 없습니다.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "이 통합 문서에는 값 필드가 '고유 개수'인 피벗 테이블이 있습니다. .xlsx 파일에는 일반 개수와 GridCraft만 읽는 표식으로 저장되므로, Excel에서 새로 고치면 일반 개수로 바뀝니다."
+        }
         "My list has headers" => "내 데이터에 머리글 표시",
         "Sort by" => "정렬 기준",
         "Then by" => "다음 기준",
