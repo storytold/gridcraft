@@ -915,18 +915,17 @@ fn two_column_groups_on_different_axes_preserve_secondary_and_kind() {
     );
     let (wb, _) = read_xlsx(&bytes).unwrap();
     let ch = &wb.sheet(0).unwrap().charts[0];
-    assert_eq!(ch.kind, gridcraft_model::ChartKind::Combo);
+    // Series of one kind are one chart, a column chart with a secondary-axis series.
+    assert_eq!(ch.kind, gridcraft_model::ChartKind::ColumnClustered);
     assert!(!ch.series[0].secondary);
     assert!(ch.series[1].secondary);
-    assert_eq!(ch.series[0].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
-    assert_eq!(ch.series[1].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
+    assert_eq!(ch.series_kinds(), vec![gridcraft_model::ChartKind::ColumnClustered; 2]);
 
     let out = crate::write_xlsx(&wb).unwrap();
     let (wb2, _) = read_xlsx(&out).unwrap();
     let ch2 = &wb2.sheet(0).unwrap().charts[0];
-    assert_eq!(ch2.kind, gridcraft_model::ChartKind::Combo);
+    assert_eq!(ch2.kind, gridcraft_model::ChartKind::ColumnClustered);
     assert!(!ch2.series[0].secondary);
     assert!(ch2.series[1].secondary);
-    assert_eq!(ch2.series[0].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
-    assert_eq!(ch2.series[1].kind, Some(gridcraft_model::ChartKind::ColumnClustered));
+    assert_eq!(ch2.series_kinds(), vec![gridcraft_model::ChartKind::ColumnClustered; 2]);
 }
