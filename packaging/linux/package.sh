@@ -142,7 +142,7 @@ if has deb || has rpm; then
     mv "$NFPM_STAGE/usr/bin/gridcraft" "$NFPM_STAGE/usr/bin/$NFPM_BIN"
     mv "$NFPM_STAGE/usr/bin/gridcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
     mv "$NFPM_STAGE/usr/share/doc/gridcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
-    sed -e "s|^Exec=gridcraft\([[:space:]]\|$\)|Exec=$NFPM_BIN\1|" \
+    sed -e "s#^Exec=gridcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
         -e "s|^TryExec=gridcraft$|TryExec=$NFPM_BIN|" \
         -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
         -e "s|^Name=GridCraft$|Name=GridCraft Nightly|" \

@@ -344,18 +344,13 @@ fn main() -> eframe::Result<()> {
     // Linux/BSD: Excel's layout — no window-manager title bar above ours; our title bar carries the
     // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
     app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();
-    let app_id = std::env::var("FLATPAK_ID")
-        .ok()
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| {
-            if option_env!("GRIDCRAFT_BUILD_CHANNEL") == Some("nightly-v1")
-                || env!("CARGO_PKG_VERSION").contains("-nightly")
-            {
-                "ai.storyteller.gridcraft.nightly-v1".to_string()
-            } else {
-                "ai.storyteller.gridcraft".to_string()
-            }
-        });
+    let app_id = std::env::var("FLATPAK_ID").ok().filter(|id| !id.is_empty()).unwrap_or_else(|| {
+        if option_env!("GRIDCRAFT_BUILD_CHANNEL") == Some("nightly-v1") || env!("CARGO_PKG_VERSION").contains("-nightly") {
+            "ai.storyteller.gridcraft.nightly-v1".to_string()
+        } else {
+            "ai.storyteller.gridcraft".to_string()
+        }
+    });
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("GridCraft")
         .with_inner_size([1440.0, 900.0])
