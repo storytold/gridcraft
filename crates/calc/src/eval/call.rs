@@ -189,6 +189,10 @@ impl<'h> Evaluator<'h> {
         let (rows, cols) =
             items.iter().flat_map(|(c, v)| [dims(c), dims(v)]).fold((1, 1), |(r, k), (vr, vc)| (broadcast_dim(r, vr), broadcast_dim(k, vc)));
         let Some(n) = broadcast_len(rows, cols) else { return err(CellError::Num) };
+        // Every cell of the result may read every condition: charged before the loop.
+        if !self.spend((n as u64).saturating_mul(items.len() as u64)) {
+            return err(CellError::Calc);
+        }
         let get = |v: &Value, r: usize, col: usize| if let Value::Array(a) = v { a.get_broadcast(r, col) } else { v.clone() };
         let mut data = Vec::with_capacity(n);
         for r in 0..rows {
