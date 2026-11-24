@@ -4,9 +4,10 @@
 //! The framework dialogs run on [`SheetApp::framework_dialogs`] after GridCraft's own UI.
 //!
 //! The runtime takes Escape, Tab and the clipboard events for the whole window unless one of GridCraft's own egui
-//! widgets has the keyboard. The grid takes egui's focus whenever nothing else has it, so its keys and the clipboard
-//! events stay in egui's input; the window's Escape, while none of GridCraft's widgets has the keyboard, is read with
-//! [`escape_pressed`] and taken with [`consume_escape`].
+//! widgets has the keyboard. The window's Escape is read with [`escape_pressed`] and taken with [`consume_escape`];
+//! the grid is declared to the runtime with [`host_canvas`], which keeps Tab, the edit chords and the clipboard
+//! events in egui's input for GridCraft's shortcuts. A grid that holds egui focus keeps Escape and the clipboard
+//! events in egui as one of GridCraft's own widgets does.
 
 use std::sync::{Arc, OnceLock};
 
@@ -16,6 +17,7 @@ use craft_keymap::Overrides;
 use craft_ui::fonts::{I18nScripts, SystemFonts, UiFonts};
 use craft_ui::runtime::commands::{CommandInput, CommandSet as _, QuitCommand};
 use craft_ui::runtime::env::{RootEnv, Scale};
+use craft_ui::runtime::focus::{EditSet, KeepKeys, KeyUse};
 use craft_ui::runtime::frame::{FrameInput, FrameOutput};
 use craft_ui::runtime::keys::{Intent, with_window_intents};
 use craft_ui::shell::embed;
@@ -114,6 +116,13 @@ impl SheetApp {
     pub(crate) fn run_framework_dialogs(&mut self, ui: &mut egui::Ui) {
         self.framework_dialogs.run(ui);
     }
+}
+
+/// Declares the grid `id`, drawn in this pass, as the window's document canvas. Tab, the edit chords and the
+/// clipboard events stay in egui's input for GridCraft's shortcuts, as do the arrows, Enter and the page keys.
+pub(crate) fn host_canvas(ctx: &egui::Context, id: egui::Id) {
+    const KEYS: KeyUse = KeyUse::CANVAS.with_keep(KeepKeys::Tab).with_edits(EditSet::ALL);
+    craft_ui::runtime::focus::host_canvas(ctx, id, KEYS);
 }
 
 /// Whether Escape was pressed in this pass: from egui while one of GridCraft's own widgets or popups has the
