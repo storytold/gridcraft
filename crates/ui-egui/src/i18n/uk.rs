@@ -370,6 +370,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Останні",
         "No recent workbooks yet." => "Нещодавніх книг поки немає.",
         "More workbooks" => "Інші книги",
+        "More entries not shown" => "Показано не всі елементи",
         "Modified" => "Змінено",
         "Not available" => "Недоступно",
         "Just now" => "Щойно",
@@ -1001,6 +1002,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Move to Values",
         "Summarize by Sum" => "Summarize by Sum",
         "Summarize by Count" => "Summarize by Count",
+        "Summarize by Distinct Count" => "Підсумувати за кількістю унікальних",
         "Summarize by Average" => "Summarize by Average",
         "Summarize by Max" => "Summarize by Max",
         "Summarize by Min" => "Summarize by Min",
@@ -1027,6 +1029,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показати",
         "Collapse dialog" => "Згорнути діалогове вікно",
         "Expand dialog" => "Розгорнути діалогове вікно",
+        "Distinct Count" => "Кількість унікальних",
+        "A calculated field can't use Distinct Count." => "Обчислюване поле не може використовувати кількість унікальних.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Ця книга містить зведену таблицю з полем значень «Кількість унікальних». У файлі .xlsx воно зберігається як звичайна Кількість разом із міткою, яку читає лише GridCraft, тому Оновити в Excel перетворює його на звичайну кількість."
+        }
         "Numerical Count" => "Кількість чисел",
         "Minimum" => "Мінімум",
         "Maximum" => "Максимум",
