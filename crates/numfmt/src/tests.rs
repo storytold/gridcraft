@@ -1247,3 +1247,58 @@ fn round_as_displayed_matches_excel() {
     assert_eq!(r("0", f64::MAX), f64::MAX);
     assert_eq!(r("0.0E+0", f64::MIN_POSITIVE), 2.2e-308);
 }
+
+#[test]
+fn system_long_date_and_time_pseudo_lcids_match_en_us_excel() {
+    // 2024-10-09 (Wednesday, single-digit day) = serial 45574 in 1900 date system.
+    // Excel saves `[$-F800]dddd\,\ mmmm\ dd\,\ yyyy` in OOXML with `dd`, but renders
+    // en-US System Long Date with an unpadded day (`9`, not `09`).
+    assert_eq!(f(r"[$-F800]dddd\,\ mmmm\ dd\,\ yyyy", 45574.0), "Wednesday, October 9, 2024");
+    assert_eq!(f(r"[$-f800]dddd\,\ dd\ mmmm\ yyyy", 45574.0), "Wednesday, October 9, 2024");
+    // Two-digit day stays two digits.
+    assert_eq!(f(r"[$-F800]dddd\,\ mmmm\ dd\,\ yyyy", 45575.0), "Thursday, October 10, 2024");
+    // Colour tags and text sections remain intact alongside `[$-F800]`.
+    let fmt = NumberFormat::parse(r"[Red][$-F800]dddd\,\ mmmm\ dd\,\ yyyy;@");
+    let out = format_value(&Value::Number(45574.0), &fmt, S);
+    assert_eq!(out.text, "Wednesday, October 9, 2024");
+    assert_eq!(out.color, Some(FormatColor::Red));
+    assert_eq!(format_value(&Value::Text("Header".into()), &fmt, S).text, "Header");
+    // `[$-F400]` renders en-US System Long Time (`h:mm:ss AM/PM`) regardless of fallback tokens.
+    assert_eq!(f(r"[$-F400]h:mm:ss\ AM/PM", 0.3350925925925926), "8:02:32 AM");
+    assert_eq!(f(r"[$-F400]HH:mm:ss", 0.5103935185185185), "12:14:58 PM");
+    // Modern Excel aliases `[$-x-sysdate]` and `[$-x-systime]` match case-insensitively.
+    assert_eq!(f(r"[$-x-sysdate]dddd\,\ mmmm\ dd\,\ yyyy", 45574.0), "Wednesday, October 9, 2024");
+    assert_eq!(f(r"[$-X-SYSDATE]dddd\,\ dd\ mmmm\ yyyy", 45575.0), "Thursday, October 10, 2024");
+    assert_eq!(f(r"[$-x-systime]HH:mm:ss", 0.3350925925925926), "8:02:32 AM");
+    assert_eq!(f(r"[$-X-SysTime]h:mm:ss\ AM/PM", 0.5103935185185185), "12:14:58 PM");
+    // System date/time tags override the section cleanly even with empty or non-date fallback tokens.
+    assert_eq!(f("[$-F800]", 45574.0), "Wednesday, October 9, 2024");
+    assert_eq!(f("[$-F800]0.00", 45574.0), "Wednesday, October 9, 2024");
+    assert_eq!(f("[$-x-sysdate]", 45574.0), "Wednesday, October 9, 2024");
+    assert_eq!(f("[$-x-sysdate]General", 45574.0), "Wednesday, October 9, 2024");
+    assert_eq!(f("[$-F400]", 0.3350925925925926), "8:02:32 AM");
+    assert_eq!(f("[$-F400]0.00", 0.3350925925925926), "8:02:32 AM");
+    assert_eq!(f("[$-x-systime]", 0.5103935185185185), "12:14:58 PM");
+    assert_eq!(f(r#"[$-x-systime]"fallback""#, 0.5103935185185185), "12:14:58 PM");
+    assert!(NumberFormat::parse("[$-x-sysdate]").is_date());
+    assert!(NumberFormat::parse("[$-x-systime]").is_date());
+    assert!(NumberFormat::parse("[$-F800]0.00").is_date());
+    // Multi-section formats keep colour tags on the system-date section and leave text sections intact.
+    let sys_fmt = NumberFormat::parse("[Blue][$-x-sysdate]0.00;@");
+    let sys_out = format_value(&Value::Number(45574.0), &sys_fmt, S);
+    assert_eq!(sys_out.text, "Wednesday, October 9, 2024");
+    assert_eq!(sys_out.color, Some(FormatColor::Blue));
+    assert_eq!(format_value(&Value::Text("Title".into()), &sys_fmt, S).text, "Title");
+}
+
+#[test]
+fn system_date_time_tags_preserve_text_sections_and_ordinary_lcids() {
+    // Text sections containing `@` must stay SecKind::Text even if a system tag is present.
+    assert_eq!(t("0;-0;0;[$-F800]@", "Header"), "Header");
+    assert_eq!(t("0;-0;0;[$-x-sysdate]@", "Header"), "Header");
+    assert_eq!(f("0.00;[$-F800]@", -5.0), "-5.00");
+    // Ordinary LCIDs and non-F800/F400 hex tags stay numeric; high-word flags with low 16 bits F800 resolve as Long Date.
+    assert_eq!(f("[$-409]0.00", 12.5), "12.50");
+    assert_eq!(f("[$-F801]0.00", 12.5), "12.50");
+    assert_eq!(f("[$-1F800]0", 45574.0), "Wednesday, October 9, 2024");
+}
