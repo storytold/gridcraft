@@ -2213,3 +2213,192 @@ fn remove_personal_information_is_kept_and_honoured() {
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }
+
+#[test]
+fn issue_778_xlsx_xml_import_save_reopen_roundtrip() {
+    let mut wb = Workbook::new();
+    let mut s = Sheet::new("Delegated");
+    s.cells.set(at("A1"), Cell { value: Value::text("Item"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("B1"), Cell { value: Value::text("Amount"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("A2"), Cell { value: Value::text("Alpha"), formula: None, style: StyleId::DEFAULT, py: None });
+    s.cells.set(at("B2"), Cell { value: Value::Number(42.5), formula: None, style: StyleId::DEFAULT, py: None });
+    let mut f = Cell::formula(Formula::new("=B2*2"));
+    f.value = Value::Number(85.0);
+    s.cells.set(at("B3"), f);
+    s.merges.push(rr("A4:B4"));
+    s.hyperlinks.insert(at("A2"), Hyperlink { target: "https://example.com".into(), tooltip: Some("Example".into()), external: true });
+    s.comments.insert(
+        at("B2"),
+        Comment {
+            author: "Reviewer".into(),
+            text: "Checked".into(),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: true,
+            dates: vec![],
+            note_box: None,
+        },
+    );
+    s.shapes.push(Shape {
+        id: 1,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor { cell: at("D2"), dx: 4.0, dy: 4.0, width: 120.0, height: 60.0, mode: AnchorMode::MoveAndSize },
+        fill: Color::Rgb(0x336699),
+        line: Color::Rgb(0x112233),
+        text: "Box".into(),
+        format: Default::default(),
+        rotation: 0.0,
+        math: Default::default(),
+    });
+    s.charts.push(Chart {
+        id: 2,
+        kind: ChartKind::ColumnClustered,
+        anchor: Anchor { cell: at("D6"), dx: 0.0, dy: 0.0, width: 320.0, height: 200.0, mode: AnchorMode::MoveAndSize },
+        title: Some("Sales".into()),
+        series: vec![Series {
+            name: Some("Delegated!$B$1".into()),
+            categories: Some("Delegated!$A$2:$A$2".into()),
+            values: "Delegated!$B$2:$B$2".into(),
+            ..Default::default()
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: true,
+        data_table: Some(ChartDataTable::default()),
+        gridlines: true,
+        style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+    });
+    wb.sheets[0] = Arc::new(s);
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let (reopened, _) = read_xlsx(&bytes).unwrap();
+    let bytes2 = write_xlsx(&reopened).unwrap();
+    let (again, _) = read_xlsx(&bytes2).unwrap();
+
+    let sh = &again.sheets[0];
+    assert_eq!(sh.cells.get(at("A2")).unwrap().value, Value::text("Alpha"));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().value, Value::Number(85.0));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("B2*2"));
+    assert_eq!(sh.merges, vec![rr("A4:B4")]);
+    assert_eq!(sh.hyperlinks.get(&at("A2")).map(|h| h.target.as_str()), Some("https://example.com"));
+    assert_eq!(sh.comments.get(&at("B2")).map(|c| c.text.as_str()), Some("Checked"));
+    assert_eq!(sh.shapes.len(), 1);
+    assert_eq!(sh.shapes[0].text, "Box");
+    assert_eq!(sh.charts.len(), 1);
+    assert_eq!(sh.charts[0].title.as_deref(), Some("Sales"));
+    assert_eq!(sh.charts[0].data_table, Some(ChartDataTable::default()));
+}
+
+#[test]
+fn issue_778_full_workbook_import_save_reopen_roundtrip() {
+    const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    const NS_XDR: &str = "http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing";
+    const NS_A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const NS_C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+
+    let png = b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec();
+    let external_link = format!(
+        r#"<?xml version="1.0"?><externalLink xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><externalBook r:id="rId1"><sheetNames><sheetName val="Sheet1"/></sheetNames><sheetDataSet><sheetData sheetId="0"><row r="1"><cell r="A1"><v>10</v></cell></row></sheetData></sheetDataSet></externalBook></externalLink>"#
+    );
+    let external_link_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/externalLinkPath" Target="file:///C:/never/opened/Book2.xlsx" TargetMode="External"/></Relationships>"#
+    );
+    let types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/><Override PartName="/xl/charts/chart1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/><Override PartName="/xl/externalLinks/externalLink1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.externalLink+xml"/></Types>"#;
+    let root_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>"#
+    );
+    let wb_xml = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Notes" sheetId="2" state="hidden" r:id="rId2"/></sheets><externalReferences><externalReference r:id="rId3"/></externalReferences></workbook>"#
+    );
+    let wb_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="{NS_REL}/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="{NS_REL}/externalLink" Target="externalLinks/externalLink1.xml"/></Relationships>"#
+    );
+    let sheet1 = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}" xmlns:r="{NS_REL}"><sheetData><row r="1"><c r="A1" t="str"><v>Item</v></c><c r="B1" t="str"><v>Amount</v></c></row><row r="2"><c r="A2" t="str"><v>Alpha</v></c><c r="B2"><v>42.5</v></c><c r="C2"><f>[1]Sheet1!$A$1</f><v>10</v></c></row><row r="3"><c r="B3"><f>B2*2</f><v>85</v></c><c r="C3"><f>SUM([1]Sheet1!A1:A3)*2</f><v>60</v></c></row></sheetData><drawing r:id="rId1"/></worksheet>"#
+    );
+    let sheet1_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#
+    );
+    let sheet2 =
+        format!(r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}"><sheetData><row r="1"><c r="A1"><v>7</v></c></row></sheetData></worksheet>"#);
+    let drawing1 = format!(
+        r#"<?xml version="1.0"?><xdr:wsDr xmlns:xdr="{NS_XDR}" xmlns:a="{NS_A}" xmlns:r="{NS_REL}"><xdr:twoCellAnchor editAs="oneCell"><xdr:from><xdr:col>2</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>9</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>4</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>13</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="10" name="Picture 1" descr="Logo"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip r:embed="rId1"/></xdr:blipFill><xdr:spPr/></xdr:pic><xdr:clientData/></xdr:twoCellAnchor><xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>1</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>4</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp><xdr:nvSpPr><xdr:cNvPr id="11" name="Rect 1"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr><xdr:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Box</a:t></a:r></a:p></xdr:txBody></xdr:sp><xdr:clientData/></xdr:twoCellAnchor><xdr:twoCellAnchor><xdr:from><xdr:col>3</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>8</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="12" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="{NS_C}" r:id="rId2"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor></xdr:wsDr>"#
+    );
+    let drawing1_rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_REL}/image" Target="../media/image1.png"/><Relationship Id="rId2" Type="{NS_REL}/chart" Target="../charts/chart1.xml"/></Relationships>"#
+    );
+    let chart1 = format!(
+        r#"<?xml version="1.0"?><c:chartSpace xmlns:c="{NS_C}" xmlns:a="{NS_A}"><c:chart><c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>Sales</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:order val="0"/><c:tx><c:strRef><c:f>Data!$B$1</c:f></c:strRef></c:tx><c:cat><c:strRef><c:f>Data!$A$2:$A$2</c:f></c:strRef></c:cat><c:val><c:numRef><c:f>Data!$B$2:$B$2</c:f><c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>42.5</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser></c:barChart><c:dTable><c:showKeys/><c:showHorzBorder/><c:showVertBorder/><c:showOutline/></c:dTable></c:plotArea></c:chart></c:chartSpace>"#
+    );
+
+    let input = super::make_zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", wb_xml.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet1.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet1_rels.as_bytes()),
+        ("xl/worksheets/sheet2.xml", sheet2.as_bytes()),
+        ("xl/drawings/drawing1.xml", drawing1.as_bytes()),
+        ("xl/drawings/_rels/drawing1.xml.rels", drawing1_rels.as_bytes()),
+        ("xl/media/image1.png", &png),
+        ("xl/charts/chart1.xml", chart1.as_bytes()),
+        ("xl/externalLinks/externalLink1.xml", external_link.as_bytes()),
+        ("xl/externalLinks/_rels/externalLink1.xml.rels", external_link_rels.as_bytes()),
+    ]);
+
+    let (imported, rep1) = read_xlsx(&input).unwrap();
+    assert!(!rep1.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep1.warnings);
+    let saved1 = write_xlsx(&imported).unwrap();
+    let (reopened, rep2) = read_xlsx(&saved1).unwrap();
+    assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
+    let saved2 = write_xlsx(&reopened).unwrap();
+    let (again, _) = read_xlsx(&saved2).unwrap();
+
+    assert_eq!(again.sheets.len(), 2);
+    assert_eq!(again.sheets[0].name, "Data");
+    assert_eq!(again.sheets[0].visibility, Visibility::Visible);
+    assert_eq!(again.sheets[1].name, "Notes");
+    assert_eq!(again.sheets[1].visibility, Visibility::Hidden);
+    assert_eq!(again.sheets[1].value(at("A1")), Value::Number(7.0));
+
+    let sh = &again.sheets[0];
+    assert_eq!(sh.cells.get(at("B3")).unwrap().value, Value::Number(85.0));
+    assert_eq!(sh.cells.get(at("B3")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("B2*2"));
+    assert_eq!(sh.cells.get(at("C2")).unwrap().value, Value::Number(10.0));
+    assert_eq!(sh.cells.get(at("C2")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("[1]Sheet1!$A$1"));
+    assert_eq!(sh.cells.get(at("C3")).unwrap().value, Value::Number(60.0));
+    assert_eq!(sh.cells.get(at("C3")).unwrap().formula.as_ref().map(|f| f.text.as_str()), Some("SUM([1]Sheet1!A1:A3)*2"));
+
+    assert_eq!(sh.images.len(), 1);
+    assert_eq!(sh.images[0].data.as_ref(), png.as_slice());
+    assert_eq!(sh.images[0].anchor.mode, AnchorMode::MoveOnly);
+    assert_eq!(sh.shapes.len(), 1);
+    assert_eq!(sh.shapes[0].text, "Box");
+    assert_eq!(sh.charts.len(), 1);
+    assert_eq!(sh.charts[0].title.as_deref(), Some("Sales"));
+    assert_eq!(sh.charts[0].data_table, Some(ChartDataTable::default()));
+
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(saved2)).unwrap();
+    let mut read_part = |name: &str| {
+        let mut s = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut s).unwrap();
+        s
+    };
+    let out_wb = read_part("xl/workbook.xml");
+    assert!(out_wb.contains("<externalReferences"), "{out_wb}");
+    let out_ext = read_part("xl/externalLinks/externalLink1.xml");
+    assert!(out_ext.contains("<sheetName val=\"Sheet1\"/>"), "{out_ext}");
+    let out_ext_rels = read_part("xl/externalLinks/_rels/externalLink1.xml.rels");
+    assert!(out_ext_rels.contains("file:///C:/never/opened/Book2.xlsx") && out_ext_rels.contains("TargetMode=\"External\""), "{out_ext_rels}");
+    let out_chart = read_part("xl/charts/chart1.xml");
+    assert!(out_chart.contains("<c:numCache>") && out_chart.contains("<c:v>42.5</c:v>"), "{out_chart}");
+}
