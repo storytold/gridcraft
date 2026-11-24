@@ -52,22 +52,35 @@ mod tests {
 
     #[test]
     fn each_platform_keeps_its_published_folder() {
-        let home = if cfg!(windows) { ("HOME", r"C:\Users\u") } else { ("HOME", "/home/u") };
-        assert_eq!(config_dir_for("macos", &env(&[home]), None), Some(PathBuf::from("/home/u/Library/Application Support/GridCraft")));
+        // The base is joined with the host's own separator, so these hold on any machine the gate
+        // runs on: what each platform publishes is the folder name, not how the host spells a slash.
+        let appdata = PathBuf::from(r"C:\Users\u\AppData\Roaming");
+        assert_eq!(config_dir_for("windows", &env(&[("APPDATA", &appdata.to_string_lossy())]), None), Some(appdata.join("GridCraft")));
+        let home = PathBuf::from("/home/u");
         assert_eq!(
-            config_dir_for("windows", &env(&[("APPDATA", r"C:\Users\u\AppData\Roaming")]), None),
-            Some(PathBuf::from(r"C:\Users\u\AppData\Roaming\GridCraft"))
+            config_dir_for("macos", &env(&[("HOME", &home.to_string_lossy())]), None),
+            Some(home.join("Library/Application Support/GridCraft"))
         );
-        assert_eq!(config_dir_for("linux", &env(&[home]), None), Some(PathBuf::from("/home/u/.config/gridcraft")));
-        assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "/xdg"), home]), None), Some(PathBuf::from("/xdg/gridcraft")));
+        assert_eq!(config_dir_for("linux", &env(&[("HOME", &home.to_string_lossy())]), None), Some(home.join(".config").join("gridcraft")));
+        assert_eq!(
+            config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "/xdg"), ("HOME", &home.to_string_lossy())]), None),
+            Some(PathBuf::from("/xdg").join("gridcraft"))
+        );
         assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "")]), None), None);
     }
 
     #[test]
     fn an_empty_xdg_config_home_falls_back_to_the_home_folder() {
-        let home = [("HOME", "/home/u")];
-        assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", ""), home[0]]), None), Some(PathBuf::from("/home/u/.config/gridcraft")));
-        assert_eq!(config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "/xdg"), home[0]]), None), Some(PathBuf::from("/xdg/gridcraft")));
+        let home = PathBuf::from("/home/u");
+        let home_str = home.to_string_lossy().into_owned();
+        assert_eq!(
+            config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", ""), ("HOME", &home_str)]), None),
+            Some(home.join(".config").join("gridcraft"))
+        );
+        assert_eq!(
+            config_dir_for("linux", &env(&[("XDG_CONFIG_HOME", "/xdg"), ("HOME", &home_str)]), None),
+            Some(PathBuf::from("/xdg").join("gridcraft"))
+        );
     }
 
     #[test]
