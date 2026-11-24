@@ -199,6 +199,11 @@ fn portuguese_formulas_use_brazilian_names_and_separators() {
     // Accented names match in any case; English separators are refused, as in Spanish.
     assert!(enter(&mut app, "=média(1;3)"));
     assert_eq!(formula(&app), "AVERAGE(1,3)");
+    // `+` and `-` start a formula before an accented name as before an unaccented one.
+    assert!(enter(&mut app, "+ÍNDICE({1\\2};1;2)"));
+    assert_eq!(formula(&app), "+INDEX({1,2},1,2)");
+    assert!(enter(&mut app, "+INDICE({1\\2};1;2)"));
+    assert_eq!(formula(&app), "+INDEX({1,2},1,2)");
     assert!(!enter(&mut app, "=SUM(1.5,2.25)"));
     // The API keeps English syntax.
     assert!(app.run("cell.set", json!({"cell":"B1","input":"=SOMA(1;2)"})).is_err());
