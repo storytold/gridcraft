@@ -61,6 +61,7 @@ pub fn read_ods(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
     if import.wb.sheets.is_empty() {
         return Err(IoError::Format("ODS contains no worksheets".into()));
     }
+    import.name_sheets();
     Ok((import.wb, import.report))
 }
 
@@ -233,29 +234,39 @@ struct Import {
     text: u64,
     formats: Vec<(&'static str, StyleId)>,
     spreadsheet_seen: bool,
-    names: crate::read::SheetNames,
 }
 
 impl Import {
+    /// Names the sheets once all are read, as the XLSX reader does: a sheet whose name is already
+    /// valid keeps it, so a name an earlier sheet is repaired to can't take it (#4454).
+    fn name_sheets(&mut self) {
+        let originals: Vec<String> = self.wb.sheets.iter().map(|s| s.name.clone()).collect();
+        let trimmed: Vec<&str> = originals.iter().map(|n| n.trim_matches('\'')).collect();
+        let mut names = crate::read::SheetNames::default();
+        let owners = names.reserve_valid(trimmed.iter().map(|n| Some(*n)));
+        let mut renamed = false;
+        for (i, (sheet, base)) in self.wb.sheets.iter_mut().zip(&trimmed).enumerate() {
+            let mut name = names.keep_or_repair(&owners, base, i);
+            if name.eq_ignore_ascii_case("History") {
+                // Valid in form but reserved by Excel: the first `SheetN` no other sheet has.
+                name = (1..).map(|n| format!("Sheet{n}")).find(|n| names.insert(n)).unwrap_or_else(|| "Sheet".into());
+            }
+            if name != sheet.name {
+                renamed = true;
+                Arc::make_mut(sheet).name = name;
+            }
+        }
+        if renamed {
+            self.report.warn("Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names.");
+        }
+    }
+
     fn new() -> Self {
         let mut wb = Workbook::new();
         wb.sheets.clear();
         let mut report = ReadReport::default();
         report.warn("ODS data-only import: formulas become their saved results and will not recalculate. Source formatting, charts, images and other features are not imported. Save a new .xlsx file; ODS saving is not supported.");
-        Self {
-            wb,
-            report,
-            stack: vec![],
-            sheet: None,
-            row: None,
-            cell: None,
-            cells: 0,
-            merges: 0,
-            text: 0,
-            formats: vec![],
-            spreadsheet_seen: false,
-            names: Default::default(),
-        }
+        Self { wb, report, stack: vec![], sheet: None, row: None, cell: None, cells: 0, merges: 0, text: 0, formats: vec![], spreadsheet_seen: false }
     }
 
     fn parse(&mut self, bytes: &[u8]) -> Result<(), IoError> {
@@ -330,16 +341,9 @@ impl Import {
                 if self.wb.sheets.len() >= MAX_SHEETS {
                     return Err(IoError::TooLarge("ODS contains more than 1024 sheets".into()));
                 }
+                // The name as written; `name_sheets` makes it valid once every sheet is read.
                 let original = attr(reader, e, TABLE, b"name")?.unwrap_or_default();
-                let mut name = self.names.unique(original.trim_matches('\''), self.wb.sheets.len());
-                if self.wb.check_sheet_name(&name, None).is_err() {
-                    name = self.wb.next_sheet_name();
-                    self.names.insert(&name);
-                }
-                if name != original {
-                    self.report.warn("Some ODS sheet names were shortened or renamed to valid, unique XLSX sheet names.");
-                }
-                self.sheet = Some(SheetDraft { sheet: Sheet::new(name), depth, row: 0 });
+                self.sheet = Some(SheetDraft { sheet: Sheet::new(original), depth, row: 0 });
             }
             Tag::Row if self.sheet.as_ref().is_some_and(|s| self.stack.get(s.depth + 1..).is_some_and(|p| p.iter().all(|t| *t == Tag::Rows))) => {
                 self.row =

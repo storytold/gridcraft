@@ -67,9 +67,9 @@ pub(crate) struct SheetNames {
 }
 
 impl SheetNames {
-    /// Records `name` as taken.
-    pub(crate) fn insert(&mut self, name: &str) {
-        self.taken.insert(name.to_ascii_lowercase());
+    /// Records `name` as taken; false when it already was.
+    pub(crate) fn insert(&mut self, name: &str) -> bool {
+        self.taken.insert(name.to_ascii_lowercase())
     }
 
     /// A valid name for the `i`-th sheet based on `name`, not yet taken; it is recorded as taken.
@@ -99,22 +99,38 @@ impl SheetNames {
             }
         }
     }
+
+    /// The `i`-th sheet's name: `name` itself when `owners` (from [`Self::reserve_valid`]) gives
+    /// it to this sheet, otherwise a repaired [`Self::unique`] one.
+    pub(crate) fn keep_or_repair(&mut self, owners: &HashMap<String, usize>, name: &str, i: usize) -> String {
+        if owners.get(&name.to_ascii_lowercase()) == Some(&i) { name.to_string() } else { self.unique(name, i) }
+    }
+
+    /// Takes every name in `names` that is already valid, each held by the first sheet with it,
+    /// and returns those owners by name (ASCII-lowercased). `None` is a sheet that gets no name
+    /// here. Such a sheet keeps its name: a name another sheet is repaired to can't take it, so a
+    /// valid name stays with its sheet (and with the formulas that name it, #4454). Both readers
+    /// call it before naming any sheet.
+    pub(crate) fn reserve_valid<'a>(&mut self, names: impl IntoIterator<Item = Option<&'a str>>) -> HashMap<String, usize> {
+        let mut owners = HashMap::new();
+        for (i, name) in names.into_iter().enumerate() {
+            let Some(name) = name else { continue };
+            let key = name.to_ascii_lowercase();
+            if !name.trim().is_empty() && sheet_name_from(name) == name && !owners.contains_key(&key) {
+                owners.insert(key, i);
+                self.insert(name);
+            }
+        }
+        owners
+    }
 }
 
-/// The worksheets whose names are already valid, by name (ASCII-lowercased), each name held by the
-/// first worksheet with it; the names are taken in `names`. Such a sheet keeps its name, so a name
-/// another sheet is repaired to can't take it from a sheet that formulas name (#4454).
+/// [`SheetNames::reserve_valid`] for the worksheets of `sheet_els`; other sheets get no name.
 fn valid_name_owners(sheet_els: &[&El], rel_by_id: &HashMap<&str, &Rel>, names: &mut SheetNames) -> HashMap<String, usize> {
-    let mut owners = HashMap::new();
-    for (i, se) in sheet_els.iter().enumerate() {
-        let name = se.attr("name").unwrap_or("");
+    names.reserve_valid(sheet_els.iter().map(|se| {
         let worksheet = se.attr("id").and_then(|id| rel_by_id.get(id)).is_some_and(|r| r.kind == "worksheet");
-        if worksheet && !name.trim().is_empty() && sheet_name_from(name) == name && !owners.contains_key(&name.to_ascii_lowercase()) {
-            owners.insert(name.to_ascii_lowercase(), i);
-            names.insert(name);
-        }
-    }
-    owners
+        worksheet.then(|| se.attr("name").unwrap_or(""))
+    }))
 }
 
 impl Ctx<'_> {
@@ -422,7 +438,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             file_to_model.push(None);
             continue;
         }
-        let unique = if owners.get(&name.to_ascii_lowercase()) == Some(&i) { name.clone() } else { names.unique(&name, i) };
+        let unique = names.keep_or_repair(&owners, &name, i);
         if unique != name {
             cx.warn(format!("sheet \"{name}\" was renamed \"{unique}\": sheet names must be unique and fit Excel's limits"));
         }

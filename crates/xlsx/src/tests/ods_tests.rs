@@ -248,6 +248,23 @@ fn ods_sheet_name_is_cut_to_31_utf16_units() {
     assert!(write_xlsx(&wb).is_ok());
 }
 
+/// A sheet whose name is already valid keeps it, even when an earlier sheet's name is cut to
+/// the same text: the earlier one takes the suffix, as on XLSX open (#4454).
+#[test]
+fn ods_valid_sheet_name_stays_with_its_sheet() {
+    let long = "A".repeat(40);
+    let fits = "A".repeat(31);
+    let bytes = ods(&format!(r#"<table:table table:name="{long}"/><table:table table:name="{fits}"/><table:table table:name="'History'"/>"#));
+    let (wb, report) = read_ods(&bytes).unwrap();
+    let names: Vec<&str> = wb.sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, [format!("{} (2)", "A".repeat(25)).as_str(), fits.as_str(), "Sheet1"]);
+    assert!(report.warnings.iter().any(|w| w.contains("sheet names")));
+    for (i, sheet) in wb.sheets.iter().enumerate() {
+        assert!(wb.check_sheet_name(&sheet.name, Some(i)).is_ok());
+    }
+    assert!(write_xlsx(&wb).is_ok());
+}
+
 #[test]
 fn ods_extension_error_cache_never_imports_its_placeholder_zero() {
     let bytes = row(
