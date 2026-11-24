@@ -475,7 +475,8 @@ fn the_plain_text_stand_in_for_an_equation_is_drawn_at_a_normal_size() {
     // the same box as its fallback. Neither takes the (large) size the equation is drawn at.
     let wb = book(vec![equation(1, "B2", "\\begin{CD} A @>f>> B \\end{CD}", Color::Auto), equation(2, "B8", "x^2", Color::Auto)]);
     let d = drawing(&unzip(&write_xlsx(&wb).unwrap()));
-    let text_runs: Vec<&str> = d.match_indices("<a:r><a:rPr").map(|(i, _)| &d[i..i + d[i..].find("</a:rPr>").unwrap()]).collect();
+    let text_runs: Vec<&str> =
+        d.match_indices("<a:r><a:rPr").map(|(i, _)| &d[i..i + d[i..].find("</a:rPr>").or_else(|| d[i..].find("/>")).unwrap()]).collect();
     assert_eq!(text_runs.len(), 2, "{d}");
     for r in text_runs {
         assert!(r.contains(" sz=\"1100\""), "{r}");
