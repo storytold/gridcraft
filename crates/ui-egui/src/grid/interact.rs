@@ -648,7 +648,6 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
     if primary_clicked || resp.drag_started() {
         resp.request_focus();
     }
-    crate::framework::host_canvas(&ctx, resp.id);
     keyboard(app, &ctx, resp, geo, sh);
 }
 

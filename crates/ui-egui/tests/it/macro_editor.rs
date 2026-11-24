@@ -27,6 +27,7 @@ fn harness_with(services: Services) -> Harness {
             |ui, app: &mut SheetApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
+                app.close_path(&ctx);
                 app.ui(ui);
             },
             app,
@@ -574,6 +575,7 @@ fn the_editor_fits_a_narrow_window() {
                 |ui, app: &mut SheetApp| {
                     let ctx = ui.ctx().clone();
                     app.logic(&ctx);
+                    app.close_path(&ctx);
                     app.ui(ui);
                 },
                 app,

@@ -62,6 +62,7 @@ mod text_direction;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates_ui;
+#[cfg(not(target_arch = "wasm32"))]
 mod viewports;
 pub mod widgets;
 mod window_ui;
