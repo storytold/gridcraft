@@ -203,7 +203,14 @@ impl Language {
         self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
     }
 
-    /// The catalog's own translation of `text`, or `None` when it falls back to English.
+    /// A ribbon tab's name. Where a language names the tab differently from a command with the
+    /// same English label (Russian: the Insert tab is «Вставка», the Insert button «Вставить»), its
+    /// catalog keys the tab `Tab|name`; every other language falls back to the plain label.
+    pub fn tr_tab(self, tab: &str) -> &str {
+        self.translated(&format!("Tab|{tab}")).unwrap_or_else(|| self.tr(tab))
+    }
+
+    /// The catalog entry for `text`, if this language has one.
     fn translated(self, text: &str) -> Option<&'static str> {
         match self {
             Self::En => None,
@@ -456,6 +463,13 @@ mod tests {
             assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
             assert_eq!(language.tr("Not in any catalog|Untranslated"), "Untranslated");
         }
+        // The Insert tab and the Insert command have different Russian names; elsewhere the tab
+        // name is the plain label.
+        assert_eq!(Language::Ru.tr_tab("Insert"), "Вставка");
+        assert_eq!(Language::Ru.tr("Insert"), "Вставить");
+        assert_eq!(Language::Ru.tr_tab("Data"), "Данные");
+        assert_eq!(Language::Es.tr_tab("Insert"), Language::Es.tr("Insert"));
+        assert_eq!(Language::En.tr_tab("Insert"), "Insert");
         // A `context|label` key shows only its label in English.
         assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
         // Errors drop the `command `id`:` prefix before translating; an untranslated one stays whole.
@@ -500,6 +514,20 @@ mod tests {
         }
     }
 
+    /// The note under a validation list that was cut short is a sentence, not a feature name: a
+    /// catalog without it shows the English sentence in the middle of a translated interface.
+    #[test]
+    fn the_cut_short_list_note_is_translated_in_every_catalog() {
+        let key = crate::grid::editor::LIST_MORE_NOTE;
+        for language in Language::ALL {
+            let shown = language.tr(key);
+            assert!(!shown.contains('\n'), "{}: {key:?} is not a single line: {shown:?}", language.code());
+            if language != Language::En {
+                assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+            }
+        }
+    }
+
     /// The Custom Sort dialog's own strings have a row in every catalog (no silent English
     /// fallback), keep the `{letters}` placeholder, and read as plain English in English.
     #[test]
@@ -535,6 +563,35 @@ mod tests {
                 let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
                 assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
                 assert_eq!(shown.contains("{letters}"), key.contains("{letters}"), "{code}: placeholder of {key:?}: {shown:?}");
+            }
+        }
+    }
+
+    /// The fill-handle menus (the right-drag menu and the Auto Fill Options button) and the
+    /// Home › Fill menu have a row in every catalog, with no silent English fallback (#4458).
+    #[test]
+    fn fill_menu_labels_are_translated_in_every_catalog() {
+        let keys = [
+            "Copy Cells",
+            "Fill Series",
+            "Fill Formatting Only",
+            "Fill Without Formatting",
+            "Fill Days",
+            "Fill Weekdays",
+            "Fill Months",
+            "Fill Years",
+            "Auto Fill Options",
+            "Series…",
+            "Down",
+            "Up",
+        ];
+        for key in keys {
+            assert_eq!(Language::En.tr(key), key);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('\n'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_ne!(shown, key, "{code}: the row for {key:?} is still English");
             }
         }
     }
