@@ -8,7 +8,7 @@
 //! (bytes arrive asynchronously through `Services::inbox`); Save downloads the file; dropped
 //! files are read asynchronously.
 //!
-//! URL query flags: `?webgl` forces WebGL2; `?sample=sales|budget|grades` opens a sample;
+//! URL query flags: `?webgl` forces WebGL2 (`?webgl=0|false|off|no` disables it); `?sample=sales|budget|grades` opens a sample;
 //! `?host=parent` (inside an `<iframe>`) talks to a same-origin parent page instead: it sends the
 //! workbook to open and stores what GridCraft saves (`host`). A page can host GridCraft in its
 //! own document (no iframe) with `data-host="page"` on the canvas, talking over DOM `CustomEvent`s
@@ -31,6 +31,8 @@ mod host_save;
 mod hostmode;
 #[cfg(any(target_arch = "wasm32", test))]
 mod prefs;
+#[cfg(any(target_arch = "wasm32", test))]
+mod query;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
