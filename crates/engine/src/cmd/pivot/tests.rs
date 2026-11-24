@@ -2198,6 +2198,19 @@ fn getpivotdata_is_recalculated_when_an_edit_renames_an_older_pivottable() {
     }
 }
 
+/// A control linked to a cell that reads the renamed PivotTable shows the cell's final value.
+#[test]
+fn a_linked_control_follows_the_recalculation_after_an_older_pivottable_is_renamed() {
+    let mut s = older_with_getpivotdata("Region", "Sheet1!D1");
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "L2", "input": "=IFERROR(K2,1)"})).unwrap();
+    s.execute("insert.spinButton", json!({"at": "N2", "link": "L2", "max": 1000})).unwrap();
+    let shown = |s: &Session| s.doc().unwrap().wb.active().unwrap().controls[0].value;
+    assert_eq!(shown(&s), 1);
+    s.execute("cell.set", json!({"cell": "D1", "input": "Units"})).unwrap();
+    assert_eq!((k2(&s), shown(&s)), (Value::Number(415.0), 415));
+}
+
 /// Under manual calculation, the Calculate Now that lets it be renamed does the same.
 #[test]
 fn getpivotdata_is_recalculated_when_calculate_now_renames_an_older_pivottable() {

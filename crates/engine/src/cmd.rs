@@ -447,11 +447,12 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
-    controls::sync_linked_values(&mut wb);
     let renamed = crate::pivot::migrate_older_names(&mut wb);
     if !renamed.is_empty() {
         d.calc.cells_changed(&mut wb, &renamed);
     }
+    // Last: a control shows its linked cell's final value.
+    controls::sync_linked_values(&mut wb);
     if let Some(t0) = t0 {
         eprintln!("commit: + recalc {:?}", since(t0));
     }
