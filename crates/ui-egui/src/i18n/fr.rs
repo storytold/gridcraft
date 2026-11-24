@@ -386,6 +386,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Récent",
         "No recent workbooks yet." => "Aucun classeur récent pour le moment.",
         "More workbooks" => "Plus de classeurs",
+        "More entries not shown" => "D'autres éléments ne sont pas affichés",
         "Modified" => "Modifié",
         "Not available" => "Indisponible",
         "Just now" => "À l'instant",
@@ -486,6 +487,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afficher",
         "Collapse dialog" => "Réduire la boîte de dialogue",
         "Expand dialog" => "Développer la boîte de dialogue",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Ce classeur contient un tableau croisé dynamique avec un champ de valeur « Nombre distinct ». Dans le fichier .xlsx, il est enregistré comme un simple Nombre, avec un marqueur que seul GridCraft lit ; Actualiser dans Excel le transforme en simple nombre."
+        }
+        "Distinct Count" => "Nombre distinct",
+        "Summarize by Distinct Count" => "Synthétiser par nombre distinct",
+        "A calculated field can't use Distinct Count." => "Un champ calculé ne peut pas utiliser « Nombre distinct ».",
         "My list has headers" => "Mes données ont des en-têtes",
         "Sort by" => "Trier par",
         "Then by" => "Puis par",
@@ -618,6 +625,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char a un argument non numérique {argument}",
         "\\@char with invalid code point {code}" => "\\@char avec un point de code non valide {code}",
         "Invalid environment name character: {character}" => "Caractère non valide dans le nom d'environnement : {character}",
+        "Copy Cells" => "Copier les cellules",
+        "Fill Series" => "Remplir la série",
+        "Fill Formatting Only" => "Remplir les formats uniquement",
+        "Fill Without Formatting" => "Remplir sans la mise en forme",
+        "Fill Days" => "Remplir les jours",
+        "Fill Weekdays" => "Remplir les jours ouvrés",
+        "Fill Months" => "Remplir les mois",
+        "Fill Years" => "Remplir les années",
+        "Auto Fill Options" => "Options de remplissage automatique",
+        "Series…" => "Série…",
+        "Down" => "Vers le bas",
+        "Up" => "Vers le haut",
         _ => return None,
     })
 }
