@@ -385,6 +385,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Последние",
         "No recent workbooks yet." => "Недавних книг пока нет.",
         "More workbooks" => "Другие книги",
+        "More entries not shown" => "Показаны не все элементы",
         "Modified" => "Изменён",
         "Not available" => "Недоступен",
         "Just now" => "Только что",
@@ -1061,6 +1062,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Показать",
         "Collapse dialog" => "Свернуть диалоговое окно",
         "Expand dialog" => "Развернуть диалоговое окно",
+        "Distinct Count" => "Число уникальных",
+        "Summarize by Distinct Count" => "Итоги по числу уникальных",
+        "A calculated field can't use Distinct Count." => "Вычисляемое поле не может использовать число уникальных.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "В этой книге есть сводная таблица с полем значений «Число уникальных». В файле .xlsx оно сохраняется как обычное Количество вместе с меткой, которую читает только GridCraft, поэтому команда Обновить в Excel превращает его в обычное количество."
+        }
         "My list has headers" => "Мои данные содержат заголовки",
         "Sort by" => "Сортировать по",
         "Then by" => "Затем по",
@@ -1193,6 +1200,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "У \\@char нечисловой аргумент {argument}",
         "\\@char with invalid code point {code}" => "\\@char с недопустимой кодовой точкой {code}",
         "Invalid environment name character: {character}" => "Недопустимый символ в имени окружения: {character}",
+        "Copy Cells" => "Копировать ячейки",
+        "Fill Series" => "Заполнить ряд",
+        "Fill Formatting Only" => "Заполнить только форматы",
+        "Fill Without Formatting" => "Заполнить без форматирования",
+        "Fill Days" => "Заполнить по дням",
+        "Fill Weekdays" => "Заполнить по рабочим дням",
+        "Fill Months" => "Заполнить по месяцам",
+        "Fill Years" => "Заполнить по годам",
+        "Auto Fill Options" => "Параметры автозаполнения",
         _ => return None,
     })
 }
