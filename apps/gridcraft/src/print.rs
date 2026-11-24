@@ -8,7 +8,7 @@ pub fn discover() -> Discover {
         let _ = std::thread::Builder::new().name("print-discovery".into()).spawn(move || {
             let printers = craft_print::printers()
                 .into_iter()
-                .map(|printer| Printer::new(printer.name).label(printer.description).is_default(printer.default))
+                .map(Printer::from)
                 .collect();
             let _ = sender.send(printers);
         });
