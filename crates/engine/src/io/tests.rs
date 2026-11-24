@@ -621,6 +621,10 @@ fn displayed_exports_respect_show_zeros_and_raw_csv_keeps_values() {
     sh.show_zeros = false;
     let displayed = String::from_utf8(save_bytes(&wb, "hidden.csv").unwrap()).unwrap();
     assert_eq!(displayed, ",,0,5,sentinel\r\n");
+    for path in ["hidden.tsv", "hidden.txt", "hidden.tab"] {
+        let displayed = String::from_utf8(save_bytes(&wb, path).unwrap()).unwrap();
+        assert_eq!(displayed, "\t\t0\t5\tsentinel\r\n", "{path}");
+    }
     let raw = String::from_utf8(csv_values_bytes(&wb).unwrap()).unwrap();
     assert_eq!(raw, "0,0,0,5,sentinel\r\n");
     let html = String::from_utf8(save_bytes(&wb, "hidden.html").unwrap()).unwrap();

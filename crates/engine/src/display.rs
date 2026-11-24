@@ -135,22 +135,14 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
 /// 1E+15 (`124412140710`, not `1.24412E+11`), the shortest round-trip digits from 1E+15 (every
 /// integer below 1e16 exactly). Excel writes the cell display.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
-    let value = sheet.value(c);
-    if !sheet.show_zeros && value.as_f64() == Some(0.0) {
-        return String::new();
-    }
     let style = wb.styles.get(sheet.style_id(c));
-    with_fill_space(format_value_full(&value, &parsed(style.num_fmt.as_str()), wb.date_system))
+    with_fill_space(format_value_full(&sheet.value(c), &parsed(style.num_fmt.as_str()), wb.date_system))
 }
 
 /// A cell's value through its number format, General at the 11-character cell width.
 fn shown_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
-    let value = sheet.value(c);
-    if !sheet.show_zeros && value.as_f64() == Some(0.0) {
-        return String::new();
-    }
     let style = wb.styles.get(sheet.style_id(c));
-    value_text_as(wb, &value, style.num_fmt.as_str())
+    value_text_as(wb, &sheet.value(c), style.num_fmt.as_str())
 }
 
 /// A value through a format code given apart from a cell, as a cell shows it (General at the
