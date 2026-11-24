@@ -1421,21 +1421,22 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
 
 #[test]
 fn drawing_and_resolving_agree_on_the_combo_plot_kind() {
-    // Resolved series carry `effective_kind`; drawing re-derives the kind from it. Both paths
-    // must give the same kind for every chart kind, series kind (or none) and series index.
+    // Resolved series carry `Chart::series_kind`, the kind drawing uses: for every chart kind,
+    // series kind (or none) and series index it is never a combo, and outside a combo it is the
+    // chart's kind or one of its family.
+    let wb = Workbook::new();
     let series_kinds = std::iter::once(None).chain(ALL_KINDS.iter().map(|k| Some(*k)));
     for ck in ALL_KINDS {
         for sk in series_kinds.clone() {
             for i in 0..3 {
                 let mut c = chart(ck);
                 c.series = (0..3).map(|j| Series { kind: if j == i { sk } else { None }, ..Default::default() }).collect();
-                let from_chart = series_plot_kind(&c, i);
-                let resolved = crate::resolve::effective_kind(ck, sk, i);
-                assert_eq!(crate::resolve::plot_kind(ck, Some(resolved), i), from_chart, "{ck:?} {sk:?} {i}");
+                let resolved: Vec<ChartKind> = resolve(&wb, 0, &c).series.iter().map(|s| s.kind).collect();
+                assert_eq!(resolved, c.series_kinds(), "{ck:?} {sk:?} {i}");
                 if ck != ChartKind::Combo {
-                    assert_eq!(from_chart, ck);
+                    assert!(gridcraft_model::same_family(ck, resolved[i]), "{ck:?} {sk:?} {i}");
                 } else {
-                    assert_ne!(from_chart, ChartKind::Combo);
+                    assert_ne!(resolved[i], ChartKind::Combo);
                 }
             }
         }
