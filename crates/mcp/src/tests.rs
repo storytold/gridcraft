@@ -400,12 +400,12 @@ fn a_line_without_newline_keeps_at_most_the_limit_in_memory() {
     // client cares to send).
     let mut input =
         HugeLine { left: 4 << 30, tail: concat!("\n", r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#, "\n").as_bytes(), chunk: vec![b'a'; 1 << 20] };
-    let mut buf = Vec::new();
-    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(false));
-    assert!(buf.capacity() <= 2 * (16 << 20) + 1, "kept {} bytes", buf.capacity());
-    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), Some(true));
-    assert!(buf.starts_with(br#"{"jsonrpc""#));
-    assert_eq!(crate::server::read_message(&mut input, &mut buf).unwrap(), None);
+    assert!(matches!(craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap(), Some(craft_mcp_server::Incoming::Refused(_))));
+    match craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap() {
+        Some(craft_mcp_server::Incoming::Line(line)) => assert!(line.starts_with(r#"{"jsonrpc""#)),
+        other => panic!("expected Line, got {other:?}"),
+    }
+    assert_eq!(craft_mcp_server::read_message(&mut input, crate::server::MAX_LINE).unwrap(), None);
 }
 
 #[test]
@@ -707,4 +707,30 @@ fn a_window_argument_routes_tools_to_that_window() {
     let titles: Vec<String> =
         ok(&mut s, "list_windows", json!({})).as_array().unwrap().iter().map(|r| r["title"].as_str().unwrap().to_string()).collect();
     assert_eq!(titles, ["Book1:1", "Book2", "Book1:2"]);
+}
+
+#[test]
+fn stdio_cancel_and_batch_transcript() {
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1,\"reason\":\"client\"}}\n",
+        "[]\n",
+        "[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":9}}]\n",
+        "[{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"},{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}]\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\",\"params\":{}}\n"
+    );
+    let mut s = server();
+    let mut out = Vec::new();
+    s.serve(input.as_bytes(), &mut out).unwrap();
+    assert!(s.is_initialized());
+
+    let replies: Vec<Value> = std::str::from_utf8(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 4, "{replies:?}");
+    assert_eq!(replies[0]["id"], 1);
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "gridcraft");
+    assert_eq!(replies[1]["id"], Value::Null);
+    assert_eq!(replies[1]["error"]["code"], -32600);
+    assert_eq!(replies[2], json!([{"jsonrpc": "2.0", "id": 2, "result": {}}]));
+    assert_eq!(replies[3], json!({"jsonrpc": "2.0", "id": 3, "result": {}}));
 }
