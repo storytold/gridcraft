@@ -20,7 +20,8 @@ STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
 cp "$NIGHTLY_GUI" "$STAGE/gridcraft"
 chmod 755 "$STAGE/gridcraft"
-cp "$ROOT/assets/app-icon/hicolor/256x256/apps/ai.storyteller.gridcraft.png" "$STAGE/gridcraft-nightly.png"
+# The nightly channel's own icon (deeper field); the archive member name stays as the helper requires.
+cp "$ROOT/assets/app-icon/gridcraft-nightly.png" "$STAGE/gridcraft-nightly.png"
 nightly_copy_notices "$STAGE"
 # The private mktemp cwd is the helper authority root, not a CLI path parent.
 (cd "$NIGHTLY_WORK" && python3 "$ROOT/packaging/nightly-archive.py" linux stage archive.tar.gz)
