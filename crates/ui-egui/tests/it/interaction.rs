@@ -1738,3 +1738,161 @@ fn header_footer_dialog_opens_on_the_saved_header_and_footer() {
     let pr = &h.state().session.active().unwrap().wb.active().unwrap().print;
     assert_eq!((pr.header.as_str(), pr.footer.as_str()), ("&CNew", "&CConfidential"));
 }
+
+fn active_a1(h: &egui_kittest::Harness<'static, SheetApp>) -> String {
+    h.state().session.active().map(|d| d.selection.active.a1()).unwrap_or_default()
+}
+
+/// One key press and release in a single frame, so the key lands on the first frame the grid or
+/// the editor has focus, before egui applies the widget's `EventFilter`.
+fn key_step(h: &mut egui_kittest::Harness<'static, SheetApp>, k: Key, m: Modifiers) {
+    h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: m });
+    h.input_mut().events.push(Event::Key { key: k, physical_key: None, pressed: false, repeat: false, modifiers: m });
+    h.run_steps(1);
+}
+
+fn text_step(h: &mut egui_kittest::Harness<'static, SheetApp>, t: &str) {
+    h.input_mut().events.push(Event::Text(t.into()));
+    h.run_steps(1);
+}
+
+#[test]
+fn tab_and_shift_tab_commit_and_advance_without_losing_grid_focus() {
+    let mut h = harness(blank());
+    text_step(&mut h, "10");
+    key_step(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(value(&h, "A1"), Value::Number(10.0));
+    assert_eq!(active_a1(&h), "B1");
+    assert!(h.state().editor.is_none());
+
+    key_step(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "C1", "grid keeps focus so a second Tab moves right");
+
+    text_step(&mut h, "20");
+    key_step(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(value(&h, "C1"), Value::Number(20.0));
+    assert_eq!(active_a1(&h), "B1", "Shift+Tab commits and moves left");
+
+    key_step(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(active_a1(&h), "A1", "second Shift+Tab moves left again");
+    h.check_accessibility();
+}
+
+#[test]
+fn arrows_commit_typed_value_and_navigate_immediately_on_single_press() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = harness(s);
+
+    text_step(&mut h, "1");
+    key_step(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(value(&h, "B2"), Value::Number(1.0));
+    assert_eq!(active_a1(&h), "C2");
+    assert!(h.state().editor.is_none());
+
+    key_step(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "C3", "a single ArrowDown after ArrowRight commit navigates immediately");
+
+    text_step(&mut h, "2");
+    key_step(&mut h, Key::ArrowLeft, Modifiers::NONE);
+    assert_eq!(value(&h, "C3"), Value::Number(2.0));
+    assert_eq!(active_a1(&h), "B3");
+
+    key_step(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "B2", "a single ArrowUp after ArrowLeft commit navigates immediately");
+
+    text_step(&mut h, "3");
+    key_step(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(value(&h, "B2"), Value::Number(3.0));
+    assert_eq!(active_a1(&h), "B3");
+
+    key_step(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "C3", "ArrowRight after Enter commit navigates immediately");
+    key_step(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "D3");
+}
+
+#[test]
+fn clicking_a_cell_after_name_box_lets_tab_and_arrows_navigate_immediately() {
+    let mut h = harness(blank());
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("gridcraft.name_box")));
+    h.run_steps(2);
+
+    let pos = {
+        let app = h.state();
+        let sheet = app.session.active().unwrap().wb.active().unwrap();
+        let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+        geo.cell_rect(sheet, CellRef::parse("B2").unwrap()).center()
+    };
+    h.input_mut().events.extend([
+        Event::PointerMoved(pos),
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
+    ]);
+    h.run_steps(1);
+    assert_eq!(active_a1(&h), "B2");
+
+    key_step(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "C2");
+    key_step(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "C3");
+}
+
+#[test]
+fn shift_tab_commits_and_moves_left_without_lingering_shift_modifier() {
+    let mut s = blank();
+    s.execute("selection.set", json!({"cell": "C1"})).unwrap();
+    let mut h = harness(s);
+
+    text(&mut h, "20");
+    key_step(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(value(&h, "C1"), Value::Number(20.0));
+    assert_eq!(active_a1(&h), "B1", "Shift+Tab commits and moves left even when Shift releases in the same frame");
+
+    key_step(&mut h, Key::Tab, Modifiers::SHIFT);
+    assert_eq!(active_a1(&h), "A1");
+}
+
+#[test]
+fn f2_explicit_edit_preserves_caret_navigation_from_first_frame() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "B2", "input": "ab"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = harness(s);
+
+    key_step(&mut h, Key::F2, Modifiers::NONE);
+    assert!(h.state().editor.is_some());
+    key_step(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert!(h.state().editor.is_some(), "ArrowUp in F2 edit keeps focus in the editor");
+    assert_eq!(active_a1(&h), "B2");
+    key_step(&mut h, Key::ArrowRight, Modifiers::NONE);
+    assert!(h.state().editor.is_some(), "ArrowRight in F2 edit moves caret from line start without committing");
+    assert_eq!(active_a1(&h), "B2");
+
+    text_step(&mut h, "X");
+    key_step(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(value(&h, "B2"), Value::from("aXb"));
+    assert_eq!(active_a1(&h), "C2");
+    key_step(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "D2");
+    h.check_accessibility();
+}
+
+#[test]
+fn formula_editing_and_point_mode_remain_unaffected_from_first_frame() {
+    let mut s = blank();
+    s.execute("cell.set", json!({"cell": "B1", "input": 10})).unwrap();
+    s.execute("selection.set", json!({"cell": "B2"})).unwrap();
+    let mut h = harness(s);
+
+    text_step(&mut h, "=");
+    key_step(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=B1"));
+
+    text_step(&mut h, "+5");
+    key_step(&mut h, Key::Tab, Modifiers::NONE);
+    assert_eq!(value(&h, "B2"), Value::Number(15.0));
+    assert_eq!(active_a1(&h), "C2");
+    key_step(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(active_a1(&h), "C3");
+}

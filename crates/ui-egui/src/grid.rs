@@ -46,6 +46,7 @@ pub use editor::validation_arrow;
 use editor::{editor_slack, editor_width, list_picker_height};
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
+pub(crate) use keyboard::guard_sheet_focus;
 pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
 pub use selection::selection_fill;
 pub(crate) use selection::{SelectionPaintInput, paint_selection};
@@ -363,6 +364,8 @@ pub struct GridState {
     pub touch_pan: bool,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+    /// The grid widget's egui Id from the last pass (`guard_sheet_focus` checks whether it has focus).
+    pub(crate) widget_id: Option<egui::Id>,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
