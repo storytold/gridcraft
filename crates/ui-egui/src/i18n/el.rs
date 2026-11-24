@@ -280,6 +280,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Πρόσφατα",
         "No recent workbooks yet." => "Δεν υπάρχουν ακόμη πρόσφατα βιβλία εργασίας.",
         "More workbooks" => "Περισσότερα βιβλία εργασίας",
+        "More entries not shown" => "Περισσότερα στοιχεία δεν εμφανίζονται",
         "Modified" => "Τροποποιήθηκε",
         "Not available" => "Μη διαθέσιμο",
         "Just now" => "Μόλις τώρα",
@@ -434,6 +435,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Μετακίνηση στις τιμές",
         "Summarize by Sum" => "Σύνοψη με άθροισμα",
         "Summarize by Count" => "Σύνοψη με πλήθος",
+        "Summarize by Distinct Count" => "Σύνοψη με πλήθος διακριτών",
         "Summarize by Average" => "Σύνοψη με μέσο όρο",
         "Summarize by Max" => "Σύνοψη με μέγιστο",
         "Summarize by Min" => "Σύνοψη με ελάχιστο",
@@ -884,7 +886,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Χρώμα κελιού",
         "A to Z" => "Α έως Ω",
         "Z to A" => "Ω έως Α",
-        "+ Add Level" => "+ Προσθήκη επιπέδου",
+        "Add Level" => "Προσθήκη επιπέδου",
+        "Delete Level" => "Διαγραφή επιπέδου",
+        "Copy Level" => "Αντιγραφή επιπέδου",
+        "Move Up" => "Μετακίνηση πάνω",
+        "Move Down" => "Μετακίνηση κάτω",
+        "Order" => "Σειρά",
+        "Sort On" => "Ταξινόμηση ως προς",
+        "Sort|Column" => "Στήλη",
+        "Column {letters}" => "Στήλη {letters}",
+        "Smallest to Largest" => "Από το μικρότερο στο μεγαλύτερο",
+        "Largest to Smallest" => "Από το μεγαλύτερο στο μικρότερο",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Κλείστε το παράθυρο διαλόγου Ταξινόμηση πριν αλλάξετε ή τροποποιήσετε φύλλα εργασίας."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Επιστρέψτε στο αρχικό φύλλο εργασίας για να ταξινομήσετε ή ακυρώστε.",
         "New…" => "Νέο…",
         "Edit…" => "Επεξεργασία…",
         "Name" => "Όνομα",
@@ -1015,6 +1031,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Εμφάνιση",
         "Collapse dialog" => "Σύμπτυξη παραθύρου διαλόγου",
         "Expand dialog" => "Ανάπτυξη παραθύρου διαλόγου",
+        "Distinct Count" => "Πλήθος διακριτών",
+        "A calculated field can't use Distinct Count." => "Ένα υπολογιζόμενο πεδίο δεν μπορεί να χρησιμοποιήσει πλήθος διακριτών.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Αυτό το βιβλίο εργασίας έχει μια συγκεντρωτική λίστα με πεδίο τιμών «Πλήθος διακριτών». Στο αρχείο .xlsx αποθηκεύεται ως απλό Πλήθος μαζί με έναν δείκτη που διαβάζει μόνο το GridCraft, οπότε η Ανανέωση στο Excel το μετατρέπει σε απλό πλήθος."
+        }
         "Numerical Count" => "Αριθμητικό πλήθος",
         "Minimum" => "Ελάχιστο",
         "Maximum" => "Μέγιστο",
@@ -1121,6 +1142,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "Το \\@char έχει μη αριθμητικό όρισμα {argument}",
         "\\@char with invalid code point {code}" => "\\@char με μη έγκυρο σημείο κώδικα {code}",
         "Invalid environment name character: {character}" => "Μη έγκυρος χαρακτήρας στο όνομα περιβάλλοντος: {character}",
+        "Copy Cells" => "Αντιγραφή κελιών",
+        "Fill Series" => "Συμπλήρωση σειράς",
+        "Fill Formatting Only" => "Συμπλήρωση μόνο μορφοποίησης",
+        "Fill Without Formatting" => "Συμπλήρωση χωρίς μορφοποίηση",
+        "Fill Days" => "Συμπλήρωση ημερών",
+        "Fill Weekdays" => "Συμπλήρωση εργάσιμων ημερών",
+        "Fill Months" => "Συμπλήρωση μηνών",
+        "Fill Years" => "Συμπλήρωση ετών",
+        "Auto Fill Options" => "Επιλογές αυτόματης συμπλήρωσης",
         _ => return None,
     })
 }

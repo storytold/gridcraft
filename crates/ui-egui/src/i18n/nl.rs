@@ -373,6 +373,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recent",
         "No recent workbooks yet." => "Nog geen recente werkmappen.",
         "More workbooks" => "Meer werkmappen",
+        "More entries not shown" => "Meer items worden niet weergegeven",
         "Modified" => "Gewijzigd",
         "Not available" => "Niet beschikbaar",
         "Just now" => "Zojuist",
@@ -561,6 +562,34 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Weergeven",
         "Collapse dialog" => "Dialoogvenster samenvouwen",
         "Expand dialog" => "Dialoogvenster uitvouwen",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Deze werkmap bevat een draaitabel met een waardeveld ‘Uniek aantal’. In het .xlsx-bestand wordt het opgeslagen als een gewoon Aantal met een markering die alleen GridCraft leest; Vernieuwen in Excel maakt er een gewoon aantal van."
+        }
+        "Distinct Count" => "Uniek aantal",
+        "Summarize by Distinct Count" => "Samenvatten op Uniek aantal",
+        "A calculated field can't use Distinct Count." => "Een berekend veld kan ‘Uniek aantal’ niet gebruiken.",
+        "My list has headers" => "Mijn gegevens bevatten kopteksten",
+        "Sort by" => "Sorteren op",
+        "Then by" => "Vervolgens op",
+        "Cell Values" => "Celwaarden",
+        "Cell Color" => "Celkleur",
+        "A to Z" => "A tot Z",
+        "Z to A" => "Z tot A",
+        "Add Level" => "Niveau toevoegen",
+        "Delete Level" => "Niveau verwijderen",
+        "Copy Level" => "Niveau kopiëren",
+        "Move Up" => "Omhoog",
+        "Move Down" => "Omlaag",
+        "Order" => "Volgorde",
+        "Sort On" => "Sorteren op",
+        "Sort|Column" => "Kolom",
+        "Column {letters}" => "Kolom {letters}",
+        "Smallest to Largest" => "Van klein naar groot",
+        "Largest to Smallest" => "Van groot naar klein",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Sluit het dialoogvenster Sorteren voordat u van blad wisselt of bladen wijzigt."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Ga terug naar het oorspronkelijke blad om te sorteren, of annuleer.",
         "Numerical Count" => "Numerieke telling",
         "Minimum" => "Minimum",
         "Maximum" => "Maximum",
@@ -669,6 +698,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char heeft een niet-numeriek argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char met ongeldig codepunt {code}",
         "Invalid environment name character: {character}" => "Ongeldig teken in de omgevingsnaam: {character}",
+        "Copy Cells" => "Cellen kopiëren",
+        "Fill Series" => "Reeks vullen",
+        "Fill Formatting Only" => "Alleen opmaak vullen",
+        "Fill Without Formatting" => "Vullen zonder opmaak",
+        "Fill Days" => "Dagen vullen",
+        "Fill Weekdays" => "Werkdagen vullen",
+        "Fill Months" => "Maanden vullen",
+        "Fill Years" => "Jaren vullen",
+        "Auto Fill Options" => "Opties voor automatisch vullen",
         _ => return None,
     })
 }

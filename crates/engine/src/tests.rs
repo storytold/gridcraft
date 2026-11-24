@@ -155,6 +155,65 @@ fn editing_a_name_renames_it_in_formulas() {
     assert!(s.execute("formulas.defineName", json!({"name": "X", "oldName": "Missing"})).is_err());
 }
 
+/// A LET or LAMBDA local is not the defined name: renaming the name leaves a local of the same
+/// name alone, in cells and in rules.
+#[test]
+fn renaming_a_name_leaves_let_and_lambda_locals_alone() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LET(Rate, 3, Rate*10)+Rate"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=LAMBDA(Rate, Rate+1)(Rate)"})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "B1:B3", "rule": {"type": "expression", "formula": "=LET(Rate, 1, Rate)<Rate"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("formulas.defineName", json!({"name": "Fee", "refersTo": "=2", "oldName": "Rate"})).unwrap();
+    let formula =
+        |s: &Session, at: &str| s.doc().unwrap().wb.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).unwrap().text.clone();
+    assert_eq!(formula(&s, "A1"), "LET(Rate,3,Rate*10)+Fee");
+    assert_eq!(formula(&s, "A2"), "LAMBDA(Rate,Rate+1)(Fee)");
+    assert_eq!(v(&s, "A1"), Value::number(32.0));
+    let rule = match &s.doc().unwrap().wb.sheets[0].cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.trim_start_matches('=').to_string(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rule, "LET(Rate,1,Rate)<Fee");
+}
+
+/// Renaming a name to one a LET local already uses where the name occurs would make the local
+/// capture it: the rename is refused and changes nothing.
+#[test]
+fn renaming_a_name_onto_a_let_local_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:C3", "type": "custom", "formula1": "=LET(Total, 1, Rate*Total)>0"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let err = s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=2", "oldName": "Rate"}));
+    assert!(err.is_err(), "the LET local would capture the renamed name");
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before) || *s.doc().unwrap().wb == *before);
+    assert_eq!(s.doc().unwrap().wb.names[0].name, "Rate");
+    assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1.trim_start_matches('='), "LET(Total, 1, Rate*Total)>0");
+}
+
+/// A sheet-level name's unqualified references are read on its sheet, so they move with edits
+/// there, and stay put for edits on other sheets.
+#[test]
+fn a_sheet_level_name_follows_edits_on_its_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Other", "before": 1})).unwrap();
+    s.execute("range.setValues", json!({"range": "Sheet1!A2", "values": [[5]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "LocalRef", "refersTo": "=$A$2", "scope": "Sheet1"})).unwrap();
+    let formula = |s: &Session| s.doc().unwrap().wb.names.iter().find(|n| n.name == "LocalRef").unwrap().formula.clone();
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Other"})).unwrap();
+    assert_eq!(formula(&s), "$A$2");
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    assert_eq!(formula(&s), "$A$3");
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=LocalRef"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::number(5.0));
+}
+
 #[test]
 fn chart_recommendations_follow_the_data_shape() {
     // #215: Recommended Charts lists chart types for the data; programmatic insert stays dialog-free.
@@ -867,6 +926,65 @@ fn deleting_a_multi_area_row_selection_removes_every_area_and_undoes_once() {
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4]]})).unwrap();
     s.execute("home.deleteColumns", json!({"cols": "A:A,C:C"})).unwrap();
     assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "C1")), (Value::Number(2.0), Value::Number(4.0), Value::Empty));
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // native-only test: timing the two deletes
+fn deleting_many_separate_rows_takes_about_as_long_as_one_block() {
+    // #2287: every 10th row of a 12,000-row sheet, as 1,200 single-row areas.
+    let (rows, step) = (12_000u32, 10u32);
+    let values: Vec<serde_json::Value> = (0..rows).map(|r| json!([r, r + 100_000, r + 200_000])).collect();
+    let deleted = |r: u32| r >= 1 && (r - 1).is_multiple_of(step);
+    let list = (0..rows).filter(|&r| deleted(r)).map(|r| format!("{0}:{0}", r + 1)).collect::<Vec<_>>().join(",");
+    let build = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1", "input": format!("=SUM(A1:A{rows})")})).unwrap();
+        s.execute("cell.set", json!({"cell": "E3", "input": "=B25"})).unwrap();
+        s
+    };
+    let mut block = build();
+    let t = std::time::Instant::now();
+    block.execute("home.deleteRows", json!({"rows": format!("2:{}", rows / step + 1)})).unwrap();
+    let block_time = t.elapsed();
+
+    let mut s = build();
+    let t = std::time::Instant::now();
+    s.execute("home.deleteRows", json!({"rows": list})).unwrap();
+    let separate_time = t.elapsed();
+
+    let kept: Vec<u32> = (0..rows).filter(|&r| !deleted(r)).collect();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert_eq!(sh.used_range().unwrap().end.row as usize, kept.len() - 1);
+    for (i, r) in kept.iter().enumerate() {
+        assert_eq!(sh.value(CellRef::new(i as u32, 0)), Value::Number(*r as f64));
+        assert_eq!(sh.value(CellRef::new(i as u32, 2)), Value::Number((*r + 200_000) as f64));
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "E1"})).unwrap()["formula"], format!("=SUM(A1:A{})", kept.len()));
+    // B25 loses rows 2, 12 and 22 above it; the formula itself moves from E3 to E2.
+    assert_eq!(s.execute("cell.get", json!({"cell": "E2"})).unwrap()["formula"], "=B22");
+    assert!(
+        separate_time < block_time * 20 + std::time::Duration::from_millis(500),
+        "separate rows took {separate_time:?}, one block took {block_time:?}"
+    );
+}
+
+#[test]
+fn deleting_many_separate_columns_matches_per_area_result() {
+    let mut s = s();
+    let values: Vec<serde_json::Value> = (0..50).map(|r| json!((0..40).map(|c| r * 100 + c).collect::<Vec<_>>())).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    s.execute("cell.set", json!({"cell": "A60", "input": "=SUM(A1:AN1)+H2"})).unwrap();
+    // Columns B, E, H (refs) and F:G.
+    s.execute("home.deleteColumns", json!({"cols": "B:B,E:E,H:H,F:G"})).unwrap();
+    let kept: Vec<u32> = (0..40).filter(|c| ![1, 4, 5, 6, 7].contains(c)).collect();
+    for r in 0..50u32 {
+        for (i, c) in kept.iter().enumerate() {
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(r, i as u32)), Value::Number((r * 100 + c) as f64));
+        }
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "A60"})).unwrap()["formula"], "=SUM(A1:AI1)+#REF!");
 }
 
 #[test]
@@ -2084,6 +2202,20 @@ fn table_rename_keeps_a_defined_name_with_the_same_name() {
     assert_eq!((v(&s, "E1"), v(&s, "F1")), (Value::Number(100.0), Value::Number(7.0)));
 }
 
+/// A workbook name that reads a same-named workbook name keeps reading it when the table is renamed.
+#[test]
+fn table_rename_keeps_a_workbook_name_reading_a_same_named_name() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [7]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "100"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A2", "header": true, "name": "Data"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Data", "refersTo": "=Sheet1!$D$1"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Twice", "refersTo": "=Data*2"})).unwrap();
+    s.execute("table.rename", json!({"table": "Data", "name": "Later"})).unwrap();
+    let twice = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Twice").map(|n| n.formula.clone());
+    assert_eq!(twice.as_deref(), Some("Data*2"));
+}
+
 #[test]
 fn table_names_are_limited_to_255_characters() {
     let mut s = s();
@@ -3078,9 +3210,10 @@ fn overlapping_spills_keep_the_one_that_exists_whichever_anchor_is_first() {
 #[test]
 fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
     use gridcraft_core::CellError::Spill;
-    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, takes
-    // its cells, shrinks back and lets it spill again, then the steps are undone, redone, edited
-    // inside the contested area and cleared. Every state must match a full recalc.
+    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, is
+    // #SPILL! because E10 holds those cells (as in Excel), shrinks back and spills again, then the
+    // steps are undone, redone, edited inside the contested area and cleared. Every state must
+    // match a full recalc.
     let mut s = s();
     s.execute("cell.set", json!({"cell": "H1", "input": "1"})).unwrap();
     s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(H1)"})).unwrap();
@@ -3102,18 +3235,18 @@ fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
         s.execute(id, params.clone()).unwrap();
         assert_matches_full_recalc(&s);
         if i == 0 {
-            // Both held a spill: reading order gives F8 the cells.
-            assert_eq!(v(&s, "F12"), Value::Number(5.0));
-            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+            // Both held a spill: E10 holds F10, so it keeps it and F8 is blocked.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 2 {
             assert_eq!(v(&s, "E10"), Value::Number(10.0));
             assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 3 {
-            // Undone back to the grown F8.
-            assert_eq!(v(&s, "F12"), Value::Number(5.0));
-            assert_eq!(v(&s, "E10"), Value::Error(Spill));
+            // Undone back to the grown F8, blocked again.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
         }
         if i == 8 {
             assert_eq!((v(&s, "F8"), v(&s, "E10"), v(&s, "F9")), (Value::Empty, Value::Empty, Value::Empty));
@@ -3356,6 +3489,21 @@ fn a_spill_that_goes_away_unblocks_another() {
 }
 
 #[test]
+fn a_contested_spill_area_stays_with_its_array_after_reopening() {
+    // F13's array wants F14:G14, which C14's array already fills, so F13 is #SPILL!. The file
+    // can only cache #VALUE! for it; reopening (which recalculates) used to hand the area to F13
+    // for coming first in reading order.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C14", "input": "=SEQUENCE(1,7)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F13", "input": "=SEQUENCE(5,2)"})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "contested.xlsx", "base64": saved["base64"]})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!((v(&s, "C14"), v(&s, "G14"), v(&s, "I14")), (Value::Number(1.0), Value::Number(5.0), Value::Number(7.0)));
+}
+
+#[test]
 fn an_array_reading_another_arrays_spill_is_updated() {
     // G5 is evaluated before D11 in the same pass, so it first reads D11's old spill.
     let mut s = s();
@@ -3377,6 +3525,19 @@ fn indirect_reads_a_spill_laid_out_in_the_same_pass() {
     assert_eq!(v(&s, "E5"), Value::Number(9.0));
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert_eq!(v(&s, "E5"), Value::Number(9.0));
+}
+
+#[test]
+fn inserting_rows_lays_out_spills_where_the_formulas_moved() {
+    // D1's array grows with the inserted rows to D1:D10 and C10's array moves down to C12:E14:
+    // the area C10:E12 it filled before the insertion blocks neither of them.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(ROWS(A2:A9))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C8", "input": "=1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C10", "input": "=SEQUENCE(3,3)"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "3:4"})).unwrap();
+    assert_eq!((v(&s, "D1"), v(&s, "D10")), (Value::Number(1.0), Value::Number(10.0)));
+    assert_eq!((v(&s, "C12"), v(&s, "D12"), v(&s, "E14")), (Value::Number(1.0), Value::Number(2.0), Value::Number(9.0)));
 }
 
 #[test]
@@ -3841,6 +4002,41 @@ fn switch_row_column_follows_inserted_and_deleted_lines() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].source, None);
 }
 
+/// Sets the first chart's source on Sheet1 as a file might have left it.
+fn set_chart_source(s: &mut Session, source: &str) {
+    let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.sheet_mut(0).unwrap().charts[0].source = Some(source.into());
+}
+
+#[test]
+fn a_chart_source_already_broken_survives_an_unrelated_edit() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "Q1", "Q2"], ["North", 1, 2], ["South", 3, 4]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    set_chart_source(&mut s, "#REF!");
+    // A series reads the name, so the rename rewrites this chart; the source it doesn't use is
+    // left broken as it was.
+    let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.sheet_mut(0).unwrap().charts[0].series[0].values = "=Rate".into();
+    s.execute("formulas.defineName", json!({"name": "Fee", "oldName": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    let chart = s.doc().unwrap().wb.sheet(0).unwrap().charts[0].clone();
+    assert_eq!(chart.series[0].values, "=Fee");
+    assert_eq!(chart.source.as_deref(), Some("#REF!"));
+}
+
+#[test]
+fn deleting_a_chart_source_sheet_drops_the_source() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "Q1", "Q2"], ["North", 1, 2], ["South", 3, 4]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    set_chart_source(&mut s, "Sheet2!A1:C3");
+    // The edit breaks the source, so it goes.
+    s.execute("home.deleteSheet", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().charts[0].source, None);
+}
+
 #[test]
 fn ink_strokes_and_ink_to_shape() {
     let mut s = s();
@@ -3871,9 +4067,12 @@ fn xlsb_import_keeps_cached_values_and_reports_limits() {
         assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
         assert_eq!(v(&s, "B1"), Value::from("Original data"));
-        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+        assert_eq!(
+            s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.as_ref().map(|f| f.text.as_str()),
+            Some("42")
+        );
         s.execute("cell.set", json!({"cell": "B1", "input": "Changed"})).unwrap();
-        assert_eq!(v(&s, "A1"), Value::Number(42.0)); // Imported formula caches are constants.
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
         let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
         s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
@@ -5703,6 +5902,56 @@ fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
 }
 
 #[test]
+fn object_move_refuses_to_rotate_ink() {
+    let mut s = s();
+    let id = s.execute("draw.stroke", json!({"points": [[0, 0], [30, 20], [60, 5]]})).unwrap()["shape"].clone();
+    assert!(s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": 45})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+}
+
+#[test]
+fn object_move_rotates_shapes_only() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": -30})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 330.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let chart = s.execute("insert.chart", json!({"type": "column"})).unwrap()["chart"].clone();
+    assert!(s.execute("object.move", json!({"kind": "chart", "id": chart, "rotation": 45})).is_err());
+}
+
+#[test]
+fn object_move_rotation_respects_sheet_protection() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle", "at": "A1"})).unwrap()["shape"].clone();
+    let id_num = id.as_u64().unwrap() as u32;
+    let shape_state = |session: &Session| {
+        let doc = session.doc().unwrap();
+        let shape = doc.wb.active().unwrap().shapes.iter().find(|shape| shape.id == id_num).unwrap();
+        (shape.anchor, shape.rotation)
+    };
+
+    // Rotation remains available on an unprotected sheet.
+    s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "B2", "rotation": 45})).unwrap();
+    let (anchor, rotation) = shape_state(&s);
+    assert_eq!(rotation, 45.0);
+    assert_eq!(anchor.cell, CellRef::parse("B2").unwrap());
+    s.execute("edit.undo", json!({})).unwrap();
+
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = shape_state(&s);
+    let undo_len = s.doc().unwrap().undo.len();
+
+    let result = s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "C3", "rotation": 90}));
+    assert!(result.is_err(), "rotation should be rejected on a protected sheet");
+    assert_eq!(shape_state(&s), before, "a rejected rotation leaves the shape unchanged");
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+}
+
+#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {
@@ -6624,6 +6873,7 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod chart_data;
 mod controls;
 mod equation;
 mod json_golden;
@@ -6945,6 +7195,431 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
         assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+/// Renaming a sheet renames a PivotTable's source to it, and the PivotTable still refreshes.
+#[test]
+fn sheet_rename_renames_a_pivot_source() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Region", "Sales"], ["East", 1], ["West", 2]]})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!E3", "rows": ["Region"], "values": ["Sales"]}))
+        .unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(wb.sheets[0].pivots[0].source, "Data!$A$1:$B$3");
+    s.execute("pivot.refresh", json!({})).unwrap();
+}
+
+/// A defined name's references are on no sheet, whatever a sheet is called: inserting rows on
+/// a sheet named with a control character leaves a name's unqualified reference alone.
+#[test]
+fn names_are_on_no_sheet_whatever_the_sheet_is_called() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Nm", "refersTo": "=$A$1"})).unwrap();
+    let before = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Nm").map(|n| n.formula.clone());
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "\u{0}"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    let after = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Nm").map(|n| n.formula.clone());
+    assert!(before.is_some());
+    assert_eq!(before, after);
+}
+
+/// Renaming a sheet copies only the sheets whose references change: a sheet that doesn't name
+/// it stays shared with the undo snapshot.
+#[test]
+fn sheet_rename_leaves_untouched_sheets_shared() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Third"})).unwrap();
+    s.execute("cell.set", json!({"cell": "Other!A1", "input": "=Sheet1!A1+1"})).unwrap();
+    // A constant: the full recalculation after a rename writes every formula cell's value, which
+    // copies a sheet that holds formulas whatever the rewrite does.
+    s.execute("cell.set", json!({"cell": "Third!A1", "input": "5"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    s.execute("sheet.rename", json!({"sheet": "Sheet1", "name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let shared = |name: &str| std::sync::Arc::ptr_eq(&wb.sheets[wb.sheet_index(name).unwrap()], &before.sheets[before.sheet_index(name).unwrap()]);
+    assert!(shared("Third"), "Third doesn't name Sheet1");
+    assert!(!shared("Other"), "Other's formula names Sheet1");
+}
+
+/// Every edit that moves references moves those in conditional formats and validation too:
+/// inserting rows, renaming a name, deleting a sheet; and deleting a sheet leaves arrays be.
+#[test]
+fn reference_edits_reach_conditional_formats_and_validation() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Lists"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Lists!A1:A3", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).ok();
+    let sheet1 = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    s.execute("sheet.activate", json!({"sheet": sheet1})).ok();
+    s.execute("formulas.defineName", json!({"name": "Opts", "refersTo": "=Lists!$A$1:$A$3"})).unwrap();
+    s.execute("data.validation", json!({"range": "Sheet1!B1:B5", "type": "list", "formula1": "=Opts"})).unwrap();
+    s.execute("data.validation", json!({"range": "Sheet1!E1:E5", "type": "list", "formula1": "=Lists!$A$1:$A$3"})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!C1:C5", "rule": {"type": "expression", "formula": "=C1>$D$3"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!G2", "input": "=B2:B3*2", "array": true})).unwrap();
+    let sh = |s: &Session| s.doc().unwrap().wb.sheet(s.doc().unwrap().wb.sheet_index("Sheet1").unwrap()).cloned().unwrap();
+    // Inserting a row above moves the rule's references with its range.
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    let rule = match &sh(&s).cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(rule.trim_start_matches('='), "C2>$D$4");
+    // Renaming a name renames it in validation lists.
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Opts", "refersTo": "=Lists!$A$1:$A$3"})).unwrap();
+    assert!(sh(&s).validations.iter().any(|v| v.f1.trim_start_matches('=') == "Choices"));
+    // Deleting the sheet a list comes from makes it #REF!, and keeps the array formula.
+    let array_before = sh(&s).cells.iter().find_map(|(_, c)| c.formula.as_ref().and_then(|f| f.array));
+    assert!(array_before.is_some());
+    let lists = s.doc().unwrap().wb.sheet_index("Lists").unwrap();
+    s.execute("home.deleteSheet", json!({"sheet": lists})).unwrap();
+    assert!(sh(&s).validations.iter().any(|v| v.f1.contains("#REF!")), "{:?}", sh(&s).validations.iter().map(|v| v.f1.clone()).collect::<Vec<_>>());
+    assert_eq!(sh(&s).cells.iter().find_map(|(_, c)| c.formula.as_ref().and_then(|f| f.array)), array_before);
+}
+
+/// A copied sheet's chart plots the copy's data.
+#[test]
+fn a_copied_sheets_chart_plots_the_copy() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["x", "y"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    // A series name written as a formula on no sheet keeps its `=`, and stays a reference.
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].name = Some("=A1".into());
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let copy = wb.sheets.iter().find(|sh| sh.name != "Sheet1").unwrap();
+    assert!(copy.charts[0].series[0].values.contains(&copy.name), "{}", copy.charts[0].series[0].values);
+    assert_eq!(copy.charts[0].series[0].name.as_deref(), Some("=A1"));
+}
+
+/// A rule's formulas follow its ranges: deleting its top-left row re-hosts them at the cell
+/// that takes its place, and a cut takes rules with their cells, moving their references once.
+#[test]
+fn rule_formulas_follow_their_ranges() {
+    let rule_text = |s: &Session| -> (Vec<String>, Vec<String>) {
+        let sh = s.doc().unwrap().wb.sheets[0].clone();
+        let cf = sh.cond_formats.iter().map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => {
+                format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+            }
+            _ => String::new(),
+        });
+        let dv = sh
+            .validations
+            .iter()
+            .map(|v| format!("{}@{}", v.f1.trim_start_matches('='), v.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",")));
+        (cf.collect(), dv.collect())
+    };
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A2:A5", "rule": {"type": "expression", "formula": "=B2>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "C2:C5", "type": "custom", "formula1": "=D2>0"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(rule_text(&s), (vec!["B2>0@A2:A4".to_string()], vec!["D2>0@C2:C4".to_string()]));
+    // Cut A2:A4 to F2: the rule goes with the cells, still testing the cells beside them.
+    s.execute("edit.cut", json!({"range": "A2:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(rule_text(&s).0, vec!["B2>0@F2:F4".to_string()]);
+    // An overlapping cut moves a self-referring rule's reference once.
+    let mut s = super::tests::s();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    assert_eq!(rule_text(&s).1, vec!["A2>0@A2:A3".to_string()]);
+}
+
+/// Renaming a table renames every reference to it (a PivotTable's source, a name, a rule) and
+/// leaves formulas that don't name it, legacy arrays included, as they are.
+#[test]
+fn table_rename_renames_every_reference() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    let table = s.doc().unwrap().wb.sheets[0].tables[0].name.clone();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=A2:A3", "array": true})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Tot", "refersTo": format!("=SUM({table}[v])")})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "F1:F3", "rule": {"type": "expression", "formula": format!("=COUNT({table}[v])>0")}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("insert.pivotTable", json!({"source": table, "destination": "Sheet1!H3", "rows": ["k"], "values": ["v"]})).unwrap();
+    let array = s.doc().unwrap().wb.sheets[0].cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).unwrap();
+    s.execute("table.rename", json!({"table": table, "name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let sh = &wb.sheets[0];
+    assert_eq!(
+        sh.cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).map(|f| (f.text.clone(), f.array, f.dynamic)),
+        Some((array.text.clone(), array.array, array.dynamic))
+    );
+    assert_eq!(wb.names.iter().find(|n| n.name == "Tot").map(|n| n.formula.clone()).as_deref(), Some("SUM(Data[v])"));
+    assert!(matches!(&sh.cond_formats[0].rule, gridcraft_model::CfRule::Expression { formula, .. } if formula.contains("Data[v]")));
+    assert_eq!(sh.pivots[0].source, "Data");
+    s.execute("data.refreshAll", json!({})).unwrap();
+}
+
+/// Rules moved whole keep their formulas; a range an edit leaves in place keeps them too;
+/// thresholds are read as written; a cut to another sheet names the source sheet's cells.
+#[test]
+fn rules_moved_whole_or_left_in_place_keep_their_formulas() {
+    let cf = |s: &Session, sheet: usize| -> Vec<String> {
+        s.doc().unwrap().wb.sheets[sheet]
+            .cond_formats
+            .iter()
+            .map(|c| match &c.rule {
+                gridcraft_model::CfRule::Expression { formula, .. } => {
+                    format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+                }
+                gridcraft_model::CfRule::DataBar { min: gridcraft_model::CfValueKind::Formula(f), .. } => format!("bar {f}"),
+                _ => String::new(),
+            })
+            .collect()
+    };
+    let rule = |s: &mut Session, range: &str, f: &str| {
+        s.execute("home.clearRules", json!({"whole": true})).ok();
+        s.execute("home.conditionalFormat", json!({"range": range, "rule": {"type": "expression", "formula": f}, "style": {"fill": "#FFC7CE"}}))
+            .unwrap();
+    };
+    let mut s = s();
+    rule(&mut s, "B1:B5", "=C1>0");
+    s.execute("sheet.moveColumns", json!({"cols": "B:B", "before": 4})).unwrap();
+    // The column moved whole: the rule tests the column that was beside it (C, now B), as a
+    // formula there would.
+    assert_eq!(cf(&s, 0), vec!["B1>0@D1:D5".to_string()]);
+    let mut s = super::tests::s();
+    rule(&mut s, "A1:C1", "=B1>0");
+    s.execute("home.deleteCells", json!({"range": "A1", "shift": "up"})).unwrap();
+    assert_eq!(cf(&s, 0), vec!["B1>0@A1:C1".to_string()]);
+    // A data bar's threshold formula is read as written: deleting the first row only moves it.
+    let mut s = super::tests::s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A10", "rule": {"type": "dataBar", "min": {"type": "formula", "value": "MIN(C1:C10)"}}}))
+        .unwrap();
+    assert_eq!(cf(&s, 0), vec!["bar MIN(C1:C10)".to_string()]);
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(cf(&s, 0), vec!["bar MIN(C1:C9)".to_string()]);
+    // A cut to another sheet: the rule still reads the source sheet's cells.
+    let mut s = super::tests::s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    let one = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    let two = s.doc().unwrap().wb.sheet_index("Two").unwrap();
+    s.execute("sheet.activate", json!({"sheet": one})).ok();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!A2:A4", "rule": {"type": "expression", "formula": "=B2>0"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("edit.cut", json!({"range": "Sheet1!A2:A4"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": two})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(cf(&s, two), vec!["Sheet1!B2>0@F2:F4".to_string()]);
+    // A data bar's threshold goes along too: its cells into the block, the others on Sheet1.
+    s.execute("sheet.activate", json!({"sheet": one})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!H1:H10", "rule": {"type": "dataBar", "min": {"type": "formula", "value": "MIN(H1:H10,C1:C10)"}}}),
+    )
+    .unwrap();
+    s.execute("edit.cut", json!({"range": "Sheet1!H1:H10"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": two})).unwrap();
+    s.execute("edit.paste", json!({"at": "K1"})).unwrap();
+    assert_eq!(cf(&s, two).last().map(String::as_str), Some("bar MIN(Two!K1:K10,Sheet1!C1:C10)"));
+}
+
+/// A cut moves the rules its cells hold when it is pasted, not those they held when it was cut.
+#[test]
+fn a_cut_moves_the_rules_its_cells_hold_at_paste() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A3"})).unwrap();
+    s.execute("home.clearRules", json!({"whole": true})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let sh = &s.doc().unwrap().wb.sheets[0];
+    assert!(sh.cond_formats.is_empty(), "a cleared rule came back: {:?}", sh.cond_formats);
+    let dv: Vec<String> = sh.validations.iter().flat_map(|v| v.ranges.iter().map(|r| r.a1())).collect();
+    assert_eq!(dv, vec!["D1:D3".to_string()]);
+}
+
+/// A cut whose sheet is renamed before the paste still moves its rules and the references to
+/// its cells: the move is made on the sheet as it is now named, not as the clipboard saw it.
+#[test]
+fn a_cut_pasted_after_its_sheet_is_renamed_moves_its_rules() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B5", "input": "=A1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A3"})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let sh = &s.doc().unwrap().wb.sheets[0];
+    let cf: Vec<String> = sh
+        .cond_formats
+        .iter()
+        .map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => format!("{}@{}", formula.trim_start_matches('='), c.ranges[0].a1()),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(cf, vec!["D1>0@D1:D3".to_string()]);
+    let dv: Vec<String> = sh.validations.iter().map(|v| format!("{}@{}", v.f1.trim_start_matches('='), v.ranges[0].a1())).collect();
+    assert_eq!(dv, vec!["D1>0@D1:D3".to_string()]);
+    assert_eq!(s.execute("cell.get", json!({"cell": "B5"})).unwrap()["formula"], "=D1");
+}
+
+/// Moving a column out of a wider rule takes its part of the rule with it, as a cut does: every
+/// cell, moved or not, still checks itself.
+#[test]
+fn moving_a_column_out_of_a_rule_keeps_every_cell_checking_itself() {
+    let mut s = s();
+    s.execute("data.validation", json!({"range": "A1:C3", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "A:A", "before": 4})).unwrap();
+    let ok = |s: &Session, at: &str, input: &str| {
+        crate::cmd::data::check_validation(&s.doc().unwrap().wb, 0, gridcraft_core::CellRef::parse(at).unwrap(), input).is_none()
+    };
+    // Old A is now D; old B and C are A and B.
+    for at in ["A1", "B2", "D3"] {
+        assert!(ok(&s, at, "5"), "{at} takes 5");
+        assert!(!ok(&s, at, "-5"), "{at} refuses -5");
+    }
+    // Moved left, a whole range of the rule becomes its top-left: the parts left behind still
+    // check themselves.
+    let mut s = super::tests::s();
+    s.execute("data.validation", json!({"range": "B1:B3,D1:D3", "type": "custom", "formula1": "=B1>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 1})).unwrap();
+    for at in ["B1", "C2"] {
+        assert!(ok(&s, at, "5"), "{at} takes 5");
+        assert!(!ok(&s, at, "-5"), "{at} refuses -5");
+    }
+}
+
+/// A rule's formulas are written for the top-left of all its ranges: when an edit removes the
+/// range holding that cell, the rest re-host from it, not from their own top-left.
+#[test]
+fn rules_rehost_from_the_top_left_of_all_their_ranges() {
+    let texts = |s: &Session| -> (Vec<String>, Vec<String>) {
+        let sh = s.doc().unwrap().wb.sheets[0].clone();
+        let at = |ranges: &[gridcraft_core::RangeRef]| ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
+        let cf = sh.cond_formats.iter().map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => format!("{}@{}", formula.trim_start_matches('='), at(&c.ranges)),
+            _ => String::new(),
+        });
+        let dv = sh.validations.iter().map(|v| format!("{}@{}", v.f1.trim_start_matches('='), at(&v.ranges)));
+        (cf.collect(), dv.collect())
+    };
+    let setup = || {
+        let mut s = super::tests::s();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A5,C10:C12", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}),
+        )
+        .unwrap();
+        s.execute("data.validation", json!({"range": "A1:A5,E10:E12", "type": "custom", "formula1": "=A1>0"})).unwrap();
+        s
+    };
+    // Deleting the rows of the first area: the second keeps testing itself.
+    let mut s = setup();
+    s.execute("home.deleteRows", json!({"rows": "1:5"})).unwrap();
+    assert_eq!(texts(&s), (vec!["C5>0@C5:C7".to_string()], vec!["E5>0@E5:E7".to_string()]));
+    // Deleting the cells of the first area, shifting up or left: the second area stays put.
+    for shift in ["up", "left"] {
+        let mut s = setup();
+        s.execute("home.deleteCells", json!({"range": "A1:A5", "shift": shift})).unwrap();
+        assert_eq!(texts(&s), (vec!["C10>0@C10:C12".to_string()], vec!["E10>0@E10:E12".to_string()]), "shift {shift}");
+    }
+}
+
+/// A cut is pasted as it is: a transposed, tiled or skip-blanks paste of it is refused and
+/// changes nothing, so its rules never land on a block of another shape than its cells, nor
+/// replace a destination rule under a cell the paste leaves alone.
+#[test]
+fn a_cut_is_not_transposed_or_tiled() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:C1", "values": [[1, 2, 3]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "A1:C1", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("edit.cut", json!({"range": "A1:C1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E1"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "E1"})).is_err());
+    s.execute("selection.set", json!({"range": "E1:G2"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all"})).is_err());
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1.0));
+    assert_eq!(sh.cond_formats[0].ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), vec!["A1:C1".to_string()]);
+    // Pasted as it is, the rule goes with the cells.
+    s.execute("edit.paste", json!({"at": "E1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].cond_formats[0].ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), vec!["E1:G1".to_string()]);
+}
+
+/// Deleting cells in only the first column of a rule's range shifts its top-left cell and keeps the
+/// range's size: the rule's formula follows the cell now there, not the deleted one.
+#[test]
+fn a_rule_follows_its_top_left_through_a_partial_cell_delete() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:C3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "A1:C3", "type": "custom", "formula1": "=A1<>B1"})).unwrap();
+    s.execute("home.deleteCells", json!({"range": "A1", "shift": "up"})).unwrap();
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    let rule = match &sh.cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.trim_start_matches('=').to_string(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rule, "A1>0");
+    // The cell now at A1 came from A2, which compared itself with B2 (column B didn't move).
+    assert_eq!(sh.validations[0].f1.trim_start_matches('='), "A1<>B2");
+}
+
+/// A column moved out of a rule's range takes its part of the rule reading what the column read:
+/// a rule on B1:D1 testing the cell to its left, with D moved before B, still tests old C (now D)
+/// at the moved cell, and a rule on the moved column alone still tests that column.
+#[test]
+fn a_moved_column_keeps_what_its_part_of_a_rule_reads() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "B1:D1", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "D2", "type": "custom", "formula1": "=D2>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 1})).unwrap();
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    let mut rules: Vec<String> = sh
+        .cond_formats
+        .iter()
+        .map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => {
+                format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+            }
+            other => format!("{other:?}"),
+        })
+        .collect();
+    rules.sort();
+    assert_eq!(rules, vec!["A1>0@C1:D1".to_string(), "D1>0@B1".to_string()]);
+    assert_eq!(sh.validations[0].f1.trim_start_matches('='), "B2>0");
+}
+
+/// Internal hyperlinks keep the place they name as typed, as Excel's "Place in This Document"
+/// links do: renaming or deleting a sheet, or inserting rows, leaves them as they were.
+#[test]
+fn internal_link_targets_stay_as_typed() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Lists"})).unwrap();
+    let one = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    s.execute("insert.link", json!({"cell": "Sheet1!A1", "target": "Lists!B5"})).unwrap();
+    s.execute("insert.link", json!({"cell": "Sheet1!A2", "target": "Sheet1!C9"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    let lists = s.doc().unwrap().wb.sheet_index("Lists").unwrap();
+    s.execute("sheet.rename", json!({"sheet": lists, "name": "Data"})).unwrap();
+    s.execute("home.deleteSheet", json!({"sheet": lists})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let one = wb.sheet_index("Sheet1").unwrap_or(one);
+    let mut targets: Vec<String> = wb.sheets[one].hyperlinks.values().map(|h| h.target.clone()).collect();
+    targets.sort();
+    assert_eq!(targets, vec!["Lists!B5".to_string(), "Sheet1!C9".to_string()]);
 }
 
 #[test]

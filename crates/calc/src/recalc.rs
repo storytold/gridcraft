@@ -59,26 +59,29 @@ pub struct Calc {
 
 /// Who gets the cells when two arrays want the same ones. Excel (measured by a reviewer on
 /// PR #2483) lets the spill that already exists keep its cells, whichever anchor comes first;
-/// the other formula shows `#SPILL!`, and clearing the winner lets it spill. The rule here:
+/// the other formula shows `#SPILL!`, and clearing the winner lets it spill. The rule here, for
+/// each cell both want:
 ///
-/// 1. an anchor that held a spill before this calculation outranks one that did not;
-/// 2. otherwise the anchor first in reading order (row, then column) wins.
+/// 1. the anchor whose spill held that cell before this calculation keeps it, so an array that
+///    grows into another's area is `#SPILL!` even when it held a spill of its own;
+/// 2. otherwise an anchor that held a spill before this calculation outranks one that did not;
+/// 3. otherwise the anchor first in reading order (row, then column) wins.
 ///
-/// Rule 2 alone decides when nothing is remembered, so the result never depends on hash order
+/// Rule 3 alone decides when nothing is remembered, so the result never depends on hash order
 /// or evaluation order. A full recalculation remembers the layout the sheet held before it
-/// started (rule 1), so it agrees with the incremental one; a workbook that is calculated for
-/// the first time has no such layout (rule 2 only).
-///
-/// Known limits: (a) the xlsx reader does not restore spill layouts, so a workbook opened from a
-/// file is laid out by rule 2 alone, although Excel keeps the layout the file records; (b) when
-/// both anchors held a spill and one grows into the other, rule 2 decides, where Excel keeps
-/// the cells the other already owns.
+/// started, so it agrees with the incremental one; a workbook that is calculated for the first
+/// time has no such layout (rule 3 only). The xlsx reader restores the area each dynamic array
+/// was saved spilling over, so a workbook opened from a file keeps the layout it was saved with.
 #[derive(Clone, Debug, Default)]
 struct Standing {
     /// `true`: `keys` are the anchors that held a spill (full recalculation, which lays every
     /// spill out afresh). `false`: `keys` are the formulas that held none (incremental).
     held: bool,
     keys: HashSet<Key>,
+    /// The area each anchor that held a spill filled before this calculation, for the anchors the
+    /// calculation lays out again (full: all of them; incremental: the formulas it recalculates).
+    /// Any other anchor still fills the area the sheet shows.
+    areas: HashMap<Key, RangeRef>,
 }
 
 impl Standing {
@@ -86,12 +89,28 @@ impl Standing {
         self.keys.contains(&k) == self.held
     }
 
-    /// Whether `a` takes cells from `b` when both want them.
+    /// Whether `a` takes cells from `b` when both want them and neither held them (rules 2, 3).
     fn outranks(&self, a: Key, b: Key) -> bool {
         match (self.had_spill(a), self.had_spill(b)) {
             (true, false) => true,
             (false, true) => false,
             _ => (a.1.row, a.1.col) < (b.1.row, b.1.col),
+        }
+    }
+
+    /// Whether `k`'s spill held `cell` before this calculation; `now` is the area the sheet
+    /// shows for `k`.
+    fn held_cell(&self, k: Key, now: Option<RangeRef>, cell: CellRef) -> bool {
+        self.had_spill(k) && self.areas.get(&k).copied().or(now).is_some_and(|r| r.contains(cell))
+    }
+
+    /// Whether `a` takes `cell` from `b` when both want it (rule 1, then [`Self::outranks`]). Each
+    /// anchor comes with the area the sheet shows for it.
+    fn outranks_at(&self, (a, a_now): (Key, Option<RangeRef>), (b, b_now): (Key, Option<RangeRef>), cell: CellRef) -> bool {
+        match (self.held_cell(a, a_now, cell), self.held_cell(b, b_now, cell)) {
+            (true, false) => true,
+            (false, true) => false,
+            _ => self.outranks(a, b),
         }
     }
 }
@@ -313,12 +332,18 @@ impl Calc {
         self.rebuild(wb);
         // The layout the sheets hold now decides who keeps cells two arrays both want.
         // (A Python cell that holds a spill counts too, as it does in the incremental pass.)
-        let mut held = HashSet::default();
+        let mut areas: HashMap<Key, RangeRef> = HashMap::default();
         for i in 0..wb.sheets.len() {
             if let Some(sh) = wb.sheet(i) {
-                held.extend(sh.spill_ranges.keys().filter(|a| sh.cell(**a).is_some_and(|c| c.formula.is_some() || c.py.is_some())).map(|a| (i, *a)));
+                areas.extend(
+                    sh.spill_ranges
+                        .iter()
+                        .filter(|(a, _)| sh.cell(**a).is_some_and(|c| c.formula.is_some() || c.py.is_some()))
+                        .map(|(a, r)| ((i, *a), *r)),
+                );
             }
         }
+        let held = areas.keys().copied().collect();
         // Spills are laid out again from the formulas where they are now (a structural edit moves
         // or deletes the formulas, not the values they spilled).
         for i in 0..wb.sheets.len() {
@@ -330,7 +355,7 @@ impl Calc {
             }
         }
         let all: Vec<Key> = self.graph.nodes.keys().copied().collect();
-        self.standing = Standing { held: true, keys: held };
+        self.standing = Standing { held: true, keys: held, areas };
         self.run(wb, all, true);
         self.standing = Standing::default();
     }
@@ -542,8 +567,15 @@ impl Calc {
             if !full {
                 // What each formula held before this calculation touched it.
                 for &k in &dirty {
-                    if seen.insert(k) && wb.sheet(k.0).is_some_and(|s| !s.spill_ranges.contains_key(&k.1)) {
-                        self.standing.keys.insert(k);
+                    if seen.insert(k) {
+                        match wb.sheet(k.0).and_then(|s| s.spill_ranges.get(&k.1)) {
+                            Some(r) => {
+                                self.standing.areas.insert(k, *r);
+                            }
+                            None => {
+                                self.standing.keys.insert(k);
+                            }
+                        }
                     }
                 }
             }
@@ -664,7 +696,7 @@ impl Calc {
                 let end = CellRef::new(key.1.row.saturating_add(array.rows as u32 - 1), key.1.col.saturating_add(array.cols as u32 - 1));
                 let range = RangeRef::new(key.1, end);
                 // Two arrays that want the same cells (see [`Standing`]): a spill already laid out
-                // that this anchor outranks is taken over, and recalculated.
+                // that this anchor outranks on every cell they share is taken over, and recalculated.
                 let standing = &self.standing;
                 // A spill can only be in the way where it has cells besides its anchor, and an
                 // anchor itself blocks the array. When no spilled cell lies in the range, the owners
@@ -675,13 +707,18 @@ impl Calc {
                     sheet
                         .spill_ranges
                         .iter()
-                        .filter(|(o, r)| **o != key.1 && r.intersects(&range) && standing.outranks(*key, (key.0, **o)))
+                        .filter(|(o, r)| {
+                            **o != key.1
+                                && r.intersection(&range).is_some_and(|shared| {
+                                    shared.iter().all(|cell| standing.outranks_at((*key, old), ((key.0, **o), Some(**r)), cell))
+                                })
+                        })
                         .map(|(o, r)| (*o, *r))
                         .collect()
                 } else {
                     Vec::new()
                 };
-                let blocked = spill_is_blocked(sheet, *key, range, end, standing);
+                let blocked = spill_is_blocked(sheet, (*key, old), range, end, standing);
                 if !blocked {
                     for (o, r) in outranked {
                         for c in r.iter() {
@@ -739,11 +776,22 @@ thread_local! {
     pub(crate) static OWNER_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Whether the array at `anchor` can't be laid out over `range`. A spill already laid out that
-/// `anchor` outranks does not block it: it is taken over when written back.
-fn spill_is_blocked(sheet: &gridcraft_model::Sheet, anchor: Key, range: RangeRef, end: CellRef, standing: &Standing) -> bool {
-    let outranked =
-        |cell: CellRef| sheet.spill_ranges.iter().any(|(o, r)| *o != anchor.1 && r.contains(cell) && standing.outranks(anchor, (anchor.0, *o)));
+/// Whether the array at `anchor` (with the area the sheet showed for it) can't be laid out over
+/// `range`. A spill already laid out that `anchor` outranks does not block it: it is taken over
+/// when written back.
+fn spill_is_blocked(
+    sheet: &gridcraft_model::Sheet,
+    (anchor, now): (Key, Option<RangeRef>),
+    range: RangeRef,
+    end: CellRef,
+    standing: &Standing,
+) -> bool {
+    let outranked = |cell: CellRef| {
+        sheet
+            .spill_ranges
+            .iter()
+            .any(|(o, r)| *o != anchor.1 && r.contains(cell) && standing.outranks_at((anchor, now), ((anchor.0, *o), Some(*r)), cell))
+    };
     end.row >= gridcraft_core::MAX_ROWS
         || end.col >= gridcraft_core::MAX_COLS
         || range.iter().any(|cell| cell != anchor.1 && (sheet.cells.has(cell) || (sheet.spill.contains_key(&cell) && !outranked(cell))))
@@ -781,6 +829,38 @@ pub fn evaluate_expr(wb: &Workbook, sheet: usize, at: CellRef, expr: &Expr) -> V
     let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
     let mut ev = Evaluator::new(&mut host, sheet, at);
     ev.value(expr)
+}
+
+/// What [`evaluate_bounded`] found: the formula's reference (not read), its value, or that it ran
+/// out of work.
+#[derive(Clone, Debug)]
+pub enum Bounded {
+    /// The formula is a reference (`$B$1:$B$9`, a name for one, `OFFSET(…)`): its areas, unread.
+    Areas(Vec<crate::eval::Area>),
+    Value(Value),
+    /// The formula needed more than the work it was given.
+    Exhausted,
+}
+
+/// Evaluates a formula in the context of a cell with at most `work` units of work (one per
+/// expression evaluated, per cell read, …), keeping a reference result as its areas so the caller
+/// can read as much of them as it needs (a validation list's search source).
+pub fn evaluate_bounded(wb: &Workbook, sheet: usize, at: CellRef, formula: &str, work: u64) -> Bounded {
+    let body = formula.strip_prefix('=').unwrap_or(formula);
+    let Ok(expr) = gridcraft_formula::parse(body) else { return Bounded::Value(Value::Error(CellError::Name)) };
+    let exprs = HashMap::default();
+    let mut rng = 0x1234_5678_9ABC_DEF0u64;
+    let mut host = PassHost::new(wb, &exprs, &mut rng, now_serial());
+    let mut ev = Evaluator::new(&mut host, sheet, at).with_work(work);
+    let r = ev.eval(&expr);
+    if ev.is_exhausted() {
+        return Bounded::Exhausted;
+    }
+    match r {
+        crate::eval::Ev::R(areas) => Bounded::Areas(areas),
+        crate::eval::Ev::V(v) => Bounded::Value(v),
+        crate::eval::Ev::L(_) => Bounded::Value(Value::Error(CellError::Calc)),
+    }
 }
 
 fn prof_now() -> f64 {
