@@ -7920,3 +7920,30 @@ fn renaming_a_name_leaves_a_literal_validation_list_alone() {
     s.execute("formulas.defineName", json!({"name": "Shut", "oldName": "Open", "refersTo": "=Sheet1!$C$1"})).unwrap();
     assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1, "Open-Closed");
 }
+
+/// A table's calculated-column and custom totals formulas are references the workbook holds:
+/// renaming a name they use, or the sheet they name, renames them too.
+#[test]
+fn table_column_formulas_follow_name_and_sheet_renames() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["v", "w"], [1, 2], [3, 4]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=Sheet1!$D$1"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let col = &mut wb.sheet_mut(0).unwrap().tables[0].columns[1];
+        col.formula = Some("[@v]*Rate+Sheet1!$E$1".into());
+        col.totals = gridcraft_model::TotalsFn::Custom;
+        col.totals_label = Some("SUBTOTAL(109,[w])*Rate".into());
+    }
+    s.execute("formulas.defineName", json!({"name": "TaxRate", "oldName": "Rate", "refersTo": "=Sheet1!$D$1"})).unwrap();
+    let col = |s: &Session| s.doc().unwrap().wb.sheets[0].tables[0].columns[1].clone();
+    assert_eq!(col(&s).formula.as_deref(), Some("[@v]*TaxRate+Sheet1!$E$1"));
+    assert_eq!(col(&s).totals_label.as_deref(), Some("SUBTOTAL(109,[w])*TaxRate"));
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Data"})).unwrap();
+    assert_eq!(col(&s).formula.as_deref(), Some("[@v]*TaxRate+Data!$E$1"));
+    // A totals label (not a custom formula) is text.
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().tables[0].columns[0].totals_label = Some("TaxRate".into());
+    s.execute("formulas.defineName", json!({"name": "Rate2", "oldName": "TaxRate", "refersTo": "=Data!$D$1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].tables[0].columns[0].totals_label.as_deref(), Some("TaxRate"));
+}

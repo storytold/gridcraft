@@ -369,6 +369,9 @@ pub enum RefPlace {
     Sparkline(usize),
     Pivot(usize),
     Control(usize),
+    /// A table (its index in the sheet's tables) and one of its columns: the column's
+    /// calculated-column or custom totals formula.
+    TableColumn(usize, usize),
 }
 
 /// [`RefHost::name`] for a workbook-level defined name: `[` and `]` can't be in a sheet's name, so
@@ -400,10 +403,10 @@ impl Workbook {
     /// a cell formula there does), chart series (a chart's source block
     /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources
     /// (not one that is a table's name alone, which reads the table first) and form controls'
-    /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
-    /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
-    /// visited: table calculated-column and totals formulas, a PivotChart's link to its
-    /// PivotTable, a slicer's table, and Python cells' `xl()` references (the engine rewrites
+    /// linked cells, and tables' calculated-column and custom totals formulas. The engine's
+    /// reference-moving edits (renaming sheets and names, deleting sheets, renaming tables,
+    /// inserting and deleting lines and cells, cut-moves) go through it. Not visited: a
+    /// PivotChart's link to its PivotTable, a slicer's table, and Python cells' `xl()` references (the engine rewrites
     /// the last itself, and a PivotChart's link on a sheet rename). A legacy array's own range is the
     /// caller's to move. Internal
     /// hyperlinks keep the place they name as typed, as Excel's do. A sheet nothing changes on
@@ -544,6 +547,21 @@ impl Workbook {
                     }
                     v
                 });
+            // Tables' calculated-column and custom totals formulas, read on the table's sheet.
+            let table_formulas = sh
+                .tables
+                .iter()
+                .enumerate()
+                .any(|(ti, t)| t.columns.iter().enumerate().any(|(ci, c)| c.formulas().any(|f| changes(RefPlace::TableColumn(ti, ci), f))))
+                .then(|| {
+                    let mut v = sh.tables.clone();
+                    for (ti, t) in v.iter_mut().enumerate() {
+                        for (ci, c) in t.columns.iter_mut().enumerate() {
+                            c.formulas_mut().for_each(|f| rewrite(RefPlace::TableColumn(ti, ci), f));
+                        }
+                    }
+                    v
+                });
             if cells.is_empty()
                 && cond_formats.is_none()
                 && validations.is_none()
@@ -551,6 +569,7 @@ impl Workbook {
                 && sparklines.is_none()
                 && pivots.is_none()
                 && controls.is_none()
+                && table_formulas.is_none()
             {
                 continue;
             }
@@ -577,6 +596,9 @@ impl Workbook {
             }
             if let Some(v) = controls {
                 sh.controls = v;
+            }
+            if let Some(v) = table_formulas {
+                sh.tables = v;
             }
         }
     }

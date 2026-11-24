@@ -66,6 +66,20 @@ pub struct TableColumn {
     pub xml: Option<XmlColumnPr>,
 }
 
+impl TableColumn {
+    /// The formulas the column holds: its calculated-column formula and, when the totals row
+    /// uses a custom formula, that formula (`totals_label` holds it then; otherwise it is a label).
+    pub fn formulas(&self) -> impl Iterator<Item = &String> {
+        let custom = (self.totals == TotalsFn::Custom).then_some(self.totals_label.as_ref()).flatten();
+        self.formula.iter().chain(custom)
+    }
+    /// [`TableColumn::formulas`], to rewrite.
+    pub fn formulas_mut(&mut self) -> impl Iterator<Item = &mut String> {
+        let custom = if self.totals == TotalsFn::Custom { self.totals_label.as_mut() } else { None };
+        self.formula.iter_mut().chain(custom)
+    }
+}
+
 /// A table column's binding to an XML map (`<xmlColumnPr>`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct XmlColumnPr {

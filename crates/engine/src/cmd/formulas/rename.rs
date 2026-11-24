@@ -134,9 +134,6 @@ impl Renamer<'_> {
 /// Renames the defined name at `index` in `wb` to `def` (its new name, scope and definition),
 /// with every formula that uses it: the workbook as it is after, or the reason the rename is
 /// refused. The renamed name keeps its place in the list.
-/// Renames the defined name at `index` in `wb` to `def` (its new name, scope and definition),
-/// with every formula that uses it: the workbook as it is after, or the reason the rename is
-/// refused. The renamed name keeps its place in the list.
 pub(super) fn rename(wb: &Workbook, index: usize, def: DefinedName) -> Result<Workbook> {
     let new = def.name.clone();
     // The names as they are after the edit, for reading uses.
@@ -192,6 +189,10 @@ pub(super) fn rename(wb: &Workbook, index: usize, def: DefinedName) -> Result<Wo
             RefPlace::Chart(_) => follow(e, &[si], &|| format!("a chart on {}", sheet_name(si))),
             RefPlace::Sparkline(_) => follow(e, &[si], &|| format!("a sparkline on {}", sheet_name(si))),
             RefPlace::Control(_) => follow(e, &[si], &|| format!("a form control on {}", sheet_name(si))),
+            RefPlace::TableColumn(ti, _) => {
+                let table = wb.sheet(si).and_then(|sh| sh.tables.get(ti)).map(|t| t.name.clone()).unwrap_or_default();
+                follow(e, &[si], &|| format!("a formula of the table {table} on {}", sheet_name(si)))
+            }
         }
     });
     let sheet_of = |name: &str| wb.sheets.iter().position(|s| s.name == name);
@@ -199,13 +200,13 @@ pub(super) fn rename(wb: &Workbook, index: usize, def: DefinedName) -> Result<Wo
         Some(si) => follow(e, &[si], &|| format!("the Python code on {}", sheet_name(si))),
         None => e,
     })?;
+    if let Some(slot) = out.names.get_mut(index) {
+        *slot = def;
+    }
     if let Some(place) = refused.into_inner() {
         return Err(EngineError::Other(format!(
             "The name can't be changed to {new}: {place} would then read something else (another name, a LET or LAMBDA variable, a table or a function), or stop finding it."
         )));
-    }
-    if let Some(slot) = out.names.get_mut(index) {
-        *slot = def;
     }
     Ok(out)
 }
