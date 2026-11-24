@@ -17,6 +17,8 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+// Windows opens links through the shell (`launch`), so only the tests use its explorer.exe opener.
+#[cfg_attr(windows, allow(dead_code))]
 mod opener;
 mod print;
 
@@ -219,11 +221,35 @@ fn open_with_system(target: &str) {
         log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
         return;
     };
-    // By absolute path where the platform has one (#2176): a bare `explorer` would be looked up
-    // in the application's directory first.
-    let env = |key: &str| std::env::var(key).ok();
-    let (system_root, windir) = (env("SystemRoot"), env("windir"));
-    let Some((program, arg)) = opener::opener_command(opener::Os::current(), &target, system_root.as_deref(), windir.as_deref()) else {
+    launch(target.as_str());
+}
+
+/// Hands an address to the shell (ShellExecuteExW), which opens it in the default browser or mail
+/// app. Not through explorer.exe: it reads its own command line, so an `=` (any query, `?id=1`)
+/// made it open the Documents folder instead, a `,` cut the address there, and it kept only the
+/// first 259 characters, which loses a long share link's query (#2085). The shell takes the
+/// address as one argument, so there is no command line for it to be read as an option of.
+/// On a thread of its own: without `SEE_MASK_ASYNCOK` the call can wait until the browser or mail
+/// app has started, and the window must not freeze for that.
+#[cfg(windows)]
+fn launch(target: &str) {
+    let target = target.to_string();
+    let spawned = std::thread::Builder::new().name("open-link".into()).spawn(move || {
+        if let Err(e) = open::that_detached(&target) {
+            log::warn!("couldn't open {target}: {e}");
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("couldn't start the thread that opens a link: {e}");
+    }
+}
+
+/// Hands an address to `/usr/bin/open` (macOS) or `xdg-open`.
+#[cfg(not(windows))]
+fn launch(target: &str) {
+    // By absolute path where the platform has one (#2176). The Windows directory only matters to
+    // the explorer.exe opener, which Windows no longer uses.
+    let Some((program, arg)) = opener::opener_command(opener::Os::current(), target, None, None) else {
         log::warn!("refused to open {target:?}: it could be read as an option");
         return;
     };
@@ -455,5 +481,60 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+/// `open_with_system` on Windows, end to end: the browser it starts asks a local listener for the
+/// address, which must arrive whole (#2085).
+#[cfg(all(test, windows))]
+mod open_with_system_tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    /// The target of the next request on `listener` other than the favicon's, answered with the
+    /// HTML `page`, waiting about 30 seconds. Connections that send nothing (a browser's
+    /// preconnects) are skipped.
+    fn next_request_target(listener: &TcpListener, page: &str) -> Option<String> {
+        listener.set_nonblocking(true).ok()?;
+        for _ in 0..600 {
+            let Ok((mut stream, _)) = listener.accept() else {
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            };
+            stream.set_nonblocking(false).ok()?;
+            stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+            let mut head = Vec::new();
+            let mut buf = [0u8; 4096];
+            while !head.windows(2).any(|w| w == b"\r\n") {
+                match stream.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => head.extend_from_slice(&buf[..n]),
+                }
+            }
+            let line = String::from_utf8_lossy(&head);
+            let Some(target) = line.lines().next().and_then(|l| l.split(' ').nth(1)) else { continue };
+            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{page}", page.len());
+            let _ = stream.write_all(response.as_bytes());
+            if target != "/favicon.ico" {
+                return Some(target.to_string());
+            }
+        }
+        None
+    }
+
+    /// A share link's shape: `=` and `&` in the query, a `,` in a value, over 2,000 characters,
+    /// and a fragment. explorer.exe opened the Documents folder for it instead of the browser.
+    /// A browser never sends the fragment, so the page it gets asks for `/fragment/<fragment>`.
+    #[test]
+    #[ignore = "opens the default browser; run by hand on Windows with --ignored"]
+    fn a_long_address_with_a_query_reaches_the_browser_whole() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let path = format!("/:f:/g/personal/a1/EaB?resid=A1%21123&ithint=folder,oneup&redeem={}", "x".repeat(2048));
+        super::open_with_system(&format!("http://127.0.0.1:{port}{path}#Sheet2-B7"));
+        let report = "<script>location.replace('/fragment/' + location.hash.slice(1))</script>";
+        assert_eq!(next_request_target(&listener, report).as_deref(), Some(path.as_str()));
+        assert_eq!(next_request_target(&listener, "ok").as_deref(), Some("/fragment/Sheet2-B7"));
     }
 }
