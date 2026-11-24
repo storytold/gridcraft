@@ -1,6 +1,7 @@
 //! DrawingML charts (`xl/charts/chartN.xml`): reading the common 2-D/3-D chart groups into the
 //! model, and writing model charts (with cached series values) from scratch.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use craft_drawingml::chart::{Chart as DmlChart, ChartType, Trendline as DmlTrendline, TrendlineType};
@@ -307,34 +308,176 @@ fn chart_title_xml(t: &str, style: ChartTextStyle, wb: &Workbook) -> String {
     s
 }
 
+fn group_kind(g: &El) -> Option<ChartKind> {
+    let grouping = g.child_val("grouping").unwrap_or("standard");
+    let stacked = grouping == "stacked";
+    let pct = grouping == "percentStacked";
+    Some(match g.name.as_str() {
+        "barChart" | "bar3DChart" => {
+            let bar = g.child_val("barDir") == Some("bar");
+            match (bar, stacked, pct) {
+                (false, true, _) => ChartKind::ColumnStacked,
+                (false, _, true) => ChartKind::ColumnStacked100,
+                (false, _, _) => ChartKind::ColumnClustered,
+                (true, true, _) => ChartKind::BarStacked,
+                (true, _, true) => ChartKind::BarStacked100,
+                (true, _, _) => ChartKind::BarClustered,
+            }
+        }
+        "lineChart" | "line3DChart" => {
+            if stacked || pct {
+                ChartKind::LineStacked
+            } else {
+                // The group's kind is its first series' (each series may differ; see
+                // `series_kind_in`).
+                match g.kids("ser").next() {
+                    Some(first) => series_kind_in(g, ChartKind::LineMarkers, first),
+                    None if g.child_val("marker").is_some_and(|v| v == "0" || v == "false") => ChartKind::Line,
+                    None => ChartKind::LineMarkers,
+                }
+            }
+        }
+        "pieChart" | "pie3DChart" | "ofPieChart" => ChartKind::Pie,
+        "doughnutChart" => ChartKind::Doughnut,
+        "areaChart" | "area3DChart" => {
+            if pct {
+                ChartKind::AreaStacked100
+            } else if stacked {
+                ChartKind::AreaStacked
+            } else {
+                ChartKind::Area
+            }
+        }
+        "scatterChart" => match g.kids("ser").next() {
+            _ if g.child_val("scatterStyle") == Some("marker") => ChartKind::Scatter,
+            Some(first) => series_kind_in(g, ChartKind::ScatterLines, first),
+            None => ChartKind::ScatterLines,
+        },
+        "bubbleChart" => ChartKind::Bubble,
+        "radarChart" => ChartKind::Radar,
+        "stockChart" => ChartKind::Stock,
+        _ => return None,
+    })
+}
+
+/// The kind series `s` of group `g` (of kind `k`) is drawn as: in a line group its own markers
+/// (none when it says so), in a scatter group its own lines; otherwise the group's.
+fn series_kind_in(g: &El, k: ChartKind, s: &El) -> ChartKind {
+    match k {
+        ChartKind::Line | ChartKind::LineMarkers => {
+            let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+            let none = s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
+            if group_markers && !none { ChartKind::LineMarkers } else { ChartKind::Line }
+        }
+        ChartKind::Scatter | ChartKind::ScatterLines if g.child_val("scatterStyle") != Some("marker") => {
+            if s.path(&["spPr", "ln"]).is_some_and(|l| l.child("noFill").is_some()) { ChartKind::Scatter } else { ChartKind::ScatterLines }
+        }
+        k => k,
+    }
+}
+
+fn rich_title(t: &El) -> Option<String> {
+    let tx = t.child("tx")?;
+    if let Some(rich) = tx.child("rich") {
+        let paras: Vec<String> =
+            rich.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect();
+        let s = paras.join("\n");
+        return if s.is_empty() { None } else { Some(s) };
+    }
+    if let Some(sr) = tx.child("strRef") {
+        if let Some(v) = sr.path(&["strCache", "pt", "v"]) {
+            return Some(v.text.clone());
+        }
+        return sr.child("f").map(|f| f.text.trim().to_string());
+    }
+    None
+}
+
+/// The text of an axis title (`c:title`): its rich text or cached reference, else Excel's default.
+fn axis_title(t: &El) -> String {
+    rich_title(t).unwrap_or_else(|| "Axis Title".into())
+}
+
+// Value axes looked at (and looked up) while finding a chart's primary axes, so a test can check
+// the work grows with the file, not with its square.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static VAL_AXIS_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let plot = root.and_then(|r| r.path(&["chart", "plotArea"]));
     let groups: Vec<&El> = plot.map(|p| p.children.iter().filter(|g| g.name.ends_with("Chart")).collect()).unwrap_or_default();
     fn ax_ids(g: &El) -> Vec<&str> {
         g.kids("axId").filter_map(|a| a.attr("val")).collect()
     }
-    let first_axes = groups.first().map(|g| ax_ids(g)).unwrap_or_default();
-    let ser_els: Vec<(&El, bool)> = groups
+    // An empty group draws nothing: the chart's kind and axes come from the groups with series
+    // (a chart without series from its first group).
+    let kinded: Vec<(&El, ChartKind)> = groups.iter().filter_map(|g| group_kind(g).map(|k| (*g, k))).collect();
+    let with_series = kinded.iter().any(|(g, _)| g.child("ser").is_some());
+    let drawing: Vec<(&El, ChartKind)> = kinded.iter().copied().filter(|(g, _)| !with_series || g.child("ser").is_some()).collect();
+    let first_kind = drawing.first().map_or_else(|| map_chart_type(dc.kind, plot), |(_, k)| *k);
+    // The primary axes are the pair whose value axis sits left or bottom (a secondary pair is on
+    // the right or top), else the first group's; series on other axes are secondary.
+    let mut val_sides: HashMap<&str, &str> = HashMap::new();
+    for a in plot.into_iter().flat_map(|p| p.kids("valAx")) {
+        #[cfg(test)]
+        VAL_AXIS_VISITS.with(|n| n.set(n.get().saturating_add(1)));
+        if let (Some(id), Some(pos)) = (a.child_val("axId"), a.child_val("axPos")) {
+            val_sides.entry(id).or_insert(pos);
+        }
+    }
+    let pairs: Vec<Vec<&str>> = drawing.iter().map(|(g, _)| ax_ids(g)).collect();
+    let primary_axes: Vec<&str> = pairs
         .iter()
-        .enumerate()
-        .flat_map(|(gi, g)| {
-            let sec = gi > 0 && ax_ids(g) != first_axes;
-            g.kids("ser").map(move |s| (s, sec))
+        .find(|ids| {
+            #[cfg(test)]
+            VAL_AXIS_VISITS.with(|n| n.set(n.get().saturating_add(1)));
+            ids.get(1).is_some_and(|id| matches!(val_sides.get(id).copied(), Some("l" | "b")))
+        })
+        .or_else(|| pairs.iter().find(|ids| !ids.is_empty()))
+        .cloned()
+        .unwrap_or_default();
+    // The axis titles are the primary pair's (an axis of another pair, or of an empty group, holds
+    // another scale's titles), else the first of their kind in the file; a shown axis before a
+    // deleted one.
+    let primary = |a: &El| a.child_val("axId").is_some_and(|id| primary_axes.contains(&id));
+    let shown = |a: &El| !a.child("delete").is_some_and(|c| c.flag("val", true));
+    let first_of = |tags: &[&str], pos: &[&str]| -> Option<&El> {
+        let fits = |a: &&El| tags.contains(&a.name.as_str()) && (pos.is_empty() || a.child_val("axPos").is_some_and(|p| pos.contains(&p)));
+        let axes = plot.into_iter().flat_map(|p| p.children.iter()).filter(fits);
+        let ranked: [&dyn Fn(&El) -> bool; 4] = [&|a| primary(a) && shown(a), &shown, &primary, &|_| true];
+        ranked.into_iter().find_map(|r| axes.clone().find(|a| r(a)))
+    };
+    // The primary pair's group says whether its axes are both value axes (a scatter's).
+    let primary_kind = drawing.iter().zip(&pairs).find(|(_, ids)| **ids == primary_axes).map_or(first_kind, |((_, k), _)| *k);
+    let (x_ax, y_ax) = if matches!(primary_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble) {
+        (first_of(&["valAx"], &["b", "t"]), first_of(&["valAx"], &["l", "r"]))
+    } else {
+        (first_of(&["catAx", "dateAx"], &[]), first_of(&["valAx"], &[]))
+    };
+    let title_of = |a: Option<&El>| a.and_then(|a| a.child("title")).map(axis_title);
+    let axis_titles = if plot.is_some() { (title_of(x_ax), title_of(y_ax)) } else { dc.axis_titles.clone() };
+    // Each series element with its axes and the kind its group draws it as (a line's markers and
+    // a scatter's lines are the series' own), in the order the shared reader lists them.
+    let ser_els: Vec<(&El, bool, ChartKind)> = groups
+        .iter()
+        .flat_map(|g| {
+            let ids = ax_ids(g);
+            let sec = !ids.is_empty() && ids != primary_axes;
+            let k = group_kind(g);
+            g.kids("ser").map(move |s| (s, sec, k.map_or(first_kind, |k| series_kind_in(g, k, s))))
         })
         .collect();
-    let multi_axis = ser_els.iter().any(|(_, sec)| *sec);
-    let is_combo = dc.kind == ChartType::Combo || multi_axis;
-    let base_kind = map_chart_type(dc.kind, plot);
-    let kind = if is_combo { ChartKind::Combo } else { base_kind };
     let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
     let series = dc
         .series
         .into_iter()
         .enumerate()
         .map(|(i, s)| {
-            let (sel, fallback_sec) = match ser_els.get(i).copied() {
-                Some((el, sec)) => (Some(el), sec),
-                None => (None, false),
+            let (sel, sec, drawn) = match ser_els.get(i).copied() {
+                Some((el, sec, k)) => (Some(el), sec, k),
+                None => (None, s.secondary_axis, s.kind.map_or(first_kind, |k| map_chart_type(k, plot))),
             };
             let color = s
                 .fill
@@ -354,7 +497,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                 .into_iter()
                 .flat_map(|e| e.kids("trendline").take(16))
                 .filter(|e| e.child("trendlineType").and_then(|c| c.attr("val")).and_then(TrendlineType::from_xml).is_some());
-            Series {
+            let series = Series {
                 name: s.refs.name.as_deref().map(chart_ref_from_file).or_else(|| (!s.name.is_empty()).then_some(s.name)),
                 categories: s
                     .refs
@@ -371,20 +514,22 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                     .unwrap_or_default(),
                 bubble_sizes: s.refs.sizes.as_deref().map(chart_ref_from_file).or_else(|| literal_array(sel.and_then(|e| e.child("bubbleSize")))),
                 color,
-                secondary: is_combo && (s.secondary_axis || fallback_sec),
-                kind: if dc.kind == ChartType::Combo {
-                    s.kind.map(|k| map_chart_type(k, plot))
-                } else if multi_axis {
-                    Some(s.kind.map(|k| map_chart_type(k, plot)).unwrap_or(base_kind))
-                } else {
-                    None
-                },
+                secondary: sec,
+                kind: None,
                 quartiles: Default::default(),
                 smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
                 trendlines: s.trendlines.iter().map(|t| map_trendline(t, trendline_els.next())).collect(),
-            }
+            };
+            (series, drawn, sel)
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // Series in the order the file gives them (`c:order`), whichever group holds them.
+    let order = |e: Option<&El>| e.and_then(|s| s.child_val("order")).and_then(|v| v.parse::<u32>().ok());
+    let mut series = series;
+    if series.iter().all(|(_, _, e)| order(*e).is_some()) {
+        series.sort_by_key(|(_, _, e)| order(*e));
+    }
+    let (series, drawn): (Vec<Series>, Vec<ChartKind>) = series.into_iter().map(|(s, k, _)| (s, k)).unzip();
     let legend = match dc.legend.as_deref() {
         None => LegendPos::None,
         Some("b") => LegendPos::Bottom,
@@ -396,14 +541,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     let text = root.map_or_else(ChartTextStyles::default, |root| {
         let chart = root.child("chart");
         let title = chart.and_then(|c| c.child("title"));
-        let val_axes: Vec<&El> = plot.map(|p| p.kids("valAx").collect()).unwrap_or_default();
-        let (x_ax, y_ax) = if matches!(base_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble) {
-            let x = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("b") | Some("t"))).copied();
-            let y = val_axes.iter().find(|a| matches!(a.child_val("axPos"), Some("l") | Some("r"))).copied();
-            (x, y)
-        } else {
-            (plot.and_then(|p| p.child("catAx").or_else(|| p.child("dateAx"))), val_axes.first().copied())
-        };
+        // The axes are the ones whose titles the chart takes (`x_ax`, `y_ax`): primary and shown first.
         // Labels' style from the first series that has them, else from a group's.
         let labels =
             groups.iter().find_map(|g| g.kids("ser").find_map(|s| s.child("dLbls"))).or_else(|| groups.iter().find_map(|g| g.child("dLbls")));
@@ -417,9 +555,9 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     });
     let hole_size =
         if plot.is_some_and(|p| p.child("doughnutChart").is_some()) { (dc.hole_size * 100.0).round().clamp(10.0, 90.0) as u8 } else { 75 };
-    Chart {
+    let mut ch = Chart {
         id: 0,
-        kind,
+        kind: first_kind,
         anchor: Default::default(),
         title: dc.title,
         series,
@@ -435,13 +573,16 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         style,
         hole_size,
         first_slice_angle: dc.first_slice_angle,
-        x_title: dc.axis_titles.0,
-        y_title: dc.axis_titles.1,
+        x_title: axis_titles.0,
+        y_title: axis_titles.1,
         source: None,
         by_rows: false,
         pivot: dc.pivot_source.as_deref().map(strip_book).filter(|n| !n.is_empty()).map(str::to_string),
         text,
-    }
+    };
+    // Series of one family are one chart; series of other families make a combination chart.
+    ch.set_drawn_kinds(&drawn, first_kind);
+    ch
 }
 
 pub fn read_chart(root: &El) -> Option<Chart> {
@@ -463,6 +604,45 @@ enum G {
     Bubble,
     Radar,
     Stock,
+}
+
+/// The kind of axes a group is drawn on.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Axes {
+    /// None: pie and doughnut.
+    None,
+    /// Categories across, values up: columns, lines, areas, stock, radar.
+    Category,
+    /// Categories down, values across: horizontal bars.
+    Horizontal,
+    /// Values both ways: scatter and bubble.
+    Values,
+}
+
+fn axes_of(g: G) -> Axes {
+    match g {
+        G::Pie | G::Doughnut => Axes::None,
+        G::Bar { bar: true, .. } => Axes::Horizontal,
+        G::Scatter { .. } | G::Bubble => Axes::Values,
+        _ => Axes::Category,
+    }
+}
+
+/// Group `g` drawn on axes of kind `family`: itself where it fits, else the nearest group that
+/// does (a line-like series as lines, others as columns, bars or scatter).
+fn fit_axes(g: G, family: Axes) -> G {
+    let own = axes_of(g);
+    if own == family || family == Axes::None {
+        return g;
+    }
+    let line_like = matches!(g, G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. });
+    match family {
+        Axes::None => g,
+        Axes::Category if line_like => G::Line { stacked: false, markers: false },
+        Axes::Category => G::Bar { bar: false, grouping: "clustered" },
+        Axes::Horizontal => G::Bar { bar: true, grouping: "clustered" },
+        Axes::Values => G::Scatter { lines: true },
+    }
 }
 
 fn group_for(k: ChartKind) -> G {
@@ -696,7 +876,14 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
     Some(s)
 }
 
-fn series_xml(s: &Series, idx: usize, g: G, wb: &Workbook, si: usize) -> String {
+/// Series `s` in group `g`, drawn as kind `own`: a line or scatter series keeps its own markers
+/// or lines within its group.
+fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: usize) -> String {
+    let g = match (g, group_for(own)) {
+        (G::Line { stacked, .. }, G::Line { markers, .. }) => G::Line { stacked, markers },
+        (G::Scatter { .. }, mine @ G::Scatter { .. }) => mine,
+        _ => g,
+    };
     let mut x = format!("<c:ser><c:idx val=\"{idx}\"/><c:order val=\"{idx}\"/>");
     if let Some(n) = &s.name {
         if is_ref(n) || is_defined_name(wb, si, n) {
@@ -828,8 +1015,10 @@ fn dlbls(show: bool, txpr: &str) -> String {
     )
 }
 
-fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
-    let sers: String = series.iter().map(|(i, s)| series_xml(s, *i, g, wb, si)).collect();
+/// Group `g` of `series`, each drawn as its kind in `kinds` (by series index).
+fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
+    let sers: String =
+        series.iter().map(|(i, s)| series_xml(s, *i, g, kinds.get(*i).copied().unwrap_or(ChartKind::ColumnClustered), wb, si)).collect();
     let dl = dlbls(ch.data_labels, &if ch.data_labels { txpr_xml(ch.text.data_labels, wb) } else { String::new() });
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
@@ -840,9 +1029,11 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
                 if bar { "bar" } else { "col" }
             )
         }
-        G::Line { stacked, .. } => format!(
-            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"1\"/>{ax}</c:lineChart>",
-            if stacked { "stacked" } else { "standard" }
+        // Each series states its own markers; an empty group's say whether the chart has them.
+        G::Line { stacked, markers } => format!(
+            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"{}\"/>{ax}</c:lineChart>",
+            if stacked { "stacked" } else { "standard" },
+            u8::from(markers || !series.is_empty())
         ),
         G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"{}\"/></c:pieChart>", ch.first_slice_angle % 360),
         G::Doughnut => format!(
@@ -851,7 +1042,11 @@ fn group_xml(g: G, series: &[(usize, &Series)], ch: &Chart, axes: (u32, u32), wb
             ch.hole_size.clamp(10, 90)
         ),
         G::Area { grouping } => format!("<c:areaChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:areaChart>"),
-        G::Scatter { .. } => format!("<c:scatterChart><c:scatterStyle val=\"lineMarker\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>"),
+        // Each series states its own lines; an empty group's style says whether the chart has them.
+        G::Scatter { lines } => {
+            let style = if lines || !series.is_empty() { "lineMarker" } else { "marker" };
+            format!("<c:scatterChart><c:scatterStyle val=\"{style}\"/><c:varyColors val=\"0\"/>{sers}{dl}{ax}</c:scatterChart>")
+        }
         G::Bubble => {
             format!("<c:bubbleChart><c:varyColors val=\"0\"/>{sers}{dl}<c:bubbleScale val=\"100\"/><c:showNegBubbles val=\"0\"/>{ax}</c:bubbleChart>")
         }
@@ -941,116 +1136,131 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     s.push_str("<c:plotArea><c:layout/>");
     let (cat_text, val_text) = (txpr_xml(ch.text.category_axis, wb), txpr_xml(ch.text.value_axis, wb));
     let all: Vec<(usize, &Series)> = ch.series.iter().enumerate().collect();
-    let primary_g;
-    let mut secondary: Option<G> = None;
-    if ch.kind == ChartKind::Combo {
-        // Series without a kind of their own: the first is a column, the others lines (as drawn).
-        let kind = |i: usize, x: &Series| x.kind.filter(|k| *k != ChartKind::Combo).or((i > 0).then_some(ChartKind::Line));
-        let is_line = |k: Option<ChartKind>| matches!(k.map(group_for), Some(G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. }));
-        let bars: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && !is_line(kind(*i, x))).copied().collect();
-        let lines: Vec<(usize, &Series)> = all.iter().filter(|(i, x)| !x.secondary && is_line(kind(*i, x))).copied().collect();
-        let sec: Vec<(usize, &Series)> = all.iter().filter(|(_, x)| x.secondary).copied().collect();
-        primary_g = G::Bar { bar: false, grouping: "clustered" };
-        if !bars.is_empty() || (lines.is_empty() && sec.is_empty()) {
-            s.push_str(&group_xml(primary_g, &bars, ch, (1, 2), wb, si));
+    // A stock chart is one group of its 3 or 4 series (high-low-close, open-high-low-close);
+    // other charts get one group per kind their series are drawn as, on each axis, in the order
+    // they first appear (a line's markers and a scatter's lines are the series' own).
+    let stock = ch.kind == ChartKind::Stock;
+    let kinds = ch.series_kinds();
+    let group_of = |i: usize| match group_for(kinds.get(i).copied().unwrap_or(ChartKind::ColumnClustered)) {
+        G::Line { stacked, .. } => G::Line { stacked, markers: false },
+        G::Scatter { .. } => G::Scatter { lines: true },
+        g => g,
+    };
+    // A chart without axes (a pie or doughnut chart) has no secondary axes either: its series
+    // are all one group. (A combination chart's pies are drawn as columns, on axes.)
+    let has_axes = (0..all.len()).any(|i| axes_of(group_of(i)) != Axes::None);
+    let groups = |secondary: bool| {
+        let mut out: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
+        for &(i, x) in all.iter().filter(|(_, x)| stock || (x.secondary && has_axes) == secondary) {
+            let g = group_of(i);
+            match out.iter_mut().find(|(k, _)| *k == g) {
+                Some((_, members)) => members.push((i, x)),
+                None => out.push((g, vec![(i, x)])),
+            }
         }
-        if !lines.is_empty() {
-            s.push_str(&group_xml(G::Line { stacked: false, markers: false }, &lines, ch, (1, 2), wb, si));
+        // The groups on one pair of axes share its kind of axes; one that can't (a pie beside
+        // columns, a scatter beside lines) is drawn in the nearest group that can.
+        // A combination chart is drawn on category axes (its series' kinds say how).
+        let family = if ch.kind == ChartKind::Combo {
+            Axes::Category
+        } else {
+            out.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None)
+        };
+        // A stock group holds 3 or 4 series (high-low-close, open-high-low-close); others are
+        // lines, which join a line group already there rather than setting its grouping.
+        let (out, stock_lines): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, m)| *g != G::Stock || (3..=4).contains(&m.len()));
+        let stock_lines = stock_lines.into_iter().map(|(_, m)| (G::Line { stacked: false, markers: false }, m));
+        // One group per type on a pair of axes (as Excel keeps them; `Chart::series_kind` gives
+        // the series of one type one grouping). Groups that fit the axes come first, so a group
+        // moved onto them joins one of its type there rather than setting its grouping.
+        let (fits, moved): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, _)| fit_axes(*g, family) == *g);
+        let mut fitted: Vec<(G, Vec<(usize, &Series)>)> = Vec::new();
+        let moved = moved.into_iter().chain(stock_lines).map(|(g, m)| (fit_axes(g, family), m));
+        for (g, members) in fits.into_iter().chain(moved) {
+            match fitted.iter_mut().find(|(k, _)| std::mem::discriminant(k) == std::mem::discriminant(&g)) {
+                Some((_, m)) => m.extend(members),
+                None => fitted.push((g, members)),
+            }
         }
-        if !sec.is_empty() {
-            let g = match sec.first().and_then(|(_, x)| x.kind).map(group_for) {
-                Some(b @ G::Bar { .. }) => b,
-                _ => G::Line { stacked: false, markers: false },
-            };
-            s.push_str(&group_xml(g, &sec, ch, (3, 4), wb, si));
-            secondary = Some(g);
+        // Each group's series in their own order.
+        for (_, members) in &mut fitted {
+            members.sort_by_key(|(i, _)| *i);
         }
-    } else {
-        primary_g = match group_for(ch.kind) {
-            // A stock chart has 3 or 4 series (high-low-close, open-high-low-close).
-            G::Stock if !(3..=4).contains(&ch.series.len()) => G::Line { stacked: false, markers: false },
+        fitted
+    };
+    let (mut primary, mut sec) = if stock { (groups(false), Vec::new()) } else { (groups(false), groups(true)) };
+    // With every series on the secondary axis, that axis is the only one.
+    if primary.is_empty() {
+        std::mem::swap(&mut primary, &mut sec);
+    }
+    // A chart without series still has a group of its kind, or it would not be read back (a
+    // stock group must hold series, so an empty stock chart has a line group).
+    if primary.is_empty() {
+        let g = match group_for(ch.kind) {
+            G::Stock => G::Line { stacked: false, markers: false },
             g => g,
         };
-        s.push_str(&group_xml(primary_g, &all, ch, (1, 2), wb, si));
+        primary.push((g, Vec::new()));
     }
-    match primary_g {
-        G::Pie | G::Doughnut => {}
-        G::Scatter { .. } | G::Bubble => {
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 1,
-                cross: 2,
-                pos: "b",
-                delete: false,
-                grid: false,
-                title: ch.x_title.as_deref(),
-                text: &cat_text,
-                crosses_max: false,
-            }));
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 2,
-                cross: 1,
-                pos: "l",
-                delete: false,
-                grid: ch.gridlines,
-                title: ch.y_title.as_deref(),
-                text: &val_text,
-                crosses_max: false,
-            }));
-        }
-        G::Bar { bar: true, .. } => {
-            s.push_str(&axis_xml(&Ax {
-                cat: true,
-                id: 1,
-                cross: 2,
-                pos: "l",
-                delete: false,
-                grid: false,
-                title: ch.x_title.as_deref(),
-                text: &cat_text,
-                crosses_max: false,
-            }));
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 2,
-                cross: 1,
-                pos: "b",
-                delete: false,
-                grid: ch.gridlines,
-                title: ch.y_title.as_deref(),
-                text: &val_text,
-                crosses_max: false,
-            }));
-        }
-        _ => {
-            s.push_str(&axis_xml(&Ax {
-                cat: true,
-                id: 1,
-                cross: 2,
-                pos: "b",
-                delete: false,
-                grid: false,
-                title: ch.x_title.as_deref(),
-                text: &cat_text,
-                crosses_max: false,
-            }));
-            s.push_str(&axis_xml(&Ax {
-                cat: false,
-                id: 2,
-                cross: 1,
-                pos: "l",
-                delete: false,
-                grid: ch.gridlines,
-                title: ch.y_title.as_deref(),
-                text: &val_text,
-                crosses_max: false,
-            }));
-        }
+    for (g, members) in &primary {
+        s.push_str(&group_xml(*g, members, &kinds, ch, (1, 2), wb, si));
     }
-    if secondary.is_some() {
-        s.push_str(&axis_xml(&Ax { cat: true, id: 3, cross: 4, pos: "b", delete: true, grid: false, title: None, crosses_max: false, text: "" }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: "r", delete: false, grid: false, title: None, crosses_max: true, text: "" }));
+    for (g, members) in &sec {
+        s.push_str(&group_xml(*g, members, &kinds, ch, (3, 4), wb, si));
+    }
+    let family = |gs: &[(G, Vec<(usize, &Series)>)]| gs.iter().map(|(g, _)| axes_of(*g)).find(|a| *a != Axes::None).unwrap_or(Axes::None);
+    let primary_axes = family(&primary);
+    // The primary axes, placed by their kind.
+    let (cat, cat_pos, val_pos) = match primary_axes {
+        Axes::None => (true, "", ""),
+        Axes::Values => (false, "b", "l"),
+        Axes::Horizontal => (true, "l", "b"),
+        Axes::Category => (true, "b", "l"),
+    };
+    if primary_axes != Axes::None {
+        s.push_str(&axis_xml(&Ax {
+            cat,
+            id: 1,
+            cross: 2,
+            pos: cat_pos,
+            delete: false,
+            grid: false,
+            title: ch.x_title.as_deref(),
+            text: &cat_text,
+            crosses_max: false,
+        }));
+        s.push_str(&axis_xml(&Ax {
+            cat: false,
+            id: 2,
+            cross: 1,
+            pos: val_pos,
+            delete: false,
+            grid: ch.gridlines,
+            title: ch.y_title.as_deref(),
+            text: &val_text,
+            crosses_max: false,
+        }));
+    }
+    // The secondary axes: their categories (or x values) hidden, their values on the far side.
+    let (cat, cat_pos, val_pos) = match family(&sec) {
+        Axes::None => (true, "", ""),
+        Axes::Values => (false, "b", "r"),
+        Axes::Horizontal => (true, "l", "t"),
+        Axes::Category => (true, "b", "r"),
+    };
+    if !cat_pos.is_empty() {
+        s.push_str(&axis_xml(&Ax { cat, id: 3, cross: 4, pos: cat_pos, delete: true, grid: false, title: None, text: "", crosses_max: false }));
+        s.push_str(&axis_xml(&Ax {
+            cat: false,
+            id: 4,
+            cross: 3,
+            pos: val_pos,
+            delete: false,
+            grid: false,
+            title: None,
+            text: "",
+            crosses_max: true,
+        }));
     }
     if let Some(t) = &ch.data_table {
         let _ = write!(

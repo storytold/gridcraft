@@ -448,32 +448,6 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     t.to_string()
 }
 
-pub(crate) fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
-    match (chart_kind, series_kind) {
-        (ChartKind::Combo, Some(k)) if k != ChartKind::Combo => k,
-        (ChartKind::Combo, _) => {
-            if i == 0 {
-                ChartKind::ColumnClustered
-            } else {
-                ChartKind::Line
-            }
-        }
-        (_, Some(k)) if k != ChartKind::Combo => k,
-        (k, _) => k,
-    }
-}
-
-/// The kind series `i` is drawn as: its own kind in a combo chart (first series a column, the
-/// rest lines when it has none), else the chart's. The one rule shared by resolving and drawing.
-pub(crate) fn plot_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
-    if chart_kind == ChartKind::Combo { effective_kind(chart_kind, series_kind, i) } else { chart_kind }
-}
-
-/// The kind series `i` of `chart` is drawn as: its own kind in a combo chart, else the chart's.
-pub fn series_plot_kind(chart: &Chart, i: usize) -> ChartKind {
-    plot_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i)
-}
-
 /// Evaluates a chart's series formulas: names, values, categories (default "1", "2", …), X
 /// values (scatter/bubble), bubble sizes, number formats and colours (explicit, else the
 /// default palette derived from the workbook theme accents).
@@ -489,7 +463,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
         let name = s.name.as_deref().map(|n| series_name(wb, sheet, n)).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Series{}", i + 1));
         let color =
             s.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or_else(|| series_color(&wb.theme, i));
-        let kind = effective_kind(chart.kind, s.kind, i);
+        let kind = chart.series_kind(i);
         let x = match (&s.categories, numeric_x || matches!(kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble)) {
             // X values with text in them (labels) are ignored: the points are numbered 1..n.
             (Some(f), true) => {
