@@ -7921,6 +7921,26 @@ fn renaming_a_name_leaves_a_literal_validation_list_alone() {
     assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1, "Open-Closed");
 }
 
+/// A chart series name that is a bare word is a label; it would read as a reference once a
+/// defined name has that word. A rename onto that word would change what the series shows, so it
+/// is refused.
+#[test]
+fn renaming_a_name_onto_a_chart_series_label_is_refused() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[7], [5], [2]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Old", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    s.execute("insert.chart", json!({"range": "A2:A3", "type": "column"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].name = Some("Budget".into());
+    let r = s.execute("formulas.defineName", json!({"name": "Budget", "oldName": "Old", "refersTo": "=Sheet1!$A$1"}));
+    assert!(r.is_err(), "{r:?}");
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(wb.sheets[0].charts[0].series[0].name.as_deref(), Some("Budget"));
+    assert!(wb.names.iter().any(|n| n.name == "Old") && !wb.names.iter().any(|n| n.name == "Budget"));
+    // A rename to another word leaves the label a label.
+    s.execute("formulas.defineName", json!({"name": "Cost", "oldName": "Old", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].charts[0].series[0].name.as_deref(), Some("Budget"));
+}
+
 /// A table's calculated-column and custom totals formulas are references the workbook holds:
 /// renaming a name they use, or the sheet they name, renames them too.
 #[test]

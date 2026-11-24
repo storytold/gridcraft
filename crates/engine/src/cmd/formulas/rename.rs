@@ -203,6 +203,19 @@ pub(super) fn rename(wb: &Workbook, index: usize, def: DefinedName) -> Result<Wo
     if let Some(slot) = out.names.get_mut(index) {
         *slot = def;
     }
+    // A chart series name is read as a reference or shown as a label depending on the defined
+    // names (`Workbook::series_name_is_reference`), so it too must read the same way after: a
+    // label whose word the edit makes a name would start showing that name's value.
+    for (si, (sb, sa)) in wb.sheets.iter().zip(&out.sheets).enumerate() {
+        let series = |sh: &gridcraft_model::Sheet| sh.charts.iter().flat_map(|c| c.series.iter().map(|s| s.name.clone())).collect::<Vec<_>>();
+        let changed = series(sb).iter().zip(series(sa)).any(|(b, a)| match (b, a) {
+            (Some(b), Some(a)) => wb.series_name_is_reference(b, si) != out.series_name_is_reference(&a, si),
+            _ => false,
+        });
+        if changed {
+            refuse_at(format!("a chart series name on {}", sheet_name(si)));
+        }
+    }
     if let Some(place) = refused.into_inner() {
         return Err(EngineError::Other(format!(
             "The name can't be changed to {new}: {place} would then read something else (another name, a LET or LAMBDA variable, a table or a function), or stop finding it."

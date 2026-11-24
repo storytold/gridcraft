@@ -392,6 +392,13 @@ fn rewrite_with<E>(t: &mut String, f: &dyn Fn(Expr) -> Expr, parse: fn(&str) -> 
     true
 }
 
+/// [`Workbook::series_name_is_reference`], given the names as (lower-cased name, scope).
+fn series_name_is_reference(names: &[(String, Option<usize>)], text: &str, sheet: usize) -> bool {
+    let t = text.trim();
+    let defined = || names.iter().any(|(n, scope)| scope.is_none_or(|s| s == sheet) && *n == t.to_lowercase());
+    t.starts_with('=') || t.contains('!') || defined()
+}
+
 fn rewrite_text(t: &mut String, f: &dyn Fn(Expr) -> Expr) -> bool {
     rewrite_with(t, f, gridcraft_formula::parse)
 }
@@ -418,19 +425,14 @@ impl Workbook {
             let host = RefHost { sheet: n.scope, name, place: RefPlace::Name(i) };
             rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
         }
-        // A series name is read by the chart as a reference when it starts with `=`, names a
-        // sheet (`!`) or is a defined name its sheet sees; anything else (a word, a table's
-        // name, `Q1`) is a label and is left as written.
+        // A series name that is a label (see `Workbook::series_name_is_reference`) is left as
+        // written.
         let names: Vec<(String, Option<usize>)> = self.names.iter().map(|n| (n.name.to_lowercase(), n.scope)).collect();
         // A PivotTable source that is a table's name alone reads the table before any defined
         // name of that name (`pivot::resolve_source`), so a name's edit doesn't reach it.
         let tables: Vec<String> = self.sheets.iter().flat_map(|s| s.tables.iter().map(|t| t.name.to_lowercase())).collect();
         let table_source = |t: &str| tables.contains(&t.trim().trim_start_matches('=').trim().to_lowercase());
-        let label = |t: &str, si: usize| {
-            let t = t.trim();
-            let defined = || names.iter().any(|(n, scope)| scope.is_none_or(|s| s == si) && *n == t.to_lowercase());
-            !t.starts_with('=') && !t.contains('!') && !defined()
-        };
+        let label = |t: &str, si: usize| !series_name_is_reference(&names, t, si);
         for (si, shared) in self.sheets.iter_mut().enumerate() {
             // Worked out on the shared sheet; a list is copied only when something in it
             // changes, and a sheet nothing changes on stays shared with undo snapshots.
@@ -601,6 +603,15 @@ impl Workbook {
                 sh.tables = v;
             }
         }
+    }
+
+    /// Whether a chart series name `text` on `sheet` is read as a reference (or formula) rather
+    /// than shown as a label: it starts with `=`, names a sheet (`!`) or is a defined name the
+    /// sheet sees. Anything else (a word, a table's name, `Q1`) is a label. Whether a bare word
+    /// is a label depends on the defined names, so an edit to them can change it.
+    pub fn series_name_is_reference(&self, text: &str, sheet: usize) -> bool {
+        let names: Vec<(String, Option<usize>)> = self.names.iter().map(|n| (n.name.to_lowercase(), n.scope)).collect();
+        series_name_is_reference(&names, text, sheet)
     }
 
     /// A new workbook with one sheet, "Sheet1".
