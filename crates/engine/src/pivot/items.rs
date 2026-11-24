@@ -42,19 +42,23 @@ fn make_item(wb: &Workbook, v: &Value, group: PivotDateGroup, fmt: &ItemFormat, 
     // The label is the model's, which file writers list items by too. It takes the source record's
     // value (already its cell's first element) and reads an array's first element the same way as
     // the match below.
-    let label = gridcraft_model::pivot_source::item_label(v, group, fmt, wb.date_system);
+    let label = || gridcraft_model::pivot_source::item_label(v, group, fmt, wb.date_system);
     let v = &v.scalar();
     match v {
-        Value::Empty => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
+        Value::Empty => ("b".into(), it(Value::text("(blank)"), label(), 4, 0.0, false)),
+        // A date group's label and key come from one call; other numbers take the shared label.
         Value::Number(n) => match gridcraft_model::pivot_source::date_group_item(wb.date_system, *n, group) {
-            Some((_, key)) => (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false)),
-            None => (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true)),
+            Some((label, key)) => (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false)),
+            None => (format!("n{}", n.to_bits()), it(v.clone(), label(), 0, *n, true)),
         },
-        Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), label, 1, 0.0, false)),
-        Value::Bool(b) => (format!("l{label}"), it(Value::Bool(*b), label, 2, *b as u8 as f64, false)),
-        Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), label, 3, 0.0, false)),
+        Value::Text(t) => (format!("t{}", t.to_lowercase()), it(v.clone(), label(), 1, 0.0, false)),
+        Value::Bool(b) => {
+            let label = label();
+            (format!("l{label}"), it(Value::Bool(*b), label, 2, *b as u8 as f64, false))
+        }
+        Value::Error(e) => (format!("e{}", e.as_str()), it(v.clone(), label(), 3, 0.0, false)),
         // An array in an array: no value an item can hold.
-        Value::Array(_) => ("b".into(), it(Value::text("(blank)"), label, 4, 0.0, false)),
+        Value::Array(_) => ("b".into(), it(Value::text("(blank)"), label(), 4, 0.0, false)),
     }
 }
 
