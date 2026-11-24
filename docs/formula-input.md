@@ -40,11 +40,14 @@ format or teach the calculation engine ambiguous aliases.
 
 ## Brazilian Portuguese
 
-**Português (Brasil)** uses the Brazilian function names below with the same separators as
-Spanish: decimal commas, `;` between arguments and `\` between array columns. For example,
-`=SE(VERDADEIRO;SOMA(1,5;2,25);0)` evaluates to 3.75. Accented names match in any case
-(`média` is `MÉDIA`). Spanish aliases such as `SUMA` are not read in Portuguese, and English
-names (`SUM`) keep working with Portuguese separators.
+**Português (Brasil)** gives every worksheet function in the catalog its Brazilian name (the
+table is `crates/formula/src/pt_br.rs`) and uses the same separators as Spanish:
+decimal commas, `;` between arguments and `\` between array columns. For example,
+`=SE(VERDADEIRO;SOMA(1,5;2,25);0)` evaluates to 3.75. Names match in any case and with or
+without accents (`média`, `MEDIA` and `MÉDIA` are AVERAGE; `ENDERECO` is ADDRESS) and are
+shown accented. Some names are unchanged (`ABS`, `ACOS`). Spanish aliases such as `SUMA` are
+not read in Portuguese, and English names (`SUM`) keep working with Portuguese separators.
+The most common ones:
 
 | Brazilian Portuguese | Canonical English |
 | -------------------- | ----------------- |

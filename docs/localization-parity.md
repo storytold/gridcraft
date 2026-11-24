@@ -51,7 +51,7 @@ Cell text now uses shared Unicode bidi layout while retaining logical source ind
   strings plus ~500 function descriptions), so the ribbon-only languages cover **~12%** and
   Japanese and Portuguese **~43%** (measured count / estimated total).
 - **Formulas: en-US plus Spanish and Brazilian Portuguese entry.** Spanish (10 common names)
-  and Brazilian Portuguese (`pt-BR`, all 514 catalog functions: `SOMA`, `MÉDIA`, `PROCV`,
+  and Brazilian Portuguese (`pt-BR`, every catalog function: `SOMA`, `MÉDIA`, `PROCV`,
   `SOMASES`, `SE`, `E`/`OU`, `PGTO`…; accents optional on entry) translate function names and use
   `;` arguments, `,` decimals and `\` array columns in the cell editor and formula bar; files and
   APIs keep en-US syntax. Other languages use en-US function names, `,` argument separator and
@@ -115,7 +115,7 @@ separators, number/date formats, machine translation with agent review, and scri
 | Hindi | hi | 0 (0%) | no | Devanagari: **no shaping** | no | none | 12–18 h |
 | Arabic | ar | 0 (0%) | no | shared shaping/bidi; no Arabic UI catalog or mirrored shell; PDF export: shaped and joined, follows cell direction, mirrors RTL sheets; Sheet RTL mirrors the grid (#146) | no | none | 25–35 h |
 | French | fr | 0 (0%) | no | Latin: yes | no | none | 6–10 h |
-| Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669); help for the 35 localized functions | Latin: yes | no | menus, File view, dialogs, formula names | 2–4 h |
+| Portuguese | pt-BR | 943 (~43%) | dialogs and tooltips (dialogs take effect with #669) | Latin: yes | no | menus, File view, dialogs, formula names | 2–4 h |
 | Indonesian | id | 0 (0%) | no | Latin: yes | no | none | 5–8 h |
 | Japanese | ja | 268 (~12%) | no | CJK system-font fallback; IME unverified; no furigana display, but phonetic runs (ふりがな) survive an XLSX open + save | no | menus only | 8–12 h |
 | Japanese | ja | 943 (~43%) | dialogs and messages | CJK system-font fallback; IME unverified; no furigana display | no | menus, File view, dialogs, messages | 3–5 h |
@@ -151,7 +151,7 @@ language (none so far) and of localized function names.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-24 | minor | Brazilian Portuguese formula entry (`FormulaLocale::PtBr`, #2754): all 514 catalog functions have their pt-BR name (table from #1280: `SOMA`, `MÉDIA`, `CONT.NÚM`, `PROCV`, `ÍNDICE`, `SEERRO`, `PGTO`…) plus `VERDADEIRO`/`FALSO`, with `;` arguments, decimal commas and `\` array columns in the cell editor and formula bar. Names are accepted with or without accents (`MEDIA`, `INDICE`, as in #1382) and shown accented. Files, clipboard and APIs keep English |
+| 2026-11-24 | minor | Brazilian Portuguese formula entry (`FormulaLocale::PtBr`, #2754): every catalog function has its pt-BR name (#1280's 514-entry table, plus `INFODADOSTABELADINÂMICA` for GETPIVOTDATA and ECMA.CEILING kept in English: `SOMA`, `MÉDIA`, `CONT.NÚM`, `PROCV`, `ÍNDICE`, `SEERRO`, `PGTO`…) plus `VERDADEIRO`/`FALSO`, with `;` arguments, decimal commas and `\` array columns in the cell editor and formula bar. Names are accepted with or without accents (`MEDIA`, `INDICE`, as in #1382) and shown accented. Files, clipboard and APIs keep English |
 | 2026-11-18 | minor | The fill-handle menus (right-drag menu and Auto Fill Options: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, Fill Days, Fill Weekdays, Fill Months, Fill Years, and the button's own name) have a row in all 18 non-English catalogs, and Series…, Down and Up from the Home › Fill menu in the nine catalogs that lacked them; the Ukrainian rows that held English are translated. A test fails when one goes missing (#4458). The translations are AI-assisted and not yet reviewed by native speakers |
 | 2026-11-15 | minor | The RaTeX equation parser's messages follow the interface language: its 33 fixed messages are catalog keys, and its 33 messages that carry a piece of the source (a command, token, environment name or count) are read back into templates (`i18n::unfill`) whose translation is filled with the same pieces. A message of another shape, such as RaTeX's internal ones or the chemistry parser's, stays English. 66 new keys in every catalog (#4261) |
 | 2026-11-10 | minor | Ukrainian Chart is `Діаграма`, matching [craft-i18n#211](https://github.com/storytold/craft-i18n/pull/211) and distinct from Diagram (`Схема`) |

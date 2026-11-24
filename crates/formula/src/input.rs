@@ -53,6 +53,11 @@ impl FormulaLocale {
     pub fn array_column_separator(self) -> char {
         if self == Self::En { ',' } else { '\\' }
     }
+    /// Whether this locale's table names the canonical function (its name may be unchanged, as
+    /// pt-BR `ABS`).
+    pub fn has_name(self, canonical: &str) -> bool {
+        self.table().iter().any(|(en, _)| en.eq_ignore_ascii_case(canonical))
+    }
     /// The localized name of a canonical English function, or `canonical` when untranslated.
     pub fn function_name(self, canonical: &str) -> &str {
         self.table().iter().find(|(en, _)| en.eq_ignore_ascii_case(canonical)).map(|(_, local)| *local).unwrap_or(canonical)

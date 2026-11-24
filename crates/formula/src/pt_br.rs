@@ -146,6 +146,8 @@ pub(crate) const FUNCTIONS: &[(&str, &str)] = &[
     ("DURATION", "DURAÇÃO"),
     ("DVAR", "BDVAREST"),
     ("DVARP", "BDVARP"),
+    // No published pt-BR name for this compatibility function: it keeps its English name.
+    ("ECMA.CEILING", "ECMA.CEILING"),
     ("EDATE", "DATAM"),
     ("EFFECT", "EFETIVA"),
     ("ENCODEURL", "CODIFURL"),
@@ -204,6 +206,7 @@ pub(crate) const FUNCTIONS: &[(&str, &str)] = &[
     ("GCD", "MDC"),
     ("GEOMEAN", "MÉDIA.GEOMÉTRICA"),
     ("GESTEP", "DEGRAU"),
+    ("GETPIVOTDATA", "INFODADOSTABELADINÂMICA"),
     ("GROUPBY", "AGRUPARPOR"),
     ("GROWTH", "CRESCIMENTO"),
     ("HARMEAN", "MÉDIA.HARMÔNICA"),
@@ -527,7 +530,7 @@ mod tests {
 
     #[test]
     fn names_are_complete_unique_and_bidirectional() {
-        assert_eq!(FUNCTIONS.len(), 514);
+        assert_eq!(FUNCTIONS.len(), 516);
         let mut canonical = HashSet::new();
         let mut localized = HashSet::new();
         for &(english, portuguese) in FUNCTIONS {

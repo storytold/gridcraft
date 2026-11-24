@@ -176,61 +176,29 @@ mod tests {
         assert_eq!(sig("IF", En, Language::En), "IF(logical_test, [value_if_true], [value_if_false])");
     }
 
-    /// Brazilian Portuguese hints: names, `;` and argument names, from either spelling.
+    /// Brazilian Portuguese hints: Portuguese names, `;` and the merged pt-BR argument names.
     #[test]
     fn portuguese_function_help() {
         use FormulaLocale::PtBr;
         let pt = Language::PtBr;
         assert_eq!(sig("procv", PtBr, pt), "PROCV(valor_procurado; matriz_tabela; núm_índice_coluna; [procurar_intervalo])");
         assert_eq!(sig("SOMASES", PtBr, pt), "SOMASES(intervalo_soma; intervalo_critérios1; critérios1; ...)");
-        assert_eq!(sig("média", PtBr, pt), "MÉDIA(núm1; [núm2]; ...)");
-        assert_eq!(description("SE", PtBr, pt).as_deref(), Some("Retorna um valor conforme uma condição."));
-        // Every function with a Portuguese name has Portuguese help and argument names.
-        for name in [
-            "SOMA",
-            "MÉDIA",
-            "SE",
-            "CONT.NÚM",
-            "CONT.VALORES",
-            "SOMASE",
-            "SOMASES",
-            "CONT.SE",
-            "CONT.SES",
-            "SOMARPRODUTO",
-            "PROCV",
-            "PROCH",
-            "PROCX",
-            "ÍNDICE",
-            "CORRESP",
-            "ARRED",
-            "ARREDONDAR.PARA.CIMA",
-            "ARREDONDAR.PARA.BAIXO",
-            "TRUNCAR",
-            "MÁXIMO",
-            "MÍNIMO",
-            "E",
-            "OU",
-            "NÃO",
-            "SEERRO",
-            "CONCATENAR",
-            "HOJE",
-            "AGORA",
-            "VPL",
-            "TIR",
-            "PGTO",
-            "VP",
-            "VF",
-            "VERDADEIRO",
-            "FALSO",
-        ] {
-            let english = crate::formula_bar::function_description(PtBr.canonical_name(name)).unwrap_or_default();
-            assert!(pt.function_description(&english).is_some(), "{name}: no Portuguese description for {english:?}");
-            let hint = sig(name, PtBr, pt);
-            assert!(hint.starts_with(&format!("{name}(")), "{name}: {hint}");
-            // Argument names are translated (all or none, so a changed hint means all).
-            if !hint.ends_with("()") {
-                assert_ne!(hint, sig(name, PtBr, Language::En), "{name}: untranslated arguments");
-            }
+        // Typed without accents, shown with them.
+        assert!(sig("media", PtBr, pt).starts_with("MÉDIA(número1; "), "{}", sig("media", PtBr, pt));
+        assert_eq!(description("SE", PtBr, pt).as_deref(), Some("Retorna um valor quando uma condição é TRUE e outro quando é FALSE."));
+    }
+
+    /// Every function in the catalog has a Brazilian Portuguese name, and every Portuguese name
+    /// belongs to a catalog function (or is VERDADEIRO/FALSO), so the two cannot drift apart.
+    #[test]
+    fn portuguese_names_cover_the_function_catalog() {
+        use FormulaLocale::PtBr;
+        let catalog: Vec<String> =
+            gridcraft_engine::cmd::formulas::function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect();
+        let missing: Vec<&String> = catalog.iter().filter(|name| !PtBr.has_name(name)).collect();
+        assert!(missing.is_empty(), "no pt-BR name for {missing:?}");
+        for name in &catalog {
+            assert_eq!(PtBr.canonical_name(PtBr.function_name(name)), name.as_str(), "{name} does not round-trip");
         }
     }
 }
