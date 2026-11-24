@@ -386,6 +386,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "최근 항목",
         "No recent workbooks yet." => "최근 통합 문서가 아직 없습니다.",
         "More workbooks" => "더 많은 통합 문서",
+        "More entries not shown" => "표시되지 않은 항목이 더 있습니다",
         "Modified" => "수정한 날짜",
         "Not available" => "사용할 수 없음",
         "Just now" => "방금",
@@ -494,6 +495,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "표시",
         "Collapse dialog" => "대화 상자 축소",
         "Expand dialog" => "대화 상자 확장",
+        "Distinct Count" => "고유 개수",
+        "Summarize by Distinct Count" => "고유 개수로 요약",
+        "A calculated field can't use Distinct Count." => "계산 필드에는 고유 개수를 사용할 수 없습니다.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "이 통합 문서에는 값 필드가 '고유 개수'인 피벗 테이블이 있습니다. .xlsx 파일에는 일반 개수와 GridCraft만 읽는 표식으로 저장되므로, Excel에서 새로 고치면 일반 개수로 바뀝니다."
+        }
         "My list has headers" => "내 데이터에 머리글 표시",
         "Sort by" => "정렬 기준",
         "Then by" => "다음 기준",
@@ -620,6 +627,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char 의 인수 {argument} 이(가) 숫자가 아닙니다",
         "\\@char with invalid code point {code}" => "\\@char 의 코드 포인트 {code} 이(가) 잘못되었습니다",
         "Invalid environment name character: {character}" => "환경 이름에 잘못된 문자가 있습니다: {character}",
+        "Copy Cells" => "셀 복사",
+        "Fill Series" => "연속 데이터 채우기",
+        "Fill Formatting Only" => "서식만 채우기",
+        "Fill Without Formatting" => "서식 없이 채우기",
+        "Fill Days" => "일 단위 채우기",
+        "Fill Weekdays" => "평일 단위 채우기",
+        "Fill Months" => "월 단위 채우기",
+        "Fill Years" => "연 단위 채우기",
+        "Auto Fill Options" => "자동 채우기 옵션",
+        "Series…" => "연속 데이터…",
+        "Down" => "아래쪽",
+        "Up" => "위쪽",
         _ => return None,
     })
 }
