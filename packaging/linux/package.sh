@@ -248,7 +248,11 @@ if has appimage; then
   fi
   # Absolute, because appimagetool runs in $DIST below (CARGO_TARGET_DIR, APPIMAGETOOL or
   # APPIMAGE_RUNTIME may be relative, e.g. target/agent-<name>).
-  OUT="$(cd "$DIST" && pwd)/$BASENAME.AppImage"
+  APPIMAGE_BASENAME="$BASENAME"
+  if [[ "$IS_NIGHTLY" = 1 && "$VERSION" != *-nightly* ]]; then
+    APPIMAGE_BASENAME="gridcraft-$VERSION-nightly-linux-$ARCH"
+  fi
+  OUT="$(cd "$DIST" && pwd)/$APPIMAGE_BASENAME.AppImage"
   APPDIR="$(cd "$APPDIR" && pwd)"
   TOOL="$(cd "$(dirname "$TOOL")" && pwd)/$(basename "$TOOL")"
   RUNTIME="$(cd "$(dirname "$RUNTIME")" && pwd)/$(basename "$RUNTIME")"

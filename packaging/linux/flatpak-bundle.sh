@@ -61,7 +61,7 @@ tar -xzf "$TARBALL" -C "$WORK/stage" --strip-components=1
 if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
   sed -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
       -e "s|^Name=GridCraft$|Name=GridCraft Nightly|" \
-      -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.gridcraft.nightly-v1|' \
+      -e "s|^StartupWMClass=.*|StartupWMClass=$FLATPAK_ID|" \
       -e '/^MimeType=/d' \
       "$WORK/stage/share/applications/$APP_ID.desktop" >"$WORK/stage/share/applications/$FLATPAK_ID.desktop"
   rm -f "$WORK/stage/share/applications/$APP_ID.desktop"
