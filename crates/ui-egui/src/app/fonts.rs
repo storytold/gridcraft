@@ -13,7 +13,7 @@ impl SheetApp {
         self.fonts_set = true;
         self.fonts_rebind = false;
         self.fonts_han = Some(theme::HanOrder::of(self.ui.language));
-        self.fonts_bound = self.used_fonts();
+        self.fonts_bound = fonts::installed_among(&self.used_fonts());
         self.fonts_seen = self.fonts_key();
     }
 
@@ -97,18 +97,22 @@ impl SheetApp {
     /// Binds the workbook's installed fonts once the background scan has finished. Adding fonts
     /// re-applies the font set, which egui activates at the next pass, so skip this frame's paint
     /// (same one-frame cost as startup). Only when an open workbook changed.
-    fn rebind_workbook_fonts(&mut self, ctx: &egui::Context) {
+    pub(super) fn rebind_workbook_fonts(&mut self, ctx: &egui::Context) {
         let seen = self.fonts_key();
         if seen == self.fonts_seen {
             return;
         }
         let used = self.used_fonts();
         self.fonts_seen = seen;
-        if used == self.fonts_bound {
+        // Compare the installed families the set binds, not the raw list: every new style (a
+        // cell made bold, another size) repeats its font's name there, and rebuilding the font
+        // set for it rebuilds the glyph atlas and skips a frame's paint.
+        let bindable = fonts::installed_among(&used);
+        if bindable == self.fonts_bound {
             return;
         }
         ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
-        self.fonts_bound = used;
+        self.fonts_bound = bindable;
         self.fonts_rebind = true;
         ctx.request_repaint();
     }

@@ -400,6 +400,22 @@ mod lifecycle_tests {
     }
 
     #[test]
+    /// A new cell format in a font the set already binds (bold, another size) keeps the font set:
+    /// rebuilding it rebuilds the glyph atlas and skips a frame's paint, a visible flash.
+    fn a_new_format_in_a_bound_font_keeps_the_font_set() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        let mut app = app();
+        app.fonts_ready = true;
+        app.fonts_set = true;
+        app.rebind_workbook_fonts(&ctx);
+        app.fonts_rebind = false;
+        app.session.execute("home.bold", serde_json::json!({ "range": "A1" })).unwrap();
+        app.rebind_workbook_fonts(&ctx);
+        assert!(!app.fonts_rebind, "bold text in the same font needs no new font set");
+    }
+
+    #[test]
     /// A language-driven font rebuild waits while a synthetic step is pending and proceeds once it is clear.
     fn a_pending_step_delays_a_font_change() {
         let ctx = egui::Context::default();
