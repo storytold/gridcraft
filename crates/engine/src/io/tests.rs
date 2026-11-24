@@ -639,16 +639,19 @@ fn full_sync_tolerates_only_unsupported_errors() {
 }
 
 /// Apple's ENOTSUP is 45 (EOPNOTSUPP is 102), and std maps only the latter to
-/// `ErrorKind::Unsupported`: F_FULLFSYNC refused with ENOTSUP must still save. Elsewhere 45 is
-/// another error (EL2NSYNC on Linux) and stays a failed save.
+/// `ErrorKind::Unsupported`: F_FULLFSYNC refused with ENOTSUP must still save. On Linux, 45 is
+/// EL2NSYNC and stays a failed save. On FreeBSD and other BSDs, 45 is ENOTSUP (the same value as
+/// EOPNOTSUPP), so this host's std reports `ErrorKind::Unsupported` and the flush is tolerated
+/// even when the `apple` flag is false — which is the real helper's behaviour on those systems.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn full_sync_tolerates_apple_enotsup() {
-    use std::io::Error;
+    use std::io::{Error, ErrorKind};
     let enotsup = Error::from_raw_os_error(45);
     assert!(flush_unsupported_on(&enotsup, true, true), "ENOTSUP on Apple");
-    assert!(!flush_unsupported_on(&enotsup, true, false), "45 on other Unix");
-    assert!(!flush_unsupported_on(&enotsup, false, false), "45 on Windows");
+    let host_maps_45_unsupported = enotsup.kind() == ErrorKind::Unsupported;
+    assert_eq!(flush_unsupported_on(&enotsup, true, false), host_maps_45_unsupported, "45 on other Unix");
+    assert_eq!(flush_unsupported_on(&enotsup, false, false), host_maps_45_unsupported, "45 on Windows");
     assert!(flush_unsupported_on(&Error::from_raw_os_error(25), true, true), "ENOTTY on Apple");
     assert!(!flush_unsupported_on(&Error::from_raw_os_error(5), true, true), "EIO on Apple");
     assert!(!flush_unsupported_on(&Error::from_raw_os_error(28), true, true), "ENOSPC on Apple");
