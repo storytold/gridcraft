@@ -53,6 +53,15 @@ impl FormulaLocale {
     pub fn array_column_separator(self) -> char {
         if self == Self::En { ',' } else { '\\' }
     }
+    /// Whether the function name `name` starts with what was typed, ignoring case, and for
+    /// Brazilian Portuguese accents too (`med` starts `MÉDIA`); for autocomplete.
+    pub fn name_starts_with(self, name: &str, typed: &str) -> bool {
+        if self == Self::PtBr {
+            fold_accents(name).starts_with(&fold_accents(typed))
+        } else {
+            crate::fold_name(name).starts_with(&crate::fold_name(typed))
+        }
+    }
     /// Whether this locale's table names the canonical function (its name may be unchanged, as
     /// pt-BR `ABS`).
     pub fn has_name(self, canonical: &str) -> bool {
