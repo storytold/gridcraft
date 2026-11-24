@@ -344,7 +344,7 @@ fn main() -> eframe::Result<()> {
     // A nightly profile owns its control tokens as well, so even a nightly build that is asked
     // for a control server can never write the stable app's token file.
     if let Some(root) = launch_profile::current().root() {
-        match profile_root::control_directory(root).and_then(|dir| gridcraft_mcp::control_auth::set_token_root(dir)) {
+        match profile_root::control_directory(root).and_then(gridcraft_mcp::control_auth::set_token_root) {
             Ok(()) => {}
             Err(error) => {
                 report_launch_profile_error(&error);
