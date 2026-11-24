@@ -384,7 +384,8 @@ pub fn push_u64(o: &mut String, mut n: u64) {
 }
 
 /// Appends the `A1`-style text of `c` ([`gridcraft_core::CellRef::a1`]).
-pub fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
+#[cfg(test)]
+fn push_a1(o: &mut String, c: gridcraft_core::CellRef) {
     let mut letters = [0u8; 8];
     let mut i = letters.len();
     let mut n = u64::from(c.col) + 1;
