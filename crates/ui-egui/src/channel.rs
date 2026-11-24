@@ -92,10 +92,13 @@ pub fn version() -> &'static str {
 }
 
 /// The commit a nightly was built from, read back from its version (`…g<sha12>`), if any.
+///
+/// The producer writes the sha in lower case (the version pattern every nightly job enforces), so an
+/// upper-case one is a malformed version rather than a commit: nothing is read back for it.
 pub fn commit_for(version: &str) -> Option<&str> {
     let (_, suffix) = version.split_once("-nightly.")?;
     let (_, sha) = suffix.rsplit_once(".g")?;
-    (sha.len() == 12 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
+    (sha.len() == 12 && sha.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))).then_some(sha)
 }
 
 pub fn commit() -> Option<&'static str> {
