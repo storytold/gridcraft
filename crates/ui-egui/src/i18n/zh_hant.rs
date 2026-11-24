@@ -3,7 +3,7 @@
 /// Returns the Traditional Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
-        "Diagram" => "圖表",
+        "Diagram" => "圖解",
         "Decorative Text" => "裝飾文字",
         "Paste" => "貼上",
         "Paste Values" => "貼上值",
