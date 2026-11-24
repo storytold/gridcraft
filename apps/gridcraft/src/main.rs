@@ -229,10 +229,18 @@ fn open_with_system(target: &str) {
 /// made it open the Documents folder instead, a `,` cut the address there, and it kept only the
 /// first 259 characters, which loses a long share link's query (#2085). The shell takes the
 /// address as one argument, so there is no command line for it to be read as an option of.
+/// On a thread of its own: without `SEE_MASK_ASYNCOK` the call can wait until the browser or mail
+/// app has started, and the window must not freeze for that.
 #[cfg(windows)]
 fn launch(target: &str) {
-    if let Err(e) = open::that_detached(target) {
-        log::warn!("couldn't open {target}: {e}");
+    let target = target.to_string();
+    let spawned = std::thread::Builder::new().name("open-link".into()).spawn(move || {
+        if let Err(e) = open::that_detached(&target) {
+            log::warn!("couldn't open {target}: {e}");
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("couldn't start the thread that opens a link: {e}");
     }
 }
 
