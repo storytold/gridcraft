@@ -382,6 +382,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recentes",
         "No recent workbooks yet." => "Ainda não há pastas de trabalho recentes.",
         "More workbooks" => "Mais pastas de trabalho",
+        "More entries not shown" => "Mais itens não exibidos",
         "Modified" => "Modificado",
         "Not available" => "Indisponível",
         "Just now" => "Agora mesmo",
@@ -712,6 +713,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description (optional):" => "Descrição (opcional):",
         "Fits inside the selected cell and moves with its content." => "Ajusta-se dentro da célula selecionada e move-se com o conteúdo dela.",
         "Choose a PNG or JPEG no larger than 16 MB." => "Escolha um PNG ou JPEG de no máximo 16 MB.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Esta pasta de trabalho tem uma tabela dinâmica com um campo de valor «Contagem distinta». No arquivo .xlsx ela é salva como uma Contagem comum, com um marcador que só o GridCraft lê; Atualizar no Excel a transforma em contagem comum."
+        }
         "About" => "Sobre",
         "Contributors" => "Colaboradores",
         "Models" => "Modelos",
@@ -1042,6 +1046,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        "Distinct Count" => "Contagem distinta",
+        "Summarize by Distinct Count" => "Resumir por contagem distinta",
+        "A calculated field can't use Distinct Count." => "Um campo calculado não pode usar «Contagem distinta».",
         "Numerical Count" => "Contagem Numérica",
         "Minimum" => "Mínimo",
         "Maximum" => "Máximo",

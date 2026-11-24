@@ -311,6 +311,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Zuletzt verwendet",
         "No recent workbooks yet." => "Noch keine zuletzt verwendeten Arbeitsmappen.",
         "More workbooks" => "Weitere Arbeitsmappen",
+        "More entries not shown" => "Weitere Elemente werden nicht angezeigt",
         "Modified" => "Geändert",
         "Not available" => "Nicht verfügbar",
         "Just now" => "Gerade eben",
@@ -521,6 +522,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Anzeigen",
         "Collapse dialog" => "Dialogfeld reduzieren",
         "Expand dialog" => "Dialogfeld erweitern",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Diese Arbeitsmappe enthält eine PivotTable mit einem Wertfeld „Distinkte Anzahl“. In der .xlsx-Datei wird sie als normale Anzahl mit einer Markierung gespeichert, die nur GridCraft liest; Aktualisieren in Excel macht daraus eine normale Anzahl."
+        }
+        "Distinct Count" => "Distinkte Anzahl",
+        "Summarize by Distinct Count" => "Nach Distinkter Anzahl zusammenfassen",
+        "A calculated field can't use Distinct Count." => "Ein berechnetes Feld kann „Distinkte Anzahl“ nicht verwenden.",
         "My list has headers" => "Daten haben Überschriften",
         "Sort by" => "Sortieren nach",
         "Then by" => "Anschließend nach",
