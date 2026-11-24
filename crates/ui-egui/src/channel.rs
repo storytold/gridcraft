@@ -11,9 +11,12 @@ use std::sync::OnceLock;
 
 /// The stable window/Wayland app id, matching the `.desktop` file and the hicolor icon name.
 pub const APP_ID: &str = "ai.storyteller.gridcraft";
-/// The nightly window id and Windows AUMID. The package/bundle identity is
-/// `ai.storyteller.gridcraft.nightly` (a different string, see packaging/).
+/// The nightly window id and Windows AUMID.
 pub const NIGHTLY_APP_ID: &str = "ai.storyteller.gridcraft.nightly-v1";
+/// The nightly Flatpak package (and macOS bundle) identity, `packaging/linux/flatpak-bundle.sh`.
+/// A different string from [`NIGHTLY_APP_ID`] on purpose: inside its sandbox the Flatpak names the
+/// window after the package id, which is what its `.desktop` file and portal entry carry.
+pub const NIGHTLY_PACKAGE_ID: &str = "ai.storyteller.gridcraft.nightly";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
@@ -124,6 +127,10 @@ mod tests {
         assert_eq!(id_for(Channel::Stable), "ai.storyteller.gridcraft");
         assert_eq!(id_for(Channel::NightlyV1), "ai.storyteller.gridcraft.nightly-v1");
         assert_ne!(id_for(Channel::Stable), id_for(Channel::NightlyV1));
+        // Three strings, not two: the Flatpak package id is not the window id, and neither is stable's.
+        assert_eq!(NIGHTLY_PACKAGE_ID, "ai.storyteller.gridcraft.nightly");
+        assert_ne!(NIGHTLY_PACKAGE_ID, id_for(Channel::NightlyV1));
+        assert_ne!(NIGHTLY_PACKAGE_ID, id_for(Channel::Stable));
         assert_eq!(name_for(Channel::Stable), "GridCraft");
         assert_eq!(name_for(Channel::NightlyV1), "GridCraft Nightly");
         assert!(stable_services_for(Channel::Stable));

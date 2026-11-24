@@ -34,7 +34,10 @@ nightly_init() {
 
 # Compile only: macOS runs the version query after signing (packaging/macos/nightly-verify.sh).
 nightly_compile_gui() {
-  (cd "$ROOT" && GRIDCRAFT_OVERRIDE_VERSION="$VERSION" cargo build --release --locked -p gridcraft --target "$NIGHTLY_RUST_TARGET")
+  # `build.rs` reads GRIDCRAFT_VERSION (it bakes it as GRIDCRAFT_BUILT_VERSION, the value the
+  # binary answers `--version` with), so the prepared identity is passed explicitly here as well as
+  # through the inherited environment; VERSION is that same value (see env.sh).
+  (cd "$ROOT" && GRIDCRAFT_VERSION="$VERSION" GRIDCRAFT_OVERRIDE_VERSION="$VERSION" cargo build --release --locked -p gridcraft --target "$NIGHTLY_RUST_TARGET")
   NIGHTLY_GUI="$CARGO_TARGET_DIR/$NIGHTLY_RUST_TARGET/release/gridcraft"
   [[ -f "$NIGHTLY_GUI" && ! -L "$NIGHTLY_GUI" ]] || nightly_die 'the owned GUI build did not produce a regular executable'
   [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$GRIDCRAFT_BUILD_SHA" && -z "$(git -C "$ROOT" status --porcelain)" ]] || nightly_die 'source changed during the build'
@@ -44,7 +47,10 @@ nightly_build_gui() {
   nightly_compile_gui
   local actual
   actual="$("$NIGHTLY_GUI" --version)" || nightly_die 'side-effect-free nightly version verification failed'
-  [[ "$actual" == "GridCraft $VERSION (nightly-v1)" ]] || nightly_die 'the built version/flavor is not the prepared identity'
+  # Exactly what the flavor prints (`build_flavor::version` in apps/gridcraft): the prepared
+  # version followed by the build channel. A stable build prints the Cargo version instead.
+  [[ "$actual" == "GridCraft $VERSION (nightly-v1)" ]] \
+    || nightly_die "the built identity is '$actual', not 'GridCraft $VERSION (nightly-v1)'"
   [[ "$(git -C "$ROOT" rev-parse HEAD)" == "$GRIDCRAFT_BUILD_SHA" && -z "$(git -C "$ROOT" status --porcelain)" ]] || nightly_die 'source changed during the version query'
 }
 

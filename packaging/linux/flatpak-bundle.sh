@@ -59,7 +59,29 @@ mkdir -p "$WORK/stage"
 tar -xzf "$TARBALL" -C "$WORK/stage" --strip-components=1
 [[ -x "$WORK/stage/bin/gridcraft" ]] || { echo "error: $TARBALL has no bin/gridcraft" >&2; exit 1; }
 if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
-  sed -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
+  # The sandbox's own Flatpak id names the window (main.rs) and its data folder is already private,
+  # but the GUI still needs its launch profile: this launcher passes it, and the desktop entry and
+  # the manifest's one command name the launcher instead of the binary.
+  cat >"$WORK/stage/bin/gridcraft-nightly" <<'LAUNCHER'
+#!/bin/sh
+# GridCraft Nightly inside its own Flatpak: the launch profile is this app's private data folder.
+set -eu
+if [ -z "${XDG_DATA_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+  echo "gridcraft-nightly: XDG_DATA_HOME and HOME are both unset, so there is no Nightly data folder" >&2
+  exit 2
+fi
+case "${1-}" in
+  --launch-profile | --profile-root) exec /app/bin/gridcraft "$@" ;;
+esac
+if [ "$#" -eq 1 ] && { [ "${1-}" = "--version" ] || [ "${1-}" = "-V" ]; }; then
+  exec /app/bin/gridcraft "$@"
+fi
+exec /app/bin/gridcraft --launch-profile nightly-v1 --profile-root "${XDG_DATA_HOME:-$HOME/.local/share}/gridcraft-nightly/profile" -- "$@"
+LAUNCHER
+  chmod 755 "$WORK/stage/bin/gridcraft-nightly"
+  sed -e "s#^Exec=gridcraft\([[:space:]]\|$\)#Exec=gridcraft-nightly\1#" \
+      -e "s|^TryExec=gridcraft$|TryExec=gridcraft-nightly|" \
+      -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
       -e "s|^Name=GridCraft$|Name=GridCraft Nightly|" \
       -e "s|^StartupWMClass=.*|StartupWMClass=$FLATPAK_ID|" \
       -e '/^MimeType=/d' \
@@ -69,6 +91,8 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
       -e "s|<name>GridCraft</name>|<name>GridCraft Nightly</name>|g" \
       -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$FLATPAK_ID.desktop</launchable>|g" \
       -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$FLATPAK_ID</icon>|g" \
+      -e "s|<binary>gridcraft</binary>|<binary>gridcraft-nightly</binary>|g" \
+      -e '/<mediatype>/d' \
       "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml" >"$WORK/stage/share/metainfo/$FLATPAK_ID.metainfo.xml"
   rm -f "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml"
   mv "$WORK/stage/share/mime/packages/$APP_ID.xml" "$WORK/stage/share/mime/packages/$FLATPAK_ID.xml"
@@ -77,7 +101,10 @@ if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
   [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
   install -Dm644 "$NIGHTLY_ICON" \
     "$WORK/stage/share/icons/hicolor/256x256/apps/$FLATPAK_ID.png"
+  # The manifest installs and runs the launcher; `command:` is what `flatpak run` starts.
   sed -e "s|ai\.storyteller\.gridcraft|$FLATPAK_ID|g" \
+      -e "s|^command: gridcraft$|command: gridcraft-nightly|" \
+      -e "s|^      - install -Dm755 bin/gridcraft-cli /app/bin/gridcraft-cli$|&\n      - install -Dm755 bin/gridcraft-nightly /app/bin/gridcraft-nightly|" \
       "$HERE/flatpak/$APP_ID.bundle.yml" >"$WORK/$FLATPAK_ID.yml"
 else
   cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$FLATPAK_ID.yml"

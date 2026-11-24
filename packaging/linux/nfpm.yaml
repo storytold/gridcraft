@@ -55,6 +55,9 @@ overrides:
       - xdg-desktop-portal
 
 contents:
+  - src: ${STAGE}/usr/lib/gridcraft-nightly/gridcraft
+    dst: /usr/lib/gridcraft-nightly/gridcraft
+    file_info: { mode: 0755 }
   - src: ${STAGE}/usr/bin/${NFPM_BIN}
     dst: /usr/bin/${NFPM_BIN}
     file_info: { mode: 0755 }

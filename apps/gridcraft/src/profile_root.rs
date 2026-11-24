@@ -211,10 +211,19 @@ fn validate_for(
         // takes its root from the Launcher only, so there is never a second candidate.
         return Err("nightly-v1 cannot be combined with GRIDCRAFT_CONFIG_DIR".into());
     }
-    if platform != Platform::Windows && env("FLATPAK_ID").is_some_and(|v| !v.is_empty()) {
-        // These rows are native tar/app-bundle launches, not a Flatpak package. Inheriting its
-        // runtime namespace could point another profile at the stable app's flatpak folder.
-        return Err("nightly-v1 native packages cannot inherit a Flatpak instance; launch through the native Launcher".into());
+    if platform != Platform::Windows
+        && let Some(id) = env("FLATPAK_ID").filter(|value| !value.is_empty())
+        && id.to_string_lossy().as_ref() != gridcraft_ui_egui::channel::NIGHTLY_PACKAGE_ID
+    {
+        // `packaging/linux/flatpak-bundle.sh` builds GridCraft Nightly as its own Flatpak
+        // (`ai.storyteller.gridcraft.nightly`), whose sandbox is already a private home, so that one
+        // instance may carry a profile. Any other, the stable app's included, could point it at
+        // another installation's tree; these rows are otherwise native tar/app-bundle launches.
+        return Err(format!(
+            "nightly-v1 can only run inside its own Flatpak instance ({}), not {}",
+            gridcraft_ui_egui::channel::NIGHTLY_PACKAGE_ID,
+            id.to_string_lossy()
+        ));
     }
     let chosen = canonical_future(root)?;
     let exe = absolute(exe.ok_or("cannot establish the installation boundary")?.to_path_buf(), "the executable")?;
@@ -406,6 +415,24 @@ mod tests {
         fixture.env.remove("HOME");
         assert!(fixture.check(Platform::Linux, &candidate).unwrap_err().contains("HOME"));
         assert!(!candidate.exists());
+    }
+
+    #[test]
+    fn only_the_nightly_s_own_flatpak_instance_may_carry_a_profile() {
+        let mut fixture = Fixture::new();
+        let root = fixture.root.join("flatpak profile");
+        for (id, accepted) in [
+            (gridcraft_ui_egui::channel::NIGHTLY_PACKAGE_ID, true),
+            // The stable Flatpak, and a lookalike that only shares the prefix, stay refused.
+            ("ai.storyteller.gridcraft", false),
+            ("ai.storyteller.gridcraft.nightly-v1", false),
+            ("io.github.other.Gridcraft", false),
+        ] {
+            fixture.env.insert("FLATPAK_ID".into(), id.into());
+            let result = fixture.check(Platform::Linux, &root);
+            assert_eq!(result.is_ok(), accepted, "{id}");
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 
     #[test]

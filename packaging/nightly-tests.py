@@ -13,6 +13,7 @@ def main() -> int:
         ("gridcraft_plist_suite", "macos/nightly_plist_tests.py"),
         ("gridcraft_release_dispatch_suite", "nightly-release-tests.py"),
         ("gridcraft_mac_sign_suite", "macos/nightly_sign_tests.py"),
+        ("gridcraft_linux_launch_suite", "linux/nightly-linux-launch-tests.py"),
     ):
         spec = importlib.util.spec_from_file_location(name, here / relative)
         module = importlib.util.module_from_spec(spec)

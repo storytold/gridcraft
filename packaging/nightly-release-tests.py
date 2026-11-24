@@ -286,6 +286,7 @@ class TrustedSourcePreparation(unittest.TestCase):
         self.assertEqual(len(inclusions), 1)
         entries = inclusions[0].split(",")
         expected = {"packaging/nightly-tests.py", "packaging/nightly-archive-tests.py",
+                    "packaging/linux/nightly-linux-launch-tests.py",
                     "packaging/macos/nightly_plist_tests.py", "packaging/macos/nightly_sign_tests.py",
                     "packaging/windows/nightly-package-tests.ps1",
                     "packaging/windows/nightly-signing-tests.ps1", "packaging/nightly-release-tests.py"}
