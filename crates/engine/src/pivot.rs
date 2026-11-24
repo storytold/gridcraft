@@ -152,11 +152,17 @@ pub fn migrate_older_names(wb: &mut Workbook) {
 /// Older GridCraft named a column by its header as the cell showed it: the formula under Show
 /// Formulas (`="Region"`), a long General number narrowed to the cell width. Now a header is its
 /// value through its number format. The saved names are read against the headers as the sheet
-/// showed them; when both ways (with and without Show Formulas) place every saved field, the
-/// sheet's saved Show Formulas setting decides. Each field then takes the current name of the
-/// column it named, and so does each field a calculated formula names. A calculated field whose
-/// name is now also a header is renamed (`Margin2`), with the values that show it, as Excel
-/// doesn't allow the two to share a name. A saved name no way places is left as it is.
+/// showed them, both ways (with and without Show Formulas), by one rule for each name:
+/// - the layout that places more of the saved fields is read first, the sheet's saved Show
+///   Formulas setting on a tie;
+/// - a name it places takes that column;
+/// - a name only the other layout places takes that layout's column, unless a field the first
+///   layout placed already has it (then two fields would read one column);
+/// - a name neither places is left as it is.
+///
+/// Each field then takes the current name of its column, and so does each field a calculated
+/// formula names. A calculated field whose name is now also a header is renamed (`Margin2`),
+/// with the values that show it, as Excel doesn't allow the two to share a name.
 fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotTable> {
     use gridcraft_model::pivot_source::{headers, unique_names};
     let (si, r) = resolve_source(wb, &pt.source, pivot_sheet).ok()?;
@@ -175,10 +181,14 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
         .chain(pt.filters.iter().map(|f| f.source_col.as_str()))
         .chain(pt.values.iter().map(|v| v.source_col.as_str()).filter(|n| !calc_name(n)))
         .collect();
-    let places = |list: &[String]| fields.iter().all(|n| list.iter().any(|h| h.eq_ignore_ascii_case(n)));
     let saved_way = sh.show_formulas;
     let lists = [shown(saved_way), shown(!saved_way)];
-    let old = lists.iter().flatten().find(|l| places(l)).or(lists.first().and_then(Option::as_ref));
+    let pos = |l: &Option<Vec<String>>, n: &str| l.as_ref()?.iter().position(|h| h.trim().eq_ignore_ascii_case(n.trim()));
+    let placed = |l: &Option<Vec<String>>| fields.iter().filter(|n| pos(l, n).is_some()).count();
+    let [saved_list, other_list] = &lists;
+    let (first, second) = if placed(other_list) > placed(saved_list) { (other_list, saved_list) } else { (saved_list, other_list) };
+    // Columns the first layout gives the saved fields: the second layout can't give them again.
+    let claimed: Vec<usize> = fields.iter().filter_map(|n| pos(first, n)).collect();
 
     // Calculated fields keep their own names unless a header now has one of them.
     let mut calc_names: Vec<String> = Vec::new();
@@ -195,7 +205,7 @@ fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotT
     }
     // A saved name's new name: the column it named, else the calculated field it named.
     let column = |n: &str| -> Option<String> {
-        let i = old?.iter().position(|h| h.trim().eq_ignore_ascii_case(n.trim()))?;
+        let i = pos(first, n).or_else(|| pos(second, n).filter(|i| !claimed.contains(i)))?;
         current.get(i).cloned()
     };
     let calculated = |n: &str| -> Option<String> {

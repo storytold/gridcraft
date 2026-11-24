@@ -1995,3 +1995,62 @@ fn renaming_a_defined_name_leaves_a_table_source_on_its_table() {
     let gt = find_row(&s, "Grand Total").unwrap();
     assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
 }
+
+/// A field saved under a formula header's text, saved and reopened with Show Formulas off the
+/// whole time, takes the column's name now.
+#[test]
+fn an_older_formula_header_field_saved_with_show_formulas_off_takes_its_column() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+    assert_eq!(grand_total(&s, 1), Value::Number(415.0));
+    reopen_as_older(&mut s, |pt| pt.filters[0].source_col = "=\"Region\"".into());
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert_eq!(p.filters[0].source_col, "Region");
+    assert_eq!(p.filters[0].selected, Some(vec!["East".to_string()]));
+    assert_eq!(grand_total(&s, 1), Value::Number(415.0));
+}
+
+/// Neither way of showing the headers places every saved field: `="Region"` is only A's name
+/// with Show Formulas on, and `Product` only B's (a formula header) with it off. Each name takes
+/// the column the way that places it gives, so both fields keep their columns.
+#[test]
+fn each_older_name_takes_the_column_whichever_way_places_it() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=\"Prod\"&\"uct\""})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"], "filters": ["Product"]})).unwrap();
+    s.execute("pivot.filter", json!({"field": "Product", "selected": ["Apples"]})).unwrap();
+    assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+    reopen_as_older(&mut s, |pt| pt.rows[0].source_col = "=\"Region\"".into());
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let p = pt(&s);
+    assert_eq!((p.rows[0].source_col.as_str(), p.filters[0].source_col.as_str()), ("Region", "Product"));
+    assert_eq!(p.filters[0].selected, Some(vec!["Apples".to_string()]));
+    assert_eq!(grand_total(&s, 1), Value::Number(420.0));
+}
+
+/// Two saved names that the two ways of showing the headers would both put on column A: the way
+/// that places more of the fields wins, and the other name is left as it is rather than reading
+/// A a second time.
+#[test]
+fn an_older_name_the_other_way_would_put_on_a_taken_column_is_left() {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=\"Prod\"&\"uct\""})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"], "filters": ["Product"]})).unwrap();
+    reopen_as_older(&mut s, |pt| {
+        // `Region` and `Product` are A's and B's names with Show Formulas off; `="Region"` is
+        // A's only with it on.
+        let mut col = pt.rows[0].clone();
+        col.source_col = "=\"Region\"".into();
+        pt.columns.push(col);
+    });
+    let p = pt(&s);
+    assert_eq!(p.rows[0].source_col, "Region");
+    assert_eq!(p.filters[0].source_col, "Product");
+    assert_eq!(p.columns[0].source_col, "=\"Region\"", "A is already the row field's");
+    assert!(p.names_from_values);
+}
