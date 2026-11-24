@@ -815,6 +815,56 @@ fn autosave_waits_instead_of_dropping_a_print_exclusion() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// AutoSave's hold ends, with its notice, when there is nothing left to hold back for, and a later
+/// hold on the same sheets is said again. A notice about something else stays.
+#[test]
+fn an_autosave_hold_ends_with_its_notice() {
+    fn until(h: &mut egui_kittest::Harness<'_, SheetApp>, done: impl Fn(&SheetApp) -> bool) -> bool {
+        for _ in 0..60 {
+            h.run_steps(1);
+            if done(h.state()) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        false
+    }
+    let held = |a: &SheetApp| a.notice.as_ref().is_some_and(|n| n.text.contains("on hold"));
+    let exclude = |h: &mut egui_kittest::Harness<'_, SheetApp>, on: bool| {
+        h.state_mut().run("pageLayout.pageSetup", serde_json::json!({"excluded": on})).unwrap();
+    };
+    let dir = std::env::temp_dir().join(format!("gridcraft-autosave-resume-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("Book.xlsx").to_string_lossy().into_owned();
+    let mut h = marked_after_saving(Services::default(), &path);
+    h.state_mut().ui.autosave = true;
+    assert!(until(&mut h, held));
+    // Nothing is lost any more: AutoSave saves.
+    exclude(&mut h, false);
+    assert!(until(&mut h, |a| a.session.active().is_some_and(|d| !d.is_dirty())), "AutoSave resumed");
+    assert!(until(&mut h, |a| a.notice.is_none()), "the hold's notice goes with it");
+    // The same sheets again: held, and said again.
+    exclude(&mut h, true);
+    assert!(until(&mut h, held), "a later hold is said again");
+    // Turning AutoSave off ends the hold, but not a notice about something else.
+    let other = gridcraft_ui_egui::Notice { text: "Macros were kept.".into(), kind: gridcraft_ui_egui::NoticeKind::Info, action: None };
+    h.state_mut().notice = Some(other.clone());
+    h.state_mut().ui.autosave = false;
+    h.run_steps(2);
+    assert_eq!(h.state().notice.as_ref(), Some(&other));
+    // A Save the user agreed to ends it too.
+    h.state_mut().notice = None;
+    h.state_mut().ui.autosave = true;
+    assert!(until(&mut h, held));
+    h.state_mut().run_or_alert("file.save", serde_json::json!({}));
+    h.run_steps(3);
+    click(&mut h, "Save Anyway");
+    h.run_steps(2);
+    assert_eq!(h.state().notice, None);
+    assert!(!h.state().session.active().unwrap().is_dirty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Save As asks about the file that was picked, and leaves the workbook's own file alone.
 #[test]
 fn save_as_asks_about_the_picked_file_and_keeps_the_first_one() {

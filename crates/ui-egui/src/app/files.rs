@@ -106,6 +106,9 @@ impl SheetApp {
     /// forced hidden UI pass from saving the same change twice.
     pub(super) fn autosave(&mut self, ctx: &egui::Context) {
         let dirty_xlsx = self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
+        if !(self.ui.autosave && dirty_xlsx) {
+            self.end_autosave_hold();
+        }
         let now = crate::monotonic_ms();
         let autosave_due =
             self.ui.autosave && self.editor.is_none() && self.text_box_editor.is_none() && now - self.grid.last_autosave > 2000.0 && dirty_xlsx;
@@ -122,11 +125,24 @@ impl SheetApp {
                 }
                 return;
             }
+            self.end_autosave_hold();
             self.store_view_state();
             let _ = self.session.run("file.save", json!({}));
         } else if self.ui.autosave && dirty_xlsx {
             // Keep checking even when no input arrives while the window is hidden.
             ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
+    }
+
+    /// AutoSave's hold on the active workbook lasts while AutoSave is on and the workbook has
+    /// changes whose loss wasn't agreed to. When it ends, so does its notice (another notice stays),
+    /// and a later hold is said again.
+    fn end_autosave_hold(&mut self) {
+        let Some(uid) = self.session.active().map(|d| d.uid) else { return };
+        if self.held_losses.remove(&uid).is_some()
+            && self.notice.as_ref().is_some_and(|n| n.action.as_ref().is_some_and(|(_, dialog)| dialog == "saveLoss"))
+        {
+            self.notice = None;
         }
     }
 
