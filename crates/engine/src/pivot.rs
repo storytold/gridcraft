@@ -129,7 +129,10 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
 /// writers) then sees one set of names. It runs wherever cells have just taken their values: as a
 /// workbook is opened, and after each edit and recalculation, so a PivotTable whose source can't
 /// be read (a blank header) is renamed as soon as it can. One already renamed costs a flag test.
-pub fn migrate_older_names(wb: &mut Workbook) {
+/// Returns a cell of each report renamed, for the caller to recalculate the GETPIVOTDATA formulas
+/// that read it: they were calculated with the old names, since headers need their values first.
+#[must_use]
+pub fn migrate_older_names(wb: &mut Workbook) -> Vec<(usize, CellRef)> {
     let mut updates: Vec<(usize, usize, PivotTable)> = Vec::new();
     for (si, sh) in wb.sheets.iter().enumerate() {
         for (pi, pt) in sh.pivots.iter().enumerate() {
@@ -140,11 +143,14 @@ pub fn migrate_older_names(wb: &mut Workbook) {
             }
         }
     }
+    let mut reports = Vec::new();
     for (si, pi, new) in updates {
         if let Some(slot) = wb.sheet_mut(si).and_then(|sh| sh.pivots.get_mut(pi)) {
+            reports.extend(new.last_range.map(|r| (si, r.start)));
             *slot = new;
         }
     }
+    reports
 }
 
 /// A PivotTable saved by an older GridCraft, with its fields named by header value; `None` when
@@ -162,8 +168,9 @@ pub fn migrate_older_names(wb: &mut Workbook) {
 /// - a name neither places is left as it is.
 ///
 /// Each field then takes the current name of its column, and so does each field a calculated
-/// formula or GETPIVOTDATA's saved index names. A calculated field whose name is now also a header is renamed (`Margin2`),
-/// with the values that show it, as Excel doesn't allow the two to share a name.
+/// formula or GETPIVOTDATA's saved index names. A calculated field whose name is now also a header
+/// is renamed (`Margin2`), with the values that show it, as Excel doesn't allow the two to share a
+/// name. Worksheet formulas are not rewritten: GETPIVOTDATA knows a field by its current name only.
 fn migrated(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<PivotTable> {
     use gridcraft_model::pivot_source::{headers, unique_names};
     let (si, r) = resolve_source(wb, &pt.source, pivot_sheet).ok()?;

@@ -2148,3 +2148,96 @@ fn an_older_name_the_other_way_would_put_on_a_taken_column_is_left() {
     assert_eq!(p.columns[0].source_col, "=\"Region\"", "A is already the row field's");
     assert!(p.names_from_values);
 }
+
+/// A book an older GridCraft saved with a GETPIVOTDATA formula for `field` at Sheet1!K2, its
+/// Region header a formula, a PivotTable index under the old name, and `blank` a cleared header.
+fn older_with_getpivotdata(field: &str, blank: &str) -> Session {
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=\"Region\""})).unwrap();
+    s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    let (at, sheet) = (pt(&s).last_range.unwrap().start.a1(), s.doc().unwrap().wb.active().unwrap().name.clone());
+    let f = format!("=GETPIVOTDATA(\"Sales\",{sheet}!{at},\"{}\",\"East\")", field.replace('"', "\"\""));
+    s.execute("cell.set", json!({"cell": "Sheet1!K2", "input": f})).unwrap();
+    if !blank.is_empty() {
+        s.execute("cell.set", json!({"cell": blank, "input": ""})).unwrap();
+    }
+    reopen_as_older(&mut s, |pt| {
+        pt.rows[0].source_col = "=\"Region\"".into();
+        let mut cells = pt.data_index.cells().unwrap().to_vec();
+        cells.iter_mut().flat_map(|c| &mut c.items).for_each(|i| i.field = "=\"Region\"".into());
+        pt.data_index = gridcraft_model::PivotLookup::default();
+        pt.data_index.set_cells(cells);
+    });
+    s
+}
+
+fn k2(s: &Session) -> Value {
+    let wb = &s.doc().unwrap().wb;
+    wb.sheet(wb.sheet_index("Sheet1").unwrap()).unwrap().value(CellRef::parse("K2").unwrap())
+}
+
+/// The edit that lets an older PivotTable be renamed also recalculates the GETPIVOTDATA formulas
+/// that read its report, so no published value comes from the old names.
+#[test]
+fn getpivotdata_is_recalculated_when_an_edit_renames_an_older_pivottable() {
+    for (blank, fix) in [("", ""), ("Sheet1!D1", "Units")] {
+        let mut s = older_with_getpivotdata("Region", blank);
+        if !fix.is_empty() {
+            assert_eq!(k2(&s), Value::Error(CellError::Ref));
+            s.execute("cell.set", json!({"cell": blank, "input": fix})).unwrap();
+        }
+        assert!(pt(&s).names_from_values);
+        assert_eq!(k2(&s), Value::Number(415.0), "blank header: {blank:?}");
+        if !fix.is_empty() {
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!((k2(&s), pt(&s).names_from_values), (Value::Error(CellError::Ref), false));
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!((k2(&s), pt(&s).names_from_values), (Value::Number(415.0), true));
+        }
+    }
+}
+
+/// Under manual calculation, the Calculate Now that lets it be renamed does the same.
+#[test]
+fn getpivotdata_is_recalculated_when_calculate_now_renames_an_older_pivottable() {
+    let mut s = older_with_getpivotdata("Region", "Sheet1!D1");
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!D1", "input": "=Sheet1!K5&\"\""})).unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!K5", "input": "Units"})).unwrap();
+    assert!(!pt(&s).names_from_values);
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    assert!(pt(&s).names_from_values);
+    assert_eq!(k2(&s), Value::Number(415.0));
+}
+
+/// GETPIVOTDATA knows a field by its current name only: a formula that spells the name an older
+/// GridCraft showed is not rewritten, and reads as an unknown field once the PivotTable is renamed.
+#[test]
+fn getpivotdata_does_not_know_an_older_pivottables_old_names() {
+    let s = older_with_getpivotdata("=\"Region\"", "");
+    assert!(pt(&s).names_from_values);
+    assert_eq!(k2(&s), Value::Error(CellError::Ref));
+}
+
+/// A waiting PivotTable is renamed by the headers it first finds readable: a mistyped header costs
+/// the field that named it, unless the field is named by the header's plain text.
+#[test]
+fn a_mistyped_header_costs_a_waiting_older_pivottable_only_that_formula_header() {
+    for (header, typo, right, kept) in [("Sheet1!D1", "Unts", "Units", true), ("Sheet1!A1", "=\"Regoin\"", "=\"Region\"", false)] {
+        let mut s = older_with_getpivotdata("Region", header);
+        assert!(!pt(&s).names_from_values);
+        s.execute("cell.set", json!({"cell": header, "input": typo})).unwrap();
+        assert!(pt(&s).names_from_values);
+        s.execute("cell.set", json!({"cell": header, "input": right})).unwrap();
+        s.execute("pivot.refresh", json!({})).unwrap();
+        assert_eq!(find_row(&s, "East").is_some(), kept, "{header}");
+    }
+    // Undoing the mistyped header lets the PivotTable wait again.
+    let mut s = older_with_getpivotdata("Region", "Sheet1!A1");
+    s.execute("cell.set", json!({"cell": "Sheet1!A1", "input": "=\"Regoin\""})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!A1", "input": "=\"Region\""})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert!(find_row(&s, "East").is_some());
+}

@@ -330,6 +330,9 @@ impl DocState {
         let _ = gridcraft_model::PIVOT_INDEXER.set(pivot::index_cells);
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
+        if !pivot::migrate_older_names(&mut wb).is_empty() {
+            calc.recalc_all(&mut wb);
+        }
         Self::with_calc(wb, calc, path, title, trust)
     }
     /// A workbook as its file saved it: the dependency graph is built but nothing is
@@ -344,8 +347,9 @@ impl DocState {
         // Equations arrive without a layout (files never store one); painting reads only the cache.
         wb.refresh_equations();
         // PivotTables an older GridCraft saved take today's field names, once, now that formula
-        // headers have values.
-        pivot::migrate_older_names(&mut wb);
+        // headers have values. ([`DocState::new`] did so already; a workbook opened with its saved
+        // values keeps them, so nothing is recalculated here.)
+        let _ = pivot::migrate_older_names(&mut wb);
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
