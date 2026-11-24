@@ -69,8 +69,11 @@ pub(super) fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                     return Ok(());
                 }
                 let t = trendline_param(p)?;
+                // Every series' kind in one pass: a combo series' kind looks back for its group's
+                // first series, so asking per series is quadratic in a chart with many.
+                let kinds = c.series_kinds();
                 let eligible: Vec<usize> =
-                    targets.into_iter().filter(|i| gridcraft_chart::supports_trendline(gridcraft_chart::series_plot_kind(c, *i))).collect();
+                    targets.into_iter().filter(|i| kinds.get(*i).is_some_and(|k| gridcraft_chart::supports_trendline(*k))).collect();
                 if eligible.is_empty() {
                     return Err(bad("chart.addElement", "trendlines need a 2-D column, bar, line, area, scatter or bubble series"));
                 }
