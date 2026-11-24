@@ -1,6 +1,7 @@
 //! Text functions.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 
 use gridcraft_core::parse::parse_number_text_in;
 use gridcraft_core::{CellError, Value, number_to_text};
@@ -785,6 +786,41 @@ fn build_regex(pattern: &str, insensitive: bool) -> R<regex::Regex> {
     if pattern.len() > MAX_TEXT {
         return Err(CellError::Value);
     }
+    // Array formulas often match one short pattern against hundreds of cells. Bound
+    // the number of retained programs and keep the original compiler limits.
+    const MAX_CACHED_PATTERN_BYTES: usize = 256;
+    const REGEX_CACHE_ENTRIES: usize = 16;
+    if pattern.len() <= MAX_CACHED_PATTERN_BYTES {
+        return RECENT_REGEXES.with_borrow_mut(|cache| {
+            if let Some(index) = cache.iter().position(|entry| entry.insensitive == insensitive && entry.pattern == pattern)
+                && let Some(entry) = cache.remove(index)
+            {
+                let result = entry.compiled.clone();
+                cache.push_front(entry);
+                return result;
+            }
+            let result = compile_regex(pattern, insensitive);
+            if cache.len() == REGEX_CACHE_ENTRIES {
+                cache.pop_back();
+            }
+            cache.push_front(CachedRegex { pattern: pattern.to_owned(), insensitive, compiled: result.clone() });
+            result
+        });
+    }
+    compile_regex(pattern, insensitive)
+}
+
+struct CachedRegex {
+    pattern: String,
+    insensitive: bool,
+    compiled: R<regex::Regex>,
+}
+
+thread_local! {
+    static RECENT_REGEXES: RefCell<VecDeque<CachedRegex>> = const { RefCell::new(VecDeque::new()) };
+}
+
+fn compile_regex(pattern: &str, insensitive: bool) -> R<regex::Regex> {
     regex::RegexBuilder::new(pattern)
         .case_insensitive(insensitive)
         .size_limit(1 << 22)
@@ -1524,6 +1560,8 @@ mod tests {
         assert_eq!(ev("REGEXTEST", vec![t("abc123"), t("[0-9]+")]), Value::Bool(true));
         assert_eq!(ev("REGEXTEST", vec![t("ABC"), t("abc")]), Value::Bool(false));
         assert_eq!(ev("REGEXTEST", vec![t("ABC"), t("abc"), n(1.0)]), Value::Bool(true));
+        assert_eq!(ev("REGEXTEST", vec![t("ABC"), t("abc"), n(0.0)]), Value::Bool(false));
+        is_text(ev("REGEXREPLACE", vec![t("ABC"), t("abc"), t("match"), n(0.0), n(1.0)]), "match");
         is_err(ev("REGEXTEST", vec![t("a"), t("(")]), CellError::Value);
         is_text(ev("REGEXEXTRACT", vec![t("tel 555-1234 or 555-9876"), t("[0-9]{3}-[0-9]{4}")]), "555-1234");
         let v = ev("REGEXEXTRACT", vec![t("tel 555-1234 or 555-9876"), t("[0-9]{3}-[0-9]{4}"), n(1.0)]);
