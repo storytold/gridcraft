@@ -45,13 +45,12 @@ impl eframe::App for App {
         }
         self.0.logic(ctx);
         self.1.logic(&mut self.0, ctx);
-        if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        }
+        self.0.close_path(ctx);
     }
     /// Forwards raw input to the shared app, then opens every non-empty dropped file path as a workbook.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.0.raw_input_hook(ctx, raw);
+        self.0.before_input(ctx);
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
@@ -59,7 +58,8 @@ impl eframe::App for App {
             }
         }
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        gridcraft_ui_egui::framework::before_ui(ui.ctx(), &*frame);
         self.1.show(&mut self.0, ui);
     }
     fn on_exit(&mut self) {
@@ -393,6 +393,7 @@ fn main() -> eframe::Result<()> {
                 let Some(mut app) = pending.take() else {
                     return Err("the app was already created".into());
                 };
+                gridcraft_ui_egui::framework::install(&cc.egui_ctx)?;
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {

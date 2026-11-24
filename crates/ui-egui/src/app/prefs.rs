@@ -27,27 +27,6 @@ impl SheetApp {
         self.effective_dark = ctx.theme() == egui::Theme::Dark;
     }
 
-    /// Keeps egui's own keyboard zoom and quit shortcuts off and applies GridCraft's zoom factor.
-    pub(super) fn sync_input_options(&mut self, ctx: &egui::Context) {
-        // Interface size: the preference owns the zoom factor, so egui's own Ctrl/Cmd +/-/0 zoom
-        // keys stay off (they would also swallow GridCraft's shortcuts).
-        if ctx.options(|o| o.zoom_with_keyboard) {
-            ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        }
-        // egui closes the window on Ctrl+Q (and with Shift or Alt held too) without asking to save
-        // (#1443). Excel for Windows has no such key (Ctrl+Q is Quick Analysis). With a native
-        // window per workbook egui's Cmd+Q would close only the window it was typed in: the menu
-        // bar's Quit item has the key instead (it asks about unsaved workbooks first).
-        if (ctx.os() != egui::os::OperatingSystem::Mac || self.native_windows) && ctx.options(|o| !o.quit_shortcuts.is_empty()) {
-            ctx.options_mut(|o| o.quit_shortcuts.clear());
-        }
-        let zoom = self.ui.zoom_factor();
-        if (ctx.zoom_factor() - zoom).abs() > 0.001 {
-            ctx.set_zoom_factor(zoom);
-            ctx.request_repaint();
-        }
-    }
-
     /// Look for a newer release once, in the background, as the desktop app starts (a no-op on the
     /// web). A found release opens the update prompt; nothing is shown when GridCraft is current.
     pub fn start_update_check(&mut self) {

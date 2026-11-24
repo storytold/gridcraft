@@ -959,7 +959,7 @@ pub fn window(app: &mut SheetApp, ctx: &egui::Context, d: &mut Dialog, open: &mu
             *open = false;
         }
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && ed.picker.is_some() {
+    if crate::framework::escape_pressed(&ctx) && ed.picker.is_some() {
         ed.picker = None;
     }
     prompts(app, ctx, &mut ed, open);
@@ -1110,7 +1110,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
             ui.label("Keep the changes the macro has made so far? They are one undo step either way.");
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button("Cancel").clicked() || crate::framework::escape_pressed(ui.ctx()) {
                     answer = Some(None);
                 }
                 if ui.button("Undo Changes").clicked() {
@@ -1147,7 +1147,7 @@ fn prompts(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor, open: &mut 
             ui.label(egui::RichText::new(format!("Save changes to macro “{}”?", ed.draft.name)).strong());
             ui.add_space(8.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if ui.button("Cancel").clicked() || crate::framework::escape_pressed(ui.ctx()) {
                     answer = Some(None);
                 }
                 if ui.button("Don't Save").clicked() {

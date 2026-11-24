@@ -93,6 +93,14 @@ epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
 # driver. Same craft-libs revision as craft-update above.
 craft-window = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "cd87dc61f77d8470b2e9e6a1236f9a84ee0a64de", default-features = false, features = ["ui"] }
+# The UI runtime GridCraft's egui UI is hosted by (`crates/ui-egui/src/framework.rs`): who the app is
+# to the framework's dialogs, the runtime's key bindings, the theme mode, window placement and the
+# printer controls. Same craft-libs revision as above.
+craft-behavior = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "cd87dc61f77d8470b2e9e6a1236f9a84ee0a64de" }
+craft-host = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "cd87dc61f77d8470b2e9e6a1236f9a84ee0a64de" }
+craft-keymap = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "cd87dc61f77d8470b2e9e6a1236f9a84ee0a64de" }
+craft-theme = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "cd87dc61f77d8470b2e9e6a1236f9a84ee0a64de" }
+craft-print = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "cd87dc61f77d8470b2e9e6a1236f9a84ee0a64de", features = ["ui"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
