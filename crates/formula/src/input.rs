@@ -32,55 +32,13 @@ const SPANISH: &[(&str, &str)] = &[
     ("FALSE", "FALSO"),
 ];
 
-/// Brazilian Portuguese names, as the Portuguese (Brazil) edition of the target app spells them.
-/// Accented names (`MÉDIA`, `CONT.NÚM`, `ÍNDICE`) also match unaccented-case input such as
-/// `média`, through [`crate::same_name`].
-const PORTUGUESE_BR: &[(&str, &str)] = &[
-    ("SUM", "SOMA"),
-    ("AVERAGE", "MÉDIA"),
-    ("IF", "SE"),
-    ("COUNT", "CONT.NÚM"),
-    ("COUNTA", "CONT.VALORES"),
-    ("SUMIF", "SOMASE"),
-    ("SUMIFS", "SOMASES"),
-    ("COUNTIF", "CONT.SE"),
-    ("COUNTIFS", "CONT.SES"),
-    ("SUMPRODUCT", "SOMARPRODUTO"),
-    ("VLOOKUP", "PROCV"),
-    ("HLOOKUP", "PROCH"),
-    ("XLOOKUP", "PROCX"),
-    ("INDEX", "ÍNDICE"),
-    ("MATCH", "CORRESP"),
-    ("ROUND", "ARRED"),
-    ("ROUNDUP", "ARREDONDAR.PARA.CIMA"),
-    ("ROUNDDOWN", "ARREDONDAR.PARA.BAIXO"),
-    ("TRUNC", "TRUNCAR"),
-    ("MAX", "MÁXIMO"),
-    ("MIN", "MÍNIMO"),
-    ("AND", "E"),
-    ("OR", "OU"),
-    ("NOT", "NÃO"),
-    ("IFERROR", "SEERRO"),
-    ("CONCATENATE", "CONCATENAR"),
-    ("TODAY", "HOJE"),
-    ("NOW", "AGORA"),
-    // Financial block, as in Spanish (#1986).
-    ("NPV", "VPL"),
-    ("IRR", "TIR"),
-    ("PMT", "PGTO"),
-    ("PV", "VP"),
-    ("FV", "VF"),
-    ("TRUE", "VERDADEIRO"),
-    ("FALSE", "FALSO"),
-];
-
 impl FormulaLocale {
     /// Canonical English name and localized name of every translated function and boolean.
     fn table(self) -> &'static [(&'static str, &'static str)] {
         match self {
             Self::En => &[],
             Self::Es => SPANISH,
-            Self::PtBr => PORTUGUESE_BR,
+            Self::PtBr => crate::pt_br::FUNCTIONS,
         }
     }
     /// Separates function arguments and reference unions: `,` in English, `;` otherwise.
