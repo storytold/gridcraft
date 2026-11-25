@@ -79,6 +79,34 @@ fn restored_mode_drops_the_group_and_special_bits_when_the_group_is_lost() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(unix)]
+#[test]
+fn fresh_save_drops_group_and_other_write_under_a_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os("GRIDCRAFT_UMASK_CHILD").is_none() {
+        // Re-run this test in a child shell whose umask is 0002.
+        let exe = std::env::current_exe().unwrap();
+        let status = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("umask 0002 && exec \"$0\" --exact io::tests::fresh_save_drops_group_and_other_write_under_a_permissive_umask")
+            .arg(exe)
+            .env("GRIDCRAFT_UMASK_CHILD", "1")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-umask-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let fresh = dir.join("new.xlsx");
+    write_file(fresh.to_str().unwrap(), b"v").unwrap();
+    let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(mode & 0o022 == 0, "mode {mode:o}");
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn open_refuses_directories_and_unknowable_lengths() {
     let dir = std::env::temp_dir().join(format!("gridcraft-fs-safety-open-{}", std::process::id()));
@@ -344,6 +372,68 @@ fn failed_save_leaves_no_temporary_file() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A save replaces an existing workbook with exactly the new bytes, and a save into a folder
+/// that doesn't exist fails without creating anything. The flush to disk before the rename is
+/// not covered: a power loss can't be simulated in a unit test.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_writes_exact_bytes_and_fails_cleanly_without_a_folder() {
+    let dir = std::env::temp_dir().join(format!("gridcraft-write-exact-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let dest = dir.join("Book.xlsx");
+    std::fs::write(&dest, b"old workbook that is longer than the new one").unwrap();
+    let bytes: Vec<u8> = (0..=255u8).cycle().take(100_000).collect();
+    write_file(dest.to_str().unwrap(), &bytes).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes);
+    assert!(!dir.join("Book.xlsx.sctmp").exists());
+    let missing = dir.join("no-such-folder").join("Book.xlsx");
+    assert!(write_file(missing.to_str().unwrap(), b"x").is_err());
+    assert!(!dir.join("no-such-folder").exists());
+    assert_eq!(std::fs::read(&dest).unwrap(), bytes, "the existing workbook is untouched");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Only "this file system cannot flush" errors are tolerated when syncing a saved file.
+/// The fallback on a real network mount is not tested.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_only_unsupported_errors() {
+    use std::io::{Error, ErrorKind};
+    assert_eq!(full_sync_unsupported(&Error::from_raw_os_error(25)), cfg!(unix));
+    assert!(full_sync_unsupported(&Error::from(ErrorKind::Unsupported)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::PermissionDenied)));
+    assert!(!full_sync_unsupported(&Error::from(ErrorKind::StorageFull)));
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(28)), "ENOSPC on Linux");
+    assert!(!full_sync_unsupported(&Error::from_raw_os_error(5)), "EIO");
+}
+
+/// Apple's ENOTSUP is 45 (EOPNOTSUPP is 102), and std maps only the latter to
+/// `ErrorKind::Unsupported`: F_FULLFSYNC refused with ENOTSUP must still save. On Linux, 45 is
+/// EL2NSYNC and stays a failed save. On FreeBSD and other BSDs, 45 is ENOTSUP (the same value as
+/// EOPNOTSUPP), so this host's std reports `ErrorKind::Unsupported` and the flush is tolerated
+/// even when the `apple` flag is false — which is the real helper's behaviour on those systems.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn full_sync_tolerates_apple_enotsup() {
+    use std::io::{Error, ErrorKind};
+    let enotsup = Error::from_raw_os_error(45);
+    assert!(flush_unsupported_on(&enotsup, true, true), "ENOTSUP on Apple");
+    let host_maps_45_unsupported = enotsup.kind() == ErrorKind::Unsupported;
+    assert_eq!(flush_unsupported_on(&enotsup, true, false), host_maps_45_unsupported, "45 on other Unix");
+    assert_eq!(flush_unsupported_on(&enotsup, false, false), host_maps_45_unsupported, "45 on Windows");
+    assert!(flush_unsupported_on(&Error::from_raw_os_error(25), true, true), "ENOTTY on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(5), true, true), "EIO on Apple");
+    assert!(!flush_unsupported_on(&Error::from_raw_os_error(28), true, true), "ENOSPC on Apple");
+}
+
+/// The real helper on an Apple host: a raw ENOTSUP from F_FULLFSYNC is tolerated.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn full_sync_tolerates_raw_enotsup_on_apple() {
+    assert!(full_sync_unsupported(&std::io::Error::from_raw_os_error(45)));
+}
+
 /// While a script runs (#2178), file reads and writes are refused whatever command or
 /// parameter asked for them; nesting and dropping the sandbox restore access.
 #[cfg(not(target_arch = "wasm32"))]
@@ -527,9 +617,80 @@ fn delimited_exports_preserve_general_precision_and_explicit_number_formats() {
     sheet.set_cell(CellRef::new(0, 0), Cell { value: Value::Number(124412140710.0), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(1.23456789012345), ..Default::default() });
     sheet.set_cell(CellRef::new(0, 2), Cell { value: Value::Number(124412140710.0), style: scientific, ..Default::default() });
+    // Every integer below 1e16 that f64 holds (also 2^53 and the even integers above it) keeps
+    // every digit; larger numbers keep the shortest digits that read back as the same value,
+    // and a number `&` would write with an exponent is written out in full, so reopening the
+    // file can't give it a scientific format that then rounds it on the next save.
+    let cells = [
+        (1234567890123456.0, "1234567890123456"),
+        (-9007199254740991.0, "-9007199254740991"),
+        (9007199254740992.0, "9007199254740992"),
+        (9007199254740994.0, "9007199254740994"),
+        (9123456789012346.0, "9123456789012346"),
+        (-9999999999999998.0, "-9999999999999998"),
+        (12345678901234567.0, "12345678901234568"),
+        (1e20, "100000000000000000000"),
+        (1e15 - 0.5, "999999999999999.5"),
+        (1.0 / 3.0 * 1e-6, "0.000000333333333333333"),
+        (1.23456789012346e-10, "0.000000000123456789012346"),
+    ];
+    for (col, (n, _)) in cells.iter().enumerate() {
+        sheet.set_cell(CellRef::new(0, col as u32 + 3), Cell { value: Value::Number(*n), ..Default::default() });
+    }
     for (path, separator) in [("data.csv", ","), ("data.tsv", "\t")] {
         let output = String::from_utf8(save_bytes(&workbook, path).unwrap()).unwrap();
-        assert_eq!(output, format!("124412140710{separator}1.23456789012345{separator}1.24E+11\r\n"));
+        let tail: Vec<&str> = cells.iter().map(|(_, text)| *text).collect();
+        assert_eq!(output, format!("124412140710{s}1.23456789012345{s}1.24E+11{s}{}\r\n", tail.join(separator), s = separator));
+        // Reopening the file and saving it again changes nothing.
+        let (reopened, _) = open_bytes(path, output.as_bytes()).unwrap();
+        assert_eq!(String::from_utf8(save_bytes(&reopened, path).unwrap()).unwrap(), output);
+    }
+}
+
+/// A number shown as General is written as `&` converts it (15 significant digits), whatever
+/// colour, sections or literals the format adds, and in a Text cell. Excel writes the cell
+/// display (`1.24412E+11`, `0.333333333`); GridCraft keeps the digits so part codes survive
+/// (integers below 1e16 keep all their digits, and nothing gets an exponent; see the test above).
+#[test]
+fn delimited_exports_write_general_numbers_as_text_converts_them() {
+    use gridcraft_core::Value;
+    use gridcraft_model::{Cell, NumFmt, StyleId};
+    let mut wb = Workbook::new();
+    let mut styled = |code: &str| wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
+    let (blue, signed, red, text, unit) =
+        (styled("[Blue]General"), styled("General;-General"), styled("General;[Red]-General"), styled("@"), styled("General\" mm\""));
+    let code = 124412140710.0;
+    let sh = wb.sheet_mut(0).unwrap();
+    let cells = [
+        (Value::Number(1.0 / 3.0), StyleId::DEFAULT),
+        (Value::Number(0.1 + 0.2), StyleId::DEFAULT),
+        (Value::Number(1e20), StyleId::DEFAULT),
+        (Value::Number(code), blue),
+        (Value::Number(9007199254740994.0), blue),
+        (Value::Number(-1.0 / 3.0), blue),
+        (Value::Number(-code), signed),
+        (Value::Number(-code), red),
+        (Value::Number(code), text),
+        (Value::Number(code), unit),
+    ];
+    for (col, (value, style)) in cells.into_iter().enumerate() {
+        sh.set_cell(CellRef::new(0, col as u32), Cell { value, formula: None, py: None, style });
+    }
+    for (path, sep) in [("out.csv", ","), ("out.txt", "\t")] {
+        let output = String::from_utf8(save_bytes(&wb, path).unwrap()).unwrap();
+        let expected = [
+            "0.333333333333333",
+            "0.3",
+            "100000000000000000000",
+            "124412140710",
+            "9007199254740994",
+            "-0.333333333333333",
+            "-124412140710",
+            "-124412140710",
+            "124412140710",
+            "124412140710 mm",
+        ];
+        assert_eq!(output, format!("{}\r\n", expected.join(sep)));
     }
 }
 
