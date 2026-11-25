@@ -249,9 +249,9 @@ fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
         markers: false,
     });
     let options = PrintOptions { range: RangeRef::parse("A1:B2"), ..PrintOptions::default() };
-    let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
+    let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "", false).unwrap().bytes;
     wb.sheet_mut(0).unwrap().right_to_left = true;
-    let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
+    let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "", false).unwrap().bytes;
     let points = |pdf: &[u8]| {
         let pdf = String::from_utf8_lossy(pdf);
         let after = pdf.split("1 0 0 RG\n").nth(1).unwrap();
@@ -1099,6 +1099,73 @@ fn rotated_wrapped_text_prints_rotated() {
     // Every piece of both headers is rotated, each wrapped along the row height into a few long lines.
     assert_eq!(up + down, blocks.len(), "a header line printed flat: {blocks:?}");
     assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
+}
+
+/// The content operand and page y of each `BT` block in a PDF. PDF y grows upwards, so a
+/// larger y is higher on the page.
+fn pdf_text_blocks(pdf: &[u8]) -> Vec<(String, f32)> {
+    let text = String::from_utf8_lossy(pdf);
+    text.split("BT\n")
+        .skip(1)
+        .filter_map(|block| {
+            let tm = block.find(" Tm\n")?;
+            let y = block[..tm].split_whitespace().filter_map(|n| n.parse::<f32>().ok()).next_back()?;
+            let end = block.find(" Tj")?;
+            Some((block[..end].to_string(), y))
+        })
+        .collect()
+}
+
+#[test]
+fn furigana_is_drawn_above_the_cell_text_only_when_on() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "東京都"})).unwrap();
+    // The reading is ASCII so the WinAnsi PDF can carry it (non-Latin text does not export, #141);
+    // two runs check that they are joined in document order.
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).phonetics.push(gridcraft_model::PhoneticString {
+        text: "東京都".into(),
+        runs: vec![
+            gridcraft_model::PhoneticRun { start: 0, end: 2, text: "TO".into() },
+            gridcraft_model::PhoneticRun { start: 2, end: 3, text: "KYO".into() },
+        ],
+        props: None,
+    });
+    let (off, pages_off) = pdf_of(&mut s, json!({}));
+    assert!(!contains(&off, "TOKYO"), "furigana is off by default");
+    s.execute("view.furigana", json!({"on": true})).unwrap();
+    let (on, pages_on) = pdf_of(&mut s, json!({}));
+    assert!(contains(&on, "(TOKYO) Tj"), "the reading is drawn as text");
+    // About half the 11 pt cell font, and the row height does not change.
+    assert!(contains(&on, "/F1 5.5 Tf"), "the reading is half the cell size");
+    assert_eq!(pages_on, pages_off, "furigana never changes the layout");
+    s.execute("view.furigana", json!({"on": false})).unwrap();
+    let (again, _) = pdf_of(&mut s, json!({}));
+    assert!(!contains(&again, "TOKYO"), "turning it off removes the reading");
+}
+
+#[test]
+fn furigana_and_cell_text_take_separate_parts_of_the_cell() {
+    // The reading sits in a strip at the top of the cell and the text is laid out below it,
+    // for every vertical alignment. PDF y grows upwards, so the reading's y is the larger one.
+    for align in ["home.alignTop", "home.alignMiddle", "home.alignBottom"] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "A1", "input": "東京都"})).unwrap();
+        std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).phonetics.push(gridcraft_model::PhoneticString {
+            text: "東京都".into(),
+            runs: vec![gridcraft_model::PhoneticRun { start: 0, end: 3, text: "TOKYO".into() }],
+            props: None,
+        });
+        s.execute(align, json!({})).unwrap();
+        s.execute("view.furigana", json!({"on": true})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let blocks = pdf_text_blocks(&pdf);
+        let reading = blocks.iter().find(|(t, _)| t.contains("(TOKYO)")).expect("the reading is drawn").1;
+        // The cell's own text: a CID run, since the WinAnsi font cannot carry it.
+        let text = blocks.iter().find(|(t, _)| t.contains('<') && !t.contains("TOKYO")).expect("the cell text is drawn").1;
+        // Their baselines are 11 pt apart: more than the reading's 5.5 pt line and the text's
+        // 8.8 pt cap height together, so the glyphs cannot overlap.
+        assert!(reading - text >= 9.9, "{align}: reading y {reading} and text y {text} share a strip");
+    }
 }
 
 #[test]

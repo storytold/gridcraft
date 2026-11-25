@@ -438,6 +438,8 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
     if geo.fr > 0 && geo.fc > 0 {
         quads.push((fr_rows, fr_cols, Rect::from_min_max(geo.cells.min, split)));
     }
+    // One text → reading index for this paint pass; off means nothing is built.
+    let phonetics = app.session.prefs.furigana.then(|| gridcraft_engine::display::PhoneticIndex::new(wb));
     for (rows, cols, clip) in &quads {
         if rows.0 > rows.1 || cols.0 > cols.1 {
             continue;
@@ -453,6 +455,7 @@ fn paint_panes(input: PanesInput<'_>, cf: &mut CfCache) -> Vec<PaneQuad> {
             rows: *rows,
             cols: *cols,
             cf,
+            phonetics: phonetics.as_ref(),
             tokens: t,
             active_row,
         });

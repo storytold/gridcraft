@@ -5,6 +5,7 @@ use super::{
     BorderLine, BorderStyle, Borders, CellRef, Color, Font, Page, PatternType, Point, RangeRef, Rgb, Sheet, Style, StyleId, Underline, Value,
     Workbook, split_sheet,
 };
+use crate::display::PhoneticIndex;
 
 // ---------------------------------------------------------------- drawing
 
@@ -319,7 +320,7 @@ impl<'a> Covered<'a> {
 }
 
 /// Draws the cells of a block: fills, gridlines, data bars, borders and text.
-pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut crate::cf::CfCache) {
+pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut crate::cf::CfCache, phonetics: Option<&PhoneticIndex<'_>>) {
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     if bw <= 0.0 || bh <= 0.0 {
@@ -438,7 +439,7 @@ pub(super) fn draw_block(pg: &mut Page, b: &Block, gridlines: bool, cf: &mut cra
         } else if let Some(on) = checkbox_state(l, &sh.value(*c)) {
             draw_checkbox(pg, (b.text_x(x, w), y, w, h), b.k, on);
         } else {
-            draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) });
+            draw_text(pg, b, TextPlacement { cell: *c, look: l, rect: (x, y, w, h), merged, merges: &merges, limits: (bx, bx + bw) }, phonetics);
         }
     }
     pg.restore();

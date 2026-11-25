@@ -22,6 +22,7 @@ use serde_json::{Value as Json, json};
 use super::{
     CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, split_sheet, str_param, target_sheet, u32_param,
 };
+use crate::display::PhoneticIndex;
 
 mod draw;
 mod header_footer;
@@ -163,7 +164,9 @@ pub struct RenderedPdf {
 const MISSING_ARABIC_FONT: &str = "Some Arabic text could not be drawn in this PDF because no Noto Sans Arabic face was found for it.";
 
 /// Renders laid-out sheets to a PDF.
-pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str) -> Result<RenderedPdf> {
+pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str, furigana: bool) -> Result<RenderedPdf> {
+    // One text → reading index for the whole export; off means nothing is built.
+    let phonetics = furigana.then(|| PhoneticIndex::new(wb));
     let mut doc = PdfDoc::new();
     doc.info.title = if wb.props.title.is_empty() { file.to_string() } else { wb.props.title.clone() };
     doc.info.author = wb.props.author.clone();
@@ -197,7 +200,7 @@ pub fn render_pdf(wb: &Workbook, layouts: &[SheetLayout], file: &str, path: &str
                 let mut x = ox + lay.heading_w * k;
                 for (csi, cs) in csegs.iter().enumerate() {
                     let b = make_block(wb, lay.sheet, sh, *rs, *cs, (x, y), lay);
-                    draw_block(pg, &b, lay.settings.gridlines, &mut cf);
+                    draw_block(pg, &b, lay.settings.gridlines, &mut cf, phonetics.as_ref());
                     draw_block_links(pg, &b, page_index, &mut pending_links);
                     printed_blocks.push(PrintedBlock {
                         page: page_index,
@@ -261,7 +264,7 @@ fn build_pdf(s: &mut Session, p: &Json, cmd: &str) -> Result<(Vec<u8>, usize)> {
     let d = s.doc()?;
     let lays = layouts(&d.wb, &opts);
     let path = d.path.clone().unwrap_or_default();
-    let pdf = render_pdf(&d.wb, &lays, &d.display_title(), &path)?;
+    let pdf = render_pdf(&d.wb, &lays, &d.display_title(), &path, s.prefs.furigana)?;
     if pdf.missing_arabic_font {
         s.ui_requests.push(crate::UiRequest::Message(MISSING_ARABIC_FONT.into()));
     }

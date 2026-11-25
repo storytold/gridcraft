@@ -1,8 +1,9 @@
 use super::draw::{Block, Look, rgb_of};
 use super::{
-    Baseline, CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, ReadingOrder, Sheet, Style, StyleTable, TextDirection, Underline,
+    Baseline, CellRef, Color, Font, HAlign, MAX_COLS, Page, Point, RangeRef, ReadingOrder, Rgb, Sheet, Style, StyleTable, TextDirection, Underline,
     VAlign, Value,
 };
+use crate::display::PhoneticIndex;
 use unicode_segmentation::UnicodeSegmentation;
 
 const PAD_PX: f32 = 2.0;
@@ -237,7 +238,7 @@ pub(super) struct TextPlacement<'a> {
     pub limits: (f32, f32),
 }
 
-pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
+pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>, phonetics: Option<&PhoneticIndex<'_>>) {
     let TextPlacement { cell: c, look: l, rect, merged, merges, limits } = placement;
     let (x, y, w, h) = rect;
     let sh = b.sh;
@@ -309,19 +310,14 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         .map(|(ascent, descent)| (ascent.max(size * 0.8), descent.max(size * 0.22)));
     let line_h = extents.map_or(size * 1.2, |(ascent, descent)| (ascent + descent + size * 0.2).max(size * 1.2));
     let n = lines.len().max(1) as f32;
-    let first_baseline = if let Some((ascent, descent)) = extents {
-        match st.align.v {
-            VAlign::Top => y + pad + ascent,
-            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
-            VAlign::Bottom => y + h - pad - descent - (n - 1.0) * line_h,
-        }
-    } else {
-        match st.align.v {
-            VAlign::Top => y + pad + size * 0.8,
-            VAlign::Center | VAlign::Justify | VAlign::Distributed => y + (h - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
-            VAlign::Bottom => y + h - pad - size * 0.22 - (n - 1.0) * line_h,
-        }
-    };
+    // ふりがな表示: the reading takes a strip at the top of the cell and the text is laid out
+    // below it (View › Show › Furigana). Rotated and vertical cells show no reading, as on screen.
+    let reading = furigana_reading(phonetics, sh, c, rot);
+    let furigana = reading.and_then(|r| furigana_layout(r, font, size, (w, h), pad, indent));
+    // The text is laid out between the reading's strip and the cell's bottom pad; without a
+    // reading the strip is just the top pad, which keeps the unread cell's baselines unchanged.
+    let band = TextBand::new(y, h, pad, furigana.as_ref());
+    let first_baseline = band.first_baseline(st.align.v, size, extents, n, line_h);
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
     let spans = st.align.h == HAlign::CenterAcross && !wrap && !merged && rot == 0;
@@ -398,5 +394,115 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
             pg.stroke_line(lx, ly - size * 0.3, lx + lw, ly - size * 0.3, (size * 0.06).max(0.2), color);
         }
     }
+    if let (Some(reading), Some(f)) = (reading, &furigana) {
+        draw_furigana(pg, (x, y, w, h), f.size, font, color, h_align, indent, reading, b.k);
+    }
+    pg.restore();
+}
+
+/// A cell's reading laid out for PDF export: its font size and the top strip of the cell that the
+/// text leaves clear, so the reading and the text never overlap. Row and pagination never change.
+struct Furigana {
+    size: f32,
+    strip: f32,
+}
+
+/// The vertical band a cell's text is laid out in: below a furigana reading's strip when the cell
+/// has one, above the cell's bottom pad; the first line's baseline follows from the cell's
+/// vertical alignment. Without a reading the band is the whole padded cell, so the unread cell's
+/// baselines keep the positions they had before ふりがな表示.
+struct TextBand {
+    /// The top edge: the cell's top pad, or the reading's strip when there is one.
+    top: f32,
+    /// The bottom edge: the cell's bottom pad.
+    bottom: f32,
+    /// Whether a reading takes the cell's top, so a row too short for both clips the text below it.
+    reading: bool,
+}
+
+impl TextBand {
+    /// The band of the cell at `(y, h)` with its pad `pad`, minus the reading's strip, if any.
+    fn new(y: f32, h: f32, pad: f32, furigana: Option<&Furigana>) -> Self {
+        Self { top: furigana.map_or(y + pad, |f| y + f.strip), bottom: y + h - pad, reading: furigana.is_some() }
+    }
+
+    /// The first line's baseline for `n` lines of `line_h`: the vertical alignment applied to the
+    /// band, using the font's measured `extents` or its nominal ascent and descent when the font
+    /// reports none. A row too short for the reading and the text together clips the text's lower
+    /// lines instead of drawing them over the reading.
+    fn first_baseline(&self, v: VAlign, size: f32, extents: Option<(f32, f32)>, n: f32, line_h: f32) -> f32 {
+        let height = (self.bottom - self.top).max(0.0);
+        let baseline = if let Some((ascent, descent)) = extents {
+            match v {
+                VAlign::Top => self.top + ascent,
+                VAlign::Center | VAlign::Justify | VAlign::Distributed => self.top + (height - (n - 1.0) * line_h - ascent - descent) / 2.0 + ascent,
+                VAlign::Bottom => self.bottom - descent - (n - 1.0) * line_h,
+            }
+        } else {
+            match v {
+                VAlign::Top => self.top + size * 0.8,
+                VAlign::Center | VAlign::Justify | VAlign::Distributed => self.top + (height - n * line_h) / 2.0 + line_h * 0.5 + size * 0.33,
+                VAlign::Bottom => self.bottom - size * 0.22 - (n - 1.0) * line_h,
+            }
+        };
+        if self.reading { baseline.max(self.top + size * 0.8) } else { baseline }
+    }
+}
+
+/// The phonetic (ふりがな) reading a cell shows in PDF export: the workbook's reading for the
+/// cell's string, when the cell holds horizontal text. Rotated and vertical stacked (255) cells
+/// show none, as on screen, because the reading would have to follow the rotation.
+fn furigana_reading<'a, 'b>(phonetics: Option<&'a PhoneticIndex<'b>>, sh: &Sheet, c: CellRef, rot: i16) -> Option<&'a str> {
+    if rot != 0 {
+        return None;
+    }
+    phonetics?.reading(sh, c)
+}
+
+/// About half the cell font's size, capped to the cell's top 45% and shrunk until the reading fits
+/// the cell width. The strip is the cell's top pad plus the reading's line box, which the cell
+/// text is laid out below; a row too short for both clips the text rather than overlap it.
+fn furigana_layout(reading: &str, font: Font, size: f32, (w, h): (f32, f32), pad: f32, indent: f32) -> Option<Furigana> {
+    if reading.is_empty() || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let avail = (w - 2.0 * pad - indent).max(1.0);
+    let mut fs = (size * 0.5).min((h * 0.45).max(1.0));
+    let tw = gridcraft_pdf::text_width(font, fs, reading);
+    if tw > avail {
+        fs = (fs * avail / tw).max(1.0);
+    }
+    Some(Furigana { size: fs, strip: (pad + fs * 1.2).min(h) })
+}
+
+/// Draws a cell's phonetic (ふりがな) reading above its text at the font size [`furigana_layout`]
+/// gives, aligned like the text and clipped to the cell so it never spills into a neighbour. The
+/// row height is not changed (Excel's View › Furigana).
+#[allow(clippy::too_many_arguments)]
+fn draw_furigana(
+    pg: &mut Page,
+    (x, y, w, h): (f32, f32, f32, f32),
+    size: f32,
+    font: Font,
+    color: Rgb,
+    h_align: HAlign,
+    indent: f32,
+    reading: &str,
+    k: f32,
+) {
+    if reading.is_empty() || w <= 0.0 || h <= 0.0 {
+        return;
+    }
+    let pad = PAD_PX * k;
+    let tw = gridcraft_pdf::text_width(font, size, reading);
+    let lx = match h_align {
+        HAlign::Right => x + w - pad - tw,
+        HAlign::Center | HAlign::CenterAcross | HAlign::Distributed => x + (w - tw) / 2.0,
+        _ => x + pad + indent,
+    };
+    let ly = y + pad + size * 0.8;
+    pg.save();
+    pg.clip_rect(x, y, w, h);
+    pg.text(lx, ly, size, font, color, reading);
     pg.restore();
 }
