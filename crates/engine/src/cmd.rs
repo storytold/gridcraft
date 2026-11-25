@@ -877,9 +877,15 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
             // Only a wrapping cell is laid out over several lines: each explicit line break
             // starts one, and each line folds at the column width.
             if st.align.wrap {
-                let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
-                let w = sh.col_width(c).max(1.0) - 6.0;
-                lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
+                // Hidden columns return 0.0 from col_width(); wrapping at 0px clamps to 1px
+                // and inflates the row to 546px (409.5pt). Measure at the column's stored
+                // unhidden width (matching Excel AutoFit), skipping wrap only if that is <= 0.
+                let col_w = sh.cols.get(&c).and_then(|i| i.size).unwrap_or(sh.default_col_width);
+                if col_w > 0.0 {
+                    let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
+                    let w = (col_w - 6.0).max(1.0);
+                    lines = text.lines().map(|l| wrapped_line_count(l, w, size, st.font.bold)).sum::<f32>().max(1.0);
+                }
             }
         } else if st.font.size <= gridcraft_model::DEFAULT_FONT_SIZE {
             continue;
