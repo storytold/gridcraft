@@ -166,6 +166,7 @@ impl SheetApp {
         }
         let Some(d) = self.session.active() else { return };
         let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+        let title = crate::channel::window_title(&title);
         if self.grid.last_title.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.grid.last_title = Some(title);
