@@ -2066,6 +2066,44 @@ fn workbook_view_attributes_round_trip_independently() {
 }
 
 #[test]
+fn page_layout_view_flags_default_visible() {
+    let wb = Workbook::new();
+    let s = wb.sheet(0).unwrap();
+    assert!(s.show_ruler && s.show_white_space);
+    let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+    assert!(!xml.contains("showRuler") && !xml.contains("showWhiteSpace"), "defaults stay unwritten: {xml}");
+}
+
+#[test]
+fn page_layout_ruler_and_white_space_round_trip_independently() {
+    for (attrs, show_ruler, show_white_space) in [
+        ("", true, true),
+        (r#" showRuler="0""#, false, true),
+        (r#" showWhiteSpace="0""#, true, false),
+        (r#" showRuler="0" showWhiteSpace="0""#, false, false),
+        (r#" showRuler="1" showWhiteSpace="1""#, true, true),
+    ] {
+        let body = format!(r#"<sheetViews><sheetView view="pageLayout" workbookViewId="0"{attrs}/></sheetViews><sheetData/>"#);
+        let (wb, _) = read_xlsx(&super::minimal(&body, &[], "", "")).unwrap();
+        let s = wb.sheet(0).unwrap();
+        assert_eq!((s.show_ruler, s.show_white_space), (show_ruler, show_white_space), "reading {attrs:?}");
+        assert_eq!(s.view, SheetViewMode::PageLayout, "the view still reads");
+
+        let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+        assert_eq!(xml.contains("showRuler=\"0\""), !show_ruler, "{xml}");
+        assert_eq!(xml.contains("showWhiteSpace=\"0\""), !show_white_space, "{xml}");
+        assert!(
+            !xml.contains("showRuler=\"1\"") && !xml.contains("showWhiteSpace=\"1\""),
+            "visible is the schema default and stays unwritten: {xml}"
+        );
+
+        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+        let s = back.sheet(0).unwrap();
+        assert_eq!((s.show_ruler, s.show_white_space), (show_ruler, show_white_space), "{attrs:?} round trip");
+    }
+}
+
+#[test]
 fn workbook_view_selects_first_visible_window_consistently() {
     let cases = [
         (

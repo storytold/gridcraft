@@ -314,6 +314,8 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
         show_row_col_headers: (!sheet.show_headings).then_some(false),
         show_formulas: sheet.show_formulas.then_some(true),
         show_zeros: (!sheet.show_zeros).then_some(false),
+        show_ruler: (!sheet.show_ruler).then_some(false),
+        show_white_space: (!sheet.show_white_space).then_some(false),
         show_outline_symbols: (!sheet.show_outline_symbols).then_some(false),
         right_to_left: sheet.right_to_left.then_some(true),
         view: (sheet.view != gridcraft_model::SheetViewMode::Normal).then(|| sheet.view.as_str().to_string()),
