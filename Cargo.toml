@@ -30,29 +30,29 @@ gridcraft-math = { path = "crates/math" }
 # ui-egui, craft-print in the app, craft-web-api and craft-web-host in the web app) comes from one
 # craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "=0.1.0", features = ["ui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "=0.1.0", features = ["ui"] }
 # PDF RunLength encoding; this revision also fixes the vendored JBIG2 dependency for Git consumers.
-craft-pdf = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0", default-features = false }
-craft-stream-codecs = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0", default-features = false }
+craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
 # Compound files ([MS-CFB]) and password-encrypted OOXML packages ([MS-OFFCRYPTO]).
-craft-cfb = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
-craft-offcrypto = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
-craft-ods = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
+craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
+craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
+craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
 # OPC zip packages (parts, relationships, the zip writer) under `crates/xlsx/src/package.rs`.
-craft-opc = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
+craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
 # Delimited text (CSV, TSV) and SYLK; `crates/xlsx/src/csv.rs` and `crates/engine/src/io/sylk.rs`
 # turn them into workbooks.
-craft-csv = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
-craft-math = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
+craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
+craft-math = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
 # The native JSON workbook (`.json`, `.scjson`): read, written, and kept newer macros written back.
-craft-gridcraft-format = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
+craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
 # SpreadsheetML worksheet/drawing/string/package XML; workbook model mapping stays in gridcraft-xlsx.
-craft-xlsx = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
-craft-xml = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
-craft-xls = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
-craft-drawingml = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "0.1.0" }
-craft-mcp-server = { git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", version = "=0.1.0" }
+craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
+craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
+craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "0.1.0" }
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", version = "=0.1.0" }
 
 # foundation
 thiserror = "2"
@@ -92,15 +92,15 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
 # driver. Same craft-libs revision as craft-update above.
-craft-window = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", default-features = false, features = ["ui"] }
+craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", default-features = false, features = ["ui"] }
 # The UI runtime GridCraft's egui UI is hosted by (`crates/ui-egui/src/framework.rs`): who the app is
 # to the framework's dialogs, the runtime's key bindings, the theme mode, window placement and the
 # printer controls. Same craft-libs revision as above.
-craft-behavior = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1" }
-craft-host = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1" }
-craft-keymap = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1" }
-craft-theme = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1" }
-craft-print = { version = "0.1.0", git = "https://github.com/aiongg/craft-libs", rev = "3ad64a26ea8a72c03c416681e14f7744393790b1", features = ["ui"] }
+craft-behavior = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f" }
+craft-host = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f" }
+craft-keymap = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f" }
+craft-theme = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f" }
+craft-print = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f", features = ["ui"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
