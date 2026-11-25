@@ -1,5 +1,5 @@
-//! Arabic shaping and subset Type3 fonts. Outlines use the same variation coordinates as the
-//! shaper; ActualText preserves the logical source independently of visual glyph order.
+//! Arabic and Hebrew shaping and subset Type3 fonts. Outlines use the same variation coordinates
+//! as the shaper; ActualText preserves the logical source independently of visual glyph order.
 use std::{borrow::Cow, collections::BTreeMap, fmt::Write as _, sync::OnceLock};
 
 use harfrust::{Direction, ShaperData, ShaperInstance, UnicodeBuffer};
@@ -12,7 +12,7 @@ use unicode_bidi::BidiInfo;
 
 use crate::{CID_FONT, Error, Font, TextDirection, n, needs_cid, pdf_string, pdf_utf16_string};
 
-include!(concat!(env!("OUT_DIR"), "/arabic_fonts.rs"));
+include!(concat!(env!("OUT_DIR"), "/shaped_fonts.rs"));
 
 const MAX_TEXT_BYTES: usize = 128 * 1024;
 const MAX_OUTLINE_BYTES: usize = 256 * 1024;
@@ -20,31 +20,100 @@ const MAX_SUBSET_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SUBSET_GLYPHS: usize = 16_384;
 const SYNTHETIC_BOLD_STROKE: f32 = 30.0;
 
-/// How `text` set in `font` is drawn. Symbol keeps its own one-run encoding, and Arabic without
-/// an installed or bundled face falls back to the standard fonts.
+/// How `text` set in `font` is drawn. Symbol keeps its own one-run encoding, and Arabic or Hebrew
+/// without an installed or bundled face falls back to the standard fonts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shaping {
     Plain,
     Shaped,
-    NoFont,
+    NoFont(Script),
+}
+
+/// A script drawn from its own embedded face. One text is set in one face: Arabic when it has
+/// Arabic letters, otherwise Hebrew when it has Hebrew letters or the shekel sign, which neither
+/// the standard fonts nor the CID font draw.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Script {
+    Arabic,
+    Hebrew,
+}
+
+impl Script {
+    /// One pass, since every width measurement asks.
+    pub(crate) fn of(text: &str) -> Option<Self> {
+        let mut hebrew = false;
+        for ch in text.chars() {
+            if Self::Arabic.has(ch) {
+                return Some(Self::Arabic);
+            }
+            hebrew |= ch == '\u{20aa}' || Self::Hebrew.has(ch);
+        }
+        hebrew.then_some(Self::Hebrew)
+    }
+
+    fn has_letters(self, text: &str) -> bool {
+        text.chars().any(|ch| self.has(ch))
+    }
+
+    fn has(self, ch: char) -> bool {
+        match self {
+            Self::Arabic => {
+                matches!(ch as u32, 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x089f | 0x08a0..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x10e60..=0x10e7f | 0x1ee00..=0x1eeff)
+            }
+            Self::Hebrew => matches!(ch as u32, 0x0590..=0x05ff | 0xfb1d..=0xfb4f),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Arabic => "Arabic",
+            Self::Hebrew => "Hebrew",
+        }
+    }
+
+    /// Characters every usable face of the script maps.
+    fn sample(self) -> &'static str {
+        match self {
+            Self::Arabic => "العربية١٢٣",
+            Self::Hebrew => "עברית",
+        }
+    }
+
+    fn bundled(self) -> &'static [(&'static str, &'static [u8])] {
+        match self {
+            Self::Arabic => ARABIC_FONTS,
+            Self::Hebrew => HEBREW_FONTS,
+        }
+    }
+
+    /// The Noto family's file name stem, for installed faces.
+    fn file_stem(self) -> &'static str {
+        match self {
+            Self::Arabic => "NotoSansArabic",
+            Self::Hebrew => "NotoSansHebrew",
+        }
+    }
+
+    fn tag(self) -> harfrust::Script {
+        match self {
+            Self::Arabic => harfrust::script::ARABIC,
+            Self::Hebrew => harfrust::script::HEBREW,
+        }
+    }
 }
 
 pub(crate) fn shaping(font: Font, text: &str) -> Shaping {
-    if font == Font::Symbol || !needed(text) {
+    let Some(script) = Script::of(text).filter(|_| font != Font::Symbol) else {
         return Shaping::Plain;
-    }
-    match face(bold(font)) {
-        Ok(None) => Shaping::NoFont,
+    };
+    match face(script, bold(font)) {
+        Ok(None) => Shaping::NoFont(script),
         Ok(Some(_)) | Err(_) => Shaping::Shaped,
     }
 }
 
 pub(crate) fn shaped(font: Font, text: &str) -> bool {
     shaping(font, text) == Shaping::Shaped
-}
-
-pub(crate) fn needed(text: &str) -> bool {
-    text.chars().any(|ch| matches!(ch as u32, 0x0600..=0x06ff | 0x0750..=0x077f | 0x0870..=0x089f | 0x08a0..=0x08ff | 0xfb50..=0xfdff | 0xfe70..=0xfefc | 0x10e60..=0x10e7f | 0x1ee00..=0x1eeff))
 }
 
 fn bold(font: Font) -> bool {
@@ -71,40 +140,68 @@ struct Face {
     data: ShaperData,
     instance: ShaperInstance,
     synthetic_bold: bool,
+    script: Script,
 }
 
 impl Face {
-    fn new(bytes: Cow<'static, [u8]>, bold: bool) -> Result<Self, Error> {
-        let font = FontRef::from_index(&bytes, 0).map_err(|e| Error(format!("Invalid Arabic PDF font: {e}")))?;
-        if !"العربية١٢٣".chars().all(|ch| font.charmap().map(ch).is_some()) {
-            return Err(Error("The PDF font lacks Arabic glyphs".into()));
+    fn new(bytes: Cow<'static, [u8]>, bold: bool, script: Script) -> Result<Self, Error> {
+        let name = script.name();
+        let font = FontRef::from_index(&bytes, 0).map_err(|e| Error(format!("Invalid {name} PDF font: {e}")))?;
+        if !script.sample().chars().all(|ch| font.charmap().map(ch).is_some()) {
+            return Err(Error(format!("The PDF font lacks {name} glyphs")));
         }
         let data = ShaperData::new(&font);
         let instance = ShaperInstance::from_variations(&font, [("wght", if bold { 700.0 } else { 400.0 })]);
-        Ok(Self { bytes, data, instance, synthetic_bold: false })
+        Ok(Self { bytes, data, instance, synthetic_bold: false, script })
     }
 
     fn font(&self) -> Result<FontRef<'_>, Error> {
-        FontRef::from_index(&self.bytes, 0).map_err(|e| Error(format!("Invalid Arabic PDF font: {e}")))
+        FontRef::from_index(&self.bytes, 0).map_err(|e| Error(format!("Invalid {} PDF font: {e}", self.script.name())))
     }
 }
 
 #[cfg(test)]
 pub(crate) fn bold_face_is_synthetic() -> bool {
-    face(true).is_ok_and(|face| face.is_some_and(|face| face.synthetic_bold))
+    face(Script::Arabic, true).is_ok_and(|face| face.is_some_and(|face| face.synthetic_bold))
 }
 
-/// The Arabic face for a weight, or `None` when none is bundled or installed. The search runs
-/// once per weight, so measuring text never rescans the font directories.
-fn face(is_bold: bool) -> Result<Option<&'static Face>, Error> {
-    static REGULAR: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
-    static BOLD: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
-    let cache = if is_bold { &BOLD } else { &REGULAR };
-    cache.get_or_init(|| find_face(ARABIC_FONTS, &system_font_dirs(), is_bold)).as_ref().map(Option::as_ref).map_err(Error::clone)
+/// The left and right ends of each glyph's outline on the line, in 1/1000 em.
+#[cfg(test)]
+pub(crate) fn ink_spans(font: Font, text: &str) -> Result<Vec<[f32; 2]>, Error> {
+    let layout = layout(font, text, TextDirection::Auto)?;
+    let face = loaded_face(font, layout.script)?;
+    let raw = face.font()?;
+    let location = skrifa::instance::LocationRef::new(face.instance.coords());
+    let mut spans = Vec::new();
+    for item in layout.items {
+        let Item::Glyph { id, x, .. } = item else { continue };
+        let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing PDF glyph outline".into()))?;
+        let mut pen = Pen { bounds: [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY], ..Default::default() };
+        glyph.draw(DrawSettings::unhinted(Size::new(1000.0), location), &mut pen).map_err(|e| Error(format!("Cannot draw PDF glyph: {e}")))?;
+        spans.push([x + pen.bounds[0], x + pen.bounds[2]]);
+    }
+    Ok(spans)
 }
 
-fn loaded_face(font: Font) -> Result<&'static Face, Error> {
-    face(bold(font))?.ok_or_else(|| Error("Arabic PDF export needs Noto Sans Arabic".into()))
+/// The face of a script for a weight, or `None` when none is bundled or installed. The search
+/// runs once per script and weight, so measuring text never rescans the font directories.
+fn face(script: Script, is_bold: bool) -> Result<Option<&'static Face>, Error> {
+    static ARABIC_REGULAR: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
+    static ARABIC_BOLD: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
+    static HEBREW_REGULAR: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
+    static HEBREW_BOLD: OnceLock<Result<Option<Face>, Error>> = OnceLock::new();
+    let cache = match (script, is_bold) {
+        (Script::Arabic, false) => &ARABIC_REGULAR,
+        (Script::Arabic, true) => &ARABIC_BOLD,
+        (Script::Hebrew, false) => &HEBREW_REGULAR,
+        (Script::Hebrew, true) => &HEBREW_BOLD,
+    };
+    cache.get_or_init(|| find_face(script, script.bundled(), &system_font_dirs(), is_bold)).as_ref().map(Option::as_ref).map_err(Error::clone)
+}
+
+fn loaded_face(font: Font, script: Script) -> Result<&'static Face, Error> {
+    let name = script.name();
+    face(script, bold(font))?.ok_or_else(|| Error(format!("{name} PDF export needs Noto Sans {name}")))
 }
 
 fn bundled_match(fonts: &[(&str, &'static [u8])], is_bold: bool) -> Option<&'static [u8]> {
@@ -148,33 +245,34 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
     Vec::new()
 }
 
-fn find_face(bundled: &[(&str, &'static [u8])], dirs: &[std::path::PathBuf], is_bold: bool) -> Result<Option<Face>, Error> {
+fn find_face(script: Script, bundled: &[(&str, &'static [u8])], dirs: &[std::path::PathBuf], is_bold: bool) -> Result<Option<Face>, Error> {
     use std::io::Read as _;
     if let Some(bytes) = bundled_match(bundled, is_bold) {
-        return Face::new(Cow::Borrowed(bytes), is_bold).map(Some);
+        return Face::new(Cow::Borrowed(bytes), is_bold, script).map(Some);
     }
-    let filename = if is_bold { "NotoSansArabic-Bold.ttf" } else { "NotoSansArabic-Regular.ttf" };
+    let (stem, script_name) = (script.file_stem(), script.name());
+    let filename = format!("{stem}-{}.ttf", if is_bold { "Bold" } else { "Regular" });
     for dir in dirs {
-        for name in ["NotoSansArabic.ttf", "NotoSansArabic[wght].ttf", filename] {
-            let path = dir.join(name);
+        for name in [format!("{stem}.ttf"), format!("{stem}[wght].ttf"), filename.clone()] {
+            let path = dir.join(&name);
             let file = match std::fs::File::open(&path) {
                 Ok(file) => file,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(Error(format!("Cannot read Arabic PDF font {}: {e}", path.display()))),
+                Err(e) => return Err(Error(format!("Cannot read {script_name} PDF font {}: {e}", path.display()))),
             };
             let mut bytes = Vec::new();
-            file.take((64 << 20) + 1).read_to_end(&mut bytes).map_err(|e| Error(format!("Cannot read Arabic PDF font: {e}")))?;
+            file.take((64 << 20) + 1).read_to_end(&mut bytes).map_err(|e| Error(format!("Cannot read {script_name} PDF font: {e}")))?;
             if bytes.len() > 64 << 20 {
-                return Err(Error("Arabic PDF font exceeds 64 MiB".into()));
+                return Err(Error(format!("{script_name} PDF font exceeds 64 MiB")));
             }
             if is_bold && name != filename && !has_weight_axis(&bytes) {
                 continue;
             }
-            return Face::new(Cow::Owned(bytes), is_bold).map(Some);
+            return Face::new(Cow::Owned(bytes), is_bold, script).map(Some);
         }
     }
     if let Some((name, bytes)) = bundled_fallback(bundled, is_bold) {
-        let mut face = Face::new(Cow::Borrowed(bytes), is_bold)?;
+        let mut face = Face::new(Cow::Borrowed(bytes), is_bold, script)?;
         face.synthetic_bold = needs_synthetic_bold(name, bytes, is_bold);
         return Ok(Some(face));
     }
@@ -205,26 +303,30 @@ pub(crate) enum Item {
 pub(crate) struct Layout {
     pub items: Vec<Item>,
     pub width: f32,
+    /// The face the glyphs come from.
+    pub script: Script,
 }
 
 /// Positions are in 1/1000 em, matching the Type3 font matrix.
 pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result<Layout, Error> {
+    let script = Script::of(text).unwrap_or(Script::Arabic);
+    let name = script.name();
     if text.len() > MAX_TEXT_BYTES {
-        return Err(Error("Arabic PDF text exceeds the 128 KiB per-line limit".into()));
+        return Err(Error(format!("{name} PDF text exceeds the 128 KiB per-line limit")));
     }
     let direction = if direction == TextDirection::Context { direction.resolve(text) } else { direction };
-    let face = loaded_face(font)?;
+    let face = loaded_face(font, script)?;
     let raw = face.font()?;
     let shaper = face.data.shaper(&raw).instance(Some(&face.instance)).build();
     let units = shaper.units_per_em();
     if units <= 0 {
-        return Err(Error("Arabic PDF font has invalid units per em".into()));
+        return Err(Error(format!("{name} PDF font has invalid units per em")));
     }
     let scale = 1000.0 / units as f32;
     let single_line: String = text.chars().map(|ch| if is_paragraph_break(ch) { ' ' } else { ch }).collect();
     let text = single_line.as_str();
     let bidi = BidiInfo::new(text, direction.level());
-    let mut layout = Layout { items: Vec::new(), width: 0.0 };
+    let mut layout = Layout { items: Vec::new(), width: 0.0, script };
     for para in &bidi.paragraphs {
         let (levels, runs) = bidi.visual_runs(para, para.range.clone());
         for run in runs {
@@ -263,8 +365,8 @@ pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result
                 buffer.set_post_context(run_text.get(span.end..).unwrap_or_default());
                 buffer.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
                 buffer.set_flags(harfrust::BufferFlags::REMOVE_DEFAULT_IGNORABLES);
-                if needed(part) {
-                    buffer.set_script(harfrust::script::ARABIC);
+                if script.has_letters(part) {
+                    buffer.set_script(script.tag());
                 }
                 buffer.guess_segment_properties();
                 let shaped = shaper.shape(buffer, harfrust::ShapeOptions::new());
@@ -275,7 +377,7 @@ pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result
                 let mut previous_cluster = None;
                 for (info, pos) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
                     if info.glyph_id == 0 {
-                        return Err(Error("The Arabic PDF font produced a missing glyph".into()));
+                        return Err(Error(format!("The {name} PDF font produced a missing glyph")));
                     }
                     let cluster = info.cluster as usize;
                     let source = if previous_cluster == Some(cluster) {
@@ -302,7 +404,8 @@ pub(crate) fn layout(font: Font, text: &str, direction: TextDirection) -> Result
 
 pub(crate) fn vertical_extents(font: Font, text: &str, direction: TextDirection) -> Result<(f32, f32), Error> {
     let layout = layout(font, text, direction)?;
-    let face = loaded_face(font)?;
+    let face = loaded_face(font, layout.script)?;
+    let name = layout.script.name();
     let raw = face.font()?;
     let metrics = raw.glyph_metrics(Size::new(1000.0), skrifa::instance::LocationRef::new(face.instance.coords()));
     let (mut ascent, mut descent) = (0.0_f32, 0.0_f32);
@@ -312,13 +415,13 @@ pub(crate) fn vertical_extents(font: Font, text: &str, direction: TextDirection)
                 let (bottom, top) = if let Some(bounds) = metrics.bounds(id.into()) {
                     (bounds.y_min, bounds.y_max)
                 } else {
-                    let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph outline".into()))?;
+                    let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error(format!("Missing {name} PDF glyph outline")))?;
                     let mut pen = Pen::default();
                     glyph
                         .draw(DrawSettings::unhinted(Size::new(1000.0), skrifa::instance::LocationRef::new(face.instance.coords())), &mut pen)
-                        .map_err(|e| Error(format!("Cannot measure Arabic PDF glyph: {e}")))?;
+                        .map_err(|e| Error(format!("Cannot measure {name} PDF glyph: {e}")))?;
                     if pen.full {
-                        return Err(Error("Arabic PDF glyph exceeds the outline size limit".into()));
+                        return Err(Error(format!("{name} PDF glyph exceeds the outline size limit")));
                     }
                     (pen.bounds[1], pen.bounds[3])
                 };
@@ -339,7 +442,7 @@ pub(crate) fn is_logical_order(text: &str, direction: TextDirection) -> bool {
     direction != TextDirection::RightToLeft && !text.chars().any(is_control)
 }
 
-/// Bidi reordering for standard-font text requires no optional Arabic font.
+/// Bidi reordering for standard-font text requires no optional Arabic or Hebrew font.
 pub(crate) fn latin_visual(text: &str, direction: TextDirection) -> Result<Cow<'_, str>, Error> {
     if is_logical_order(text, direction) {
         return Ok(Cow::Borrowed(text));
@@ -383,7 +486,7 @@ fn mirror_ansi(ch: char) -> char {
     }
 }
 
-/// Whether a character is drawn from the embedded Arabic face. Line breaks never are, so the
+/// Whether a character is drawn from the embedded face. Line breaks never are, so the
 /// fallback path draws them as spaces even when the face maps them.
 fn embeddable(mapped: bool, ch: char) -> bool {
     (mapped || is_control(ch)) && !is_line_break(ch)
@@ -405,7 +508,8 @@ fn is_control(ch: char) -> bool {
 
 #[derive(Default)]
 pub(crate) struct Subset {
-    keys: BTreeMap<(u32, bool, bool, String), usize>,
+    /// Glyphs of both faces share the page's Type3 fonts, so the key names the face.
+    keys: BTreeMap<(Script, u32, bool, bool, String), usize>,
     glyphs: Vec<Glyph>,
     bytes: usize,
     /// Some text on the page set a run in the CJK CID font, so the page must declare it.
@@ -430,24 +534,27 @@ fn glyph_procedure(glyph: &Glyph) -> String {
 }
 
 impl Subset {
-    fn insert(&mut self, font: Font, id: u32, source: String) -> Result<usize, Error> {
-        let key = (id, bold(font), italic(font), source.clone());
+    fn insert(&mut self, font: Font, script: Script, id: u32, source: String) -> Result<usize, Error> {
+        let key = (script, id, bold(font), italic(font), source.clone());
         if let Some(index) = self.keys.get(&key) {
             return Ok(*index);
         }
+        let name = script.name();
         if self.glyphs.len() >= MAX_SUBSET_GLYPHS {
-            return Err(Error("PDF page has too many distinct Arabic glyphs".into()));
+            return Err(Error(format!("PDF page has too many distinct {name} glyphs")));
         }
-        let face = loaded_face(font)?;
+        let face = loaded_face(font, script)?;
         let raw = face.font()?;
         let location = skrifa::instance::LocationRef::new(face.instance.coords());
-        let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph outline".into()))?;
-        let width =
-            raw.glyph_metrics(Size::new(1000.0), location).advance_width(id.into()).ok_or_else(|| Error("Missing Arabic PDF glyph width".into()))?;
+        let glyph = raw.outline_glyphs().get(id.into()).ok_or_else(|| Error(format!("Missing {name} PDF glyph outline")))?;
+        let width = raw
+            .glyph_metrics(Size::new(1000.0), location)
+            .advance_width(id.into())
+            .ok_or_else(|| Error(format!("Missing {name} PDF glyph width")))?;
         let mut pen = Pen { shear: if italic(font) { 0.212_556_56 } else { 0.0 }, ..Default::default() };
-        glyph.draw(DrawSettings::unhinted(Size::new(1000.0), location), &mut pen).map_err(|e| Error(format!("Cannot draw Arabic PDF glyph: {e}")))?;
+        glyph.draw(DrawSettings::unhinted(Size::new(1000.0), location), &mut pen).map_err(|e| Error(format!("Cannot draw {name} PDF glyph: {e}")))?;
         if pen.full || self.bytes.saturating_add(pen.path.len()).saturating_add(source.len().saturating_mul(2)) > MAX_SUBSET_BYTES {
-            return Err(Error("Arabic PDF outlines exceed the page size limit".into()));
+            return Err(Error(format!("{name} PDF outlines exceed the page size limit")));
         }
         let index = self.glyphs.len();
         self.bytes += pen.path.len() + source.len() * 2;
@@ -465,7 +572,7 @@ impl Subset {
         for item in layout.items {
             match item {
                 Item::Glyph { id, x, y, source } => {
-                    let index = self.insert(font, id, source)?;
+                    let index = self.insert(font, layout.script, id, source)?;
                     let _ = writeln!(
                         out,
                         "/A{} {} Tf 1 0 0 1 {} {} Tm <{:02X}> Tj",
@@ -645,10 +752,22 @@ mod tests {
 
     #[test]
     fn no_bundled_or_installed_face_is_not_an_error() {
-        for bold in [false, true] {
-            assert!(matches!(super::find_face(&[], &[], bold), Ok(None)));
-            assert!(matches!(super::find_face(&[], &[std::env::temp_dir().join("gridcraft-no-fonts-here")], bold), Ok(None)));
+        for (script, bold) in [super::Script::Arabic, super::Script::Hebrew].into_iter().flat_map(|script| [(script, false), (script, true)]) {
+            assert!(matches!(super::find_face(script, &[], &[], bold), Ok(None)));
+            assert!(matches!(super::find_face(script, &[], &[std::env::temp_dir().join("gridcraft-no-fonts-here")], bold), Ok(None)));
         }
+    }
+
+    #[test]
+    fn the_same_glyph_id_from_the_arabic_and_hebrew_faces_is_two_glyphs() {
+        use super::Script::{Arabic, Hebrew};
+        if !matches!((super::face(Arabic, false), super::face(Hebrew, false)), (Ok(Some(_)), Ok(Some(_)))) {
+            return;
+        }
+        let mut subset = super::Subset::default();
+        let arabic = subset.insert(crate::Font::Helvetica, Arabic, 3, String::new()).unwrap();
+        let hebrew = subset.insert(crate::Font::Helvetica, Hebrew, 3, String::new()).unwrap();
+        assert_ne!(arabic, hebrew, "a page holding both scripts draws each glyph from its own face");
     }
 
     #[test]

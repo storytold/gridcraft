@@ -1,6 +1,6 @@
 # gridcraft-pdf
 
-A small PDF 1.7 writer for shaped Arabic text, vector drawing and RGBA images.
+A small PDF 1.7 writer for shaped Arabic and Hebrew text, vector drawing and RGBA images.
 
 ## API migration
 

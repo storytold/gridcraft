@@ -267,7 +267,7 @@ pub fn width_is_char_sum(font: Font, text: &str, direction: TextDirection) -> bo
 }
 
 /// Width of `text` in points when set in `font` at `size` points.
-/// Arabic uses shaped advances. If its font cannot render the text, measurement returns zero
+/// Arabic and Hebrew use shaped advances. If their font cannot render the text, measurement returns zero
 /// and drawing that text causes [`PdfDoc::finish`] to return the rendering error.
 pub fn text_width(font: Font, size: f32, text: &str) -> f32 {
     text_width_with_direction(font, size, text, TextDirection::Auto)
@@ -525,6 +525,7 @@ pub struct Page {
     arabic: arabic::Subset,
     error: Option<Error>,
     missing_arabic_font: bool,
+    missing_hebrew_font: bool,
 }
 
 /// Most bytes of content per page before further drawing is dropped (keeps hostile inputs from
@@ -785,13 +786,13 @@ impl Page {
         self.op(&s);
     }
 
-    /// Arabic ink extents above and below the baseline, in points. Standard font text returns
+    /// Arabic or Hebrew ink extents above and below the baseline, in points. Standard font text returns
     /// `None`. Font errors are recorded for [`PdfDoc::finish`], just as when drawing text.
     pub fn text_vertical_extents(&mut self, font: Font, size: f32, text: &str) -> Option<(f32, f32)> {
         self.text_vertical_extents_with_direction(font, size, text, TextDirection::Auto)
     }
 
-    /// Arabic ink extents with an explicit paragraph base direction.
+    /// Arabic or Hebrew ink extents with an explicit paragraph base direction.
     pub fn text_vertical_extents_with_direction(&mut self, font: Font, size: f32, text: &str, direction: TextDirection) -> Option<(f32, f32)> {
         if !arabic::shaped(font, text) {
             return None;
@@ -833,7 +834,11 @@ impl Page {
         let matrix = format!("{} {} {} {} {} {}", n(cs), n(-sn), n(sn), n(cs), n(origin.x), n(self.y(origin.y)));
         let size = size.min(10_000.0);
         let shaping = arabic::shaping(font, text);
-        self.missing_arabic_font |= shaping == arabic::Shaping::NoFont;
+        match shaping {
+            arabic::Shaping::NoFont(arabic::Script::Arabic) => self.missing_arabic_font = true,
+            arabic::Shaping::NoFont(arabic::Script::Hebrew) => self.missing_hebrew_font = true,
+            arabic::Shaping::Plain | arabic::Shaping::Shaped => {}
+        }
         if shaping == arabic::Shaping::Shaped {
             self.shaped_text(&matrix, size, font, color, text, direction);
         } else {
@@ -1032,6 +1037,7 @@ impl PdfDoc {
             arabic: arabic::Subset::default(),
             error: None,
             missing_arabic_font: false,
+            missing_hebrew_font: false,
         });
         let i = self.pages.len() - 1;
         &mut self.pages[i]
@@ -1050,6 +1056,12 @@ impl PdfDoc {
     /// because no Arabic face was found for its weight.
     pub fn missing_arabic_font(&self) -> bool {
         self.pages.iter().any(|page| page.missing_arabic_font)
+    }
+
+    /// Whether some Hebrew text was set in the standard and CID fonts, which have no Hebrew glyphs,
+    /// because no Hebrew face was found for its weight.
+    pub fn missing_hebrew_font(&self) -> bool {
+        self.pages.iter().any(|page| page.missing_hebrew_font)
     }
 
     /// Serializes the document. A document without pages gets one blank Letter page.

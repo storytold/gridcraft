@@ -948,6 +948,51 @@ fn arabic_is_shaped_and_preserved_or_falls_back_without_a_font() {
 }
 
 #[test]
+fn hebrew_and_the_shekel_sign_are_drawn_from_the_hebrew_face() {
+    if arabic::layout(Font::Helvetica, "שלום", TextDirection::Auto).is_err() && arabic::HEBREW_FONTS.is_empty() {
+        let mut doc = PdfDoc::new();
+        doc.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], "שלום ₪120");
+        assert!(doc.missing_hebrew_font() && !doc.missing_arabic_font(), "without a Hebrew face the export says which face is missing");
+        check_xref(&doc.finish().unwrap()).unwrap();
+        return;
+    }
+    for (text, mapped) in [("שלום", &b" <05E9>\n"[..]), ("עולם ₪120", &b" <20AA>\n"[..]), ("₪120", &b" <20AA>\n"[..])] {
+        let mut doc = PdfDoc::new();
+        doc.add_page(600.0, 300.0).text(30.0, 70.0, 20.0, Font::Helvetica, [0, 0, 0], text);
+        assert!(!doc.missing_hebrew_font(), "{text}");
+        let pdf = doc.finish().unwrap();
+        check_xref(&pdf).unwrap();
+        assert!(find(&pdf, b"/UniGB-UTF16-H").is_none(), "{text}: Hebrew and ₪ are never set in the CJK font, which has no glyphs for them");
+        assert!(find(&pdf, b"/Subtype /Type3").is_some(), "{text}");
+        assert!(find(&pdf, mapped).is_some(), "{text}: the face's glyph maps back to its character");
+        assert_eq!(utf16_entry(&pdf, "/ActualText").unwrap(), text);
+    }
+}
+
+#[test]
+fn hebrew_points_are_drawn_on_their_letters_from_the_hebrew_face() {
+    // Skipped only without a Hebrew face, bundled or installed: a face that fails to lay the text out fails the test.
+    if arabic::shaping(Font::Helvetica, "בְּרֵאשִׁית") == arabic::Shaping::NoFont(arabic::Script::Hebrew) {
+        return;
+    }
+    let pointed = arabic::layout(Font::Helvetica, "בְּרֵאשִׁית", TextDirection::Auto);
+    let (pointed, plain) = (pointed.unwrap(), arabic::layout(Font::Helvetica, "בראשית", TextDirection::Auto).unwrap());
+    assert!(pointed.items.iter().all(|item| matches!(item, arabic::Item::Glyph { .. })), "{:?}", pointed.items);
+    assert!(pointed.items.len() > plain.items.len(), "each point is a glyph of its own");
+    assert!((pointed.width - plain.width).abs() < 1.0, "the points sit on their letters and add no width");
+    // Which arm the dot sits over is what tells shin from sin, so it shows the points are placed and not only drawn.
+    // A face may draw the letter and its dot as one glyph, which leaves no dot to place.
+    let dot_from_letter = |text: &str| {
+        let mut spans = arabic::ink_spans(Font::Helvetica, text).unwrap();
+        spans.sort_by(|a, b| (a[1] - a[0]).total_cmp(&(b[1] - b[0])));
+        let [dot, letter] = spans[..] else { return None };
+        Some((dot[0] + dot[1]) / 2.0 - (letter[0] + letter[1]) / 2.0)
+    };
+    assert!(dot_from_letter("שׁ").is_none_or(|x| x > 0.0), "the shin dot is over the right arm");
+    assert!(dot_from_letter("שׂ").is_none_or(|x| x < 0.0), "the sin dot is over the left arm");
+}
+
+#[test]
 fn latin_inside_arabic_text_declares_its_page_font() {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
         return;
