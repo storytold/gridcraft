@@ -248,7 +248,9 @@ fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collectio
 }
 
 /// The PivotTables of `sh` whose whole report `ranges` cover, in index order. A report the ranges
-/// cover only in part is an error.
+/// cover only in part is an error. Rows an applied filter hides aren't cleared, so a report with
+/// some of its rows hidden that way is only partly cleared, and one with all of them hidden isn't
+/// touched.
 fn cleared_pivots(sh: &gridcraft_model::Sheet, ranges: &[RangeRef]) -> Result<Vec<usize>> {
     let mut whole = Vec::new();
     for (pi, pt) in sh.pivots.iter().enumerate() {
@@ -256,7 +258,11 @@ fn cleared_pivots(sh: &gridcraft_model::Sheet, ranges: &[RangeRef]) -> Result<Ve
         if !ranges.iter().any(|r| r.intersects(&area)) {
             continue;
         }
-        if !crate::pivot::covered_by(area, ranges) {
+        let hidden = filtered_rows(sh, area).len() as u32;
+        if hidden == area.height() {
+            continue;
+        }
+        if hidden > 0 || !crate::pivot::covered_by(area, ranges) {
             return Err(EngineError::Other(crate::pivot::PARTIAL_REPORT.into()));
         }
         whole.push(pi);
@@ -286,8 +292,9 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
     };
     // Clearing the contents of a whole PivotTable report deletes the PivotTable; clearing only part
     // of one is refused, as the report can't be left half blank under a PivotTable that still
-    // owns it. Formats, notes and links clear as on any other cell.
-    let pivots: Vec<usize> = if matches!(what, "contents" | "all") && !uncheck_only {
+    // owns it. Formats, notes and links clear as on any other cell. (A first Delete over checked
+    // boxes only unchecks them, but still empties the other cells, report cells among them.)
+    let pivots: Vec<usize> = if matches!(what, "contents" | "all") {
         match s.doc()?.wb.sheet(sheet) {
             Some(sh) => cleared_pivots(sh, &ranges)?,
             None => Vec::new(),

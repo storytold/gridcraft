@@ -1677,3 +1677,46 @@ fn shifting_cells_through_a_report_is_refused() {
     s.execute("home.insertCells", json!({"range": beside, "shift": "down"})).unwrap();
     assert_eq!(pt(&s).last_range, Some(r));
 }
+
+/// A checked checkbox elsewhere in the selection makes Delete only uncheck boxes, but the other
+/// cells it covers are emptied all the same, report cells among them.
+#[test]
+fn a_checked_box_in_the_selection_doesnt_let_part_of_a_report_be_cleared() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    s.execute("insert.checkbox", json!({"range": "H1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H1", "input": "TRUE"})).unwrap();
+    let label = CellRef::new(r.start.row + 1, r.start.col).a1();
+    let before = text(&s, &label);
+    let err = s.execute("edit.clearContents", json!({"range": format!("{label},H1")})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT);
+    assert_eq!(text(&s, &label), before);
+    s.execute("edit.clearContents", json!({"range": format!("{},H1", r.a1())})).unwrap();
+    assert_eq!(pivot_count(&s), 0);
+}
+
+/// Clearing skips the rows an applied filter hides, so a report with some rows hidden is only
+/// partly cleared: refused, rather than deleting the PivotTable whose hidden rows stay.
+#[test]
+fn a_report_with_filtered_rows_isnt_cleared_whole() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"destination": "Sheet1!H3", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    s.execute("data.filter", json!({"range": "A1:E13"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["East"]})).unwrap();
+    let d = s.doc().unwrap();
+    assert!((r.start.row..=r.end.row).any(|row| d.wb.active().unwrap().is_row_hidden(row)), "the filter hides a report row");
+    let err = s.execute("edit.clearContents", json!({"range": r.a1()})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT);
+    assert_eq!(pivot_count(&s), 1);
+}
+
+#[test]
+fn cut_rows_holding_a_report_cant_be_inserted_elsewhere() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    s.execute("edit.cut", json!({"range": format!("{}:{}", r.start.row + 1, r.end.row + 1)})).unwrap();
+    let err = s.execute("home.insertCopiedCells", json!({"at": CellRef::new(r.end.row + 5, 0).a1()})).unwrap_err().to_string();
+    assert!(err.contains("PivotTable report"), "{err}");
+    assert_eq!((pivot_count(&s), pt(&s).last_range), (1, Some(r)));
+}

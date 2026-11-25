@@ -633,6 +633,11 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
             return Err(EngineError::Other("The cut rows or columns can't be inserted inside themselves.".into()));
         }
     }
+    // Inserting cut cells pastes their values and deletes where they were: a PivotTable doesn't
+    // move with them, so its report would turn into plain values and the PivotTable be deleted.
+    if cut && d.wb.sheet(clip.sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| crate::pivot::report_area(pt).intersects(&sel))) {
+        return Err(EngineError::Other("Cut rows or columns that hold a PivotTable report can't be inserted elsewhere.".into()));
+    }
     let revision = d.revision;
     let before = (d.wb.clone(), d.selection.clone());
     // Inside an undo group the nested steps add no undo entries of their own.
