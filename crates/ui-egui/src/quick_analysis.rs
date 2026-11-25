@@ -49,6 +49,8 @@ pub struct State {
     pub tab: Tab,
     /// Totals by row (results to the right) instead of by column (results below).
     pub by_rows: bool,
+    /// The popup just opened: its first tile takes the keyboard focus so arrows, Enter and Space work.
+    focus_first_tile: bool,
 }
 
 /// What a tile does.
@@ -153,6 +155,7 @@ pub fn toggle(app: &mut SheetApp, on: Option<bool>) -> Result<Json, String> {
         return Err("Select at least two cells to use Quick Analysis.".into());
     } else {
         app.grid.quick_analysis.open = Some((sheet, sel));
+        app.grid.quick_analysis.focus_first_tile = true;
     }
     Ok(json!({"open": app.grid.quick_analysis.open.is_some()}))
 }
@@ -208,8 +211,11 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
     // Right after a fill-handle drag the Auto Fill Options button sits at the same corner; it wins
     // until that fill is no longer current (Ctrl+Q still opens the popup).
     let fill_tag = app.grid.fill_tag.is_some();
+    // Whether the launcher or a popup control has the keyboard, so the grid reads no keys this frame.
+    let mut keyboard_in_popup = false;
     if corner_visible && (open || (!busy && !fill_tag)) {
         let mut clicked = false;
+        let mut focused = false;
         egui::Area::new(Id::unique("quick_analysis_button")).fixed_pos(button.min).order(Order::Foreground).show(&ctx, |ui| {
             let (r, resp) = ui.allocate_exact_size(button.size(), Sense::click());
             let fill = if resp.is_pointer_button_down_on() || open {
@@ -222,8 +228,13 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
             ui.painter().rect_filled(r, 4.0, fill);
             ui.painter().rect_stroke(r, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
             icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), Icon::QuickAnalysis, t.accent);
-            clicked = resp.on_hover_text(lang.tr("Quick Analysis (Ctrl+Q)")).clicked();
+            paint_focus_ring(ui, &t, r, &resp);
+            let name = lang.tr("Quick Analysis (Ctrl+Q)");
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, name));
+            focused = resp.has_focus();
+            clicked = resp.on_hover_text(name).clicked();
         });
+        keyboard_in_popup = focused;
         if clicked {
             let _ = toggle(app, None);
         }
@@ -231,12 +242,16 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
     let Some((_, opened_for)) = app.grid.quick_analysis.open else { return };
     let pos = pos2(button.left(), button.bottom() + 4.0);
     let mut picked: Option<Action> = None;
+    // The frame that opened the popup (Ctrl+Q is still in the input) must not close it again.
+    let just_opened = app.grid.quick_analysis.focus_first_tile;
     let resp = egui::Area::new(Id::unique("quick_analysis_popup")).fixed_pos(pos).order(Order::Foreground).constrain(true).show(&ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             let state = &mut app.grid.quick_analysis;
             ui.horizontal(|ui| {
                 for tab in Tab::ALL {
-                    if ui.selectable_label(state.tab == tab, lang.tr(tab.label())).clicked() {
+                    let tab_button = ui.selectable_label(state.tab == tab, lang.tr(tab.label()));
+                    keyboard_in_popup |= tab_button.has_focus();
+                    if tab_button.clicked() {
                         state.tab = tab;
                     }
                 }
@@ -244,16 +259,17 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
             ui.separator();
             if state.tab == Tab::Totals {
                 ui.horizontal(|ui| {
-                    ui.selectable_value(&mut state.by_rows, false, lang.tr("By Column"));
-                    ui.selectable_value(&mut state.by_rows, true, lang.tr("By Row"));
+                    keyboard_in_popup |= ui.selectable_value(&mut state.by_rows, false, lang.tr("By Column")).has_focus();
+                    keyboard_in_popup |= ui.selectable_value(&mut state.by_rows, true, lang.tr("By Row")).has_focus();
                 });
             }
             let items = tiles(state.tab, &opened_for.a1(), &sheet_name, state.by_rows);
+            let mut take_focus = std::mem::take(&mut state.focus_first_tile);
             for row in items.chunks(6) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for item in row {
-                        if paint_tile(ui, &t, item, lang.tr(item.label)) {
+                        if paint_tile(ui, &t, item, lang.tr(item.label), std::mem::take(&mut take_focus), &mut keyboard_in_popup) {
                             picked = Some(item.action.clone());
                         }
                     }
@@ -269,14 +285,43 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
             Action::Run(id, params) => app.run_or_alert(id, params),
             Action::Dialog(name, params) => app.open_dialog(name, params),
         }
-    } else if outside_click || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    } else if outside_click
+        || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        || (keyboard_in_popup && !just_opened && toggle_key_pressed(&ctx))
+    {
         app.grid.quick_analysis.open = None;
     }
 }
 
-/// One option of the popup: a small picture over a wrapped label. True when clicked.
-fn paint_tile(ui: &mut Ui, t: &Tokens, item: &Tile, label: &str) -> bool {
+/// Ctrl+Q (Control+Q on a Mac, where Command+Q stays Quit) while a tile has the keyboard: the grid
+/// no longer reads keys then, so the popup closes itself on the key that opened it.
+fn toggle_key_pressed(ctx: &egui::Context) -> bool {
+    ctx.input_mut(|i| {
+        let pressed = |e: &egui::Event| {
+            matches!(e, egui::Event::Key { key: egui::Key::Q, pressed: true, modifiers: m, .. } if m.ctrl && !m.shift && !m.alt && !m.mac_cmd)
+        };
+        let Some(at) = i.events.iter().position(pressed) else { return false };
+
+        i.events.remove(at);
+        true
+    })
+}
+
+/// A visible ring around a control that has the keyboard focus.
+fn paint_focus_ring(ui: &Ui, t: &Tokens, rect: Rect, resp: &egui::Response) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect.expand(1.0), 5.0, Stroke::new(2.0, t.sheet_focus), StrokeKind::Outside);
+    }
+}
+
+/// One option of the popup: a small picture over a wrapped label, a button named by that label.
+/// `take_focus` gives it the keyboard focus. True when clicked.
+fn paint_tile(ui: &mut Ui, t: &Tokens, item: &Tile, label: &str, take_focus: bool, has_keyboard: &mut bool) -> bool {
     let (rect, resp) = ui.allocate_exact_size(TILE, Sense::click());
+    if take_focus {
+        resp.request_focus();
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     if resp.is_pointer_button_down_on() {
         ui.painter().rect_filled(rect, 4.0, t.pressed);
     } else if resp.hovered() {
@@ -287,6 +332,8 @@ fn paint_tile(ui: &mut Ui, t: &Tokens, item: &Tile, label: &str) -> bool {
     let galley = ui.painter().layout(label.to_string(), theme::ui_font(11.0), t.text, TILE.x - 4.0);
     let at = pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 34.0);
     ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(at, galley, t.text);
+    paint_focus_ring(ui, t, rect, &resp);
+    *has_keyboard |= resp.has_focus();
     resp.clicked()
 }
 

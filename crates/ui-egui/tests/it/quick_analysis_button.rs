@@ -134,3 +134,57 @@ fn escape_closes_the_popup_without_cancelling_the_pending_copy() {
     esc(&mut h);
     assert!(h.state().session.clipboard.is_none(), "a second Esc, with no popup, cancels the copy as before");
 }
+
+/// The launcher and the tiles are named buttons. The popup hands the keyboard to its first tile,
+/// an arrow moves the focus to the next one and Enter runs it.
+#[test]
+fn launcher_and_tiles_are_named_buttons_that_work_by_keyboard() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable as _;
+    let mut session = crate::support::blank_session();
+    session.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3], [4, 5, 6]]})).unwrap();
+    session.execute("selection.set", json!({"range": "A1:C2"})).unwrap();
+    let mut h = crate::support::harness(session, 4);
+    h.get_by_role_and_label(Role::Button, "Quick Analysis (Ctrl+Q)");
+
+    toggle(h.state_mut(), Some(true)).unwrap();
+    h.run_steps(3);
+    assert!(h.get_by_role_and_label(Role::Button, "Data Bars").is_focused(), "the first tile takes the focus");
+    h.get_by_role_and_label(Role::Button, "Clear Rules");
+
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    assert!(h.get_by_role_and_label(Role::Button, "Color Scale").is_focused(), "an arrow moves the focus to the next tile");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "the chosen tile closes the popup");
+    let sheet = h.state().session.active().unwrap().wb.active().unwrap();
+    assert_eq!(sheet.cond_formats.len(), 1, "and its color scale is applied");
+}
+
+/// Whether a frame of the launcher and popup draws the focus ring colour as a stroke.
+fn draws_focus_ring(app: &mut SheetApp, frames: usize) -> bool {
+    let sh = app.session.active().unwrap().wb.active().unwrap().clone();
+    let g = Geo::new(&sh, Rect::from_min_max(pos2(0.0, 0.0), pos2(1200.0, 800.0)), Vec2::ZERO);
+    let ctx = egui::Context::default();
+    // No fade-in, so the colours are the theme's own.
+    ctx.global_style_mut(|style| style.animation_time = 0.0);
+    let ring = gridcraft_ui_egui::theme::Tokens::get(&ctx).sheet_focus;
+    let mut seen = false;
+    for _ in 0..frames {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| gridcraft_ui_egui::quick_analysis::show(app, ui, &g, &sh));
+        seen = out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.color == ring));
+        out.drop_without_applying_deltas();
+    }
+    seen
+}
+
+/// The focused tile shows a ring, so a keyboard user can see where they are.
+#[test]
+fn the_focused_tile_shows_a_visible_focus_ring() {
+    let mut app = app();
+    app.run("selection.set", json!({"range": "B2:D5"})).unwrap();
+    assert!(!draws_focus_ring(&mut app, 3), "no ring while the popup is closed");
+    toggle(&mut app, Some(true)).unwrap();
+    assert!(draws_focus_ring(&mut app, 3), "the first tile has the focus and a ring");
+}
