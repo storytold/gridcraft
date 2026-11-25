@@ -1,6 +1,6 @@
 //! Workspace tooling: `cargo xtask <command>` (or `cargo run -p xtask -- <command>`).
 //!
-//! Pure Rust (std + serde_json, plus the engine for `parity`). External tools (`cargo`, `git`)
+//! Pure Rust (std, serde_json, chrono and sha2, plus the engine for `parity`). External tools (`cargo`, `git`)
 //! are invoked through `std::process::Command`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -12,6 +12,7 @@ mod keytips;
 mod layers;
 #[cfg_attr(not(feature = "engine"), allow(dead_code))]
 mod parity;
+mod renderer_bench;
 mod stats;
 mod version;
 
@@ -39,6 +40,7 @@ commands:
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
+  renderer-bench  build/run a source-verified native grid benchmark (--help for options)
 ";
 
 fn main() -> ExitCode {
@@ -55,6 +57,7 @@ fn main() -> ExitCode {
         Some("parity") => parity::run(&root(), &rest),
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
+        Some("renderer-bench") => renderer_bench::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
