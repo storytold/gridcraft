@@ -27,21 +27,24 @@ type Row = Option<(String, StyleId)>;
 /// `r`'s top row down. Each run of filled cells is a paragraph and blank cells stay between them;
 /// a word wider than the line keeps a line of its own. The other columns of `r` only give width.
 /// Lines past the bottom of `r` go on down the column; they replace cells there that hold
-/// something only with `overwrite`, else the error asks first. Cells holding numbers, formulas
-/// or merged areas can't be justified.
+/// something (spilled values too) only with `overwrite`, else the error asks first. Cells holding
+/// numbers, formulas or spilled values can't be justified, and no merged area may meet the cells
+/// written.
 pub fn justify(cx: &mut Ctx, sheet: usize, r: RangeRef, measure: Option<&TextWidth>, overwrite: bool) -> Result<Justified> {
     let sh = cx.wb.sheet(sheet).ok_or_else(|| EngineError::Other("There's no such sheet.".into()))?;
     let col = r.start.col;
     // Only rows up to the last stored one can hold text.
     let last = sh.used_range().map_or(r.start.row, |u| u.end.row.min(r.end.row)).max(r.start.row);
     let width = (r.start.col..=r.end.col).map(|c| sh.col_width(c)).sum::<f32>() - PADDING;
+    // The merges in the column, found once: an empty merge holds no cell and is past the used range.
+    let merged: Vec<RangeRef> = sh.merges.iter().filter(|m| !m.is_single() && m.start.col <= col && col <= m.end.col).copied().collect();
 
     // ---- the paragraphs: (text of each cell, style of its first cell)
     let mut source: Vec<Option<(Vec<String>, StyleId)>> = Vec::new();
     for row in r.start.row..=last {
         let at = CellRef::new(row, col);
-        if sh.merge_at(at).is_some_and(|m| !m.is_single()) {
-            return Err(EngineError::Other("Merged cells can't be justified.".into()));
+        if sh.spill.get(&at).is_some_and(|v| !v.is_empty()) {
+            return Err(not_text());
         }
         let text = match sh.cell(at) {
             Some(c) if c.formula.is_some() || c.py.is_some() => return Err(not_text()),
@@ -106,17 +109,19 @@ pub fn justify(cx: &mut Ctx, sheet: usize, r: RangeRef, measure: Option<&TextWid
     let end = end as u32;
     if end > r.end.row {
         let below = RangeRef::new(CellRef::new(r.end.row + 1, col), CellRef::new(end, col));
-        if let Some((at, _)) = sh.cells.iter_range(below).find(|(_, c)| c.has_content()).filter(|_| !overwrite) {
+        let stored = sh.cells.iter_range(below).find(|(_, c)| c.has_content()).map(|(at, _)| at);
+        let spilled = || sh.spill.range(below.start..=below.end).find(|(at, v)| below.contains(**at) && !v.is_empty()).map(|(at, _)| *at);
+        if let Some(at) = stored.or_else(spilled).filter(|_| !overwrite) {
             return Err(EngineError::Confirm(format!(
                 "The text will extend below the selection and replace what is in {}. Do you want to replace it?",
                 at.a1()
             )));
         }
-        if below.iter().any(|at| sh.merge_at(at).is_some_and(|m| !m.is_single())) {
-            return Err(EngineError::Other("Merged cells can't be justified.".into()));
-        }
     }
     let written = RangeRef::new(r.start, CellRef::new(end.max(last), col));
+    if merged.iter().any(|m| m.intersects(&written)) {
+        return Err(EngineError::Other("Merged cells can't be justified.".into()));
+    }
 
     let shm = cx.sheet_mut(sheet)?;
     for (i, at) in written.iter().enumerate() {
@@ -235,5 +240,30 @@ mod tests {
         assert_eq!(s.doc().unwrap().undo.len(), undo + 1, "one undo step");
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!((text(&s, "A1"), text(&s, "A6")), (SENTENCE.to_string(), "keep".to_string()));
+    }
+
+    /// An empty merge holds no cell, so only the cells to be written show it in the way.
+    #[test]
+    fn a_merge_where_lines_would_go_is_refused_even_when_empty() {
+        let mut s = session();
+        s.execute("cell.set", json!({"cell": "A1", "input": SENTENCE})).unwrap();
+        s.execute("home.mergeCells", json!({"range": "A3:B4"})).unwrap();
+        let err = s.execute("edit.fillJustify", json!({"range": "A1:A10"})).unwrap_err().to_string();
+        assert!(err.contains("Merged"), "{err}");
+        assert_eq!(text(&s, "A1"), SENTENCE);
+    }
+
+    /// Spilled values are no stored cells, yet they are filled: in the selection they can't be
+    /// justified, and below it they are asked about before lines replace them.
+    #[test]
+    fn spilled_values_count_as_filled() {
+        let mut s = session();
+        s.execute("cell.set", json!({"cell": "A3", "input": "=SEQUENCE(3,2)"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": SENTENCE})).unwrap();
+        let err = s.execute("edit.fillJustify", json!({"range": "B1:B6"})).unwrap_err().to_string();
+        assert!(err.contains("Only text"), "{err}");
+        let err = s.execute("edit.fillJustify", json!({"range": "B1"})).unwrap_err();
+        assert!(matches!(err, EngineError::Confirm(_)), "{err}");
+        assert_eq!(text(&s, "B1"), SENTENCE);
     }
 }
