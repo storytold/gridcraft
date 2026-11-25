@@ -50,10 +50,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // Alt shortcuts type their character too on Windows and Linux (Alt+= sends Text("=")): once
     // a shortcut ran, that text must not start an edit over what it just did.
     let mut shortcut_ran = false;
-    for ev in events {
+    for (idx, ev) in events.iter().enumerate() {
         // IME events are handled outside the match to keep this loop's complexity down. Any
         // non-commit IME event (preedit, delete-surrounding) falls through to `_ => {}` below.
-        if handle_ime_commit(app, &ev, shortcut_pressed, shortcut_ran) {
+        if handle_ime_commit(app, &events[idx..], shortcut_pressed, shortcut_ran) {
             return;
         }
         match ev {
@@ -63,10 +63,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             egui::Event::Cut => {
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
-            egui::Event::Paste(text) => app.paste_external(text),
+            egui::Event::Paste(text) => app.paste_external(text.clone()),
             // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
             // a floating picture at the active cell, as Excel does.
-            egui::Event::PasteImage(image) => app.paste_color_image(&image),
+            egui::Event::PasteImage(image) => app.paste_color_image(image),
             // PRIMARY middle-click paste belongs to egui's TextEdit; the grid has no caret to
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}
@@ -77,10 +77,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             // checkbox (#1951).
             egui::Event::Text(text) if text == " " && is_checkbox(sh, app) => {}
             egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
-                seed_editor(app, text);
+                seed_editor(app, collect_seed_text(&events[idx..]));
                 return;
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
+                let (key, physical_key, m) = (*key, *physical_key, *m);
                 use egui::Key;
                 let nudged = object_key(app, sh, key, m);
                 if nudged || crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
@@ -182,18 +183,54 @@ fn seed_editor(app: &mut SheetApp, text: String) {
     }
 }
 
-/// Seed the editor from a finished composition, if `ev` is one.
+/// Collect every printable text and IME-commit event in the rest of this frame's burst until a
+/// commit, navigation or modifier shortcut key arrives. The in-cell `TextEdit` does not hold
+/// egui focus yet on the frame `seed_editor` opens it, so returning after the first character
+/// drops the rest of a fast keyboard or USB barcode-scanner burst (#4731).
+fn collect_seed_text(rest: &[egui::Event]) -> String {
+    let mut out = String::new();
+    for ev in rest {
+        match ev {
+            egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => out.push_str(text),
+            egui::Event::Ime(egui::ImeEvent::Commit(text)) if !text.is_empty() => out.push_str(text),
+            egui::Event::Key { key: egui::Key::Backspace, pressed: true, modifiers: m, .. } if !m.alt && !m.ctrl && !m.command => {
+                out.pop();
+            }
+            egui::Event::Key { key, pressed: true, modifiers: m, .. } if stops_seed(*key, *m) => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+fn stops_seed(key: egui::Key, m: egui::Modifiers) -> bool {
+    m.alt
+        || m.ctrl
+        || m.command
+        || matches!(
+            key,
+            egui::Key::Enter
+                | egui::Key::Tab
+                | egui::Key::Escape
+                | egui::Key::ArrowUp
+                | egui::Key::ArrowDown
+                | egui::Key::ArrowLeft
+                | egui::Key::ArrowRight
+        )
+}
+
+/// Seed the editor from a finished composition, if `rest` starts with one.
 ///
 /// Only `ImeEvent::Commit` is finished text; a preedit is the input method's in-progress
 /// spelling and must not seed the editor. `Event::Ime` and `Event::Text` are mutually
 /// exclusive for one keystroke, so accepting a commit cannot double-insert a character.
 /// Returns whether the caller should stop handling this frame's events.
-fn handle_ime_commit(app: &mut SheetApp, ev: &egui::Event, shortcut_pressed: bool, shortcut_ran: bool) -> bool {
-    let egui::Event::Ime(egui::ImeEvent::Commit(text)) = ev else { return false };
+fn handle_ime_commit(app: &mut SheetApp, rest: &[egui::Event], shortcut_pressed: bool, shortcut_ran: bool) -> bool {
+    let Some(egui::Event::Ime(egui::ImeEvent::Commit(text))) = rest.first() else { return false };
     if shortcut_pressed || shortcut_ran || text.is_empty() {
         return false;
     }
-    seed_editor(app, text.clone());
+    seed_editor(app, collect_seed_text(rest));
     true
 }
 
