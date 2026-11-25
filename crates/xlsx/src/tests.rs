@@ -9,6 +9,7 @@ mod chart_data_table;
 mod chart_ref_offsets;
 mod controls_tests;
 mod csv_tests;
+mod db_queries_tests;
 mod encrypted_tests;
 mod equation_tests;
 mod fixtures;

@@ -131,8 +131,10 @@ past the parser's limit, and a wrapper inside the text. **Saving writes the real
 
 Excel's Get Data reaches files (Excel, CSV, XML, JSON, PDF, Parquet, folders), databases (SQL
 Server, Access, ODBC, …), web pages, SharePoint and online services, through Power Query.
-GridCraft imports CSV/TSV, JSON and HTML tables only, with no query editor, no connections and no
-refresh. Counted under features (Get & Transform, ~10% ready), not here.
+GridCraft imports CSV/TSV, JSON and HTML tables, and the result of one SQL query from PostgreSQL,
+MySQL/MariaDB or SQLite, and from ODBC in builds with the `odbc` feature (off by default; it needs the system's ODBC driver manager, such as unixODBC on Linux and macOS) (Data ▸ From Database, desktop and CLI). The imported table keeps its
+query in `customXml/gridcraftDbQueries.xml` (the connection password is never saved; the SQL is saved as written, so don't put passwords or other secrets in it before sharing the workbook; Excel keeps the part), so Data ▸ Refresh
+runs it again; no query editor. Counted under features (Get & Transform, ~10% ready), not here.
 
 ## Python cells
 
@@ -188,6 +190,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-01 | trivial | XLSX selects the first visible workbook view as one unit and bounds imported/exported tab ratios; isolated attributes and sheet-edit round trips covered, with firstSheet left to #2264 (#3057) |
 | 2026-10-31 | minor | CSV and text open detects each column's date order: a value that reads only day first (`31/05/2026`) makes the column day first, a value that reads only month first (`12/31/2026`) makes it month first, an all-ambiguous column keeps month first with a warning, and a column with both kinds stays text with a warning (#2765) |
 | 2026-10-31 | minor | XLSX open reads Google Sheets' `IFERROR(__xludf.DUMMYFUNCTION("…"),cached)` export wrapper as the formula inside when GridCraft calculates every function in it (plain, shared and array formulas, whole or nested; Google-only functions and unparseable, over-long or over-deep inner text keep the wrapper and the cached value) and keeps the cached value; saving writes the real formula with Excel's `_xlfn.` prefixes (#2871) |
+| 2026-10-30 | trivial | Import sources: From Database (PostgreSQL, MySQL/MariaDB, SQLite, ODBC); the table keeps its query for Refresh |
 | 2026-10-26 | minor | PDF honors cell Context/LTR/RTL, preserves paragraph direction across wrapping, and mirrors RTL sheet geometry without reversing glyphs |
 | 2026-10-26 | minor | Arabic PDF export embeds licensed glyph outlines, joins letters and marks, preserves logical text and reports unsupported glyphs before writing; Arabic runs take the embedded faces ahead of the CJK CID font, and CJK inside Arabic text is set in the CID font instead of failing the export |
 | 2026-10-26 | minor | Alignment readingOrder 0/1/2 survives cell, named-style and differential-style round-trips; Format Cells exposes reading direction and CF priority preserves unspecified inheritance |

@@ -203,6 +203,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.table_id += 1;
             let n = out.tables;
             let name = table_name(&t.name, &mut used_names, out.table_id);
+            out.table_names.insert(t.id, name.clone());
             let xml = table_xml(t, cols, &name, out.table_id, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             part.features.table_parts.push(rels.add("table", &format!("../tables/table{n}.xml")));
