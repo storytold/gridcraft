@@ -25,7 +25,7 @@ NIGHTLY_VERSION = "0.19.1-nightly.20261124.7.1.gabcdef012345"
 PROFILE = "gridcraft-nightly/profile"
 # The tar launcher is the shared template rendered for this app; these are its bytes.
 TAR_PROFILE = "ai.storyteller.gridcraft.nightly"
-TAR_LAUNCHER_SHA256 = "52bc8bdd0bb847093a948b53f0cebd481782ebb3c41bc9f3f34a3aade2fa1c3d"
+TAR_LAUNCHER_SHA256 = "da4d5c6187527b57bb3d6b9f2b8791dff71c2f3421a4116cbda3cd3314b54af7"
 
 RECORDER = """#!/bin/sh
 printf '<%s>\\n' "$@"
@@ -153,6 +153,13 @@ class CanonicalTarLauncher(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assertEqual(run([str(launcher), flag], cwd=self.root, env=self.env).stdout.splitlines(),
                                  self.prefix(self.data / TAR_PROFILE) + ["<--version>"])
+
+    def test_a_launcher_profile_argv_passes_through_unchanged(self):
+        # The ArtCraft Launcher names its own profile and per-install root; the app validates the pair.
+        launcher = self.install()
+        argv = ["--launch-profile", "nightly-v1", "--profile-root", str(self.root / "launcher root"), "--", "book.xlsx"]
+        self.assertEqual(run([str(launcher), *argv], cwd=self.root, env=self.env).stdout.splitlines(),
+                         [f"<{arg}>" for arg in argv])
 
     def test_a_missing_gui_fails_before_anything_runs(self):
         launcher = self.install()
