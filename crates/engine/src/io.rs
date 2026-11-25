@@ -3,7 +3,7 @@
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::{LineIndex, Sheet, Workbook};
+use gridcraft_model::{CsvEncoding, LineIndex, Sheet, Workbook};
 
 use crate::{EngineError, Result};
 
@@ -67,15 +67,32 @@ pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
 /// [`open_bytes`], first decrypting a password-protected workbook with `password`. Errors never
 /// quote the password.
 pub fn open_bytes_with_password(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Workbook, Vec<String>)> {
-    open_bytes_with(name, bytes, password, false)
+    open_bytes_with_encoding(name, bytes, password, false, CsvEncoding::Auto)
 }
 
 /// [`open_bytes_with_password`], and with `csv_as_text` a CSV/TSV/TXT file keeps every field as
 /// the text it holds, with no number, date or boolean conversion (identifiers such as GTINs, SKUs
 /// and ZIP codes survive). It does not apply to other formats.
 pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_with_encoding(name, bytes, password, csv_as_text, CsvEncoding::Auto)
+}
+
+/// [`open_bytes_with`] in a named CSV encoding; the workbook remembers the one the file turned out
+/// to be in, so a plain save writes it back.
+pub fn open_bytes_encoded(name: &str, bytes: &[u8], password: Option<&str>, encoding: CsvEncoding) -> Result<(Workbook, Vec<String>)> {
+    open_bytes_with_encoding(name, bytes, password, false, encoding)
+}
+
+/// [`open_bytes_with_password`], with `csv_as_text` and the CSV/TSV `encoding` both applied.
+pub fn open_bytes_with_encoding(
+    name: &str,
+    bytes: &[u8],
+    password: Option<&str>,
+    csv_as_text: bool,
+    encoding: CsvEncoding,
+) -> Result<(Workbook, Vec<String>)> {
     if gridcraft_xlsx::sniff(bytes) != gridcraft_xlsx::Format::Encrypted {
-        let (mut wb, warnings) = open_plain(name, bytes, csv_as_text)?;
+        let (mut wb, warnings) = open_plain(name, bytes, csv_as_text, encoding)?;
         fit_imported_rows(&mut wb);
         return Ok((wb, warnings));
     }
@@ -89,7 +106,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
     if gridcraft_xlsx::sniff(&plain) == gridcraft_xlsx::Format::Encrypted {
         return Err(EngineError::Other(format!("We can't open '{name}': the encrypted file is damaged (it holds another encrypted file).")));
     }
-    let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text)?;
+    let (mut wb, mut warnings) = open_plain(name, &plain, csv_as_text, encoding)?;
     fit_imported_rows(&mut wb);
     warnings.insert(0, DECRYPTED_NOTICE.into());
     Ok((wb, warnings))
@@ -138,8 +155,8 @@ fn decrypt_message(name: &str, e: gridcraft_xlsx::DecryptError) -> String {
 /// Parses bytes that aren't encrypted, then takes the workbook's macros, and the button actions
 /// xlsx has no place for, out of their hidden names, and adopts the Python cells they hold (see
 /// [`adopt_python`]) within the limits of [`enforce_python_limits`].
-fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
-    let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text)?;
+fn open_plain(name: &str, bytes: &[u8], csv_as_text: bool, encoding: CsvEncoding) -> Result<(Workbook, Vec<String>)> {
+    let (mut wb, mut warnings) = read_plain(name, bytes, csv_as_text, encoding)?;
     warnings.extend(crate::macros::load(&mut wb));
     crate::cmd::controls::load_action_names(&mut wb);
     warnings.extend(adopt_python(&mut wb));
@@ -272,7 +289,7 @@ fn sane_python_output(v: &gridcraft_core::Value) -> bool {
 }
 
 /// Parses bytes that aren't encrypted, as they are.
-fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
+fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool, encoding: CsvEncoding) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
     let sniffed = gridcraft_xlsx::sniff(bytes);
     if sniffed == gridcraft_xlsx::Format::Xls {
@@ -339,7 +356,7 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             Ok((wb, warnings))
         }
         Some(FileKind::Tsv) => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, encoding, ..Default::default() };
             let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             // Tab is what makes it a .tsv/.txt; saved as .csv it gets the CSV default.
             wb.csv_delimiter = None;
@@ -347,7 +364,7 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             Ok((wb, report.warnings))
         }
         _ => {
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions { delimiter: 0, parse_values: !csv_as_text, encoding, ..Default::default() };
             let (mut wb, report) = gridcraft_xlsx::read_csv_with_report(bytes, &opts).map_err(|e| EngineError::Other(e.to_string()))?;
             rename_first_sheet(&mut wb, name);
             Ok((wb, report.warnings))
@@ -493,18 +510,47 @@ fn set_first_sheet_name(wb: &mut Workbook, stem: &str) {
 
 /// Encodes a workbook in the format chosen by `path`'s extension.
 pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
+    save_bytes_encoded(wb, path, None)
+}
+
+/// [`save_bytes`] with the delimited-file encoding this write uses: `None` writes the encoding
+/// the workbook was opened with ([`Workbook::csv_encoding`]), else UTF-8 without a BOM.
+pub fn save_bytes_encoded(wb: &Workbook, path: &str, encoding: Option<CsvEncoding>) -> Result<Vec<u8>> {
+    save_bytes_encoded_report(wb, path, encoding).map(|(bytes, _)| bytes)
+}
+
+/// [`save_bytes_encoded`], also reporting a CSV/TSV write that could not spell every character
+/// ([`CsvLoss`]).
+pub fn save_bytes_encoded_report(wb: &Workbook, path: &str, encoding: Option<CsvEncoding>) -> Result<(Vec<u8>, Option<CsvLoss>)> {
     // An unknown or missing extension is refused rather than written as an XLSX under that name:
     // a typo like `.cvs` would otherwise produce a file no other app recognises.
     let Some(kind) = FileKind::from_path(path) else {
         let name = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path);
         return Err(EngineError::Other(format!("{name}: unknown file format. Save as .xlsx, .csv, .tsv, .json or .html.")));
     };
-    save_bytes_as(wb, path, kind)
+    save_bytes_as_encoded_report(wb, path, kind, encoding)
 }
 
 /// Encodes a workbook as `kind`, whatever `path`'s extension says.
 pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8>> {
+    save_bytes_as_encoded(wb, path, kind, None)
+}
+
+/// [`save_bytes_as`] with the delimited-file encoding for this write; `None` writes
+/// [`Workbook::csv_encoding`] (UTF-8 without a BOM when the workbook has none).
+pub fn save_bytes_as_encoded(wb: &Workbook, path: &str, kind: FileKind, encoding: Option<CsvEncoding>) -> Result<Vec<u8>> {
+    save_bytes_as_encoded_report(wb, path, kind, encoding).map(|(bytes, _)| bytes)
+}
+
+/// [`save_bytes_as_encoded`], also reporting a CSV/TSV write that could not spell every character:
+/// a code page the caller named replaced some with `?`, or a remembered one was given up for UTF-8
+/// so nothing was lost ([`CsvLoss`]).
+pub fn save_bytes_as_encoded_report(wb: &Workbook, path: &str, kind: FileKind, encoding: Option<CsvEncoding>) -> Result<(Vec<u8>, Option<CsvLoss>)> {
     let sheet = wb.active_sheet();
+    // A code page the caller named for this write may replace characters with `?`; one the
+    // workbook remembers may not (see [`write_delimited`]).
+    let explicit = encoding.is_some();
+    let encoding = encoding.or(wb.csv_encoding).unwrap_or(CsvEncoding::Utf8);
     match kind {
         // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
         // the VBA project, so any other name saves without it, as Excel does.
@@ -518,6 +564,7 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
             gridcraft_xlsx::write_xlsx_named_with(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book, XLSX_FUNCTIONS)
                 .map_err(|e| EngineError::Other(e.to_string()))
+                .map(|bytes| (bytes, None))
         }
         FileKind::Xls => {
             Err(EngineError::Other("Excel 97-2003 (.xls) is supported for import only. Save as .xlsx or another supported export format.".into()))
@@ -527,11 +574,18 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
         FileKind::Sylk => {
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
-        // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
-        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
-        FileKind::Json => crate::macros::json_bytes(wb),
-        FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
+        // A workbook read from CSV keeps the separator and the encoding it was read with (a `;`
+        // Shift-JIS file stays a `;` Shift-JIS file), unless this write names one.
+        FileKind::Csv => match wb.sheet(sheet) {
+            Some(sh) => csv(wb, sh, wb.csv_delimiter.unwrap_or(b','), encoding, explicit),
+            None => Ok((Vec::new(), None)),
+        },
+        FileKind::Tsv => match wb.sheet(sheet) {
+            Some(sh) => csv(wb, sh, b'\t', encoding, explicit),
+            None => Ok((Vec::new(), None)),
+        },
+        FileKind::Json => crate::macros::json_bytes(wb).map(|bytes| (bytes, None)),
+        FileKind::Html => to_html(wb, sheet).map(|text| (text.into_bytes(), None)),
     }
 }
 
@@ -558,21 +612,90 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
+///
 /// One intentional difference: a number shown as General is not narrowed to the cell width and
 /// never gets an exponent (`gridcraft_numfmt::format_value_full`). Below 1E+15 it is written as
 /// `&` converts it (15 significant digits); from 1E+15 as the shortest digits that read back as
 /// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
 /// that `&` writes in scientific notation as their 15 digits in full.
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| crate::display::value_text(wb, sh, c)).map_err(|e| EngineError::Other(e.to_string()))
+fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8, encoding: CsvEncoding, explicit: bool) -> Result<(Vec<u8>, Option<CsvLoss>)> {
+    write_delimited(sh, delimiter, encoding, explicit, |c| crate::display::value_text(wb, sh, c))
+}
+
+/// A delimited-file write that could not spell every character: the code page the caller named
+/// turned some into `?`, or a code page the workbook only remembered could not spell them and the
+/// file was written as UTF-8 instead of losing them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CsvLoss {
+    /// The code page that could not spell the text.
+    pub encoding: CsvEncoding,
+    /// Characters written as `?` (zero when the write fell back to UTF-8).
+    pub replaced: usize,
+    /// True when `encoding` was only remembered: the bytes are UTF-8, not that code page.
+    pub fell_back_to_utf8: bool,
+}
+
+impl CsvLoss {
+    /// The message a save reports, naming the code page either way.
+    pub fn message(&self) -> String {
+        if self.fell_back_to_utf8 {
+            format!(
+                "This file was opened as {}, which cannot write every character the sheet now holds, so it was saved as UTF-8 instead of losing them.",
+                self.encoding.as_str()
+            )
+        } else {
+            let plural = if self.replaced == 1 { "" } else { "s" };
+            format!(
+                "Saved as {}: {} character{plural} it cannot write became '?'. Save as UTF-8 to keep them.",
+                self.encoding.as_str(),
+                self.replaced
+            )
+        }
+    }
+}
+
+/// Writes one sheet as CSV/TSV in `encoding`. `explicit` says the caller named that code page:
+/// characters it cannot spell then become `?` and are counted ([`CsvLoss::replaced`]). A code page
+/// the workbook only remembered is never allowed to lose characters — the sheet is written as
+/// UTF-8 instead ([`CsvLoss::fell_back_to_utf8`]).
+fn write_delimited(
+    sh: &Sheet,
+    delimiter: u8,
+    encoding: CsvEncoding,
+    explicit: bool,
+    cell_text: impl Fn(CellRef) -> String,
+) -> Result<(Vec<u8>, Option<CsvLoss>)> {
+    let written = gridcraft_xlsx::write_csv_encoded_report(sh, delimiter, encoding, &cell_text).map_err(|e| EngineError::Other(e.to_string()))?;
+    if written.replaced == 0 {
+        return Ok((written.bytes, None));
+    }
+    if explicit {
+        return Ok((written.bytes, Some(CsvLoss { encoding, replaced: written.replaced, fell_back_to_utf8: false })));
+    }
+    let utf8 = gridcraft_xlsx::write_csv_encoded(sh, delimiter, CsvEncoding::Utf8, &cell_text).map_err(|e| EngineError::Other(e.to_string()))?;
+    Ok((utf8, Some(CsvLoss { encoding, replaced: 0, fell_back_to_utf8: true })))
 }
 
 /// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
 /// times as ISO 8601, booleans `TRUE`/`FALSE`, errors as their text, text as stored. Save As CSV
 /// writes displayed text instead ([`save_bytes`]) and stays the default.
 pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
-    let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok(Vec::new()) };
-    gridcraft_xlsx::write_csv(sh, wb.csv_delimiter.unwrap_or(b','), |c| match sh.value(c) {
+    csv_values_bytes_report(wb, None).map(|(bytes, _)| bytes)
+}
+
+/// [`csv_values_bytes`] in `encoding` (the code page the caller named), or the one the workbook was
+/// opened with; also reporting a write that could not spell every character ([`CsvLoss`]).
+pub fn csv_values_bytes_encoded(wb: &Workbook, encoding: Option<CsvEncoding>) -> Result<Vec<u8>> {
+    csv_values_bytes_report(wb, encoding).map(|(bytes, _)| bytes)
+}
+
+/// [`csv_values_bytes_encoded`] with the loss report: a code page the caller named may replace
+/// characters with `?`, while a remembered one falls back to UTF-8 instead of losing them.
+pub fn csv_values_bytes_report(wb: &Workbook, encoding: Option<CsvEncoding>) -> Result<(Vec<u8>, Option<CsvLoss>)> {
+    let Some(sh) = wb.sheet(wb.active_sheet()) else { return Ok((Vec::new(), None)) };
+    let explicit = encoding.is_some();
+    let encoding = encoding.or(wb.csv_encoding).unwrap_or(CsvEncoding::Utf8);
+    write_delimited(sh, wb.csv_delimiter.unwrap_or(b','), encoding, explicit, |c| match sh.value(c) {
         gridcraft_core::Value::Number(n) if n.is_finite() => {
             let shape = crate::display::parsed(wb.styles.get(sh.style_id(c)).num_fmt.as_str()).date_shape(n);
             match shape.zip(gridcraft_core::date::datetime_from_serial(wb.date_system, n)) {
@@ -583,7 +706,6 @@ pub fn csv_values_bytes(wb: &Workbook) -> Result<Vec<u8>> {
         gridcraft_core::Value::Text(t) => t.to_string(),
         v => crate::display::value_text_as(wb, &v, "General"),
     })
-    .map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// `date` and `time` say which parts the cell's format shows; a format with neither is not a date.

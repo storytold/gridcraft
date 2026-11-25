@@ -518,6 +518,137 @@ fn csv_save_keeps_the_separator_it_was_opened_with() {
     assert_eq!(String::from_utf8(save_bytes(&wb, "tabs.csv").unwrap()).unwrap(), tabs);
 }
 
+/// A CP932 (Shift-JIS) Japanese CSV built in code — `日本語,漢字,ｶﾅ,"a,b"` — never a binary fixture.
+fn japanese_cp932_csv() -> Vec<u8> {
+    let mut b = vec![0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA]; // 日本語
+    b.push(b',');
+    b.extend_from_slice(&[0x8A, 0xBF, 0x8E, 0x9A]); // 漢字
+    b.push(b',');
+    b.extend_from_slice(&[0xB6, 0xC5]); // ｶﾅ (halfwidth katakana)
+    b.push(b',');
+    b.extend_from_slice(b"\"a,b\"\r\n");
+    b
+}
+
+/// A delimited file is saved in the code page it was opened with (the `csv_delimiter` model):
+/// `Auto` detects Shift-JIS from the kana, a plain save writes those bytes back, and an
+/// explicit encoding on open is remembered the same way.
+#[test]
+fn csv_save_keeps_the_shift_jis_it_was_opened_with() {
+    let bytes = japanese_cp932_csv();
+    let (wb, _) = open_bytes("日本語.csv", &bytes).unwrap();
+    assert_eq!(wb.csv_encoding, Some(CsvEncoding::ShiftJis));
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 0)), gridcraft_core::Value::text("日本語"));
+    assert_eq!(wb.sheet(0).unwrap().value(CellRef::new(0, 3)), gridcraft_core::Value::text("a,b"));
+    assert_eq!(save_bytes(&wb, "日本語.csv").unwrap(), bytes, "a plain save keeps Shift-JIS");
+    assert_eq!(save_bytes(&wb, "copy.CSV").unwrap(), bytes, "and Save As another name too");
+    let (explicit, _) = open_bytes_encoded("jp.csv", &bytes, None, CsvEncoding::ShiftJis).unwrap();
+    assert_eq!(explicit.csv_encoding, Some(CsvEncoding::ShiftJis));
+    assert_eq!(save_bytes(&explicit, "jp.csv").unwrap(), bytes);
+    // The same bytes forced through Windows-1252 are the Latin-1 reading, and round trip as it.
+    let (latin, _) = open_bytes_encoded("jp.csv", &bytes, None, CsvEncoding::Windows1252).unwrap();
+    assert_eq!(latin.csv_encoding, Some(CsvEncoding::Windows1252));
+    assert_eq!(latin.sheet(0).unwrap().value(CellRef::new(0, 0)), gridcraft_core::Value::text("\u{201C}\u{FA}\u{2013}{\u{152}\u{EA}"));
+    assert_eq!(save_bytes(&latin, "jp.csv").unwrap(), bytes);
+    // A .tsv keeps the encoding too (only its delimiter is reset).
+    let tsv = [0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA, b'\t', 0xB6, 0xC5, b'\r', b'\n'];
+    let (from_tsv, _) = open_bytes("日本語.tsv", &tsv).unwrap();
+    assert_eq!(from_tsv.csv_encoding, Some(CsvEncoding::ShiftJis));
+    assert_eq!(save_bytes(&from_tsv, "日本語.tsv").unwrap(), tsv);
+}
+
+/// A workbook that was never read from a delimited file saves as BOM-less UTF-8; an explicit
+/// encoding on a save applies to that write only.
+#[test]
+fn csv_save_defaults_to_utf8_without_bom() {
+    let mut wb = Workbook::new();
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::text("日本語"));
+    assert_eq!(wb.csv_encoding, None);
+    assert_eq!(save_bytes(&wb, "book.csv").unwrap(), "日本語\r\n".as_bytes());
+    let cp932 = vec![0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA, b'\r', b'\n'];
+    assert_eq!(save_bytes_encoded(&wb, "book.csv", Some(CsvEncoding::ShiftJis)).unwrap(), cp932);
+    assert_eq!(wb.csv_encoding, None, "a save never changes the workbook's remembered encoding");
+    assert_eq!(save_bytes(&wb, "book.csv").unwrap(), "日本語\r\n".as_bytes(), "so the next plain save is UTF-8 again");
+    let bom = save_bytes_encoded(&wb, "book.csv", Some(CsvEncoding::Utf8Bom)).unwrap();
+    assert!(bom.starts_with(&[0xEF, 0xBB, 0xBF]) && bom.get(3..) == Some("日本語\r\n".as_bytes()));
+    // A character CP932 cannot write becomes `?`, not an HTML numeric character reference.
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(1, 0), gridcraft_core::Value::text("Ǎ😀"));
+    let sjis = save_bytes_encoded(&wb, "book.csv", Some(CsvEncoding::ShiftJis)).unwrap();
+    assert!(sjis.ends_with(b"??\r\n"), "{sjis:?}");
+    assert!(!sjis.windows(2).any(|w| w == b"&#"), "never an HTML character reference: {sjis:?}");
+}
+
+/// A plain save of a file opened in a legacy code page must not turn a character the code page
+/// cannot spell into `?`. Such a write falls back to UTF-8 and says so; only a code page the caller
+/// names for that write may replace characters, and then it reports how many.
+#[test]
+fn csv_save_of_a_remembered_code_page_never_drops_characters() {
+    // `café,1` in Windows-1252: 0xE9 is `é`.
+    let latin = [b'c', b'a', b'f', 0xE9, b',', b'1', b'\r', b'\n'];
+    let (mut wb, _) = open_bytes("latin.csv", &latin).unwrap();
+    assert_eq!(wb.csv_encoding, Some(CsvEncoding::Windows1252));
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(1, 0), gridcraft_core::Value::text("日本"));
+    // A plain save: the remembered Windows-1252 cannot hold the Japanese, so the file becomes UTF-8
+    // and no character is replaced by `?`.
+    let (saved, loss) = save_bytes_as_encoded_report(&wb, "latin.csv", FileKind::Csv, None).unwrap();
+    assert_eq!(saved, "café,1\r\n日本,\r\n".as_bytes());
+    assert!(!saved.contains(&b'?'), "{saved:?}");
+    assert_eq!(loss, Some(CsvLoss { encoding: CsvEncoding::Windows1252, replaced: 0, fell_back_to_utf8: true }));
+    assert!(loss.unwrap().message().contains("windows-1252"));
+    assert_eq!(save_bytes(&wb, "latin.csv").unwrap(), saved, "the plain save takes the same path");
+    assert_eq!(wb.csv_encoding, Some(CsvEncoding::Windows1252), "the workbook still remembers what it was opened with");
+
+    // The same for a Shift-JIS file and an emoji, which CP932 has no pair for.
+    let (mut jp, _) = open_bytes("jp.csv", &japanese_cp932_csv()).unwrap();
+    assert_eq!(jp.csv_encoding, Some(CsvEncoding::ShiftJis));
+    jp.sheet_mut(0).unwrap().set_value(CellRef::new(1, 0), gridcraft_core::Value::text("😀"));
+    let (saved, loss) = save_bytes_as_encoded_report(&jp, "jp.csv", FileKind::Csv, None).unwrap();
+    assert_eq!(loss, Some(CsvLoss { encoding: CsvEncoding::ShiftJis, replaced: 0, fell_back_to_utf8: true }));
+    assert!(saved.ends_with("😀,,,\r\n".as_bytes()), "{saved:?}");
+    assert!(!saved.contains(&b'?'), "{saved:?}");
+
+    // A code page the caller names may replace characters — and the write says how many.
+    let (explicit, loss) = save_bytes_as_encoded_report(&wb, "latin.csv", FileKind::Csv, Some(CsvEncoding::Windows1252)).unwrap();
+    assert_eq!(explicit, b"caf\xE9,1\r\n??,\r\n");
+    assert_eq!(loss, Some(CsvLoss { encoding: CsvEncoding::Windows1252, replaced: 2, fell_back_to_utf8: false }));
+    assert!(loss.unwrap().message().contains("2 characters"));
+
+    // A write that fits reports nothing, and keeps its code page.
+    let mut fits = Workbook::new();
+    fits.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::text("é"));
+    let (bytes, loss) = save_bytes_as_encoded_report(&fits, "fits.csv", FileKind::Csv, Some(CsvEncoding::Windows1252)).unwrap();
+    assert_eq!(bytes, b"\xE9\r\n");
+    assert_eq!(loss, None);
+}
+
+/// The raw-values export takes the same encoding as Save As CSV: the caller's code page, else the
+/// one the workbook was opened with.
+#[test]
+fn csv_values_export_honours_the_encoding() {
+    let mut wb = Workbook::new();
+    {
+        let sh = wb.sheet_mut(0).unwrap();
+        sh.set_value(CellRef::new(0, 0), gridcraft_core::Value::text("日本"));
+        sh.set_value(CellRef::new(0, 1), gridcraft_core::Value::Number(1.0));
+    }
+    assert_eq!(wb.csv_encoding, None);
+    assert_eq!(csv_values_bytes(&wb).unwrap(), "日本,1\r\n".as_bytes(), "UTF-8 without a BOM by default");
+    let shift_jis = vec![0x93, 0xFA, 0x96, 0x7B, b',', b'1', b'\r', b'\n'];
+    assert_eq!(csv_values_bytes_encoded(&wb, Some(CsvEncoding::ShiftJis)).unwrap(), shift_jis);
+    // A workbook opened as Shift-JIS keeps its code page with no explicit encoding...
+    wb.csv_encoding = Some(CsvEncoding::ShiftJis);
+    assert_eq!(csv_values_bytes(&wb).unwrap(), shift_jis);
+    // ...and a named one that cannot spell the text replaces the characters and says how many.
+    let (bytes, loss) = csv_values_bytes_report(&wb, Some(CsvEncoding::Windows1252)).unwrap();
+    assert_eq!(bytes, b"??,1\r\n");
+    assert_eq!(loss, Some(CsvLoss { encoding: CsvEncoding::Windows1252, replaced: 2, fell_back_to_utf8: false }));
+    // A remembered code page that cannot spell the text falls back to UTF-8 instead of losing it.
+    wb.csv_encoding = Some(CsvEncoding::Windows1252);
+    let (bytes, loss) = csv_values_bytes_report(&wb, None).unwrap();
+    assert_eq!(bytes, "日本,1\r\n".as_bytes());
+    assert_eq!(loss, Some(CsvLoss { encoding: CsvEncoding::Windows1252, replaced: 0, fell_back_to_utf8: true }));
+}
+
 #[test]
 fn csv_save_of_a_workbook_not_read_from_csv_uses_commas() {
     let mut wb = Workbook::new();

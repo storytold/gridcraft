@@ -2965,6 +2965,150 @@ fn saving_an_opened_semicolon_csv_keeps_semicolons() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// `日本語,漢字,"a,b"` in CP932 (Shift-JIS), built in code — never a binary fixture.
+#[cfg(not(target_arch = "wasm32"))]
+fn japanese_cp932_csv() -> Vec<u8> {
+    vec![0x93, 0xFA, 0x96, 0x7B, 0x8C, 0xEA, b',', 0x8A, 0xBF, 0x8E, 0x9A, b',', b'"', b'a', b',', b'b', b'"', b'\r', b'\n']
+}
+
+/// Open a Shift-JIS CSV with `encoding: "shift_jis"` (or its `cp932` alias), edit, Save: the file
+/// stays Shift-JIS, and `file.saveBytes`/`file.saveAs`/`file.exportCsv` with an encoding honour it.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn saving_a_csv_opened_as_shift_jis_keeps_shift_jis() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-encoding-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let japanese = japanese_cp932_csv();
+    let path = dir.join("jp.csv");
+    let utf8 = dir.join("utf8.csv");
+    std::fs::write(&path, &japanese).unwrap();
+    std::fs::write(&utf8, "日本語,漢字,\"a,b\"\r\n".as_bytes()).unwrap();
+    let mut s = s();
+    s.execute("file.open", json!({"path": path, "encoding": "cp932"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("日本語"));
+    assert_eq!(v(&s, "C1"), Value::text("a,b"));
+    // An edit and a plain Save write Shift-JIS back, with the separator it was opened with.
+    s.execute("cell.set", json!({"cell": "A2", "input": "テスト"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    let mut expected = japanese.clone();
+    expected.extend_from_slice(&[0x83, 0x65, 0x83, 0x58, 0x83, 0x67]); // テスト
+    expected.extend_from_slice(b",,\r\n");
+    assert_eq!(std::fs::read(&path).unwrap(), expected);
+    // The workbook remembers the encoding: Save Bytes without one is Shift-JIS, and asking for
+    // Shift-JIS explicitly writes the same bytes; Export as CSV does too.
+    for params in [json!({"format": "csv"}), json!({"format": "csv", "encoding": "shift_jis"})] {
+        let saved = s.execute("file.saveBytes", params.clone()).unwrap();
+        assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), expected, "{params}");
+    }
+    let exported = dir.join("export.csv");
+    s.execute("file.exportCsv", json!({"path": exported, "encoding": "shift_jis"})).unwrap();
+    assert_eq!(std::fs::read(&exported).unwrap(), expected);
+    // A CSV opened as UTF-8 saves as UTF-8; Save As with an encoding converts this write only.
+    s.execute("file.open", json!({"path": utf8})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("日本語"));
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(std::fs::read(&utf8).unwrap(), "日本語,漢字,\"a,b\"\r\n".as_bytes());
+    let converted = dir.join("converted.csv");
+    s.execute("file.saveAs", json!({"path": converted, "encoding": "shift_jis"})).unwrap();
+    assert_eq!(std::fs::read(&converted).unwrap(), japanese);
+    // An unknown spelling is an error, never a silent UTF-8 read or write.
+    assert!(s.execute("file.saveBytes", json!({"format": "csv", "encoding": "latin-1"})).is_err());
+    let b64 = crate::io::base64_encode("a,b\r\n".as_bytes());
+    assert!(s.execute("file.open", json!({"name": "other.csv", "base64": b64, "encoding": "utf8"})).is_err());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A plain `file.save` of a file opened in a legacy code page keeps every character by writing
+/// UTF-8, and says which code page it gave up; asking for that code page explicitly writes `?` and
+/// reports how many characters were replaced.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn saving_a_csv_with_unmappable_text_keeps_it_or_reports_the_loss() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-loss-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let mut s = s();
+    // `café,1` in Windows-1252, opened with `auto`: the workbook remembers Windows-1252.
+    let latin = dir.join("latin.csv");
+    std::fs::write(&latin, b"caf\xE9,1\r\n").unwrap();
+    s.execute("file.open", json!({"path": latin})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "日本"})).unwrap();
+    // A plain Save writes UTF-8 rather than `??`, and warns which encoding could not hold the text.
+    let r = s.execute("file.save", json!({})).unwrap();
+    assert_eq!(std::fs::read(&latin).unwrap(), "café,1\r\n日本,\r\n".as_bytes());
+    let warnings = r["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].as_str().unwrap().contains("windows-1252"), "{warnings:?}");
+    // Asking for Windows-1252 explicitly may replace the characters — and says how many.
+    let r = s.execute("file.save", json!({"encoding": "windows-1252"})).unwrap();
+    assert_eq!(std::fs::read(&latin).unwrap(), b"caf\xE9,1\r\n??,\r\n");
+    let warning = r["warnings"][0].as_str().unwrap();
+    assert!(warning.contains("2 characters") && warning.contains("windows-1252"), "{warning}");
+
+    // The same for a Shift-JIS file and the emoji CP932 has no pair for.
+    let jp = dir.join("jp.csv");
+    std::fs::write(&jp, japanese_cp932_csv()).unwrap();
+    s.execute("file.open", json!({"path": jp})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "😀"})).unwrap();
+    let r = s.execute("file.save", json!({})).unwrap();
+    let saved = std::fs::read(&jp).unwrap();
+    assert_eq!(std::str::from_utf8(&saved).unwrap().lines().last(), Some("😀,,"), "{saved:?}");
+    assert!(!saved.contains(&b'?'), "{saved:?}");
+    assert!(r["warnings"][0].as_str().unwrap().contains("shift_jis"), "{:?}", r["warnings"]);
+    let r = s.execute("file.save", json!({"encoding": "shift_jis"})).unwrap();
+    let saved = std::fs::read(&jp).unwrap();
+    let expected: Vec<u8> = japanese_cp932_csv().into_iter().chain(b"?,".iter().copied()).chain(b",\r\n".iter().copied()).collect();
+    assert_eq!(saved, expected);
+    assert!(r["warnings"][0].as_str().unwrap().contains("1 character"), "{:?}", r["warnings"]);
+    // A save that fits reports nothing and keeps its code page.
+    s.execute("cell.set", json!({"cell": "A2", "input": ""})).unwrap();
+    let r = s.execute("file.save", json!({"encoding": "shift_jis"})).unwrap();
+    assert_eq!(r["warnings"], json!([]));
+    assert_eq!(std::fs::read(&jp).unwrap(), japanese_cp932_csv());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// `file.exportCsv {values: true}` honours `encoding`, and a workbook opened as Shift-JIS exports
+/// its raw values in Shift-JIS with no encoding parameter.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn export_csv_values_honours_the_encoding() {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-values-encoding-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "日本"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+    let cp932 = vec![0x93, 0xFA, 0x96, 0x7B, b',', b'1', b'\r', b'\n'];
+    // No encoding: BOM-less UTF-8, as before.
+    let utf8 = dir.join("values.csv");
+    let r = s.execute("file.exportCsv", json!({"path": utf8, "values": true})).unwrap();
+    assert_eq!(std::fs::read(&utf8).unwrap(), "日本,1\r\n".as_bytes());
+    assert_eq!(r["warnings"], json!([]));
+    // A named code page applies to the raw-values export too (before P2 this stayed UTF-8).
+    let sjis = dir.join("values-sjis.csv");
+    s.execute("file.exportCsv", json!({"path": sjis, "values": true, "encoding": "shift_jis"})).unwrap();
+    assert_eq!(std::fs::read(&sjis).unwrap(), cp932);
+    // A workbook opened as Shift-JIS keeps its encoding with no parameter.
+    let jp = dir.join("jp.csv");
+    std::fs::write(&jp, japanese_cp932_csv()).unwrap();
+    s.execute("file.open", json!({"path": jp})).unwrap();
+    let values = dir.join("jp-values.csv");
+    s.execute("file.exportCsv", json!({"path": values, "values": true})).unwrap();
+    assert_eq!(std::fs::read(&values).unwrap(), japanese_cp932_csv());
+    // A code page that cannot spell the values replaces them and reports how many.
+    let cp1252 = dir.join("values-latin.csv");
+    let r = s.execute("file.exportCsv", json!({"path": cp1252, "values": true, "encoding": "windows-1252"})).unwrap();
+    assert_eq!(std::fs::read(&cp1252).unwrap(), b"???,??,\"a,b\"\r\n");
+    let warning = r["warnings"][0].as_str().unwrap();
+    assert!(warning.contains("windows-1252") && warning.contains("5 characters"), "{warning}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// `file.exportCsv` writes displayed text by default (Excel's Save As CSV); `values: true` writes the
 /// raw values for automation: full precision, ISO dates and times.
 #[test]
