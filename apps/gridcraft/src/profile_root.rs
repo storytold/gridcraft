@@ -181,10 +181,17 @@ pub fn control_directory(root: &Path) -> Result<PathBuf, String> {
 /// The app's own exclusive writable probe: create a file inside the profile, then remove it.
 pub fn ensure_writable(root: &Path) -> std::io::Result<()> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let probe = root.join(format!(".gridcraft-nightly-writable-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-    let result = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).map(drop);
-    let _ = std::fs::remove_file(&probe);
-    result
+    // A crashed launch can leave a probe with this name behind: take the next one instead of
+    // failing, and remove only the file this call created, never someone else's.
+    loop {
+        let probe =
+            root.join(format!(".gridcraft-nightly-writable-{}-{}", std::process::id(), NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&probe) {
+            Ok(_) => return std::fs::remove_file(&probe),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// The writable hook is injected so filesystem boundary tests exercise the real policy without

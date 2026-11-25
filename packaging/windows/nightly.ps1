@@ -84,7 +84,8 @@ try {
   $env:GRIDCRAFT_BUILD_CHANNEL = 'nightly-v1'
   $env:GRIDCRAFT_REQUIRE_WINRES = '1'
   $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_RUSTFLAGS = '-C target-feature=+crt-static'
-  cargo build --release --locked -p gridcraft --target $Target
+  # Into the directory the archive steps read (`$TargetDir`), not Cargo's default.
+  cargo build --release --locked -p gridcraft --target $Target --target-dir $TargetDir
   if ($LASTEXITCODE -ne 0) { throw "nightly cargo build failed: $LASTEXITCODE" }
 } finally {
   $env:GRIDCRAFT_BUILD_CHANNEL = $oldChannel

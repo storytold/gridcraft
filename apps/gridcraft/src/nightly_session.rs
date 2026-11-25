@@ -300,9 +300,11 @@ mod tests {
         // regular_or_missing refuses an alias outright; the temporary writer is what a first write
         // uses, and it never follows one either.
         assert!(Session::begin(Some(&fixture.0), version()).is_err());
-        atomic_write_no_follow(&fixture.0.join("record.json"), b"ours").unwrap();
-        assert_eq!(std::fs::read(fixture.0.join("record.json")).unwrap(), b"ours");
+        // The link is at RECORD itself: writing there must replace the alias, not follow it.
+        atomic_write_no_follow(&fixture.0.join(RECORD), b"ours").unwrap();
+        assert_eq!(std::fs::read(fixture.0.join(RECORD)).unwrap(), b"ours");
+        assert!(!fixture.0.join(RECORD).is_symlink(), "the alias must be replaced, not written through");
         assert_eq!(std::fs::read(&external).unwrap(), b"stable bytes");
-        assert!(!fixture.0.join(".record.json.new").exists());
+        assert!(!fixture.0.join(".nightly-session.json.new").exists());
     }
 }
