@@ -12,6 +12,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
+        cmd!(noundo "file.recover", "Recover Unsaved Workbooks", ["File"], None, "{} → {enabled, documents: [{id, name, savedAt}], error} | {restore: id} → {index, title, warnings} | {discard: id} (desktop app only: copies of workbooks a run that ended without saving them left behind; restore opens one as a new unsaved workbook)", always, |s, p| s.recover(p)),
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
@@ -80,9 +81,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // an unprotected copy.
     let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
     // Replace an untouched blank Book1 like Excel does.
-    if s.documents().len() == 1
-        && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
-    {
+    if s.only_untouched_blank() {
         s.close_document(0);
     }
     // Someone else may have made the file: its active content asks before it runs.
@@ -90,6 +89,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
+    doc.from_encrypted = encrypted;
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();

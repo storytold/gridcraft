@@ -85,6 +85,8 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
+        // Before the process ends: a last copy of unsaved work, and no leftover copies.
+        self.app.session.finish_recovery();
         save_prefs(&self.app);
         // A ready update installs once the process has exited. The macOS exit below skips
         // dropping the app, so the helper is started here. A nightly has no updater at all.
@@ -451,6 +453,13 @@ fn main() -> eframe::Result<()> {
     }
     let control_port = control_port;
     load_prefs(&mut app);
+    // Recovery copies of unsaved workbooks live next to the preferences; runs without
+    // preferences (agents' test runs) keep none.
+    if let Some(dir) = config_dir().filter(|_| prefs_enabled())
+        && let Err(e) = app.session.enable_recovery(dir.join("recovery"))
+    {
+        log::warn!("no recovery copies: {e}");
+    }
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();

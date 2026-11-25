@@ -2,7 +2,8 @@
 //! default can never disagree.
 //!
 //! Everything the desktop writes about the user lives under [`config_dir`]: `ui.json`,
-//! `prefs.json` and `logs/` (see `logging`). The control channel's token folder is resolved by
+//! `prefs.json`, `logs/` (see `logging`) and `recovery/`, the copies of unsaved workbooks
+//! (`gridcraft_engine::recovery`). The control channel's token folder is resolved by
 //! `gridcraft_mcp` from the same root at start-up. Nothing else in the app persists user state.
 //! A nightly takes its root from the Launcher's validated profile and nothing else, so stable has
 //! no environment override of its own: the platform's published folder is the whole story.
