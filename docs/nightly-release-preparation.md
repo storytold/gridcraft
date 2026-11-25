@@ -114,8 +114,8 @@ supplies its own profile; the packaged formats pass an already-supplied profile 
 | deb/rpm | `/usr/bin/gridcraft-nightly` | `/usr/lib/gridcraft-nightly/gridcraft` | `<xdg>/gridcraft-nightly/profile` |
 | AppImage | `AppRun` (a script) and `usr/bin/gridcraft-nightly` | `usr/bin/gridcraft` | same |
 | flat nightly tar | `gridcraft` (the shared template) | `gridcraft-bin` | `<xdg>/ai.storyteller.gridcraft.nightly` |
-| plain tree tarball | `bin/gridcraft-nightly` | `bin/gridcraft` | same |
-| Arch handoff | `bin/gridcraft-nightly` | `.gridcraft-nightly/gridcraft` | same |
+| plain tree tarball | `bin/gridcraft-nightly` | `bin/gridcraft` | `<xdg>/gridcraft-nightly/profile` |
+| Arch handoff | `bin/gridcraft-nightly` | `.gridcraft-nightly/gridcraft` | `<xdg>/gridcraft-nightly/profile` |
 | Flatpak bundle | `/app/bin/gridcraft-nightly` | `/app/bin/gridcraft` | the sandbox's own `~/.local/share` |
 
 The flat nightly tar uses the kit's standard layout: `<app>` is the launcher people run and
