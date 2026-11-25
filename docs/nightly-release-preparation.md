@@ -105,21 +105,24 @@ traversing root, a root that resolves through a link into a fenced folder, an in
 `${XDG_DATA_HOME:-$HOME/.local/share}/gridcraft-nightly/profile`, a sibling of stable's
 `<xdg>/gridcraft`, never an ancestor.
 
-**Every Linux format ships a launcher, and each passes an already-supplied profile through.**
+**Every Linux format ships a launcher.** The flat nightly tar's `gridcraft` is craft-common-actions'
+shared launcher template (`scripts/nightly-launcher.sh.in` from #363, rendered for this app), so it always
+supplies its own profile; the packaged formats pass an already-supplied profile through.
 
 | Format | Launcher | GUI | Data root |
 |---|---|---|---|
 | deb/rpm | `/usr/bin/gridcraft-nightly` | `/usr/lib/gridcraft-nightly/gridcraft` | `<xdg>/gridcraft-nightly/profile` |
 | AppImage | `AppRun` (a script) and `usr/bin/gridcraft-nightly` | `usr/bin/gridcraft` | same |
-| flat nightly tar | `gridcraft` | `gridcraft-bin` | same |
+| flat nightly tar | `gridcraft` (the shared template) | `gridcraft-bin` | `<xdg>/ai.storyteller.gridcraft.nightly` |
 | plain tree tarball | `bin/gridcraft-nightly` | `bin/gridcraft` | same |
 | Arch handoff | `bin/gridcraft-nightly` | `.gridcraft-nightly/gridcraft` | same |
 | Flatpak bundle | `/app/bin/gridcraft-nightly` | `/app/bin/gridcraft` | the sandbox's own `~/.local/share` |
 
 The flat nightly tar uses the kit's standard layout: `<app>` is the launcher people run and
 `<app>-bin` is the GUI ELF it starts, so the shared Unix verifier can keep requiring `gridcraft`
-as the entrypoint. No launcher falls back to a relative or world-writable path for the GUI, and a
-candidate that is the launcher itself is never started.
+as the entrypoint. That launcher is the shared template: it resolves its own directory once and execs
+`gridcraft-bin` with `--launch-profile nightly-v1 --profile-root <xdg>/ai.storyteller.gridcraft.nightly --`
+and the user's arguments, asking a bare `--version`/`-V` in the Launcher's own form.
 
 **macOS and Windows.** `GridCraft Nightly.app` (`CFBundleIdentifier
 ai.storyteller.gridcraft.nightly`, associations removed) is built and verified unsigned on main and
