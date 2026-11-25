@@ -36,6 +36,7 @@ pub fn submit() -> Submit {
                     _ => None,
                 },
                 copies: settings.copies.clamp(1, 999),
+                collate: settings.collate,
                 duplex: settings.duplex.and_then(|value| match value {
                     Duplex::LongEdge => Some(craft_print::Duplex::LongEdge),
                     Duplex::ShortEdge => Some(craft_print::Duplex::ShortEdge),

@@ -19,7 +19,7 @@ pub type Harness = egui_kittest::Harness<'static, SheetApp>;
 pub fn builder<State>() -> HarnessBuilder<State> {
     egui_kittest::Harness::builder().with_context_setup(|ctx| {
         gridcraft_ui_egui::framework::install_headless(ctx);
-        ctx.set_fonts(gridcraft_ui_egui::theme::pinned_font_definitions());
+        craft_ui::fonts::load(ctx, gridcraft_ui_egui::theme::pinned_font_definitions());
         gridcraft_ui_egui::theme::apply(ctx, false);
     })
 }
