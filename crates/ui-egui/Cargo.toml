@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 # The UI runtime that hosts this egui UI (`src/framework.rs`) and the framework dialogs, from the
 # one craft-libs revision every craft-libs dependency uses (see the root Cargo.toml).
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "16001e7210bee61db60c84fbe18c3c3e2ef4584f" }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d1bdf8e5dac7513e4fbc4dab16edaaeda5ebcf5e" }
 craft-behavior = { workspace = true }
 craft-host = { workspace = true }
 craft-keymap = { workspace = true }
