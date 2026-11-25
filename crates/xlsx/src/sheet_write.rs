@@ -267,6 +267,14 @@ fn build_craft_cols(sheet: &Sheet, sid: &dyn Fn(gridcraft_model::StyleId) -> u32
 }
 
 fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
+    // Excel scrolls a pane frozen one way only by the sheet view's `topLeftCell` the other way:
+    // the column with frozen rows alone, the row with frozen columns alone.
+    let view_top_left = match sheet.freeze {
+        None => sheet.view_top_left,
+        Some((rows, cols)) if rows > 0 && cols == 0 => CellRef::new(0, sheet.view_top_left.col),
+        Some((rows, cols)) if cols > 0 && rows == 0 => CellRef::new(sheet.view_top_left.row, 0),
+        Some(_) => CellRef::default(),
+    };
     let active = sheet.view_active.a1();
     let (pane, selections) = match sheet.freeze {
         Some((rows, cols)) if rows > 0 || cols > 0 => {
@@ -319,7 +327,7 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
         view: (sheet.view != gridcraft_model::SheetViewMode::Normal).then(|| sheet.view.as_str().to_string()),
         zoom_scale: (sheet.zoom != 100 && (10..=400).contains(&sheet.zoom)).then_some(u32::from(sheet.zoom)),
         zoom_scale_normal: (sheet.zoom != 100 && (10..=400).contains(&sheet.zoom)).then_some(u32::from(sheet.zoom)),
-        top_left_cell: (sheet.view_top_left != CellRef::default() && sheet.freeze.is_none()).then(|| sheet.view_top_left.a1()),
+        top_left_cell: (view_top_left != CellRef::default()).then(|| view_top_left.a1()),
         workbook_view_id: Some(0),
         pane,
         selections,
