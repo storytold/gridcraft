@@ -8,3 +8,9 @@ plan/
 /.claude/
 /target-*/
 /craft-fonts/
+
+# Checked out inside the workspace by the shared nightly workflows (craft-common-actions).
+/.nightly-tools
+/.nightly-input
+/craft-i18n
+__pycache__/

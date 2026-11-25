@@ -19,6 +19,7 @@ pub mod backstage;
 mod border_preview;
 mod capture;
 mod cell_pictures;
+pub mod channel;
 mod chartcache;
 pub mod chartview;
 pub mod code_editor;
