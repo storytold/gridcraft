@@ -228,7 +228,8 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui, geo: &Geo, sh: &Sheet) {
             ui.painter().rect_filled(r, 4.0, fill);
             ui.painter().rect_stroke(r, 4.0, Stroke::new(1.0, t.separator), StrokeKind::Inside);
             icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), Icon::QuickAnalysis, t.accent);
-            paint_focus_ring(ui, &t, r, &resp);
+            // The launcher sits on the sheet, so its ring is the sheet's focus colour
+            paint_focus_ring(ui, t.sheet_focus, r, &resp);
             let name = lang.tr("Quick Analysis (Ctrl+Q)");
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, open, name));
             focused = resp.has_focus();
@@ -307,10 +308,10 @@ fn toggle_key_pressed(ctx: &egui::Context) -> bool {
     })
 }
 
-/// A visible ring around a control that has the keyboard focus.
-fn paint_focus_ring(ui: &Ui, t: &Tokens, rect: Rect, resp: &egui::Response) {
+/// A visible ring in `color` around a control that has the keyboard focus.
+fn paint_focus_ring(ui: &Ui, color: Color32, rect: Rect, resp: &egui::Response) {
     if resp.has_focus() {
-        ui.painter().rect_stroke(rect.expand(1.0), 5.0, Stroke::new(2.0, t.sheet_focus), StrokeKind::Outside);
+        ui.painter().rect_stroke(rect.expand(1.0), 5.0, Stroke::new(2.0, color), StrokeKind::Outside);
     }
 }
 
@@ -332,7 +333,7 @@ fn paint_tile(ui: &mut Ui, t: &Tokens, item: &Tile, label: &str, take_focus: boo
     let galley = ui.painter().layout(label.to_string(), theme::ui_font(11.0), t.text, TILE.x - 4.0);
     let at = pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 34.0);
     ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).galley(at, galley, t.text);
-    paint_focus_ring(ui, t, rect, &resp);
+    paint_focus_ring(ui, t.popup_focus_ring(), rect, &resp);
     *has_keyboard |= resp.has_focus();
     resp.clicked()
 }

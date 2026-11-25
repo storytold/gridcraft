@@ -162,18 +162,18 @@ fn launcher_and_tiles_are_named_buttons_that_work_by_keyboard() {
     assert_eq!(sheet.cond_formats.len(), 1, "and its color scale is applied");
 }
 
-/// Whether a frame of the launcher and popup draws the focus ring colour as a stroke.
+/// Whether a frame of the launcher and popup draws the popup focus ring (a 2 px stroke).
 fn draws_focus_ring(app: &mut SheetApp, frames: usize) -> bool {
     let sh = app.session.active().unwrap().wb.active().unwrap().clone();
     let g = Geo::new(&sh, Rect::from_min_max(pos2(0.0, 0.0), pos2(1200.0, 800.0)), Vec2::ZERO);
     let ctx = egui::Context::default();
     // No fade-in, so the colours are the theme's own.
     ctx.global_style_mut(|style| style.animation_time = 0.0);
-    let ring = gridcraft_ui_egui::theme::Tokens::get(&ctx).sheet_focus;
+    let ring = gridcraft_ui_egui::theme::Tokens::get(&ctx).popup_focus_ring();
     let mut seen = false;
     for _ in 0..frames {
         let out = ctx.run_ui(egui::RawInput::default(), |ui| gridcraft_ui_egui::quick_analysis::show(app, ui, &g, &sh));
-        seen = out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.color == ring));
+        seen = out.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.color == ring && r.stroke.width == 2.0));
         out.drop_without_applying_deltas();
     }
     seen
