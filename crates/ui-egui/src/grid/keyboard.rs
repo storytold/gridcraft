@@ -184,7 +184,7 @@ fn seed_editor(app: &mut SheetApp, text: String) {
 }
 
 /// Collect every printable text and IME-commit event in the rest of this frame's burst until a
-/// commit, navigation or modifier shortcut key arrives. The in-cell `TextEdit` does not hold
+/// commit, navigation or editor shortcut key arrives. The in-cell `TextEdit` does not hold
 /// egui focus yet on the frame `seed_editor` opens it, so returning after the first character
 /// drops the rest of a fast keyboard or USB barcode-scanner burst (#4731).
 fn collect_seed_text(rest: &[egui::Event]) -> String {
@@ -212,6 +212,8 @@ fn stops_seed(key: egui::Key, m: egui::Modifiers) -> bool {
             egui::Key::Enter
                 | egui::Key::Tab
                 | egui::Key::Escape
+                | egui::Key::F3
+                | egui::Key::F4
                 | egui::Key::ArrowUp
                 | egui::Key::ArrowDown
                 | egui::Key::ArrowLeft
