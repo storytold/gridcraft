@@ -1725,3 +1725,117 @@ fn cut_rows_holding_a_report_cant_be_inserted_elsewhere() {
     assert!(err.contains("PivotTable report"), "{err}");
     assert_eq!((pivot_count(&s), pt(&s).last_range), (1, Some(r)));
 }
+
+/// The report cell showing `shown` (first by row), as A1.
+fn report_cell_showing(s: &Session, shown: &str) -> String {
+    let r = pt(s).last_range.unwrap();
+    r.iter().find(|c| text(s, &c.a1()) == shown).unwrap_or_else(|| panic!("no report cell shows {shown:?}")).a1()
+}
+
+fn undo_len(s: &Session) -> usize {
+    s.doc().unwrap().undo.len()
+}
+
+#[test]
+fn typing_into_a_value_header_renames_its_value_field() {
+    let mut s = sales();
+    region_report(&mut s);
+    let header = report_cell_showing(&s, "Sum of Sales");
+    let undo = undo_len(&s);
+    s.execute("cell.set", json!({"cell": header, "input": "Revenue"})).unwrap();
+    assert_eq!(pt(&s).values[0].name, "Revenue");
+    assert_eq!(text(&s, &header), "Revenue", "the report shows the new name");
+    assert_eq!(undo_len(&s), undo + 1, "one undo step");
+    // Typing the name it already has changes nothing.
+    s.execute("cell.set", json!({"cell": header, "input": "Revenue"})).unwrap();
+    assert_eq!(undo_len(&s), undo + 1);
+    // A source field's own name is taken; with a space after it, or a lone space, it isn't.
+    let taken = s.execute("cell.set", json!({"cell": header, "input": "sales"})).unwrap_err().to_string();
+    assert!(taken.contains("already exists"), "{taken}");
+    assert!(s.execute("cell.set", json!({"cell": header, "input": ""})).is_err());
+    for name in ["Sales ", " "] {
+        s.execute("cell.set", json!({"cell": header, "input": name})).unwrap();
+        assert_eq!(pt(&s).values[0].name, name);
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pt(&s).values[0].name, "Sales ");
+}
+
+#[test]
+fn typing_into_row_and_column_labels_sets_their_captions() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    let (rows, cols) = (report_cell_showing(&s, "Row Labels"), report_cell_showing(&s, "Column Labels"));
+    s.execute("cell.set", json!({"cell": rows, "input": "Regions"})).unwrap();
+    s.execute("cell.set", json!({"cell": cols, "input": "Fruit"})).unwrap();
+    assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Regions"));
+    assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Fruit"));
+    // The captions are the PivotTable's: a refresh writes them again.
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!((text(&s, &rows), text(&s, &cols)), ("Regions".to_string(), "Fruit".to_string()));
+    let blank = s.execute("cell.set", json!({"cell": rows, "input": "  "})).unwrap_err().to_string();
+    assert!(blank.contains("can't be blank"), "{blank}");
+    // null gives the default back.
+    s.execute("pivot.layout", json!({"rowHeaderCaption": null})).unwrap();
+    assert_eq!(text(&s, &rows), "Row Labels");
+}
+
+/// With Σ Values in Rows the value captions are row labels: those rename their value field, the
+/// item labels around them don't, in Compact and in Tabular form with Σ Values first.
+#[test]
+fn value_captions_in_rows_rename_their_value_field() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"]})).unwrap();
+    s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+    s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 0})).unwrap();
+    for (layout, name) in [("compact", "Volume"), ("tabular", "Amount")] {
+        s.execute("pivot.layout", json!({"layout": layout})).unwrap();
+        let caption = report_cell_showing(&s, &pt(&s).values[1].name.clone());
+        s.execute("cell.set", json!({"cell": caption, "input": name})).unwrap();
+        assert_eq!(pt(&s).values[1].name, name, "{layout}");
+        assert_eq!(pt(&s).values[0].name, "Sum of Sales", "{layout}");
+        // West is listed under both value fields; neither of its labels is a caption.
+        let west = report_cell_showing(&s, "West");
+        let err = s.execute("cell.set", json!({"cell": west, "input": "Westward"})).unwrap_err().to_string();
+        assert!(err.contains("isn't supported yet"), "{layout}: {err}");
+    }
+}
+
+#[test]
+fn a_reports_cells_cant_be_overwritten_by_any_edit() {
+    let mut s = sales();
+    let report = region_report(&mut s);
+    let value = report_cell_showing(&s, "415");
+    let err = s.execute("cell.set", json!({"cell": value, "input": "1"})).unwrap_err().to_string();
+    assert_eq!(err, crate::cmd::REPORT_CELLS);
+    // Commands other than cell.set are refused by the same check, before anything is written.
+    s.execute("cell.set", json!({"cell": "H1", "input": "x"})).unwrap();
+    s.execute("edit.copy", json!({"range": "H1"})).unwrap();
+    for (cmd, p) in [("range.fill", json!({"range": report, "input": "0"})), ("edit.paste", json!({"at": value}))] {
+        let err = s.execute(cmd, p).unwrap_err().to_string();
+        assert_eq!(err, crate::cmd::REPORT_CELLS, "{cmd}");
+    }
+    assert_eq!(text(&s, &value), "415");
+    // Formats aren't contents, and a refresh rewrites the report from changed source data.
+    s.execute("home.bold", json!({"range": report})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "200"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!(text(&s, &value), "515");
+}
+
+/// A value field whose source column is gone isn't shown; the captions after it still rename
+/// their own field.
+#[test]
+fn a_value_caption_after_a_missing_field_renames_its_own_field() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Units", "Sales"]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "Quantity"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let header = report_cell_showing(&s, "Sum of Sales");
+    s.execute("cell.set", json!({"cell": header, "input": "Revenue"})).unwrap();
+    assert_eq!((pt(&s).values[0].name.as_str(), pt(&s).values[1].name.as_str()), ("Sum of Units", "Revenue"));
+}

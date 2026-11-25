@@ -128,6 +128,7 @@ mod tests {
             chart_cols: (1..1000).map(|c| (c, format!("S{c}"))).collect(),
             label_col: Some(0),
             data: vec![],
+            headers: vec![],
         };
         assert_eq!(chart_series("Sheet1", CellRef::new(0, 0), &out).len(), MAX_CHART_SERIES);
     }

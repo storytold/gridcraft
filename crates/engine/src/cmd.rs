@@ -423,6 +423,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     if !structural {
         check_arrays(&d.wb, &wb)?;
     }
+    check_pivots(&d.wb, &wb)?;
     if wb.calc.precision_as_displayed {
         round_edited_as_displayed(&d.wb, &mut wb, &mut changed, structural);
     }
@@ -650,6 +651,44 @@ pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocke
         Some(t) => format!("The range \"{t}\" needs its password before it can be changed (Review › Allow Edit Ranges)."),
         None => PROTECTED.into(),
     })
+}
+
+/// What an edit of a PivotTable report's cells is refused with.
+pub(crate) const REPORT_CELLS: &str = "Cells in a PivotTable report can't be changed directly. Change the PivotTable's fields instead.";
+
+/// Refuses an edit that changed what a cell of a PivotTable report holds, whichever command made
+/// it, while that PivotTable keeps the report it last wrote: the report would show what its
+/// PivotTable doesn't compute, until the next refresh overwrites it. A refresh gives the
+/// PivotTable a new index, and lines inserted or deleted through or before a report move it or
+/// give it a new index, so those aren't edits of its cells. Formats can change.
+fn check_pivots(old: &Workbook, new: &Workbook) -> Result<()> {
+    for sh in &old.sheets {
+        if sh.pivots.iter().all(|pt| pt.last_range.is_none()) {
+            continue;
+        }
+        let Some(after) = new.sheet_index(&sh.name).and_then(|i| new.sheets.get(i)) else { continue };
+        if std::sync::Arc::ptr_eq(sh, after) {
+            continue;
+        }
+        let kept: Vec<RangeRef> = sh
+            .pivots
+            .iter()
+            .filter_map(|pt| {
+                let area = pt.last_range?;
+                let same = |n: &&gridcraft_model::PivotTable| n.id == pt.id && n.last_range == Some(area) && n.data_index.same(&pt.data_index);
+                after.pivots.iter().any(|n| same(&n)).then_some(area)
+            })
+            .collect();
+        if kept.is_empty() {
+            continue;
+        }
+        for c in sh.cells.diff(&after.cells) {
+            if kept.iter().any(|r| r.contains(c)) && !same_content(sh.cell(c), after.cell(c)) {
+                return Err(EngineError::Other(REPORT_CELLS.into()));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Refuses an edit that put something into a cell of a multi-cell legacy array other than its

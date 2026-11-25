@@ -681,6 +681,12 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     if !pt.grand_totals_rows {
         s.push_str(" colGrandTotals=\"0\"");
     }
+    if let Some(c) = &pt.row_header_caption {
+        let _ = write!(s, " rowHeaderCaption=\"{}\"", esc_attr(c));
+    }
+    if let Some(c) = &pt.col_header_caption {
+        let _ = write!(s, " colHeaderCaption=\"{}\"", esc_attr(c));
+    }
     s.push_str(" multipleFieldFilters=\"0\">");
 
     // Location: the body (report filters sit above it).
@@ -850,7 +856,8 @@ fn write_data_fields(s: &mut String, c: &Cache, layout: &PivotTableLayout<'_>, f
     let _ = write!(s, "<dataFields count=\"{}\">", layout.values.len());
     let mut used: Vec<String> = Vec::new();
     for (i, value) in &layout.values {
-        let base = if value.name.trim().is_empty() {
+        // A name of spaces is a blank caption the user chose; only a missing one is made up.
+        let base = if value.name.is_empty() {
             format!("{} of {}", func_caption(value.func), c.fields.get(*i).map(|f| f.name.as_str()).unwrap_or(""))
         } else {
             value.name.clone()

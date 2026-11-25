@@ -349,5 +349,7 @@ pub(super) fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "valuesOnRows": pt.values_on_rows,
         "valuesPosition": pt.values_position,
         "enableShowDetails": pt.enable_show_details,
+        "rowHeaderCaption": pt.row_header_caption,
+        "colHeaderCaption": pt.col_header_caption,
     })
 }

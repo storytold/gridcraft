@@ -20,12 +20,14 @@ use super::{
 use crate::pivot as pv;
 use crate::selection::current_region;
 
+mod cells;
 mod charts;
 mod create;
 mod fields;
 mod layout;
 mod params;
 
+pub(crate) use cells::type_into_report;
 use charts::{insert_pivot_chart, recommended};
 use create::{insert_pivot, options, show_details, summarize_table};
 use fields::{add_field, calculated_field, fields, list, move_field, remove_field, value_settings};
@@ -143,7 +145,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "PivotTable Layout",
             ["PivotTable Design", "Layout"],
             None,
-            "{pivot?, layout?: compact|outline|tabular, grandTotalsRows?: bool, grandTotalsCols?: bool, subtotals?: bool|top|bottom|none, style?: \"PivotStyleLight16\", showHeaders?: bool, replace?}",
+            "{pivot?, layout?: compact|outline|tabular, grandTotalsRows?: bool, grandTotalsCols?: bool, subtotals?: bool|top|bottom|none, style?: \"PivotStyleLight16\", showHeaders?: bool, rowHeaderCaption?: \"Row Labels\" | null (default), colHeaderCaption?: \"Column Labels\" | null, replace?}",
             has_doc,
             layout
         ),

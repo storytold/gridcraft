@@ -156,6 +156,8 @@ pub(super) fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     let gr = bool_param(p, "grandTotalsRows");
     let gc = bool_param(p, "grandTotalsCols");
     let hd = bool_param(p, "showHeaders");
+    let row_caption = caption_param(p, "rowHeaderCaption")?;
+    let col_caption = caption_param(p, "colHeaderCaption")?;
     update(s, p, |pt, _, _| {
         if let Some(l) = lay {
             pt.layout = l;
@@ -181,8 +183,27 @@ pub(super) fn layout(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = hd {
             pt.show_headers = v;
         }
+        if let Some(c) = row_caption {
+            pt.row_header_caption = c;
+        }
+        if let Some(c) = col_caption {
+            pt.col_header_caption = c;
+        }
         Ok(json!({"layout": layout_name(pt.layout)}))
     })
+}
+
+/// A Row Labels / Column Labels caption parameter: absent (`None`), `null` for the default
+/// (`Some(None)`) or the new caption, which can't be blank.
+fn caption_param(p: &Json, key: &str) -> Result<Option<Option<String>>> {
+    match p.get(key) {
+        None => Ok(None),
+        Some(Json::Null) => Ok(Some(None)),
+        Some(Json::String(c)) if c.trim().is_empty() => Err(other("A PivotTable header caption can't be blank.")),
+        Some(Json::String(c)) if c.chars().count() > 255 => Err(bad("pivot.layout", format!("`{key}` is longer than 255 characters"))),
+        Some(Json::String(c)) => Ok(Some(Some(c.clone()))),
+        Some(_) => Err(bad("pivot.layout", format!("`{key}` is a caption or null"))),
+    }
 }
 
 pub(super) fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {

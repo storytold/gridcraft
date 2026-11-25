@@ -136,6 +136,13 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other(m));
     }
+    // Typing into a PivotTable's report renames the header the cell names, if it names one.
+    let report = d.wb.sheet(sheet).and_then(|sh| sh.pivots.iter().position(|pt| pt.last_range.is_some_and(|r| r.contains(at))));
+    if let Some(pi) = report
+        && !array
+    {
+        return crate::cmd::pivot::type_into_report(s, sheet, pi, at, &input);
+    }
     let active_sheet = s.doc()?.wb.active_sheet();
     edit(s, |cx| {
         if array {

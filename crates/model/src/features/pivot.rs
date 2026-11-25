@@ -147,6 +147,12 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// The Compact layout's row header caption (`None`: "Row Labels").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_header_caption: Option<String>,
+    /// The Compact layout's column header caption (`None`: "Column Labels").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col_header_caption: Option<String>,
 }
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
@@ -227,6 +233,12 @@ struct LookupInner {
 pub struct PivotLookup(std::sync::Arc<LookupInner>);
 
 impl PivotLookup {
+    /// Whether both are the same index, not merely equal ones: a refresh, and lines inserted or
+    /// deleted inside the report, give a PivotTable a new index.
+    pub fn same(&self, other: &PivotLookup) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// The value cells, if they were set.
     pub fn cells(&self) -> Option<&[PivotDataCell]> {
         self.0.cells.get().map(Vec::as_slice)
@@ -320,6 +332,8 @@ impl Default for PivotTable {
             data_index: PivotLookup::default(),
             values_on_rows: false,
             values_position: None,
+            row_header_caption: None,
+            col_header_caption: None,
         }
     }
 }

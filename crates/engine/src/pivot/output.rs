@@ -47,6 +47,19 @@ impl OutCell {
     }
 }
 
+/// A report cell that names part of the PivotTable's definition, so typing into it renames that
+/// part instead of overwriting the cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeaderRole {
+    /// The Compact layout's row header ("Row Labels").
+    RowCaption,
+    /// The Compact layout's column header ("Column Labels").
+    ColCaption,
+    /// The caption of the PivotTable's value field `n` (its index in `values`, "Sum of Sales"),
+    /// over its data or, with Σ Values in Rows, beside it.
+    Value(usize),
+}
+
 /// A computed report: a dense grid relative to its top-left, with row kinds.
 #[derive(Clone, Debug)]
 pub struct Output {
@@ -63,6 +76,8 @@ pub struct Output {
     pub label_col: Option<u32>,
     /// Every value cell with the items that locate it (for GETPIVOTDATA).
     pub data: Vec<PivotDataCell>,
+    /// The cells (row, column) that name a header, see [`HeaderRole`].
+    pub headers: Vec<(u32, u32, HeaderRole)>,
 }
 
 impl Output {
@@ -79,6 +94,7 @@ pub(super) struct Grid {
     pub(super) rows: Vec<Vec<OutCell>>,
     pub(super) kinds: Vec<RowKind>,
     pub(super) width: usize,
+    pub(super) headers: Vec<(u32, u32, HeaderRole)>,
 }
 
 impl Grid {
@@ -93,6 +109,17 @@ impl Grid {
     pub(super) fn set(&mut self, r: usize, c: usize, value: Value, kind: CellKind, indent: u8, fmt: Option<String>) {
         if let Some(cell) = self.rows.get_mut(r).and_then(|row| row.get_mut(c)) {
             *cell = OutCell { value, kind, indent, num_fmt: fmt };
+        }
+    }
+    /// Sets a header cell that names `role`.
+    pub(super) fn set_header(&mut self, r: usize, c: usize, value: Value, kind: CellKind, role: HeaderRole) {
+        self.set(r, c, value, kind, 0, None);
+        self.mark_header(r, c, role);
+    }
+    /// Records that the cell at (`r`, `c`) names `role`.
+    pub(super) fn mark_header(&mut self, r: usize, c: usize, role: HeaderRole) {
+        if r < self.rows.len() && c < self.width {
+            self.headers.push((r as u32, c as u32, role));
         }
     }
 }
@@ -114,7 +141,12 @@ pub(super) struct Line {
     pub(super) labels: Vec<(usize, Value, u8, Option<String>)>,
     /// The value field of the line when Σ Values sits in Rows (`None`: one per data column).
     pub(super) vi: Option<usize>,
+    /// Which of `labels` is the caption of value field `vi` (Σ Values in Rows).
+    pub(super) value_caption: Option<usize>,
 }
+
+/// The labels a tabular line takes from its parents, and which of them is a value caption.
+type Inherited<'a> = (&'a [(usize, Value, u8, Option<String>)], Option<usize>);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ColKind {
@@ -178,6 +210,7 @@ impl Ctx<'_> {
                 values: true,
                 labels: vec![(col, Value::text(caption(label, name)), indent, None)],
                 vi: Some(vi),
+                value_caption: None,
             });
         }
     }
@@ -189,7 +222,7 @@ impl Ctx<'_> {
         for (vi, name) in self.val_names.iter().enumerate() {
             let labels = vec![(col, Value::text(name.as_str()), indent, None)];
             let leaf = nodes.is_empty();
-            out.push(Line { kind: LineKind::Item(!leaf), leaf, path: prefix.clone(), values: leaf, labels, vi: Some(vi) });
+            out.push(Line { kind: LineKind::Item(!leaf), leaf, path: prefix.clone(), values: leaf, labels, vi: Some(vi), value_caption: Some(0) });
             if !leaf {
                 self.flatten(nodes, depth, Some(vi), prefix, out);
             }
@@ -218,6 +251,7 @@ impl Ctx<'_> {
                     values: true,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_caption: None,
                 });
             } else if leaf {
                 out.push(Line {
@@ -227,6 +261,7 @@ impl Ctx<'_> {
                     values: false,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_caption: None,
                 });
                 // Outline gives each level its own column, so the captions go in the Values
                 // column even when the levels between are collapsed away.
@@ -241,6 +276,7 @@ impl Ctx<'_> {
                     values: false,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_caption: None,
                 });
                 self.flatten(&node.children, depth + 1, None, prefix, out);
                 if self.pt.subtotals {
@@ -255,6 +291,7 @@ impl Ctx<'_> {
                     values: top,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    value_caption: None,
                 });
                 self.flatten(&node.children, depth + 1, vi, prefix, out);
                 if self.pt.subtotals && !self.pt.subtotals_top {
@@ -265,6 +302,7 @@ impl Ctx<'_> {
                         values: true,
                         labels: vec![(col, Value::text(caption(&label, "Total")), indent, None)],
                         vi,
+                        value_caption: None,
                     });
                 }
             }
@@ -284,10 +322,11 @@ impl Ctx<'_> {
         for (vi, name) in self.val_names.iter().enumerate() {
             let mut labels: Vec<(usize, Value, u8, Option<String>)> = if vi == 0 { pending.to_vec() } else { vec![] };
             labels.push((depth, Value::text(name.as_str()), 0, None));
+            let value_caption = Some(labels.len() - 1);
             if nodes.is_empty() {
-                out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi) });
+                out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi), value_caption });
             } else {
-                self.flatten_tabular(nodes, depth, Some(vi), prefix, &labels, out);
+                self.flatten_tabular(nodes, depth, Some(vi), prefix, (&labels, value_caption), out);
             }
         }
     }
@@ -298,7 +337,7 @@ impl Ctx<'_> {
         depth: usize,
         vi: Option<usize>,
         prefix: &mut Vec<u32>,
-        pending: &[(usize, Value, u8, Option<String>)],
+        (pending, pending_caption): Inherited<'_>,
         out: &mut Vec<Line>,
     ) {
         if self.values_here(depth, vi) {
@@ -312,16 +351,18 @@ impl Ctx<'_> {
             prefix.push(node.item);
             let (v, fmt, label) = self.label_cell(depth, node.item);
             let mut labels: Vec<(usize, Value, u8, Option<String>)> = if i == 0 { pending.to_vec() } else { vec![] };
+            // The parents' labels, a value caption among them, start only the first line.
+            let value_caption = if i == 0 { pending_caption } else { None };
             labels.push((col, v, 0, fmt));
             let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
             if depth + 1 >= n || collapsed || node.children.is_empty() {
                 if values_below {
                     self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, out);
                 } else {
-                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi });
+                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi, value_caption });
                 }
             } else {
-                self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, out);
+                self.flatten_tabular(&node.children, depth + 1, vi, prefix, (&labels, value_caption), out);
                 if self.pt.subtotals && values_below {
                     self.value_subtotals(col, 0, &label, prefix, out);
                 } else if self.pt.subtotals {
@@ -332,6 +373,7 @@ impl Ctx<'_> {
                         values: true,
                         labels: vec![(col, Value::text(caption(&label, "Total")), 0, None)],
                         vi,
+                        value_caption: None,
                     });
                 }
             }

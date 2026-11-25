@@ -119,6 +119,8 @@ fn workbook() -> Workbook {
         data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
+        row_header_caption: None,
+        col_header_caption: None,
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -180,6 +182,8 @@ fn workbook() -> Workbook {
         data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
+        row_header_caption: Some("Regions".into()),
+        col_header_caption: Some("Months & weeks".into()),
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {
@@ -234,6 +238,15 @@ fn pivots_round_trip() {
     // A second trip is stable.
     let (again, _) = read_xlsx(&write_xlsx(&back).unwrap()).unwrap();
     assert_eq!(&again.sheet(1).unwrap().pivots, read);
+}
+
+/// A value field named with spaces keeps them: " " is a blank caption, not a missing one.
+#[test]
+fn a_blank_value_caption_round_trips() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots[0].values[0].name = " ".into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(1).unwrap().pivots[0].values[0].name, " ");
 }
 
 #[test]
