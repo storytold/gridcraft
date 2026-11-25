@@ -72,7 +72,8 @@ fn cells_are_hit_through_the_page_transform() {
     assert_eq!(sh.view, SheetViewMode::PageLayout);
     // Cells start inside the first page's margins, not at the grid's corner.
     let a1 = g.cell_rect(sh, CellRef::new(0, 0));
-    let content = screen(&g, pg.page_x(0) + pg.margins[0], pg.page_y(0) + pg.margins[2]);
+    let (cx, cy, _, _) = pg.content_rect(0, 0);
+    let content = screen(&g, cx, cy);
     assert!((a1.left() - content.x).abs() < 0.5 && (a1.top() - content.y).abs() < 0.5, "{a1:?} vs {content:?}");
     let c5 = g.cell_rect(sh, CellRef::parse("C5").unwrap()).center();
     assert_eq!(g.cell_at(sh, c5), CellRef::parse("C5").unwrap());

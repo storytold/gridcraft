@@ -146,8 +146,23 @@ pub(super) fn fallback_lines(text: &str, h: f32, line_h: f32) -> impl Iterator<I
     text.lines().take(n)
 }
 
-fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
-    (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
+/// Object rectangle `(x, y, w, h)` in printed sheet-point coordinates relative to A1,
+/// matching the coordinate space of each page block's `[px0..px1] × [py0..py1]` bounds.
+fn anchor_printed_rect(b: &Block, sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
+    let kx = f64::from(b.kx);
+    let ky = f64::from(b.ky);
+    let k = f64::from(b.k);
+    let w = f64::from(a.width.max(0.0));
+    let h = f64::from(a.height.max(0.0));
+    let cx = sh.col_left(a.cell.col);
+    let cy = b.lay.row_top(sh, a.cell.row);
+    let dx = f64::from(a.dx);
+    let dy = f64::from(a.dy);
+    match a.mode {
+        gridcraft_model::AnchorMode::Absolute => (cx * kx + dx * k, cy * ky + dy * k, w * k, h * k),
+        gridcraft_model::AnchorMode::MoveOnly => ((cx + dx) * kx, (cy + dy) * ky, w * k, h * k),
+        gridcraft_model::AnchorMode::MoveAndSize => ((cx + dx) * kx, (cy + dy) * ky, w * kx, h * ky),
+    }
 }
 
 /// Decodes an embedded picture to RGBA, downscaled to at most `max_w`×`max_h` pixels, unless the
@@ -169,19 +184,24 @@ fn decode_image(data: &[u8], max_w: u32, max_h: u32, room: u64) -> Option<Decode
 /// picture again, but the decode happens once).
 pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Block, pics: &mut PicCache) {
     let block = b.range();
-    let (sx0, sy0) = (sh.col_left(block.start.col), sh.row_top(block.start.row));
-    let (sx1, sy1) = (sh.col_left(block.end.col.saturating_add(1)), sh.row_top(block.end.row.saturating_add(1)));
+    let (px0, py0) = (sh.col_left(block.start.col) * f64::from(b.kx), b.lay.row_top(sh, block.start.row) * f64::from(b.ky));
+    let (px1, py1) =
+        (sh.col_left(block.end.col.saturating_add(1)) * f64::from(b.kx), b.lay.row_top(sh, block.end.row.saturating_add(1)) * f64::from(b.ky));
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
-    let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
+    let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < px1 && r.0 + r.2 > px0 && r.1 < py1 && r.1 + r.3 > py0;
     let place = |r: (f64, f64, f64, f64)| {
-        (b.text_x(bx + ((r.0 - sx0) as f32) * b.k, r.2 as f32 * b.k), by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k)
+        let ox = bx + (r.0 - px0) as f32;
+        let oy = by + (r.1 - py0) as f32;
+        let w = r.2 as f32;
+        let h = r.3 as f32;
+        (b.text_x(ox, w), oy, w, h)
     };
     pg.save();
     pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     draw_sparklines(pg, wb, si, sh, b, block);
     for (imi, im) in sh.images.iter().enumerate() {
-        let r = anchor_rect(sh, &im.anchor);
+        let r = anchor_printed_rect(b, sh, &im.anchor);
         if !visible(r) {
             continue;
         }
@@ -195,7 +215,7 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         }
     }
     for shp in &sh.shapes {
-        let r = anchor_rect(sh, &shp.anchor);
+        let r = anchor_printed_rect(b, sh, &shp.anchor);
         if !visible(r) {
             continue;
         }
@@ -222,15 +242,17 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
         draw_shape(pg, wb, shp, b, (x, y, w, h));
     }
     for (chi, ch) in sh.charts.iter().enumerate() {
-        let r = anchor_rect(sh, &ch.anchor);
+        let r = anchor_printed_rect(b, sh, &ch.anchor);
         if !visible(r) {
             continue;
         }
-        let (x, y, _, _) = place(r);
+        let (x, y, w, h) = place(r);
+        let chart_w = if b.k > 0.0 { w / b.k } else { ch.anchor.width.max(0.0) };
+        let chart_h = if b.k > 0.0 { h / b.k } else { ch.anchor.height.max(0.0) };
         // As for pictures, each page gets its own copy of the drawing commands.
         let prims = pics.chart((si, chi), || {
             let data = gridcraft_chart::resolve(wb, si, ch);
-            gridcraft_chart::render(ch, &data, r.2 as f32, r.3 as f32, &PdfMeasure)
+            gridcraft_chart::render(ch, &data, chart_w, chart_h, &PdfMeasure)
         });
         if let Some(prims) = prims {
             draw_prims(pg, prims, Xf { ox: x, oy: y, k: b.k });

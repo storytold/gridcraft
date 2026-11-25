@@ -195,6 +195,13 @@ impl Geo {
             self.cells.top() + self.frozen_h + (self.ri.start(row) as f32 - self.ri.start(self.fr) as f32 - self.scroll.y) * self.z
         }
     }
+    /// Effective row height in sheet/layout units (uses `PageGrid`'s auto-fitted height in Page Layout view).
+    pub fn row_height(&self, sh: &Sheet, row: u32) -> f32 {
+        match &self.paper {
+            Some(pg) => pg.row_height(row),
+            None => sh.row_height(row),
+        }
+    }
     /// Screen x of `col`'s right edge. Not `x(col + 1)`: across the freeze line (and between
     /// pages) the next column is laid out elsewhere (#2544).
     pub fn x_end(&self, sh: &Sheet, col: u32) -> f32 {
@@ -202,7 +209,7 @@ impl Geo {
     }
     /// Screen y of `row`'s bottom edge (see `x_end`).
     pub fn y_end(&self, sh: &Sheet, row: u32) -> f32 {
-        self.y(sh, row) + sh.row_height(row) * self.z
+        self.y(sh, row) + self.row_height(sh, row) * self.z
     }
     /// Columns `a` and `b` are on the same side of the freeze line, so they scroll together.
     pub fn same_col_pane(&self, a: u32, b: u32) -> bool {

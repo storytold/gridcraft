@@ -8,7 +8,7 @@ use super::{Rect, Sheet, pos2};
 /// The tinted band of `row` inside one quadrant (`rows` x `cols`): none when the row is outside
 /// the quadrant or hidden.
 pub fn active_row_band(geo: &Geo, sh: &Sheet, row: u32, rows: (u32, u32), cols: (u32, u32)) -> Option<Rect> {
-    let height = sh.row_height(row) * geo.z;
+    let height = geo.row_height(sh, row) * geo.z;
     if row < rows.0 || row > rows.1 || height <= 0.0 {
         return None;
     }

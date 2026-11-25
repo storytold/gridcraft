@@ -379,20 +379,20 @@ fn page_count_300_rows_letter_portrait() {
     let mut s = s();
     let rows: Vec<Vec<Json>> = (1..=300).map(|i| vec![json!(i)]).collect();
     s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
-    // 684pt of printable height / 15pt rows = 45 rows per page → 7 pages.
+    // Modeled Calibri 11pt 600-dpi row height is 14.52pt (121 dots): 683.04pt / 14.52pt = 47 rows per page → 7 pages.
     let (pdf, pages) = pdf_of(&mut s, json!({}));
     assert_eq!(pages, 7);
     assert!(pdf.starts_with(b"%PDF-1.7"));
     assert!(contains(&pdf, "/Count 7"));
     let pv = s.execute("file.printPreview", json!({})).unwrap();
     assert_eq!(pv["pages"], 7);
-    assert_eq!(pv["pageList"][0]["rows"], "1:45");
-    assert_eq!(pv["pageList"][1]["rows"], "46:90");
-    assert_eq!(s.execute("file.printPreview", json!({"page": 7})).unwrap()["page"]["rows"], "271:300");
+    assert_eq!(pv["pageList"][0]["rows"], "1:47");
+    assert_eq!(pv["pageList"][1]["rows"], "48:94");
+    assert_eq!(s.execute("file.printPreview", json!({"page": 7})).unwrap()["page"]["rows"], "283:300");
     assert!(s.execute("file.printPreview", json!({"page": 8})).is_err());
-    // Landscape: 504pt / 15 = 33 rows per page → 10 pages.
+    // Landscape: 503.04pt / 14.52pt = 34 rows per page → 9 pages.
     s.execute("pageLayout.pageSetup", json!({"orientation": "landscape"})).unwrap();
-    assert_eq!(pdf_of(&mut s, json!({})).1, 10);
+    assert_eq!(pdf_of(&mut s, json!({})).1, 9);
     // Fit to one page.
     assert_eq!(pdf_of(&mut s, json!({"fitToPage": true})).1, 1);
     s.execute("pageLayout.pageSetup", json!({"fitWidth": 1, "fitHeight": 2, "orientation": "portrait"})).unwrap();
@@ -401,8 +401,8 @@ fn page_count_300_rows_letter_portrait() {
     s.execute("pageLayout.pageSetup", json!({"scale": 100, "rowBreaks": [11], "titleRows": "1:1"})).unwrap();
     let pv = s.execute("file.printPreview", json!({})).unwrap();
     assert_eq!(pv["pageList"][0]["rows"], "1:10");
-    // Title row takes one line on later pages: 44 body rows.
-    assert_eq!(pv["pageList"][1]["rows"], "11:54");
+    // Title row takes one line on later pages: 46 body rows.
+    assert_eq!(pv["pageList"][1]["rows"], "11:56");
 }
 
 #[test]
@@ -411,11 +411,11 @@ fn wide_sheet_goes_down_then_over() {
     let rows: Vec<Vec<Json>> = (0..60).map(|r| (0..15).map(|c| json!(r * 100 + c)).collect()).collect();
     s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
     let pv = s.execute("file.printPreview", json!({})).unwrap();
-    // 511.2pt / 48pt = 10 columns per page; 45 rows per page.
+    // Default Calibri 11pt columns are ~51.57pt wide on paper (9 cols A:I); 14.52pt rows (47 rows per page).
     assert_eq!(pv["pages"], 4);
-    assert_eq!(pv["pageList"][0]["range"], "A1:J45");
-    assert_eq!(pv["pageList"][1]["range"], "A46:J60");
-    assert_eq!(pv["pageList"][2]["range"], "K1:O45");
+    assert_eq!(pv["pageList"][0]["range"], "A1:I47");
+    assert_eq!(pv["pageList"][1]["range"], "A48:I60");
+    assert_eq!(pv["pageList"][2]["range"], "J1:O47");
 }
 
 /// The ranges of the printed pages, in print order.
@@ -536,7 +536,7 @@ fn page_order_without_breaks_and_with_print_titles() {
         s.execute("pageLayout.pageSetup", json!({"pageOrder": "downThenOver"})).unwrap();
         let down = page_ranges(&mut s);
         if !titles {
-            assert_eq!(down, ["A1:J45", "A46:J60", "K1:O45", "K46:O60"]);
+            assert_eq!(down, ["A1:I47", "A48:I60", "J1:O47", "J48:O60"]);
         }
         s.execute("pageLayout.pageSetup", json!({"pageOrder": "overThenDown"})).unwrap();
         let over = page_ranges(&mut s);
@@ -1453,4 +1453,572 @@ fn imported_xlsx_b5_envelope_uses_iso_b5_print_dimensions() {
     let (pdf, pages) = pdf_of(&mut s, json!({}));
     assert_eq!(pages, 1);
     assert!(contains(&pdf, "/MediaBox [0 0 498.9 708.66]"));
+}
+
+#[test]
+fn empty_invisibly_styled_cells_do_not_blow_up_pagination() {
+    let mut wb = Workbook::new();
+    let mut invisible = Style::default();
+    invisible.font.bold = true;
+    invisible.num_fmt = gridcraft_model::NumFmt::new("0.00");
+    let invisible_id = wb.styles.intern(invisible);
+
+    let mut filled = Style::default();
+    filled.fill.pattern = PatternType::Solid;
+    filled.fill.fg = Color::Rgb(0x336699);
+    let filled_id = wb.styles.intern(filled);
+
+    let mut bordered = Style::default();
+    bordered.borders.bottom = BorderLine { style: BorderStyle::Thin, color: Color::Rgb(0x000000) };
+    let bordered_id = wb.styles.intern(bordered);
+
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("Title"));
+    sh.set_value(CellRef::new(4, 2), Value::Number(42.0));
+    // 1000 rows × 20 columns of empty cells with invisible (font/numfmt-only) styling.
+    for r in 5..1000 {
+        for c in 0..20 {
+            sh.cells.set(CellRef::new(r, c), gridcraft_model::Cell::styled(Value::Empty, invisible_id));
+        }
+    }
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay.area, RangeRef::new(CellRef::new(0, 0), CellRef::new(4, 2)));
+    assert_eq!(lay.pages.len(), 1);
+
+    // Adding a visible fill or visible border extends the print range to include it.
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(CellRef::new(6, 4), gridcraft_model::Cell::styled(Value::Empty, filled_id));
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay.area, RangeRef::new(CellRef::new(0, 0), CellRef::new(6, 4)));
+
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(CellRef::new(8, 5), gridcraft_model::Cell::styled(Value::Empty, bordered_id));
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay.area, RangeRef::new(CellRef::new(0, 0), CellRef::new(8, 5)));
+}
+
+#[test]
+fn blank_trailing_pages_are_trimmed_on_sparse_l_shaped_sheet() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    // Tall column A spanning 2 vertical pages (60 rows), plus a wide header in row 1 spanning 2 horizontal pages (12 cols).
+    // Page grid is 2×2 in DownThenOver order: (r0,c0) data, (r1,c0) data, (r0,c1) header, (r1,c1) completely blank trailing page.
+    for r in 0..60 {
+        sh.set_value(CellRef::new(r, 0), Value::Number(r as f64));
+    }
+    sh.set_value(CellRef::new(0, 11), Value::text("Wide header"));
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay.row_bands.len(), 2);
+    assert_eq!(lay.col_bands.len(), 2);
+    assert_eq!(lay.pages, vec![(0, 0), (1, 0), (0, 1)], "trailing blank page (1, 1) must be omitted");
+}
+
+#[test]
+fn column_width_geometry_matches_excel_normal_font_pagination() {
+    // Reproduces horizontal page-break geometry with Arial 10pt Normal font on Letter portrait
+    // (0.7" side margins => 511.2 pt printable width):
+    // cols A,B = 178 px (25.5 chars), col C = 213 px (30.5 chars), col D = 101 px (14.5 chars).
+    // At legacy 0.75 pt/px all 4 columns summed to 502.5 pt and leaked col D onto page 1;
+    // with modeled 600-dpi Arial 10pt MDW (46 dots = 5.52 pt/char), A..C = 448.7 pt and A..D = 528.3 pt > 511.2 pt,
+    // so col D cleanly breaks to page 2.
+    let mut normal = Style::default();
+    normal.font.name = "Arial".into();
+    normal.font.size = 10.0;
+    let mut wb = Workbook::new();
+    wb.styles = StyleTable::with_default(normal);
+    let sh = wb.sheet_mut(0).unwrap();
+    for (c, w) in [(0, 178.0), (1, 178.0), (2, 213.0), (3, 101.0)] {
+        sh.cols.entry(c).or_default().size = Some(w);
+        sh.set_value(CellRef::new(0, c), Value::text(format!("Col{c}")));
+    }
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay.col_bands, vec![(0, 2), (3, 3)]);
+}
+
+#[test]
+fn contiguous_solid_fill_banner_coalesces_into_one_rect_without_seams() {
+    let mut wb = Workbook::new();
+    let mut banner = Style::default();
+    banner.fill.pattern = PatternType::Solid;
+    banner.fill.fg = Color::Rgb(0x336699);
+    let banner_id = wb.styles.intern(banner);
+
+    let sh = wb.sheet_mut(0).unwrap();
+    for c in 0..4 {
+        sh.cells.set(CellRef::new(0, c), gridcraft_model::Cell::styled(Value::Empty, banner_id));
+    }
+    sh.set_value(CellRef::new(0, 0), Value::text("Banner"));
+
+    let lays = layouts(&wb, &PrintOptions::default());
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let stream = String::from_utf8_lossy(&pdf);
+    let fill_ops: Vec<&str> = stream.lines().filter(|l| l.ends_with(" re f")).collect();
+    assert_eq!(fill_ops.len(), 1, "4 contiguous same-colour cells must emit one coalesced fill rect, got: {fill_ops:?}");
+}
+
+#[test]
+fn unwrapped_text_overflows_across_empty_and_hidden_neighbours_at_print_column_scale() {
+    let mut normal = Style::default();
+    normal.font.name = "Arial".into();
+    normal.font.size = 10.0;
+    let mut wb = Workbook::new();
+    wb.styles = StyleTable::with_default(normal);
+
+    let mut title_style = Style::default();
+    title_style.font.name = "Arial".into();
+    title_style.font.size = 18.0;
+    let title_id = wb.styles.intern(title_style);
+
+    let sh = wb.sheet_mut(0).unwrap();
+    for (c, w) in [(0, 178.0), (1, 178.0), (2, 213.0)] {
+        sh.cols.entry(c).or_default().size = Some(w);
+    }
+    let title = "Long Report Header Title Spanning Columns";
+    sh.cells.set(CellRef::new(0, 0), gridcraft_model::Cell::styled(Value::text(title), title_id));
+    // Col B is empty (allows overflow), Col C is populated (stops overflow).
+    sh.set_value(CellRef::new(0, 2), Value::text("Date"));
+
+    let lays = layouts(&wb, &PrintOptions::default());
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let stream = String::from_utf8_lossy(&pdf);
+    let title_pos = stream.find(&format!("({title}) Tj")).expect("title text in PDF");
+    let clip_line = stream[..title_pos].lines().rev().find(|l| l.ends_with(" re W n")).expect("clip rect before title");
+    let parts: Vec<f32> = clip_line.split_whitespace().take(4).filter_map(|t| t.parse().ok()).collect();
+    let clip_w = parts[2];
+    let expected_ab_w = (178.0 + 178.0) * lays[0].col_px_to_pt;
+    assert!((clip_w - expected_ab_w).abs() < 0.2, "overflow clip width {clip_w} should span A+B ({expected_ab_w})");
+}
+
+#[test]
+fn range_override_and_print_titles_suppress_blank_trailing_page_trimming() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    for r in 0..60 {
+        sh.set_value(CellRef::new(r, 0), Value::Number(r as f64));
+    }
+    sh.set_value(CellRef::new(0, 11), Value::text("Wide header"));
+
+    // Explicit range override keeps all 4 pages, including blank trailing (1, 1).
+    let ovr = RangeRef::new(CellRef::new(0, 0), CellRef::new(59, 11));
+    let lay_ovr = layout_sheet(&wb, 0, &PrintOptions::default(), Some(ovr)).unwrap();
+    assert_eq!(lay_ovr.pages.len(), 4);
+
+    // Repeated title rows/cols keep trailing pages because titles print on them.
+    wb.sheet_mut(0).unwrap().print.title_rows = Some((0, 0));
+    let lay_titles = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay_titles.pages.len(), 4);
+}
+
+#[test]
+fn visible_conditional_formatting_expands_print_range_and_prevents_trimming() {
+    let mut wb = Workbook::new();
+    let fill_style = Style { fill: gridcraft_model::Fill::solid(Color::Rgb(0xDCE6F1)), ..Style::default() };
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("Top"));
+    sh.cond_formats.push(gridcraft_model::CondFormat {
+        ranges: vec![RangeRef::new(CellRef::new(55, 11), CellRef::new(55, 11))],
+        rule: gridcraft_model::CfRule::Blanks { style: Box::new(fill_style) },
+        priority: 1,
+        stop_if_true: false,
+    });
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay.area, RangeRef::new(CellRef::new(0, 0), CellRef::new(55, 11)));
+    assert_eq!(lay.pages.len(), 4, "trailing page (1, 1) holds visible CF fill and must not be trimmed");
+}
+
+#[test]
+fn absolute_anchor_keeps_physical_position_and_size_under_column_scaling() {
+    let mut normal = Style::default();
+    normal.font.name = "Arial".into();
+    normal.font.size = 10.0;
+    let mut wb = Workbook::new();
+    wb.styles = StyleTable::with_default(normal);
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("A"));
+    sh.shapes.push(gridcraft_model::Shape {
+        id: 1,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor { cell: CellRef::new(0, 0), dx: 100.0, dy: 40.0, width: 80.0, height: 40.0, mode: gridcraft_model::AnchorMode::Absolute },
+        fill: Color::Rgb(0xFF0000),
+        line: Color::Auto,
+        text: String::new(),
+        format: gridcraft_model::ShapeFormat::default(),
+        rotation: 0.0,
+        math: gridcraft_model::EquationCache::default(),
+    });
+    let lays = layouts(&wb, &PrintOptions::default());
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let stream = String::from_utf8_lossy(&pdf);
+    // Red polygon vertices must use physical 0.75 pt/px (dx=75pt, width=60pt), not col_px_to_pt (~0.7886).
+    let expected_x0 = lays[0].margins[0] + layout::GRID_EDGE_INSET_PT + 100.0 * PX_TO_PT;
+    let expected_x1 = expected_x0 + 80.0 * PX_TO_PT;
+    assert!(
+        stream.contains(&format!("{expected_x0:.2} ")) || stream.contains(&format!("{expected_x0:.1} ")),
+        "expected physical x0={expected_x0:.2} in stream"
+    );
+    assert!(
+        stream.contains(&format!("{expected_x1:.2} ")) || stream.contains(&format!("{expected_x1:.1} ")),
+        "expected physical x1={expected_x1:.2} in stream"
+    );
+}
+
+#[test]
+fn vertical_row_scaling_and_non_custom_font_autofit_match_excel_geometry() {
+    let mut normal = Style::default();
+    normal.font.name = "Arial".into();
+    normal.font.size = 10.0;
+    let mut wb = Workbook::new();
+    wb.styles = StyleTable::with_default(normal);
+    let mut segoe11 = Style::default();
+    segoe11.font.name = "Segoe UI".into();
+    segoe11.font.size = 11.0;
+    let segoe11_id = wb.styles.intern(segoe11);
+
+    let sh = wb.sheet_mut(0).unwrap();
+    // Row 0: explicit customHeight=25.5pt (34 px); Row 1: non-custom ht=16pt (21.33 px) with Segoe UI 11.
+    sh.rows.insert(0, gridcraft_model::LineInfo { size: Some(34.0), custom: true, ..Default::default() });
+    sh.rows.insert(1, gridcraft_model::LineInfo { size: Some(16.0 * 4.0 / 3.0), custom: false, ..Default::default() });
+    sh.cells.set(CellRef::new(0, 0), gridcraft_model::Cell::styled(Value::text("Banner"), segoe11_id));
+    sh.cells.set(CellRef::new(1, 0), gridcraft_model::Cell::styled(Value::text("Data"), segoe11_id));
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    // Custom row stays at 34 px and scales by ~0.726 pt/px (~24.7pt); non-custom Segoe UI 11 auto-fits to 22 px (~15.97pt).
+    let r0_pt = lay.row_height(wb.sheet(0).unwrap(), 0) * lay.ky();
+    let r1_pt = lay.row_height(wb.sheet(0).unwrap(), 1) * lay.ky();
+    assert!((r0_pt - 24.7).abs() < 0.15, "row 0 height {r0_pt}pt");
+    assert!((r1_pt - 15.97).abs() < 0.15, "row 1 height {r1_pt}pt");
+}
+
+#[test]
+fn unwrapped_text_overflowing_past_right_edge_expands_print_range_and_survives_trim() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    for c in 0..8 {
+        sh.cols.entry(c).or_default().size = Some(80.0);
+    }
+    // Last populated column H (col 7) sits near right edge of page 1; long unwrapped text overflows into col I/J (page 2).
+    sh.set_value(CellRef::new(0, 0), Value::text("Start"));
+    sh.set_value(CellRef::new(0, 7), Value::text("This unwrapped description clearly overflows into adjacent empty columns on page two"));
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert!(lay.area.end.col > 7, "overflow should expand area past col H, got {:?}", lay.area);
+    assert_eq!(lay.pages.len(), 2, "overflow page must not be trimmed as blank");
+}
+
+#[test]
+fn absolute_anchor_on_page_two_below_autofit_delta_row_is_drawn_at_exact_coords() {
+    let mut wb = Workbook::new();
+    let big_font = wb.styles.intern(Style { font: gridcraft_model::Font { size: 36.0, ..Default::default() }, ..Default::default() });
+    let sh = wb.sheet_mut(0).unwrap();
+    // Row 2 has a 36pt font without customHeight, creating a large auto-fit row delta on page 1.
+    for r in 0..70 {
+        sh.set_value(CellRef::new(r, 0), Value::Number(r as f64));
+    }
+    sh.set_style(CellRef::new(2, 0), big_font);
+    let lays0 = layouts(&wb, &PrintOptions::default());
+    assert!(!lays0[0].row_deltas.is_empty(), "expected auto-fit delta on page 1");
+    assert!(lays0[0].row_bands.len() >= 2, "expected at least 2 vertical pages");
+    let p2_first_row = lays0[0].row_bands[1].0;
+
+    // Place an Absolute-anchored red rectangle right at the top of page 2 (row = p2_first_row).
+    let dx = 24.0_f32;
+    let dy = 8.0_f32;
+    let w = 80.0_f32;
+    let h = 20.0_f32;
+    wb.sheet_mut(0).unwrap().shapes.push(gridcraft_model::Shape {
+        id: 7,
+        kind: ShapeKind::Rectangle,
+        anchor: Anchor { cell: CellRef::new(p2_first_row, 0), dx, dy, width: w, height: h, mode: gridcraft_model::AnchorMode::Absolute },
+        fill: Color::Rgb(0xFF0000),
+        line: Color::Auto,
+        text: String::new(),
+        format: gridcraft_model::ShapeFormat::default(),
+        rotation: 0.0,
+        math: gridcraft_model::EquationCache::default(),
+    });
+
+    let lays = layouts(&wb, &PrintOptions::default());
+    assert_eq!(lays[0].pages.len(), 2);
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let doc = String::from_utf8_lossy(&pdf);
+    // Extract each page's content stream (`stream\n...\nendstream`).
+    let streams: Vec<&str> = doc.split("\nstream\n").skip(1).filter_map(|s| s.split("\nendstream").next()).collect();
+    assert_eq!(streams.len(), 2, "expected 2 page content streams");
+    fn find_red_poly(stream: &str) -> Option<&str> {
+        let lines: Vec<&str> = stream.lines().collect();
+        lines.windows(2).find_map(|w| (w[0] == "1 0 0 rg" && w[1].ends_with(" h f")).then_some(w[1]))
+    }
+    assert!(find_red_poly(streams[0]).is_none(), "page-2 Absolute shape must not leak onto page 1");
+    let poly_line = find_red_poly(streams[1]).expect("page-2 Absolute shape must emit a filled red polygon path on page 2");
+    // Parse `x0 y0 m x1 y1 l x2 y2 l x3 y3 l h f` directly.
+    let tokens: Vec<&str> = poly_line.split_whitespace().collect();
+    assert_eq!(tokens.len(), 14, "unexpected polygon operator: {poly_line}");
+    assert_eq!((tokens[2], tokens[5], tokens[8], tokens[11], tokens[12], tokens[13]), ("m", "l", "l", "l", "h", "f"));
+    let x0: f32 = tokens[0].parse().unwrap();
+    let y0_pdf: f32 = tokens[1].parse().unwrap();
+    let x1: f32 = tokens[3].parse().unwrap();
+    let y2_pdf: f32 = tokens[7].parse().unwrap();
+
+    let lay = &lays[0];
+    let expected_x0 = lay.margins[0] + layout::GRID_EDGE_INSET_PT + dx * PX_TO_PT * lay.scale;
+    let expected_x1 = expected_x0 + w * PX_TO_PT * lay.scale;
+    let expected_y0 = lay.margins[2] + layout::GRID_EDGE_INSET_PT + dy * PX_TO_PT * lay.scale;
+    let expected_y1 = expected_y0 + h * PX_TO_PT * lay.scale;
+    // PDF y-axis is bottom-up (`page_h - y`).
+    let expected_y0_pdf = lay.page_h - expected_y0;
+    let expected_y1_pdf = lay.page_h - expected_y1;
+    assert!((x0 - expected_x0).abs() < 0.05, "x0={x0} vs expected {expected_x0} in `{poly_line}`");
+    assert!((x1 - expected_x1).abs() < 0.05, "x1={x1} vs expected {expected_x1} in `{poly_line}`");
+    assert!((y0_pdf - expected_y0_pdf).abs() < 0.05, "y0_pdf={y0_pdf} vs expected {expected_y0_pdf} in `{poly_line}`");
+    assert!((y2_pdf - expected_y1_pdf).abs() < 0.05, "y2_pdf={y2_pdf} vs expected {expected_y1_pdf} in `{poly_line}`");
+}
+
+#[test]
+fn overflowing_text_with_columns_hidden_to_xfd_terminates_fast_with_exact_bounds() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    // Hide every column from E (col 4) through XFD (MAX_COLS - 1), except col 10,000 is left visible on one test below.
+    for c in 4..MAX_COLS {
+        sh.cols.insert(c, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+    }
+    // Add many overflowing text rows in col D (col 3) + many unrelated merges to exercise indexed merge lookup.
+    let long_text = "Long overflowing text that would otherwise scan 16,380 hidden columns out to XFD";
+    for r in 0..400 {
+        sh.set_value(CellRef::new(r, 3), Value::text(long_text));
+        sh.merges.push(RangeRef::new(CellRef::new(r, 0), CellRef::new(r, 1)));
+    }
+    let lays = layouts(&wb, &PrintOptions::default());
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    assert!(pdf.starts_with(b"%PDF-"));
+    assert_eq!(lays[0].hidden_col_runs, vec![(4, MAX_COLS - 1)]);
+    assert_eq!(layout::next_visible_col(&lays[0].hidden_col_runs, 4), None);
+    assert_eq!(lays[0].area.end.col, 3, "hidden columns E..=XFD must not expand print bounds");
+
+    // Unhide a single distant column (col 10,000) and verify overflow jumps straight to it cleanly.
+    wb.sheet_mut(0).unwrap().cols.remove(&10_000);
+    let lay_gap = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(layout::next_visible_col(&lay_gap.hidden_col_runs, 4), Some(10_000));
+    assert_eq!(lay_gap.area.end.col, 10_000, "overflow must jump past hidden run 4..=9999 into visible col 10,000");
+}
+
+#[test]
+fn center_across_title_extends_print_range_and_retains_spanned_pages() {
+    let mut wb = Workbook::new();
+    let center_across =
+        wb.styles.intern(Style { align: gridcraft_model::Alignment { h: HAlign::CenterAcross, ..Default::default() }, ..Default::default() });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("Title"));
+    for c in 0..=5 {
+        sh.set_style(CellRef::new(0, c), center_across);
+    }
+    // Unrelated empty CenterAcross cells on a blank row without a leading content cell must not expand bounds.
+    for c in 0..=10 {
+        sh.set_style(CellRef::new(15, c), center_across);
+    }
+    for r in 1..10 {
+        for c in 0..=2 {
+            sh.set_value(CellRef::new(r, c), Value::Number((r * 10 + c) as f64));
+        }
+    }
+    let range = layout::sheet_print_range(&wb, 0, wb.sheet(0).unwrap()).unwrap();
+    assert_eq!(range, RangeRef::new(CellRef::new(0, 0), CellRef::new(9, 5)), "CenterAcross A1:F1 must extend print range to A1:F10");
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay.area, RangeRef::new(CellRef::new(0, 0), CellRef::new(9, 5)));
+
+    // Now span a CenterAcross title across a horizontal page break (A1:L1) over 2-page-tall A2:C60 data:
+    // page (0, 1) holds part of the centered title span and must be kept, while blank trailing (1, 1) is trimmed.
+    let mut wb2 = Workbook::new();
+    let ca2 = wb2.styles.intern(Style { align: gridcraft_model::Alignment { h: HAlign::CenterAcross, ..Default::default() }, ..Default::default() });
+    let sh2 = wb2.sheet_mut(0).unwrap();
+    sh2.set_value(CellRef::new(0, 0), Value::text("Wide Centered Report Title"));
+    for c in 0..=11 {
+        sh2.set_style(CellRef::new(0, c), ca2);
+    }
+    for r in 1..60 {
+        for c in 0..=2 {
+            sh2.set_value(CellRef::new(r, c), Value::Number(r as f64));
+        }
+    }
+    let lay2 = layout_sheet(&wb2, 0, &PrintOptions::default(), None).unwrap();
+    assert_eq!(lay2.area, RangeRef::new(CellRef::new(0, 0), CellRef::new(59, 11)));
+    assert_eq!(lay2.row_bands.len(), 2);
+    assert_eq!(lay2.col_bands.len(), 2);
+    assert_eq!(lay2.pages, vec![(0, 0), (1, 0), (0, 1)], "page (0, 1) holding CenterAcross span must be kept; blank (1, 1) trimmed");
+}
+
+#[test]
+fn short_indented_text_triggers_overflow_beyond_column_width() {
+    let mut wb = Workbook::new();
+    let indented = wb.styles.intern(Style { align: gridcraft_model::Alignment { indent: 8, ..Default::default() }, ..Default::default() });
+    let sh = wb.sheet_mut(0).unwrap();
+    // Default col width is 64px (~46-48 pt). "Hi" has len*size*0.85 = 2*11*0.85 = 18.7 pt <= cell_w,
+    // but with indent=8 (54 pt) + padding (3 pt) + text_width, it clearly overflows into col B.
+    sh.cells.set(CellRef::new(0, 0), gridcraft_model::Cell::styled(Value::text("Hi"), indented));
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert!(lay.area.end.col >= 1, "indented short text must overflow past col A, got {:?}", lay.area);
+}
+
+#[test]
+fn overflowing_text_draws_continuation_on_adjacent_horizontal_pages() {
+    let mut wb = Workbook::new();
+    let right_align = wb.styles.intern(Style { align: Alignment { h: HAlign::Right, ..Default::default() }, ..Default::default() });
+    let sh = wb.sheet_mut(0).unwrap();
+    for c in 0..10 {
+        sh.cols.entry(c).or_default().size = Some(80.0);
+    }
+    let right_msg = "OverflowRightContinuationMarker across page break into column H and I";
+    // Row 0: G1 (col 6, last col on page 1) overflows rightward onto an otherwise-empty page 2 (cols H..).
+    sh.set_value(CellRef::new(0, 0), Value::text("Start"));
+    sh.set_value(CellRef::new(0, 6), Value::text(right_msg));
+
+    let lays_right = layouts(&wb, &PrintOptions::default());
+    assert_eq!(lays_right[0].col_bands.len(), 2, "expected 2 horizontal pages, got {:?}", lays_right[0].col_bands);
+    assert_eq!(lays_right[0].col_bands[0].1, 6, "G (col 6) must be the last column on page 1");
+    assert_eq!(lays_right[0].col_bands[1].0, 7, "H (col 7) must be the first column on page 2");
+    assert_eq!(lays_right[0].pages.len(), 2, "overflow-only page 2 must be retained");
+    let pdf_right = render_pdf(&wb, &lays_right, "", "").unwrap().bytes;
+    let doc_right = String::from_utf8_lossy(&pdf_right);
+    let streams_right: Vec<&str> = doc_right.split("\nstream\n").skip(1).filter_map(|s| s.split("\nendstream").next()).collect();
+    assert_eq!(streams_right.len(), 2, "expected 2 page content streams");
+    assert!(streams_right[0].contains("OverflowRightContinuationMarker"), "page 1 must draw rightward overflow source G1");
+    assert!(streams_right[1].contains("OverflowRightContinuationMarker"), "page 2 must draw rightward overflow continuation from G1");
+
+    // Row 2: H3 (col 7, first col on page 2) is right-aligned and overflows leftward into G3/F3 (page 1).
+    let left_msg = "OverflowLeftContinuationMarker across page break into column G and F";
+    wb.sheet_mut(0).unwrap().cells.set(CellRef::new(2, 7), gridcraft_model::Cell::styled(Value::text(left_msg), right_align));
+    let lays = layouts(&wb, &PrintOptions::default());
+    assert_eq!(lays[0].col_bands.len(), 2);
+    assert_eq!(lays[0].pages.len(), 2);
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let doc = String::from_utf8_lossy(&pdf);
+    let streams: Vec<&str> = doc.split("\nstream\n").skip(1).filter_map(|s| s.split("\nendstream").next()).collect();
+    assert_eq!(streams.len(), 2);
+    assert!(streams[0].contains("OverflowRightContinuationMarker"), "page 1 must draw rightward overflow source G1");
+    assert!(streams[1].contains("OverflowRightContinuationMarker"), "page 2 must draw rightward overflow continuation from G1");
+    assert!(streams[1].contains("OverflowLeftContinuationMarker"), "page 2 must draw leftward overflow source H3");
+    assert!(streams[0].contains("OverflowLeftContinuationMarker"), "page 1 must draw leftward overflow continuation from H3");
+}
+
+#[test]
+fn center_across_title_draws_continuation_on_second_horizontal_page() {
+    // 1. Short banner centered across A1:L1 sits entirely on page 1 (midpoint around col F/G,
+    // page break after col I): page 2 must NOT emit an invisible clipped copy of the text.
+    let mut wb_short = Workbook::new();
+    let ca_short = wb_short.styles.intern(Style { align: Alignment { h: HAlign::CenterAcross, ..Default::default() }, ..Default::default() });
+    let sh_short = wb_short.sheet_mut(0).unwrap();
+    sh_short.set_value(CellRef::new(0, 0), Value::text("ShortCenterAcrossBanner"));
+    for c in 0..=11 {
+        sh_short.set_style(CellRef::new(0, c), ca_short);
+    }
+    let lays_short = layouts(&wb_short, &PrintOptions::default());
+    assert_eq!(lays_short[0].col_bands.len(), 2);
+    assert_eq!(lays_short[0].pages.len(), 2);
+    let pdf_short = render_pdf(&wb_short, &lays_short, "", "").unwrap().bytes;
+    let doc_short = String::from_utf8_lossy(&pdf_short);
+    let streams_short: Vec<&str> = doc_short.split("\nstream\n").skip(1).filter_map(|s| s.split("\nendstream").next()).collect();
+    assert_eq!(streams_short.len(), 2);
+    assert!(streams_short[0].contains("ShortCenterAcrossBanner"), "page 1 must draw short CenterAcross title");
+    assert!(
+        !streams_short[1].contains("ShortCenterAcrossBanner"),
+        "page 2 must not emit invisible clipped copy of CenterAcross title that does not reach page 2"
+    );
+
+    // 2. Banner centered across A1:R1 (18 equal columns, 9 on page 1 and 9 on page 2) has its
+    // center right on the page 1 / page 2 break, so it visibly crosses onto page 2.
+    let mut wb = Workbook::new();
+    let ca = wb.styles.intern(Style { align: Alignment { h: HAlign::CenterAcross, ..Default::default() }, ..Default::default() });
+    let banner = "CenterAcrossPageBreakBanner";
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text(banner));
+    for c in 0..=17 {
+        sh.set_style(CellRef::new(0, c), ca);
+    }
+    let lays = layouts(&wb, &PrintOptions::default());
+    let lay = &lays[0];
+    assert_eq!(lay.col_bands.len(), 2, "expected 2 horizontal pages, got {:?}", lay.col_bands);
+    assert_eq!(lay.pages.len(), 2);
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let doc = String::from_utf8_lossy(&pdf);
+    let streams: Vec<&str> = doc.split("\nstream\n").skip(1).filter_map(|s| s.split("\nendstream").next()).collect();
+    assert_eq!(streams.len(), 2);
+    assert!(streams[0].contains(banner), "page 1 must draw CenterAcross title");
+    assert!(streams[1].contains(banner), "page 2 must draw visible CenterAcross title continuation");
+
+    // Verify the banner's exact horizontal placement on page 2 crosses page 2's left clip edge.
+    let p2_lines: Vec<&str> = streams[1].lines().collect();
+    let tj_idx = p2_lines.iter().position(|l| l.contains(banner)).expect("page 2 banner Tj line");
+    let tm_line = p2_lines[..tj_idx].iter().rev().find(|l| l.ends_with(" Tm")).expect("page 2 banner Tm line");
+    let tokens: Vec<&str> = tm_line.split_whitespace().collect();
+    assert_eq!(tokens.len(), 7, "unexpected Tm operator: {tm_line}");
+    let tx_p2: f32 = tokens[4].parse().unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let st = wb.styles.get(ca);
+    let font = Font::styled(Font::family_for(&st.font.name), st.font.bold, st.font.italic);
+    let size = st.font.size * lay.scale;
+    let tw = gridcraft_pdf::text_width(font, size, banner);
+    let kx = lay.col_px_to_pt * lay.scale;
+    let page2_clip_l = lay.margins[0] + layout::GRID_EDGE_INSET_PT;
+    let a1_x_on_p2 = page2_clip_l + (sh.col_left(0) - sh.col_left(lay.col_bands[1].0)) as f32 * kx;
+    let span_w = (sh.col_left(18) - sh.col_left(0)) as f32 * kx;
+    let expected_tx_p2 = a1_x_on_p2 + (span_w - tw) / 2.0;
+    assert!((tx_p2 - expected_tx_p2).abs() < 0.05, "page 2 banner x={tx_p2} vs expected {expected_tx_p2} (Tm: `{tm_line}`)");
+    assert!(tx_p2 < page2_clip_l && tx_p2 + tw > page2_clip_l, "banner [{tx_p2}, {}] must straddle page 2 left edge {page2_clip_l}", tx_p2 + tw);
+}
+
+#[test]
+fn explicit_print_area_excludes_overflow_from_outside_cells() {
+    let mut wb = Workbook::new();
+    let right_align = wb.styles.intern(Style { align: Alignment { h: HAlign::Right, ..Default::default() }, ..Default::default() });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.print.print_area = Some(RangeRef::parse("C1:F20").unwrap());
+    sh.set_value(CellRef::new(0, 1), Value::text("OutsideLeftOverflowMarker extending well into C1 and D1"));
+    sh.cells
+        .set(CellRef::new(0, 6), gridcraft_model::Cell::styled(Value::text("OutsideRightOverflowMarker extending well into F1 and E1"), right_align));
+    sh.set_value(CellRef::new(1, 3), Value::text("InsidePrintAreaMarker"));
+
+    let lays = layouts(&wb, &PrintOptions::default());
+    assert_eq!(lays[0].area, RangeRef::parse("C1:F20").unwrap());
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let doc = String::from_utf8_lossy(&pdf);
+    assert!(doc.contains("InsidePrintAreaMarker"), "printed area cell must appear in PDF");
+    assert!(!doc.contains("OutsideLeftOverflowMarker"), "cell B1 outside print_area must not overflow into C1");
+    assert!(!doc.contains("OutsideRightOverflowMarker"), "cell G1 outside print_area must not overflow into F1");
+}
+
+#[test]
+fn range_override_excludes_overflow_from_outside_cells() {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(1, 1), Value::text("OutsideSelectionOverflowMarker extending well into C2 and D2"));
+    sh.set_value(CellRef::new(2, 3), Value::text("InsideSelectionMarker"));
+
+    let opts = PrintOptions { ranges: vec![RangeRef::parse("C2:F10").unwrap()], ..Default::default() };
+    let lays = layouts(&wb, &opts);
+    assert_eq!(lays[0].area, RangeRef::parse("C2:F10").unwrap());
+    let pdf = render_pdf(&wb, &lays, "", "").unwrap().bytes;
+    let doc = String::from_utf8_lossy(&pdf);
+    assert!(doc.contains("InsideSelectionMarker"), "selected cell must appear in PDF");
+    assert!(!doc.contains("OutsideSelectionOverflowMarker"), "cell B2 outside range_override must not overflow into C2");
+}
+
+#[test]
+fn leftward_text_overflow_widens_print_range_min_col() {
+    let mut wb = Workbook::new();
+    let right_align = wb.styles.intern(Style { align: Alignment { h: HAlign::Right, ..Default::default() }, ..Default::default() });
+    let center_align = wb.styles.intern(Style { align: Alignment { h: HAlign::Center, ..Default::default() }, ..Default::default() });
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.cells.set(
+        CellRef::new(0, 3),
+        gridcraft_model::Cell::styled(Value::text("Long right-aligned text overflowing leftward across C1 and B1"), right_align),
+    );
+    let range = layout::sheet_print_range(&wb, 0, wb.sheet(0).unwrap()).unwrap();
+    assert!(range.start.col < 3, "right-aligned overflow from D1 must widen print range leftward, got {range:?}");
+    assert_eq!(range.end.col, 3);
+
+    // Centered text in D3 with empty neighbours widens both start.col and end.col.
+    wb.sheet_mut(0).unwrap().cells.set(
+        CellRef::new(2, 3),
+        gridcraft_model::Cell::styled(Value::text("Long centered text overflowing both leftward and rightward across columns"), center_align),
+    );
+    let lay = layout_sheet(&wb, 0, &PrintOptions::default(), None).unwrap();
+    assert!(lay.area.start.col < 3, "centered overflow must widen min_col leftward, got {:?}", lay.area);
+    assert!(lay.area.end.col > 3, "centered overflow must widen max_col rightward, got {:?}", lay.area);
 }

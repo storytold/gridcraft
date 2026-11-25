@@ -663,7 +663,7 @@ pub(crate) fn paint_headers(
                 if !done_rows.insert((rr, clip.top() as i32)) {
                     continue;
                 }
-                let h = sh.row_height(rr) * geo.z;
+                let h = geo.row_height(sh, rr) * geo.z;
                 if h <= 0.0 {
                     continue;
                 }

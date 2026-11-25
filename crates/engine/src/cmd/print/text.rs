@@ -151,7 +151,7 @@ fn font_for(style: &Style) -> Font {
     Font::styled(Font::family_for(&style.font.name), style.font.bold, style.font.italic)
 }
 
-fn text_direction(order: ReadingOrder) -> TextDirection {
+pub(super) fn text_direction(order: ReadingOrder) -> TextDirection {
     match order {
         ReadingOrder::Context => TextDirection::Context,
         ReadingOrder::LeftToRight => TextDirection::LeftToRight,
@@ -161,7 +161,7 @@ fn text_direction(order: ReadingOrder) -> TextDirection {
 
 /// The alignment a cell is laid out with before a right-to-left sheet is mirrored. Explicit Left
 /// and Right are swapped there, as in the grid, so they print on the side the user chose.
-fn text_align(align: HAlign, value: &Value, direction: TextDirection, right_to_left_sheet: bool) -> HAlign {
+pub(super) fn text_align(align: HAlign, value: &Value, direction: TextDirection, right_to_left_sheet: bool) -> HAlign {
     match align {
         HAlign::General => match value {
             Value::Number(_) => HAlign::Right,
@@ -182,23 +182,32 @@ fn empty_for_overflow(sh: &Sheet, c: CellRef, merges: &[RangeRef]) -> bool {
     sh.value_ref(c).is_none_or(|v| v.is_empty()) && !merges.iter().any(|m| m.contains(c))
 }
 
-fn extend_text_bounds(sh: &Sheet, c: CellRef, merges: &[RangeRef], k: f32, need: f32, align: HAlign, bounds: (f32, f32)) -> (f32, f32) {
+fn extend_text_bounds(b: &Block, c: CellRef, merges: &[RangeRef], need: f32, align: HAlign, bounds: (f32, f32)) -> (f32, f32) {
+    let sh = b.sh;
+    let hidden_cols = &b.lay.hidden_col_runs;
+    let kx = b.kx;
     let (mut clip_l, mut clip_r) = bounds;
     let grow = |dir: i64, mut remaining: f32| -> f32 {
         let mut ext = 0.0;
-        let mut col = c.col as i64 + dir;
-        while remaining > 0.0 && col >= 0 && col < MAX_COLS as i64 {
-            let nc = CellRef::new(c.row, col as u32);
+        let mut cur = if dir > 0 { c.col.checked_add(1).filter(|&v| v < MAX_COLS) } else { c.col.checked_sub(1) };
+        while remaining > 0.0 {
+            let Some(raw_col) = cur else { break };
+            let Some(col) =
+                (if dir > 0 { super::layout::next_visible_col(hidden_cols, raw_col) } else { super::layout::prev_visible_col(hidden_cols, raw_col) })
+            else {
+                break;
+            };
+            let nc = CellRef::new(c.row, col);
             if !empty_for_overflow(sh, nc, merges) {
                 break;
             }
-            let width = sh.col_width(nc.col) * k;
+            let width = sh.col_width(col) * kx;
             ext += width;
             remaining -= width;
-            col += dir;
             if ext > 20_000.0 {
                 break;
             }
+            cur = if dir > 0 { col.checked_add(1).filter(|&v| v < MAX_COLS) } else { col.checked_sub(1) };
         }
         ext
     };
@@ -235,6 +244,64 @@ pub(super) struct TextPlacement<'a> {
     pub merged: bool,
     pub merges: &'a [RangeRef],
     pub limits: (f32, f32),
+}
+
+struct HorizontalLines<'a> {
+    lines: &'a [TextLine],
+    rect: (f32, f32, f32, f32),
+    clip: (f32, f32),
+    across: f32,
+    pad: f32,
+    indent: f32,
+    h_align: HAlign,
+    first_baseline: f32,
+    line_h: f32,
+    font: Font,
+    size: f32,
+    color: [u8; 3],
+    underline: Underline,
+    strike: bool,
+}
+
+fn draw_horizontal_lines(pg: &mut Page, b: &Block, hl: &HorizontalLines<'_>) {
+    let (x, y, w, h) = hl.rect;
+    let (clip_l, clip_r) = hl.clip;
+    let mut clipped = false;
+    for (i, line) in hl.lines.iter().enumerate() {
+        let lw = gridcraft_pdf::text_width_with_direction(hl.font, hl.size, &line.text, line.direction);
+        let lx = match hl.h_align {
+            HAlign::Right => x + w - hl.pad - lw - hl.indent,
+            HAlign::Center => x + (w + hl.across - lw) / 2.0,
+            _ => x + hl.pad + hl.indent,
+        };
+        if lx + lw <= clip_l || lx >= clip_r {
+            continue;
+        }
+        let ly = hl.first_baseline + i as f32 * hl.line_h;
+        if ly - hl.size > y + h || ly < y - hl.line_h {
+            continue;
+        }
+        if !clipped {
+            pg.save();
+            pg.clip_rect(b.text_x(clip_l, clip_r - clip_l), y, clip_r - clip_l, h);
+            clipped = true;
+        }
+        let lx = b.text_x(lx, lw);
+        pg.text_with_direction(Point::new(lx, ly), hl.size, hl.font, hl.color, &line.text, line.direction);
+        if hl.underline != Underline::None {
+            let uw = (hl.size * 0.06).max(0.2);
+            pg.stroke_line(lx, ly + hl.size * 0.12, lx + lw, ly + hl.size * 0.12, uw, hl.color);
+            if matches!(hl.underline, Underline::Double | Underline::DoubleAccounting) {
+                pg.stroke_line(lx, ly + hl.size * 0.24, lx + lw, ly + hl.size * 0.24, uw, hl.color);
+            }
+        }
+        if hl.strike {
+            pg.stroke_line(lx, ly - hl.size * 0.3, lx + lw, ly - hl.size * 0.3, (hl.size * 0.06).max(0.2), hl.color);
+        }
+    }
+    if clipped {
+        pg.restore();
+    }
 }
 
 pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) {
@@ -325,17 +392,20 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     // Overflow into empty neighbours (single-line text, not merged).
     // Center Across Selection spans the empty Center Across cells to its right; the text stays within that run.
     let spans = st.align.h == HAlign::CenterAcross && !wrap && !merged && rot == 0;
-    let across = if spans { center_across_width(&wb.styles, sh, c, merges) * b.k } else { 0.0 };
+    let across = if spans { center_across_width(&wb.styles, sh, c, merges) * b.kx } else { 0.0 };
     let (mut clip_l, mut clip_r) = (x, x + w + across);
-    if !wrap && !merged && !is_num && rot.abs() != 90 && across <= 0.0 && tw + 2.0 * pad + indent > w {
+    if !wrap && !merged && !is_num && st.align.h != HAlign::Fill && rot.abs() != 90 && across <= 0.0 && tw + 2.0 * pad + indent > w {
         let need = tw + 2.0 * pad + indent - w;
-        (clip_l, clip_r) = extend_text_bounds(sh, c, merges, b.k, need, h_align, (clip_l, clip_r));
+        (clip_l, clip_r) = extend_text_bounds(b, c, merges, need, h_align, (clip_l, clip_r));
     }
     let clip_l = clip_l.max(limits.0);
     let clip_r = clip_r.min(limits.1);
-    pg.save();
-    pg.clip_rect(b.text_x(clip_l, clip_r - clip_l), y, (clip_r - clip_l).max(0.0), h);
+    if clip_r <= clip_l {
+        return;
+    }
     if rotated {
+        pg.save();
+        pg.clip_rect(b.text_x(clip_l, clip_r - clip_l), y, clip_r - clip_l, h);
         // Rotated text: anchored at the bottom-left (upward) or top-left (downward) of the cell.
         // Wrapped lines stack rightward for upward text and leftward for downward text, so
         // downward text starts its first line far enough in for the last to end at the left pad.
@@ -359,6 +429,8 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         return;
     }
     if rot == 255 {
+        pg.save();
+        pg.clip_rect(b.text_x(clip_l, clip_r - clip_l), y, clip_r - clip_l, h);
         // Vertical stacked text.
         let stacked: String = lines.iter().map(|line| line.text.as_str()).collect();
         let chars: Vec<&str> = stacked.graphemes(true).take(500).collect();
@@ -374,29 +446,24 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
         pg.restore();
         return;
     }
-    for (i, line) in lines.iter().enumerate() {
-        let lw = gridcraft_pdf::text_width_with_direction(font, size, &line.text, line.direction);
-        let lx = match h_align {
-            HAlign::Right => x + w - pad - lw - indent,
-            HAlign::Center => x + (w + across - lw) / 2.0,
-            _ => x + pad + indent,
-        };
-        let ly = first_baseline + i as f32 * line_h;
-        if ly - size > y + h || ly < y - line_h {
-            continue;
-        }
-        let lx = b.text_x(lx, lw);
-        pg.text_with_direction(Point::new(lx, ly), size, font, color, &line.text, line.direction);
-        if st.font.underline != Underline::None {
-            let uw = (size * 0.06).max(0.2);
-            pg.stroke_line(lx, ly + size * 0.12, lx + lw, ly + size * 0.12, uw, color);
-            if matches!(st.font.underline, Underline::Double | Underline::DoubleAccounting) {
-                pg.stroke_line(lx, ly + size * 0.24, lx + lw, ly + size * 0.24, uw, color);
-            }
-        }
-        if st.font.strike {
-            pg.stroke_line(lx, ly - size * 0.3, lx + lw, ly - size * 0.3, (size * 0.06).max(0.2), color);
-        }
-    }
-    pg.restore();
+    draw_horizontal_lines(
+        pg,
+        b,
+        &HorizontalLines {
+            lines: &lines,
+            rect,
+            clip: (clip_l, clip_r),
+            across,
+            pad,
+            indent,
+            h_align,
+            first_baseline,
+            line_h,
+            font,
+            size,
+            color,
+            underline: st.font.underline,
+            strike: st.font.strike,
+        },
+    );
 }

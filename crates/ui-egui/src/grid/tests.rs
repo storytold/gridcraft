@@ -530,3 +530,39 @@ fn kept_sheet_geometry_and_cf_statistics_follow_every_change() {
     assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
     check_cf(&mut app);
 }
+
+#[test]
+fn paged_geo_row_height_and_cell_rect_match_autofit_delta_rows() {
+    use gridcraft_engine::model::{Font, Style, Workbook};
+    use gridcraft_engine::paper::PageGrid;
+    let mut wb = Workbook::new();
+    let segoe11 = wb.styles.intern(Style { font: Font { name: "Segoe UI".into(), size: 11.0, ..Default::default() }, ..Default::default() });
+    let big24 = wb.styles.intern(Style { font: Font { size: 24.0, ..Default::default() }, ..Default::default() });
+    {
+        let sh = wb.sheet_mut(0).unwrap();
+        for r in 0..10 {
+            sh.set_value(CellRef::new(r, 0), gridcraft_engine::core::Value::text("x"));
+        }
+        // Non-custom Segoe UI 11 in default 20px row auto-fits to 22px (+2px delta); 24pt font gets a larger delta.
+        sh.set_style(CellRef::new(2, 0), segoe11);
+        sh.set_style(CellRef::new(5, 0), big24);
+    }
+    let pg = Arc::new(PageGrid::build(&wb, 0, 50, 10).unwrap());
+    let sh = wb.sheet(0).unwrap();
+    let geo = Geo::paged(sh, Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(1000.0, 800.0)), egui::Vec2::ZERO, pg.clone());
+    for row in [2u32, 5u32] {
+        let expected_h = (pg.row_y(row + 1) - pg.row_y(row)) as f32;
+        assert!(expected_h > sh.row_height(row) + 0.5, "row {row} must have an auto-fit delta");
+        assert!((pg.row_height(row) - expected_h).abs() < 1e-4);
+        assert!((geo.row_height(sh, row) - expected_h).abs() < 1e-4);
+        let y_end = geo.y_end(sh, row);
+        let next_y = geo.y(sh, row + 1);
+        assert!((y_end - next_y).abs() < 1e-4, "row {row}: y_end={y_end} vs y(row+1)={next_y}");
+        let rect = geo.cell_rect(sh, CellRef::new(row, 0));
+        assert!((rect.bottom() - next_y).abs() < 1e-4, "row {row}: cell_rect bottom={} vs y(row+1)={next_y}", rect.bottom());
+        assert_eq!(geo.row_at(sh, y_end - 0.5), row, "just above y_end hits delta row {row}");
+        assert_eq!(geo.row_at(sh, y_end + 0.5), row + 1, "just below y_end hits next row {}", row + 1);
+        let band = active_row_band(&geo, sh, row, (0, 9), (0, 3)).unwrap();
+        assert!((band.bottom() - y_end).abs() < 1e-4, "active_row_band must cover delta row height");
+    }
+}
