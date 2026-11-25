@@ -127,8 +127,14 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   100–165 h including #5. [localization-parity.md](localization-parity.md)
 
 ### 12. Get & Transform, external data, data model (F)
-- No Power Query editor, connections, refresh, From Web/database/folder sources, relationships or
-  data model (`data.fromWeb`, `data.relationships` missing). **Estimate:** 60–100 h.
+- No Power Query editor, connections, From Web/folder sources, relationships or data model
+  (`data.fromWeb`, `data.relationships` missing). From Database (`data.fromDatabase`) runs one
+  SQL query, or a table and its chosen columns, against PostgreSQL, MySQL/MariaDB, SQLite or ODBC
+  (desktop and CLI; each driver is a cargo feature, PostgreSQL, MySQL and SQLite on by default,
+  ODBC off) into a new table sheet. The table keeps its
+  query in the workbook (custom XML part, no password), and Data › Refresh / Refresh All run it
+  again in place; connections can be saved in the preferences. No query editor yet (#1206, #1318).
+  **Estimate:** 55–95 h.
 
 ### 13. Analysis tools: Solver, Analysis ToolPak, Forecast Sheet (F)
 - Forecast Sheet (`data.forecastSheet`) and the FORECAST.ETS family are in, including Forecast
@@ -201,8 +207,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
 | 2026-11-01 | minor | §13: the Analysis ToolPak has all 19 of Excel's tools (two-factor Anova with and without replication, z-Test, Fourier Analysis, Random Number Generation, Sampling); its chart output remains. The stale "`data.solver`, `data.analysisToolPak` missing" and "no Forecast Start" sentences removed |
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
+| 2026-11-01 | minor | §12: From Database drivers are cargo features (`postgres`, `mysql`, `sqlite` on by default, `odbc` off); the security warning for queries read from a file shows each statement and the user it connects as |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-30 | minor | §12: From Database (`data.fromDatabase`): SQL import from PostgreSQL, MySQL/MariaDB, SQLite, ODBC; the table keeps its query (`data.refresh`, Refresh All), table/column picker, saved connections (#1206) |
 | 2026-10-26 | minor | §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry. Other script and UI gaps remain. |
 | 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
 | 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |

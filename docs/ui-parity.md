@@ -4,7 +4,7 @@
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (281 / 296).
+separately in [parity-checklist.md](parity-checklist.md) (284 / 298).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -307,6 +307,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 | 2026-10-31 | minor | Esc in a File-page text field leaves the field and cancels editing; the next Esc returns to the sheet (#3035) |
 | 2026-10-31 | minor | Recently Used lists the functions most recently entered in a formula from any source, kept with the preferences; the Insert Function dialog is titled as in Excel, its category list (Most Recently Used, All, each category) works, and its category column follows the widest name shown |
 | 2026-10-31 | minor | Formulas › Function Library: Insert Function, the AutoSum split button and three columns of labelled small buttons with category colours; category menus end with Insert Function…; More Functions cascades; Home › Editing shares the AutoSum menu; MR key tip for Recently Used |
+| 2026-10-30 | minor | Data tab: From Database (dialog with saved connections, table and column picker or SQL), Refresh and Refresh All; ribbon catalog count 281 / 296 → 283 / 298 |
 | 2026-10-31 | minor | CJK fallback text shares the Latin baseline in cells, editors and window titles; fixed row heights and clipping remain workbook-controlled |
 | 2026-10-30 | minor | Checkbox cells print and export to PDF as boxes, as on screen: unchecked white with a grey outline, checked green with a white tick (#2972). They printed their value as TRUE or FALSE; other values in a checkbox cell still print as text |
 | 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |

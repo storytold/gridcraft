@@ -7,6 +7,15 @@ publish = false
 default-run = "gridcraft"
 description = "GridCraft desktop app"
 
+[features]
+# Data › From Database drivers; a build can leave any of them out (`--no-default-features`).
+default = ["postgres", "mysql", "sqlite"]
+postgres = ["gridcraft-datasource/postgres"]
+mysql = ["gridcraft-datasource/mysql"]
+sqlite = ["gridcraft-datasource/sqlite"]
+# ODBC data sources (needs the system ODBC driver manager to link: unixODBC on Linux).
+odbc = ["gridcraft-datasource/odbc"]
+
 [lints]
 workspace = true
 
@@ -30,6 +39,7 @@ winresource = "0.1"
 winit = { version = "0.30", default-features = false, features = ["x11", "wayland-csd-adwaita-notitle"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+gridcraft-datasource = { workspace = true }
 # Same craft-libs revision as the workspace's craft-update and craft-window (see the root
 # Cargo.toml).
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "aa84415bae3b765fef6b7ef42404f66ad1cff9d9" }
