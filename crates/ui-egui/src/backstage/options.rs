@@ -6,6 +6,24 @@ use super::{Key, Language, Modifiers, SheetApp, Ui, dim, i18n, json, section, ve
 /// tabs and scroll bars) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
+/// How far a notch of the mouse wheel moves the sheet: a slider, with what it means written beside it.
+fn wheel_rows_option(app: &mut SheetApp, ui: &mut egui::Ui, lang: crate::i18n::Language) {
+    let current = app.ui.wheel_rows;
+    let mut picked = current;
+    ui.horizontal(|ui| {
+        let label = ui.label(lang.tr("Mouse wheel scrolling:"));
+        ui.add(egui::Slider::new(&mut picked, 0..=20).show_value(false)).labelled_by(label.id);
+        ui.label(match picked {
+            0 => lang.tr("Usual speed").to_string(),
+            1 => lang.tr("1 row").to_string(),
+            n => lang.tr("{n} rows").replace("{n}", &n.to_string()),
+        });
+    });
+    if picked != current {
+        app.run_or_alert("options.wheelRows", json!({"rows": picked}));
+    }
+}
+
 pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
@@ -19,6 +37,7 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut highlight_row, lang.tr("Highlight the active cell's row")).changed() {
         app.run_or_alert("options.highlightActiveRow", json!({"on": highlight_row}));
     }
+    wheel_rows_option(app, ui, lang);
     ui.add_space(18.0);
     section(ui, lang, "Options|Editing");
     let mut autocomplete = app.ui.autocomplete;

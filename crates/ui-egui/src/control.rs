@@ -274,6 +274,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
                 ("options.highlightActiveRow", "Highlight the active cell's row", "{on?: bool} (toggles without it) → {on}"),
+                ("options.wheelRows", "Mouse wheel scrolling", "{rows?: 0–20 (0 = the wheel's usual speed)} → {rows}"),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.window.minimize", "Minimize Window", ""),
                 ("ui.window.maximize", "Maximize Window", "{on: bool}"),
