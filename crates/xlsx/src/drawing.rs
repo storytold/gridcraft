@@ -337,7 +337,8 @@ fn described_source(descr: &str) -> Option<(&str, &str)> {
 /// stands in, as do the runs of a body without Office Math (one colour throughout: the plain-text
 /// box of an equation outside the subset). The runs of GridCraft's own Office Math cannot stand
 /// in when the source colours some of them (`{\color{green}a}+d` would read back green), so such
-/// a source with no saved ink reads as Automatic.
+/// a source with no saved ink reads as Automatic, unless every run carries the same colour: that
+/// is how earlier versions saved an explicit ink (on each run, with no paragraph-end fill).
 fn equation_ink(tb: Option<&El>, source: &str, own: bool, has_math: bool) -> Color {
     let Some(tb) = tb else { return Color::default() };
     if own && has_math {
@@ -345,10 +346,37 @@ fn equation_ink(tb: Option<&El>, source: &str, own: bool, has_math: bool) -> Col
             return c;
         }
         if source.contains("\\color") || source.contains("\\textcolor") {
-            return Color::default();
+            return uniform_run_color(tb).unwrap_or_default();
         }
     }
     first_run_color(tb, 0).unwrap_or_default()
+}
+
+/// The colour every run under `e` carries, or `None` when there is no run, a run has no fill or
+/// the runs differ.
+fn uniform_run_color(e: &El) -> Option<Color> {
+    let mut found: Option<Color> = None;
+    let mut mixed = false;
+    collect_run_colors(e, 0, &mut found, &mut mixed);
+    if mixed { None } else { found }
+}
+
+fn collect_run_colors(e: &El, depth: usize, found: &mut Option<Color>, mixed: &mut bool) {
+    if depth > 12 || *mixed {
+        return;
+    }
+    if e.name == "rPr" {
+        match (e.child("solidFill").and_then(dml_color), *found) {
+            (None, _) => *mixed = true,
+            (Some(c), None) => *found = Some(c),
+            (Some(c), Some(f)) if c != f => *mixed = true,
+            _ => {}
+        }
+        return;
+    }
+    for c in &e.children {
+        collect_run_colors(c, depth + 1, found, mixed);
+    }
 }
 
 /// The colour of the first run (DrawingML `rPr` with a fill) under `e`.

@@ -582,6 +582,26 @@ fn nested_colours_keep_the_frame_ink_through_save_and_reopen() {
 }
 
 #[test]
+fn a_workbook_saved_before_the_paragraph_carried_the_ink_keeps_its_explicit_frame_ink() {
+    // The earlier writer put the frame's ink on every Office Math run and wrote no fill on the
+    // paragraph end: strip that fill from a saved equation to get the same bytes.
+    let src = "{\\color{green}a+{\\color{black}b}+c}+d";
+    let wb = book(vec![equation(1, "B2", src, Color::Rgb(0x1F4E79))]);
+    let mut parts = unzip(&write_xlsx(&wb).unwrap());
+    let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
+    let d = drawing(&parts);
+    let at = d.find("<a:endParaRPr").unwrap();
+    let open_end = d[at..].find('>').unwrap() + at + 1;
+    let close = d[open_end..].find("</a:endParaRPr>").unwrap() + open_end;
+    assert!(d[open_end..close].contains("1F4E79"), "the paragraph end carries the ink: {d}");
+    let legacy = format!("{}{}", &d[..open_end], &d[close..]);
+    assert!(legacy.matches("1F4E79").count() > 1, "every run still carries the ink");
+    parts.insert(name, legacy.into_bytes());
+    let s = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
+    assert_eq!((s.len(), s[0].kind, s[0].text.as_str(), s[0].line), (1, ShapeKind::Equation, src, Color::Rgb(0x1F4E79)));
+}
+
+#[test]
 fn the_plain_text_stand_in_for_an_equation_is_drawn_at_a_normal_size() {
     // A source Office Math cannot hold is saved as the text box alone; a source it can hold has
     // the same box as its fallback. Neither takes the (large) size the equation is drawn at.
