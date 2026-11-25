@@ -84,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
             "insert.wordArt",
-            "WordArt",
+            "Decorative Text",
             ["Insert", "Text"],
             None,
             "{style?: preset name or 0-based index (Classic, Midnight, Sunrise, Lagoon, Ember, Mint Outline, Ink Stamp, Orchid, Graphite, Lime Pop), text?, at?, width?, height?, fontSize?, bold?, italic?, fill?: hex, outline?: hex|false, outlineWidth?, shadow?: hex|bool}",
@@ -93,7 +93,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             "wordArt.set",
-            "Format WordArt",
+            "Format Decorative Text",
             [],
             None,
             "{id: WordArt id, style?, text?, fontSize?, bold?, italic?, fill?: hex, outline?: hex|false, outlineWidth?, shadow?: hex|bool}",
