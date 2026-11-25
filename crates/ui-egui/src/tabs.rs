@@ -162,7 +162,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                 all.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, app.ui.language.tr("All sheets")));
                 let items = app.session.active().map(|d| navigator_items(&d.wb.sheets)).unwrap_or_default();
                 let active = app.session.active().map(|d| d.wb.active_sheet().to_string()).unwrap_or_default();
-                let rows: Vec<(&str, String)> = items.iter().map(|(i, name)| (i.as_str(), name.clone())).collect();
+                let rows: Vec<(&str, &str)> = items.iter().map(|(i, name)| (i.as_str(), name.as_str())).collect();
                 if let crate::ribbon::ComboResult::Picked(i) = crate::ribbon::editable_combo(ui, &all, "sheet_navigator", &active, &rows, false)
                     && let Ok(i) = i.parse::<usize>()
                 {

@@ -12,7 +12,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 /// A font file is skipped by the scan past this size: a catalog only needs each face's name, and a
 /// damaged or enormous file must not turn startup into a long read.
@@ -283,12 +283,25 @@ fn installed_in(cat: &[Face], names: &[String]) -> Vec<String> {
     out
 }
 
+/// The full font list, built once the background scan lands and shared from then on. The catalog
+/// is published exactly once, so the list it implies never changes either.
+static FAMILIES: OnceLock<Arc<[String]>> = OnceLock::new();
+
 /// The font list a combo box shows: the standard [`crate::ribbon::FONTS`] names first (what Excel
 /// offers, and what we substitute), then every other installed family A–Z. Never blocks: until the
-/// background scan finishes it returns just the standard names.
-pub fn families() -> Vec<String> {
+/// background scan finishes it returns just the standard names — uncached, so the full list can
+/// still take over once the scan lands; from then on the list is built once and shared as an
+/// `Arc`, not rebuilt (sorted, deduped, cloned) on every frame.
+pub fn families() -> Arc<[String]> {
+    match catalog_now() {
+        Some(cat) => FAMILIES.get_or_init(|| families_from(cat).into()).clone(),
+        None => families_from(&[]).into(),
+    }
+}
+
+/// [`families`] over a given catalog (empty while the scan has not finished).
+fn families_from(cat: &[Face]) -> Vec<String> {
     let mut out: Vec<String> = crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect();
-    let Some(cat) = catalog_now() else { return out };
     let mut seen: HashSet<String> = out.iter().map(|s| s.to_lowercase()).collect();
     let mut installed: Vec<String> = cat.iter().map(|f| f.family.clone()).collect();
     installed.sort_by_key(|a| a.to_lowercase());
@@ -594,6 +607,28 @@ mod tests {
         assert_eq!(faces_named(&cat, "Noto Sans KR").len(), 2);
         let medium = faces_named(&cat, "Noto Sans KR Medium");
         assert_eq!(medium.iter().map(|f| f.weight).collect::<Vec<_>>(), [500.0]);
+    }
+
+    #[test]
+    fn the_font_list_is_the_standard_set_until_the_scan_lands() {
+        assert_eq!(families_from(&[]), crate::ribbon::FONTS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn the_font_list_appends_installed_families_sorted_and_deduped() {
+        let cat = [
+            face("Zebra", &["Zebra"], "zebra.ttf", 400.0),
+            face("MEIRYO", &["MEIRYO"], "meiryo-upper.ttc", 400.0),
+            face("Meiryo", &["Meiryo"], "meiryo.ttc", 400.0),
+            face("Meiryo", &["Meiryo"], "meiryob.ttc", 700.0),
+            face("arial", &["arial"], "arial.ttf", 400.0),
+        ];
+        let list = families_from(&cat);
+        let standard = crate::ribbon::FONTS.len();
+        assert_eq!(&list[..standard], crate::ribbon::FONTS);
+        // "arial" is already in the standard set (case aside), and the installed Meiryo faces —
+        // including the case variant MEIRYO — collapse to a single entry, the first spelling.
+        assert_eq!(&list[standard..], ["MEIRYO", "Zebra"]);
     }
 
     #[test]

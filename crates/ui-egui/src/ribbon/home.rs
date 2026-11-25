@@ -573,12 +573,19 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     });
 }
 
+/// Excel's font name box: shows the current font's name; the dropdown offers the shared font
+/// list ([`crate::fonts::families`]: the standard names first, then the installed families),
+/// and a pick applies through `home.fontName`.
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
     let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
-    let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
+    // The standard set first, then every installed system font, as in the Format Cells dialog
+    // (`fonts::families`, built once and cached when the background scan lands). Until the scan
+    // finishes this is just the standard set; installed fonts appear once it lands.
+    let families = crate::fonts::families();
+    let items: Vec<(&str, &str)> = families.iter().map(|f| (f.as_str(), f.as_str())).collect();
     if let ComboResult::Picked(value) = editable_combo(ui, &resp, "font", &name, &items, forced) {
         act(app, "home.fontName", json!({"name": value}));
     }
@@ -665,7 +672,7 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     arrow.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Font Size"));
     let sizes = [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
     let labels: Vec<String> = sizes.iter().map(|s| format!("{}", *s as i32)).collect();
-    let items: Vec<(&str, String)> = labels.iter().map(|s| (s.as_str(), s.clone())).collect();
+    let items: Vec<(&str, &str)> = labels.iter().map(|s| (s.as_str(), s.as_str())).collect();
     if let ComboResult::Picked(value) = list_combo(ui, &arrow, frame, "size", &current, &items)
         && let Ok(v) = value.parse::<f32>()
     {
@@ -673,6 +680,9 @@ fn size_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     }
 }
 
+/// Excel's number format box: the dropdown lists each format kind with a live preview of the
+/// active cell's value in that format; a pick applies through `home.numberFormat`, except
+/// `__more`, which opens the Format Cells dialog instead.
 fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let code = st.num_fmt.as_str().to_string();
     let kind = gridcraft_engine::display::number_format(&code).kind();
@@ -683,15 +693,17 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     control_keytip(app, ui, &resp, "home.numberFormat");
     let forced = invoke(app, "home.numberFormat");
     let names = ["General", "Number", "Currency", "Accounting", "Short Date", "Long Date", "Time", "Percentage", "Fraction", "Scientific", "Text"];
-    let items: Vec<(&str, String)> = names
+    // The displays are built once and kept alive here; the combo borrows them (and the values).
+    let mut displays: Vec<String> = names
         .iter()
         .map(|n| {
             let code = gridcraft_engine::cmd::format::format_code_for(n);
             let preview = app.session.active().map(|d| gridcraft_engine::display::format(&sample, code, &d.wb).text).unwrap_or_default();
-            (*n, format!("{:<12}   {preview}", lang.tr(n)))
+            format!("{:<12}   {preview}", lang.tr(n))
         })
-        .chain(std::iter::once(("__more", format!("{:>12}", lang.tr("More Number Formats…")))))
         .collect();
+    displays.push(format!("{:>12}", lang.tr("More Number Formats…")));
+    let items: Vec<(&str, &str)> = names.iter().copied().chain(["__more"]).zip(displays.iter().map(|d| d.as_str())).collect();
     if let ComboResult::Picked(value) = editable_combo(ui, &resp, "number", &current, &items, forced) {
         match value.as_str() {
             "__more" => app.open_dialog("formatCells", json!({"tab": "Number"})),
