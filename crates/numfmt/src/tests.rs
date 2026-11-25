@@ -917,6 +917,30 @@ fn b2_prefix_renders_hijri_date() {
     assert_eq!(f("B2d/m/yyyy;@", 46314.0), "8/5/1448");
 }
 
+/// #1233: a Thai locale tag shows Thai month and weekday names; `bb` and `bbbb` are the
+/// Buddhist-era year (Gregorian + 543), with or without a tag.
+#[test]
+fn thai_locale_tags_and_buddhist_year() {
+    // Wednesday 14 October 2026 (2569 BE).
+    let day = 46309.0;
+    assert_eq!(f("[$-th-TH]d mmmm yyyy", day), "14 ตุลาคม 2026");
+    assert_eq!(f("[$-th-TH]d mmm bbbb", day), "14 ต.ค. 2569");
+    assert_eq!(f("[$-th-TH]dddd", day), "พุธ");
+    assert_eq!(f("[$-41E]ddd d/m/bb", day), "พ. 14/10/69");
+    assert_eq!(f("[$-41E]d mmmm bbbb;@", 46351.0), "25 พฤศจิกายน 2569");
+    // The year code works without a tag, as Excel documents: 1/1/2000 is 1/1/2543.
+    assert_eq!(f("d/m/bbbb", 36526.0), "1/1/2543");
+    assert_eq!(f("BBBB", 36526.0), "2543");
+    // Other tags keep English names, and the tag's currency symbol still shows.
+    assert_eq!(f("[$-409]mmmm", day), "October");
+    assert_eq!(f("[$-41D]mmmm", day), "October");
+    assert_eq!(f("[$฿-41E]#,##0", 1234.0), "฿1,234");
+    // A lone `b` is still text.
+    assert_eq!(f("0 b", 5.0), "5 b");
+    // Under `B2` the Hijri names win over the tag.
+    assert_eq!(f("B2[$-41E]dddd", 46314.0), "الإثنين");
+}
+
 /// Under `B2`, Excel shows Arabic weekday names, the full name for `ddd` as well as `dddd`.
 #[test]
 fn b2_prefix_names_weekdays_in_arabic() {

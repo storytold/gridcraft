@@ -124,7 +124,10 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
     let second = (ms / 1000) % 60;
     let milli = ms % 1000;
     // No date in the section's calendar (serial 60 under `B2`): shown like an out-of-range date.
-    let date = sec.calendar.date(&dt)?;
+    let mut date = sec.calendar.date(&dt)?;
+    if sec.thai && sec.calendar == Calendar::Gregorian {
+        date = date.in_thai(&dt);
+    }
     let mut out = Out::default();
     for t in &sec.toks {
         match t {
@@ -133,6 +136,10 @@ pub(crate) fn render_date(sec: &Section, v: f64, sys: DateSystem) -> Option<Out>
                 match *d {
                     DatePart::Year(n) => {
                         let _ = if n <= 2 { write!(text, "{:02}", date.year.rem_euclid(100)) } else { write!(text, "{:04}", date.year) };
+                    }
+                    DatePart::BuddhistYear(n) => {
+                        let year = i64::from(dt.year) + 543;
+                        let _ = if n <= 2 { write!(text, "{:02}", year.rem_euclid(100)) } else { write!(text, "{year:04}") };
                     }
                     DatePart::Month(n) => match n {
                         1 | 2 => push_padded(text, date.month as i64, n),
