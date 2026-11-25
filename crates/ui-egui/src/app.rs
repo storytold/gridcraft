@@ -60,6 +60,7 @@ impl SheetApp {
             fonts_bound: Vec::new(),
             fonts_seen: (0, 0),
             fonts_rebind: false,
+            fonts_bound_next: None,
             fonts_han: None,
             effective_dark: false,
             desktop_theme: desktop_theme::DesktopTheme::default(),
@@ -194,7 +195,9 @@ impl SheetApp {
     /// Lays out the whole window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        if !self.fonts_ready || self.fonts_rebind {
+        // Only startup and a language change wait for fonts; a workbook-font change paints in
+        // the active set while the new one is pending.
+        if !self.fonts_ready {
             ctx.request_repaint();
             return;
         }
@@ -382,7 +385,7 @@ mod lifecycle_tests {
         app.synthetic.push_back(vec![key_event(true)]);
 
         // The font gate returns before input handling; `begin_pass` has still consumed the events.
-        app.fonts_rebind = true;
+        app.fonts_ready = false;
         let mut raw = raw_with_size(egui::vec2(900.0, 700.0));
         app.raw_input_hook(&ctx, &mut raw);
         assert_eq!(raw.events.len(), 1);
@@ -391,13 +394,40 @@ mod lifecycle_tests {
         assert_eq!(app.synthetic.len(), 1, "the step is still queued");
 
         // A completed pass that did not apply it made the hook offer it again for a real pass.
-        app.fonts_rebind = false;
+        app.fonts_ready = true;
         let mut raw = raw_with_size(egui::vec2(900.0, 700.0));
         app.raw_input_hook(&ctx, &mut raw);
         assert_eq!(raw.events.len(), 1, "the step is not lost across the font gate");
         let _ = ui_pass(&ctx, raw, |ui| app.ui(ui));
         assert!(!app.synthetic_pending);
         assert!(app.synthetic.is_empty(), "the real UI pass applied the step");
+    }
+
+    #[test]
+    /// A workbook-font change (a file whose fonts the set doesn't bind yet) still paints the formula
+    /// bar and grid that frame, in the active set; its new families count as bound a frame later,
+    /// once egui has made the set live. Skipping the paint flashed them blank.
+    fn a_workbook_font_change_still_paints_the_grid() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(theme::font_definitions());
+        let mut app = app();
+        app.fonts_ready = true;
+        app.fonts_set = true;
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        let _ = ui_pass(&ctx, raw_with_size(egui::vec2(900.0, 700.0)), |ui| app.ui(ui));
+
+        // Fonts bound for another workbook: this one needs a new set.
+        app.fonts_bound = vec!["Another Workbook's Font".into()];
+        app.fonts_seen = (u64::MAX, u64::MAX);
+        app.rebind_workbook_fonts(&ctx);
+        assert!(app.fonts_rebind && app.fonts_bound_next.is_some(), "the new set waits for the next pass");
+
+        app.perf.grid_ms = -1.0;
+        let _ = ui_pass(&ctx, raw_with_size(egui::vec2(900.0, 700.0)), |ui| app.ui(ui));
+        assert!(app.perf.grid_ms >= 0.0, "the grid is painted while the new set waits");
+
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| app.logic(ctx));
+        assert!(!app.fonts_rebind && app.fonts_bound_next.is_none(), "the new set's families are bound once it is live");
     }
 
     #[test]
