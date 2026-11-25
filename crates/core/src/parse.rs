@@ -14,6 +14,13 @@ pub struct Parsed {
     pub format: Option<&'static str>,
 }
 
+/// Text without the spaces around it. Only the plain space: Excel keeps text with a no-break
+/// space (U+00A0), a tab or a line break around the digits as text, in typed entry, in arithmetic
+/// and in the Number Stored as Text check (observed in Excel).
+fn trim_spaces(s: &str) -> &str {
+    s.trim_matches(' ')
+}
+
 /// Interprets typed cell input (not formulas). Text that isn't a number, date, boolean or error
 /// stays text. A leading apostrophe forces text.
 pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
@@ -23,7 +30,7 @@ pub fn parse_input(s: &str, sys: DateSystem) -> Parsed {
     if let Some(rest) = s.strip_prefix('\'') {
         return Parsed { value: Value::text(rest), format: None };
     }
-    let t = s.trim();
+    let t = trim_spaces(s);
     if t.eq_ignore_ascii_case("TRUE") {
         return Parsed { value: Value::Bool(true), format: None };
     }
@@ -46,14 +53,14 @@ pub fn parse_number_text(s: &str) -> Option<f64> {
 
 /// Like [`parse_number_text`], with date text read in the given workbook date system.
 pub fn parse_number_text_in(s: &str, sys: DateSystem) -> Option<f64> {
-    parse_numeric(s.trim(), sys).map(|(n, _)| n)
+    parse_numeric(trim_spaces(s), sys).map(|(n, _)| n)
 }
 
 /// Text that Excel's "Number Stored as Text" check flags: it would be a number if typed (signs,
 /// thousands separators, currency, percent, exponent, a parenthesised negative). Dates, times and
 /// fractions kept as text are not flagged, as in Excel.
 pub fn number_stored_as_text(s: &str) -> Option<f64> {
-    let t = s.trim();
+    let t = trim_spaces(s);
     // The same parentheses typed entry reads, accounting forms included: `$(5)`, `(5)%`.
     match parenthesized(t) {
         Some(inner) if inner.strip_prefix('$').map_or(inner.as_str(), str::trim_start).starts_with(['-', '+', '(']) => None,
@@ -393,6 +400,23 @@ mod tests {
 
     fn p(s: &str) -> Parsed {
         parse_input(s, DateSystem::D1900)
+    }
+
+    /// Only plain spaces around the digits are dropped. A no-break space, a tab or a line break keeps
+    /// the text as text in typed entry, in arithmetic and in the Number Stored as Text check, as
+    /// observed in Excel, where `=A1*1` and `VALUE(A1)` give #VALUE! for these.
+    #[test]
+    fn only_plain_spaces_around_a_number_are_dropped() {
+        for s in ["42817", "42817 ", " 42817", "  42817  "] {
+            assert_eq!(p(s).value, Value::number(42817.0), "{s:?}");
+            assert_eq!(parse_number_text(s), Some(42817.0), "{s:?}");
+            assert_eq!(number_stored_as_text(s), Some(42817.0), "{s:?}");
+        }
+        for s in ["42817\u{a0}", "\u{a0}42817", "\u{a0}42817\u{a0}", "42817\t", "42817\n", "1\u{a0}234"] {
+            assert_eq!(p(s).value, Value::text(s), "{s:?}");
+            assert_eq!(parse_number_text(s), None, "{s:?}");
+            assert_eq!(number_stored_as_text(s), None, "{s:?}");
+        }
     }
 
     /// #2163: digits too many for a finite number don't make one (∞/∞ was NaN).
