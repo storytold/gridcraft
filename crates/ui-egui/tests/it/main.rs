@@ -130,4 +130,5 @@ mod validation_list_search;
 mod wheel_zoom;
 mod whole_line_shortcuts;
 mod widgets;
+mod wrap_breaks;
 mod zoom_dialog;
