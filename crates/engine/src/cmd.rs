@@ -456,6 +456,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
     fit_rows.sort_unstable();
     fit_rows.dedup();
     let mut sweep: Option<(usize, MergeSweep)> = None;
+    let mut cf = crate::cf::CfCache::new();
     let mut left = MERGE_FIT_WORK;
     for (si, row) in fit_rows {
         if sweep.as_ref().is_none_or(|(at, _)| *at != si) {
@@ -465,7 +466,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
             sweep = Some((si, MergeSweep::new(left)));
         }
         if let Some((_, sw)) = sweep.as_mut() {
-            fit_row_height(&mut wb, si, row, sw);
+            fit_row_height(&mut wb, si, row, sw, &mut cf);
         }
     }
     if let Some(t0) = t0 {
@@ -741,7 +742,8 @@ fn wrapped_line_count(line: &str, width: f32, size: f32, bold: bool) -> f32 {
 /// a multi-line value shows on one line and AutoFit gives a one-line row.
 pub fn auto_row_height(wb: &mut Workbook, si: usize, row: u32) {
     let mut sweep = MergeSweep::new(MERGE_FIT_WORK);
-    fit_row_height(wb, si, row, &mut sweep);
+    let mut cf = crate::cf::CfCache::new();
+    fit_row_height(wb, si, row, &mut sweep, &mut cf);
 }
 
 /// Most merge comparisons one auto-fit pass (a commit, or opening a workbook) makes. Past it the
@@ -822,8 +824,8 @@ impl MergeSweep {
     }
 }
 
-/// [`auto_row_height`] with the sheet's merges taken from `sweep`.
-pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut MergeSweep) {
+/// [`auto_row_height`] with the sheet's merges taken from `sweep` and conditional-format cache `cf`.
+pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut MergeSweep, cf: &mut crate::cf::CfCache) {
     // Out of budget: the row keeps the height it has.
     if sweep.left() == 0 {
         return;
@@ -879,7 +881,7 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
             // Only a wrapping cell is laid out over several lines: each explicit line break
             // starts one, and each line folds at the column width.
             if st.align.wrap {
-                let text = crate::display::cell_text(wb, sh, CellRef::new(row, c));
+                let text = crate::display::cell_text_with_cf(wb, si, sh, CellRef::new(row, c), cf);
                 let w = sh.col_width(c).max(1.0) - 6.0;
                 lines = text.lines().map(|l| wrapped_line_count(l, w.max(1.0), size, st.font.bold)).sum::<f32>().max(1.0);
             }

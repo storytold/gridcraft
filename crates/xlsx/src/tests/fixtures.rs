@@ -270,6 +270,63 @@ fn dxf_outline_font_survives_save() {
     assert_eq!(written, Some(format!(r#" count="3">{dxfs}"#).as_str()));
 }
 
+/// An explicit `"General"` differential number format (`<numFmt numFmtId="0" formatCode="General"/>`)
+/// round-trips through `write_xlsx` -> `read_xlsx` with `dxf_stated.num_fmt == true`, distinct from
+/// a dxf that leaves `numFmt` unset, so it continues to override a numeric/percent base cell format.
+#[test]
+fn explicit_general_dxf_num_fmt_roundtrips_through_xlsx() {
+    use gridcraft_model::{CfOperator, CondFormat, NumFmt, Style, Workbook};
+
+    let mut wb = Workbook::new();
+    let pct_style = wb.styles.intern(Style { num_fmt: NumFmt::new("0.00%"), ..Style::default() });
+    let mut explicit_general = Style::default();
+    explicit_general.dxf_stated.num_fmt = true;
+    let mut bold_only = Style::default();
+    bold_only.font.bold = true;
+
+    {
+        let sh = wb.sheet_mut(0).unwrap();
+        for row in 0..2 {
+            let c = CellRef::new(row, 0);
+            sh.set_value(c, Value::Number(0.25));
+            sh.set_style(c, pct_style);
+        }
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![RangeRef::cell(at("A1"))],
+            priority: 1,
+            stop_if_true: false,
+            rule: CfRule::CellIs { op: CfOperator::Greater, a: "0".into(), b: None, style: Box::new(explicit_general) },
+        });
+        sh.cond_formats.push(CondFormat {
+            ranges: vec![RangeRef::cell(at("A2"))],
+            priority: 2,
+            stop_if_true: false,
+            rule: CfRule::CellIs { op: CfOperator::Greater, a: "0".into(), b: None, style: Box::new(bold_only) },
+        });
+    }
+
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let styles_xml = String::from_utf8(crate::package::Package::open(&bytes).unwrap().read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert!(
+        styles_xml.contains(r#"<dxf><numFmt numFmtId="0" formatCode="General"/></dxf>"#),
+        "expected explicit General numFmt in styles.xml dxfs, got: {styles_xml}"
+    );
+
+    let (reopened, _) = read_xlsx(&bytes).unwrap();
+    let sh = reopened.sheet(0).unwrap();
+    assert_eq!(reopened.styles.get(sh.style_id(at("A1"))).num_fmt.as_str(), "0.00%");
+    assert_eq!(reopened.styles.get(sh.style_id(at("A2"))).num_fmt.as_str(), "0.00%");
+    assert_eq!(sh.cond_formats.len(), 2);
+
+    let st1 = sh.cond_formats[0].rule.style().expect("explicit General rule style");
+    assert_eq!(st1.num_fmt.as_str(), "General");
+    assert!(st1.dxf_stated.num_fmt, "explicit General dxf numFmt must survive write_xlsx -> read_xlsx");
+
+    let st2 = sh.cond_formats[1].rule.style().expect("bold-only rule style");
+    assert_eq!(st2.num_fmt.as_str(), "General");
+    assert!(!st2.dxf_stated.num_fmt, "unset dxf numFmt must stay unstated across round-trip");
+}
+
 /// A dxf writes its parts in schema order: the border comes before the protection.
 #[test]
 fn dxf_border_is_written_before_protection() {

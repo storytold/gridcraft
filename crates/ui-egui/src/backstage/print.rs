@@ -117,7 +117,8 @@ const PREVIEW_COLS: u32 = 60;
 /// inside the sheet's margins. `paper_w` is the page width in points.
 fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gridcraft_engine::model::Workbook, t: &Tokens) {
     let Some(range) = page.get("range").and_then(Json::as_str).and_then(gridcraft_engine::core::RangeRef::parse) else { return };
-    let Some(sh) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)).and_then(|i| wb.sheets.get(i)) else { return };
+    let Some(si) = page.get("sheet").and_then(Json::as_str).and_then(|n| wb.sheet_index(n)) else { return };
+    let Some(sh) = wb.sheets.get(si) else { return };
     // Preview pixels per point, and per sheet pixel (sheet geometry is 96 dpi: 0.75 pt per pixel).
     let per_pt = rect.width() / paper_w;
     let print_scale =
@@ -135,6 +136,7 @@ fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gri
     let font = theme::ui_font((11.0 * per_pt * print_scale).clamp(3.0, 14.0));
     let last_row = range.end.row.min(range.start.row.saturating_add(PREVIEW_ROWS));
     let last_col = range.end.col.min(range.start.col.saturating_add(PREVIEW_COLS));
+    let mut cf = gridcraft_engine::cf::CfCache::new();
     let mut y = body.top();
     for row in range.start.row..=last_row {
         let h = sh.row_height(row) * per_px;
@@ -154,7 +156,7 @@ fn paint_page(p: &egui::Painter, rect: Rect, paper_w: f32, page: &Json, wb: &gri
                 break;
             }
             let cell = gridcraft_engine::core::CellRef::new(row, col);
-            let text = gridcraft_engine::display::cell_text(wb, sh, cell);
+            let text = gridcraft_engine::display::cell_text_with_cf(wb, si, sh, cell, &mut cf);
             if !text.is_empty() {
                 let numeric = sh.value(cell).as_f64().is_some();
                 // Text runs on over empty neighbours, as on the sheet; numbers stay in their cell.

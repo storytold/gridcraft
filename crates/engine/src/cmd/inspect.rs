@@ -97,6 +97,7 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let formulas = bool_param(p, "formulas").unwrap_or(false);
     let formatted = bool_param(p, "formatted").unwrap_or(false);
+    let mut cf = crate::cf::CfCache::new();
     let mut rows = Vec::with_capacity(r.height() as usize);
     for row in r.start.row..=r.end.row {
         let mut cols = Vec::with_capacity(r.width() as usize);
@@ -105,7 +106,7 @@ fn read(s: &mut Session, p: &Json) -> Result<Json> {
             let v = if formulas && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref()) {
                 json!(format!("={}", f.text))
             } else if formatted {
-                json!(crate::display::cell_text(&d.wb, sh, c))
+                json!(crate::display::cell_text_with_cf(&d.wb, sheet, sh, c, &mut cf))
             } else {
                 value_json(&sh.value(c))
             };
@@ -123,12 +124,13 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
     let c = cell_param_on(s, p, "cell", sheet)?.unwrap_or(d.selection.active);
     let cell = sh.cell(c);
     let style = d.wb.styles.get(sh.style_id(c));
+    let mut cf = crate::cf::CfCache::new();
     Ok(json!({
         "cell": c.a1(),
         "value": value_json(&sh.value(c)),
         "type": if sh.cell_pictures.contains_key(&c) { "picture" } else { match sh.value(c) { Value::Empty => "empty", Value::Number(_) => "number", Value::Text(_) => "text", Value::Bool(_) => "boolean", Value::Error(_) => "error", Value::Array(_) => "array" } },
         "formula": cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text)),
-        "text": crate::display::cell_text(&d.wb, sh, c),
+        "text": crate::display::cell_text_with_cf(&d.wb, sheet, sh, c, &mut cf),
         "input": sh.input_text(c),
         "picture": sh.cell_pictures.get(&c).map(|picture| json!({"mime": picture.mime, "alt": picture.alt, "bytes": picture.data.len()})),
         "spilledFrom": sh.spill_anchor(c).map(|a| a.a1()),

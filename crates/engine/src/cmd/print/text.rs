@@ -263,8 +263,11 @@ pub(super) fn draw_text(pg: &mut Page, b: &Block, placement: TextPlacement<'_>) 
     }
     let is_num = matches!(v, Value::Number(_));
     let wrap = st.align.wrap;
-    let mut text = if sh.show_formulas {
-        crate::display::cell_text(wb, sh, c)
+    let mut text = if sh.show_formulas
+        && let Some(f) = sh.cell(c).and_then(|x| x.formula.as_ref())
+        && !crate::display::formula_hidden(wb, sh, c)
+    {
+        format!("={}", f.text)
     } else if code == "General"
         && let Value::Number(n) = v
     {

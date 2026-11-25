@@ -219,6 +219,7 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
             {
                 runs = vec![(first, last)];
             }
+            let mut cf = crate::cf::CfCache::new();
             for (first, last) in runs {
                 let span = RangeRef::new(CellRef::new(u.start.row, first), CellRef::new(u.end.row, last));
                 for (cell, _) in sh.cells.iter_range(span) {
@@ -234,7 +235,7 @@ pub(super) fn autofit_cols(s: &mut Session, p: &Json) -> Result<Json> {
                     // header row), not only the cell's own.
                     let table_font = sh.table_at(cell).map(|t| crate::tables::table_cell_style(&cx.wb, si, t, cell).font);
                     let font = table_font.as_ref().unwrap_or(&st.font);
-                    let text = crate::display::cell_text(&cx.wb, sh, cell);
+                    let text = crate::display::cell_text_with_cf(&cx.wb, si, sh, cell, &mut cf);
                     for line in text.lines() {
                         let w = match &measure {
                             Some(m) => {

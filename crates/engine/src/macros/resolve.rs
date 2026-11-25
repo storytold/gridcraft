@@ -359,10 +359,13 @@ fn shift(c: CellRef, dr: i64, dc: i64, t: &str) -> R<CellRef> {
 fn header_col(env: &Env, place: Place, row: u32, h: &str) -> Option<i64> {
     let sh = env.wb.sheet(place.sheet)?;
     let r = place.range;
+    let mut cf = crate::cf::CfCache::new();
     (r.start.col..=r.end.col)
         // The header's value, however the sheet shows it: with Show Formulas on, the cell's
         // display text is its formula.
-        .position(|c| crate::display::value_text(env.wb, sh, CellRef::new(row, c)).trim().eq_ignore_ascii_case(h.trim()))
+        .position(|c| {
+            crate::display::value_text_with_cf(env.wb, place.sheet, sh, CellRef::new(row, c), &mut cf).trim().eq_ignore_ascii_case(h.trim())
+        })
         .map(|i| i as i64 + 1)
 }
 

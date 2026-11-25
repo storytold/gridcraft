@@ -332,28 +332,42 @@ fn visible_formula_text<'a>(wb: &Workbook, sh: &'a Sheet, c: CellRef) -> Option<
     (!crate::display::formula_hidden(wb, sh, c)).then_some(f.text.as_str())
 }
 
+/// Mode-independent formatted display of `c`, honouring conditional formatting `<dxf><numFmt>` overrides.
+fn cell_shown_text(wb: &Workbook, sheet: Option<usize>, sh: &Sheet, c: CellRef, v: &Value, cf: &mut crate::cf::CfCache) -> String {
+    match sheet {
+        Some(si) => {
+            let eff_code = cf.effective_num_fmt(wb, si, sh, c);
+            crate::display::value_text_as(wb, v, &eff_code)
+        }
+        None => crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str()),
+    }
+}
+
 /// Mode-independent `<kind>:<val>:<eff_disp>` base key of a non-blank cell.
 ///
 /// Cells with distinct non-empty formatted displays (`42` vs `42.00`) stay distinct, whereas a cell
 /// whose custom format displays only whitespace falls back to its underlying value (`42`), keeping
 /// General `42` stable if later formatted as spaces.
-fn cell_base_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value) -> String {
+fn cell_base_token_from_shown(v: &Value, shown: &str) -> String {
     let typed = typed_value_token(v);
-    let vtext = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-    let eff = filter_case_key(if vtext.trim().is_empty() { v.display() } else { vtext }.trim());
+    let eff = if shown.trim().is_empty() { filter_case_key(v.display().trim()) } else { filter_case_key(shown.trim()) };
     format!("{typed}:{}", pct_encode(&eff))
+}
+
+fn slicer_tile_text_from_shown(v: &Value, shown: &str) -> Option<String> {
+    let tile = if shown.trim().is_empty() { v.display().trim().to_string() } else { shown.trim().to_string() };
+    (!tile.is_empty()).then_some(tile)
 }
 
 /// Slicer tile text for `c`: formatted value display (mode-independent of Show Formulas),
 /// falling back to the underlying value display only when a non-blank cell's formatted display is empty/whitespace.
-pub(crate) fn slicer_tile_text(wb: &Workbook, sh: &Sheet, c: CellRef) -> Option<String> {
+pub(crate) fn slicer_tile_text(wb: &Workbook, sheet: usize, sh: &Sheet, c: CellRef, cf: &mut crate::cf::CfCache) -> Option<String> {
     let v = sh.value(c);
     if filter_dropdown_blank(&v) {
         return None;
     }
-    let vtext = crate::display::value_text_as(wb, &v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-    let tile = if vtext.trim().is_empty() { v.display().trim().to_string() } else { vtext.trim().to_string() };
-    (!tile.is_empty()).then_some(tile)
+    let shown = cell_shown_text(wb, Some(sheet), sh, c, &v, cf);
+    slicer_tile_text_from_shown(&v, &shown)
 }
 
 /// Encodes a slicer tile's display key as an identity token (`s:<encoded_tile>`).
@@ -364,8 +378,7 @@ pub(crate) fn slicer_identity_token(tile: &str) -> String {
 /// Canonical checklist identity for `c`: `"d:<base>"` when formulas and constants share a value
 /// group, `"f:<base>:<formula>"` / `"c:<base>"` when formulas are distinguished, or `"w:<base>:<ws>"`
 /// when disambiguating whitespace-formatted cells.
-fn cell_identity_token(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, shown: &str, split_formulas: bool, split_fmtws: bool) -> String {
-    let base = cell_base_token(wb, sh, c, v);
+fn cell_identity_token_from_base(wb: &Workbook, sh: &Sheet, c: CellRef, base: &str, shown: &str, split_formulas: bool, split_fmtws: bool) -> String {
     if split_fmtws && shown.trim().is_empty() {
         return format!("w:{base}:{}", pct_encode(&shown.to_ascii_lowercase()));
     }
@@ -386,8 +399,8 @@ fn id_splits_base(id: &str, base: &str) -> bool {
 }
 
 /// Checks whether a non-blank cell matches any primary stored identity (`d:`, `c:`, `f:`, `w:`, `s:`).
-fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, identities: &[String]) -> bool {
-    let base = cell_base_token(wb, sh, c, v);
+fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Value, shown: &str, identities: &[String]) -> bool {
+    let base = cell_base_token_from_shown(v, shown);
     // Stored bases are re-folded, so identities saved with ASCII-only folding match every row of their merged entry.
     let stored = |rest| normalized_identity_base(rest).filter(|(b, _)| *b == base).map(|(_, tail)| tail);
     let mut formula_enc: Option<Option<String>> = None;
@@ -410,10 +423,9 @@ fn row_matches_primary_identities(wb: &Workbook, sh: &Sheet, c: CellRef, v: &Val
             let Some(Some(tail)) = stored(rest) else {
                 return false;
             };
-            let shown = crate::display::value_text_as(wb, v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
             shown.trim().is_empty() && pct_encode(&shown.to_ascii_lowercase()) == tail
         } else if let Some(rest) = id.strip_prefix("s:") {
-            slicer_enc.get_or_insert_with(|| slicer_tile_text(wb, sh, c).map(|t| pct_encode(&t.to_lowercase()))).as_deref() == Some(rest)
+            slicer_enc.get_or_insert_with(|| slicer_tile_text_from_shown(v, shown).map(|t| pct_encode(&t.to_lowercase()))).as_deref() == Some(rest)
         } else {
             false
         }
@@ -486,6 +498,7 @@ impl<'a> PreparedFilter<'a> {
     fn criterion_matches(
         &self,
         wb: &Workbook,
+        sheet: usize,
         sh: &Sheet,
         row: u32,
         i: usize,
@@ -493,48 +506,54 @@ impl<'a> PreparedFilter<'a> {
         crit: &FilterCriterion,
         pre_migration: bool,
         icon_uses_hidden: bool,
+        cf: &mut crate::cf::CfCache,
     ) -> bool {
         let Some(col) = self.range.start.col.checked_add(off) else {
             return true;
         };
         let c = CellRef::new(row, col);
         let v = sh.value(c);
-        let text = crate::display::cell_text(wb, sh, c);
         match crit {
             FilterCriterion::Values { values, blanks, identities } => {
-                let matches_non_blank = || {
-                    let shown = crate::display::value_text_as(wb, &v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-                    if identities
-                        .iter()
-                        .filter_map(|id| id.strip_prefix("fmtws:"))
-                        .any(|ws_enc| shown.trim().is_empty() && pct_encode(&shown.to_ascii_lowercase()) == ws_enc)
-                    {
-                        return true;
-                    }
-                    let has_primary = identities.iter().any(|id| !id.starts_with("fmtws:"));
-                    if has_primary {
-                        row_matches_primary_identities(wb, sh, c, &v, identities)
-                    } else {
-                        self.criterion_values
-                            .get(&i)
-                            .is_some_and(|set| set.contains(&filter_case_key(text.trim())) || set.contains(&filter_case_key(v.display().trim())))
-                    }
-                };
                 if pre_migration {
                     if filter_blank(&v) {
-                        *blanks
-                    } else if filter_dropdown_blank(&v) {
-                        *blanks || values.iter().any(|x| x.eq_ignore_ascii_case(&text))
-                    } else {
-                        matches_non_blank()
+                        return *blanks;
+                    }
+                    if filter_dropdown_blank(&v) {
+                        let text = crate::display::cell_text_with_cf(wb, sheet, sh, c, cf);
+                        return *blanks || values.iter().any(|x| x.eq_ignore_ascii_case(&text));
                     }
                 } else if filter_dropdown_blank(&v) {
-                    self.criterion_blanks[i]
+                    return self.criterion_blanks[i];
+                }
+                let shown = cell_shown_text(wb, Some(sheet), sh, c, &v, cf);
+                let mut has_primary = false;
+                for id in identities {
+                    if let Some(ws_enc) = id.strip_prefix("fmtws:") {
+                        if shown.trim().is_empty() && pct_encode(&shown.to_ascii_lowercase()) == ws_enc {
+                            return true;
+                        }
+                    } else {
+                        has_primary = true;
+                    }
+                }
+                if has_primary {
+                    row_matches_primary_identities(wb, sh, c, &v, &shown, identities)
                 } else {
-                    matches_non_blank()
+                    let text = if sh.show_formulas
+                        && let Some(ft) = visible_formula_text(wb, sh, c)
+                    {
+                        format!("={ft}")
+                    } else {
+                        shown
+                    };
+                    self.criterion_values
+                        .get(&i)
+                        .is_some_and(|set| set.contains(&filter_case_key(text.trim())) || set.contains(&filter_case_key(v.display().trim())))
                 }
             }
             FilterCriterion::Custom { a, b, and } => {
+                let text = crate::display::cell_text_with_cf(wb, sheet, sh, c, cf);
                 let x = custom_ok(&v, &text, &a.0, &a.1);
                 match b {
                     Some(b) => {
@@ -569,19 +588,27 @@ impl<'a> PreparedFilter<'a> {
     }
 
     /// Whether `row` passes all criteria of this filter (rows outside `range` are unaffected).
-    fn row_passes(&self, wb: &Workbook, sh: &Sheet, row: u32, pre_migration: bool) -> bool {
+    fn row_passes(&self, wb: &Workbook, sheet: usize, sh: &Sheet, row: u32, pre_migration: bool, cf: &mut crate::cf::CfCache) -> bool {
         if self.criteria.is_empty() || row <= self.range.start.row || row > self.range.end.row {
             return true;
         }
-        self.criteria.iter().enumerate().all(|(i, (off, crit))| self.criterion_matches(wb, sh, row, i, *off, crit, pre_migration, true))
+        self.criteria.iter().enumerate().all(|(i, (off, crit))| self.criterion_matches(wb, sheet, sh, row, i, *off, crit, pre_migration, true, cf))
     }
 
     /// Whether `row` passes every active criterion except `excluded_offset`.
-    fn row_matches_other_columns(&self, wb: &Workbook, sh: &Sheet, row: u32, excluded_offset: u32) -> bool {
+    fn row_matches_other_columns(
+        &self,
+        wb: &Workbook,
+        sheet: usize,
+        sh: &Sheet,
+        row: u32,
+        excluded_offset: u32,
+        cf: &mut crate::cf::CfCache,
+    ) -> bool {
         self.criteria
             .iter()
             .enumerate()
-            .all(|(i, (off, crit))| *off == excluded_offset || self.criterion_matches(wb, sh, row, i, *off, crit, false, false))
+            .all(|(i, (off, crit))| *off == excluded_offset || self.criterion_matches(wb, sheet, sh, row, i, *off, crit, false, false, cf))
     }
 }
 
@@ -644,13 +671,14 @@ pub(crate) fn migrate_loaded_autofilters(wb: &mut Workbook) {
             let after_specs = collect_sheet_filters(sh);
             let old_prepared: Vec<_> = before_filters.iter().map(|(r, c)| PreparedFilter::new(sh, *r, c)).collect();
             let new_prepared: Vec<_> = after_specs.iter().map(|(r, c)| PreparedFilter::new(sh, *r, c)).collect();
+            let mut cf = crate::cf::CfCache::new();
             sh.rows
                 .iter()
                 .filter(|(_, info)| info.hidden)
                 .map(|(&row, _)| row)
                 .filter(|&row| {
-                    let old_pass = old_prepared.iter().all(|f| f.row_passes(wb, sh, row, true));
-                    let new_pass = new_prepared.iter().all(|f| f.row_passes(wb, sh, row, false));
+                    let old_pass = old_prepared.iter().all(|f| f.row_passes(wb, si, sh, row, true, &mut cf));
+                    let new_pass = new_prepared.iter().all(|f| f.row_passes(wb, si, sh, row, false, &mut cf));
                     !old_pass && new_pass
                 })
                 .collect()
@@ -709,7 +737,10 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
 fn apply_criteria_range(wb: &mut Workbook, sheet: usize, af_range: RangeRef, criteria: &[(u32, FilterCriterion)]) {
     let hide: Vec<(u32, bool)> = if let Some(sh) = wb.sheet(sheet) {
         let prepared = PreparedFilter::new(sh, af_range, criteria);
-        (prepared.range.start.row.saturating_add(1)..=prepared.range.end.row).map(|row| (row, !prepared.row_passes(wb, sh, row, false))).collect()
+        let mut cf = crate::cf::CfCache::new();
+        (prepared.range.start.row.saturating_add(1)..=prepared.range.end.row)
+            .map(|row| (row, !prepared.row_passes(wb, sheet, sh, row, false, &mut cf)))
+            .collect()
     } else {
         return;
     };
@@ -777,10 +808,21 @@ pub fn filter_by_cell_params(wb: &Workbook, sh: &Sheet, c: CellRef, col: &str) -
     if filter_dropdown_blank(&v) {
         return json!({"column": col, "values": [], "blanks": true});
     }
-    let t = crate::display::cell_text(wb, sh, c);
-    let has_visible_formula = sh.show_formulas && visible_formula_text(wb, sh, c).is_some();
+    let sheet = wb.sheets.iter().position(|s| std::ptr::eq(s.as_ref(), sh));
+    let mut cf = crate::cf::CfCache::new();
+    let shown = cell_shown_text(wb, sheet, sh, c, &v, &mut cf);
+    let formula_src = visible_formula_text(wb, sh, c);
+    let has_visible_formula = sh.show_formulas && formula_src.is_some();
+    let t = if let Some(ft) = formula_src
+        && sh.show_formulas
+    {
+        format!("={ft}")
+    } else {
+        shown.clone()
+    };
     let raw = if has_visible_formula || t.trim().is_empty() { v.display().trim().to_string() } else { t.trim().to_string() };
-    let id = cell_identity_token(wb, sh, c, &v, &t, sh.show_formulas, false);
+    let base = cell_base_token_from_shown(&v, &shown);
+    let id = cell_identity_token_from_base(wb, sh, c, &base, &t, sh.show_formulas, false);
     json!({"column": col, "values": [raw], "identities": [id], "blanks": false})
 }
 
@@ -843,36 +885,44 @@ fn column_filter_choices(wb: &Workbook, sheet: usize, col: u32, eligible_only: b
         _ => None,
     };
     let prepared = PreparedFilter::new(sh, af.range, &af.criteria);
+    let mut cf = crate::cf::CfCache::new();
     type ChoiceBucket = ((u8, i64, String), FilterChoice, (String, &'static str));
     let mut seen: std::collections::BTreeMap<Option<String>, ChoiceBucket> = std::collections::BTreeMap::new();
     // Imported end rows cannot add choices beyond the grid either.
     for row in
         af.range.start.row.saturating_add(1)..=af.range.end.row.min(af.range.start.row.saturating_add(1_000_000)).min(gridcraft_core::MAX_ROWS - 1)
     {
-        if eligible_only && !prepared.row_matches_other_columns(wb, sh, row, off) {
+        if eligible_only && !prepared.row_matches_other_columns(wb, sheet, sh, row, off, &mut cf) {
             continue;
         }
         let c = CellRef::new(row, col);
         let v = sh.value(c);
         let blank = filter_dropdown_blank(&v);
-        let t = if blank { "(Blanks)".to_string() } else { crate::display::cell_text(wb, sh, c) };
-        let on = selected.is_none_or(|(i, (crit_off, crit))| prepared.criterion_matches(wb, sh, row, i, *crit_off, crit, false, false));
+        let on =
+            selected.is_none_or(|(i, (crit_off, crit))| prepared.criterion_matches(wb, sheet, sh, row, i, *crit_off, crit, false, false, &mut cf));
         if blank {
             seen.entry(None).and_modify(|(_, entry, _)| entry.checked |= on).or_insert((
                 sort_key(&Value::Empty),
-                FilterChoice { label: t, value: None, identity: None, checked: on },
+                FilterChoice { label: "(Blanks)".to_string(), value: None, identity: None, checked: on },
                 (String::new(), ""),
             ));
             continue;
         }
-        let base = cell_base_token(wb, sh, c, &v);
-        let split_formulas = sh.show_formulas || selected_identities.is_some_and(|ids| ids.iter().any(|id| id_splits_base(id, &base)));
-        let split_fmtws = true;
-        let shown = crate::display::value_text_as(wb, &v, wb.styles.get(sh.style_id(c)).num_fmt.as_str());
-        let id = cell_identity_token(wb, sh, c, &v, &shown, split_formulas, split_fmtws);
-        let val_trimmed = v.display().trim().to_string();
+        let shown = cell_shown_text(wb, Some(sheet), sh, c, &v, &mut cf);
         let formula_src = visible_formula_text(wb, sh, c);
         let has_visible_formula = sh.show_formulas && formula_src.is_some();
+        let t = if let Some(ft) = formula_src
+            && sh.show_formulas
+        {
+            format!("={ft}")
+        } else {
+            shown.clone()
+        };
+        let base = cell_base_token_from_shown(&v, &shown);
+        let split_formulas = sh.show_formulas || selected_identities.is_some_and(|ids| ids.iter().any(|id| id_splits_base(id, &base)));
+        let split_fmtws = true;
+        let id = cell_identity_token_from_base(wb, sh, c, &base, &shown, split_formulas, split_fmtws);
+        let val_trimmed = v.display().trim().to_string();
         let trimmed = t.trim();
         let disp_empty = trimmed.is_empty();
         let base_label = if disp_empty { escape_reserved_blanks_label(&val_trimmed) } else { escape_reserved_blanks_label(trimmed) };
@@ -1158,5 +1208,111 @@ mod unicode_filter_tests {
         sh.autofilter.as_mut().unwrap().criteria = vec![(0, FilterCriterion::Values { values: vec!["Ä".into()], blanks: false, identities: again })];
         s.execute("data.reapply", json!({})).unwrap();
         assert!(!is_hidden(&s, 1) && !is_hidden(&s, 2) && is_hidden(&s, 3), "reapplying the unchanged checklist keeps the same rows");
+    }
+}
+
+#[cfg(test)]
+mod cf_numfmt_filter_tests {
+    use super::*;
+    use gridcraft_core::{CellRef, RangeRef};
+    use gridcraft_model::{CfOperator, CfRule, CondFormat, NumFmt, Style};
+
+    fn is_hidden(s: &Session, row: u32) -> bool {
+        s.doc().unwrap().wb.active().unwrap().is_row_hidden(row)
+    }
+
+    /// When two cells share the same underlying value and cell format (`0.25` as `0.00%`) and a CF
+    /// `<dxf><numFmt>` (`0.0`) covers only the first cell (so A2 displays `"0.3"` and A3 displays
+    /// `"25.00%"`), deselecting `"0.3"` in AutoFilter or a slicer must cleanly hide A2 while keeping
+    /// A3 visible and `"0.3"` deselected.
+    #[test]
+    fn mixed_cf_numfmt_deselect_hides_cf_row_in_autofilter_and_slicer() {
+        // (a) AutoFilter: A2 and A3 are both 0.25 formatted `0.00%`, CF `0.0` covers only A2.
+        let mut s = Session::new();
+        s.new_workbook();
+        {
+            let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+            let pct = wb.styles.intern(Style { num_fmt: NumFmt::new("0.00%"), ..Style::default() });
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.set_value(CellRef::new(0, 0), Value::Text("Rate".into()));
+            sh.set_value(CellRef::new(1, 0), Value::Number(0.25));
+            sh.set_style(CellRef::new(1, 0), pct);
+            sh.set_value(CellRef::new(2, 0), Value::Number(0.25));
+            sh.set_style(CellRef::new(2, 0), pct);
+            sh.cond_formats.push(CondFormat {
+                ranges: vec![RangeRef::new(CellRef::new(1, 0), CellRef::new(1, 0))],
+                priority: 1,
+                stop_if_true: false,
+                rule: CfRule::CellIs {
+                    op: CfOperator::Less,
+                    a: "0.3".into(),
+                    b: None,
+                    style: Box::new(Style { num_fmt: NumFmt::new("0.0"), ..Style::default() }),
+                },
+            });
+        }
+        s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+
+        let choices = filter_choices(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(choices.len(), 2, "{choices:?}");
+        assert!(choices.iter().any(|c| c.label == "0.3" && c.checked), "{choices:?}");
+        assert!(choices.iter().any(|c| c.label == "25.00%" && c.checked), "{choices:?}");
+
+        // Uncheck `"0.3"` while keeping `"25.00%"` checked.
+        let active: Vec<(&FilterChoice, bool)> = choices.iter().map(|c| (c, c.label != "0.3")).collect();
+        let params = filter_choices_params("A", &active);
+        s.execute("data.filterBy", params).unwrap();
+
+        assert!(is_hidden(&s, 1), "A2 (CF display \"0.3\") must be hidden after unchecking \"0.3\"");
+        assert!(!is_hidden(&s, 2), "A3 (display \"25.00%\") must remain visible");
+        let after = filter_choices(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(after.iter().find(|c| c.label == "0.3").map(|c| c.checked), Some(false), "{after:?}");
+        assert_eq!(after.iter().find(|c| c.label == "25.00%").map(|c| c.checked), Some(true), "{after:?}");
+
+        // Reapply preserves the exact same hidden/unchecked state.
+        s.execute("data.reapply", json!({})).unwrap();
+        assert!(is_hidden(&s, 1), "A2 must remain hidden on Reapply");
+        assert!(!is_hidden(&s, 2), "A3 must remain visible on Reapply");
+        let after_reapply = filter_choices(&s.doc().unwrap().wb, 0, 0);
+        assert_eq!(after_reapply.iter().find(|c| c.label == "0.3").map(|c| c.checked), Some(false), "{after_reapply:?}");
+        assert_eq!(after_reapply.iter().find(|c| c.label == "25.00%").map(|c| c.checked), Some(true), "{after_reapply:?}");
+
+        // (b) Slicer: multi-clicking `"0.3"` off deselects `"0.3"` and hides A2 while keeping `"25.00%"` / A3 active.
+        let mut s_sl = Session::new();
+        s_sl.new_workbook();
+        s_sl.execute("range.setValues", json!({"range": "A1", "values": [["Rate"], [0.25], [0.25]]})).unwrap();
+        s_sl.execute("insert.table", json!({"range": "A1:A3", "name": "Rates"})).unwrap();
+        let slicer_id = s_sl.execute("insert.slicer", json!({"table": "Rates", "column": "Rate"})).unwrap()["slicer"].as_u64().unwrap() as u32;
+        {
+            let wb = std::sync::Arc::make_mut(&mut s_sl.doc_mut().unwrap().wb);
+            let pct = wb.styles.intern(Style { num_fmt: NumFmt::new("0.00%"), ..Style::default() });
+            let sh = wb.sheet_mut(0).unwrap();
+            sh.set_style(CellRef::new(1, 0), pct);
+            sh.set_style(CellRef::new(2, 0), pct);
+            sh.cond_formats.push(CondFormat {
+                ranges: vec![RangeRef::new(CellRef::new(1, 0), CellRef::new(1, 0))],
+                priority: 1,
+                stop_if_true: false,
+                rule: CfRule::CellIs {
+                    op: CfOperator::Less,
+                    a: "0.3".into(),
+                    b: None,
+                    style: Box::new(Style { num_fmt: NumFmt::new("0.0"), ..Style::default() }),
+                },
+            });
+        }
+        {
+            let wb = &s_sl.doc().unwrap().wb;
+            let sl = wb.sheet(0).unwrap().slicers.iter().find(|x| x.id == slicer_id).unwrap();
+            assert_eq!(crate::cmd::slicer::slicer_items(wb, 0, sl), vec![("0.3".into(), true), ("25.00%".into(), true)]);
+        }
+
+        s_sl.execute("slicer.toggle", json!({"slicer": slicer_id, "value": "0.3", "multi": true})).unwrap();
+        assert!(is_hidden(&s_sl, 1), "A2 (CF display \"0.3\") must be hidden after multi-clicking \"0.3\" off");
+        assert!(!is_hidden(&s_sl, 2), "A3 (display \"25.00%\") must remain visible");
+        let wb = &s_sl.doc().unwrap().wb;
+        let sl = wb.sheet(0).unwrap().slicers.iter().find(|x| x.id == slicer_id).unwrap();
+        assert_eq!(sl.selected, Some(vec!["25.00%".into()]));
+        assert_eq!(crate::cmd::slicer::slicer_items(wb, 0, sl), vec![("0.3".into(), false), ("25.00%".into(), true)]);
     }
 }

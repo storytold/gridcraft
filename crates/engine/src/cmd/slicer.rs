@@ -50,8 +50,9 @@ pub fn column_values(wb: &Workbook, sheet: usize, table: &str, column: &str) -> 
     let col = dr.start.col + ci as u32;
     let mut seen = std::collections::BTreeSet::new();
     let mut out = Vec::new();
+    let mut cf = crate::cf::CfCache::new();
     for row in dr.start.row..=dr.end.row {
-        let Some(tile) = super::data::slicer_tile_text(wb, sh, CellRef::new(row, col)) else {
+        let Some(tile) = super::data::slicer_tile_text(wb, sheet, sh, CellRef::new(row, col), &mut cf) else {
             continue;
         };
         if seen.insert(tile.to_lowercase()) {

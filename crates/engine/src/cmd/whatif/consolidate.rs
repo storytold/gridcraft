@@ -134,7 +134,8 @@ pub(super) fn consolidate(s: &mut Session, p: &Json) -> Result<Json> {
         if r0 > r.end.row || c0 > r.end.col {
             continue;
         }
-        let label = |c: CellRef| crate::display::cell_text(&d.wb, sh, c).trim().to_string();
+        let mut cf = crate::cf::CfCache::new();
+        let mut label = |c: CellRef| crate::display::cell_text_with_cf(&d.wb, si, sh, c, &mut cf).trim().to_string();
         // Column keys of this source.
         let mut cols: Vec<(u32, usize)> = Vec::new();
         for col in c0..=r.end.col {

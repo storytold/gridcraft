@@ -103,7 +103,7 @@ pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>, csv_as_
 /// height grow to fit their content. Rows the file made taller keep their height — our
 /// line-height estimate can differ from Excel's, and shrinking files that already look
 /// right would be a visible regression. Custom-height rows are left alone entirely.
-fn fit_imported_rows(wb: &mut Workbook) {
+pub(crate) fn fit_imported_rows(wb: &mut Workbook) {
     // The whole pass shares one budget of merge comparisons: later sheets keep their heights once it is spent.
     let mut left = crate::cmd::MERGE_FIT_WORK;
     for si in 0..wb.sheets.len() {
@@ -113,9 +113,10 @@ fn fit_imported_rows(wb: &mut Workbook) {
         rows.dedup();
         // One sweep over the sheet's merges for all of its rows, in ascending order.
         let mut sweep = crate::cmd::MergeSweep::new(left);
+        let mut cf = crate::cf::CfCache::new();
         for row in rows {
             let before = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
-            crate::cmd::fit_row_height(wb, si, row, &mut sweep);
+            crate::cmd::fit_row_height(wb, si, row, &mut sweep, &mut cf);
             let Some(before) = before else { continue };
             let after = wb.sheet(si).and_then(|sh| sh.rows.get(&row)).and_then(|i| i.size);
             if after.is_none_or(|a| before > a + 0.5)
@@ -533,8 +534,10 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, Some(wb.csv_delimiter.unwrap_or(b',')))).transpose().map(Option::unwrap_or_default),
-        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, None)).transpose().map(Option::unwrap_or_default),
+        FileKind::Csv => {
+            wb.sheet(sheet).map(|sh| csv(wb, sheet, sh, Some(wb.csv_delimiter.unwrap_or(b',')))).transpose().map(Option::unwrap_or_default)
+        }
+        FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sheet, sh, None)).transpose().map(Option::unwrap_or_default),
         FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
     }
@@ -569,8 +572,9 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
 /// that `&` writes in scientific notation as their 15 digits in full.
 /// `delimiter` `None` writes a tab-separated file (`.tsv`, `.txt`).
-fn csv(wb: &Workbook, sh: &Sheet, delimiter: Option<u8>) -> Result<Vec<u8>> {
-    let text = |c| crate::display::value_text(wb, sh, c);
+fn csv(wb: &Workbook, sheet: usize, sh: &Sheet, delimiter: Option<u8>) -> Result<Vec<u8>> {
+    let mut cf = crate::cf::CfCache::new();
+    let text = |c| crate::display::value_text_with_cf(wb, sheet, sh, c, &mut cf);
     match delimiter {
         Some(d) => gridcraft_xlsx::write_csv(sh, d, text),
         None => gridcraft_xlsx::write_tsv(sh, text),
@@ -743,6 +747,7 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
     let merges = merge_index(sh, r)?;
     let mut out = ClipboardHtml(String::new());
     write!(out, "<table{} style=\"border-collapse:collapse;font-family:Calibri,Carlito,Arial,sans-serif;font-size:11pt\">", table_dir(sh)).ok()?;
+    let mut cf = crate::cf::CfCache::new();
     for row in r.start.row..=r.end.row {
         if sh.is_row_hidden(row) {
             continue;
@@ -762,7 +767,7 @@ pub(crate) fn range_html(wb: &Workbook, sheet: usize, r: RangeRef, plain_text: &
             };
             // Use the visible selected cell, even when the merge's original anchor
             // is outside the range or hidden. This matches the plain-text copy.
-            let text = crate::display::cell_text(wb, sh, c);
+            let text = crate::display::cell_text_with_cf(wb, sheet, sh, c, &mut cf);
             let dir = CellDir::of(sh, c, &text);
             let css = html_cell_css(wb, sh, c, dir);
             write!(out, "<td style=\"border:1px solid #d4d4d4;padding:2px 4px;white-space:pre-wrap;{css}\"{}{span}>", dir.attr()).ok()?;
@@ -888,6 +893,7 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
             }
             out.push_str("</colgroup>");
         }
+        let mut cf = crate::cf::CfCache::new();
         for row in r.start.row..=r.end.row {
             if sh.is_row_hidden(row) {
                 continue;
@@ -903,7 +909,7 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 if merge.is_some_and(|m| m.start != c) || (fixed && sh.is_col_hidden(col)) {
                     continue;
                 }
-                let text = crate::display::cell_text(wb, sh, c);
+                let text = crate::display::cell_text_with_cf(wb, sheet, sh, c, &mut cf);
                 let dir = CellDir::of(sh, c, &text);
                 let css = html_cell_css(wb, sh, c, dir);
                 let span = merge

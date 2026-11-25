@@ -55,8 +55,8 @@ pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut Cf
         if st.font.strike {
             style.font.strike = true;
         }
-        // In a differential style General means "not set" (#1163).
-        if st.num_fmt.as_str() != "General" {
+        // In a differential style General means "not set" (#1163), unless explicitly stated.
+        if st.num_fmt.as_str() != "General" || st.dxf_stated.num_fmt {
             style.num_fmt = st.num_fmt.clone();
         }
         if st.align.reading_order.is_some() {

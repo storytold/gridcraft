@@ -174,8 +174,9 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     let mut taken: HashSet<String> = HashSet::new();
     let mut next_suffix: HashMap<String, usize> = HashMap::new();
     let mut formats = Vec::new();
+    let mut cf = crate::cf::CfCache::new();
     for c in r.start.col..=r.end.col {
-        let h = crate::display::cell_text(wb, sh, CellRef::new(r.start.row, c)).trim().to_string();
+        let h = crate::display::cell_text_with_cf(wb, si, sh, CellRef::new(r.start.row, c), &mut cf).trim().to_string();
         if h.is_empty() {
             return Err(FIELD_NAME_ERR.into());
         }

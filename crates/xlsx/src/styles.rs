@@ -443,8 +443,10 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
     if let Some(n) = x.child("numFmt") {
         if let Some(code) = n.attr("formatCode") {
             s.num_fmt = inline_fmts.entry(code).or_insert_with(|| NumFmt::new(code)).clone();
+            s.dxf_stated.num_fmt = s.num_fmt.as_str() == "General";
         } else if let Some(id) = n.attr_u32("numFmtId") {
             s.num_fmt = num_fmt_code(id, fmts);
+            s.dxf_stated.num_fmt = s.num_fmt.as_str() == "General";
         }
     }
     if let Some(f) = x.child("fill") {
@@ -841,7 +843,7 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
     {
         dx.push_str(&font_xml(&d.font, Some(&d.dxf_stated), false));
     }
-    if d.num_fmt != def.num_fmt {
+    if d.num_fmt != def.num_fmt || d.dxf_stated.num_fmt {
         let id = nf.id(d.num_fmt.as_str());
         let _ = write!(dx, "<numFmt numFmtId=\"{id}\" formatCode=\"{}\"/>", esc_attr(d.num_fmt.as_str()));
     }
