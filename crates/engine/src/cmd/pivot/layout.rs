@@ -2,8 +2,8 @@ use super::create::source_param;
 use super::fields::{canonical, in_axes, shift_values, update};
 use super::params::{group_param, layout_name};
 use super::{
-    Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
-    json, other, pv, str_param,
+    Chart, Ctx, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit,
+    find_pivot, json, other, pv, str_param,
 };
 
 pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
@@ -269,24 +269,30 @@ pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     edit(s, |cx| {
-        // Its PivotCharts become ordinary charts.
-        let link = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi).map(|pt| (sh.name.clone(), pt.name.clone())));
-        if let Some((sheet, name)) = link {
-            for i in 0..cx.wb.sheets.len() {
-                let linked = |c: &Chart| c.pivot.as_deref().is_some_and(|l| pv::links_to(l, &sheet, &name));
-                if cx.wb.sheet(i).is_some_and(|sh| sh.charts.iter().any(linked)) {
-                    for c in cx.sheet_mut(i)?.charts.iter_mut().filter(|c| linked(c)) {
-                        c.pivot = None;
-                    }
+        delete_pivot(cx, si, pi)?;
+        Ok(json!({}))
+    })
+}
+
+/// Removes PivotTable `pi` of sheet `si` with its report cells; its PivotCharts become ordinary
+/// charts. Shared by Delete PivotTable and the clears and line deletes that take a whole report.
+pub(crate) fn delete_pivot(cx: &mut Ctx, si: usize, pi: usize) -> Result<()> {
+    let link = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi).map(|pt| (sh.name.clone(), pt.name.clone())));
+    if let Some((sheet, name)) = link {
+        for i in 0..cx.wb.sheets.len() {
+            let linked = |c: &Chart| c.pivot.as_deref().is_some_and(|l| pv::links_to(l, &sheet, &name));
+            if cx.wb.sheet(i).is_some_and(|sh| sh.charts.iter().any(linked)) {
+                for c in cx.sheet_mut(i)?.charts.iter_mut().filter(|c| linked(c)) {
+                    c.pivot = None;
                 }
             }
         }
-        pv::clear_output(&mut cx.wb, si, pi);
-        let sh = cx.sheet_mut(si)?;
-        if pi < sh.pivots.len() {
-            sh.pivots.remove(pi);
-        }
-        cx.structural = true;
-        Ok(json!({}))
-    })
+    }
+    pv::clear_output(&mut cx.wb, si, pi);
+    let sh = cx.sheet_mut(si)?;
+    if pi < sh.pivots.len() {
+        sh.pivots.remove(pi);
+    }
+    cx.structural = true;
+    Ok(())
 }

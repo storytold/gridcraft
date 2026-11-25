@@ -1,4 +1,4 @@
-use gridcraft_core::{CellError, CellRef, Value};
+use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use serde_json::{Value as Json, json};
 
 use crate::Session;
@@ -1582,4 +1582,98 @@ fn renaming_a_defined_name_leaves_a_table_source_on_its_table() {
     s.execute("pivot.refresh", json!({})).unwrap();
     let gt = find_row(&s, "Grand Total").unwrap();
     assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
+}
+
+fn pivot_count(s: &Session) -> usize {
+    s.doc().unwrap().wb.active().unwrap().pivots.len()
+}
+
+/// Region by Sum of Sales on Sheet2; returns the report's area.
+fn region_report(s: &mut Session) -> String {
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    pt(s).last_range.unwrap().a1()
+}
+
+#[test]
+fn clearing_a_whole_report_deletes_the_pivottable_in_one_undo_step() {
+    let mut s = sales();
+    let report = region_report(&mut s);
+    let first = pt(&s).last_range.unwrap().start;
+    s.execute("edit.clearContents", json!({"range": report})).unwrap();
+    assert_eq!(pivot_count(&s), 0, "the PivotTable goes with its report");
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.cells.iter_range(RangeRef::parse(&report).unwrap()).next().is_none(), "no report cell or format is left");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pivot_count(&s), 1);
+    assert_eq!(pt(&s).last_range.unwrap().a1(), report);
+    assert!(!val(&s, &first.a1()).is_empty());
+    // A larger selection (here the whole sheet) takes the report with it as well.
+    s.execute("edit.clearAll", json!({"range": "A1:XFD1048576"})).unwrap();
+    assert_eq!(pivot_count(&s), 0);
+}
+
+#[test]
+fn clearing_part_of_a_report_is_refused_and_clearing_formats_is_not() {
+    let mut s = sales();
+    let report = region_report(&mut s);
+    let label = CellRef::new(pt(&s).last_range.unwrap().start.row + 1, pt(&s).last_range.unwrap().start.col).a1();
+    let before = text(&s, &label);
+    let err = s.execute("edit.clearContents", json!({"range": label})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT);
+    assert_eq!(text(&s, &label), before);
+    // An area that overlaps the report's edge is part of it too.
+    let r = RangeRef::parse(&report).unwrap();
+    let overlap = RangeRef::new(CellRef::new(r.end.row, r.start.col), CellRef::new(r.end.row + 3, r.end.col + 3));
+    assert!(s.execute("edit.clearAll", json!({"range": overlap.a1()})).is_err());
+    // Formats aren't the report's contents: they clear on part or all of it, and the PivotTable stays.
+    s.execute("edit.clearFormats", json!({"range": label})).unwrap();
+    s.execute("edit.clearFormats", json!({"range": report})).unwrap();
+    assert_eq!(pivot_count(&s), 1);
+    assert_eq!(text(&s, &label), before);
+}
+
+#[test]
+fn a_report_covered_by_several_areas_is_cleared_whole_only_without_gaps() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    let mid = r.start.row + 1;
+    let top = RangeRef::new(r.start, CellRef::new(mid, r.end.col));
+    // Left column below the split, then the right column: together every cell of the report.
+    let left = RangeRef::new(CellRef::new(mid + 1, r.start.col), CellRef::new(r.end.row, r.start.col));
+    let right = RangeRef::new(CellRef::new(mid + 1, r.start.col + 1), CellRef::new(r.end.row, r.end.col));
+    let gap = RangeRef::new(CellRef::new(mid + 2, r.start.col), CellRef::new(r.end.row, r.end.col));
+    let err = s.execute("edit.clearContents", json!({"range": format!("{},{}", top.a1(), gap.a1())})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT, "a row between the areas is left out");
+    assert_eq!(pivot_count(&s), 1);
+    s.execute("edit.clearContents", json!({"range": format!("{},{},{}", top.a1(), right.a1(), left.a1())})).unwrap();
+    assert_eq!(pivot_count(&s), 0);
+}
+
+#[test]
+fn deleting_every_row_of_a_report_deletes_the_pivottable() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    // Rows through part of the report move its cells and keep the PivotTable.
+    s.execute("home.deleteRows", json!({"rows": format!("{0}:{0}", r.start.row + 2)})).unwrap();
+    assert_eq!(pivot_count(&s), 1);
+    let r = pt(&s).last_range.unwrap();
+    s.execute("home.deleteRows", json!({"rows": format!("{}:{}", r.start.row, r.end.row + 2)})).unwrap();
+    assert_eq!(pivot_count(&s), 0, "no PivotTable is left without a report");
+}
+
+#[test]
+fn shifting_cells_through_a_report_is_refused() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    let above = CellRef::new(r.start.row - 1, r.start.col).a1();
+    let inside = CellRef::new(r.start.row + 1, r.start.col).a1();
+    for (cmd, at, shift) in [("home.insertCells", &above, "down"), ("home.deleteCells", &inside, "left")] {
+        let err = s.execute(cmd, json!({"range": at, "shift": shift})).unwrap_err().to_string();
+        assert!(err.contains("PivotTable report"), "{cmd} {shift}: {err}");
+    }
+    assert_eq!(pt(&s).last_range, Some(r));
+    // Cells beside the report shift as usual.
+    let beside = CellRef::new(r.start.row - 1, r.end.col + 1).a1();
+    s.execute("home.insertCells", json!({"range": beside, "shift": "down"})).unwrap();
+    assert_eq!(pt(&s).last_range, Some(r));
 }
