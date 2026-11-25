@@ -1,16 +1,46 @@
 //! SYLK (`.slk`) import. `craft_csv::sylk` reads the file (values, formulas rewritten from R1C1 to
 //! A1, number formats, column widths); this module makes it a one-sheet workbook: formulas parsed
 //! (a formula GridCraft can't parse is skipped and counted), error values recognised, formats
-//! interned as styles and widths converted from characters.
+//! interned as styles and widths converted from characters, and the options record's calendar
+//! flag kept so the file's dates survive.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use craft_csv::sylk;
-use gridcraft_core::{CellError, CellRef, Value};
+use gridcraft_core::{CellError, CellRef, DateSystem, Value};
 use gridcraft_model::{Cell, Formula, NumFmt, Sheet, Style, Workbook};
 
 use crate::{EngineError, Result};
+
+/// Whether the file's options record selects the 1904 date system. Excel writes the flag in the
+/// `O` record's `V` field: `V4` for a 1904 workbook and `V0` for a 1900 one (the field is a bit
+/// mask, and bit 2 is the calendar). Keeping it makes the file's serials show the dates it shows;
+/// read as 1900 dates, every one would be 1,462 days early.
+fn uses_1904_calendar(bytes: &[u8]) -> bool {
+    let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes);
+    for line in bytes.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let mut fields = line.split(|&b| b == b';');
+        let Some(kind) = fields.next() else { continue };
+        // The reader stops at the end record: don't honour an option past it.
+        if kind == b"E" {
+            return false;
+        }
+        if kind != b"O" {
+            continue;
+        }
+        for field in fields {
+            if let Some(arg) = field.strip_prefix(b"V")
+                && let Ok(arg) = std::str::from_utf8(arg)
+                && let Ok(flags) = arg.trim().parse::<u32>()
+            {
+                return flags & 4 != 0;
+            }
+        }
+    }
+    false
+}
 
 /// Reads a SYLK file into a one-sheet workbook. Returns the workbook and its warnings.
 pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
@@ -19,6 +49,9 @@ pub fn read(name: &str, bytes: &[u8]) -> Result<(Workbook, Vec<String>)> {
         _ => EngineError::Other(format!("We can't open '{name}': it isn't a SYLK file (it doesn't start with an ID record).")),
     })?;
     let mut wb = Workbook::new();
+    if uses_1904_calendar(bytes) {
+        wb.date_system = DateSystem::D1904;
+    }
     let mut sheet = Sheet::new("Sheet1");
     let mut skipped = file.skipped;
     let mut styles = HashMap::new();
