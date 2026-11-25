@@ -411,7 +411,7 @@ fn frozen_column_text_keeps_its_cell_when_scrolled() {
         s.execute("cell.set", json!({"cell": "C1", "input": "v"})).unwrap();
         s.execute("view.freezeFirstColumn", json!({})).unwrap();
     });
-    for col in [1, 2, 3, 8] {
+    for col in [2, 3, 8] {
         scroll_to_col(&mut h, col);
         let a1 = cell_rect(&h, "A1");
         let clips = text_clips(&h, LEFT);
@@ -425,23 +425,67 @@ fn frozen_column_text_keeps_its_cell_when_scrolled() {
     }
 }
 
-/// Issue #2544: with two frozen columns, A1's text keeps overflowing across the whole of empty B1.
+/// Issue #2544: with two frozen columns, A1's text keeps overflowing across the whole of empty B1,
+/// whatever the scrolled pane draws of it.
 #[test]
 fn frozen_text_overflows_to_the_freeze_line_when_scrolled() {
     let mut h = harness(|s| {
         s.execute("cell.set", json!({"cell": "A1", "input": LEFT})).unwrap();
         s.execute("view.freezePanes", json!({"cell": "C1"})).unwrap();
     });
-    for col in [2, 3, 4, 10] {
+    for col in [3, 4, 10] {
         scroll_to_col(&mut h, col);
         let (a1, b1) = (cell_rect(&h, "A1"), cell_rect(&h, "B1"));
         let clips = text_clips(&h, LEFT);
-        assert_eq!(clips.len(), 1, "A1 is drawn once: {clips:?}");
         assert!(
-            (clips[0].left() - a1.left()).abs() <= 0.5 && (clips[0].right() - b1.right()).abs() <= 0.5,
+            clips.iter().any(|c| (c.left() - a1.left()).abs() <= 0.5 && (c.right() - b1.right()).abs() <= 0.5),
             "A1's text spans A1:B1 at column {col}: {clips:?} vs {a1:?} {b1:?}"
         );
     }
+}
+
+/// As observed in Excel: text overflows across the freeze line, and each pane draws its own part. The
+/// frozen pane draws it as if nothing had scrolled, cut at the line; the scrolled pane by its scroll.
+#[test]
+fn text_crosses_the_freeze_line_and_each_pane_draws_its_part() {
+    let mut h = harness(|s| {
+        s.execute("cell.set", json!({"cell": "B1", "input": LEFT})).unwrap();
+        s.execute("cell.set", json!({"cell": "D2", "input": RIGHT})).unwrap();
+        s.execute("selection.set", json!({"range": "D2"})).unwrap();
+        s.execute("home.alignRight", json!({})).unwrap();
+        s.execute("view.freezePanes", json!({"cell": "D1"})).unwrap();
+    });
+    let starts = |h: &Harness, text: &str| -> Vec<f32> {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                Shape::Text(t) if t.galley.job.text == text => Some(t.pos.x),
+                _ => None,
+            })
+            .collect()
+    };
+    let (line, b_left) = (cell_rect(&h, "D1").left(), cell_rect(&h, "B1").left());
+    let clips = text_clips(&h, LEFT);
+    assert!(clips.iter().any(|c| c.left() <= b_left + 0.5 && (c.right() - line).abs() <= 0.5), "cut at the line: {clips:?}");
+    assert!(clips.iter().any(|c| c.right() > line + 1.0), "and carrying on past it: {clips:?}");
+    let unscrolled = starts(&h, LEFT);
+    assert!(unscrolled.windows(2).all(|p| (p[0] - p[1]).abs() <= 0.5), "unscrolled, one line of text: {unscrolled:?}");
+    let first = unscrolled[0];
+
+    // Columns D and E scroll out: the two parts move apart by exactly that.
+    let scroll = cell_rect(&h, "F1").left() - line;
+    scroll_to_col(&mut h, 5);
+    assert!((cell_rect(&h, "F1").left() - line).abs() <= 0.5, "F is now first after the line");
+    let scrolled = starts(&h, LEFT);
+    assert_eq!(scrolled.len(), 2, "one part per pane: {scrolled:?}");
+    assert!(scrolled.iter().any(|x| (x - first).abs() <= 0.5), "the frozen part stays put: {scrolled:?}");
+    assert!(scrolled.iter().any(|x| (x - (first - scroll)).abs() <= 1.0), "the scrolled part moved by the scroll: {scrolled:?}");
+
+    // D2's right-aligned text ends in the scrolled-out column D, and still shows up to the line.
+    let a2 = cell_rect(&h, "A2");
+    let clips = text_clips(&h, RIGHT);
+    assert!(clips.iter().any(|c| c.intersects(a2.shrink(1.0))), "D2's text still reaches A2: {clips:?}");
 }
 
 /// Issue #2544: the frozen columns' gridlines reach the freeze line, and none is drawn inside
