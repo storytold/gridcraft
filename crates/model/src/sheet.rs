@@ -119,6 +119,12 @@ pub struct Sheet {
     pub show_headings: bool,
     pub show_formulas: bool,
     pub show_zeros: bool,
+    /// The ruler in Page Layout view (Excel's Show Ruler), from `sheetView showRuler`.
+    #[serde(default = "yes")]
+    pub show_ruler: bool,
+    /// The space between pages in Page Layout view, from `sheetView showWhiteSpace`.
+    #[serde(default = "yes")]
+    pub show_white_space: bool,
     /// The outline's level buttons and brackets (Excel's Show Outline Symbols, Ctrl+8); the
     /// outline itself stays.
     #[serde(default = "yes")]
@@ -210,6 +216,8 @@ impl Sheet {
             show_headings: true,
             show_formulas: false,
             show_zeros: true,
+            show_ruler: true,
+            show_white_space: true,
             right_to_left: false,
             zoom: 100,
             cond_formats: vec![],
@@ -1009,6 +1017,15 @@ mod tests {
             let position = documented.iter().position(|&x| x == id).map(|p| p as f32);
             assert_eq!(s.object_anchor(ObjRef::new(kind, id)).map(|a| a.dx), position, "{kind:?} {id}");
         }
+    }
+
+    #[test]
+    fn sheet_json_without_view_flags_opens_with_ruler_and_white_space() {
+        let mut v = serde_json::to_value(Sheet::new("S")).unwrap();
+        v.as_object_mut().unwrap().remove("show_ruler");
+        v.as_object_mut().unwrap().remove("show_white_space");
+        let s: Sheet = serde_json::from_value(v).unwrap();
+        assert!(s.show_ruler && s.show_white_space, "old .gridcraft files show both");
     }
 }
 
