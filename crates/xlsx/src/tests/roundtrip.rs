@@ -1679,12 +1679,43 @@ fn package_kind_sets_workbook_content_type() {
         let main: Vec<_> =
             types.kids("Override").filter(|e| e.attr("PartName") == Some("/xl/workbook.xml")).filter_map(|e| e.attr("ContentType")).collect();
         assert_eq!(main, [ct], "{path}");
+        // The kind the package declares is read back from its workbook content type.
+        assert_eq!(crate::package_kind(&bytes), Some(kind), "{path}");
         // Every kind reads back.
         let (back, report) = read_xlsx(&bytes).unwrap();
         assert!(report.warnings.is_empty(), "{path}: {:?}", report.warnings);
         assert_eq!(back.sheet(0).unwrap().value(at("A1")), Value::Number(7.0));
     }
     assert_eq!(crate::XlsxKind::from_path("noext"), crate::XlsxKind::Workbook);
+    assert_eq!(crate::package_kind(b"not a package"), None);
+}
+
+/// #4351: the package kind is read from the workbook part's content type, whether the package
+/// declares it with an Override or a Default.
+#[test]
+fn package_kind_reads_the_workbook_content_type() {
+    for kind in [crate::XlsxKind::Workbook, crate::XlsxKind::MacroWorkbook, crate::XlsxKind::Template, crate::XlsxKind::MacroTemplate] {
+        assert_eq!(crate::XlsxKind::from_content_type(kind.main_content_type()), Some(kind));
+    }
+    assert_eq!(crate::XlsxKind::from_content_type("application/xml"), None);
+    // Media types are case-insensitive (RFC 2045): a package may spell `macroEnabled` differently.
+    for kind in [crate::XlsxKind::Workbook, crate::XlsxKind::MacroWorkbook, crate::XlsxKind::Template, crate::XlsxKind::MacroTemplate] {
+        let lower = kind.main_content_type().to_ascii_lowercase();
+        assert_eq!(crate::XlsxKind::from_content_type(&lower), Some(kind), "{lower}");
+    }
+    // A Default declaration of the workbook part's type, with no Override for it.
+    let types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/vnd.ms-excel.sheet.macroEnabled.main+xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/></Types>"#;
+    let book = r#"<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#;
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#;
+    let sheet = r#"<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData/></worksheet>"#;
+    let bytes = super::make_zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", book.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+    ]);
+    assert_eq!(crate::package_kind(&bytes), Some(crate::XlsxKind::MacroWorkbook));
 }
 
 /// The workbook's default font (`fonts[0]`, the Normal style's) is what every default-formatted

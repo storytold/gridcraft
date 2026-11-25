@@ -86,10 +86,18 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     // Someone else may have made the file: its active content asks before it runs.
+    let xlsx = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx;
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
-    if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
+    if crate::io::FileKind::from_path(&name).is_none() && xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
+    // The package's own subtype (`.xlsx`, `.xlsm`, `.xltx`, `.xltm`), from its workbook content
+    // type rather than its name: an ordinary Save writes the same one back (#4351).
+    if xlsx {
+        doc.package_kind = gridcraft_xlsx::package_kind(&bytes);
+    }
+    // The file carries the project even when its declared package type does not admit one.
+    doc.vba_in_file = doc.wb.vba_project.is_some();
     let i = s.add_document(doc);
     // The decrypted-workbook notice is for the info bar, not a message box.
     let shown: Vec<&str> = warnings.iter().map(String::as_str).filter(|w| *w != crate::io::DECRYPTED_NOTICE).collect();
@@ -107,6 +115,13 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn save(s: &mut Session, p: &Json) -> Result<Json> {
+    save_with(s, p, false)
+}
+
+/// `explicit` is Save As: the caller named the destination, so its extension picks the format
+/// even when the path is the document's own. An ordinary Save keeps the format the document's
+/// file was opened as.
+fn save_with(s: &mut Session, p: &Json, explicit: bool) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
         None => {
@@ -122,11 +137,30 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc_mut()?;
     // The document's own file keeps the format its content had when opened; any other path
     // goes by its extension. Relative paths to linked workbooks are rewritten for the new folder.
-    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
+    // Save As (`explicit`) always goes by the extension, so an unknown one is refused (#4351).
+    let own = d.path.as_deref() == Some(path.as_str());
+    let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| own && !explicit));
+    // An XLSX package's own file keeps the subtype it was opened as: a macro-enabled package
+    // named `.xlsx` or with no extension keeps its VBA project. A named destination, and Save As
+    // to any path, goes by the extension instead, an explicit choice of format (#4351).
+    let remembered = own && !explicit;
+    let package = d.package_kind.filter(|_| remembered).unwrap_or_else(|| gridcraft_xlsx::XlsxKind::from_path(&path));
+    // An ordinary Save never silently strips a VBA project it loaded. When the package type
+    // could not be read, or declares a macro-free workbook part while a project is in memory,
+    // writing would lose the project: ask for a format instead of overwriting the file (#4351).
+    if remembered && kind == Some(crate::io::FileKind::Xlsx) && d.vba_in_file && d.wb.vba_project.is_some() && !package.is_macro_enabled() {
+        let name = std::path::Path::new(&path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(&path);
+        return Err(bad(
+            "file.save",
+            format!(
+                "{name}: the workbook holds a VBA project, but its package type does not carry one. Save As .xlsm to keep the macros, or .xlsx to remove them."
+            ),
+        ));
+    }
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
     let bytes = match kind {
-        Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
+        Some(kind) => crate::io::save_bytes_as(wb, &path, kind, Some(package))?,
         None => crate::io::save_bytes(wb, &path)?,
     };
     crate::io::write_file(&path, &bytes)?;
@@ -148,6 +182,10 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         }
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
+        // The file just written is the one an ordinary Save writes back: remember its kind, and
+        // whether it carries the VBA project (Save As to a macro-free name drops it, as asked).
+        d.package_kind = if kind == Some(crate::io::FileKind::Xlsx) { Some(package) } else { None };
+        d.vba_in_file = kind == Some(crate::io::FileKind::Xlsx) && package.is_macro_enabled() && d.wb.vba_project.is_some();
     }
     if distinct_notice {
         s.ui_requests.push(crate::UiRequest::Message(DISTINCT_COUNT_NOTICE.into()));
@@ -179,7 +217,7 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
         s.ui_requests.push(crate::UiRequest::Dialog("saveAs".into(), json!({})));
         return ok();
     }
-    save(s, p)
+    save_with(s, p, true)
 }
 
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {

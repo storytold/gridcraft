@@ -499,15 +499,18 @@ pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
         let name = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path);
         return Err(EngineError::Other(format!("{name}: unknown file format. Save as .xlsx, .csv, .tsv, .json or .html.")));
     };
-    save_bytes_as(wb, path, kind)
+    save_bytes_as(wb, path, kind, None)
 }
 
-/// Encodes a workbook as `kind`, whatever `path`'s extension says.
-pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8>> {
+/// Encodes a workbook as `kind`, whatever `path`'s extension says. For [`FileKind::Xlsx`],
+/// `package` picks the member of the SpreadsheetML family (a document's own file keeps the kind it
+/// was opened as, even under another name); `None` goes by the extension.
+pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind, package: Option<gridcraft_xlsx::XlsxKind>) -> Result<Vec<u8>> {
     let sheet = wb.active_sheet();
     match kind {
-        // The extension picks the package kind; only the macro-enabled kinds (.xlsm, .xltm) carry
-        // the VBA project, so any other name saves without it, as Excel does.
+        // The extension picks the package kind, unless the caller passes the kind a document's
+        // own file was opened as. Only the macro-enabled kinds (.xlsm, .xltm) carry the VBA
+        // project, so any other name saves without it, as Excel does.
         // Macros, and button actions xlsx has no place for, travel in hidden names.
         FileKind::Xlsx => {
             let named = crate::macros::with_names(wb)?;
@@ -516,7 +519,8 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
                 None => named,
             };
             let book = std::path::Path::new(path).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or_default();
-            gridcraft_xlsx::write_xlsx_named_with(named.as_ref().unwrap_or(wb), gridcraft_xlsx::XlsxKind::from_path(path), book, XLSX_FUNCTIONS)
+            let package = package.unwrap_or_else(|| gridcraft_xlsx::XlsxKind::from_path(path));
+            gridcraft_xlsx::write_xlsx_named_with(named.as_ref().unwrap_or(wb), package, book, XLSX_FUNCTIONS)
                 .map_err(|e| EngineError::Other(e.to_string()))
         }
         FileKind::Xls => {

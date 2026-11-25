@@ -61,7 +61,7 @@ const MAX_KEPT_PARTS: usize = 4096;
 /// Most relationships read from one rels part.
 const MAX_RELS: usize = 10_000;
 /// Largest relationships, content-types or VML part read here.
-const MAX_META: u64 = 16 * 1024 * 1024;
+pub(crate) const MAX_META: u64 = 16 * 1024 * 1024;
 /// Longest chain of relationships followed from an owner.
 const MAX_CHAIN: usize = 16;
 /// Largest kept XML fragment of a sheet.
