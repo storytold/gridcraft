@@ -50,13 +50,22 @@ impl SheetApp {
 
     /// Look for a newer release once, in the background, as the desktop app starts (a no-op on the
     /// web). A found release opens the update prompt; nothing is shown when GridCraft is current.
+    /// A nightly channel has no update feed of its own: the Launcher installs and replaces it.
     pub fn start_update_check(&mut self) {
         #[cfg(not(target_arch = "wasm32"))]
-        updates_ui::start(self, false);
+        if crate::channel::stable_services_allowed() {
+            updates_ui::start(self, false);
+        }
     }
 
     /// Help ▸ Check for Updates…: look now, and say so when GridCraft is up to date or the check fails.
     pub fn check_for_updates(&mut self) {
+        // Never from the nightly channel: a check would download into, and record in, the stable
+        // app's folders, and an install would replace a Launcher-managed copy.
+        if !crate::channel::stable_services_allowed() {
+            self.message = Some((crate::channel::name().into(), "GridCraft Nightly is updated by ArtCraft Launcher.".into()));
+            return;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::start(self, true);
         #[cfg(target_arch = "wasm32")]
