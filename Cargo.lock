@@ -2291,6 +2291,7 @@ dependencies = [
  "serde_json",
  "winit",
  "winresource",
+ "winsafe",
 ]
 
 [[package]]
