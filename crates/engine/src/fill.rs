@@ -596,9 +596,17 @@ const TWO_POW_MINUS_600: f64 = f64::from_bits((1023 - 600) << 52);
 /// The least-squares line through `nums` at positions 0, 1, 2…: its values at the first and last
 /// positions, and its step. A lone number gives a step of zero. When a number is larger than 2^600,
 /// the fit runs on the numbers multiplied by 2^-600 and its results are multiplied by 2^600, so the
-/// sums stay finite for numbers up to the largest double.
+/// sums stay finite for numbers up to the largest double. When every number is smaller than 2^-600,
+/// the fit runs on the numbers multiplied by 2^600 and its results are multiplied by 2^-600, so
+/// subnormal numbers keep their step instead of rounding it to zero.
 fn least_squares(nums: &[f64]) -> (f64, f64, f64) {
-    let (down, up) = if nums.iter().any(|y| y.abs() > TWO_POW_600) { (TWO_POW_MINUS_600, TWO_POW_600) } else { (1.0, 1.0) };
+    let (down, up) = if nums.iter().any(|y| y.abs() > TWO_POW_600) {
+        (TWO_POW_MINUS_600, TWO_POW_600)
+    } else if nums.iter().all(|y| y.abs() < TWO_POW_MINUS_600) {
+        (TWO_POW_600, TWO_POW_MINUS_600)
+    } else {
+        (1.0, 1.0)
+    };
     let n = nums.len() as f64;
     let mean_x = (n - 1.0) / 2.0;
     let mean_y = nums.iter().map(|y| y * down).sum::<f64>() / n;

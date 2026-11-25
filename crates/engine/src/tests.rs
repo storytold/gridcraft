@@ -1343,6 +1343,10 @@ fn linear_and_growth_trend_continue_the_fitted_line_or_curve() {
     s.execute("range.setValues", json!({"range": "X1", "values": [[tiny], [tiny], [tiny]]})).unwrap();
     fill(&mut s, "X1:X3", "X1:X4", "linearTrend").unwrap();
     assert_eq!(v(&s, "X4"), Value::Number(tiny));
+    // The two smallest doubles continue their step: 1 and 2 times the smallest give 3 and 4 times it.
+    s.execute("range.setValues", json!({"range": "AD1", "values": [[tiny], [f64::from_bits(2)]]})).unwrap();
+    fill(&mut s, "AD1:AD2", "AD1:AD4", "linearTrend").unwrap();
+    assert_eq!(nums(&s, &["AD3", "AD4"]), n(&[f64::from_bits(3), f64::from_bits(4)]));
     // Huge numbers three times repeat exactly: the largest double, and one with 14 digits.
     let (big, big14) = (f64::MAX, 1.7976931348623e308);
     s.execute("range.setValues", json!({"range": "Y1", "values": [[big, big14], [big, big14], [big, big14]]})).unwrap();
