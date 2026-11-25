@@ -71,9 +71,23 @@ impl SheetApp {
         let mut ed = editor::EditState::new(d.uid, d.wb.active_sheet(), at, text, replace, from_formula_bar).on_sheet(&d.wb);
         ed.window = self.session.active_window();
         ed.locale = locale;
-        if replace && self.ui.autocomplete && !ed.is_formula() {
+        // A list validation with an in-cell dropdown is searched as the user types; its list
+        // replaces column AutoComplete.
+        let list = sh
+            .validations
+            .iter()
+            .find(|v| v.kind == gridcraft_engine::model::ValidationKind::List && v.in_cell_dropdown && v.ranges.iter().any(|r| r.contains(at)));
+        if let Some(dv) = list {
+            // Read within a budget: a list from a huge range must not stall the edit it opens.
+            let budget = gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET;
+            ed.set_list_source(gridcraft_engine::cmd::data::list_search_source(&d.wb, d.wb.active_sheet(), at, dv, budget), replace);
+        } else if replace && self.ui.autocomplete && !ed.is_formula() {
             ed.completion = editor::column_completion(sh, at, &ed.text);
         }
+        // Typing over an open dropdown list hands over to the searched list the edit shows; the
+        // entries it read (and the workbook version they pin) go with it.
+        self.grid.list_picker = None;
+        self.grid.list_picker_items = None;
         self.editor = Some(ed);
         self.session.mode = if replace { gridcraft_engine::Mode::Enter } else { gridcraft_engine::Mode::Edit };
     }
@@ -137,9 +151,13 @@ impl SheetApp {
         if !self.follow_draft_sheet(&mut ed) {
             return true;
         }
-        let text = match &ed.completion {
+        // Only an explicit acceptance takes the list's entry; a failed commit asks again.
+        let accepted = std::mem::take(&mut ed.list_accept);
+        let text = match (ed.list_choice().filter(|_| accepted), &ed.completion) {
+            // The searched validation list's highlighted entry, as the list spells it.
+            (Some(choice), _) => choice.to_string(),
             // A code edit commits the code as typed, whatever a completion holds.
-            Some(full) if !ed.python && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
+            (None, Some(full)) if !ed.python && full.to_lowercase().starts_with(&ed.text.to_lowercase()) => full.clone(),
             _ => ed.text.clone(),
         };
         // F2 then Enter (or a file command) on an untouched draft: nothing to write.
