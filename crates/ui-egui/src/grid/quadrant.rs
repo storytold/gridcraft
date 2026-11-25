@@ -105,6 +105,8 @@ pub(crate) struct QuadrantPaint<'a> {
     pub(crate) tokens: &'a Tokens,
     /// The row to tint, when "Highlight the active cell's row" is on.
     pub(crate) active_row: Option<u32>,
+    /// Page Break Preview: the printed area. Outside it the cells are grey, as in Excel.
+    pub(crate) printed: Option<Rect>,
 }
 
 /// Paint a worksheet quadrant, including backgrounds, borders, and text.
@@ -120,6 +122,7 @@ pub(crate) fn paint_quadrant(mut quadrant: QuadrantPaint<'_>) {
     paint_gridlines(&quadrant);
     let cells = visible_cells(&quadrant);
     let looks = paint_backgrounds(&mut quadrant, &cells, &merges);
+    paint_unprinted(&quadrant);
     let outside = outside_text_cells(&mut quadrant, &merges);
     // Over the fills and under the text and borders.
     paint_active_row(&quadrant, None);
@@ -127,6 +130,24 @@ pub(crate) fn paint_quadrant(mut quadrant: QuadrantPaint<'_>) {
     paint_borders(&mut quadrant, &looks, &merges);
     paint_sparklines(&quadrant, range);
     paint_filter_buttons(&quadrant, range);
+}
+
+/// Page Break Preview: everything outside the printed area turns grey over the fills and the
+/// gridlines and under the text and borders, as Excel paints it (#A0A0A0, measured).
+fn paint_unprinted(q: &QuadrantPaint<'_>) {
+    let Some(pr) = q.printed else { return };
+    let c = q.painter.clip_rect();
+    let grey = if q.tokens.dark { Color32::from_gray(0x3C) } else { Color32::from_gray(0xA0) };
+    for r in [
+        Rect::from_min_max(c.min, pos2(c.right(), pr.top())),
+        Rect::from_min_max(pos2(c.left(), pr.bottom()), c.max),
+        Rect::from_min_max(pos2(c.left(), pr.top()), pos2(pr.left(), pr.bottom())),
+        Rect::from_min_max(pos2(pr.right(), pr.top()), pos2(c.right(), pr.bottom())),
+    ] {
+        if r.is_positive() {
+            q.painter.rect_filled(r, 0.0, grey);
+        }
+    }
 }
 
 fn visible_merges(q: &QuadrantPaint<'_>, range: RangeRef) -> Vec<RangeRef> {
