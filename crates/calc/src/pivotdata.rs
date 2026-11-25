@@ -38,9 +38,12 @@ fn item_matches(item: &PivotItemRef, v: &Value, exact: bool) -> bool {
 
 /// Whether `cell` is the value field asked for with exactly these items.
 fn cell_matches(cell: &PivotDataCell, data_field: &str, pairs: &[(String, Value)], exact: bool) -> bool {
-    (same_text(&cell.data_field, data_field) || same_text(&cell.source_col, data_field))
-        && cell.items.len() == pairs.len()
-        && pairs.iter().all(|(f, v)| cell.items.iter().any(|it| same_text(&it.field, f) && item_matches(it, v, exact)))
+    (same_text(&cell.data_field, data_field) || same_text(&cell.source_col, data_field)) && items_match(cell, pairs, exact)
+}
+
+/// Whether `cell` has exactly these items.
+fn items_match(cell: &PivotDataCell, pairs: &[(String, Value)], exact: bool) -> bool {
+    cell.items.len() == pairs.len() && pairs.iter().all(|(f, v)| cell.items.iter().any(|it| same_text(&it.field, f) && item_matches(it, v, exact)))
 }
 
 fn is_axis_field(pt: &PivotTable, field: &str) -> bool {
@@ -65,14 +68,15 @@ fn find<'a>(cells: &'a PivotLookup, data_field: &str, pairs: &[(String, Value)])
         return Some(c);
     }
     let all = cells.cells()?;
-    // As in the index: a caption spelled as asked for wins over a source field or a caption
-    // that matches only with blanks ignored.
+    // In the index's order: a caption spelled as asked for, then a source field, then a caption
+    // that matches only with blanks ignored, whatever order the cells come in.
     let caption = data_field.to_lowercase();
-    let scan = |exact: bool| {
-        all.iter()
-            .find(|cell| cell.data_field.to_lowercase() == caption && cell_matches(cell, data_field, pairs, exact))
-            .or_else(|| all.iter().find(|cell| cell_matches(cell, data_field, pairs, exact)))
+    let named = |cell: &PivotDataCell, rank: u8| match rank {
+        0 => cell.data_field.to_lowercase() == caption,
+        1 => same_text(&cell.source_col, data_field),
+        _ => same_text(&cell.data_field, data_field),
     };
+    let scan = |exact: bool| (0..3).find_map(|rank| all.iter().find(|cell| named(cell, rank) && items_match(cell, pairs, exact)));
     scan(true).or(hit).or_else(|| scan(false))
 }
 

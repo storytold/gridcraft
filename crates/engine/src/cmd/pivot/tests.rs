@@ -1867,3 +1867,20 @@ fn getpivotdata_tells_a_spaced_caption_from_the_source_field() {
         assert_eq!((val(&s, "K1"), val(&s, "K2")), (Value::Number(27.0), Value::Number(285.0)), "{values}");
     }
 }
+
+/// Numbers whose labels differ from the number asked for ("1.00" for 1) are found by scanning;
+/// the scan ranks names as the index does, so a "Sales " caption ahead of the Sales field's
+/// "Sum of Sales" doesn't answer for "Sales".
+#[test]
+fn getpivotdata_numeric_items_rank_a_source_field_above_a_spaced_caption() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Key", "Units", "Sales"], [1, 3, 10], [2, 4, 20]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2:A3", "code": "0.00"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Key"], "values": ["Units", "Sales"]})).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "name": "Sales "})).unwrap();
+    let at = pt(&s).last_range.unwrap().start.a1();
+    s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Key",1)"#)})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(10.0));
+}
