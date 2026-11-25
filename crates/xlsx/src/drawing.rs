@@ -366,6 +366,11 @@ fn collect_run_colors(e: &El, depth: usize, found: &mut Option<Color>, mixed: &m
         return;
     }
     if e.name == "rPr" {
+        // Office Math's own run style (`m:rPr`: bold, plain, script) sits beside the DrawingML one
+        // that carries the fill, and the parser drops the prefix that tells them apart
+        if is_math_run_style(e) {
+            return;
+        }
         match (e.child("solidFill").and_then(dml_color), *found) {
             (None, _) => *mixed = true,
             (Some(c), None) => *found = Some(c),
@@ -377,6 +382,13 @@ fn collect_run_colors(e: &El, depth: usize, found: &mut Option<Color>, mixed: &m
     for c in &e.children {
         collect_run_colors(c, depth + 1, found, mixed);
     }
+}
+
+/// Whether `e` is an Office Math `m:rPr` (only style children such as `m:sty`), not the DrawingML
+/// `a:rPr` of the run, which holds the fill and the font.
+fn is_math_run_style(e: &El) -> bool {
+    const MATH_STYLE: [&str; 6] = ["nor", "sty", "scr", "lit", "aln", "brk"];
+    !e.children.is_empty() && e.children.iter().all(|c| MATH_STYLE.contains(&c.name.as_str()))
 }
 
 /// The colour of the first run (DrawingML `rPr` with a fill) under `e`.

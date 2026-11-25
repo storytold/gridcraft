@@ -584,12 +584,14 @@ fn nested_colours_keep_the_frame_ink_through_save_and_reopen() {
 #[test]
 fn a_workbook_saved_before_the_paragraph_carried_the_ink_keeps_its_explicit_frame_ink() {
     // The earlier writer put the frame's ink on every Office Math run and wrote no fill on the
-    // paragraph end: strip that fill from a saved equation to get the same bytes.
-    let src = "{\\color{green}a+{\\color{black}b}+c}+d";
+    // paragraph end: strip that fill from a saved equation to get the same bytes. The styled
+    // runs (`\\mathbf`, `\\text`) also carry an `m:rPr` of Office Math style beside the `a:rPr`.
+    let src = "{\\color{green}a+{\\color{black}\\mathbf{b}}+\\text{c}}+d";
     let wb = book(vec![equation(1, "B2", src, Color::Rgb(0x1F4E79))]);
     let mut parts = unzip(&write_xlsx(&wb).unwrap());
     let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
     let d = drawing(&parts);
+    assert!(d.contains("<m:rPr><m:sty"), "a styled run writes an Office Math run style: {d}");
     let at = d.find("<a:endParaRPr").unwrap();
     let open_end = d[at..].find('>').unwrap() + at + 1;
     let close = d[open_end..].find("</a:endParaRPr>").unwrap() + open_end;
