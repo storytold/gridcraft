@@ -24,6 +24,15 @@ impl Selection {
     pub fn at(c: CellRef) -> Selection {
         Selection { active: c, anchor: c, ranges: vec![RangeRef::cell(c)] }
     }
+    /// The selection a sheet opens with: the active cell saved with it, with the merged cells it
+    /// touches whole, as Excel shows it (a title merged across A1:F1 opens selected as A1:F1).
+    pub fn opening(sheet: Option<&Sheet>) -> Selection {
+        let mut sel = Selection::at(sheet.map(|s| s.view_active).unwrap_or_default());
+        if let Some(sh) = sheet {
+            sel.expand_merges(sh);
+        }
+        sel
+    }
     pub fn range(r: RangeRef) -> Selection {
         Selection { active: r.start, anchor: r.start, ranges: vec![r] }
     }
