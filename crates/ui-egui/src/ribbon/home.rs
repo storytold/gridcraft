@@ -485,7 +485,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
         let fill = small_button(ui, Icon::FillDown, "", "Fill", true);
         for sequence in keytip_table::group_extension(
             app.keytips.prefix().unwrap_or_default(),
-            &["edit.fillDown", "edit.fillRight", "edit.fillUp", "edit.fillLeft", "dialog:series", "edit.flashFill"],
+            &["edit.fillDown", "edit.fillRight", "edit.fillUp", "edit.fillLeft", "dialog:series", "edit.fillJustify", "edit.flashFill"],
         ) {
             keytip(app, ui, sequence, fill.rect.center_bottom());
         }
@@ -499,6 +499,7 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
                     ("Up", "edit.fillUp", json!({})),
                     ("Left", "edit.fillLeft", json!({})),
                     ("Series…", "dialog:series", json!({})),
+                    ("Justify", "edit.fillJustify", json!({})),
                     ("Flash Fill", "edit.flashFill", json!({})),
                 ],
             );

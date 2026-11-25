@@ -11,6 +11,9 @@ use gridcraft_numfmt::{FormatKind, NumberFormat};
 use crate::Result;
 use crate::cmd::Ctx;
 
+mod justify;
+pub use justify::{Justified, justify};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FillMode {
     Series,

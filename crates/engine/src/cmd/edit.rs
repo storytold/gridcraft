@@ -24,7 +24,7 @@ pub(crate) use cell::{check_arg_counts, input_to_cell, is_formula_input, json_to
 #[cfg(test)]
 pub(crate) use clipboard::parse_tsv;
 use clipboard::{clear_clipboard, copy, cut, paste, range_move};
-use fill::{auto_fill, fill_dir, fill_series, flash_fill};
+use fill::{auto_fill, fill_dir, fill_justify, fill_series, flash_fill};
 #[cfg(test)]
 use find::replace_ci;
 pub(crate) use find::wildcard;
@@ -142,6 +142,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{range?, direction?: columns|rows, type?: linear|growth|date|autofill, step?: 1, stop?, dateUnit?: day|weekday|month|year}",
             has_doc,
             fill_series
+        ),
+        cmd!(
+            "edit.fillJustify",
+            "Justify",
+            ["Home", "Editing", "Fill"],
+            None,
+            "{range?, overwrite?: bool}: reflows the text of the selection's first column to the selection's width, one paragraph per run of filled cells (blank cells stay between them); numbers and formulas can't be justified. Lines that reach below the selection need overwrite: true to write over filled cells there → {lines, range}",
+            has_doc,
+            fill_justify
         ),
         cmd!("edit.flashFill", "Flash Fill", ["Home", "Editing", "Fill"], Some("Ctrl+E"), "{range?}", has_doc, flash_fill),
         cmd!(noundo "edit.find", "Find…", ["Home", "Editing", "Find & Select"], Some("Cmd+F"), "{what, matchCase?, wholeCell?, lookIn?: formulas|values, byColumns?, all?: bool, within?: sheet|workbook|selection} (selection: only the selected cells; Find Next keeps them selected and moves the active cell)", has_doc, find),

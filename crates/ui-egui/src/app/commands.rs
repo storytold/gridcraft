@@ -144,9 +144,11 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
-        match self.run(id, params) {
+        match self.run(id, params.clone()) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
+            // A command that would replace data asks first; OK runs it again with `overwrite`.
+            Err(e) if crate::macro_ui::ask(self, "GridCraft", id, &params, &e) => {}
             Err(e) => self.alert(e),
             Ok(_) => {}
         }
