@@ -1,0 +1,24 @@
+[package]
+name = "gridcraft-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft command line: inspect, convert, evaluate, script and serve MCP without a window"
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "gridcraft-cli"
+path = "src/main.rs"
+
+[dependencies]
+gridcraft-sandbox = { workspace = true }
+gridcraft-engine = { workspace = true }
+gridcraft-mcp = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# `check`: validating the packages GridCraft writes (content types, relationships).
+zip = { workspace = true }
+quick-xml = { workspace = true }

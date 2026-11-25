@@ -1,0 +1,120 @@
+# Contributor names for the About window.
+#
+# Everyone who contributes is credited by GitHub username automatically. Anything more is up to
+# you: add YOUR OWN entry below, in your own PR (commit it yourself). Never add someone else; a
+# maintainer may add a person only when that person asked, recording where in consent_source.
+#
+# Copy this block, replacing your-github-username (every field is optional):
+#
+#   [people.your-github-username]
+#   real_name = "Your Name"        # shown when the viewer picks "Real name"
+#   display_name = "Nickname"      # shown when the viewer picks "Display name"
+#   sync_github_name = true        # or: use the name on your public GitHub profile as display name
+#
+# To remove your names, delete your entry (or set fields empty) in a PR. The next
+# contributors.py run, and the next build, drop them.
+
+[people.echelon]
+real_name = "Brandon Thomas"
+display_name = "Brandon Thomas"
+sync_github_name = false
+
+[people.nihilist-narwhal]
+display_name = "nihilist-narwhal"
+sync_github_name = false
+
+[people.edurbs]
+sync_github_name = true
+
+[people.Cheejyg]
+real_name = "Glenn Chee"
+display_name = "Cheejyg"
+sync_github_name = false
+
+[people.arcanii]
+real_name = "Bryan Mark"
+display_name = "Arcanii"
+sync_github_name = false
+
+[people.vangel76]
+real_name = "Valentin Klein"
+display_name = "vangel76"
+sync_github_name = false
+
+[people.MacJedi42]
+sync_github_name = true
+
+[people.alexanderalber]
+real_name = "Alexander Alber"
+
+[people.webdevtodayjason]
+display_name = "Jason Brashear"
+sync_github_name = false
+
+[people.Losminek]
+sync_github_name = true
+
+[people.GhostMitra]
+sync_github_name = true
+
+[people.shrshk]
+real_name = "Shirish Veerabattini"
+sync_github_name = true
+[people.jsymes21-byte]
+real_name = "James Symes"
+sync_github_name = true
+[people.Silvertree2010]
+display_name = "Netter"
+sync_github_name = false
+
+[people.Shnrqpdr]
+sync_github_name = true
+
+[people.yeniufuklar-com]
+real_name = "Ufuk Efe"
+display_name = "Ufuk Efe"
+sync_github_name = true
+
+[people.pourie-he]
+sync_github_name = true
+
+[people.Stefanfra]
+real_name = "Stefan Fransen"
+sync_github_name = true
+
+[people.allenyllee]
+sync_github_name = true
+
+[people.marcoarnulfo]
+real_name = "Marco Arnulfo"
+display_name = "Marco Arnulfo"
+sync_github_name = false
+
+[people.Harrison-Booth]
+real_name = "Harrison Booth"
+sync_github_name = false
+
+[people.bilalmughal]
+sync_github_name = true
+
+[people.tyrel]
+real_name = "Tyrel Haveman"
+
+[people.helenkwok]
+real_name = "Helen Kwok"
+
+[people.dotCooCoo]
+real_name = "Robert Lee"
+sync_github_name = true
+
+[people.dylanmtaylor]
+sync_github_name = true
+
+[people.Plutonium-fream]
+sync_github_name = true
+
+[people.maxm11]
+sync_github_name = true
+
+[people.RockerHX]
+sync_github_name = true

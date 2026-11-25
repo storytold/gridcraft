@@ -1,0 +1,53 @@
+[package]
+name = "gridcraft-ui-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft egui frontend (Excel-style UI); swappable — nothing below depends on it"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The shared capture slot (`craft_ui::capture`) comes from the one craft-libs revision every
+# craft-libs dependency uses (see the root Cargo.toml).
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "aa84415bae3b765fef6b7ef42404f66ad1cff9d9" }
+gridcraft-engine = { workspace = true }
+gridcraft-chart = { workspace = true }
+# `monochrome_emoji_fonts` restores the Noto Emoji and emoji-icon faces that 0.37 moved behind
+# this feature. The UI draws ✕, ◀, ↘ and 📋 as text; without these faces the strict kittest
+# harness (and a host with no symbol font) renders them as tofu.
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
+egui_extras = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+image = { workspace = true }
+skrifa = { workspace = true }
+unicode-bidi = "=0.3.18"
+web-time = { workspace = true }
+
+# Linux only, where winit reports no system theme: the desktop portal's light/dark answer (see
+# `desktop_theme.rs`). Already in the tree, with these features, through egui's own
+# accessibility bus; pinned to one version so nothing is built twice.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "=5.19.0"
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+epaint_default_fonts = { workspace = true }
+gridcraft-xlsx = { workspace = true, features = ["test-support"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }
+# The desktop's preferred language for the first-run interface language.
+sys-locale = { workspace = true }
+craft-window = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Read the browser's preferred language for the first-run web interface language.
+web-sys = { version = "0.3", features = ["Window", "Navigator", "Performance"] }
+
+[build-dependencies]
+serde_json = { workspace = true }
+toml = "1"

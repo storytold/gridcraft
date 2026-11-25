@@ -1,0 +1,215 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: packaging/macos/package.sh substitutes @VERSION@ (full, e.g. 0.2.0-rc.1),
+     @SHORT_VERSION@ (numeric X.Y.Z) and @BUILD_SHA@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <!-- UI translations are embedded in Rust; declare them for AppKit's system dialogs (open and
+       save panels, overwrite confirmation). Keep in sync with the interface languages. -->
+  <key>CFBundleLocalizations</key>
+  <array>
+    <string>en</string>
+    <string>cs</string>
+    <string>de</string>
+    <string>el</string>
+    <string>es</string>
+    <string>fr</string>
+    <string>it</string>
+    <string>ja</string>
+    <string>ko</string>
+    <string>nl</string>
+    <string>pl</string>
+    <string>pt-BR</string>
+    <string>ro</string>
+    <string>ru</string>
+    <string>sr</string>
+    <string>tr</string>
+    <string>uk</string>
+    <string>vi</string>
+    <string>zh-Hans</string>
+  </array>
+  <key>CFBundleDisplayName</key>
+  <string>GridCraft</string>
+  <key>CFBundleName</key>
+  <string>GridCraft</string>
+  <key>CFBundleExecutable</key>
+  <string>GridCraft</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.storyteller.gridcraft</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@SHORT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@SHORT_VERSION@</string>
+  <key>GridCraftVersion</key>
+  <string>@VERSION@</string>
+  <key>GridCraftBuildCommit</key>
+  <string>@BUILD_SHA@</string>
+  <key>CFBundleIconFile</key>
+  <string>GridCraft</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.productivity</string>
+  <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
+       Apple silicon and has the Metal feature set wgpu targets. -->
+  <key>LSMinimumSystemVersion</key>
+  <string>11.0</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSRequiresAquaSystemAppearance</key>
+  <false/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © the GridCraft authors. MIT OR Apache-2.0.</string>
+
+  <!-- Files GridCraft opens. Rank Alternate: it's offered under "Open With" without taking
+       over the default app (Numbers, another spreadsheet) for these types. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Excel Workbook</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.openxmlformats.spreadsheetml.sheet</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>xlsx</string></array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array><string>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Excel Macro-Enabled Workbook</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.openxmlformats.spreadsheetml.sheet.macroenabled</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>xlsm</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>CSV Document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.comma-separated-values-text</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>csv</string></array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array><string>text/csv</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>TSV Document</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>public.tab-separated-values-text</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>tsv</string></array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array><string>text/tab-separated-values</string></array>
+    </dict>
+    <!-- .xlsb and .ods are imported (data only) into a new workbook that saves as .xlsx. -->
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Excel Binary Workbook</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>com.microsoft.excel.sheet.binary.macroenabled</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>xlsb</string></array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array><string>application/vnd.ms-excel.sheet.binary.macroEnabled.12</string></array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>OpenDocument Spreadsheet</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>org.oasis-open.opendocument.spreadsheet</string>
+      </array>
+      <key>CFBundleTypeExtensions</key>
+      <array><string>ods</string></array>
+      <key>CFBundleTypeMIMETypes</key>
+      <array><string>application/vnd.oasis.opendocument.spreadsheet</string></array>
+    </dict>
+  </array>
+
+  <!-- Types macOS may not know; the system's own declaration wins when it has one. -->
+  <key>UTImportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>org.openxmlformats.spreadsheetml.sheet.macroenabled</string>
+      <key>UTTypeDescription</key>
+      <string>Excel Macro-Enabled Workbook</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.zip-archive</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>xlsm</string></array>
+        <key>public.mime-type</key>
+        <array><string>application/vnd.ms-excel.sheet.macroEnabled.12</string></array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>com.microsoft.excel.sheet.binary.macroenabled</string>
+      <key>UTTypeDescription</key>
+      <string>Excel Binary Workbook</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+        <string>public.zip-archive</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array><string>xlsb</string></array>
+        <key>public.mime-type</key>
+        <array><string>application/vnd.ms-excel.sheet.binary.macroEnabled.12</string></array>
+      </dict>
+    </dict>
+  </array>
+
+</dict>
+</plist>

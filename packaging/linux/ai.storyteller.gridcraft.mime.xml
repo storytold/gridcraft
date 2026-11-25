@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- shared-mime-info for the formats GridCraft opens. Every type below already ships with
+     shared-mime-info on current distros; these entries only make sure the glob is known on
+     minimal systems. The system's own definitions win where they exist. -->
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+    <comment>Office Open XML workbook</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.xlsx"/>
+  </mime-type>
+  <mime-type type="application/vnd.ms-excel.sheet.macroEnabled.12">
+    <comment>Office Open XML macro-enabled workbook</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.xlsm"/>
+  </mime-type>
+  <mime-type type="application/vnd.ms-excel.sheet.binary.macroEnabled.12">
+    <comment>Excel binary workbook</comment>
+    <glob pattern="*.xlsb"/>
+  </mime-type>
+  <mime-type type="application/vnd.oasis.opendocument.spreadsheet">
+    <comment>OpenDocument spreadsheet</comment>
+    <sub-class-of type="application/zip"/>
+    <glob pattern="*.ods"/>
+  </mime-type>
+  <mime-type type="text/csv">
+    <comment>CSV document</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.csv"/>
+  </mime-type>
+  <mime-type type="text/tab-separated-values">
+    <comment>TSV document</comment>
+    <sub-class-of type="text/plain"/>
+    <glob pattern="*.tsv"/>
+  </mime-type>
+</mime-info>
