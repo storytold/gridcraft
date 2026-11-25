@@ -50,7 +50,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     // Alt shortcuts type their character too on Windows and Linux (Alt+= sends Text("=")): once
     // a shortcut ran, that text must not start an edit over what it just did.
     let mut shortcut_ran = false;
-    for ev in events {
+    for (index, ev) in events.iter().cloned().enumerate() {
         // IME events are handled outside the match to keep this loop's complexity down. Any
         // non-commit IME event (preedit, delete-surrounding) falls through to `_ => {}` below.
         if handle_ime_commit(app, &ev, shortcut_pressed, shortcut_ran) {
@@ -76,7 +76,11 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             // toggled *and* opened an editor holding a space, which Enter then committed over the
             // checkbox (#1951).
             egui::Event::Text(text) if text == " " && is_checkbox(sh, app) => {}
-            egui::Event::Text(text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
+            egui::Event::Text(mut text) if text.chars().all(|c| !c.is_control()) && !text.is_empty() => {
+                // On a slow frame several typed keys arrive together, and the cell editor opened
+                // here reads keys only from the next frame on: start the edit with all the text
+                // of this frame. Keys that are not typing wait for the next frame (`frame_end`).
+                typed_in_frame(&events[index + 1..], &mut text);
                 seed_editor(app, text);
                 return;
             }
@@ -276,4 +280,98 @@ fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool 
         }
         _ => false,
     }
+}
+
+/// Appends to `text` the characters typed in `rest` (the events after the one that started the
+/// edit) up to the first key that is not typing.
+fn typed_in_frame(rest: &[egui::Event], text: &mut String) {
+    for later in rest {
+        match later {
+            egui::Event::Text(t) if t.chars().all(|c| !c.is_control()) => text.push_str(t),
+            e if ends_typing(e) => break,
+            _ => {}
+        }
+    }
+}
+
+/// Where a frame's keyboard input ends ([`SheetApp::pace_keys`](crate::SheetApp)): before the first key that is
+/// not typing if something was typed earlier in the frame, else just after that key (and the
+/// character it typed, if any: Shift+Space). `None` when the frame takes all its events.
+pub(crate) fn frame_end(events: &[egui::Event]) -> Option<usize> {
+    let mut typed = false;
+    for (n, e) in events.iter().enumerate() {
+        if ends_typing(e) {
+            if typed {
+                return Some(n);
+            }
+            let own_text = events[n + 1..].iter().take_while(|e| matches!(e, egui::Event::Text(_))).count();
+            return Some(n + 1 + own_text);
+        }
+        if matches!(e, egui::Event::Text(_) | egui::Event::Ime(_)) {
+            typed = true;
+        }
+    }
+    None
+}
+
+/// Events that [`frame_end`] may hold for the next frame: the keyboard's. Pointer and window
+/// events stay in their frame, since egui has already taken the pointer's state from them.
+pub(crate) fn is_keyboard_event(e: &egui::Event) -> bool {
+    matches!(
+        e,
+        egui::Event::Key { .. }
+            | egui::Event::Text(_)
+            | egui::Event::Ime(_)
+            | egui::Event::Paste(_)
+            | egui::Event::PasteImage(_)
+            | egui::Event::Copy
+            | egui::Event::Cut
+    )
+}
+
+/// A key press that is not typing (an editing, moving or function key, or a shortcut), or a
+/// clipboard command.
+fn ends_typing(e: &egui::Event) -> bool {
+    match e {
+        egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
+            ((m.ctrl || m.command) && !m.alt) || (m.shift && *key == egui::Key::Space) || !types_text(*key)
+        }
+        egui::Event::Paste(_) | egui::Event::PasteImage(_) | egui::Event::Copy | egui::Event::Cut => true,
+        _ => false,
+    }
+}
+
+/// Whether a key press is typing (its character comes as a Text event) rather than an editing,
+/// moving or function key.
+fn types_text(key: egui::Key) -> bool {
+    use egui::Key;
+    !matches!(
+        key,
+        Key::Enter
+            | Key::Tab
+            | Key::Escape
+            | Key::Backspace
+            | Key::Delete
+            | Key::Insert
+            | Key::ArrowUp
+            | Key::ArrowDown
+            | Key::ArrowLeft
+            | Key::ArrowRight
+            | Key::Home
+            | Key::End
+            | Key::PageUp
+            | Key::PageDown
+            | Key::F1
+            | Key::F2
+            | Key::F3
+            | Key::F4
+            | Key::F5
+            | Key::F6
+            | Key::F7
+            | Key::F8
+            | Key::F9
+            | Key::F10
+            | Key::F11
+            | Key::F12
+    )
 }

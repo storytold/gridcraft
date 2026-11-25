@@ -258,6 +258,8 @@ pub struct SheetApp {
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
+    /// Keyboard events held for the next frame (see [`grid::frame_end`]).
+    held_keys: Vec<egui::Event>,
     /// The front synthetic batch was injected into `RawInput` but no `ui` pass has applied it
     /// yet. eframe retains that unconsumed input across hidden logic-only ticks; the flag makes
     /// the hook offer it once and asks for a hidden paint until a UI pass applies it.
