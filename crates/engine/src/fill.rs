@@ -682,13 +682,23 @@ fn add_months_clamped(sys: gridcraft_core::DateSystem, serial: f64, months: i64)
 
 /// `x` rounded to 15 significant digits through its exact decimal expansion, so a number that
 /// already has 15 or fewer digits comes back unchanged at any size. A number near the largest
-/// double whose rounding would pass it keeps its value.
+/// double whose rounding would pass it keeps its value. A whole number below 10^15 is returned
+/// as it is, and other numbers are written to a buffer on the stack, so a fill does not allocate
+/// for each cell.
 fn round15(x: f64) -> f64 {
-    if x == 0.0 || !x.is_finite() {
+    use std::io::Write;
+    if x == 0.0 || !x.is_finite() || (x.fract() == 0.0 && x.abs() < 1e15) {
         return x;
     }
-    match format!("{x:.14e}").parse::<f64>() {
-        Ok(r) if r.is_finite() => r,
+    // "-1.23456789012345e-308" is the longest expansion: 22 bytes.
+    let mut buf = [0u8; 32];
+    let mut out = &mut buf[..];
+    if write!(out, "{x:.14e}").is_err() {
+        return x;
+    }
+    let len = 32 - out.len();
+    match buf.get(..len).and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()) {
+        Some(r) if r.is_finite() => r,
         _ => x,
     }
 }
@@ -979,6 +989,21 @@ mod tests {
         s.execute("data.flashFill", serde_json::json!({})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
         assert_eq!(sh.value(CellRef::new(1, 1)), Value::from("03/12/2023"));
+    }
+
+    #[test]
+    fn round15_matches_the_decimal_expansion_without_allocating() {
+        let by_string = |x: f64| match format!("{x:.14e}").parse::<f64>() {
+            Ok(r) if r.is_finite() => r,
+            _ => x,
+        };
+        let tiny = f64::from_bits(1);
+        let whole = [1.0, -7.0, 999_999_999_999_999.0, 1e15, 1e15 + 1.0, 123_456_789_012_345_680.0];
+        let other = [0.1 + 0.2, -1.0 / 3.0, tiny, -tiny, 1e-308, f64::MAX, -f64::MAX, 1.7976931348623e308];
+        for x in whole.into_iter().chain(other) {
+            assert_eq!(round15(x).to_bits(), by_string(x).to_bits(), "{x:e}");
+        }
+        assert_eq!(round15(-0.0).to_bits(), (-0.0f64).to_bits());
     }
 
     #[test]
