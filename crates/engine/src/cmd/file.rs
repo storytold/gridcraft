@@ -58,7 +58,16 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         return ok();
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
-    let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
+    // Rows of wrapped text fit with the front end's text widths, as the grid draws them; later, once
+    // the workbook's fonts are installed, when the front end asks to wait for them.
+    let measure = s.text_width.clone();
+    let defer = s.defer_row_fit && measure.is_some();
+    let (password, csv_as_text) = (str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false));
+    let (mut wb, warnings) = if defer {
+        crate::io::open_bytes_unfitted(&name, &bytes, password, csv_as_text)?
+    } else {
+        crate::io::open_bytes_measured(&name, &bytes, password, csv_as_text, measure.as_ref())?
+    };
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     // What `CELL("filename")` reports (#1489). A workbook opened from bytes knows its name but
     // never a folder, so it reports `[name]Sheet` with none; an import reports the file it came
@@ -87,6 +96,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     // Someone else may have made the file: its active content asks before it runs.
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
+    doc.rows_unfit = defer;
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
