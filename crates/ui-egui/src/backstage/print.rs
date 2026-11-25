@@ -1,6 +1,7 @@
 use super::{
     Align2, Backstage, Icon, Json, Outcome, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, dim, json, pos2, square_button, theme, vec2,
 };
+use crate::backstage::PrintScope;
 
 /// Builds the print scope and fit-to-page parameters, caches `file.printPreview` per document revision/options, and draws page thumbnails with navigation plus the print settings and Print action.
 pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
@@ -10,11 +11,20 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
         dim(ui, lang.tr("No workbook is open."));
         return;
     };
-    let mut params = json!({"sheets": if bs.print_all { "all" } else { "active" }});
+    // Print Selection always targets the active sheet, like Excel -- the engine's own `range`
+    // override (see `layouts()`) only ever applies to the active sheet anyway, so "all" + a
+    // selection range wouldn't mean anything coherent.
+    let selection_a1 = app.session.active().map(|d| {
+        d.selection.ranges.iter().copied().reduce(|a, b| a.union(&b)).unwrap_or_else(|| gridcraft_engine::core::RangeRef::cell(d.selection.active)).a1()
+    });
+    let mut params = json!({"sheets": if bs.print_scope == PrintScope::EntireWorkbook { "all" } else { "active" }});
+    if bs.print_scope == PrintScope::Selection && let Some(range) = &selection_a1 {
+        params["range"] = json!(range);
+    }
     if bs.fit_to_page {
         params["fitToPage"] = json!(true);
     }
-    let key = (uid, revision, bs.print_all, bs.fit_to_page);
+    let key = (uid, revision, bs.print_scope, selection_a1.clone().filter(|_| bs.print_scope == PrintScope::Selection).unwrap_or_default(), bs.fit_to_page);
     if bs.preview.as_ref().is_none_or(|(k, _)| *k != key) {
         let preview = app.session.run("file.printPreview", params.clone()).unwrap_or(Json::Null);
         bs.preview = Some((key, preview));
@@ -34,14 +44,20 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 out.close = app.services.print_native.is_none();
             }
             ui.add_space(16.0);
-            let scope = if bs.print_all { "Print Entire Workbook" } else { "Print Active Sheets" };
+            let scope = match bs.print_scope {
+                PrintScope::EntireWorkbook => "Print Entire Workbook",
+                PrintScope::Selection => "Print Selection",
+                PrintScope::ActiveSheets => "Print Active Sheets",
+            };
             craft_ui::ComboBox::from_id_salt("backstage_print_scope")
                 .width(230.0)
                 .selected_text(lang.tr(scope))
                 .show_ui(ui, |ui| {
-                    for (all, label) in [(false, "Print Active Sheets"), (true, "Print Entire Workbook")] {
-                        if ui.selectable_label(bs.print_all == all, lang.tr(label)).clicked() {
-                            bs.print_all = all;
+                    for (value, label) in
+                        [(PrintScope::ActiveSheets, "Print Active Sheets"), (PrintScope::EntireWorkbook, "Print Entire Workbook"), (PrintScope::Selection, "Print Selection")]
+                    {
+                        if ui.selectable_label(bs.print_scope == value, lang.tr(label)).clicked() {
+                            bs.print_scope = value;
                             bs.preview_page = 0;
                         }
                     }
@@ -49,7 +65,42 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
                 .response
                 .accessible_name(lang.tr("Print What"));
             ui.add_space(8.0);
+            // Portrait/Landscape already exists as `pageLayout.orientation` (used by the Page
+            // Layout ribbon tab), but Print itself never offered a quick way to flip it without
+            // leaving the print preview -- Excel's own Print screen has this right next to the
+            // other quick settings, so this mirrors it instead of only living on the ribbon.
+            let landscape = app
+                .session
+                .active()
+                .and_then(|d| d.wb.active())
+                .is_some_and(|s| s.print.orientation != Default::default()); // default is Portrait
+            let orientation_label = if landscape { "Landscape Orientation" } else { "Portrait Orientation" };
+            craft_ui::ComboBox::from_id_salt("backstage_print_orientation")
+                .width(230.0)
+                .selected_text(lang.tr(orientation_label))
+                .show_ui(ui, |ui| {
+                    for (is_landscape, label) in [(false, "Portrait Orientation"), (true, "Landscape Orientation")] {
+                        if ui.selectable_label(landscape == is_landscape, lang.tr(label)).clicked() {
+                            app.run_or_alert("pageLayout.orientation", json!({"orientation": if is_landscape { "landscape" } else { "portrait" }}));
+                            bs.preview_page = 0;
+                        }
+                    }
+                })
+                .response
+                .accessible_name(lang.tr("Orientation"));
+            ui.add_space(8.0);
             if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
+                bs.preview_page = 0;
+            }
+            ui.add_space(8.0);
+            // Also already exists as `pageLayout.printGridlines` (the Page Layout ribbon tab's
+            // Gridlines > Print checkbox) -- same reasoning as Orientation above: Excel's Page
+            // Setup dialog has a Gridlines checkbox right on its Sheet tab, so this gives it a
+            // home next to the other print-affecting settings instead of ribbon-only.
+            let mut print_gridlines =
+                app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.print.gridlines);
+            if ui.checkbox(&mut print_gridlines, lang.tr("Print Gridlines")).changed() {
+                app.run_or_alert("pageLayout.printGridlines", json!({"on": print_gridlines}));
                 bs.preview_page = 0;
             }
             ui.add_space(8.0);

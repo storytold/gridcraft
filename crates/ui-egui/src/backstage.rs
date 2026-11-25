@@ -116,14 +116,14 @@ pub struct Backstage {
     props: [String; 6],
     /// Focus at the end of the previous frame, before egui clears it on Esc.
     text_edit_focused: bool,
-    /// Print: the whole workbook rather than the active sheet.
-    pub print_all: bool,
+    /// Print: what to print -- the active sheet, the whole workbook, or just the selection.
+    pub print_scope: PrintScope,
     /// Print: fit each sheet on one page.
     pub fit_to_page: bool,
     /// Print: the previewed page (0-based).
     preview_page: usize,
-    /// Print: the preview for (document, revision, whole workbook, fit to page).
-    preview: Option<((u64, u64, bool, bool), Json)>,
+    /// Print: the preview for (document, revision, scope, selection A1 when scope is Selection, fit to page).
+    preview: Option<((u64, u64, PrintScope, String, bool), Json)>,
     /// Save As: the chosen file type (an extension from [`SAVE_TYPES`]).
     pub save_format: &'static str,
     /// Home and Open: when the recent workbooks were last changed.
@@ -135,13 +135,22 @@ pub struct Backstage {
 pub const SAVE_TYPES: [(&str, &str); 4] =
     [("xlsx", "Excel Workbook (*.xlsx)"), ("csv", "CSV UTF-8 (Comma delimited) (*.csv)"), ("html", "Web Page (*.html)"), ("pdf", "PDF (*.pdf)")];
 
+/// File › Print's "Print What" choice, same three options as Excel.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PrintScope {
+    #[default]
+    ActiveSheets,
+    EntireWorkbook,
+    Selection,
+}
+
 impl Backstage {
     pub fn new(page: Page) -> Backstage {
         Backstage {
             page,
             props: Default::default(),
             text_edit_focused: false,
-            print_all: false,
+            print_scope: PrintScope::default(),
             fit_to_page: false,
             preview_page: 0,
             preview: None,
