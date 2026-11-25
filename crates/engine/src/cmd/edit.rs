@@ -249,8 +249,8 @@ fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collectio
 
 /// The PivotTables of `sh` whose whole report `ranges` cover, in index order. A report the ranges
 /// cover only in part is an error. Rows an applied filter hides aren't cleared, so a report with
-/// some of its rows hidden that way is only partly cleared, and one with all of them hidden isn't
-/// touched.
+/// some of its rows hidden that way is only partly cleared, and ranges that meet only its hidden
+/// rows leave it as it is.
 fn cleared_pivots(sh: &gridcraft_model::Sheet, ranges: &[RangeRef]) -> Result<Vec<usize>> {
     let mut whole = Vec::new();
     for (pi, pt) in sh.pivots.iter().enumerate() {
@@ -258,11 +258,13 @@ fn cleared_pivots(sh: &gridcraft_model::Sheet, ranges: &[RangeRef]) -> Result<Ve
         if !ranges.iter().any(|r| r.intersects(&area)) {
             continue;
         }
-        let hidden = filtered_rows(sh, area).len() as u32;
-        if hidden == area.height() {
+        // Only the report's rows the filter shows are cleared: none of them in the ranges, no change.
+        let hidden = filtered_rows(sh, area);
+        let shown = |r: &RangeRef| r.intersection(&area).is_some_and(|i| hidden.range(i.start.row..=i.end.row).count() < i.height() as usize);
+        if !ranges.iter().any(shown) {
             continue;
         }
-        if hidden > 0 || !crate::pivot::covered_by(area, ranges) {
+        if !hidden.is_empty() || !crate::pivot::covered_by(area, ranges) {
             return Err(EngineError::Other(crate::pivot::PARTIAL_REPORT.into()));
         }
         whole.push(pi);

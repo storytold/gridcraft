@@ -1709,6 +1709,11 @@ fn a_report_with_filtered_rows_isnt_cleared_whole() {
     let err = s.execute("edit.clearContents", json!({"range": r.a1()})).unwrap_err().to_string();
     assert_eq!(err, crate::pivot::PARTIAL_REPORT);
     assert_eq!(pivot_count(&s), 1);
+    // A selection meeting only hidden report rows clears nothing of the report, and the rest of it.
+    let hidden = (r.start.row..=r.end.row).find(|row| s.doc().unwrap().wb.active().unwrap().is_row_hidden(*row)).unwrap();
+    s.execute("cell.set", json!({"cell": "K1", "input": "x"})).unwrap();
+    s.execute("edit.clearContents", json!({"range": format!("{},K1", CellRef::new(hidden, r.start.col).a1())})).unwrap();
+    assert_eq!((pivot_count(&s), text(&s, "K1")), (1, String::new()));
 }
 
 #[test]
