@@ -564,7 +564,8 @@ pub(crate) fn round_all_constants_as_displayed(wb: &mut Workbook) {
 
 /// The constants among `cells` on sheet `si` whose value the option changes, with their rounded
 /// values. A locked constant on a protected sheet keeps its value: protection keeps its content,
-/// and rounding it by its format would change the content that the sheet protects.
+/// and rounding it by its format would change the content that the sheet protects. A PivotTable
+/// report's values aren't constants but what its PivotTable computes, so they keep theirs too.
 fn displayed_updates(
     prec: &mut gridcraft_calc::DisplayedPrecision,
     wb: &Workbook,
@@ -572,8 +573,10 @@ fn displayed_updates(
     cells: impl Iterator<Item = CellRef>,
 ) -> Vec<(CellRef, f64)> {
     let Some(sh) = wb.sheet(si) else { return Vec::new() };
+    let reports: Vec<RangeRef> = sh.pivots.iter().filter_map(|pt| pt.last_range).collect();
     cells
         .filter(|&c| !(sh.is_protected() && wb.styles.get(sh.style_id(c)).protection.locked))
+        .filter(|&c| !reports.iter().any(|r| r.contains(c)))
         .filter_map(|c| {
             let cell = sh.cell(c)?;
             match cell.value {

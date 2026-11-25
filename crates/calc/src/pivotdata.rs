@@ -65,10 +65,15 @@ fn find<'a>(cells: &'a PivotLookup, data_field: &str, pairs: &[(String, Value)])
         return Some(c);
     }
     let all = cells.cells()?;
-    all.iter()
-        .find(|cell| cell_matches(cell, data_field, pairs, true))
-        .or(hit)
-        .or_else(|| all.iter().find(|cell| cell_matches(cell, data_field, pairs, false)))
+    // As in the index: a caption spelled as asked for wins over a source field or a caption
+    // that matches only with blanks ignored.
+    let caption = data_field.to_lowercase();
+    let scan = |exact: bool| {
+        all.iter()
+            .find(|cell| cell.data_field.to_lowercase() == caption && cell_matches(cell, data_field, pairs, exact))
+            .or_else(|| all.iter().find(|cell| cell_matches(cell, data_field, pairs, exact)))
+    };
+    scan(true).or(hit).or_else(|| scan(false))
 }
 
 impl Evaluator<'_> {

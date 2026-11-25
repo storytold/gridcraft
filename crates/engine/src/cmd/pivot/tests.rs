@@ -1839,3 +1839,31 @@ fn a_value_caption_after_a_missing_field_renames_its_own_field() {
     s.execute("cell.set", json!({"cell": header, "input": "Revenue"})).unwrap();
     assert_eq!((pt(&s).values[0].name.as_str(), pt(&s).values[1].name.as_str()), ("Sum of Units", "Revenue"));
 }
+
+/// Precision as displayed rounds constants; a report's values are its PivotTable's results, so
+/// neither switching it on nor formatting a report cell under it changes them.
+#[test]
+fn precision_as_displayed_leaves_report_values_alone() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": [{"field": "Sales", "func": "average"}]})).unwrap();
+    let west = report_cell_showing(&s, "71.25");
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    s.execute("home.numberFormat", json!({"range": west, "code": "0"})).unwrap();
+    assert_eq!(val(&s, &west), Value::Number(71.25));
+}
+
+/// A value field captioned "Sales " beside a "Sales" source field: GETPIVOTDATA reads each name
+/// as its own field, whichever comes first.
+#[test]
+fn getpivotdata_tells_a_spaced_caption_from_the_source_field() {
+    for values in [json!(["Sales", "Units"]), json!(["Units", "Sales"])] {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": values})).unwrap();
+        let units = pt(&s).values.iter().position(|v| v.source_col == "Units").unwrap();
+        s.execute("pivot.valueSettings", json!({"index": units, "name": "Sales "})).unwrap();
+        let at = pt(&s).last_range.unwrap().start.a1();
+        s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales ",{at},"Region","West")"#)})).unwrap();
+        s.execute("cell.set", json!({"cell": "K2", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","West")"#)})).unwrap();
+        assert_eq!((val(&s, "K1"), val(&s, "K2")), (Value::Number(27.0), Value::Number(285.0)), "{values}");
+    }
+}
