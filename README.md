@@ -165,6 +165,10 @@ directives, e.g. `RUST_LOG=debug` or `RUST_LOG=warn,gridcraft_engine=debug` (a t
 matches a prefix: `gridcraft*=debug`). Runs with `GRIDCRAFT_NO_PREFS` set (no saved settings)
 log to standard error only.
 
+The `nightly-v1` channel keeps all of that in its own profile instead, which the Launcher names
+(`--launch-profile nightly-v1 --profile-root <dir>`); a nightly build refuses to start without one,
+so a Nightly run never touches the stable app's settings, prefs or logs.
+
 ## For agents: MCP, CLI and the control channel
 
 ```sh
@@ -191,7 +195,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 |---|---|
 | L0 | `core` (addresses, values, errors, dates, input parsing) · `numfmt` (number format codes) |
 | L1 | `formula` (lexer, parser, printer, reference adjustment) · `functions` (worksheet function library) |
-| L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX, CSV, plus XLSB and ODS data import) · `vba` (reads VBA projects, never runs them) |
+| L2 | `model` (workbook, sheets, copy-on-write cells, styles, tables, charts…) · `calc` (dependency graph, evaluator, dynamic arrays) · `xlsx` (XLSX, CSV, plus XLSB and ODS data import) · `vba` (read-only MS-OVBA stream decompression) |
 | L3 | `chart` (toolkit-free chart layout and rendering) |
 | L5 | `engine` (session, commands, history, clipboard, fill, sort, filter, file I/O) |
 | L6 | `ui-egui` (spreadsheet UI, control channel) · `mcp` (MCP server) |
@@ -205,7 +209,7 @@ egui frontend is a separate crate, so the UI can be swapped without touching the
 
 GridCraft is in **alpha**: the core workflow works end to end, but depth, fidelity and file
 compatibility are still rough. It covers 89% of standard ribbon commands in our catalog
-([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 513 standard worksheet functions
+([`docs/parity-checklist.md`](docs/parity-checklist.md)) and 514 standard worksheet functions
 ([`docs/function-parity.md`](docs/function-parity.md)); this is a parity inventory, not a count of working implementations. Weighted by what spreadsheet users rely on, we
 estimate it is about 50% ready for real work. Next up: XLSX fidelity on real-world files, very large
 workbooks and multi-threaded recalc, chart depth, text in every script, and `.xls` import. Stage,

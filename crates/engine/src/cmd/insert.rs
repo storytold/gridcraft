@@ -164,7 +164,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Object",
             [],
             None,
-            "{kind: chart|image|shape|slicer|equation|control, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger)}",
+            "{kind: chart|image|shape|slicer|equation|control, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger), rotation?: degrees clockwise (shapes, not ink)}",
             has_doc,
             move_object
         ),
@@ -335,6 +335,74 @@ mod tests {
         let mut json = serde_json::to_value(get(&s)).unwrap();
         json.as_object_mut().unwrap().remove("data_table");
         assert_eq!(serde_json::from_value::<Chart>(json).unwrap().data_table, None);
+    }
+
+    #[test]
+    fn chart_type_change_drops_series_kinds_it_does_not_draw() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A", "B"], ["Q1", 10, 1], ["Q2", 20, 2]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:C3", "type": "combo"})).unwrap();
+        let chart = |s: &Session| s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let active = wb.active_sheet();
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[0].kind = Some(ChartKind::Area);
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        // A new type applies to every series: neither the area nor the markers stay.
+        s.execute("chart.set", json!({"type": "line"})).unwrap();
+        let c = chart(&s);
+        assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, None]);
+        assert_eq!((c.series_kind(0), c.series_kind(1)), (ChartKind::Line, ChartKind::Line));
+        // Setting the type a chart already has keeps a series' own markers (a file's).
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        s.execute("chart.set", json!({"type": "line", "subtype": ""})).unwrap();
+        assert_eq!(chart(&s).series_kinds(), vec![ChartKind::Line, ChartKind::LineMarkers]);
+        // Trendlines go by the kind each series is drawn as.
+        s.execute("chart.set", json!({"type": "pie"})).unwrap();
+        assert!(s.execute("chart.addElement", json!({"element": "trendline"})).is_err());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(chart(&s).series[1].kind, Some(ChartKind::LineMarkers));
+    }
+
+    /// Adding a trendline to every series of a combo chart works out the series' kinds in one
+    /// pass, however many series it holds (a stored chart isn't held to the renderer's limit):
+    /// eight times the series is about eight times the work, not sixty-four.
+    #[test]
+    fn trendlines_for_every_series_are_checked_in_linear_time() {
+        let visits = |n: usize| {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+            s.execute("insert.chart", json!({"range": "A1:B3", "type": "combo"})).unwrap();
+            // Line series, then as many column series: asked one at a time, each column series
+            // looks back past every line series for the first column series of its group.
+            let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+            let active = wb.active_sheet();
+            if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+                let one = c.series[0].clone();
+                c.series = (0..2 * n)
+                    .map(|i| {
+                        let mut se = one.clone();
+                        se.kind = Some(if i < n { ChartKind::Line } else { ChartKind::ColumnClustered });
+                        se
+                    })
+                    .collect();
+            }
+            gridcraft_model::features::work::take_series_visits();
+            s.execute("chart.addElement", json!({"element": "trendline"})).unwrap();
+            let visits = gridcraft_model::features::work::take_series_visits();
+            let c = s.active().unwrap().wb.active().unwrap().charts[0].clone();
+            assert!(c.series.iter().all(|se| se.trendlines.len() == 1));
+            visits
+        };
+        let (small, large) = (visits(200), visits(1_600));
+        assert!(small >= 400, "every series' kind is worked out: {small}");
+        assert!(large < 16 * small, "eight times the series took {large} visits against {small}");
     }
 
     #[test]

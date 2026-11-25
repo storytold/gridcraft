@@ -38,7 +38,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("model", Class::Layer(2)),
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
-    // VBA projects (vbaProject.bin) read from [MS-OVBA]; core only, never runs VBA.
+    // Read-only MS-OVBA stream decompression.
     ("vba", Class::Layer(2)),
     ("chart", Class::Layer(3)),
     ("engine", Class::Layer(5)),
@@ -261,7 +261,7 @@ mod tests {
         assert!(v.iter().any(|x| matches!(x, Violation::Upward { from: 2, to: 2, .. })), "{v:?}");
         let v = check(&[c("gridcraft-ui-egui", &[("gridcraft-mcp", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 6, to: 6, .. }]));
-        // vba reads streams through a trait; it must not reach into xlsx for the CFB reader.
+        // The stream decoder must stay independent of the workbook reader.
         let v = check(&[c("gridcraft-vba", &[("gridcraft-xlsx", Normal, true)])]);
         assert!(matches!(v[..], [Violation::Upward { from: 2, to: 2, .. }]), "{v:?}");
     }
