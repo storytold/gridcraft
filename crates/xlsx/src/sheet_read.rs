@@ -166,9 +166,12 @@ const MAX_DYNAMIC_CELLS: u64 = 16_000_000;
 /// so adversarial range counts can't make each cell scan a long list (a real workbook has a
 /// handful of ranges).
 const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
-/// Most conditional-format range cells one sheet keeps, over all rules of an element: every
-/// rule copies its element's whole range list, so rules × ranges must stay bounded.
-const MAX_COND_CELLS: u64 = 4_000_000;
+/// Most conditional-format ranges one sheet keeps, over all rules of an element: every rule
+/// copies its element's whole range list, so rules × ranges must stay bounded. Ranges are counted,
+/// not the cells they cover: a range costs the same however large it is, and nothing walks a
+/// rule's cells (painting asks whether a cell is inside; statistics read only the used cells), so
+/// a rule over whole columns or the whole sheet, common in real files, is kept.
+const MAX_COND_RANGES: u64 = 4_000_000;
 
 fn from_craft_el(e: &craft_xml::El) -> El {
     let name = e.name.split_once(':').map_or(e.name.as_str(), |(_, local)| local).to_string();
@@ -315,10 +318,10 @@ fn apply_craft_sheet_part(
         apply_craft_view(v, sheet);
     }
     let mut fit_to_page = false;
-    let mut cf_kept_cells = 0u64;
+    let mut cf_kept_ranges = 0u64;
     cx.cf_ext_ids.clear();
     for cf in &sp.features.conditional_formats {
-        read_cf(cx, &from_craft_el(&cf.to_el()), sheet, &mut cf_kept_cells);
+        read_cf(cx, &from_craft_el(&cf.to_el()), sheet, &mut cf_kept_ranges);
     }
     if let Some(vals) = &sp.features.validations {
         for v in &vals.items {
@@ -363,7 +366,7 @@ fn apply_craft_sheet_part(
             }
             "protectedRanges" => read_protected_ranges(&from_craft_el(child), sheet),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, &from_craft_el(child)),
-            "extLst" => read_ext(cx, &from_craft_el(child), sheet, &mut cf_kept_cells),
+            "extLst" => read_ext(cx, &from_craft_el(child), sheet, &mut cf_kept_ranges),
             _ => {}
         }
     }
@@ -1005,7 +1008,7 @@ pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
 }
 
 /// Worksheet extensions: x14 data validations and sparklines.
-fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, cf_kept_cells: &mut u64) {
+fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, cf_kept_ranges: &mut u64) {
     for ext in e.kids("ext") {
         for c in &ext.children {
             match c.name.as_str() {
@@ -1033,7 +1036,7 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, cf_kept_cells: &mut u64
                         }
                     }
                 }
-                "conditionalFormattings" => read_x14_cf(cx, c, sheet, cf_kept_cells),
+                "conditionalFormattings" => read_x14_cf(cx, c, sheet, cf_kept_ranges),
                 _ => {}
             }
         }
