@@ -18,7 +18,7 @@ use gridcraft_engine::model::PageOrder;
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
 /// Unchanged hyperlink display text is omitted so its number or formula stays intact.
-pub(crate) fn build_params(d: &Dialog, lang: crate::i18n::Language) -> Json {
+pub(crate) fn build_params(d: &Dialog) -> Json {
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "insertLink" => {
@@ -100,11 +100,17 @@ pub(crate) fn build_params(d: &Dialog, lang: crate::i18n::Language) -> Json {
         }
         "defineName" => {
             if let Some(m) = v.as_object_mut() {
-                // The scope box shows the workbook keyword in the interface language.
-                for key in ["scope", "oldScope"] {
-                    if m.get(key).and_then(Json::as_str).is_some_and(|s| s == "Workbook" || s == lang.tr("Workbook")) {
-                        m.remove(key);
-                    }
+                // The scope box may show the workbook keyword in the interface language: the dialog
+                // records that label in `workbookLabel` only when no sheet has the same name, so a
+                // sheet called like the translated keyword keeps its scope. `oldScope` is never
+                // translated.
+                let label = m.remove("workbookLabel");
+                let label = label.as_ref().and_then(Json::as_str);
+                if m.get("scope").and_then(Json::as_str).is_some_and(|s| s == "Workbook" || Some(s) == label) {
+                    m.remove("scope");
+                }
+                if m.get("oldScope").and_then(Json::as_str) == Some("Workbook") {
+                    m.remove("oldScope");
                 }
             }
         }
@@ -436,7 +442,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         confirm = false;
     }
     if confirm && let Some(cmd) = d.command {
-        let params = build_params(&d, app.ui.language);
+        let params = build_params(&d);
         match app.run(cmd, params) {
             Ok(r) => {
                 open = false;

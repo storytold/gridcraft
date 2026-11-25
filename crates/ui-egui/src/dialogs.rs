@@ -828,9 +828,17 @@ impl Dialog {
                         defaults[key] = v.clone();
                     }
                 }
-                // The scope box shows the workbook keyword in the interface language; OK maps it back.
-                if defaults["scope"] == "Workbook" {
-                    defaults["scope"] = json!(app.ui.language.tr("Workbook"));
+                // The scope box shows the workbook keyword in the interface language; OK maps it back
+                // through `workbookLabel`. A sheet with that very name keeps the English keyword, so
+                // the translated text always means the sheet there.
+                let label = app.ui.language.tr("Workbook");
+                let label_is_a_sheet =
+                    app.session.active().is_some_and(|d| d.wb.sheets.iter().any(|s| s.name.to_lowercase() == label.to_lowercase()));
+                if label != "Workbook" && !label_is_a_sheet {
+                    defaults["workbookLabel"] = json!(label);
+                    if defaults["scope"] == "Workbook" {
+                        defaults["scope"] = json!(label);
+                    }
                 }
                 Dialog::form(
                     "defineName",
@@ -1156,9 +1164,32 @@ mod tests {
         let mut dialog = Dialog::open(&mut app, "removeDuplicates", json!({})).unwrap();
         assert_eq!(dialog.values.get("range"), Some(&json!("B2:C5")));
         assert!(dialog.fields.iter().any(|field| matches!(field, Field::Text { key: "range", .. })));
-        assert_eq!(build_params(&dialog, crate::i18n::Language::En)["range"], "B2:C5");
+        assert_eq!(build_params(&dialog)["range"], "B2:C5");
         dialog.set_value("range", json!("D2:E6"));
-        assert_eq!(build_params(&dialog, crate::i18n::Language::En)["range"], "D2:E6");
+        assert_eq!(build_params(&dialog)["range"], "D2:E6");
+    }
+
+    /// The scope box shows the workbook keyword translated. Typed back, it means workbook scope,
+    /// unless a sheet carries that very name: then it is that sheet's scope.
+    #[test]
+    fn a_sheet_named_like_the_translated_workbook_keyword_keeps_its_scope() {
+        let tr = crate::i18n::Language::Tr;
+        let label = tr.tr("Workbook");
+        assert_ne!(label, "Workbook", "the test needs a translated keyword");
+        for (sheet, sheet_scope) in [(label, true), ("Veriler", false)] {
+            let mut session = gridcraft_engine::Session::default();
+            session.new_workbook();
+            session.execute("sheet.rename", json!({"name": sheet})).unwrap();
+            let mut app = SheetApp::new(session, Default::default());
+            app.ui.language = tr;
+            let mut d = Dialog::open(&mut app, "defineName", json!({})).unwrap();
+            d.set_value("name", json!("Toplam"));
+            d.set_value("scope", json!(label));
+            app.run(d.command.unwrap(), build_params(&d)).unwrap();
+            let names = &app.session.active().unwrap().wb.names;
+            let scope = names.iter().find(|n| n.name == "Toplam").map(|n| n.scope);
+            assert_eq!(scope, Some(sheet_scope.then_some(0)), "sheet named {sheet:?}");
+        }
     }
 
     #[test]
@@ -1183,7 +1214,7 @@ mod tests {
         assert_eq!(d.values["operator"], "greater");
         assert_eq!(d.values["formula1"], "5");
         // OK without edits keeps the rule: 6 is accepted, 4 is rejected.
-        app.run(d.command.unwrap(), build_params(&d, crate::i18n::Language::En)).unwrap();
+        app.run(d.command.unwrap(), build_params(&d)).unwrap();
         let doc = app.session.active().unwrap();
         let at = gridcraft_engine::core::CellRef::new(0, 0);
         assert!(gridcraft_engine::cmd::data::check_validation(&doc.wb, 0, at, "6").is_none());

@@ -238,6 +238,21 @@ fn chart_category_axis_from_blank_corner_and_select_data() {
     assert_eq!(series(&s), [(None, "Sheet1!$E$2:$E$4".to_string())]);
 }
 
+/// A chart of several series has no series name to take its title from: `defaultTitle` (the
+/// caller's language) names it, and without one it falls back to "Chart Title".
+#[test]
+fn a_multi_series_chart_takes_the_callers_default_title() {
+    for (params, expected) in
+        [(json!({"type": "column", "defaultTitle": "Grafik Başlığı"}), "Grafik Başlığı"), (json!({"type": "column"}), "Chart Title")]
+    {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["", "North", "South"], ["Q1", 10, 15], ["Q2", 20, 25]]})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:C3"})).unwrap();
+        s.execute("insert.chart", params).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].title.as_deref(), Some(expected));
+    }
+}
+
 #[test]
 fn entry_and_text_paste_use_inherited_formats_and_cell_overrides() {
     let mut s = s();

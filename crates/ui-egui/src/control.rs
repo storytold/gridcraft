@@ -361,7 +361,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                         app.dialog = Some(d);
                         return err(e);
                     }
-                    let params = crate::dialogs::build_params(&d, app.ui.language);
+                    let params = crate::dialogs::build_params(&d);
                     let home = app.ui_window();
                     let r = app.run(cmd, params);
                     if r.is_err() {

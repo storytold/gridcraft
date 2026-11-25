@@ -302,7 +302,7 @@ mod data_validation_tests {
             fields,
             json!({"type": "list", "operator": "between", "formula1": "ABC,DEF", "formula2": "GHI,JKL", "dropdown": true}),
         );
-        let params = build_params(&dialog, crate::i18n::Language::En);
+        let params = build_params(&dialog);
         assert_eq!(params["formula1"], "ABC,DEF");
         assert!(params.get("formula2").is_none());
         assert!(params.get("operator").is_none());
@@ -323,7 +323,7 @@ mod data_validation_tests {
             one,
             json!({"type": "date", "operator": "lessOrEqual", "formula1": "2026-10-12", "formula2": "2030-01-01"}),
         );
-        let params = build_params(&dialog, crate::i18n::Language::En);
+        let params = build_params(&dialog);
         assert_eq!(params["operator"], "lessOrEqual");
         assert_eq!(params["formula1"], "2026-10-12");
         assert!(params.get("formula2").is_none());
