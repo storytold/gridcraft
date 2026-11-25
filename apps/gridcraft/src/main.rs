@@ -443,6 +443,7 @@ fn main() -> eframe::Result<()> {
         log::warn!("sample {s}: {e}");
     }
     let mut app = SheetApp::new(session, services());
+    app.background_open = true;
     app.watch_desktop_theme();
     // The updater is a stable-only service: a nightly is installed, replaced and updated by the
     // Launcher, so it never checks for one, never prompts and never writes craft-update's state.
