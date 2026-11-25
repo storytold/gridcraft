@@ -2104,6 +2104,15 @@ fn page_layout_ruler_and_white_space_round_trip_independently() {
 }
 
 #[test]
+fn white_space_is_kept_on_a_normal_view_sheet() {
+    let body = r#"<sheetViews><sheetView workbookViewId="0" showWhiteSpace="0"/></sheetViews><sheetData/>"#;
+    let (wb, _) = read_xlsx(&super::minimal(body, &[], "", "")).unwrap();
+    assert!(!wb.sheet(0).unwrap().show_white_space);
+    let (xml, _) = sheet1_xml(&write_xlsx(&wb).unwrap());
+    assert!(xml.contains("showWhiteSpace=\"0\""), "{xml}");
+}
+
+#[test]
 fn workbook_view_selects_first_visible_window_consistently() {
     let cases = [
         (
