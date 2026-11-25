@@ -263,10 +263,24 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<(Sheet, cr
     settle_python_spills_past_budget(&st, &mut sheet);
 
     apply_craft_sheet_part(cx, &sheet_part, &rels, name, too_many_merges, &mut sheet)?;
+    drop_default_row_heights(&mut sheet);
     let root = from_craft_el(&sheet_part.root);
     let read_controls = read_form_controls(cx, &root, &rels, &mut sheet);
     read_sheet_notes_and_tables(cx, &sheet_part, &rels, &mut sheet)?;
     Ok((sheet, read_controls))
+}
+
+/// Automatic heights equal to the sheet's default are noise. Rows arrive before the sheet's format
+/// has been read, so this waits for it: until then `default_row_height` is only the standard one, and
+/// a real 15 points on a sheet whose default is 12 would look like noise.
+fn drop_default_row_heights(sheet: &mut Sheet) {
+    let default = sheet.default_row_height;
+    sheet.rows.retain(|_, info| {
+        if !info.custom && info.size.is_some_and(|size| size.to_bits() == default.to_bits()) {
+            info.size = None;
+        }
+        *info != LineInfo::default()
+    });
 }
 
 fn apply_craft_sheet_part(
@@ -729,9 +743,7 @@ fn read_craft_row(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, row: &
     let mut info = LineInfo::default();
     if let Some(ht) = row.height {
         info.custom = row.custom_height;
-        if info.custom || (pt_to_px(ht) - sheet.default_row_height).abs() > 0.5 {
-            info.size = Some(pt_to_px(ht));
-        }
+        info.size = Some(pt_to_px(ht));
     }
     info.hidden = row.hidden;
     info.outline = row.outline_level.min(7);
