@@ -192,6 +192,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "잘못된 데이터 표시",
         "Clear Validation" => "유효성 검사 지우기",
         "Group" => "그룹",
+        "Auto Outline" => "자동 윤곽",
         "Ungroup" => "그룹 해제",
         "Show Detail" => "세부 정보 표시",
         "Hide Detail" => "세부 정보 숨기기",

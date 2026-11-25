@@ -110,3 +110,52 @@ fn settings_dialog_puts_summary_rows_above_their_detail() {
     assert!(sh.rows.get(&3).is_some_and(|l| l.collapsed));
     assert!(!sh.rows.get(&8).is_some_and(|l| l.collapsed));
 }
+
+/// The (0-based row, level) of every grouped row of the active sheet.
+fn row_levels(h: &Harness) -> Vec<(u32, u8)> {
+    let sh = h.state().session.active().unwrap().wb.active().unwrap().clone();
+    sh.rows.iter().filter(|(_, l)| l.outline > 0).map(|(r, l)| (*r, l.outline)).collect()
+}
+
+#[test]
+fn group_is_a_split_button_whose_menu_runs_auto_outline() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness();
+    let rows = json!([["Item", "Jan"], ["a", 1], ["b", 2], ["c", 3], ["Sum", "=SUM(B2:B4)"]]);
+    h.state_mut().session.run("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    h.state_mut().run("ui.ribbonTab", json!({"tab": "Data"})).unwrap();
+    h.run_steps(2);
+    // The menu is closed until the arrow is clicked; it then lists Group and Auto Outline.
+    assert!(h.query_by_label("Auto Outline").is_none());
+    h.get_by_label("Group options").click();
+    h.run_steps(3);
+    h.get_by_label("Auto Outline").click();
+    h.run_steps(3);
+    assert_eq!(row_levels(&h), [(1, 1), (2, 1), (3, 1)]);
+    assert!(h.state().message.is_none() && h.state().toast.is_none());
+
+    // One undo step removes the outline, and the button's main part still runs Group on the
+    // selection (A1: row 1).
+    h.state_mut().session.run("edit.undo", json!({})).unwrap();
+    assert!(row_levels(&h).is_empty());
+    h.get_by_label("Group").click();
+    h.run_steps(3);
+    assert_eq!(row_levels(&h), [(0, 1)]);
+}
+
+#[test]
+fn the_menu_item_is_translated_and_an_empty_sheet_says_why_nothing_was_outlined() {
+    use egui_kittest::kittest::Queryable as _;
+    let mut h = harness();
+    h.state_mut().run("app.language.set", json!({"language": "de"})).unwrap();
+    h.state_mut().run("ui.ribbonTab", json!({"tab": "Data"})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Gruppieren options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Auto Outline").is_none(), "Auto Outline is untranslated");
+    h.get_by_label("AutoGliederung").click();
+    h.run_steps(3);
+    // Nothing to outline: the command's error is shown and nothing is grouped.
+    assert!(h.state().message.is_some() || h.state().toast.is_some());
+    assert!(row_levels(&h).is_empty());
+}

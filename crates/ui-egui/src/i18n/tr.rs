@@ -176,6 +176,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Circle Invalid Data" => "Geçersiz Verileri Daire İçine Al",
         "Clear Validation" => "Doğrulamayı Temizle",
         "Group" => "Gruplandır",
+        "Auto Outline" => "Otomatik Anahat",
         "Ungroup" => "Grubu Çöz",
         "Show Detail" => "Ayrıntıyı Göster",
         "Hide Detail" => "Ayrıntıyı Gizle",
