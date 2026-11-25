@@ -40,7 +40,9 @@ pub(super) fn wrap_lines(text: &str, font: Font, size: f32, width: f32, directio
 }
 
 fn wrap_summed_paragraph(para: &str, font: Font, size: f32, width: f32, direction: TextDirection, out: &mut Vec<TextLine>) {
-    let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(font.char_width(c))).sum() };
+    // `advance` is the width the PDF writer draws a character with (an embedded fallback face for
+    // scripts the standard font cannot encode), so the wrap points match the printed line.
+    let units_of = |s: &str| -> u64 { s.chars().map(|c| u64::from(gridcraft_pdf::advance(font, c))).sum() };
     let fits = |units: u64| units as f32 * size / 1000.0 <= width;
     let space = units_of(" ");
     let mut line = String::new();
