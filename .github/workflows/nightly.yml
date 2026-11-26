@@ -22,7 +22,7 @@ jobs:
       actions: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@be00e5ccd18b68e950c8a08532f2230e7c3d0cba
+    uses: storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@15c319f7a61bccb5444425cfba86873e7d591790
     with:
       tooling-revision: be00e5ccd18b68e950c8a08532f2230e7c3d0cba
       app-name: gridcraft
