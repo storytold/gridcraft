@@ -53,7 +53,7 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
         }
         packed
     };
-    let text = crate::display::range_text(&wb, sheet, range);
+    let text = crate::display::range_text(&wb, sheet, range)?;
     // The HTML rendering is for the host clipboard (UI); it can reach 4 MB, so agents and
     // scripts get it only when they ask for it.
     let html = if p.get("html").and_then(Json::as_bool) == Some(true) { crate::io::range_html(&wb, sheet, range, &text) } else { None };
