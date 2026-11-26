@@ -2,7 +2,7 @@
 
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, Result, Session, always, bad, bool_param, cmd, edit, has_doc, ok, str_param, target_sheet, u32_param};
 use crate::DocState;
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -12,8 +12,8 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
-        cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool}", has_doc, close),
-        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
+        cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool, document?: bool} (closes the active window, or with `document` the workbook and all its windows; the workbook closes with its last window)", has_doc, close),
+        cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?, values?: bool} → {path, bytes}: writes the cells as displayed, like Excel's Save As CSV; `values: true` writes raw values instead (full-precision numbers, ISO 8601 dates and times, TRUE/FALSE)", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
         cmd!("file.properties", "Properties", ["File"], None, "{title?, subject?, author?, company?, keywords?, description?}", has_doc, properties),
         cmd!(
@@ -21,11 +21,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "Options",
             ["File"],
             None,
-            "{} → {calculation: {mode, iterative, maxIterations, maxChange}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
+            "{} → {calculation: {mode, iterative, maxIterations, maxChange, precisionAsDisplayed}} for the active workbook (the interface opens File › Options; change settings with their own commands, e.g. formulas.calculationOptions, view.theme, app.language.set)",
             always,
             options
         ),
-        cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{index}", has_doc, activate_window),
+        cmd!(noundo "window.activate", "Switch Window", ["Window"], None, "{window} | {doc} | {index} (a window id, a workbook id, or the workbook's position in the list)", has_doc, activate_window),
+        cmd!(noundo "window.close", "Close Window", ["Window"], None, "{window?, doc?, force?: bool} → {closed, document}: closes a window (the active one by default); its workbook closes with its last window, asking first when it has unsaved changes unless `force`", has_doc, close_window),
+        cmd!(query "window.list", "Windows", ["Window"], None, "{} → [{window, doc, index, title, dirty, active, hidden}]", always, |s, _| Ok(s.window_list())),
     ]
 }
 
@@ -34,7 +36,7 @@ fn new_workbook(s: &mut Session, p: &Json) -> Result<Json> {
         Some(name) => {
             let wb = crate::sample::build(name).ok_or_else(|| bad("file.new", format!("unknown sample `{name}`")))?;
             let title = crate::sample::title(name);
-            s.add_document(DocState::new(wb, None, title))
+            s.add_document(DocState::new(wb, None, title, crate::Trust::Local))
         }
         None => s.new_workbook(),
     };
@@ -69,9 +71,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         matches!(crate::io::FileKind::from_path(&name), Some(crate::io::FileKind::Ods | crate::io::FileKind::Xlsb | crate::io::FileKind::Xls))
             || matches!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Ods | gridcraft_xlsx::Format::Xlsb | gridcraft_xlsx::Format::Xls);
     let title = if imported {
-        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(|n| n.to_str()).unwrap_or("Book"))
+        format!("{} (imported).xlsx", std::path::Path::new(&name).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book"))
     } else {
-        std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string()
+        std::path::Path::new(&name).file_name().and_then(std::ffi::OsStr::to_str).unwrap_or("Book").to_string()
     };
     // An import has no save target: ordinary Save must ask for a new destination. Neither does a
     // workbook decrypted with its password, so Save never replaces the encrypted original with
@@ -83,7 +85,8 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     {
         s.close_document(0);
     }
-    let mut doc = DocState::new(wb, path, title);
+    // Someone else may have made the file: its active content asks before it runs.
+    let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
@@ -113,7 +116,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     };
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
-    if std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+    if std::path::Path::new(&path).extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
     let d = s.doc_mut()?;
@@ -127,6 +130,13 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         None => crate::io::save_bytes(wb, &path)?,
     };
     crate::io::write_file(&path, &bytes)?;
+    // Only a field the user was not told about yet raises the notice: a known path is no proof,
+    // since a Distinct Count added after an earlier save is still unreported.
+    let distinct = distinct_count_fields(wb);
+    let distinct_notice = kind == Some(crate::io::FileKind::Xlsx) && distinct.iter().any(|f| !d.distinct_disclosed.contains(f));
+    if kind == Some(crate::io::FileKind::Xlsx) {
+        d.distinct_disclosed = distinct;
+    }
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
         // The new file is the workbook's own now, so `CELL("filename")` reports it (#1489). Set
@@ -139,7 +149,29 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
     }
+    if distinct_notice {
+        s.ui_requests.push(crate::UiRequest::Message(DISTINCT_COUNT_NOTICE.into()));
+    }
     Ok(json!({"path": path, "bytes": bytes.len()}))
+}
+
+/// Shown when a workbook with a Distinct Count PivotTable value field is saved as .xlsx for the first time (#3336): the
+/// file stores a plain Count that only GridCraft's private marker turns back into Distinct Count.
+const DISTINCT_COUNT_NOTICE: &str = "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count.";
+
+/// Every Distinct Count value field of the workbook, as (sheet, pivot, value) positions.
+fn distinct_count_fields(wb: &gridcraft_model::Workbook) -> Vec<(usize, usize, usize)> {
+    let mut fields = Vec::new();
+    for (si, sheet) in wb.sheets.iter().enumerate() {
+        for (pi, pt) in sheet.pivots.iter().enumerate() {
+            for (vi, v) in pt.values.iter().enumerate() {
+                if v.func == gridcraft_model::PivotFunc::DistinctCount {
+                    fields.push((si, pi, vi));
+                }
+            }
+        }
+    }
+    fields
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
@@ -156,10 +188,22 @@ fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     // The file name goes into a PivotChart's link to its PivotTable.
     let bytes = crate::io::save_bytes(&d.wb, &name)?;
+    if fmt == "xlsx" && !distinct_count_fields(&d.wb).is_empty() {
+        s.ui_requests.push(crate::UiRequest::Message(DISTINCT_COUNT_NOTICE.into()));
+    }
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
 }
 
+/// File › Close closes the active window; the workbook closes with its last window.
 fn close(s: &mut Session, p: &Json) -> Result<Json> {
+    if !bool_param(p, "document").unwrap_or(false)
+        && let Some(id) = s.active_window()
+        && let Some(doc) = s.window(id).map(|w| w.doc_uid)
+        && s.windows().iter().filter(|w| w.doc_uid == doc).count() > 1
+    {
+        s.close_window(id);
+        return Ok(json!({"closed": true, "document": false}));
+    }
     let force = bool_param(p, "force").unwrap_or(false);
     let d = s.doc()?;
     if d.is_dirty() && !force {
@@ -174,12 +218,16 @@ fn close(s: &mut Session, p: &Json) -> Result<Json> {
 fn export(s: &mut Session, p: &Json, ext: &str) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("file.export", "missing `path`"))?.to_string();
     let d = s.doc()?;
-    let mut wb = (*d.wb).clone();
+    let wb = (*d.wb).clone();
     if p.get("sheet").is_some() {
-        wb.active_sheet = target_sheet(s, p)?;
+        wb.set_active_sheet(target_sheet(s, p)?);
     }
     let target = if path.ends_with(&format!(".{ext}")) { path.clone() } else { format!("{path}.{ext}") };
-    let bytes = crate::io::save_bytes(&wb, &target)?;
+    let bytes = if ext == "csv" && bool_param(p, "values").unwrap_or(false) {
+        crate::io::csv_values_bytes(&wb)?
+    } else {
+        crate::io::save_bytes(&wb, &target)?
+    };
     crate::io::write_file(&target, &bytes)?;
     Ok(json!({"path": target, "bytes": bytes.len()}))
 }
@@ -214,16 +262,41 @@ fn options(s: &mut Session, _: &Json) -> Result<Json> {
             gridcraft_model::CalcMode::AutomaticExceptTables => "automaticExceptTables",
             gridcraft_model::CalcMode::Manual => "manual",
         };
-        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change})
+        json!({"mode": mode, "iterative": c.iterative, "maxIterations": c.max_iterations, "maxChange": c.max_change, "precisionAsDisplayed": c.precision_as_displayed})
     });
     Ok(json!({"calculation": calculation}))
 }
 
 fn activate_window(s: &mut Session, p: &Json) -> Result<Json> {
-    let i = u32_param(p, "index").ok_or_else(|| bad("window.activate", "missing `index`"))? as usize;
-    if i >= s.documents().len() {
-        return Err(bad("window.activate", "no such window"));
-    }
-    s.set_active(i);
+    let id = match u32_param(p, "index").filter(|_| p.get("window").is_none_or(Json::is_null) && p.get("doc").is_none_or(Json::is_null)) {
+        Some(i) => {
+            let uid = s.documents().get(i as usize).map(|d| d.uid).ok_or_else(|| bad("window.activate", "no such window"))?;
+            s.doc_window(uid).ok_or_else(|| bad("window.activate", "no such window"))?
+        }
+        None if p.get("window").is_none_or(Json::is_null) && p.get("doc").is_none_or(Json::is_null) => {
+            return Err(bad("window.activate", "missing `window`"));
+        }
+        None => super::extra::window_param(s, "window.activate", p)?,
+    };
+    s.unhide_window(id);
     ok()
+}
+
+fn close_window(s: &mut Session, p: &Json) -> Result<Json> {
+    let id = super::extra::window_param(s, "window.close", p)?;
+    let doc = s.window(id).map(|w| w.doc_uid).unwrap_or_default();
+    if s.windows().iter().filter(|w| w.doc_uid == doc).count() > 1 {
+        s.close_window(id);
+        return Ok(json!({"closed": true, "document": false}));
+    }
+    let force = bool_param(p, "force").unwrap_or(false);
+    let d = s.documents().iter().find(|d| d.uid == doc).ok_or(crate::EngineError::NoDocument)?;
+    if d.is_dirty() && !force {
+        let title = d.display_title();
+        s.activate_window(id);
+        s.ui_requests.push(crate::UiRequest::Dialog("saveChanges".into(), json!({"title": title})));
+        return Ok(json!({"closed": false, "dirty": true}));
+    }
+    s.close_window(id);
+    Ok(json!({"closed": true, "document": true}))
 }

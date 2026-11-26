@@ -5,11 +5,16 @@ use std::sync::Mutex;
 
 use gridcraft_core::{CellRef, RangeRef, Value};
 use gridcraft_model::{Sheet, Workbook};
-use gridcraft_numfmt::{Formatted, NumberFormat, format_value};
+use gridcraft_numfmt::{Formatted, NumberFormat, format_value, format_value_full};
 
 /// Parsed number formats are cached by code.
-fn parsed(code: &str) -> NumberFormat {
+pub(crate) fn parsed(code: &str) -> NumberFormat {
     static CACHE: std::sync::LazyLock<Mutex<HashMap<String, NumberFormat>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    // A code of more bytes than 4 × the character limit can't be within it: it shows as General
+    // without being hashed or scanned again for every cell that shares it.
+    if code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS {
+        return NumberFormat::parse("General");
+    }
     let lock = || CACHE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if let Some(f) = lock().get(code) {
         return f.clone();
@@ -24,7 +29,12 @@ fn parsed(code: &str) -> NumberFormat {
     f
 }
 
+/// The parsed format of `code`; one longer than the character limit is a General format that keeps
+/// the code it was made from. The engine itself formats through `parsed`, which doesn't copy it.
 pub fn number_format(code: &str) -> NumberFormat {
+    if code.len() > 4 * gridcraft_numfmt::MAX_FORMAT_CODE_CHARS {
+        return NumberFormat::parse(code);
+    }
     parsed(code)
 }
 
@@ -90,14 +100,14 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if reads_back(&iso) { iso } else { raw }
 }
 
-/// Whether `c` has a formula that must not be shown: its cell is formatted Hidden on a
-/// protected sheet. A spilled cell follows its anchor.
+/// Whether `c` has a formula or Python code that must not be shown: its cell is formatted
+/// Hidden on a protected sheet. A spilled cell follows its anchor.
 pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
     if !sheet.is_protected() {
         return false;
     }
     let at = match sheet.cell(c) {
-        Some(x) if x.formula.is_some() => c,
+        Some(x) if x.formula.is_some() || x.py.is_some() => c,
         _ => match sheet.spill_ranges.iter().find(|(_, r)| r.contains(c)) {
             Some((anchor, _)) => *anchor,
             None => return false,
@@ -106,7 +116,8 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
     wb.styles.get(sheet.style_id(at)).protection.hidden
 }
 
-/// The text a cell shows (full precision General; the grid narrows General to fit the column).
+/// The text a cell shows (General up to the 11-character cell width; the grid narrows General
+/// further to fit the column).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if sheet.show_formulas
         && let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref())
@@ -114,20 +125,35 @@ pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     {
         return format!("={}", f.text);
     }
-    value_text(wb, sheet, c)
+    shown_text(wb, sheet, c)
 }
 
 /// A cell's value with its number format applied, independent of column width: no `#####`
-/// and no General narrowing (Save As CSV/Text writes this). Formulas give their result.
+/// and no General narrowing (Save As CSV/Text writes this). Formulas give their result. A number
+/// shown as General (also through a coloured or sectioned General, or a Text format) is written
+/// as [`format_value_full`] writes it, never with an exponent: `&`'s 15 significant digits below
+/// 1E+15 (`124412140710`, not `1.24412E+11`), the shortest round-trip digits from 1E+15 (every
+/// integer below 1e16 exactly). Excel writes the cell display.
 pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    let style = wb.styles.get(sheet.style_id(c));
+    with_fill_space(format_value_full(&sheet.value(c), &parsed(style.num_fmt.as_str()), wb.date_system))
+}
+
+/// A cell's value through its number format, General at the 11-character cell width.
+fn shown_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     let style = wb.styles.get(sheet.style_id(c));
     value_text_as(wb, &sheet.value(c), style.num_fmt.as_str())
 }
 
-/// [`value_text`] for a value and a format code given apart from a cell (print takes the code
-/// from the cell's effective look, which a conditional format can override).
+/// A value through a format code given apart from a cell, as a cell shows it (General at the
+/// 11-character cell width). Print takes the code from the cell's effective look, which a
+/// conditional format can override.
 pub fn value_text_as(wb: &Workbook, v: &Value, code: &str) -> String {
-    let f = format(v, code, wb);
+    with_fill_space(format(v, code, wb))
+}
+
+/// The formatted text with a single space where a `*x` repeat fill would expand.
+fn with_fill_space(f: Formatted) -> String {
     match f.fill {
         Some((_, pos)) => {
             let mut t = f.text;
@@ -156,7 +182,9 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
             }
             first = false;
             let t = cell_text(wb, sh, CellRef::new(row, col));
-            if t.contains(['\t', '\n', '"']) {
+            // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
+            // `say "hi"` is copied as it is (#2225).
+            if t.contains(['\t', '\n', '\r']) {
                 out.push('"');
                 out.push_str(&t.replace('"', "\"\""));
                 out.push('"');
@@ -225,4 +253,32 @@ pub fn stats(sheet: &Sheet, ranges: &[RangeRef]) -> Stats {
         s.max = 0.0;
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A format code far past Excel's 255 characters shows its values as General, for every cell
+    /// that shares it, without being hashed into the cache each time.
+    #[test]
+    fn an_overlong_code_formats_as_general() {
+        let wb = Workbook::new();
+        let code = format!("0.00{}", "\"x\"".repeat(400_000));
+        for _ in 0..1_000 {
+            assert_eq!(format(&Value::Number(1.5), &code, &wb).text, "1.5");
+        }
+        assert_eq!(format(&Value::Number(1.5), "0.00", &wb).text, "1.50");
+    }
+
+    /// The public `number_format` keeps the code of an overlong format; it is General, but not the
+    /// same format as a real `General`.
+    #[test]
+    fn number_format_keeps_an_overlong_code() {
+        let code = format!("0.00{}", "\"x\"".repeat(2_000));
+        let f = number_format(&code);
+        assert!(f.is_general());
+        assert_eq!(f.code(), code);
+        assert_ne!(f, number_format("General"));
+    }
 }

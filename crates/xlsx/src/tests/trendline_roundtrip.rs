@@ -53,8 +53,11 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
@@ -105,7 +108,7 @@ fn every_trendline_kind_round_trips_in_every_chart_group() {
 fn chart_parts(bytes: &[u8]) -> Vec<String> {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
     let mut names: Vec<String> =
-        (0..z.len()).map(|i| z.name_for_index(i).unwrap().to_string()).filter(|n| n.starts_with("xl/charts/chart")).collect();
+        (0..z.len()).map(|i| z.name_for_index(i).unwrap().unwrap().to_string()).filter(|n| n.starts_with("xl/charts/chart")).collect();
     names.sort();
     names
         .iter()
@@ -186,4 +189,37 @@ fn a_huge_forecast_in_a_file_is_read_clamped() {
     assert_eq!((big.forward, big.backward), (Trendline::MAX_FORECAST, Trendline::MAX_FORECAST));
     let small = read("2.5", "-3");
     assert_eq!((small.forward, small.backward), (2.5, 0.0), "ordinary values are kept");
+}
+
+#[test]
+fn trendline_metadata_pairing_skips_unknown_trendline_elements() {
+    let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+      <c:chart><c:plotArea><c:barChart><c:barDir val="col"/>
+        <c:ser><c:idx val="0"/><c:order val="0"/>
+          <c:trendline>
+            <c:spPr><a:ln w="12700"><a:solidFill><a:srgbClr val="00FF00"/></a:solidFill></a:ln></c:spPr>
+            <c:trendlineType val="notAType"/>
+            <c:dispEq val="1"/>
+          </c:trendline>
+          <c:trendline>
+            <c:spPr><a:ln w="25400"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:prstDash val="sysDot"/></a:ln></c:spPr>
+            <c:trendlineType val="linear"/>
+            <c:forward val="2.5"/>
+            <c:dispRSqr val="1"/>
+          </c:trendline>
+          <c:val><c:numRef><c:f>Data!$B$2:$B$6</c:f></c:numRef></c:val>
+        </c:ser>
+        <c:axId val="1"/><c:axId val="2"/>
+      </c:barChart></c:plotArea></c:chart>
+    </c:chartSpace>"#;
+    let root = crate::xml::parse(xml.as_bytes()).unwrap();
+    let t = &crate::chart::read_chart(&root).unwrap().series[0].trendlines;
+    assert_eq!(t.len(), 1);
+    assert_eq!(t[0].kind, TrendlineKind::Linear);
+    assert_eq!(t[0].forward, 2.5);
+    assert!(!t[0].display_equation);
+    assert!(t[0].display_r_squared);
+    assert_eq!(t[0].color, Some(Color::Rgb(0xFF0000)));
+    assert_eq!(t[0].width, Some(2.0));
+    assert_eq!(t[0].dash, Some(LineDash::SysDot));
 }

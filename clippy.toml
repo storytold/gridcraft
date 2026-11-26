@@ -10,3 +10,5 @@ disallowed-methods = [
     { path = "std::time::Instant::now", reason = "traps on wasm; read the clock only off wasm" },
     { path = "std::time::SystemTime::now", reason = "traps on wasm; read the clock only off wasm" },
 ]
+
+cognitive-complexity-threshold = 30

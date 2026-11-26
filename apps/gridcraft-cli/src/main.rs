@@ -11,6 +11,7 @@
 //! gridcraft-cli functions [--json] [--search X] [--category C]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
+//! gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
 //! gridcraft-cli version | --version
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -30,6 +31,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod sandbox_check;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -43,10 +45,14 @@ const USAGE: &str = "usage:
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
                      [--out FILE] [--print RANGE] [--quiet]
+                     a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
+                     blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
+  gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+                     whether this system confines programs (no program: a confined self-test)
   gridcraft-cli version";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
@@ -59,7 +65,35 @@ fn stdout_failed(e: std::io::Error) -> ! {
     std::process::exit(1);
 }
 
+/// The first Launcher-profile argument in `args`, in either its separate or `=` form. Only the
+/// tokens a shell would see before `--` count: after it they are file names.
+fn launch_profile_argument(args: &[std::ffi::OsString]) -> Option<String> {
+    for arg in args {
+        if arg == "--" {
+            return None;
+        }
+        let text = arg.to_string_lossy();
+        for flag in ["--launch-profile", "--profile-root"] {
+            if text == flag || text.starts_with(&format!("{flag}=")) {
+                return Some(flag.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn main() -> ExitCode {
+    // A confined launcher run (and its probes) comes first, before anything else starts.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+    // The nightly profile protocol belongs to the desktop app: the Launcher's selector is not a
+    // CLI option, and a CLI that silently ignored it would act on the wrong files.
+    if let Some(flag) = launch_profile_argument(&raw) {
+        eprintln!("gridcraft-cli: {flag} belongs to the GridCraft desktop app, not this CLI");
+        return ExitCode::from(2);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
@@ -77,6 +111,7 @@ fn main() -> ExitCode {
         Some("cat") => cat(rest),
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
+        Some("sandbox-check") => return sandbox_check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),
@@ -193,7 +228,18 @@ fn pretty(v: &Value) -> String {
 
 /// A number as a person would type it: `6`, `0.5`, `1e+300`.
 fn number_text(n: f64) -> String {
-    if n.fract() == 0.0 && n.abs() < 1e15 { format!("{}", n as i64) } else { format!("{n}") }
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        format!("{}", n as i64)
+    } else if n.is_finite() && (n.abs() >= 1e15 || n.abs() < 1e-5) {
+        // Rust's `Display` never uses exponent form; `{:e}` omits the `+` on positive exponents.
+        let s = format!("{n:e}");
+        match s.split_once('e') {
+            Some((m, e)) if !e.starts_with('-') => format!("{m}e+{e}"),
+            _ => s,
+        }
+    } else {
+        format!("{n}")
+    }
 }
 
 /// A computed value (as returned by `formulas.evaluate` / `sheet.read`) as plain text.
@@ -375,6 +421,17 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
     }
     if t.starts_with('{') {
         let v: Value = serde_json::from_str(t).map_err(|e| format!("bad JSON: {e}"))?;
+        // A key this does not read is a mistake, not a comment: `{"command": …, "args": {…}}` and
+        // `{"command": …, "name": "Report"}` ran the command with no parameters at all and the
+        // script still exited 0, so a typo made a valid, wrong workbook (#2256).
+        if let Some(o) = v.as_object() {
+            let mut unknown: Vec<&str> = o.keys().map(String::as_str).filter(|k| !matches!(*k, "command" | "id" | "params")).collect();
+            if !unknown.is_empty() {
+                unknown.sort_unstable();
+                let (plural, list) = (if unknown.len() == 1 { "key" } else { "keys" }, unknown.join("`, `"));
+                return Err(format!("unknown {plural} `{list}`: a line is {{\"command\": \"id\", \"params\": {{…}}}}"));
+            }
+        }
         let id = v.get("command").or_else(|| v.get("id")).and_then(Value::as_str).ok_or("JSON command needs a `command` field")?;
         return Ok(Some((id.to_string(), v.get("params").cloned().unwrap_or_else(|| json!({})))));
     }
@@ -556,6 +613,22 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
 
+    /// The Launcher's nightly selector belongs to the desktop app; the CLI says so and exits 2
+    /// rather than acting on whatever it thinks the file list is.
+    #[test]
+    fn launcher_profile_arguments_are_refused_in_both_forms_and_only_before_the_delimiter() {
+        let args = |values: &[&str]| values.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        assert_eq!(launch_profile_argument(&args(&["--launch-profile", "nightly-v1"])).as_deref(), Some("--launch-profile"));
+        assert_eq!(launch_profile_argument(&args(&["--profile-root", "/tmp/p", "info", "a.xlsx"])).as_deref(), Some("--profile-root"));
+        assert_eq!(launch_profile_argument(&args(&["--profile-root=/tmp/p"])).as_deref(), Some("--profile-root"));
+        assert_eq!(launch_profile_argument(&args(&["info", "--launch-profile=nightly-v1"])).as_deref(), Some("--launch-profile"));
+        // After `--` they are file names, exactly as the desktop app parses them.
+        assert_eq!(launch_profile_argument(&args(&["--", "--launch-profile", "nightly-v1"])), None);
+        assert_eq!(launch_profile_argument(&args(&["--", "--profile-root=/tmp/p"])), None);
+        assert_eq!(launch_profile_argument(&args(&["info", "a.xlsx", "--json"])), None);
+        assert_eq!(launch_profile_argument(&[]), None);
+    }
+
     #[test]
     fn parses_commands() {
         assert_eq!(parse_command("home.bold={\"range\":\"A1\"}").unwrap(), Some(("home.bold".into(), json!({"range": "A1"}))));
@@ -567,12 +640,37 @@ mod tests {
         assert_eq!(parse_command("{\"command\":\"edit.redo\"}").unwrap(), Some(("edit.redo".into(), json!({}))));
         assert_eq!(parse_command("  # comment").unwrap(), None);
         assert!(parse_command("x={bad").is_err());
+        // A key this does not read is a mistake: the command used to run with no parameters and
+        // the script still exited 0, so a typo made a valid, wrong workbook (#2256).
+        for (line, named) in [
+            (r#"{"command":"home.insertSheet","args":{"name":"R"}}"#, "`args`"),
+            (r#"{"command":"home.insertSheet","name":"R"}"#, "`name`"),
+            (r#"{"command":"home.insertSheet","params":{},"note":"why"}"#, "`note`"),
+        ] {
+            let e = parse_command(line).expect_err("refused");
+            assert!(e.contains("unknown key") && e.contains(named), "{line}: {e}");
+            assert!(e.contains(r#"{"command": "id", "params": {…}}"#), "{line}: {e}");
+        }
+        // Several at once are listed in one message, sorted.
+        let e = parse_command(r#"{"command":"x","name":"R","args":{}}"#).expect_err("refused");
+        assert!(e.contains("unknown keys `args`, `name`"), "{e}");
+        // `id` is still the accepted alternative to `command`, and `params` still carries them.
+        assert_eq!(parse_command(r#"{"id":"edit.undo"}"#).unwrap(), Some(("edit.undo".into(), json!({}))));
+        assert_eq!(
+            parse_command(r#"{"command":"home.insertSheet","params":{"name":"R"}}"#).unwrap(),
+            Some(("home.insertSheet".into(), json!({"name": "R"})))
+        );
     }
 
     #[test]
     fn value_texts() {
         assert_eq!(value_text(&json!(6.0)), "6");
         assert_eq!(value_text(&json!(0.25)), "0.25");
+        assert_eq!(value_text(&json!(1e300)), "1e+300");
+        assert_eq!(value_text(&json!(-1.5e300)), "-1.5e+300");
+        assert_eq!(value_text(&json!(1e-20)), "1e-20");
+        assert_eq!(value_text(&json!(1e-300)), "1e-300");
+        assert_eq!(value_text(&json!(0.0001)), "0.0001");
         assert_eq!(value_text(&json!(true)), "TRUE");
         assert_eq!(value_text(&json!({"error": "#DIV/0!"})), "#DIV/0!");
         assert_eq!(value_text(&json!([[1.0, 2.0], [3.0, "x"]])), "1\t2\n3\tx");

@@ -1,11 +1,12 @@
 //! Desktop spooler adapter. Discovery and submission never run on the UI thread.
-use gridcraft_ui_egui::printing::{Discover, Duplex, Printer, Settings, Submit};
+use gridcraft_ui_egui::printing::{Destination, Discover, Duplex, Printer, Settings, Submit};
 
+/// Returns a printer-discovery closure that enumerates `craft_print::printers()` on a named background thread and sends the mapped list through a channel.
 pub fn discover() -> Discover {
     Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new().name("print-discovery".into()).spawn(move || {
-            let printers = craft_print::printers().into_iter().map(|printer| Printer { name: printer.name, default: printer.default }).collect();
+            let printers = craft_print::printers().into_iter().map(Printer::from).collect();
             let _ = sender.send(printers);
         });
         receiver
@@ -17,7 +18,7 @@ pub fn discover() -> Discover {
 static JOBS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
 
 pub fn finish_pending_jobs() {
-    let workers = std::mem::take(&mut *JOBS.lock().unwrap_or_else(|poison| poison.into_inner()));
+    let workers = std::mem::take(&mut *JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
     for worker in workers {
         if worker.join().is_err() {
             log::error!("the print worker stopped unexpectedly during shutdown");
@@ -30,12 +31,17 @@ pub fn submit() -> Submit {
         let (sender, receiver) = std::sync::mpsc::channel();
         let worker = std::thread::Builder::new().name("print-submit".into()).spawn(move || {
             let job = craft_print::Job {
-                printer: Some(settings.printer),
+                printer: match settings.destination {
+                    Destination::Printer(name) => Some(name),
+                    _ => None,
+                },
                 copies: settings.copies.clamp(1, 999),
-                duplex: settings.duplex.map(|value| match value {
-                    Duplex::LongEdge => craft_print::Duplex::LongEdge,
-                    Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
-                    Duplex::Off => craft_print::Duplex::Off,
+                collate: settings.collate,
+                duplex: settings.duplex.and_then(|value| match value {
+                    Duplex::LongEdge => Some(craft_print::Duplex::LongEdge),
+                    Duplex::ShortEdge => Some(craft_print::Duplex::ShortEdge),
+                    Duplex::Off => Some(craft_print::Duplex::Off),
+                    _ => None,
                 }),
                 grayscale: settings.grayscale,
                 scaling: craft_print::Scaling::ShrinkToFit,
@@ -45,7 +51,7 @@ pub fn submit() -> Submit {
             let _ = sender.send(craft_print::submit(&bytes, &job).map_err(|error| error.to_string()));
         });
         if let Ok(worker) = worker {
-            let mut jobs = JOBS.lock().unwrap_or_else(|poison| poison.into_inner());
+            let mut jobs = JOBS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             jobs.retain(|job| !job.is_finished());
             jobs.push(worker);
         }

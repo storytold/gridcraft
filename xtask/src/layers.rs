@@ -29,8 +29,12 @@ pub const TABLE: &[(&str, Class)] = &[
     ("core", Class::Layer(0)),
     ("numfmt", Class::Layer(0)),
     ("pdf", Class::Layer(0)),
+    // The confined launcher for helper processes; the Python worker and the apps use it.
+    ("sandbox", Class::Layer(0)),
     ("formula", Class::Layer(1)),
     ("functions", Class::Layer(1)),
+    // Equation layout (LaTeX to glyphs, rules and paths) and OMML, on top of RaTeX.
+    ("math", Class::Layer(1)),
     ("model", Class::Layer(2)),
     ("calc", Class::Layer(2)),
     ("xlsx", Class::Layer(2)),
@@ -58,8 +62,9 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
 }
 
 /// Format crates may only depend on these workspace crates (on top of the layer rule), so a
-/// file format never pulls in calculation or engine code.
-pub const FORMAT_ALLOWED: &[(&str, &[&str])] = &[("xlsx", &["core", "formula", "model"])];
+/// file format never pulls in calculation or engine code. `math` converts equations to and from
+/// OMML.
+pub const FORMAT_ALLOWED: &[(&str, &[&str])] = &[("xlsx", &["core", "formula", "math", "model"])];
 
 /// External crates that constitute a UI toolkit / windowing dependency.
 /// Entries ending in `*` are prefixes.
@@ -174,7 +179,7 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
             }
         }
     }
-    out.sort_by_key(|v| v.to_string());
+    out.sort_by_key(ToString::to_string);
     out.dedup();
     out
 }
