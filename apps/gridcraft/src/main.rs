@@ -268,14 +268,23 @@ fn initialize_nightly_process_identity() -> Result<(), process_identity::Identit
     )
 }
 
-/// Tell a desktop user why a nightly launch was refused. A headless form (`--version` on a runner)
-/// never gets here: the version query is answered before this and before any profile work.
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Tell a desktop user why a nightly launch was refused, in a native box where one renders without the
+/// app's event loop (Windows, X11/Wayland), and on standard error always. A headless form (`--version`
+/// on a runner) never gets here: the version query is answered before this and before any profile work.
 fn report_launch_profile_error(error: &str) {
     eprintln!("GridCraft launch profile: {error}");
     let desktop_session = cfg!(windows)
         || cfg!(target_os = "macos")
         || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
-    if build_flavor::needs_native_error(build_flavor::COMPILED, desktop_session) {
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
         if let Err(error) = initialize_nightly_process_identity() {
             eprintln!("GridCraft launch profile: {error}");
             return;
@@ -328,6 +337,48 @@ fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
         std::process::exit(2);
     }
     Some(early.args)
+}
+
+/// The app's own command line, once the launch profile's tokens are gone: `--control`,
+/// `--control-token`, `--sample` and the files to open. `--` ends the options, and everything after
+/// it is a file, even a name that reads like one — that is how the Launcher hands a nightly its
+/// documents (`launch_profile::parse` puts the separator first), so the separator itself is never
+/// opened as a file.
+#[derive(Debug, Default, PartialEq)]
+struct DesktopArgs {
+    control_port: Option<u16>,
+    control_token: Option<String>,
+    sample: Option<String>,
+    files: Vec<String>,
+}
+
+fn desktop_args(args: &[String], control_port: Option<u16>, control_token: Option<String>) -> DesktopArgs {
+    let mut parsed = DesktopArgs { control_port, control_token, ..DesktopArgs::default() };
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--" => {
+                parsed.files.extend(args[i + 1..].iter().cloned());
+                break;
+            }
+            "--control" => {
+                i += 1;
+                parsed.control_port = args.get(i).and_then(|p| p.parse().ok());
+            }
+            "--control-token" => {
+                i += 1;
+                parsed.control_token = args.get(i).cloned();
+            }
+            "--sample" => {
+                i += 1;
+                parsed.sample = Some(args.get(i).cloned().unwrap_or_else(|| "sales".into()));
+            }
+            a if a.starts_with("-psn_") => {}
+            a => parsed.files.push(a.to_string()),
+        }
+        i += 1;
+    }
+    parsed
 }
 
 fn main() -> eframe::Result<()> {
@@ -396,30 +447,10 @@ fn main() -> eframe::Result<()> {
         eprintln!("GridCraft Nightly: the control channel is not part of the nightly channel");
         std::process::exit(2);
     }
-    let mut control_port: Option<u16> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok())).flatten();
-    let mut control_token: Option<String> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok()).flatten();
-    let mut sample: Option<String> = None;
-    let mut files: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--control" => {
-                i += 1;
-                control_port = args.get(i).and_then(|p| p.parse().ok());
-            }
-            "--control-token" => {
-                i += 1;
-                control_token = args.get(i).cloned();
-            }
-            "--sample" => {
-                i += 1;
-                sample = Some(args.get(i).cloned().unwrap_or_else(|| "sales".into()));
-            }
-            a if a.starts_with("-psn_") => {}
-            a => files.push(a.to_string()),
-        }
-        i += 1;
-    }
+    let control_port: Option<u16> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok())).flatten();
+    let control_token: Option<String> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok()).flatten();
+    let parsed = desktop_args(&args, control_port, control_token);
+    let (control_port, control_token, sample, files) = (parsed.control_port, parsed.control_token, parsed.sample, parsed.files);
     // The log file lives in the settings folder, next to the preferences; opened after the
     // arguments, so `--version` leaves no file behind. Records logged until now are written to it
     // first. Runs without preferences (agents' test runs) log to standard error only, so they
@@ -614,5 +645,43 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+#[cfg(test)]
+mod launch_separator_tests {
+    use super::*;
+    use crate::build_flavor::BuildFlavor;
+
+    /// The argv the Launcher starts a nightly with, extended by `tail`, as the start then reads it.
+    fn launcher_argv(tail: &[&str]) -> Vec<String> {
+        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", "/nightly-data/profiles/gridcraft", "--"]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        argv.extend(tail.iter().map(std::ffi::OsString::from));
+        launch_profile::parse(argv).unwrap().args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn the_launchers_separator_is_never_a_file() {
+        let parsed = desktop_args(&launcher_argv(&[]), None, None);
+        assert_eq!(parsed, DesktopArgs::default(), "the separator must not reach the file list");
+    }
+
+    #[test]
+    fn files_after_the_separator_are_opened_in_order() {
+        assert_eq!(desktop_args(&launcher_argv(&["a.file"]), None, None).files, ["a.file"]);
+        let parsed = desktop_args(&launcher_argv(&["a.file", "--version", "--sample"]), None, None);
+        assert_eq!(parsed.files, ["a.file", "--version", "--sample"], "after -- every word is a file");
+        assert_eq!((parsed.sample, parsed.control_port), (None, None));
+    }
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }
