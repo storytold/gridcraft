@@ -1,5 +1,5 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
-use super::legend::{cat_label, plot_kind};
+use super::legend::cat_label;
 use super::lines::{decimate_area, draw_markers, draw_runs};
 use super::trend::{draw_trend_labels, draw_trendlines, max_backward, max_forward, max_forward_slots, supports_trendline};
 use super::{
@@ -16,6 +16,7 @@ enum Fam {
     Col100,
     Line,
     LineStack,
+    Line100,
     Area,
     AreaStack,
     Area100,
@@ -31,6 +32,7 @@ fn family(k: ChartKind) -> Fam {
         ColumnStacked100 | BarStacked100 => Fam::Col100,
         Line | LineMarkers | Scatter | ScatterLines | Radar | Stock => Fam::Line,
         LineStacked => Fam::LineStack,
+        LineStacked100 | LineStacked100Markers => Fam::Line100,
         Area => Fam::Area,
         AreaStacked => Fam::AreaStack,
         AreaStacked100 => Fam::Area100,
@@ -40,7 +42,7 @@ fn family(k: ChartKind) -> Fam {
 
 /// Families stacked to 100%: each category's values are shares of its total.
 fn is_100(f: Fam) -> bool {
-    matches!(f, Fam::Col100 | Fam::Area100)
+    matches!(f, Fam::Col100 | Fam::Line100 | Fam::Area100)
 }
 
 fn is_col(f: Fam) -> bool {
@@ -48,7 +50,12 @@ fn is_col(f: Fam) -> bool {
 }
 
 fn is_line(f: Fam) -> bool {
-    matches!(f, Fam::Line | Fam::LineStack)
+    matches!(f, Fam::Line | Fam::LineStack | Fam::Line100)
+}
+
+/// Line kinds that draw a marker at each point.
+fn has_markers(k: ChartKind) -> bool {
+    matches!(k, ChartKind::LineMarkers | ChartKind::LineStacked100Markers)
 }
 
 /// Bars that fall into one pixel column, merged: extent along the category axis (`a0..=a1`, the
@@ -156,7 +163,7 @@ impl BarSink {
 }
 
 fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Vec<Vec<Option<(f64, f64)>>> {
-    // Totals for 100% stacking, per axis and family (100% columns and 100% areas stack apart).
+    // Totals for 100% stacking, per axis and family (100% columns, lines and areas stack apart).
     let mut totals: Vec<((bool, Fam), Vec<f64>)> = Vec::new();
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
@@ -187,7 +194,7 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
     for (i, s) in data.series.iter().enumerate() {
         let fam = fams.get(i).copied().unwrap_or(Fam::Col);
         let a = sec.get(i).copied().unwrap_or(false);
-        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::AreaStack | Fam::Area100);
+        let stacked = matches!(fam, Fam::ColStack | Fam::Col100 | Fam::LineStack | Fam::Line100 | Fam::AreaStack | Fam::Area100);
         let key = (a, fam);
         let si = if stacked {
             match stacks.iter().position(|(k, _, _)| *k == key) {
@@ -216,7 +223,7 @@ fn series_spans(data: &ChartData, fams: &[Fam], sec: &[bool], ncat: usize) -> Ve
                 }),
                 (Some((_, pos, _)), _) => {
                     let v = v.unwrap_or(0.0);
-                    let v = if fam == Fam::Area100 { share(key, j, v) } else { v };
+                    let v = if is_100(fam) { share(key, j, v) } else { v };
                     pos.get_mut(j).map(|acc| {
                         let base = *acc;
                         *acc = clean(*acc + v);
@@ -292,7 +299,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     if ncat == 0 {
         return;
     }
-    let kinds: Vec<ChartKind> = data.series.iter().enumerate().map(|(i, s)| if horizontal { chart.kind } else { plot_kind(chart, s, i) }).collect();
+    let kinds: Vec<ChartKind> = data.series.iter().map(|s| if horizontal { chart.kind } else { s.kind }).collect();
     let fams: Vec<Fam> = kinds.iter().map(|k| family(*k)).collect();
     let any_primary = data.series.iter().any(|s| !s.secondary);
     let sec: Vec<bool> = data.series.iter().map(|s| s.secondary && any_primary && !horizontal).collect();
@@ -424,7 +431,7 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
                     let pts: Vec<Option<[f32; 2]>> = row.iter().enumerate().map(|(j, sp)| sp.map(|(_, t)| [center(j), vpos(t, &sc)])).collect();
                     draw_runs(ctx, &pts, s.color, 2.25, s.smooth.then_some(plot));
                     let k = kinds.get(i).copied().unwrap_or(ChartKind::Line);
-                    if k == ChartKind::LineMarkers && cw >= 3.0 {
+                    if has_markers(k) && cw >= 3.0 {
                         draw_markers(ctx, pts.iter().flatten().copied(), 3.5, s.color);
                     }
                     if labels_on {
@@ -528,7 +535,7 @@ pub(super) fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
                 ctx.out.push(Prim::Circle { cx: p[0], cy: p[1], r, fill: Some(fill), stroke: Some((WHITE, 0.75)) });
             }
         } else {
-            let lines = chart.kind == ChartKind::ScatterLines || s.kind == ChartKind::ScatterLines;
+            let lines = s.kind == ChartKind::ScatterLines;
             if lines {
                 draw_runs(ctx, &px, s.color, 2.0, s.smooth.then_some(plot));
             }

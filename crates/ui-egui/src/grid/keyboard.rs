@@ -1,6 +1,8 @@
 use super::geo::Geo;
+use super::interact::object_key;
 use super::menus::is_checkbox;
-use super::{CellRef, Drag, Sheet, SheetApp, json};
+use super::selection::add_mode_move;
+use super::{CellRef, Drag, SelectionMode, Sheet, SheetApp, json};
 
 /// Whether something other than the grid owns the keyboard this frame: an editor, a dialog, a
 /// message, a menu or another focused widget. Kept out of [`keyboard`] to hold its complexity
@@ -81,19 +83,15 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
-                if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
-                    shortcut_ran = true;
+                let Some(m) = selection_mode_key(app, sh, key, m) else { continue };
+                let nudged = object_key(app, sh, key, m);
+                if nudged || crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
+                    shortcut_ran |= !nudged;
                     continue;
                 }
                 let cmd = m.command;
                 let shift = m.shift;
-                let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
-                    let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
-                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
-                    app.grid.ensure_visible = true;
-                    app.grid.reveal_moving_end = shift;
-                    app.grid.reveal_from = from;
-                };
+                let mv = |app: &mut SheetApp, dr: i64, dc: i64| move_selection(app, dr, dc, shift, cmd);
                 match key {
                     Key::ArrowUp => mv(app, -1, 0),
                     Key::ArrowDown => mv(app, 1, 0),
@@ -104,6 +102,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     Key::PageUp if !cmd => mv(app, -page, 0),
                     Key::PageDown => app.run_or_alert("sheet.next", json!({})),
                     Key::PageUp => app.run_or_alert("sheet.previous", json!({})),
+                    // Add mode: Home and End move the active cell as arrows do, keeping the selected areas.
                     Key::Home if cmd => {
                         let r = sh.freeze.map(|f| f.0).unwrap_or(0);
                         let c = sh.freeze.map(|f| f.1).unwrap_or(0);
@@ -147,14 +146,13 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                         }
                     }
                     Key::Escape if app.selected_object.is_some() => app.selected_object = None,
-                    Key::Escape => {
-                        app.session.clipboard = None;
-                        app.session.format_painter = None;
-                    }
+                    Key::Escape => cancel_pending_and_selection_mode(app),
                     Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
+                    // F8 Extend Selection, Shift+F8 Add or Remove Selection: each toggles its mode.
                     Key::F8 if m.alt => {
                         app.open_dialog("macros", json!({}));
                     }
+                    Key::F8 if !cmd => toggle_selection_mode(app, shift),
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
                     // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
@@ -244,6 +242,76 @@ fn request_grid_ime(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, 
     });
 }
 
+/// The F8 selection modes' part of a key press. Extend mode makes the navigation keys extend from
+/// the anchor as if Shift were held; Add mode moves Shift+Home and Ctrl+Shift+End within the area
+/// being added, and Home, Ctrl+Home and Ctrl+End move the active cell keeping the areas. The modifiers to handle the key with, or `None` when the key was handled here.
+/// Kept out of [`keyboard`] to hold its complexity within the workspace limit.
+fn selection_mode_key(app: &mut SheetApp, sh: &Sheet, key: egui::Key, m: egui::Modifiers) -> Option<egui::Modifiers> {
+    use egui::Key;
+    let navigation =
+        matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End);
+    let m = if navigation && app.grid.selection_mode == SelectionMode::Extend { egui::Modifiers { shift: true, ..m } } else { m };
+    if app.grid.selection_mode == SelectionMode::Add && m.shift && (key == Key::Home || (m.command && key == Key::End)) {
+        let from = app.session.active().map(|d| d.selection.moving_end()).unwrap_or_default();
+        let to = match (key, m.command) {
+            (Key::Home, true) => CellRef::new(0, 0),
+            (Key::Home, false) => CellRef::new(from.row, 0),
+            (Key::End, true) => sh.used_range().map(|u| u.end).unwrap_or_default(),
+            _ => from,
+        };
+        add_mode_move(app, i64::from(to.row) - i64::from(from.row), i64::from(to.col) - i64::from(from.col), true, false);
+        return None;
+    }
+    if add_mode_home_end(app, sh, key, m.command) {
+        return None;
+    }
+    Some(m)
+}
+
+/// An arrow or Page key's move: `selection.move` (extending with Shift, jumping with Ctrl), or in
+/// Add mode a move of the active cell that keeps the selected areas.
+fn move_selection(app: &mut SheetApp, dr: i64, dc: i64, shift: bool, cmd: bool) {
+    let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
+    if app.grid.selection_mode == SelectionMode::Add {
+        add_mode_move(app, dr, dc, shift, cmd);
+        app.grid.reveal_from = from;
+        return;
+    }
+    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
+    app.grid.ensure_visible = true;
+    app.grid.reveal_moving_end = shift;
+    app.grid.reveal_from = from;
+}
+
+/// Add mode: Home and Ctrl+Home/Ctrl+End move the active cell as the arrows do, keeping the
+/// selected areas. Whether the key was one of those (and so was handled).
+fn add_mode_home_end(app: &mut SheetApp, sh: &Sheet, key: egui::Key, cmd: bool) -> bool {
+    if app.grid.selection_mode != SelectionMode::Add || !(cmd || key == egui::Key::Home) {
+        return false;
+    }
+    let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
+    let to = match key {
+        egui::Key::Home if cmd => CellRef::new(sh.freeze.map(|f| f.0).unwrap_or(0), sh.freeze.map(|f| f.1).unwrap_or(0)),
+        egui::Key::End => sh.used_range().map(|u| u.end).unwrap_or_default(),
+        _ => CellRef::new(a.row, 0),
+    };
+    add_mode_move(app, i64::from(to.row) - i64::from(a.row), i64::from(to.col) - i64::from(a.col), false, false);
+    true
+}
+
+/// Esc: what [`cancel_pending`] cancels, and the F8 selection modes end.
+fn cancel_pending_and_selection_mode(app: &mut SheetApp) {
+    cancel_pending(app);
+    let _ = app.run("ui.selectionMode", json!({"mode": "off"}));
+}
+
+/// F8 toggles Extend Selection, Shift+F8 Add or Remove Selection.
+fn toggle_selection_mode(app: &mut SheetApp, shift: bool) {
+    let target = if shift { SelectionMode::Add } else { SelectionMode::Extend };
+    let mode = if app.grid.selection_mode == target { SelectionMode::Off } else { target };
+    let _ = app.run("ui.selectionMode", json!({"mode": mode.id()}));
+}
+
 /// This frame's input events, without those the focused form control took.
 fn grid_events(app: &mut SheetApp, ctx: &egui::Context, sh: &Sheet) -> Vec<egui::Event> {
     let events = ctx.input(|i| i.events.clone());
@@ -273,5 +341,14 @@ fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool 
             false
         }
         _ => false,
+    }
+}
+
+/// Esc with nothing else to dismiss drops the pending copy and the Format Painter. An open Quick
+/// Analysis popup owns the key: it closes and the pending copy stays.
+fn cancel_pending(app: &mut SheetApp) {
+    if app.grid.quick_analysis.open.take().is_none() {
+        app.session.clipboard = None;
+        app.session.format_painter = None;
     }
 }
