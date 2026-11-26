@@ -9,9 +9,15 @@ description = "GridCraft egui frontend (Excel-style UI); swappable — nothing b
 workspace = true
 
 [dependencies]
-# The shared capture slot (`craft_ui::capture`) comes from the one craft-libs revision every
-# craft-libs dependency uses (see the root Cargo.toml).
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "aa84415bae3b765fef6b7ef42404f66ad1cff9d9" }
+# The UI runtime that hosts this egui UI (`src/framework.rs`) and the framework dialogs, from the
+# one craft-libs revision every craft-libs dependency uses (see the root Cargo.toml).
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-behavior = { workspace = true }
+craft-host = { workspace = true }
+craft-keymap = { workspace = true }
+craft-print = { workspace = true }
+craft-theme = { workspace = true }
+craft-window = { workspace = true }
 gridcraft-engine = { workspace = true }
 gridcraft-chart = { workspace = true }
 # `monochrome_emoji_fonts` restores the Noto Emoji and emoji-icon faces that 0.37 moved behind
@@ -42,7 +48,6 @@ gridcraft-xlsx = { workspace = true, features = ["test-support"] }
 craft-update = { workspace = true }
 # The desktop's preferred language for the first-run interface language.
 sys-locale = { workspace = true }
-craft-window = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Read the browser's preferred language for the first-run web interface language.
