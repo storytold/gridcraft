@@ -14,18 +14,9 @@ gh api repos/storytold/gridcraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `be00e5ccd18b68e950c8a08532f2230e7c3d0cba`, the craft-common-actions
-main commit that merged [#371](https://github.com/storytold/craft-common-actions/pull/371) (the
-candidate is admitted on the built commit's own Sonar analysis, not main's latest) after
-[#370](https://github.com/storytold/craft-common-actions/pull/370) (the Windows and macOS nightly
-registry rows for the 14 apps) and
-[#369](https://github.com/storytold/craft-common-actions/pull/369) (shared helper checkouts kept out
-of the app's clean-source check, and macOS on `macos-15`), following
-[#364](https://github.com/storytold/craft-common-actions/pull/364) (the signer may run on the
-policy's signer branch) and [#363](https://github.com/storytold/craft-common-actions/pull/363) (the
-multi-app pipeline, which makes the signer's `app-name` input required and admits any reviewed
-registry app), with #342 (`a4f6fd51`, policy v3 and the `platforms` input) and #339 (`605d5876`)
-earlier. Both callers name it in `uses` and `tooling-revision`. A pin is reviewed source
+Shared tooling is pinned to `8389cad8b849ea6bdb5e15fbce16772c3457565a`, the craft-common-actions
+main commit that merged the signer Windows fix (#375), following the shared work already
+reviewed here. Both callers name it in `uses` and `tooling-revision`. A pin is reviewed source
 availability, not provider, queue, native signing or crypto qualification.
 **Signer branch.** The signer runs on `refs/heads/nightly-signer`, not on the stable `release`
 branch, so nightly signer files never need a stable release sync. The policy's `release_branch`
@@ -72,7 +63,7 @@ any Sonar debt snapshot) before `nightly-signer` is advanced to it.
 |---|---|---|
 | `repository_id` | `1408285582` | `gh api repos/storytold/gridcraft --jq .id` |
 | `producer_workflow_id` | `429713469` | `gh api repos/storytold/gridcraft/actions/workflows/nightly.yml` (path `.github/workflows/nightly.yml`, state `active`) |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `be00e5cc…` (craft-common-actions exact-analysis admission, #371 after #370 and #369, following #364) | The callers' pin |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `8389cad8…` (the signer Windows fix (#375)) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push; equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist |
 | `platforms` | three rows | Suite stable identities (Windows Authenticode publisher subject, Linux OpenPGP release key fingerprint, macOS Apple Developer ID team `DJ6XS33FX8`) |
