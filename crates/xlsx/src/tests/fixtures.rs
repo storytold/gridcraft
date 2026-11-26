@@ -1016,14 +1016,16 @@ fn color_filter_keeps_a_dxf_theme_colour_and_tint() {
 }
 
 #[test]
-fn color_filter_reads_a_solid_conditional_format_dxfs_foreground() {
+fn a_solid_conditional_format_dxf_keeps_its_background_colour() {
+    // Conditional formats keep the pre-existing background-first reading; colour filters use
+    // their own foreground-first swatch.
     let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor rgb="FFFF0000"/></patternFill></fill></dxf>"#;
     let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
       <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
     let styles = styles_with_dxfs(&[dxf]);
     let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
     match &wb.sheet(0).unwrap().cond_formats[0].rule {
-        CfRule::CellIs { style, .. } => assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFFFFFF))),
+        CfRule::CellIs { style, .. } => assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFF0000))),
         r => panic!("{r:?}"),
     }
     let out = crate::write_xlsx(&wb).unwrap();

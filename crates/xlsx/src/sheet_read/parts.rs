@@ -146,14 +146,17 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
                 }
             }
         } else if let Some(c) = fc.child("colorFilter") {
-            let Some(dxf) = c.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)) else { continue };
+            let Some(dxf_id) = c.attr_u32("dxfId") else { continue };
+            let Some(dxf) = cx.dxfs.get(dxf_id as usize) else { continue };
+            let fill_color = cx.dxf_fill_colors.get(dxf_id as usize).copied().unwrap_or(Color::Auto);
+            let font_color = dxf.font.color;
             let cell_color = c.flag("cellColor", true);
             let swatch = if cell_color {
-                if dxf.fill.fg != Color::Auto { dxf.fill.fg } else { dxf.font.color }
-            } else if dxf.font.color != Color::Auto {
-                dxf.font.color
+                if fill_color != Color::Auto { fill_color } else { font_color }
+            } else if font_color != Color::Auto {
+                font_color
             } else {
-                dxf.fill.fg
+                fill_color
             };
             if cell_color { FilterCriterion::FillColor(swatch) } else { FilterCriterion::FontColor(swatch) }
         } else if let Some(i) = fc.child("iconFilter") {

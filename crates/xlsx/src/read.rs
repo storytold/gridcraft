@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
 use gridcraft_model::{
-    CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
+    CalcMode, CellPicture, Color, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook, WorkbookView,
 };
 
 use crate::package::{Package, Rel};
@@ -23,6 +23,8 @@ pub struct Ctx<'a> {
     /// Cell format index → model style.
     pub xf_map: Vec<StyleId>,
     pub dxfs: Vec<Style>,
+    /// The solid fill colour each dxf states for a colour filter (foreground first).
+    pub dxf_fill_colors: Vec<Color>,
     pub palette: Vec<u32>,
     pub date_system: DateSystem,
     pub styles: StyleTable,
@@ -222,7 +224,7 @@ fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) ->
     }
     if let Some(r) = find_rel(wb_rels, "styles").cloned() {
         if let Some(x) = cx.optional_xml(&r.target)? {
-            let StylesIn { xfs, dxfs, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
+            let StylesIn { xfs, dxfs, dxf_fill_colors, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
             cx.num_fmts = num_fmts;
             // Cell format 0 is the Normal cell format: everything on it (font, number format,
             // fill, borders, alignment, protection) is what a cell without its own format shows
@@ -232,6 +234,7 @@ fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) ->
             }
             cx.xf_map = xfs.into_iter().enumerate().map(|(i, s)| if i == 0 { StyleId::DEFAULT } else { cx.styles.intern(s) }).collect();
             cx.dxfs = dxfs;
+            cx.dxf_fill_colors = dxf_fill_colors;
             cx.palette = palette;
             wb.cell_styles = named;
         }
@@ -323,6 +326,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         phonetics: vec![],
         xf_map: vec![],
         dxfs: vec![],
+        dxf_fill_colors: vec![],
         palette: crate::tables::INDEXED.to_vec(),
         date_system: DateSystem::D1900,
         styles: StyleTable::default(),
