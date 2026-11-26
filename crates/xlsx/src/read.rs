@@ -35,6 +35,10 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Kept extensions of the current sheet's `<extLst>` (URI, rebuilt XML), until attached.
+    pub sheet_exts: Vec<(String, String)>,
+    /// URIs of the current sheet's extensions that were dropped.
+    pub sheet_exts_dropped: Vec<String>,
     /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
     /// formulas, evaluated with implicit intersection), collected per sheet.
     pub legacy_formulas: Vec<gridcraft_core::CellRef>,
@@ -322,6 +326,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        sheet_exts: vec![],
+        sheet_exts_dropped: vec![],
         legacy_formulas: vec![],
         shared_formula_bytes: 0,
         known_function,
@@ -425,6 +431,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        sheet.preserved = crate::extlist::keep_sheet(&mut cx, &name, sheet.preserved.take(), kept.keeps());
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         kept.charts(&mut cx, &mut sheet);
         sheet.visibility = match se.attr("state") {
