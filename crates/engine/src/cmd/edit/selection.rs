@@ -52,6 +52,13 @@ impl crate::DocState {
         // View state: set in place, so the workbook is neither copied nor made dirty.
         self.wb.set_active_sheet(i);
         self.selection = self.sheet_selections.get(i).cloned().unwrap_or_default();
+        // A sheet's first visit starts at A1, which may be part of a merged cell: take it whole,
+        // as a click would (#1348). A selection the sheet remembers comes back as it was.
+        if self.selection == crate::Selection::default()
+            && let Some(sh) = self.wb.sheet(i)
+        {
+            self.selection.expand_merges(sh);
+        }
     }
 }
 

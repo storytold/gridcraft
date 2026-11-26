@@ -35,7 +35,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::{rewrite_all_formulas_many, rewrite_cell_links, rewrite_python_refs};
+pub(crate) use paste_special::{place_moved_rules, rewrite_all_formulas_many, rewrite_python_refs};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_next_corner, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -206,6 +206,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
         // Step by step: a rename and a new sheet undone together match up only one step apart.
         super::extra::keep_view_modes(d, &cur_wb);
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -227,6 +228,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
         super::extra::keep_view_modes(d, &cur_wb);
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
