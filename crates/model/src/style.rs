@@ -197,6 +197,11 @@ pub struct Font {
     /// theme's minor font. Fonts derived from it (bold, a colour, a size) keep the link.
     #[serde(default = "default_minor")]
     pub minor: bool,
+    /// Outlined (hollow) letters: an XLSX `<outline/>`. Kept and saved; GridCraft does not
+    /// draw it yet (the letters render solid). Always serialized, like the other flags, so a
+    /// whole style sent back through `home.formatCells` (the Format Cells dialog) clears it.
+    #[serde(default)]
+    pub outline: bool,
 }
 
 fn default_minor() -> bool {
@@ -208,7 +213,7 @@ impl Hash for Font {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.name.hash(h);
         self.size.to_bits().hash(h);
-        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family, self.minor).hash(h);
+        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family, self.minor, self.outline).hash(h);
     }
 }
 
@@ -226,6 +231,7 @@ impl Default for Font {
             charset: None,
             family: None,
             minor: true,
+            outline: false,
         }
     }
 }
@@ -408,6 +414,9 @@ pub struct DxfStated {
     pub bold: bool,
     pub italic: bool,
     pub strike: bool,
+    /// Outlined letters turned off (`<outline val="0"/>`). Defaulted so JSON saved before it opens.
+    #[serde(default)]
+    pub outline: bool,
     pub underline: bool,
     pub size: bool,
     pub name: bool,
@@ -527,6 +536,27 @@ mod tests {
         assert_eq!(t.derive(bold, |s| s.font.bold = false), StyleId::DEFAULT);
         assert_eq!(t.len(), 2);
         assert!(!t.get(StyleId(999)).font.bold);
+    }
+
+    /// Two fonts differing only in outlined letters are different styles; JSON states the flag
+    /// even when off, and JSON saved before it existed reads as not outlined.
+    #[test]
+    fn outline_makes_a_distinct_style() -> Result<(), Box<dyn std::error::Error>> {
+        let mut t = StyleTable::default();
+        let outlined = t.derive(StyleId::DEFAULT, |s| s.font.outline = true);
+        assert_ne!(outlined, StyleId::DEFAULT);
+        assert_ne!(Font { outline: true, ..Font::default() }, Font::default());
+        assert_eq!(t.derive(outlined, |s| s.font.outline = false), StyleId::DEFAULT);
+        let mut json = serde_json::to_value(Font::default())?;
+        assert_eq!(json.get("outline"), Some(&serde_json::Value::Bool(false)));
+        assert!(json.as_object_mut().ok_or("none")?.remove("outline").is_some());
+        assert_eq!(serde_json::from_value::<Font>(json)?, Font::default());
+        let on = serde_json::to_value(Font { outline: true, ..Font::default() })?;
+        assert_eq!(on.get("outline"), Some(&serde_json::Value::Bool(true)));
+        let mut stated = serde_json::to_value(DxfStated::default())?;
+        assert!(stated.as_object_mut().ok_or("none")?.remove("outline").is_some());
+        assert_eq!(serde_json::from_value::<DxfStated>(stated)?, DxfStated::default());
+        Ok(())
     }
 
     #[test]
