@@ -1307,13 +1307,14 @@ fn imported_xlsx_b5_envelope_uses_iso_b5_print_dimensions() {
         let mut part = input.by_index(i).unwrap();
         let mut data = Vec::new();
         part.read_to_end(&mut data).unwrap();
-        if part.name() == "xl/worksheets/sheet1.xml" {
+        let name = part.name().unwrap().to_string();
+        if name == "xl/worksheets/sheet1.xml" {
             let xml = String::from_utf8(data).unwrap();
             assert!(xml.contains(r#"paperSize="5""#));
             // Set the input id independently of the shared paper-name mapping under test.
             data = xml.replace(r#"paperSize="5""#, r#"paperSize="34""#).into_bytes();
         }
-        output.start_file(part.name(), zip::write::SimpleFileOptions::default()).unwrap();
+        output.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
         output.write_all(&data).unwrap();
     }
     let bytes = output.finish().unwrap().into_inner();
