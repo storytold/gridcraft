@@ -512,6 +512,15 @@ fn control_auth_handshake_and_compare() {
     assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
 }
 
+#[test]
+fn a_relative_token_root_is_refused_before_it_is_selected() {
+    // The app may point the tokens at its own private profile, but only at an absolute folder: a
+    // relative one would resolve against whatever directory the process was started in. (A
+    // successful selection is process-wide, so this test only exercises the refusal.)
+    assert!(crate::control_auth::set_token_root(std::path::PathBuf::from("relative/tokens")).is_err());
+    assert!(crate::control_auth::set_token_root(std::path::PathBuf::from("")).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn control_token_file_is_private() {
@@ -707,4 +716,30 @@ fn a_window_argument_routes_tools_to_that_window() {
     let titles: Vec<String> =
         ok(&mut s, "list_windows", json!({})).as_array().unwrap().iter().map(|r| r["title"].as_str().unwrap().to_string()).collect();
     assert_eq!(titles, ["Book1:1", "Book2", "Book1:2"]);
+}
+
+#[test]
+fn stdio_cancel_and_batch_transcript() {
+    let input = concat!(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"}}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":1,\"reason\":\"client\"}}\n",
+        "[]\n",
+        "[{\"jsonrpc\":\"2.0\",\"method\":\"notifications/cancelled\",\"params\":{\"requestId\":9}}]\n",
+        "[{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"ping\"},{\"jsonrpc\":\"2.0\",\"method\":\"notifications/progress\"}]\n",
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"ping\",\"params\":{}}\n"
+    );
+    let mut s = server();
+    let mut out = Vec::new();
+    s.serve(input.as_bytes(), &mut out).unwrap();
+    assert!(s.is_initialized());
+
+    let replies: Vec<Value> = std::str::from_utf8(&out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(replies.len(), 4, "{replies:?}");
+    assert_eq!(replies[0]["id"], 1);
+    assert_eq!(replies[0]["result"]["serverInfo"]["name"], "gridcraft");
+    assert_eq!(replies[1]["id"], Value::Null);
+    assert_eq!(replies[1]["error"]["code"], -32600);
+    assert_eq!(replies[2], json!([{"jsonrpc": "2.0", "id": 2, "result": {}}]));
+    assert_eq!(replies[3], json!({"jsonrpc": "2.0", "id": 3, "result": {}}));
 }

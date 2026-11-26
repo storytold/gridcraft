@@ -216,7 +216,7 @@ pub fn question_box(app: &mut SheetApp, ctx: &egui::Context) {
         ui.add(egui::Label::new(&q.text).wrap());
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if ui.button("Cancel").clicked() || crate::framework::escape_pressed(ui.ctx()) {
                 answer = Some(None);
             }
             // Right to left: list the choices reversed, so the first one ends up next to Cancel
