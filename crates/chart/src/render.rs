@@ -159,6 +159,7 @@ pub(crate) fn sanitize(d: &ChartData) -> ChartData {
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
                 number_format: s.number_format.clone(),
+                point_formats: s.point_formats.iter().take(MAX_POINTS).cloned().collect(),
             })
             .collect(),
     }
