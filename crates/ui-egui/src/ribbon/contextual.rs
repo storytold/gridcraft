@@ -104,7 +104,7 @@ fn table_style_strip(app: &mut SheetApp, ui: &mut Ui, tname: &str, current: &str
         }
         let more = icon_button(ui, Icon::Chevron, t.text_dim, "More Table Styles", vec2(18.0, 40.0));
         anchor_keytip(app, ui, &more, &["table.style"]);
-        egui::Popup::menu(&more).show(|ui| table_gallery(app, ui, "table.style"));
+        egui::Popup::menu(&more).show(|ui| table_gallery(app, ui, "table.style", false));
     });
 }
 

@@ -367,8 +367,9 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
     anchor_keytip(app, ui, &cf, &["home.conditionalFormat", "home.manageRules", "home.clearRules"]);
     egui::Popup::menu(&cf).show(|ui| cf_menu(app, ui));
     let ft = big_button(ui, Icon::FormatTable, "Format\nas Table", "Format as Table", true);
-    anchor_keytip(app, ui, &ft, &["table.style"]);
-    egui::Popup::menu(&ft).show(|ui| table_gallery(app, ui, "home.formatAsTable"));
+    control_keytip(app, ui, &ft, "home.formatAsTable");
+    let forced = invoke(app, "home.formatAsTable");
+    egui::Popup::menu(&ft).open_memory(popup_command(forced, ft.clicked())).show(|ui| table_gallery(app, ui, "home.formatAsTable", forced));
     let cs = big_button(ui, Icon::CellStyles, "Cell\nStyles", "Cell Styles", true);
     anchor_keytip(app, ui, &cs, &["home.newCellStyle"]);
     egui::Popup::menu(&cs).show(|ui| cell_style_gallery(app, ui));

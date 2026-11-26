@@ -1015,21 +1015,8 @@ fn keytip_hsu_() {
 fn keytip_ht_() {
     let mut h = harness(blank());
     sequence(&mut h, "HT", false);
-    assert_eq!(h.state().keytips.prefix(), Some("HT"), "HT must stay armed waiting for more input");
-}
-
-#[test]
-fn keytip_htn_() {
-    let mut h = harness(blank());
-    sequence(&mut h, "HTN", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "HTN must invoke table.style and surface its missing-params error");
-}
-
-#[test]
-fn keytip_htp_() {
-    let mut h = harness(blank());
-    sequence(&mut h, "HTP", false);
-    assert!(h.state().message.is_some() || h.state().toast.is_some(), "HTP must invoke table.style and surface its missing-params error");
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "HT must route to its control without an error box");
+    assert_eq!(h.state().keytips.prefix(), None);
 }
 
 #[test]
@@ -3086,7 +3073,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 413;
+    const EXPECTED: usize = 411;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

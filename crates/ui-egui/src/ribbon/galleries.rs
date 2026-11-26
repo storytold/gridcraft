@@ -2,7 +2,7 @@ use super::controls::act;
 use super::{Align2, Cat, Rect, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, json, pos2, theme, vec2};
 
 /// A gallery of table styles drawn as mini tables.
-pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
+pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str, focus_first: bool) {
     ui.set_width(430.0);
     let Some(wb) = app.session.active().map(|d| d.wb.clone()) else { return };
     for (fam, n) in [("Light", 21u32), ("Medium", 28), ("Dark", 11)] {
@@ -11,8 +11,12 @@ pub(super) fn table_gallery(app: &mut SheetApp, ui: &mut Ui, cmd: &str) {
             for i in 1..=n {
                 let name = format!("TableStyle{fam}{i}");
                 let (r, resp) = ui.allocate_exact_size(vec2(54.0, 38.0), Sense::click());
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &name));
+                if focus_first && fam == "Light" && i == 1 {
+                    resp.request_focus();
+                }
                 paint_table_swatch(ui, r, &wb, &name);
-                if resp.hovered() {
+                if resp.hovered() || resp.has_focus() {
                     ui.painter().rect_stroke(r.expand(1.5), 2.0, Stroke::new(2.0, Tokens::get(ui.ctx()).cat(Cat::Orange)), StrokeKind::Outside);
                 }
                 if resp.on_hover_text(&name).clicked() {
