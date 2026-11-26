@@ -39,3 +39,13 @@ pub fn services_harness(services: Services, steps: usize) -> Harness {
 pub fn app_harness(app: SheetApp, steps: usize) -> Harness {
     harness_with(builder().with_size(egui::vec2(1200.0, 800.0)), app, steps)
 }
+
+/// Runs `n` frames as the desktop and web shells do: the app hands the runtime its frame input
+/// (theme mode, interface scale) before each one.
+pub fn frames(h: &mut Harness, n: usize) {
+    for _ in 0..n {
+        let ctx = h.ctx.clone();
+        h.state_mut().before_input(&ctx);
+        h.step();
+    }
+}
