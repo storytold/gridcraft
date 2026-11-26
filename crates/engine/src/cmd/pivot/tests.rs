@@ -501,6 +501,53 @@ fn refresh_after_source_edits() {
     s.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
 }
 
+/// #3738: renaming the source worksheet keeps a range-backed PivotTable working, before and after
+/// an XLSX round trip.
+#[test]
+fn source_follows_a_renamed_sheet() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("sheet.rename", json!({"name": "Source"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Amount"], ["East", 10], ["West", 20]]})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Report"})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({"source": "Source!A1:B3", "destination": "Report!A1", "name": "RegionPivot", "rows": ["Region"], "values": [{"field": "Amount", "func": "sum"}]}),
+    )
+    .unwrap();
+    let source = |s: &Session| {
+        let d = s.doc().unwrap();
+        let si = d.wb.sheet_index("Report").unwrap();
+        d.wb.sheet(si).unwrap().pivots[0].source.clone()
+    };
+    let total = |s: &Session| {
+        let d = s.doc().unwrap();
+        let si = d.wb.sheet_index("Report").unwrap();
+        d.wb.sheet(si).unwrap().value(CellRef::parse("B4").unwrap())
+    };
+    s.execute("sheet.rename", json!({"sheet": "Source", "name": "RenamedSource"})).unwrap();
+    assert_eq!(source(&s), "RenamedSource!A1:B3");
+    s.execute("cell.set", json!({"sheet": "RenamedSource", "cell": "B2", "input": "12"})).unwrap();
+    s.execute("pivot.refresh", json!({"pivot": "RegionPivot"})).unwrap();
+    assert_eq!(total(&s), Value::Number(32.0));
+    // A name that needs quotes is quoted.
+    s.execute("sheet.rename", json!({"sheet": "RenamedSource", "name": "My Data"})).unwrap();
+    assert_eq!(source(&s), "'My Data'!A1:B3");
+    // Undo restores the source with the sheet name.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(source(&s), "RenamedSource!A1:B3");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(source(&s), "'My Data'!A1:B3");
+    s.execute("pivot.refresh", json!({"pivot": "RegionPivot"})).unwrap();
+    // The PivotTable is saved and still refreshes after reopening.
+    let wb = (*s.doc().unwrap().wb).clone();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let si = back.sheet_index("Report").unwrap();
+    let pts = &back.sheet(si).unwrap().pivots;
+    assert_eq!(pts.len(), 1);
+    assert_eq!(crate::pivot::resolve_source(&back, &pts[0].source, si).map(|(i, _)| i), Ok(back.sheet_index("My Data").unwrap()));
+}
+
 fn pivot_chart(s: &Session) -> gridcraft_model::Chart {
     s.doc().unwrap().wb.active().unwrap().charts.last().unwrap().clone()
 }
