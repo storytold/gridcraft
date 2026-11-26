@@ -27,6 +27,7 @@ fn ctrl_shift_a() -> Event {
 /// A cell editor holding `text`, caret at the end.
 fn editing(text: &str) -> (Context, SheetApp) {
     let ctx = Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     let mut session = Session::new();
     session.new_workbook();
     let mut app = crate::common::app(session);

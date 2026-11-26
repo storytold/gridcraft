@@ -270,7 +270,7 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                             ed.request_focus();
                                         }
                                         if ed.lost_focus() {
-                                            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) && text != name {
+                                            if !crate::framework::escape_pressed(ui.ctx()) && text != name {
                                                 app.run_or_alert("sheet.rename", json!({"sheet": i, "name": text}));
                                             }
                                             app.grid.renaming_tab = None;
