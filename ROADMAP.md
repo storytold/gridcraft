@@ -217,6 +217,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-13 | Spills: an array that grows into cells another array's spill already holds is `#SPILL!`, in automatic calculation and after Calculate Now, as in Excel; a workbook reopened from XLSX keeps the spill layout it was saved with (#964, found by the command-sequence fuzz) |
 | 2026-10-13 | Grid: resizing several selected columns or rows previews on the dragged one and applies the size to all on release; Esc cancels (#1082) |
 | 2026-10-12 | Next/previous sheet navigation stops at the first/last visible worksheet instead of activating a hidden boundary sheet; the current selection is retained |
+| 2026-10-12 | Quick Analysis (Ctrl+Q): a corner button and popup on multi-cell selections run conditional formats, charts, totals (`analysis.addTotal`), tables, PivotTables and sparklines (`analysis.addSparklines`) in one click (#791) |
 | 2026-10-12 | GETPIVOTDATA reads PivotTable values by field and items (#284) |
 | 2026-10-12 | PDF writer: objects are written straight to the output, identical pictures are stored once, style operators are emitted only when they change, `q` nesting is limited to 28 and polyline joins no longer leak into later strokes (#816) |
 | 2026-10-12 | Insert › Text › WordArt (`insert.wordArt`, `wordArt.set`): floating decorative text with 10 original styles, outline and shadow, in-place editing, XLSX and print (#784) |

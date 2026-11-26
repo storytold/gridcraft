@@ -48,6 +48,7 @@ fn sample() -> Workbook {
             indent: 1,
             rotation: -30,
             reading_order: Some(ReadingOrder::RightToLeft),
+            padding: [None; 4],
         };
         s.protection.locked = false;
     });
@@ -807,6 +808,33 @@ fn empty_workbook_roundtrip() {
     assert_eq!(back.sheets[0].default_col_width, 64.0);
     assert_eq!(back.sheets[0].default_row_height, 20.0);
     assert!(crate::sniff(&bytes) == crate::Format::Xlsx);
+}
+
+/// Outlined (hollow) letters are kept on save and reopen, written after `<strike/>` as Excel does;
+/// `<outline val="0"/>` reads as not outlined.
+#[test]
+fn outlined_font_survives_xlsx_roundtrip() {
+    let mut wb = Workbook::new();
+    let outlined = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.font.outline = true;
+        s.font.strike = true;
+    });
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.cells.set(at("A1"), Cell { value: Value::text("hollow"), formula: None, style: outlined, py: None });
+    sheet.set_value(at("A2"), Value::text("solid"));
+
+    let bytes = write_xlsx(&wb).unwrap();
+    let styles = Package::open(&bytes).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let styles = String::from_utf8(styles).unwrap();
+    assert!(styles.contains("<strike/><outline/>"), "{styles}");
+    assert_eq!(styles.matches("<outline").count(), 1, "only the outlined font says so: {styles}");
+
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let sheet = &back.sheets[0];
+    let style_of = |a: &str| back.styles.get(sheet.cells.get(at(a)).map_or(StyleId::DEFAULT, |c| c.style));
+    assert!(style_of("A1").font.outline && style_of("A1").font.strike);
+    assert!(!style_of("A2").font.outline);
+    assert!(!crate::styles::read_font(&crate::xml::parse(br#"<font><outline val="0"/></font>"#).unwrap(), &[]).outline);
 }
 
 #[test]
@@ -2212,6 +2240,49 @@ fn remove_personal_information_is_kept_and_honoured() {
     let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
+}
+
+#[test]
+fn cell_padding_is_dropped_by_xlsx_and_nothing_else_is() {
+    // SpreadsheetML has no cell padding: it is not written, and everything else in the style is.
+    let mut wb = Workbook::new();
+    let full = wb.styles.derive(StyleId::DEFAULT, |s| {
+        s.font.bold = true;
+        s.fill = Fill::solid(Color::Rgb(0x00AAFF));
+        s.align = Alignment {
+            h: HAlign::Right,
+            v: VAlign::Center,
+            wrap: true,
+            shrink: false,
+            indent: 2,
+            rotation: 45,
+            reading_order: None,
+            padding: [Some(100), Some(200), Some(0), None],
+        };
+    });
+    let only_padding = wb.styles.derive(StyleId::DEFAULT, |s| s.align.padding = [Some(50); 4]);
+    let mut s = Sheet::new("Padded");
+    s.cells.set(at("A1"), Cell { value: Value::text("full"), formula: None, style: full, py: None });
+    s.cells.set(at("B2"), Cell { value: Value::Number(7.0), formula: None, style: only_padding, py: None });
+    wb.sheets = vec![Arc::new(s)];
+
+    let bytes = write_xlsx(&wb).unwrap();
+    assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
+    // Only the full style writes `<alignment>`: the padding-only one differs from the default by
+    // nothing SpreadsheetML has, so it writes neither an empty `<alignment/>` nor `applyAlignment`.
+    let mut pkg = Package::open(&bytes).unwrap();
+    let styles = String::from_utf8(pkg.read("xl/styles.xml").unwrap().unwrap()).unwrap();
+    assert_eq!(styles.matches("<alignment").count(), 1, "{styles}");
+    assert_eq!(styles.matches("applyAlignment").count(), 1, "{styles}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+    for cell in ["A1", "B2"] {
+        let (ca, cb) = (a.cells.get(at(cell)).unwrap(), b.cells.get(at(cell)).unwrap());
+        assert_eq!(ca.value, cb.value, "{cell}");
+        let mut want = wb.styles.get(ca.style).clone();
+        want.align.padding = [None; 4];
+        assert_eq!(back.styles.get(cb.style), &want, "{cell}");
+    }
 }
 
 #[test]
