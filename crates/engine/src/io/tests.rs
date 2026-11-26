@@ -636,6 +636,22 @@ fn displayed_exports_respect_show_zeros_and_raw_csv_keeps_values() {
 }
 
 #[test]
+fn hidden_zeros_keep_visible_formulas_in_html() {
+    use gridcraft_core::Value;
+    use gridcraft_model::{Cell, Formula};
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::Number(0.0));
+    sh.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(0.0), ..Cell::formula(Formula::new("1-1")) });
+    sh.set_value(CellRef::new(0, 2), Value::text("0"));
+    sh.show_zeros = false;
+    sh.show_formulas = true;
+    let html = String::from_utf8(save_bytes(&wb, "formulas.html").unwrap()).unwrap();
+    assert!(html.contains(">=1-1</td>"), "a visible formula is not a numeric zero constant: {html}");
+    assert_eq!(html.matches(">0</td>").count(), 1, "only the literal text zero remains: {html}");
+}
+
+#[test]
 fn delimited_exports_preserve_general_precision_and_explicit_number_formats() {
     use gridcraft_core::Value;
     use gridcraft_model::{Cell, NumFmt, StyleId};
