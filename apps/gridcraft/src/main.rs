@@ -480,7 +480,6 @@ fn main() -> eframe::Result<()> {
     if !nightly {
         app.start_update_check();
     }
-    let control_port = control_port;
     load_prefs(&mut app);
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
