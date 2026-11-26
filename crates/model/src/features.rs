@@ -609,12 +609,21 @@ pub struct Trendline {
     pub intercept: Option<f64>,
     pub display_equation: bool,
     pub display_r_squared: bool,
+    /// Number format of the equation and R-squared label, if the file supplies one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label_format: Option<TrendlineLabelFormat>,
     /// Line colour; `None` = the series colour.
     pub color: Option<Color>,
     /// Line width in points; `None` = default.
     pub width: Option<f32>,
     /// Line dash; `None` = default.
     pub dash: Option<LineDash>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrendlineLabelFormat {
+    pub code: String,
+    pub source_linked: bool,
 }
 
 impl Trendline {

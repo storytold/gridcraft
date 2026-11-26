@@ -121,6 +121,22 @@ fn chart_parts(bytes: &[u8]) -> Vec<String> {
 }
 
 #[test]
+fn trendline_label_number_format_survives_chart_conversion() {
+    let mut wb = workbook();
+    let source = chart_parts(&write_xlsx(&wb).unwrap()).remove(0).replacen(
+        r#"<c:numFmt formatCode="General" sourceLinked="0"/>"#,
+        r#"<c:numFmt formatCode="0.000000&quot; units&quot;" sourceLinked="0"/>"#,
+        1,
+    );
+    let root = crate::xml::parse(source.as_bytes()).unwrap();
+    wb.sheet_mut(0).unwrap().charts = vec![crate::chart::read_chart(&root).unwrap()];
+
+    let saved = chart_parts(&write_xlsx(&wb).unwrap()).remove(0);
+    assert!(saved.contains(r#"<c:trendlineLbl><c:numFmt formatCode="0.000000&quot; units&quot;" sourceLinked="0"/>"#), "{saved}");
+    assert!(saved.contains(r#"<c:trendlineLbl><c:numFmt formatCode="General" sourceLinked="0"/>"#), "{saved}");
+}
+
+#[test]
 fn trendlines_follow_the_series_schema_sequence() {
     let parts = chart_parts(&write_xlsx(&workbook()).unwrap());
     assert_eq!(parts.len(), KINDS.len());
