@@ -25,14 +25,17 @@ fn fixture_of(kind: &str) -> (Harness, u32) {
         let shape = session.execute("insert.shape", json!({"kind": kind, "at": "D3", "width": 160, "height": height})).unwrap();
         shape["shape"].as_u64().unwrap() as u32
     };
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(vec2(1200.0, 800.0))
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(session, Default::default()),
+        );
     h.run_steps(4);
     h.state_mut().selected_object = None;
     h.run_steps(2);

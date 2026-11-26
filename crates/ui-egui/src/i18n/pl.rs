@@ -1,6 +1,8 @@
 /// Returns the Polish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Trend liniowy",
+        "Growth Trend" => "Trend wykładniczy",
         "Diagram" => "Diagram",
         "Decorative Text" => "Tekst ozdobny",
         "Paste" => "Wklej",
@@ -366,6 +368,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Ostatnie",
         "No recent workbooks yet." => "Nie masz jeszcze ostatnio używanych skoroszytów.",
         "More workbooks" => "Więcej skoroszytów",
+        "More entries not shown" => "Więcej elementów nie jest wyświetlanych",
         "Modified" => "Zmodyfikowano",
         "Not available" => "Niedostępne",
         "Just now" => "Przed chwilą",
@@ -997,6 +1000,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Przenieś do wartości",
         "Summarize by Sum" => "Podsumuj według: Suma",
         "Summarize by Count" => "Podsumuj według: Licznik",
+        "Summarize by Distinct Count" => "Podsumuj według: Licznik unikatowych",
         "Summarize by Average" => "Podsumuj według: Średnia",
         "Summarize by Max" => "Podsumuj według: Maksimum",
         "Summarize by Min" => "Podsumuj według: Minimum",
@@ -1049,6 +1053,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "GridCraft never makes this conversion: 12JAN2026 stays text." => "GridCraft nigdy nie wykonuje tej konwersji: 12JAN2026 pozostaje tekstem.",
         "Data conversion settings apply to every workbook; they are not saved in the file." => {
             "Ustawienia konwersji danych dotyczą wszystkich skoroszytów; nie są zapisywane w pliku."
+        }
+        "Distinct Count" => "Licznik unikatowych",
+        "A calculated field can't use Distinct Count." => "Pole obliczeniowe nie może używać licznika unikatowych.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Ten skoroszyt zawiera tabelę przestawną z polem wartości „Licznik unikatowych”. W pliku .xlsx jest ona zapisana jako zwykły Licznik wraz ze znacznikiem, który odczytuje tylko GridCraft, więc Odśwież w programie Excel zamienia ją w zwykły licznik."
         }
         "Numerical Count" => "Liczba wartości liczbowych",
         "Minimum" => "Minimum",
@@ -1154,6 +1163,37 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char ma nienumeryczny argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char z nieprawidłowym punktem kodowym {code}",
         "Invalid environment name character: {character}" => "Nieprawidłowy znak w nazwie środowiska: {character}",
+        "Copy Cells" => "Kopiuj komórki",
+        "Fill Series" => "Wypełnij serią",
+        "Fill Formatting Only" => "Wypełnij tylko formatami",
+        "Fill Without Formatting" => "Wypełnij bez formatowania",
+        "Fill Days" => "Wypełnij dniami",
+        "Fill Weekdays" => "Wypełnij dniami roboczymi",
+        "Fill Months" => "Wypełnij miesiącami",
+        "Fill Years" => "Wypełnij latami",
+        "Auto Fill Options" => "Opcje autowypełniania",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Nowa reguła formatowania",
+        "Edit Formatting Rule" => "Edytuj regułę formatowania",
+        "Select a Rule Type" => "Wybierz typ reguły",
+        "Edit the Rule Description" => "Edytuj opis reguły",
+        "Format all cells based on their values" => "Formatuj wszystkie komórki na podstawie ich wartości",
+        "Format only cells that contain" => "Formatuj tylko komórki zawierające",
+        "Format only top or bottom ranked values" => "Formatuj tylko wartości o najwyższej lub najniższej pozycji",
+        "Format only values that are above or below average" => "Formatuj tylko wartości powyżej lub poniżej średniej",
+        "Format only unique or duplicate values" => "Formatuj tylko wartości unikatowe lub zduplikowane",
+        "Use a formula to determine which cells to format" => "Użyj formuły do określenia, które komórki mają być formatowane",
+        "This rule type isn't available yet." => "Ten typ reguły nie jest jeszcze dostępny.",
+        "Format Style:" => "Styl formatu:",
+        "2-Color Scale" => "Skala dwukolorowa",
+        "3-Color Scale" => "Skala trójkolorowa",
+        "Midpoint" => "Punkt środkowy",
+        "Lowest value" => "Najniższa wartość",
+        "Highest value" => "Najwyższa wartość",
+        "Percent" => "Procent",
+        "Percentile" => "Percentyl",
+        "Formula" => "Formuła",
+        "More Rules…" => "Więcej reguł…",
         _ => return None,
     })
 }
