@@ -3201,6 +3201,36 @@ fn active_owner_suppressed_reader_recalculates_after_owner_completes() {
 }
 
 #[test]
+fn deep_spill_owner_chain_suppressed_reader_settles_without_round_exhaustion() {
+    let mut t = T::new();
+    let cols = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
+    for col in cols {
+        t.set(&format!("{col}1"), "=SEQUENCE(3)");
+    }
+    t.set("J1", "=SUM(I2:I3)");
+    assert_eq!(t.get("J1"), Value::Number(5.0));
+
+    for i in (0..cols.len()).rev() {
+        let cur = cols[i];
+        let formula = if i == cols.len() - 1 {
+            "=IF(J1+SUM(H2:H3)>=0,SEQUENCE(3),1)".to_string()
+        } else if i == 0 {
+            "=IF(B1>=0,SEQUENCE(3),1)".to_string()
+        } else {
+            let prev = cols[i - 1];
+            let next = cols[i + 1];
+            format!("=IF({next}1+SUM({prev}2:{prev}3)>=0,SEQUENCE(3),1)")
+        };
+        t.set(&format!("{cur}1"), &formula);
+    }
+
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("J1"), Value::Number(5.0));
+    assert_eq!(t.get("J1"), fresh.sheet(0).unwrap().value(c("J1")));
+}
+
+#[test]
 fn active_ancestor_stale_spill_is_hidden_during_on_demand_read() {
     let mut t = T::new();
     t.set("A1", "=SEQUENCE(3)");

@@ -560,7 +560,7 @@ impl Calc {
         if !full {
             self.standing = Standing::default();
         }
-        let mut priority: HashSet<Key> = HashSet::default();
+        let mut priority: HashMap<Key, usize> = HashMap::default();
         for _round in 0..8 {
             if dirty.is_empty() {
                 break;
@@ -580,8 +580,8 @@ impl Calc {
                     }
                 }
             }
-            // Suppressed readers run before active spill owners in the follow-up round, then row-major.
-            dirty.sort_by_key(|k| (!priority.contains(k), k.0, k.1.row, k.1.col));
+            // Suppressed readers run deepest-first before active spill owners in the follow-up round, then row-major.
+            dirty.sort_by_key(|k| (std::cmp::Reverse(priority.get(k).copied().unwrap_or(0)), k.0, k.1.row, k.1.col));
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
             for k in &dirty {
                 if let Some(e) = wb.sheet(k.0).and_then(|s| s.cell(k.1)).and_then(|c| c.formula.as_ref()).and_then(|f| f.expr_arc()) {
@@ -658,8 +658,8 @@ impl Calc {
         dirty: &[Key],
         results: HashMap<Key, Value>,
         spills: &HashMap<Key, std::sync::Arc<Array>>,
-        suppressed: &HashMap<Key, HashSet<Key>>,
-        priority: &mut HashSet<Key>,
+        suppressed: &HashMap<Key, HashMap<Key, usize>>,
+        priority: &mut HashMap<Key, usize>,
     ) -> Vec<Key> {
         let mut spill_changes = Vec::new();
         let mut freed = Vec::new();
@@ -684,9 +684,9 @@ impl Calc {
                 continue;
             }
             if let Some(readers) = suppressed.get(key) {
-                for &reader in readers {
+                for (&reader, &depth) in readers {
                     spill_changes.push(reader);
-                    priority.insert(reader);
+                    priority.entry(reader).and_modify(|d| *d = (*d).max(depth)).or_insert(depth);
                 }
             }
             // An unchanged spill does not alter any values its dependents read.

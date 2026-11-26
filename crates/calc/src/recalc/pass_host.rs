@@ -33,8 +33,8 @@ pub(super) struct PassHost<'a> {
     stale_built: HashSet<usize>,
     /// Formula currently evaluating at the innermost level (`compute` pushes and restores it).
     current: Option<Key>,
-    /// Readers whose read suppressed a still-active owner's stored spill: owner → readers.
-    pub(super) suppressed: HashMap<Key, HashSet<Key>>,
+    /// Readers whose read suppressed a still-active owner's stored spill: owner → (reader → depth).
+    pub(super) suppressed: HashMap<Key, HashMap<Key, usize>>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -189,7 +189,7 @@ struct StaleSpillState<'a> {
     in_progress: &'a HashSet<Key>,
     waiting: &'a HashSet<Key>,
     current: Option<Key>,
-    suppressed: &'a mut HashMap<Key, HashSet<Key>>,
+    suppressed: &'a mut HashMap<Key, HashMap<Key, usize>>,
 }
 
 impl StaleSpillState<'_> {
@@ -203,7 +203,9 @@ impl StaleSpillState<'_> {
                 if let Some(reader) = self.current
                     && reader != owner
                 {
-                    self.suppressed.entry(owner).or_default().insert(reader);
+                    let depth = self.in_progress.len() + self.waiting.len();
+                    let readers = self.suppressed.entry(owner).or_default();
+                    readers.entry(reader).and_modify(|d| *d = (*d).max(depth)).or_insert(depth);
                 }
                 return true;
             }
