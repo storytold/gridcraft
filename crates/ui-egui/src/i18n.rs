@@ -509,6 +509,35 @@ mod tests {
         }
     }
 
+    /// The right-drag fill menu's Linear Trend and Growth Trend have a row in every catalog, with
+    /// no English fallback.
+    #[test]
+    fn trend_fill_labels_are_translated_in_every_catalog() {
+        for key in ["Linear Trend", "Growth Trend"] {
+            assert_eq!(Language::En.tr(key), key);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('\n'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_ne!(shown, key, "{code}: the row for {key:?} is still English");
+            }
+        }
+    }
+
+    /// The note under a validation list that was cut short is a sentence, not a feature name: a
+    /// catalog without it shows the English sentence in the middle of a translated interface.
+    #[test]
+    fn the_cut_short_list_note_is_translated_in_every_catalog() {
+        let key = crate::grid::editor::LIST_MORE_NOTE;
+        for language in Language::ALL {
+            let shown = language.tr(key);
+            assert!(!shown.contains('\n'), "{}: {key:?} is not a single line: {shown:?}", language.code());
+            if language != Language::En {
+                assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+            }
+        }
+    }
+
     /// The Custom Sort dialog's own strings have a row in every catalog (no silent English
     /// fallback), keep the `{letters}` placeholder, and read as plain English in English.
     #[test]
@@ -634,6 +663,24 @@ mod tests {
                 let text = language.tr(template);
                 assert_eq!(placeholders(text), placeholders(template), "{}: {template:?} => {text:?}", language.code());
                 assert!(!text.contains('\n'), "{}: {template:?} => {text:?}", language.code());
+            }
+        }
+    }
+
+    #[test]
+    fn paste_special_add_and_text_to_columns_comma_have_their_own_keys() {
+        // "Add" is also the Solver button and "Comma" also the cell style (Spanish Excel: Sumar
+        // vs Agregar, Coma vs Millares), so the two dialog options are keyed by context. English
+        // shows the plain label, and a catalog that translates the plain label translates the
+        // keyed one too, so the dialog option doesn't fall back to English.
+        for (keyed, plain) in [("Paste Special|Add", "Add"), ("Text to Columns|Comma", "Comma")] {
+            assert_eq!(Language::En.tr(keyed), plain);
+            for language in Language::ALL {
+                let shown = language.tr(keyed);
+                assert!(!shown.contains('|'), "{} shows a context prefix for {keyed}: {shown}", language.code());
+                if language.tr(plain) != plain {
+                    assert_ne!(shown, plain, "{} translates {plain:?} but not {keyed:?}", language.code());
+                }
             }
         }
     }

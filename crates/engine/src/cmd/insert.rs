@@ -84,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?}",
             has_doc,
             insert_chart
         ),
@@ -217,7 +217,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], stops?: [{type: min|max|num|percent|percentile|formula, value?, color}], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
             has_doc,
             add_cf
         ),
@@ -227,7 +227,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Manage Rules…",
             ["Home", "Styles", "Conditional Formatting"],
             None,
-            "{delete?: index, moveUp?: index, moveDown?: index}",
+            "{delete?: index, moveUp?: index, moveDown?: index, edit?: index, rule?: {...} (with edit)}",
             has_doc,
             manage_cf
         ),
@@ -338,6 +338,74 @@ mod tests {
     }
 
     #[test]
+    fn chart_type_change_drops_series_kinds_it_does_not_draw() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A", "B"], ["Q1", 10, 1], ["Q2", 20, 2]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:C3", "type": "combo"})).unwrap();
+        let chart = |s: &Session| s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let active = wb.active_sheet();
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[0].kind = Some(ChartKind::Area);
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        // A new type applies to every series: neither the area nor the markers stay.
+        s.execute("chart.set", json!({"type": "line"})).unwrap();
+        let c = chart(&s);
+        assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, None]);
+        assert_eq!((c.series_kind(0), c.series_kind(1)), (ChartKind::Line, ChartKind::Line));
+        // Setting the type a chart already has keeps a series' own markers (a file's).
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        s.execute("chart.set", json!({"type": "line", "subtype": ""})).unwrap();
+        assert_eq!(chart(&s).series_kinds(), vec![ChartKind::Line, ChartKind::LineMarkers]);
+        // Trendlines go by the kind each series is drawn as.
+        s.execute("chart.set", json!({"type": "pie"})).unwrap();
+        assert!(s.execute("chart.addElement", json!({"element": "trendline"})).is_err());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(chart(&s).series[1].kind, Some(ChartKind::LineMarkers));
+    }
+
+    /// Adding a trendline to every series of a combo chart works out the series' kinds in one
+    /// pass, however many series it holds (a stored chart isn't held to the renderer's limit):
+    /// eight times the series is about eight times the work, not sixty-four.
+    #[test]
+    fn trendlines_for_every_series_are_checked_in_linear_time() {
+        let visits = |n: usize| {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+            s.execute("insert.chart", json!({"range": "A1:B3", "type": "combo"})).unwrap();
+            // Line series, then as many column series: asked one at a time, each column series
+            // looks back past every line series for the first column series of its group.
+            let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+            let active = wb.active_sheet();
+            if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+                let one = c.series[0].clone();
+                c.series = (0..2 * n)
+                    .map(|i| {
+                        let mut se = one.clone();
+                        se.kind = Some(if i < n { ChartKind::Line } else { ChartKind::ColumnClustered });
+                        se
+                    })
+                    .collect();
+            }
+            gridcraft_model::features::work::take_series_visits();
+            s.execute("chart.addElement", json!({"element": "trendline"})).unwrap();
+            let visits = gridcraft_model::features::work::take_series_visits();
+            let c = s.active().unwrap().wb.active().unwrap().charts[0].clone();
+            assert!(c.series.iter().all(|se| se.trendlines.len() == 1));
+            visits
+        };
+        let (small, large) = (visits(200), visits(1_600));
+        assert!(small >= 400, "every series' kind is worked out: {small}");
+        assert!(large < 16 * small, "eight times the series took {large} visits against {small}");
+    }
+
+    #[test]
     fn chart_data_table_refuses_unsupported_types_without_changing_history() {
         let mut s = Session::new();
         s.new_workbook();
@@ -427,5 +495,303 @@ mod tests {
         }
         s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
         s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
+    }
+
+    #[test]
+    fn colour_scale_thresholds_are_clamped_to_the_percent_range() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "percent", "value": -5, "color": "#112233"},
+                {"type": "percentile", "value": 150, "color": "#445566"},
+                {"type": "max", "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::ColorScale { stops } = rule else { panic!("expected a colour scale") };
+        assert_eq!(
+            stops,
+            vec![
+                (CfValueKind::Percent(0.0), Color::Rgb(0x112233)),
+                (CfValueKind::Percentile(100.0), Color::Rgb(0x445566)),
+                (CfValueKind::Max, Color::Rgb(0x778899)),
+            ]
+        );
+    }
+
+    #[test]
+    fn colour_scale_stops_reject_empty_formulas_and_unknown_types() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let with_stops = |stops: Json| json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": stops}});
+        let err = s
+            .execute(
+                "home.conditionalFormat",
+                with_stops(json!([
+                    {"type": "min", "color": "#112233"},
+                    {"type": "formula", "value": "  ", "color": "#445566"},
+                    {"type": "max", "color": "#778899"},
+                ])),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("home.conditionalFormat"), "{err}");
+        assert!(err.contains("formula"), "{err}");
+
+        let err = s
+            .execute(
+                "home.conditionalFormat",
+                with_stops(json!([
+                    {"type": "min", "color": "#112233"},
+                    {"type": "median", "value": 50, "color": "#445566"},
+                    {"type": "max", "color": "#778899"},
+                ])),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown stop type `median`"), "{err}");
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn colour_scale_rejects_a_stops_value_that_is_not_an_array() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // `stops` present but misshapen used to fall back to the default scale instead of erroring.
+        for stops in [json!({}), json!(null), json!("min")] {
+            let err = s
+                .execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": stops}}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("home.conditionalFormat"), "{err}");
+            assert!(err.contains("`stops` must be an array"), "{err}");
+        }
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0), "an invalid `stops` creates no rule");
+    }
+
+    #[test]
+    fn colour_scale_formulas_are_stored_verbatim() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "min", "color": "#112233"},
+                {"type": "formula", "value": "=$Z$1", "color": "#445566"},
+                {"type": "max", "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::ColorScale { stops } = rule else { panic!("expected a colour scale") };
+        assert_eq!(stops[1].0, CfValueKind::Formula("=$Z$1".into()));
+    }
+
+    #[test]
+    fn manage_rules_rejects_a_non_index_edit() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}})).unwrap();
+        for bad in [json!("0"), json!(1.5), json!(-1), json!(true)] {
+            let err = s
+                .execute("home.manageRules", json!({"edit": bad, "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("`edit` must be a rule index"), "{err}");
+        }
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn manage_rules_rejects_an_edit_past_the_last_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}})).unwrap();
+        let err = s
+            .execute("home.manageRules", json!({"edit": 1, "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        assert!(err.contains("index 1"), "{err}");
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(1), "the failed edit leaves the rule alone");
+    }
+
+    #[test]
+    fn manage_rules_rejects_an_edit_index_that_does_not_fit_a_usize() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "A1>2"}})).unwrap();
+        // On a 32-bit target this used to cast to zero and replace the rule at index 0.
+        let err =
+            s.execute("home.manageRules", json!({"edit": 4294967296u64, "rule": {"type": "expression", "formula": "A1>3"}})).unwrap_err().to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        assert!(err.contains("index 4294967296"), "{err}");
+        let rule: CfRule = serde_json::from_value(s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::Expression { formula, .. } = rule else { panic!("expected a formula rule, got {rule:?}") };
+        assert_eq!(formula, "A1>2", "the failed edit leaves the rule alone");
+    }
+
+    #[test]
+    fn manage_rules_names_itself_in_a_style_error() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}})).unwrap();
+        // A style shared by both commands must name the one that was called.
+        let rule = json!({"type": "cellIs", "operator": "greater", "value": 1, "style": {"nope": 1}});
+        let err = s.execute("home.manageRules", json!({"edit": 0, "rule": rule.clone()})).unwrap_err().to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        assert!(!err.contains("home.conditionalFormat"), "{err}");
+        let err = s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap_err().to_string();
+        assert!(err.contains("home.conditionalFormat"), "{err}");
+    }
+
+    #[test]
+    fn manage_rules_names_itself_in_a_stop_count_error() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let err = s
+            .execute(
+                "home.manageRules",
+                json!({"edit": 0, "rule": {"type": "colorScale", "stops": [
+                    {"type": "min", "color": "#112233"},
+                ]}}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+    }
+
+    #[test]
+    fn a_formula_rule_needs_a_formula_that_parses() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // An empty box used to create a rule that never applies.
+        let err =
+            s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": ""}})).unwrap_err().to_string();
+        assert!(err.contains("formula is empty"), "{err}");
+        // `=C1>` used to be written as `<formula>C1&gt;</formula>`, which Excel refuses to open.
+        let err = s
+            .execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=C1>"}}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid"), "{err}");
+        assert!(err.contains("does not parse"), "{err}");
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0), "a refused rule is not stored");
+    }
+
+    #[test]
+    fn an_invalid_formula_on_edit_leaves_the_rule_alone() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "A1>2"}})).unwrap();
+        let err = s.execute("home.manageRules", json!({"edit": 0, "rule": {"type": "expression", "formula": "=C1>"}})).unwrap_err().to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        let rule: CfRule = serde_json::from_value(s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::Expression { formula, .. } = rule else { panic!("expected a formula rule, got {rule:?}") };
+        assert_eq!(formula, "A1>2");
+    }
+
+    #[test]
+    fn a_given_stop_value_must_be_a_number() {
+        let mut s = Session::new();
+        s.new_workbook();
+        for ty in ["num", "percent", "percentile"] {
+            let err = s
+                .execute(
+                    "home.conditionalFormat",
+                    json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                        {"type": ty, "value": "5", "color": "#112233"},
+                        {"type": "max", "color": "#778899"},
+                    ]}}),
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("home.conditionalFormat"), "{ty}: {err}");
+            assert!(err.contains(&format!("`{ty}` stop's `value` must be a number")), "{ty}: {err}");
+        }
+        // A refused scale stores nothing.
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn an_omitted_stop_value_is_zero() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "num", "color": "#112233"},
+                {"type": "percent", "color": "#445566"},
+                {"type": "percentile", "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::ColorScale { stops } = rule else { panic!("expected a colour scale") };
+        assert_eq!(
+            stops,
+            vec![
+                (CfValueKind::Number(0.0), Color::Rgb(0x112233)),
+                (CfValueKind::Percent(0.0), Color::Rgb(0x445566)),
+                (CfValueKind::Percentile(0.0), Color::Rgb(0x778899)),
+            ]
+        );
+    }
+
+    #[test]
+    fn colour_scale_stops_keep_their_thresholds_and_can_be_edited() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "min", "color": "#112233"},
+                {"type": "num", "value": 5, "color": "#445566"},
+                {"type": "percentile", "value": 90, "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let stops = match rule {
+            CfRule::ColorScale { stops } => stops,
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            stops,
+            vec![
+                (CfValueKind::Min, Color::Rgb(0x112233)),
+                (CfValueKind::Number(5.0), Color::Rgb(0x445566)),
+                (CfValueKind::Percentile(90.0), Color::Rgb(0x778899)),
+            ]
+        );
+
+        s.execute(
+            "home.manageRules",
+            json!({"edit": 0, "rule": {"type": "colorScale", "stops": [
+                {"type": "formula", "value": "$B$1", "color": "#ABCABC"},
+                {"type": "max", "color": "#DEFDEF"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let stops = match rule {
+            CfRule::ColorScale { stops } => stops,
+            _ => Vec::new(),
+        };
+        assert_eq!(stops, vec![(CfValueKind::Formula("$B$1".into()), Color::Rgb(0xABCABC)), (CfValueKind::Max, Color::Rgb(0xDEFDEF))]);
     }
 }
