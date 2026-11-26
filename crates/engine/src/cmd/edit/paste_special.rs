@@ -36,15 +36,28 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let whole = clip.areas.is_empty() && (clip.selected.is_full_cols() || clip.selected.is_full_rows()) && clip.selected.contains_range(&clip.range);
     let src = if whole { clip.selected } else { clip.range };
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
-    // Tile the copy over a larger destination that is a multiple of its size.
-    let tile = sel.height() % h == 0
-        && sel.width() % w == 0
+    // Tile the copy over a larger destination that is a multiple of its size. A selection
+    // narrower than the copy but a multiple of its height takes it down every row, at the copy's
+    // width (and a shorter one a multiple of its width across), as in Excel.
+    let multiple = sel.height() % h == 0 && sel.width() % w == 0;
+    let down = sel.width() < w && sel.height() > h && sel.height() % h == 0;
+    let across = sel.height() < h && sel.width() > w && sel.width() % w == 0;
+    // The cells the tiles cover: the selection itself, or for `down`/`across` the selection at the
+    // copy's width/height, which can be much larger than what was selected.
+    let area = if down {
+        u64::from(sel.height()) * u64::from(w)
+    } else if across {
+        u64::from(h) * u64::from(sel.width())
+    } else {
+        sel.count()
+    };
+    let tile = (multiple || down || across)
         && !sel.is_single()
         && cell_param_on(s, p, "at", dest_sheet)?.is_none()
         && !sel.is_full_cols()
         && !sel.is_full_rows()
-        && sel.count() <= 4_000_000;
-    let (tiles_r, tiles_c) = if tile { (sel.height() / h, sel.width() / w) } else { (1, 1) };
+        && area <= 4_000_000;
+    let (tiles_r, tiles_c) = if tile { ((sel.height() / h).max(1), (sel.width() / w).max(1)) } else { (1, 1) };
     // A single cell or row repeated down a filtered selection skips the rows the filter hides; a
     // taller block is pasted straight down, hidden rows included, as in Excel.
     let skip_rows = match s.doc()?.wb.sheet(dest_sheet) {
@@ -63,10 +76,48 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other("Too many cells to paste as links at once.".into()));
     }
     let same_doc = s.doc()?.uid == clip.doc_uid;
-    let cut_move = clip.cut && same_doc && what == What::All;
+    // A cut in this workbook moves its cells: the source is emptied before the destination is
+    // written. As in Excel, it moves only as a plain Paste onto one cell or an area of its own size
+    // and shape. Every other way (a Paste Special option, tiling over a larger or differently shaped
+    // area, a row the filter hides) would write the cut cells somewhere other than one place, or not
+    // at all, after their source was gone, so it is refused here, before anything changes, and the
+    // cut stays pending.
+    let cut_move = clip.cut && same_doc;
+    if cut_move {
+        let plain = what == What::All && !link && !skip_blanks && !transpose && op == "none";
+        if !plain {
+            return Err(EngineError::Other("Cut cells can only be pasted with Paste. To use Paste Special, copy them instead.".into()));
+        }
+        let anchored = cell_param_on(s, p, "at", dest_sheet)?.is_some() || sel.is_single();
+        if !anchored && (sel.height() != h || sel.width() != w) {
+            return Err(EngineError::Other(
+                "The cut cells and the paste area aren't the same size and shape: select one cell, or an area the size of the cut cells.".into(),
+            ));
+        }
+        // The rows the cut itself would land on, whatever the paste would skip: an anchored or
+        // taller block is pasted straight down, so `skip_rows` (which only a tiled single row uses)
+        // can't tell whether it would write into a hidden row.
+        if let Some(end) = at.offset(i64::from(h) - 1, i64::from(w) - 1) {
+            let dest = RangeRef::new(at, end);
+            if s.doc()?.wb.sheet(dest_sheet).is_some_and(|sh| !super::filtered_rows(sh, dest).is_empty()) {
+                return Err(EngineError::Other("The cut area can't be pasted into rows the filter hides.".into()));
+            }
+        }
+    }
     let src_wb = clip.wb.clone();
     let Some(src_sheet) = src_wb.sheet(clip.sheet) else { return Err(EngineError::Other("The copied sheet no longer exists.".into())) };
-    let src_sheet_name = src_sheet.name.clone();
+    // The source sheet's name now: a cut whose sheet was renamed after it moves its cells,
+    // rules and the references to them on the sheet as it is named, not as the clipboard saw it.
+    let src_sheet_name = match s.doc()?.wb.sheet(clip.sheet) {
+        Some(live) if clip.cut && same_doc => live.name.clone(),
+        _ => src_sheet.name.clone(),
+    };
+    // A cut moves its block as it is, as Excel's does: it can't be transposed, tiled over a
+    // larger selection or pasted skipping blanks (the move's references, rules and arrays follow
+    // the whole block unturned, and its rules replace the destination's under every cell).
+    if cut_move && (transpose || skip_blanks || tiles_r > 1 || tiles_c > 1) {
+        return Err(EngineError::Other("The cut area can only be pasted as it is: paste it without Transpose or Skip Blanks, into one cell.".into()));
+    }
     edit(s, |cx| {
         // Styles from another workbook must be re-interned.
         let dest_name = cx.wb.sheet(dest_sheet).map(|sh| sh.name.clone()).unwrap_or_default();
@@ -79,6 +130,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         };
         let mut moved_formulas = std::collections::BTreeMap::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
+        // A cut moves the rules its cells hold now, not the clipboard's: rules cleared or added
+        // since the cut would otherwise come back or be lost.
+        let live_source = if cut_move { cx.wb.sheet(clip.sheet).cloned() } else { None };
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
             let source = cx.sheet_mut(clip.sheet)?;
@@ -181,7 +235,12 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             moved.dynamic = f.dynamic;
                             return Some(std::sync::Arc::new(moved));
                         }
-                        let moved = gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64);
+                        let moved = if transpose {
+                            // A transposed paste turns the references instead of shifting them (#2450).
+                            gridcraft_formula::adjust::transpose_relative(e, sc, dest)
+                        } else {
+                            gridcraft_formula::adjust::shift_relative(e, dest.row as i64 - sc.row as i64, dest.col as i64 - sc.col as i64)
+                        };
                         Some(std::sync::Arc::new(Formula { dynamic: f.dynamic, ..Formula::from_expr(moved) }))
                     };
                     let moved_py = |cell: &Cell| -> Result<Option<std::sync::Arc<gridcraft_model::PyCode>>> {
@@ -334,7 +393,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
-        if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
+        // A cut takes its rules along itself (`move_cut_rules`, below).
+        if !link && !cut_move && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
             paste_validations(cx, src_sheet, src, dest_sheet, pasted, PasteMode { transpose, skip_blanks, skip_rows: &skip_rows })?;
         }
         if what == What::ColumnWidths {
@@ -366,7 +426,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
-        if cut_move {
+        if let Some(live) = &live_source {
+            move_cut_rules(cx, live, (clip.sheet, dest_sheet), src, at)?;
             // References elsewhere to the moved block now point to its new place.
             let e = if dest_sheet == clip.sheet {
                 gridcraft_formula::adjust::Edit::Move { from: src, to_row: at.row, to_col: at.col }
@@ -551,80 +612,96 @@ fn paste_validations(
     Ok(())
 }
 
-/// Applies a reference adjustment to every cell formula and defined name in the workbook.
-pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) -> Result<()> {
-    use gridcraft_formula::adjust::Edit;
-    // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
-    // (a cut moves its arrays itself).
-    let moves_arrays = matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
-    for si in 0..wb.sheets.len() {
-        let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
-        let keys: Vec<(CellRef, std::sync::Arc<Formula>)> =
-            wb.sheets.get(si).map(|s| s.cells.iter().filter_map(|(c, cell)| cell.formula.clone().map(|f| (c, f))).collect()).unwrap_or_default();
-        if keys.is_empty() {
-            continue;
-        }
-        let on_target = moves_arrays && host.eq_ignore_ascii_case(target);
-        let Some(sheet) = wb.sheet_mut(si) else { continue };
-        for (c, f) in keys {
-            // Borrows the tree and copies and prints only the formulas the edit changes. A formula
-            // the edit leaves alone keeps its stored text, even if that text is not canonical.
-            let Some(new) = f.with_expr(|x| gridcraft_formula::adjust::adjust_if_changed(x, &host, target, e)) else { continue };
-            let array = match f.array {
-                Some(a) if on_target => crate::cmd::sheet::map_range(a, e),
-                a => a,
-            };
-            let nf = match new {
-                Some(new) => Formula { array, dynamic: f.dynamic, ..Formula::from_expr(new) },
-                None if array != f.array => Formula { array, ..(*f).clone() },
-                None => continue,
-            };
-            if let Some(cell) = sheet.cells.get_mut(c) {
-                cell.formula = Some(std::sync::Arc::new(nf));
-            }
-        }
-    }
-    for n in wb.names.iter_mut() {
-        if let Ok(expr) = gridcraft_formula::parse_name(&n.formula) {
-            // Names are workbook-level: unqualified refs don't occur; qualified ones adjust.
-            let new = gridcraft_formula::adjust::adjust(expr, "\u{0}", target, e);
-            n.formula = gridcraft_formula::print(&new);
-        }
-    }
-    rewrite_cell_links(wb, |host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e));
-    rewrite_python_refs(wb, &|host, expr| gridcraft_formula::adjust::adjust(expr, host, target, e))
-}
-
-/// Runs `f` over every reference a floating object holds (a chart's series values, categories,
-/// name and bubble sizes, and the source block it was made from, and a form control's linked
-/// cell). Every edit that moves
-/// references calls it: inserting and deleting lines and cells and cut-moves (through
-/// [`rewrite_all_formulas`]), and renaming and deleting sheets. `f` maps a reference held by an
-/// object on the sheet named `host` to its new form; text that does not parse is kept. A source
-/// block that no longer exists is dropped.
-pub(crate) fn rewrite_cell_links(wb: &mut gridcraft_model::Workbook, f: impl Fn(&str, gridcraft_formula::Expr) -> gridcraft_formula::Expr) {
-    for si in 0..wb.sheets.len() {
-        let Some(host) = wb.sheets.get(si).filter(|s| !s.charts.is_empty() || !s.controls.is_empty()).map(|s| s.name.clone()) else { continue };
-        let Some(sh) = wb.sheet_mut(si) else { continue };
-        let fix = |text: &str| -> String {
-            match gridcraft_formula::parse(text) {
-                Ok(expr) => gridcraft_formula::print(&f(&host, expr)),
-                Err(_) => text.to_string(),
+/// A cut, or Move Columns, takes its cells' conditional formats and validation with it, from
+/// sheet `from` to the block at `at` on sheet `to`, replacing the rules there. The moved parts'
+/// formulas are handled as the moved cells' are: kept written for where their cells were (on
+/// another sheet, with their references to it named), so the reference rewrite for the move
+/// shifts those into the block once. `snapshot` is the source sheet before the block moved.
+pub(crate) fn move_cut_rules(
+    cx: &mut crate::cmd::Ctx,
+    snapshot: &gridcraft_model::Sheet,
+    (from, to): (usize, usize),
+    src: RangeRef,
+    at: CellRef,
+) -> Result<()> {
+    let mut cfs: Vec<gridcraft_model::CondFormat> = crate::cmd::data::moved_rule_parts(&snapshot.cond_formats, src, at);
+    let mut dvs: Vec<gridcraft_model::Validation> = crate::cmd::data::moved_rule_parts(&snapshot.validations, src, at);
+    if from != to {
+        let name = |t: &mut String| {
+            if let Ok(e) = gridcraft_formula::parse(t.trim_start_matches('=')) {
+                let e = e.map(&mut |x| match x {
+                    gridcraft_formula::Expr::Ref(mut r) if r.sheet == gridcraft_formula::SheetSel::Current => {
+                        r.sheet = gridcraft_formula::SheetSel::Named(snapshot.name.clone());
+                        gridcraft_formula::Expr::Ref(r)
+                    }
+                    other => other,
+                });
+                *t = format!("{}{}", if t.starts_with('=') { "=" } else { "" }, gridcraft_formula::print(&e));
             }
         };
-        for ch in sh.charts.iter_mut() {
-            ch.source = ch.source.as_deref().map(fix).filter(|s| !s.contains("#REF!"));
-            for se in ch.series.iter_mut() {
-                se.values = fix(&se.values);
-                se.categories = se.categories.as_deref().map(fix);
-                se.name = se.name.as_deref().map(fix);
-                se.bubble_sizes = se.bubble_sizes.as_deref().map(fix);
+        // Every formula, thresholds included: an unnamed reference would read the destination sheet.
+        cfs.iter_mut().flat_map(|r| r.rule.formulas_mut()).for_each(name);
+        dvs.iter_mut().flat_map(|r| r.formulas_mut()).for_each(name);
+    }
+    place_moved_rules(cx, (from, to), src, at, (cfs, dvs))
+}
+
+/// Takes the rules off the cells of `src` on sheet `from` and puts `parts` (the moved parts of
+/// them, as [`move_cut_rules`] builds them) on the block at `at` on sheet `to`, in place of the
+/// rules there.
+pub(crate) fn place_moved_rules(
+    cx: &mut crate::cmd::Ctx,
+    (from, to): (usize, usize),
+    src: RangeRef,
+    at: CellRef,
+    (cfs, dvs): (Vec<gridcraft_model::CondFormat>, Vec<gridcraft_model::Validation>),
+) -> Result<()> {
+    let source = cx.sheet_mut(from)?;
+    crate::cmd::data::remove_rule_cells(&mut source.cond_formats, &[src]);
+    crate::cmd::data::remove_rule_cells(&mut source.validations, &[src]);
+    let block = RangeRef::new(at, at.offset_clamped(i64::from(src.height()) - 1, i64::from(src.width()) - 1));
+    let dest = cx.sheet_mut(to)?;
+    crate::cmd::data::remove_rule_cells(&mut dest.cond_formats, &[block]);
+    crate::cmd::data::remove_rule_cells(&mut dest.validations, &[block]);
+    dest.cond_formats.extend(cfs);
+    dest.validations.extend(dvs);
+    Ok(())
+}
+
+/// Applies a reference adjustment to every reference the workbook holds
+/// ([`Workbook::rewrite_references`]) and its Python cells, and moves the legacy array ranges
+/// on `target`.
+///
+/// [`Workbook::rewrite_references`]: gridcraft_model::Workbook::rewrite_references
+pub(crate) fn rewrite_all_formulas(wb: &mut gridcraft_model::Workbook, target: &str, e: &gridcraft_formula::adjust::Edit) -> Result<()> {
+    rewrite_all_formulas_many(wb, target, std::slice::from_ref(e))
+}
+
+/// [`rewrite_all_formulas`] for several edits applied in order, visiting each formula once.
+pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, target: &str, edits: &[gridcraft_formula::adjust::Edit]) -> Result<()> {
+    use gridcraft_formula::adjust::Edit;
+    let adjust_all =
+        |host: &str, expr: gridcraft_formula::Expr| edits.iter().fold(expr, |expr, e| gridcraft_formula::adjust::adjust(expr, host, target, e));
+    wb.rewrite_references(&|host, expr| adjust_all(host.name, expr));
+    // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
+    // (a cut moves its arrays itself).
+    let moves_arrays = |e: &&Edit| matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
+    if edits.iter().any(|e| moves_arrays(&e))
+        && let Some(si) = wb.sheet_index(target)
+        && let Some(sheet) = wb.sheet_mut(si)
+    {
+        let arrays: Vec<(CellRef, std::sync::Arc<Formula>)> =
+            sheet.cells.iter().filter_map(|(c, cell)| cell.formula.clone().filter(|f| f.array.is_some()).map(|f| (c, f))).collect();
+        for (c, f) in arrays {
+            let array = edits.iter().filter(moves_arrays).fold(f.array, |a, e| a.and_then(|a| crate::cmd::sheet::map_range(a, e)));
+            if array != f.array
+                && let Some(cell) = sheet.cells.get_mut(c)
+            {
+                cell.formula = Some(std::sync::Arc::new(Formula { array, ..(*f).clone() }));
             }
         }
-        for c in sh.controls.iter_mut() {
-            c.link = c.link.as_deref().map(fix);
-        }
     }
+    rewrite_python_refs(wb, &adjust_all)
 }
 
 /// Rewrites the `xl("…")` literals in every Python cell with `f`, which maps a reference held on
