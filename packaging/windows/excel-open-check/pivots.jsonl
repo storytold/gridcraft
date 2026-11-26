@@ -1,0 +1,4 @@
+# PivotTable on the sales table, a pivot chart, a table slicer
+insert.pivotTable={"source":"Sales","destination":"Sales!K40","rows":["Region"],"values":[{"field":"Q1","func":"sum"}]}
+insert.pivotChart={"pivot":"Sales!K42","type":"column","at":"S50"}
+insert.slicer={"table":"Sales","column":"Region","at":"AA50"}

@@ -242,8 +242,10 @@ fn build_craft_cols(sheet: &Sheet, sid: &dyn Fn(gridcraft_model::StyleId) -> u32
             first: a,
             last: b,
             width: Some(px_to_col_width(w)),
+            // As Excel writes them: a width that AutoFit or a number format sized is bestFit too, so
+            // it keeps widening when the file is opened again; one set by hand is customWidth only.
             custom_width: i.size.is_some(),
-            best_fit: false,
+            best_fit: i.size.is_some() && !i.custom,
             hidden: i.hidden,
             outline_level: i.outline.min(7),
             collapsed: i.collapsed,
