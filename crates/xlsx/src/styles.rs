@@ -61,6 +61,22 @@ fn bool_prop(e: &El, name: &str) -> bool {
     e.child(name).is_some_and(|c| c.flag("val", true))
 }
 
+/// A font's `outline` as the shared SpreadsheetML font (`craft-xlsx`) reads it: `None` when the
+/// element is absent, `Some(false)` when it says `val="0"` (stated off, which a differential
+/// format keeps), `Some(true)` when on.
+fn shared_outline(e: &El) -> Option<bool> {
+    craft_xlsx::Font::read(&crate::chart::to_craft_el(e)).outline
+}
+
+/// The shared SpreadsheetML font's `outline` element for `outline`, written as it writes it:
+/// `<outline/>`, `<outline val="0"/>`, or nothing.
+fn push_shared_outline(s: &mut String, outline: Option<bool>) {
+    let font = craft_xlsx::Font { outline, ..Default::default() }.to_el("font", false);
+    for child in font.elements() {
+        child.write_xml(s);
+    }
+}
+
 const DEFAULT_FONT_FAMILY: u8 = 2;
 const MAX_FONT_FAMILY: u8 = 14;
 
@@ -79,6 +95,7 @@ pub fn read_font(e: &El, palette: &[u32]) -> Font {
     f.bold = bool_prop(e, "b");
     f.italic = bool_prop(e, "i");
     f.strike = bool_prop(e, "strike");
+    f.outline = shared_outline(e) == Some(true);
     if let Some(u) = e.child("u") {
         f.underline = match u.attr("val").unwrap_or("single") {
             "double" => Underline::Double,
@@ -275,6 +292,7 @@ fn read_alignment(a: &El) -> Alignment {
             Some(2) => Some(ReadingOrder::RightToLeft),
             _ => None,
         },
+        padding: [None; 4],
     };
     if let Some(r) = a.attr_i64("textRotation") {
         al.rotation = match r {
@@ -414,6 +432,7 @@ fn read_dxf<'a>(x: &'a El, palette: &[u32], fmts: &HashMap<u32, NumFmt>, inline_
         st.bold = e.child("b").is_some() && !f.bold;
         st.italic = e.child("i").is_some() && !f.italic;
         st.strike = e.child("strike").is_some() && !f.strike;
+        st.outline = shared_outline(e) == Some(false);
         st.underline = e.child("u").is_some() && f.underline == Underline::None;
         st.size = has_size && size == def.size;
         st.name = has_name && name == def.name;
@@ -480,6 +499,9 @@ fn font_xml(f: &Font, dxf: Option<&DxfStated>, minor: bool) -> String {
             let _ = write!(s, "<{tag} val=\"0\"/>");
         }
     }
+    // Excel's order puts outline after strike (condense and extend aren't modelled).
+    let outline = if f.outline { Some(true) } else { stated.outline.then_some(false) };
+    push_shared_outline(&mut s, outline);
     match f.underline {
         Underline::None if stated.underline => s.push_str("<u val=\"none\"/>"),
         Underline::None => {}
@@ -574,7 +596,9 @@ fn border_xml(b: &Borders) -> String {
 }
 
 fn alignment_xml(a: &Alignment) -> Option<String> {
-    if *a == Alignment::default() {
+    // SpreadsheetML has no cell padding: it is not written, and a style that differs from the
+    // default only by padding writes no `<alignment>`.
+    if (Alignment { padding: [None; 4], ..*a }) == Alignment::default() {
         return None;
     }
     let mut s = String::from("<alignment");
@@ -800,6 +824,7 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
     if d.font.bold
         || d.font.italic
         || d.font.strike
+        || d.font.outline
         || d.font.underline != Underline::None
         || d.font.color != Color::Auto
         || d.font.vert != VertAlign::Baseline
@@ -808,6 +833,7 @@ pub fn dxf_xml(tag: &str, d: &Style, nf: &mut NumFmts) -> String {
         || d.dxf_stated.bold
         || d.dxf_stated.italic
         || d.dxf_stated.strike
+        || d.dxf_stated.outline
         || d.dxf_stated.underline
         || d.dxf_stated.size
         || d.dxf_stated.name

@@ -52,7 +52,9 @@ fn click(h: &mut Harness, pos: Pos2, button: PointerButton) {
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.input_mut().events.push(Event::PointerButton { pos, button, pressed: true, modifiers: Modifiers::NONE });
     h.input_mut().events.push(Event::PointerButton { pos, button, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
+    // The runtime takes one press per frame: the release arrives in the next frame, and the frame
+    // after it shows what the click did.
+    h.run_steps(3);
 }
 
 fn open(h: &mut Harness, menu: Menu) {
