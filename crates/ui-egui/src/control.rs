@@ -19,7 +19,7 @@
 
 use std::sync::mpsc::Sender;
 
-use craft_ui::capture::CaptureSlot;
+use crate::capture::CaptureSlot;
 use gridcraft_engine::core::CellRef;
 use serde_json::{Value as Json, json};
 
@@ -393,6 +393,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             Some(e) => {
                 e.text = s("text").unwrap_or("").to_string();
                 e.caret = e.text.chars().count();
+                e.update_list();
                 ok(Json::Null)
             }
             None => err("not editing"),
