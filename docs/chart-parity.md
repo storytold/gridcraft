@@ -17,7 +17,7 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 |---|---|---|---|
 | Column | clustered, stacked, 100% stacked, 3-D clustered/stacked/100%, 3-D column | 3 of 7 | no 3-D |
 | Bar | clustered, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D |
-| Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 3 of 7 (line, with markers, stacked) | no 100% stacked; smoothed lines landed (#62) |
+| Line | line, stacked, 100% stacked, with markers ×3, 3-D line | 5 of 7 (line, with markers, stacked, 100% stacked, 100% stacked with markers) | no stacked with markers, no 3-D; 100% stacked drawn as shares of each category's total and kept as `percentStacked` in XLSX; smoothed lines landed (#62) |
 | Pie | pie, 3-D pie, pie of pie, bar of pie, doughnut | 2 of 5 (pie, doughnut) | no exploded, pie of pie, bar of pie; doughnut draws every series as a concentric ring, first series innermost; its legend names categories, matching Excel's default vary-by-category colours |
 | Area | area, stacked, 100%, 3-D ×3 | 3 of 6 | no 3-D; 100% stacked drawn as shares of each category's total and kept as `percentStacked` in XLSX |
 | X Y (scatter) | markers, smooth lines (±markers), straight lines (±markers) | 2 of 5 | no smooth lines |
@@ -32,8 +32,8 @@ Sources: `crates/model/src/features.rs` (`ChartKind`, `Chart`, `Series`), `crate
 | Box & Whisker | 1 | 1 of 1 | |
 | Waterfall, Funnel | 2 | 2 of 2 | |
 | Filled map | 1 | 0 | needs geographic boundary data (licensing decision) |
-| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, area; bars stand upright as columns, pies, doughnuts, bubbles and chartex kinds are clustered columns, scatter series lines with markers, scatter-with-lines and radar series lines), secondary axis | |
-| **Total** | ~60 subtypes | **26 (~43%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
+| Combo | custom combinations, secondary axis | yes: each series drawn as its own kind (column, stacked column, line, line with markers, 100% stacked line with or without markers, area; bars stand upright as columns, pies, doughnuts, bubbles and chartex kinds are clustered columns, scatter series lines with markers, scatter-with-lines and radar series lines), secondary axis | |
+| **Total** | ~60 subtypes | **28 (~47%)** | usage-weighted breadth higher (~65%): column, bar, line, pie and scatter dominate |
 
 ## Chart elements and formatting
 
@@ -152,6 +152,7 @@ column chart draws and saves its forecast series as columns, not lines.
 | 2026-11-02 | minor | Charts move and resize from eight handles, each moving only its own edges (#190); resizing leaves the work list (1–2 h, within the 40–60 h rounding) |
 | 2026-11-01 | minor | Chart data tables for column, bar, line, area and compatible combo charts: command/UI controls, formatted source values, blanks, grouped category headers, legend keys, independent borders, shared print/PDF rendering and native c:dTable import/export. Dense tables show a space notice; no readiness score change. |
 | 2026-10-29 | minor | Selected charts highlight their source cells beneath floating objects, so the blue outline no longer crosses the chart; uncovered source cells remain highlighted (#2861) |
+| 2026-10-25 | minor | 100% Stacked Line and 100% Stacked Line with Markers: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-24 | minor | An unedited embedded chart keeps its original chart part, with its style, colour and user-shape parts, on save (#1668) |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
