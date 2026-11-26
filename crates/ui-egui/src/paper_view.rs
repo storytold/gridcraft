@@ -183,7 +183,7 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
                 pc.rect_filled(band, 0.0, t.active_row);
             }
             let size = (14.0 * geo.z / DISPLAY_SCALE).clamp(8.0, 22.0);
-            pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), Color32::from_gray(150));
+            pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), t.on_sheet(Color32::from_gray(150)));
         }
         // The selection outline may straddle the margin edge (as at A1 in Normal view).
         let sel_clip = clip.expand(3.0).intersect(page).intersect(geo.cells);
@@ -240,6 +240,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
             (geo.scroll.x as f64 + ((q.x - geo.cells.left()) / geo.z) as f64, geo.scroll.y as f64 + ((q.y - geo.cells.top()) / geo.z) as f64);
         pg.hf_zone_at(x, y)
     });
+    let t = Tokens::get(ui.ctx());
     let needs_text = sh.print.has_header_footer();
     let (date, time) = if needs_text { print::hf_date_time(wb) } else { Default::default() };
     for (i, j) in pages_iter(geo, &pg) {
@@ -256,14 +257,20 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
             let hovered = hover.is_some_and(|(page, z)| page == (i, j) && z.footer == footer);
             if hovered {
                 for r in &rects {
-                    p.rect_stroke(*r, 0.0, Stroke::new(1.0, Color32::from_gray(185)), StrokeKind::Inside);
+                    p.rect_stroke(*r, 0.0, Stroke::new(1.0, t.on_sheet(Color32::from_gray(185))), StrokeKind::Inside);
                 }
             }
             let Some((n, total)) = pg.page_number(i, j).or_else(|| (spec.is_empty()).then_some((1, 1))) else { continue };
             if spec.is_empty() {
                 if hovered {
                     let label = if footer { "Add footer" } else { "Add header" };
-                    p.text(rects[1].center(), Align2::CENTER_CENTER, tr(app, label), hf_font(geo, &pg, Some(10.0), false), Color32::from_gray(120));
+                    p.text(
+                        rects[1].center(),
+                        Align2::CENTER_CENTER,
+                        tr(app, label),
+                        hf_font(geo, &pg, Some(10.0), false),
+                        t.on_sheet(Color32::from_gray(120)),
+                    );
                 }
                 continue;
             }
@@ -295,7 +302,7 @@ pub(crate) fn paint_headers_footers(app: &SheetApp, ui: &egui::Ui, p: &Painter, 
                 let block = line_h * lines.len() as f32;
                 let top = if footer { screen(geo, 0.0, py + h - fm).y - block } else { screen(geo, 0.0, py + hm).y };
                 for (li, line) in lines.iter().enumerate() {
-                    p.text(pos2(x, top + li as f32 * line_h), anchor, *line, font.clone(), Color32::BLACK);
+                    p.text(pos2(x, top + li as f32 * line_h), anchor, *line, font.clone(), t.cell_text);
                 }
             }
         }
@@ -482,12 +489,12 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         if !r.intersects(geo.cells) {
             continue;
         }
-        p.rect_filled(*r, 0.0, Color32::WHITE);
+        p.rect_filled(*r, 0.0, t.grid_bg);
         let active = k == e.section;
         p.rect_stroke(
             *r,
             0.0,
-            Stroke::new(if active { 1.5 } else { 1.0 }, if active { t.sel_border } else { Color32::from_gray(160) }),
+            Stroke::new(if active { 1.5 } else { 1.0 }, if active { t.sel_border } else { t.on_sheet(Color32::from_gray(160)) }),
             StrokeKind::Inside,
         );
         if active {
@@ -496,7 +503,7 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
         let Some(text) = e.texts.get(k) else { continue };
         let anchor = [Align2::LEFT_TOP, Align2::CENTER_TOP, Align2::RIGHT_TOP][k];
         let x = [r.left() + 3.0, r.center().x, r.right() - 3.0][k];
-        p.text(pos2(x, r.top() + 2.0), anchor, text, font.clone(), Color32::BLACK);
+        p.text(pos2(x, r.top() + 2.0), anchor, text, font.clone(), t.cell_text);
         if ui.interact(*r, ui.scope_id().with(("hf_section", k)), egui::Sense::click()).clicked() {
             switch_to = Some(k);
         }
@@ -514,8 +521,8 @@ fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
             .id(id)
             .frame(egui::Frame::NONE)
             .font(font)
-            .text_color(Color32::BLACK)
-            .background_color(Color32::WHITE)
+            .text_color(t.cell_text)
+            .background_color(t.grid_bg)
             .align(align)
             .desired_width(r.width() - 6.0)
             .desired_rows(1)

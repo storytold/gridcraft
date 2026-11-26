@@ -206,6 +206,15 @@ fn area_mesh(v: &[Pos2], col: Color32) -> egui::Mesh {
 /// A shape's text with its formatting: size, bold/italic, typeface, colour, outline, horizontal
 /// alignment and vertical anchor. Shapes other than text boxes default to white text centred in
 /// the shape; text boxes to black text at the top left.
+/// Colour of a shape's text on this sheet: the authored (or automatic) colour, mapped and held
+/// legible over the shape's authored fill (white when it has none) on the dark sheet. The in-place
+/// text box editor uses the same colour.
+pub(crate) fn shape_text_color(ctx: &egui::Context, wb: &Workbook, sp: &gridcraft_engine::model::Shape, default_color: Color32) -> Color32 {
+    let authored = sp.format.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
+    let paper = sp.fill.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::WHITE);
+    Tokens::get(ctx).on_sheet_over(authored, paper, theme::INK_TEXT_MIN)
+}
+
 fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Shape, r: Rect, z: f32) {
     use gridcraft_engine::model::{ShapeTextAlign, ShapeTextAnchor};
     let f = &sp.format;
@@ -214,7 +223,7 @@ fn paint_shape_text(p: &Painter, wb: &Workbook, sp: &gridcraft_engine::model::Sh
     let align = f.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = f.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
     let default_color = if text_box || word_art { Color32::BLACK } else { Color32::WHITE };
-    let color = f.text_color.and_then(|c| c.resolve(&wb.theme)).map(theme::color32).unwrap_or(default_color);
+    let color = shape_text_color(p.ctx(), wb, sp, default_color);
     // Default 14 px (as before); a set size is in points.
     let size = f.font_size.map_or(14.0, |pt| pt * 96.0 / 72.0).clamp(1.0, 2000.0) * z;
     let family = theme::cell_family(f.font.as_deref().unwrap_or(""), f.bold, f.italic);
@@ -339,9 +348,17 @@ pub(crate) fn paint_objects(app: &SheetApp, p: &Painter, geo: &Geo, wb: &Arc<Wor
         }
         let start = p.add(egui::Shape::Noop);
         let mut label = true;
-        let fill = sp.fill.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::TRANSPARENT);
-        let line =
-            if sp.format.no_line { Color32::TRANSPARENT } else { sp.line.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::DARK_GRAY) };
+        let tk = Tokens::get(p.ctx());
+        // Authored colours are for the white sheet: the dark sheet maps fills, and holds lines and
+        // ink legible against the authored paper (the fill, else white).
+        let authored_fill = sp.fill.resolve(&wb.theme).map(theme::color32);
+        let paper = authored_fill.unwrap_or(Color32::WHITE);
+        let fill = authored_fill.map_or(Color32::TRANSPARENT, |c| tk.on_sheet(c));
+        let line = if sp.format.no_line {
+            Color32::TRANSPARENT
+        } else {
+            tk.on_sheet_over(sp.line.resolve(&wb.theme).map(theme::color32).unwrap_or(Color32::DARK_GRAY), paper, theme::INK_LINE_MIN)
+        };
         match sp.kind {
             // WordArt is only its text (no fill or outline of its own).
             ShapeKind::WordArt => {}

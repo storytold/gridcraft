@@ -88,9 +88,10 @@ Left as they are: charts and pictures (their own settings), icon-set glyphs, she
 (interface), note and comment popups (they keep their own paper, black on pale yellow or white),
 and explicit colours inside equations (an equation's automatic ink follows the sheet).
 
-Not done yet: sparklines, shapes, text boxes and Draw ink keep their authored colours on the dark
-sheet (a text box with automatic black text and no fill is hard to read there), and Page Layout
-view draws header and footer text black on the dark paper.
+Sparklines, shapes, text boxes and Draw ink are mapped like cells: fills by the colour rule,
+lines, ink and text through the contrast guard against their authored fill (white when none), and
+the in-place text box editor uses the same text colour. Page Layout headers, footers and their
+placeholders follow the sheet tokens.
 
 ### Colours GridCraft adds to the sheet
 

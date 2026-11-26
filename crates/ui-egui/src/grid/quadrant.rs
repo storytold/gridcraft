@@ -646,7 +646,7 @@ fn paint_sparklines(q: &QuadrantPaint<'_>, range: RangeRef) {
         };
         let col = sp.color.resolve(&wb.theme).unwrap_or([0x2B, 0x7C, 0xD3]);
         let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [col[0], col[1], col[2], 255], sp.markers, rect.width(), rect.height());
-        crate::chartview::paint_prims(p, rect.min, &prims, 1.0);
+        crate::chartview::paint_prims_dark(p, rect.min, &prims, 1.0, q.tokens.dark_sheet);
     }
 }
 
