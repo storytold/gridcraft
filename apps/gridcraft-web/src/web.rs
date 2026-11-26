@@ -49,6 +49,7 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
+                    gridcraft_ui_egui::framework::install_headless(&cc.egui_ctx);
                     let inbox: Inbox = Inbox::default();
                     let mut session = Session::new();
                     // In host mode the host sends the workbook to edit; no sample meanwhile.
@@ -99,6 +100,7 @@ pub fn start() {
                         }
                         bridge.post_ready();
                     }
+                    crate::api::install(&mut app, cc.egui_ctx.clone());
                     Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, prefs }))
                 }),
             )
@@ -157,6 +159,7 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx);
+        self.app.close_path(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         let changed = self.prefs.changed(&self.app);
         if !changed.is_empty() {
@@ -176,6 +179,7 @@ impl eframe::App for WebShell {
     /// Forwards a browser frame's raw input to the shared app before eframe handles it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.app.raw_input_hook(ctx, raw);
+        self.app.before_input(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
