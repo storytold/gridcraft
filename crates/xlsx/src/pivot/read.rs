@@ -232,6 +232,8 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
         pt.name = format!("PivotTable{id}");
     }
     pt.source = cache.source.clone();
+    pt.row_header_caption = x.attr("rowHeaderCaption").filter(|c| !c.trim().is_empty()).map(str::to_string);
+    pt.col_header_caption = x.attr("colHeaderCaption").filter(|c| !c.trim().is_empty()).map(str::to_string);
     let Some(loc) = x.child("location").and_then(|l| l.attr("ref")).and_then(|r| RangeRef::parse(&r.replace('$', ""))) else {
         cx.warn(format!("PivotTable \"{}\" has no valid location; kept as plain cells", pt.name));
         return None;

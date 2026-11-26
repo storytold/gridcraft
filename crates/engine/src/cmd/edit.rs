@@ -247,6 +247,31 @@ fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collectio
     sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && filtered(**r)).map(|(r, _)| *r).collect()
 }
 
+/// The PivotTables of `sh` whose whole report `ranges` cover, in index order. A report the ranges
+/// cover only in part is an error. Rows an applied filter hides aren't cleared, so a report with
+/// some of its rows hidden that way is only partly cleared, and ranges that meet only its hidden
+/// rows leave it as it is.
+fn cleared_pivots(sh: &gridcraft_model::Sheet, ranges: &[RangeRef]) -> Result<Vec<usize>> {
+    let mut whole = Vec::new();
+    for (pi, pt) in sh.pivots.iter().enumerate() {
+        let area = crate::pivot::report_area(pt);
+        if !ranges.iter().any(|r| r.intersects(&area)) {
+            continue;
+        }
+        // Only the report's rows the filter shows are cleared: none of them in the ranges, no change.
+        let hidden = filtered_rows(sh, area);
+        let shown = |r: &RangeRef| r.intersection(&area).is_some_and(|i| hidden.range(i.start.row..=i.end.row).count() < i.height() as usize);
+        if !ranges.iter().any(shown) {
+            continue;
+        }
+        if !hidden.is_empty() || !crate::pivot::covered_by(area, ranges) {
+            return Err(EngineError::Other(crate::pivot::PARTIAL_REPORT.into()));
+        }
+        whole.push(pi);
+    }
+    Ok(whole)
+}
+
 /// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides
 /// are left as they are; rows hidden by hand are cleared.
 fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
@@ -266,6 +291,18 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
                 })
             })
         })
+    };
+    // Clearing the contents of a whole PivotTable report deletes the PivotTable; clearing only part
+    // of one is refused, as the report can't be left half blank under a PivotTable that still
+    // owns it. Formats, notes and links clear as on any other cell. (A first Delete over checked
+    // boxes only unchecks them, but still empties the other cells, report cells among them.)
+    let pivots: Vec<usize> = if matches!(what, "contents" | "all") {
+        match s.doc()?.wb.sheet(sheet) {
+            Some(sh) => cleared_pivots(sh, &ranges)?,
+            None => Vec::new(),
+        }
+    } else {
+        Vec::new()
     };
     // Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
     // doesn't see them go: a locked cell's are refused here, stored cell or not.
@@ -287,6 +324,10 @@ fn clear(s: &mut Session, p: &Json, what: &str) -> Result<Json> {
         }
     }
     edit(s, |cx| {
+        // Last first, so the earlier indices stay valid.
+        for &pi in pivots.iter().rev() {
+            super::pivot::delete_pivot(cx, sheet, pi)?;
+        }
         for &whole in &ranges {
             // Cells are only stored inside the used range. Notes and links are kept apart from
             // them, so they are cleared over the whole range: one from a file can sit on a cell

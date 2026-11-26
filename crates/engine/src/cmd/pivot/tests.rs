@@ -1,4 +1,4 @@
-use gridcraft_core::{CellError, CellRef, Value};
+use gridcraft_core::{CellError, CellRef, RangeRef, Value};
 use serde_json::{Value as Json, json};
 
 use crate::Session;
@@ -1582,4 +1582,305 @@ fn renaming_a_defined_name_leaves_a_table_source_on_its_table() {
     s.execute("pivot.refresh", json!({})).unwrap();
     let gt = find_row(&s, "Grand Total").unwrap();
     assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
+}
+
+fn pivot_count(s: &Session) -> usize {
+    s.doc().unwrap().wb.active().unwrap().pivots.len()
+}
+
+/// Region by Sum of Sales on Sheet2; returns the report's area.
+fn region_report(s: &mut Session) -> String {
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    pt(s).last_range.unwrap().a1()
+}
+
+#[test]
+fn clearing_a_whole_report_deletes_the_pivottable_in_one_undo_step() {
+    let mut s = sales();
+    let report = region_report(&mut s);
+    let first = pt(&s).last_range.unwrap().start;
+    s.execute("edit.clearContents", json!({"range": report})).unwrap();
+    assert_eq!(pivot_count(&s), 0, "the PivotTable goes with its report");
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.cells.iter_range(RangeRef::parse(&report).unwrap()).next().is_none(), "no report cell or format is left");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pivot_count(&s), 1);
+    assert_eq!(pt(&s).last_range.unwrap().a1(), report);
+    assert!(!val(&s, &first.a1()).is_empty());
+    // A larger selection (here the whole sheet) takes the report with it as well.
+    s.execute("edit.clearAll", json!({"range": "A1:XFD1048576"})).unwrap();
+    assert_eq!(pivot_count(&s), 0);
+}
+
+#[test]
+fn clearing_part_of_a_report_is_refused_and_clearing_formats_is_not() {
+    let mut s = sales();
+    let report = region_report(&mut s);
+    let label = CellRef::new(pt(&s).last_range.unwrap().start.row + 1, pt(&s).last_range.unwrap().start.col).a1();
+    let before = text(&s, &label);
+    let err = s.execute("edit.clearContents", json!({"range": label})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT);
+    assert_eq!(text(&s, &label), before);
+    // An area that overlaps the report's edge is part of it too.
+    let r = RangeRef::parse(&report).unwrap();
+    let overlap = RangeRef::new(CellRef::new(r.end.row, r.start.col), CellRef::new(r.end.row + 3, r.end.col + 3));
+    assert!(s.execute("edit.clearAll", json!({"range": overlap.a1()})).is_err());
+    // Formats aren't the report's contents: they clear on part or all of it, and the PivotTable stays.
+    s.execute("edit.clearFormats", json!({"range": label})).unwrap();
+    s.execute("edit.clearFormats", json!({"range": report})).unwrap();
+    assert_eq!(pivot_count(&s), 1);
+    assert_eq!(text(&s, &label), before);
+}
+
+#[test]
+fn a_report_covered_by_several_areas_is_cleared_whole_only_without_gaps() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    let mid = r.start.row + 1;
+    let top = RangeRef::new(r.start, CellRef::new(mid, r.end.col));
+    // Left column below the split, then the right column: together every cell of the report.
+    let left = RangeRef::new(CellRef::new(mid + 1, r.start.col), CellRef::new(r.end.row, r.start.col));
+    let right = RangeRef::new(CellRef::new(mid + 1, r.start.col + 1), CellRef::new(r.end.row, r.end.col));
+    let gap = RangeRef::new(CellRef::new(mid + 2, r.start.col), CellRef::new(r.end.row, r.end.col));
+    let err = s.execute("edit.clearContents", json!({"range": format!("{},{}", top.a1(), gap.a1())})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT, "a row between the areas is left out");
+    assert_eq!(pivot_count(&s), 1);
+    s.execute("edit.clearContents", json!({"range": format!("{},{},{}", top.a1(), right.a1(), left.a1())})).unwrap();
+    assert_eq!(pivot_count(&s), 0);
+}
+
+#[test]
+fn deleting_every_row_of_a_report_deletes_the_pivottable() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    // Rows through part of the report move its cells and keep the PivotTable.
+    s.execute("home.deleteRows", json!({"rows": format!("{0}:{0}", r.start.row + 2)})).unwrap();
+    assert_eq!(pivot_count(&s), 1);
+    let r = pt(&s).last_range.unwrap();
+    s.execute("home.deleteRows", json!({"rows": format!("{}:{}", r.start.row, r.end.row + 2)})).unwrap();
+    assert_eq!(pivot_count(&s), 0, "no PivotTable is left without a report");
+}
+
+#[test]
+fn shifting_cells_through_a_report_is_refused() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    let above = CellRef::new(r.start.row - 1, r.start.col).a1();
+    let inside = CellRef::new(r.start.row + 1, r.start.col).a1();
+    for (cmd, at, shift) in [("home.insertCells", &above, "down"), ("home.deleteCells", &inside, "left")] {
+        let err = s.execute(cmd, json!({"range": at, "shift": shift})).unwrap_err().to_string();
+        assert!(err.contains("PivotTable report"), "{cmd} {shift}: {err}");
+    }
+    assert_eq!(pt(&s).last_range, Some(r));
+    // Cells beside the report shift as usual.
+    let beside = CellRef::new(r.start.row - 1, r.end.col + 1).a1();
+    s.execute("home.insertCells", json!({"range": beside, "shift": "down"})).unwrap();
+    assert_eq!(pt(&s).last_range, Some(r));
+}
+
+/// A checked checkbox elsewhere in the selection makes Delete only uncheck boxes, but the other
+/// cells it covers are emptied all the same, report cells among them.
+#[test]
+fn a_checked_box_in_the_selection_doesnt_let_part_of_a_report_be_cleared() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    s.execute("insert.checkbox", json!({"range": "H1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H1", "input": "TRUE"})).unwrap();
+    let label = CellRef::new(r.start.row + 1, r.start.col).a1();
+    let before = text(&s, &label);
+    let err = s.execute("edit.clearContents", json!({"range": format!("{label},H1")})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT);
+    assert_eq!(text(&s, &label), before);
+    s.execute("edit.clearContents", json!({"range": format!("{},H1", r.a1())})).unwrap();
+    assert_eq!(pivot_count(&s), 0);
+}
+
+/// Clearing skips the rows an applied filter hides, so a report with some rows hidden is only
+/// partly cleared: refused, rather than deleting the PivotTable whose hidden rows stay.
+#[test]
+fn a_report_with_filtered_rows_isnt_cleared_whole() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"destination": "Sheet1!H3", "rows": ["Region"], "values": ["Sales"]})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    s.execute("data.filter", json!({"range": "A1:E13"})).unwrap();
+    s.execute("data.filterBy", json!({"column": "A", "values": ["East"]})).unwrap();
+    let d = s.doc().unwrap();
+    assert!((r.start.row..=r.end.row).any(|row| d.wb.active().unwrap().is_row_hidden(row)), "the filter hides a report row");
+    let err = s.execute("edit.clearContents", json!({"range": r.a1()})).unwrap_err().to_string();
+    assert_eq!(err, crate::pivot::PARTIAL_REPORT);
+    assert_eq!(pivot_count(&s), 1);
+    // A selection meeting only hidden report rows clears nothing of the report, and the rest of it.
+    let hidden = (r.start.row..=r.end.row).find(|row| s.doc().unwrap().wb.active().unwrap().is_row_hidden(*row)).unwrap();
+    s.execute("cell.set", json!({"cell": "K1", "input": "x"})).unwrap();
+    s.execute("edit.clearContents", json!({"range": format!("{},K1", CellRef::new(hidden, r.start.col).a1())})).unwrap();
+    assert_eq!((pivot_count(&s), text(&s, "K1")), (1, String::new()));
+}
+
+#[test]
+fn cut_rows_holding_a_report_cant_be_inserted_elsewhere() {
+    let mut s = sales();
+    let r = RangeRef::parse(&region_report(&mut s)).unwrap();
+    s.execute("edit.cut", json!({"range": format!("{}:{}", r.start.row + 1, r.end.row + 1)})).unwrap();
+    let err = s.execute("home.insertCopiedCells", json!({"at": CellRef::new(r.end.row + 5, 0).a1()})).unwrap_err().to_string();
+    assert!(err.contains("PivotTable report"), "{err}");
+    assert_eq!((pivot_count(&s), pt(&s).last_range), (1, Some(r)));
+}
+
+/// The report cell showing `shown` (first by row), as A1.
+fn report_cell_showing(s: &Session, shown: &str) -> String {
+    let r = pt(s).last_range.unwrap();
+    r.iter().find(|c| text(s, &c.a1()) == shown).unwrap_or_else(|| panic!("no report cell shows {shown:?}")).a1()
+}
+
+fn undo_len(s: &Session) -> usize {
+    s.doc().unwrap().undo.len()
+}
+
+#[test]
+fn typing_into_a_value_header_renames_its_value_field() {
+    let mut s = sales();
+    region_report(&mut s);
+    let header = report_cell_showing(&s, "Sum of Sales");
+    let undo = undo_len(&s);
+    s.execute("cell.set", json!({"cell": header, "input": "Revenue"})).unwrap();
+    assert_eq!(pt(&s).values[0].name, "Revenue");
+    assert_eq!(text(&s, &header), "Revenue", "the report shows the new name");
+    assert_eq!(undo_len(&s), undo + 1, "one undo step");
+    // Typing the name it already has changes nothing.
+    s.execute("cell.set", json!({"cell": header, "input": "Revenue"})).unwrap();
+    assert_eq!(undo_len(&s), undo + 1);
+    // A source field's own name is taken; with a space after it, or a lone space, it isn't.
+    let taken = s.execute("cell.set", json!({"cell": header, "input": "sales"})).unwrap_err().to_string();
+    assert!(taken.contains("already exists"), "{taken}");
+    assert!(s.execute("cell.set", json!({"cell": header, "input": ""})).is_err());
+    for name in ["Sales ", " "] {
+        s.execute("cell.set", json!({"cell": header, "input": name})).unwrap();
+        assert_eq!(pt(&s).values[0].name, name);
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pt(&s).values[0].name, "Sales ");
+}
+
+#[test]
+fn typing_into_row_and_column_labels_sets_their_captions() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    let (rows, cols) = (report_cell_showing(&s, "Row Labels"), report_cell_showing(&s, "Column Labels"));
+    s.execute("cell.set", json!({"cell": rows, "input": "Regions"})).unwrap();
+    s.execute("cell.set", json!({"cell": cols, "input": "Fruit"})).unwrap();
+    assert_eq!(pt(&s).row_header_caption.as_deref(), Some("Regions"));
+    assert_eq!(pt(&s).col_header_caption.as_deref(), Some("Fruit"));
+    // The captions are the PivotTable's: a refresh writes them again.
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!((text(&s, &rows), text(&s, &cols)), ("Regions".to_string(), "Fruit".to_string()));
+    let blank = s.execute("cell.set", json!({"cell": rows, "input": "  "})).unwrap_err().to_string();
+    assert!(blank.contains("can't be blank"), "{blank}");
+    // null gives the default back.
+    s.execute("pivot.layout", json!({"rowHeaderCaption": null})).unwrap();
+    assert_eq!(text(&s, &rows), "Row Labels");
+}
+
+/// With Σ Values in Rows the value captions are row labels: those rename their value field, the
+/// item labels around them don't, in Compact and in Tabular form with Σ Values first.
+#[test]
+fn value_captions_in_rows_rename_their_value_field() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"]})).unwrap();
+    s.execute("pivot.moveField", json!({"field": "Σ Values", "from": "columns", "to": "rows"})).unwrap();
+    s.execute("pivot.moveField", json!({"field": "Values", "from": "rows", "to": "rows", "position": 0})).unwrap();
+    for (layout, name) in [("compact", "Volume"), ("tabular", "Amount")] {
+        s.execute("pivot.layout", json!({"layout": layout})).unwrap();
+        let caption = report_cell_showing(&s, &pt(&s).values[1].name.clone());
+        s.execute("cell.set", json!({"cell": caption, "input": name})).unwrap();
+        assert_eq!(pt(&s).values[1].name, name, "{layout}");
+        assert_eq!(pt(&s).values[0].name, "Sum of Sales", "{layout}");
+        // West is listed under both value fields; neither of its labels is a caption.
+        let west = report_cell_showing(&s, "West");
+        let err = s.execute("cell.set", json!({"cell": west, "input": "Westward"})).unwrap_err().to_string();
+        assert!(err.contains("isn't supported yet"), "{layout}: {err}");
+    }
+}
+
+#[test]
+fn a_reports_cells_cant_be_overwritten_by_any_edit() {
+    let mut s = sales();
+    let report = region_report(&mut s);
+    let value = report_cell_showing(&s, "415");
+    let err = s.execute("cell.set", json!({"cell": value, "input": "1"})).unwrap_err().to_string();
+    assert_eq!(err, crate::cmd::REPORT_CELLS);
+    // Commands other than cell.set are refused by the same check, before anything is written.
+    s.execute("cell.set", json!({"cell": "H1", "input": "x"})).unwrap();
+    s.execute("edit.copy", json!({"range": "H1"})).unwrap();
+    for (cmd, p) in [("range.fill", json!({"range": report, "input": "0"})), ("edit.paste", json!({"at": value}))] {
+        let err = s.execute(cmd, p).unwrap_err().to_string();
+        assert_eq!(err, crate::cmd::REPORT_CELLS, "{cmd}");
+    }
+    assert_eq!(text(&s, &value), "415");
+    // Formats aren't contents, and a refresh rewrites the report from changed source data.
+    s.execute("home.bold", json!({"range": report})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "200"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    assert_eq!(text(&s, &value), "515");
+}
+
+/// A value field whose source column is gone isn't shown; the captions after it still rename
+/// their own field.
+#[test]
+fn a_value_caption_after_a_missing_field_renames_its_own_field() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Units", "Sales"]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "Quantity"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let header = report_cell_showing(&s, "Sum of Sales");
+    s.execute("cell.set", json!({"cell": header, "input": "Revenue"})).unwrap();
+    assert_eq!((pt(&s).values[0].name.as_str(), pt(&s).values[1].name.as_str()), ("Sum of Units", "Revenue"));
+}
+
+/// Precision as displayed rounds constants; a report's values are its PivotTable's results, so
+/// neither switching it on nor formatting a report cell under it changes them.
+#[test]
+fn precision_as_displayed_leaves_report_values_alone() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": [{"field": "Sales", "func": "average"}]})).unwrap();
+    let west = report_cell_showing(&s, "71.25");
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    s.execute("home.numberFormat", json!({"range": west, "code": "0"})).unwrap();
+    assert_eq!(val(&s, &west), Value::Number(71.25));
+}
+
+/// A value field captioned "Sales " beside a "Sales" source field: GETPIVOTDATA reads each name
+/// as its own field, whichever comes first.
+#[test]
+fn getpivotdata_tells_a_spaced_caption_from_the_source_field() {
+    for values in [json!(["Sales", "Units"]), json!(["Units", "Sales"])] {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": values})).unwrap();
+        let units = pt(&s).values.iter().position(|v| v.source_col == "Units").unwrap();
+        s.execute("pivot.valueSettings", json!({"index": units, "name": "Sales "})).unwrap();
+        let at = pt(&s).last_range.unwrap().start.a1();
+        s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales ",{at},"Region","West")"#)})).unwrap();
+        s.execute("cell.set", json!({"cell": "K2", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","West")"#)})).unwrap();
+        assert_eq!((val(&s, "K1"), val(&s, "K2")), (Value::Number(27.0), Value::Number(285.0)), "{values}");
+    }
+}
+
+/// Numbers whose labels differ from the number asked for ("1.00" for 1) are found by scanning;
+/// the scan ranks names as the index does, so a "Sales " caption ahead of the Sales field's
+/// "Sum of Sales" doesn't answer for "Sales".
+#[test]
+fn getpivotdata_numeric_items_rank_a_source_field_above_a_spaced_caption() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Key", "Units", "Sales"], [1, 3, 10], [2, 4, 20]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A2:A3", "code": "0.00"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Key"], "values": ["Units", "Sales"]})).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "name": "Sales "})).unwrap();
+    let at = pt(&s).last_range.unwrap().start.a1();
+    s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Key",1)"#)})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(10.0));
 }

@@ -2,8 +2,8 @@ use super::create::source_param;
 use super::fields::{canonical, in_axes, shift_values, update};
 use super::params::{group_param, layout_name};
 use super::{
-    Chart, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit, find_pivot,
-    json, other, pv, str_param,
+    Chart, Ctx, Json, PivotDateGroup, PivotField, PivotFilter, PivotLayout, PivotSort, PivotTable, Result, Session, bad, bool_param, edit,
+    find_pivot, json, other, pv, str_param,
 };
 
 pub(super) fn filter(s: &mut Session, p: &Json) -> Result<Json> {
@@ -156,6 +156,8 @@ pub(super) fn layout(s: &mut Session, p: &Json) -> Result<Json> {
     let gr = bool_param(p, "grandTotalsRows");
     let gc = bool_param(p, "grandTotalsCols");
     let hd = bool_param(p, "showHeaders");
+    let row_caption = caption_param(p, "rowHeaderCaption")?;
+    let col_caption = caption_param(p, "colHeaderCaption")?;
     update(s, p, |pt, _, _| {
         if let Some(l) = lay {
             pt.layout = l;
@@ -181,8 +183,27 @@ pub(super) fn layout(s: &mut Session, p: &Json) -> Result<Json> {
         if let Some(v) = hd {
             pt.show_headers = v;
         }
+        if let Some(c) = row_caption {
+            pt.row_header_caption = c;
+        }
+        if let Some(c) = col_caption {
+            pt.col_header_caption = c;
+        }
         Ok(json!({"layout": layout_name(pt.layout)}))
     })
+}
+
+/// A Row Labels / Column Labels caption parameter: absent (`None`), `null` for the default
+/// (`Some(None)`) or the new caption, which can't be blank.
+fn caption_param(p: &Json, key: &str) -> Result<Option<Option<String>>> {
+    match p.get(key) {
+        None => Ok(None),
+        Some(Json::Null) => Ok(Some(None)),
+        Some(Json::String(c)) if c.trim().is_empty() => Err(other("A PivotTable header caption can't be blank.")),
+        Some(Json::String(c)) if c.chars().count() > 255 => Err(bad("pivot.layout", format!("`{key}` is longer than 255 characters"))),
+        Some(Json::String(c)) => Ok(Some(Some(c.clone()))),
+        Some(_) => Err(bad("pivot.layout", format!("`{key}` is a caption or null"))),
+    }
 }
 
 pub(super) fn grand_totals(s: &mut Session, p: &Json) -> Result<Json> {
@@ -269,24 +290,30 @@ pub(super) fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
 pub(super) fn delete(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     edit(s, |cx| {
-        // Its PivotCharts become ordinary charts.
-        let link = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi).map(|pt| (sh.name.clone(), pt.name.clone())));
-        if let Some((sheet, name)) = link {
-            for i in 0..cx.wb.sheets.len() {
-                let linked = |c: &Chart| c.pivot.as_deref().is_some_and(|l| pv::links_to(l, &sheet, &name));
-                if cx.wb.sheet(i).is_some_and(|sh| sh.charts.iter().any(linked)) {
-                    for c in cx.sheet_mut(i)?.charts.iter_mut().filter(|c| linked(c)) {
-                        c.pivot = None;
-                    }
+        delete_pivot(cx, si, pi)?;
+        Ok(json!({}))
+    })
+}
+
+/// Removes PivotTable `pi` of sheet `si` with its report cells; its PivotCharts become ordinary
+/// charts. Shared by Delete PivotTable and the clears and line deletes that take a whole report.
+pub(crate) fn delete_pivot(cx: &mut Ctx, si: usize, pi: usize) -> Result<()> {
+    let link = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi).map(|pt| (sh.name.clone(), pt.name.clone())));
+    if let Some((sheet, name)) = link {
+        for i in 0..cx.wb.sheets.len() {
+            let linked = |c: &Chart| c.pivot.as_deref().is_some_and(|l| pv::links_to(l, &sheet, &name));
+            if cx.wb.sheet(i).is_some_and(|sh| sh.charts.iter().any(linked)) {
+                for c in cx.sheet_mut(i)?.charts.iter_mut().filter(|c| linked(c)) {
+                    c.pivot = None;
                 }
             }
         }
-        pv::clear_output(&mut cx.wb, si, pi);
-        let sh = cx.sheet_mut(si)?;
-        if pi < sh.pivots.len() {
-            sh.pivots.remove(pi);
-        }
-        cx.structural = true;
-        Ok(json!({}))
-    })
+    }
+    pv::clear_output(&mut cx.wb, si, pi);
+    let sh = cx.sheet_mut(si)?;
+    if pi < sh.pivots.len() {
+        sh.pivots.remove(pi);
+    }
+    cx.structural = true;
+    Ok(())
 }

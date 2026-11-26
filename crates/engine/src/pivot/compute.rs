@@ -1,6 +1,6 @@
 use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
 use super::output::{
-    AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, caption, data_cols_exceed_sheet, flatten_cols,
+    AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, HeaderRole, Line, LineKind, Output, RowKind, ValSrc, caption, data_cols_exceed_sheet, flatten_cols,
 };
 use super::{
     CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_INDEXED_CELLS, MAX_VALUE_FIELDS, PivotDataCell, PivotDateGroup,
@@ -36,6 +36,32 @@ pub fn detail_cells(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Resul
     let out = compute_from(wb, pt, &src, Some(&mut probe))?;
     check_current(wb, pt, pivot_sheet, &out)?;
     Ok(probe.cells.unwrap_or_default().into_iter().map(|(r, c)| (r as u32, c as u32)).collect())
+}
+
+/// What typing into a report cell would change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReportCell {
+    /// A header naming part of the definition: typing renames it.
+    Header(HeaderRole),
+    /// An item, subtotal or grand total label, or a field name: not renamed in place (yet).
+    Label,
+    /// A value, or a blank cell of the report.
+    Other,
+}
+
+/// What the cell at (`row`, `col`) of the report grid (relative to its top-left) is, from one
+/// computation of the report. An error when the report on the sheet is out of date: its cells
+/// would no longer be where the computation puts them.
+pub fn report_cell(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize, row: u32, col: u32) -> Result<ReportCell, String> {
+    let src = read_source(wb, &pt.source, pivot_sheet)?;
+    let out = compute_from(wb, pt, &src, None)?;
+    check_current(wb, pt, pivot_sheet, &out)?;
+    if let Some(&(_, _, role)) = out.headers.iter().find(|&&(r, c, _)| r == row && c == col) {
+        return Ok(ReportCell::Header(role));
+    }
+    let value_cell = out.data.iter().any(|d| d.row == row && d.col == col);
+    let blank = out.value(row as usize, col as usize).is_empty();
+    Ok(if value_cell || blank { ReportCell::Other } else { ReportCell::Label })
 }
 
 /// An error when the report on the sheet is not what `out` computes. Excel reads its PivotTable
@@ -183,6 +209,8 @@ fn aggregate_source(input: AggregateInput<'_>, probe: &mut Option<&mut Probe>) -
 }
 
 struct HeaderInput<'a> {
+    /// The Compact layout's row and column header captions.
+    captions: (&'a str, &'a str),
     vals: &'a [(ValSrc, &'a PivotValue)],
     row_fields: &'a [&'a PivotField],
     col_fields: &'a [&'a PivotField],
@@ -200,15 +228,30 @@ struct HeaderInput<'a> {
 }
 
 fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
-    let HeaderInput { vals, row_fields, col_fields, col_items, col_fmts, vpos, data_cols, specs, row_levels, compact, on_rows, k, l, headers_on } =
-        input;
+    let HeaderInput {
+        captions: (row_caption, col_caption),
+        vals,
+        row_fields,
+        col_fields,
+        col_items,
+        col_fmts,
+        vpos,
+        data_cols,
+        specs,
+        row_levels,
+        compact,
+        on_rows,
+        k,
+        l,
+        headers_on,
+    } = input;
     let val_name = |vi: usize| vals.get(vi).map(|(_, v)| v.name.clone()).unwrap_or_default();
     let row_header = |g: &mut Grid, r: usize| {
         if row_levels == 0 || !headers_on {
             return;
         }
         if compact {
-            g.set(r, 0, Value::text("Row Labels"), CellKind::Header, 0, None);
+            g.set_header(r, 0, Value::text(row_caption), CellKind::Header, HeaderRole::RowCaption);
         } else {
             // One column per row field, Σ Values ("Values") at its place.
             let mut names: Vec<&str> = row_fields.iter().map(|f| f.source_col.as_str()).collect();
@@ -227,7 +270,7 @@ fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
         row_header(g, r);
         for (j, (_, vi)) in data_cols.iter().enumerate() {
             match vi {
-                Some(vi) => g.set(r, l + j, Value::text(val_name(*vi)), CellKind::Header, 0, None),
+                Some(vi) => g.set_header(r, l + j, Value::text(val_name(*vi)), CellKind::Header, HeaderRole::Value(*vi)),
                 // Values on rows, no column field: the one data column is the grand total.
                 None if on_rows => g.set(r, l + j, Value::text("Total"), CellKind::Header, 0, None),
                 None => {}
@@ -236,11 +279,15 @@ fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
     } else {
         let cap = g.push_row(RowKind::Header)?;
         if l > 0 && k == 1 {
-            g.set(cap, 0, Value::text(val_name(0)), CellKind::Header, 0, None);
+            g.set_header(cap, 0, Value::text(val_name(0)), CellKind::Header, HeaderRole::Value(0));
         }
         if headers_on {
-            let caption = if compact { "Column Labels".to_string() } else { col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default() };
-            g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
+            if compact {
+                g.set_header(cap, l, Value::text(col_caption), CellKind::Header, HeaderRole::ColCaption);
+            } else {
+                let caption = col_fields.first().map(|f| f.source_col.clone()).unwrap_or_default();
+                g.set(cap, l, Value::text(caption), CellKind::Header, 0, None);
+            }
         }
         let levels = col_fields.len() + usize::from(k > 1 && !on_rows);
         let first_level = g.rows.len();
@@ -264,7 +311,7 @@ fn write_headers(g: &mut Grid, input: HeaderInput<'_>) -> Result<(), String> {
                     if k > 1
                         && let Some(vi) = vi
                     {
-                        g.set(first_level + col_fields.len(), c, Value::text(val_name(*vi)), CellKind::ColLabel, 0, None);
+                        g.set_header(first_level + col_fields.len(), c, Value::text(val_name(*vi)), CellKind::ColLabel, HeaderRole::Value(*vi));
                     }
                 }
                 ColKind::Subtotal => {
@@ -576,10 +623,10 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone(), vpos, val_names: val_names.clone() };
     let mut lines: Vec<Line> = Vec::new();
     if row_levels == 0 {
-        lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None });
+        lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None, value_caption: None });
     } else {
         if pt.layout == PivotLayout::Tabular {
-            ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), &[], &mut lines);
+            ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), (&[], None), &mut lines);
         } else {
             ctx.flatten(&row_tree, 0, None, &mut Vec::new(), &mut lines);
         }
@@ -592,6 +639,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
                 values: true,
                 labels: vec![(0, Value::text(text), 0, None)],
                 vi,
+                value_caption: None,
             };
             if on_rows {
                 lines.extend(val_names.iter().enumerate().map(|(vi, name)| grand(format!("Total {name}"), Some(vi))));
@@ -627,7 +675,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         width = width.max(1);
     }
     let width = width.max(1);
-    let mut g = Grid { rows: vec![], kinds: vec![], width };
+    let mut g = Grid { rows: vec![], kinds: vec![], width, headers: vec![] };
 
     // ---- report filters
     for (c, f, _, _) in &shown_filters {
@@ -658,12 +706,14 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             chart_cols: vec![],
             label_col: None,
             data: vec![],
+            headers: vec![],
         });
     }
 
     write_headers(
         &mut g,
         HeaderInput {
+            captions: (pt.row_header_caption.as_deref().unwrap_or("Row Labels"), pt.col_header_caption.as_deref().unwrap_or("Column Labels")),
             vals: &vals,
             row_fields: &row_fields,
             col_fields: &col_fields,
@@ -758,8 +808,11 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         if line.leaf && k > 0 {
             chart_rows.push(r as u32);
         }
-        for (c, v, indent, fmt) in &line.labels {
+        for (li, (c, v, indent, fmt)) in line.labels.iter().enumerate() {
             g.set(r, *c, v.clone(), ck.0, *indent, fmt.clone());
+            if let Some(vi) = line.vi.filter(|_| line.value_caption == Some(li)) {
+                g.mark_header(r, *c, HeaderRole::Value(vi));
+            }
         }
         if !line.values {
             continue;
@@ -799,5 +852,16 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data })
+    // Value captions were placed by their place among the value fields shown; a field whose source
+    // column is gone isn't shown, so the roles name the field's place in the definition instead.
+    let defined: Vec<Option<usize>> = vals.iter().map(|(_, v)| pt.values.iter().position(|x| std::ptr::eq(x, *v))).collect();
+    let headers = g
+        .headers
+        .into_iter()
+        .filter_map(|(r, c, role)| match role {
+            HeaderRole::Value(vi) => defined.get(vi).copied().flatten().map(|i| (r, c, HeaderRole::Value(i))),
+            other => Some((r, c, other)),
+        })
+        .collect();
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, data, headers })
 }

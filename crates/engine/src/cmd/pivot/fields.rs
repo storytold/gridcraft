@@ -527,8 +527,10 @@ pub(super) fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
                 v.name = unique_value_name(pt, &auto_name(f, &cur.source_col), Some(i));
             }
         }
+        // Spaces count: "Sales " names a value field after its "Sales" source field, and " "
+        // shows a blank caption.
         if let Some(n) = &name {
-            let n = n.trim();
+            let n = n.as_str();
             if n.is_empty() {
                 return Err(other("The name isn't valid."));
             }

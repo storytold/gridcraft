@@ -147,6 +147,12 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// The Compact layout's row header caption (`None`: "Row Labels").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row_header_caption: Option<String>,
+    /// The Compact layout's column header caption (`None`: "Column Labels").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col_header_caption: Option<String>,
 }
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
@@ -214,6 +220,15 @@ pub fn pivot_key(data_field: &str, items: &[(&str, &str, bool)]) -> String {
     key
 }
 
+/// The lookup key of a value field's caption as spelled, blanks kept; it can't equal a
+/// [`pivot_key`], which starts with the field's length.
+fn caption_key(caption: &str, items: &[(&str, &str, bool)]) -> String {
+    let mut key = String::from("=");
+    key_part(&mut key, &caption.to_lowercase());
+    key.push_str(&pivot_key("", items));
+    key
+}
+
 #[derive(Default)]
 struct LookupInner {
     cells: std::sync::OnceLock<Vec<PivotDataCell>>,
@@ -227,6 +242,12 @@ struct LookupInner {
 pub struct PivotLookup(std::sync::Arc<LookupInner>);
 
 impl PivotLookup {
+    /// Whether both are the same index, not merely equal ones: a refresh, and lines inserted or
+    /// deleted inside the report, give a PivotTable a new index.
+    pub fn same(&self, other: &PivotLookup) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+
     /// The value cells, if they were set.
     pub fn cells(&self) -> Option<&[PivotDataCell]> {
         self.0.cells.get().map(Vec::as_slice)
@@ -237,20 +258,30 @@ impl PivotLookup {
         self.0.cells.get_or_init(|| cells)
     }
 
-    /// The cell with this value field and exactly these items, by hash.
+    /// The cell with this value field and exactly these items, by hash. The field is a value
+    /// field's caption spelled as it is (but for case), else a source field's name, else a
+    /// caption with outer blanks ignored, so a caption of "Sales " and a "Sales" source field
+    /// never answer for each other, whichever comes first.
     pub fn find(&self, data_field: &str, items: &[(&str, &str, bool)]) -> Option<&PivotDataCell> {
         let cells = self.0.cells.get()?;
         let keys = self.0.keys.get_or_init(|| {
-            let mut m = std::collections::HashMap::with_capacity(cells.len());
-            for (i, c) in cells.iter().enumerate() {
-                let items: Vec<(&str, &str, bool)> =
-                    c.items.iter().map(|it| (it.field.as_str(), it.label.as_str(), matches!(it.value, Value::Bool(_)))).collect();
-                m.entry(pivot_key(&c.data_field, &items)).or_insert(i);
-                m.entry(pivot_key(&c.source_col, &items)).or_insert(i);
+            let mut m = std::collections::HashMap::with_capacity(cells.len() * 3);
+            let all: Vec<Vec<(&str, &str, bool)>> = cells
+                .iter()
+                .map(|c| c.items.iter().map(|it| (it.field.as_str(), it.label.as_str(), matches!(it.value, Value::Bool(_)))).collect())
+                .collect();
+            for (i, (c, items)) in cells.iter().zip(&all).enumerate() {
+                m.entry(caption_key(&c.data_field, items)).or_insert(i);
+            }
+            for (i, (c, items)) in cells.iter().zip(&all).enumerate() {
+                m.entry(pivot_key(&c.source_col, items)).or_insert(i);
+            }
+            for (i, (c, items)) in cells.iter().zip(&all).enumerate() {
+                m.entry(pivot_key(&c.data_field, items)).or_insert(i);
             }
             m
         });
-        keys.get(&pivot_key(data_field, items)).and_then(|i| cells.get(*i))
+        keys.get(&caption_key(data_field, items)).or_else(|| keys.get(&pivot_key(data_field, items))).and_then(|i| cells.get(*i))
     }
 }
 
@@ -320,6 +351,8 @@ impl Default for PivotTable {
             data_index: PivotLookup::default(),
             values_on_rows: false,
             values_position: None,
+            row_header_caption: None,
+            col_header_caption: None,
         }
     }
 }

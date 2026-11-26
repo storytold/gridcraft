@@ -26,11 +26,11 @@ mod output;
 use charts::rebind_charts;
 pub use charts::{chart_link, chart_series, clear_output, links_to, parse_chart_link};
 use compute::compute_from;
-pub use compute::{NOT_A_VALUE_CELL, detail_cells, detail_records};
+pub use compute::{NOT_A_VALUE_CELL, ReportCell, detail_cells, detail_records, report_cell};
 pub use items::{distinct_labels, func_caption, item_label};
 #[cfg(test)]
 use output::data_cols_exceed_sheet;
-pub use output::{CellKind, OutCell, Output, RowKind};
+pub use output::{CellKind, HeaderRole, OutCell, Output, RowKind};
 use output::{cell_style, look};
 
 /// Largest source block read (cells).
@@ -46,6 +46,47 @@ pub const MAX_VALUE_FIELDS: usize = 256;
 pub const MAX_INDEXED_CELLS: usize = 1_000_000;
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// ---------------------------------------------------------------- report area
+
+/// Refusal for a clear that would take away only part of a PivotTable's report.
+pub const PARTIAL_REPORT: &str = "Part of a PivotTable report can't be cleared on its own. Select the whole report to delete the PivotTable.";
+
+/// The cells a PivotTable's report covers, report filters included: the area it last wrote, or
+/// its anchor cell while it has written none.
+pub fn report_area(pt: &PivotTable) -> RangeRef {
+    pt.last_range.unwrap_or_else(|| RangeRef::cell(pt.anchor))
+}
+
+/// Whether `ranges` together cover every cell of `area`. The ranges are cut into the row bands
+/// their edges make, and each band's column spans must join up across the area's width, so a
+/// report taken by several areas of a selection counts however large it is.
+pub fn covered_by(area: RangeRef, ranges: &[RangeRef]) -> bool {
+    let parts: Vec<RangeRef> = ranges.iter().filter_map(|r| r.intersection(&area)).collect();
+    if parts.contains(&area) {
+        return true;
+    }
+    let mut edges: Vec<u32> = parts.iter().flat_map(|r| [r.start.row, r.end.row.saturating_add(1)]).collect();
+    edges.push(area.start.row);
+    edges.sort_unstable();
+    edges.dedup();
+    for band in edges.iter().copied().filter(|&row| row <= area.end.row) {
+        let mut spans: Vec<(u32, u32)> =
+            parts.iter().filter(|r| r.start.row <= band && band <= r.end.row).map(|r| (r.start.col, r.end.col)).collect();
+        spans.sort_unstable();
+        let mut next = area.start.col;
+        for (a, b) in spans {
+            if a > next {
+                break;
+            }
+            next = next.max(b.saturating_add(1));
+        }
+        if next <= area.end.col {
+            return false;
+        }
+    }
+    true
+}
 
 // ---------------------------------------------------------------- source
 
