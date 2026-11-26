@@ -435,6 +435,7 @@ fn sample() -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        layout: Default::default(),
     };
     for kind in [
         ChartKind::ColumnClustered,
@@ -2340,6 +2341,7 @@ fn issue_778_xlsx_xml_import_save_reopen_roundtrip() {
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        layout: Default::default(),
         x_title: None,
         y_title: None,
         source: None,
