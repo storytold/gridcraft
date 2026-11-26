@@ -997,6 +997,31 @@ fn oversized_arabic_text_is_an_error_instead_of_partial_pdf() {
 }
 
 #[test]
+fn arabic_fallback_sets_latin_extended_a_in_the_extended_font() {
+    if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
+        return;
+    }
+    // Noto Sans Arabic draws ő and Ş itself but lacks the Esperanto Ĉ and ĥ, which fall back to the standard face.
+    let text = "سلام ő Ĉu ĥ";
+    let items = arabic::layout(Font::Helvetica, text, TextDirection::Auto).unwrap().items;
+    // Drawn by the face itself or in the extended font, never in WinAnsi.
+    assert!(
+        items.iter().any(|item| matches!(item, arabic::Item::Glyph { source: text, .. } | arabic::Item::Ext { text, .. } if text.contains('Ĉ'))),
+        "{items:?}"
+    );
+    for item in items {
+        if let arabic::Item::Latin { text: drawn, .. } = &item {
+            assert!(!drawn.chars().any(|c| ext_code(c).is_some()), "{drawn:?} is set in WinAnsi, where it would print as ?");
+        }
+    }
+    let mut subset = arabic::Subset::default();
+    let body = subset.text(Font::Helvetica, text, 12.0, TextDirection::Auto).unwrap();
+    let ext = format!("/F{} ", EXT_FONT + Font::Helvetica.index() + 1);
+    assert_eq!(body.contains(&ext), subset.uses_ext[Font::Helvetica.index()], "the page declares the extended font it uses");
+    assert!(!body.contains("(?)") && !body.contains("?)"), "no letter falls back to ?: {body}");
+}
+
+#[test]
 fn arabic_joining_marks_styles_and_rotation() {
     if arabic::layout(Font::Helvetica, "مرحبا", TextDirection::Auto).is_err() && arabic::ARABIC_FONTS.is_empty() {
         return;
@@ -1071,7 +1096,7 @@ fn line_breaks_in_arabic_text_draw_as_spaces() {
     {
         let layout = arabic::layout(Font::Helvetica, text, direction).unwrap();
         for item in &layout.items {
-            if let arabic::Item::Latin { text: drawn, .. } = item {
+            if let arabic::Item::Latin { text: drawn, .. } | arabic::Item::Ext { text: drawn, .. } = item {
                 assert!(!drawn.chars().any(|ch| matches!(ch, '\n' | '\r' | '\u{2028}' | '\u{2029}')), "{drawn:?} from {text:?}");
             }
         }
@@ -1169,7 +1194,7 @@ fn arabic_explicit_base_changes_visual_order_and_preserves_logical_text() {
             .into_iter()
             .map(|item| match item {
                 arabic::Item::Glyph { source, .. } => source,
-                arabic::Item::Latin { text, .. } | arabic::Item::Cid { text, .. } => text,
+                arabic::Item::Latin { text, .. } | arabic::Item::Ext { text, .. } | arabic::Item::Cid { text, .. } => text,
             })
             .collect::<String>()
     };

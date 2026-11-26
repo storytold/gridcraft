@@ -893,7 +893,8 @@ impl Page {
                 return;
             }
         };
-        for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT)].into_iter().flatten() {
+        let ext = self.arabic.uses_ext.get(font.index()).copied().unwrap_or(false).then_some(EXT_FONT + font.index());
+        for slot in [Some(font.index()), self.arabic.uses_cid.then_some(CID_FONT), ext].into_iter().flatten() {
             if let Some(f) = self.fonts.get_mut(slot) {
                 *f = true;
             }
