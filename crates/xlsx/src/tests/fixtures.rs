@@ -590,6 +590,7 @@ fn chartex_parts_as_excel_expects_them() {
         source: None,
         by_rows: false,
         pivot: None,
+        empty_cells: Default::default(),
     });
     wb.sheets = vec![std::sync::Arc::new(sheet)];
     let bytes = crate::write_xlsx(&wb).unwrap();
@@ -649,6 +650,7 @@ fn doughnut_writes_every_series_as_a_ring_with_hole_and_angle() {
         source: None,
         by_rows: false,
         pivot: None,
+        empty_cells: Default::default(),
     });
     wb.sheets = vec![std::sync::Arc::new(sheet)];
     let bytes = crate::write_xlsx(&wb).unwrap();

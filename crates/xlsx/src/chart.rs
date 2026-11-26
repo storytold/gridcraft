@@ -9,7 +9,9 @@ use craft_drawingml::color::SchemeSlot;
 use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartDataTable, ChartEmptyCells, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -451,6 +453,15 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         source: None,
         by_rows: false,
         pivot: dc.pivot_source.as_deref().map(strip_book).filter(|n| !n.is_empty()).map(str::to_string),
+        // Without the element empty cells are gaps; with it, its `val` defaults to zero.
+        empty_cells: match root.and_then(|r| r.path(&["chart", "dispBlanksAs"])) {
+            None => ChartEmptyCells::Gap,
+            Some(e) => match e.attr("val") {
+                Some("gap") => ChartEmptyCells::Gap,
+                Some("span") => ChartEmptyCells::Span,
+                _ => ChartEmptyCells::Zero,
+            },
+        },
     };
     // Series of one family are one chart; series of other families make a combination chart.
     ch.set_drawn_kinds(&drawn, first_kind);
@@ -1139,6 +1150,11 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if let Some(p) = pos {
         let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
     }
-    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
+    let blanks = match ch.empty_cells {
+        ChartEmptyCells::Gap => "gap",
+        ChartEmptyCells::Zero => "zero",
+        ChartEmptyCells::Span => "span",
+    };
+    let _ = write!(s, "<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"{blanks}\"/></c:chart></c:chartSpace>");
     s
 }

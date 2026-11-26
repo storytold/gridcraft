@@ -167,6 +167,7 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         source: None,
         by_rows: false,
         pivot: None,
+        empty_cells: Default::default(),
     })
 }
 
