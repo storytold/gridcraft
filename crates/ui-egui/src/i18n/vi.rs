@@ -5,6 +5,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Xu hướng tuyến tính",
+        "Growth Trend" => "Xu hướng tăng trưởng",
         "Diagram" => "Sơ đồ",
         "Decorative Text" => "Chữ trang trí",
         "Paste" => "Dán",
@@ -1343,6 +1345,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Fill Months" => "Điền theo tháng",
         "Fill Years" => "Điền theo năm",
         "Auto Fill Options" => "Tùy chọn tự động điền",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Quy tắc định dạng mới",
+        "Edit Formatting Rule" => "Chỉnh sửa quy tắc định dạng",
+        "Select a Rule Type" => "Chọn loại quy tắc",
+        "Edit the Rule Description" => "Sửa mô tả quy tắc",
+        "Format all cells based on their values" => "Định dạng tất cả ô dựa trên giá trị của chúng",
+        "Format only cells that contain" => "Chỉ định dạng các ô chứa",
+        "Format only top or bottom ranked values" => "Chỉ định dạng các giá trị có thứ hạng cao nhất hoặc thấp nhất",
+        "Format only values that are above or below average" => "Chỉ định dạng các giá trị trên hoặc dưới mức trung bình",
+        "Format only unique or duplicate values" => "Chỉ định dạng các giá trị duy nhất hoặc trùng lặp",
+        "Use a formula to determine which cells to format" => "Dùng công thức để xác định ô nào cần định dạng",
+        "This rule type isn't available yet." => "Loại quy tắc này chưa khả dụng.",
+        "Format Style:" => "Kiểu định dạng:",
+        "2-Color Scale" => "Thang 2 màu",
+        "3-Color Scale" => "Thang 3 màu",
+        "Midpoint" => "Điểm giữa",
+        "Lowest value" => "Giá trị thấp nhất",
+        "Highest value" => "Giá trị cao nhất",
+        "Percentile" => "Bách phân vị",
+        "Formula" => "Công thức",
+        "More Rules…" => "Thêm quy tắc…",
+        // Conditional formatting: the formatting presets the rule editor offers.
         _ => return None,
     })
 }
