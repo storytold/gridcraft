@@ -1,4 +1,3 @@
-// Russian translation © 2026 SuperSfera LLC, MIT OR Apache-2.0
 //! Russian help for the worksheet functions: descriptions and argument names, keyed
 //! by the English text of the function catalog and sorted by it (lookups binary-search). Literal
 //! formula tokens in descriptions (function names, TRUE/FALSE, error values) keep their canonical

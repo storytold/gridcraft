@@ -1,4 +1,3 @@
-// Russian translation © 2026 SuperSfera LLC, MIT OR Apache-2.0
 //! Russian translations for the interface strings in i18n.rs.
 
 /// Returns the Russian translation for `text`, or `None` so callers fall back to English.
