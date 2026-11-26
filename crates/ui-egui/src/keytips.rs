@@ -120,15 +120,7 @@ impl KeyTips {
                     } else if self.prefix.is_some() && !matches!(key, Key::ShiftLeft | Key::ShiftRight) {
                         handled = true;
                         if *key == Key::Escape {
-                            // Escape pops one level; at a single-letter level it
-                            // returns to the armed root (empty prefix).
-                            if let Some(prefix) = self.prefix.as_mut() {
-                                if prefix.is_empty() {
-                                    self.prefix = None;
-                                } else {
-                                    prefix.pop();
-                                }
-                            }
+                            self.back();
                         } else if key.name().len() == 1 {
                             let next = format!("{}{key_name}", self.prefix.as_deref().unwrap_or_default(), key_name = key.name());
                             match keytip_table::lookup(&next) {
@@ -171,7 +163,23 @@ impl KeyTips {
         ctx.input_mut(|i| {
             i.events = events.into_iter().enumerate().filter_map(|(index, event)| (!consumed.contains(&index)).then_some(event)).collect()
         });
+        // With none of GridCraft's widgets focused (the File view), the runtime takes Escape as the
+        // window's cancel.
+        if self.prefix.is_some() && crate::framework::take_window_cancel(ctx) {
+            self.back();
+        }
         actions
+    }
+
+    /// Escape pops one level; at a single-letter level it returns to the armed root (empty prefix).
+    fn back(&mut self) {
+        if let Some(prefix) = self.prefix.as_mut() {
+            if prefix.is_empty() {
+                self.prefix = None;
+            } else {
+                prefix.pop();
+            }
+        }
     }
 
     fn finish(&mut self, action: Action, actions: &mut Vec<Action>) {
