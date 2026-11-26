@@ -104,6 +104,10 @@ pub struct Preserved {
     pub sheets: Vec<PreservedSheet>,
     /// The original parts of the sheet's embedded charts (sheet owner only).
     pub charts: Vec<PreservedChart>,
+    /// Differential formats the sheet's kept `<customSheetViews>` refer to by `dxfId` (a view's
+    /// colour filter), by their id in the source file; renumbered on save like
+    /// [`PreservedPart::dxfs`].
+    pub view_dxfs: Vec<(u32, Style)>,
 }
 
 impl Preserved {

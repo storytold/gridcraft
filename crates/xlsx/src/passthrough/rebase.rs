@@ -1,5 +1,5 @@
 use super::read::{first_free_block, merge_vml};
-use super::write::{NameMap, attach, part_rels_xml, remap, write_parts};
+use super::write::{NameMap, attach, map_style_ids, part_rels_xml, remap, write_parts};
 use super::*;
 
 /// A sheet's kept content being written.
@@ -84,10 +84,16 @@ impl<'a> SheetKept<'a> {
     }
 
     /// The kept `<customSheetViews>` (users' own views of a shared workbook), with its printer
-    /// settings' new relationship ids.
-    pub fn custom_views(&self) -> Option<String> {
-        let e = self.p?.elements.iter().find(|e| e.slot == CUSTOM_SHEET_VIEWS)?;
-        remap(&e.xml, &self.ids)
+    /// settings' new relationship ids and its colour filters' formats in the written styles.
+    pub fn custom_views(&self, out: &mut Out) -> Option<String> {
+        let p = self.p?;
+        let e = p.elements.iter().find(|e| e.slot == CUSTOM_SHEET_VIEWS)?;
+        let x = remap(&e.xml, &self.ids)?;
+        if p.view_dxfs.is_empty() {
+            return Some(x);
+        }
+        let dxfs: HashMap<u32, u32> = p.view_dxfs.iter().map(|(old, s)| (*old, crate::styles::dxf_id(&mut out.dxfs, s))).collect();
+        String::from_utf8(map_style_ids(x.as_bytes(), &dxfs, &HashMap::new())?).ok()
     }
 
     /// The kept sheet elements, in schema order, with GridCraft's own form control entries

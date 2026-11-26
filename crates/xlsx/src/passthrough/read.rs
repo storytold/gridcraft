@@ -153,7 +153,7 @@ impl KeptReader {
                 }
                 queue.push_back((r.target.clone(), depth + 1));
             }
-            let (dxfs, num_fmts) = if content_type == CT_PIVOT_TABLE || content_type == CT_PIVOT_CACHE_DEF {
+            let (dxfs, num_fmts) = if content_type == CT_PIVOT_TABLE || content_type == CT_PIVOT_CACHE_DEF || content_type == CT_REVISION_LOG {
                 style_refs(cx, &data).ok_or_else(|| format!("{name} is damaged"))?
             } else {
                 (vec![], vec![])
@@ -538,6 +538,13 @@ impl KeptReader {
                 (_, None) => Err("it refers to a missing relationship".into()),
             };
             match kept {
+                Ok(()) if slot == CUSTOM_SHEET_VIEWS => match style_refs(cx, x.as_bytes()) {
+                    Some((dxfs, _)) => {
+                        p.view_dxfs = dxfs;
+                        p.elements.push(PreservedXml { slot, xml: x });
+                    }
+                    None => cx.warn(format!("sheet \"{name}\": {slot} were dropped: its XML is damaged")),
+                },
                 Ok(()) => p.elements.push(PreservedXml { slot, xml: x }),
                 Err(why) => cx.warn(format!("sheet \"{name}\": {slot} were dropped: {why}")),
             }
@@ -617,7 +624,7 @@ fn attr_values(data: &[u8], local: &[&[u8]], mut f: impl FnMut(&[u8], &str)) -> 
 }
 
 /// The differential formats (`dxfId`) and custom number formats (`numFmtId`) of the source
-/// styles part a kept PivotTable or pivot cache refers to. `None` when its XML is damaged.
+/// styles part a kept PivotTable, pivot cache, revision log or custom view refers to. `None` when its XML is damaged.
 type StyleRefs = (Vec<(u32, gridcraft_model::Style)>, Vec<(u32, String)>);
 fn style_refs(cx: &Ctx<'_>, data: &[u8]) -> Option<StyleRefs> {
     let mut dxfs: Vec<(u32, gridcraft_model::Style)> = vec![];

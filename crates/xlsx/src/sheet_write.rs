@@ -227,7 +227,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     part.features.drawing = write_sheet_drawing_rel(wb, si, sheet, &mut rels, out);
     let (legacy_rid, notes_frag) = write_sheet_notes_frag(sheet, si, &kept, &mut rels, out);
     part.features.legacy_drawing = legacy_rid;
-    if let Some(x) = kept.custom_views() {
+    if let Some(x) = kept.custom_views(out) {
         insert_custom_views(&mut part.root, &x);
     }
 

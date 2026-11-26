@@ -108,6 +108,8 @@ fn kept_total() -> usize {
 
 const NS_REL_STRICT: &str = "http://purl.oclc.org/ooxml/officeDocument/relationships";
 const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
+/// A shared workbook's revision log: its `numFmtId` and `dxfId` values are renumbered on save.
+const CT_REVISION_LOG: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.revisionLog+xml";
 
 /// Relationship kinds (last segment of the type) kept from the package root.
 const PACKAGE_ROOTS: &[&str] = &["custom-properties", "extensibility", "webextensiontaskpanes"];
