@@ -338,9 +338,12 @@ struct CellWriteInput<'a> {
 
 fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str) {
     // Excel 2010 extensions: conditional formats, then sparklines.
-    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() {
+    let has_kept_exts = !crate::extlist::sheet_exts(sheet, "").is_empty();
+    let has_exts = !x14_cf.is_empty() || !sheet.sparklines.is_empty() || has_kept_exts;
+    if has_exts {
         s.push_str("<extLst>");
     }
+    let exts_start = s.len();
     if !x14_cf.is_empty() {
         let _ = write!(s, "<ext uri=\"{EXT_X14_CF}\" xmlns:x14=\"{X14_NS}\"><x14:conditionalFormattings>{x14_cf}</x14:conditionalFormattings></ext>");
     }
@@ -365,7 +368,12 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str) {
         }
         s.push_str("</x14:sparklineGroups></ext>");
     }
-    if !x14_cf.is_empty() || !sheet.sparklines.is_empty() {
+    if has_exts {
+        // Only a sheet with kept extensions scans what was just written for their URIs.
+        if has_kept_exts {
+            let kept_exts = crate::extlist::sheet_exts(sheet, s.get(exts_start..).unwrap_or(""));
+            s.push_str(&kept_exts);
+        }
         s.push_str("</extLst>");
     }
 }
