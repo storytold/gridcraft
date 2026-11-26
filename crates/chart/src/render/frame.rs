@@ -93,8 +93,63 @@ pub(super) struct ValAxis<'a> {
 }
 
 impl ValAxis<'_> {
-    fn labels(&self) -> Vec<(f64, String)> {
+    pub(super) fn labels(&self) -> Vec<(f64, String)> {
         self.scale.ticks().into_iter().map(|v| (v, self.fmt.format(v, Some(self.scale.step)))).collect()
+    }
+}
+
+/// Most lines a wrapped category label takes under the axis, and most categories wrapped (more
+/// are rarely readable and are thinned out instead).
+const MAX_LABEL_LINES: usize = 3;
+const MAX_WRAPPED_CATEGORIES: usize = 200;
+
+/// Each label as the lines it wraps to at spaces within `maxw`; `None` when every label fits on
+/// one line already, or when one can't wrap into `max_lines` (a word wider than the slot).
+pub(super) fn wrap_labels(ctx: &Ctx, labels: &[String], size: f32, maxw: f32, max_lines: usize) -> Option<Vec<Vec<String>>> {
+    if labels.is_empty() || labels.len() > MAX_WRAPPED_CATEGORIES || maxw <= 0.0 || labels.iter().all(|t| ctx.tw(t, size) <= maxw) {
+        return None;
+    }
+    labels
+        .iter()
+        .map(|t| {
+            let mut lines: Vec<String> = Vec::new();
+            for word in t.split_whitespace() {
+                if ctx.tw(word, size) > maxw {
+                    return None;
+                }
+                match lines.last_mut() {
+                    Some(line) if ctx.tw(&format!("{line} {word}"), size) <= maxw => {
+                        line.push(' ');
+                        line.push_str(word);
+                    }
+                    _ => lines.push(word.to_string()),
+                }
+            }
+            (lines.len() <= max_lines).then_some(lines)
+        })
+        .collect()
+}
+
+/// Category labels under a vertical plot: wrapped onto their lines when they wrap, else on one
+/// line each, every `k`th one when they don't all fit.
+fn draw_category_labels(ctx: &mut Ctx, plot: Bx, l: &[String], wrapped: Option<&[Vec<String>]>, ls: f32) {
+    let n = l.len().max(1);
+    let cw = plot.w / n as f32;
+    let lh = ls * 1.4;
+    if let Some(wrapped) = wrapped {
+        for (j, lines) in wrapped.iter().enumerate() {
+            for (r, line) in lines.iter().enumerate() {
+                let y = plot.bottom() + 3.0 + lh * r as f32;
+                ctx.text(plot.x + (j as f32 + 0.5) * cw, y, line, ls, TEXT, (HAlign::Center, VAlign::Top));
+            }
+        }
+        return;
+    }
+    let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+    let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
+    for (j, t) in l.iter().enumerate().step_by(k) {
+        let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
+        ctx.text(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
     }
 }
 
@@ -120,7 +175,22 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Labels(_, o) => o.len() as f32,
             CatAxis::Numeric(..) | CatAxis::Table(..) => 0.0,
         };
-        let plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels };
+        // Category labels too wide for their slot wrap at spaces, as in Excel, when every one fits
+        // in a few lines; otherwise some are left out, as before.
+        let wrapped = match &cat {
+            CatAxis::Labels(l, _) => wrap_labels(ctx, l, ls, (area.w - left - right) / l.len().max(1) as f32 - 2.0, MAX_LABEL_LINES),
+            _ => None,
+        };
+        let rows = wrapped.as_ref().map_or(1, |w| w.iter().map(Vec::len).max().unwrap_or(1));
+        let extra = lh * (rows - 1) as f32;
+        let mut plot = Bx { x: area.x + left, y: area.y + lh * 0.5, w: area.w - left - right, h: area.h - lh * 1.5 - 4.0 - lh * levels - extra };
+        // A chart too short for the wrapped rows keeps one row and thins its labels, as before.
+        let (wrapped, rows) = if wrapped.is_some() && !plot.ok() {
+            plot.h += extra;
+            (None, 1)
+        } else {
+            (wrapped, rows)
+        };
         if !plot.ok() {
             return plot;
         }
@@ -145,16 +215,11 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Labels(l, outer) => {
                 let n = l.len().max(1);
                 let cw = plot.w / n as f32;
-                let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
-                let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
-                for (j, t) in l.iter().enumerate().step_by(k) {
-                    let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
-                    ctx.text(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
-                }
+                draw_category_labels(ctx, plot, l, wrapped.as_deref(), ls);
                 // Outer levels, one row each below the labels: a group's name centred under its
                 // categories, and a separator at each group boundary down through the rows.
                 for (i, level) in outer.iter().enumerate() {
-                    let top = plot.bottom() + 3.0 + lh * (i as f32 + 1.0);
+                    let top = plot.bottom() + 3.0 + lh * (i as f32 + rows as f32);
                     for (first, end) in level_groups(level, n) {
                         let (x0, x1) = (plot.x + first as f32 * cw, plot.x + end as f32 * cw);
                         if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {

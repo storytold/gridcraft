@@ -316,7 +316,18 @@ pub(super) fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
     // Outer levels padded to the slots (forecast slots stay in the last group).
     let outer: Vec<Vec<String>> =
         data.category_levels.iter().map(|l| (0..ncat_slots).map(|j| l.get(j).cloned().unwrap_or_default()).collect()).collect();
-    let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots);
+    // The plot's margins as the frame lays them out, for the table's columns. Columns: the value
+    // labels on the left, a secondary axis's on the right. Bars: the category labels on the left,
+    // half the last value label on the right.
+    let widest = |a: &ValAxis| a.labels().iter().map(|(_, t)| ctx.tw(t, LABEL_SIZE)).fold(0.0f32, f32::max) + 6.0;
+    let margins = if horizontal {
+        let names = labels.iter().take(2000).map(|t| ctx.tw(t, LABEL_SIZE)).fold(0.0f32, f32::max) + 6.0;
+        let last = y1.labels().last().map_or(0.0, |(_, t)| ctx.tw(t, LABEL_SIZE) / 2.0);
+        (names.min(area.w * 0.35), last.min(area.w * 0.2) + 2.0)
+    } else {
+        (widest(&y1), y2.as_ref().map_or(4.0, |a| widest(a).min(area.w * 0.3)))
+    };
+    let (area, table) = super::table::reserve(ctx, chart, data, area, ncat_slots, margins);
     let category_axis = super::table::category_axis(&table, &labels, &outer);
     let plot = frame(ctx, area, category_axis, &y1, y2.as_ref(), horizontal, chart.gridlines);
     if !plot.ok() {
