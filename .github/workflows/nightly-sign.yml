@@ -34,9 +34,9 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@8389cad8b849ea6bdb5e15fbce16772c3457565a
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@3dee18226ed28134896f69fb8b280fff9247ec7f
     with:
-      tooling-revision: 8389cad8b849ea6bdb5e15fbce16772c3457565a
+      tooling-revision: 3dee18226ed28134896f69fb8b280fff9247ec7f
       app-name: gridcraft
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
