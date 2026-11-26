@@ -237,8 +237,12 @@ fn paint_cells(
     outside: &[(CellRef, Rect, Look, Option<CfLook>)],
     merges: &[RangeRef],
 ) {
+    let mut bold_faces: std::collections::HashMap<(String, bool), bool> = std::collections::HashMap::new();
     for cell in looks.iter().chain(outside) {
-        paint_cell(q, cell, merges);
+        let font = &cell.2.style.font;
+        let faux_bold = font.bold
+            && !*bold_faces.entry((font.name.clone(), font.italic)).or_insert_with(|| theme::has_bold_face(q.painter.ctx(), &font.name, font.italic));
+        paint_cell(q, cell, merges, faux_bold);
     }
 }
 
@@ -314,7 +318,7 @@ fn should_expand_text(filter_space: f32, overflows: bool, across_end: u32, col: 
 ///
 /// Handles text layout, wrapping, alignment, overflow into neighbouring cells,
 /// and clipping, while preserving cell decoration and merged-cell constraints.
-fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef]) {
+fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLook>), merges: &[RangeRef], faux_bold: bool) {
     let (cell, rect, lk, cfl) = painted;
     let c = *cell;
     let p = q.painter;
@@ -397,7 +401,8 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let (text_top, text_bottom) = galley_baseline_bounds(&galley);
         let y = wrapped_cell_text_y(st.align.v, *rect, text_bottom - text_top, z) - text_top;
         let text_clip = wrapped_text_clip(p, *rect, &galley, y, st.align.v);
-        p.with_clip_rect(text_clip).galley(pos2(x, y), galley, color);
+        let cp = p.with_clip_rect(text_clip);
+        paint_upright_galley(&cp, pos2(x, y), &galley, color, faux_bold, z);
         return;
     }
     // Wrap Text off: Excel ignores the line breaks and draws the whole string on one line.
@@ -503,7 +508,7 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
     let text_height = text_bottom - text_top;
     let y = cell_text_y(st.align.v, *rect, text_height, z) - text_top;
     let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
-    if rotated {
+    let deco_w = if rotated {
         let angle = -(st.align.rotation as f32).to_radians();
         // Upright (±90°) wrapped text wraps to the row height: lines then stack across the column.
         let galley = if st.align.wrap && st.align.rotation.abs() == 90 {
@@ -517,13 +522,26 @@ fn paint_cell(q: &QuadrantPaint<'_>, painted: &(CellRef, Rect, Look, Option<CfLo
         let mut shape = egui::epaint::TextShape::new(pos, galley, color);
         shape.angle = angle;
         cp.add(shape);
+        w
     } else {
-        cp.galley(pos2(x, y), galley.clone(), color);
-    }
+        paint_upright_galley(&cp, pos2(x, y), &galley, color, faux_bold, z)
+    };
     paint_text_decorations(
         &cp,
-        TextDecoration { x, y: y + text_top, width: w, height: text_height, color, underline: st.font.underline, strike: st.font.strike },
+        TextDecoration { x, y: y + text_top, width: deco_w, height: text_height, color, underline: st.font.underline, strike: st.font.strike },
     );
+}
+
+/// Paints an upright cell galley, adding a slight horizontal overstrike pass when `faux_bold` is true, and returns the span width for text decorations.
+fn paint_upright_galley(cp: &Painter, pos: Pos2, galley: &std::sync::Arc<egui::Galley>, color: Color32, faux_bold: bool, z: f32) -> f32 {
+    cp.galley(pos, galley.clone(), color);
+    if faux_bold {
+        let dx = (0.55 * z).max(0.5);
+        cp.galley(pos2(pos.x + dx, pos.y), galley.clone(), color);
+        galley.size().x + dx
+    } else {
+        galley.size().x
+    }
 }
 
 struct TextDecoration {

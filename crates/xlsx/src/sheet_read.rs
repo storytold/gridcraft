@@ -317,6 +317,7 @@ fn apply_craft_sheet_part(
     let mut fit_to_page = false;
     let mut cf_kept_cells = 0u64;
     cx.cf_ext_ids.clear();
+    read_sheet_slicer_defs(cx, rels)?;
     for cf in &sp.features.conditional_formats {
         read_cf(cx, &from_craft_el(&cf.to_el()), sheet, &mut cf_kept_cells);
     }
@@ -401,6 +402,7 @@ fn read_sheet_notes_and_tables(cx: &mut Ctx<'_>, sp: &CraftSheetPart, rels: &[Re
     let tables = cx.pkg.craft_mut().tables(sp).map_err(craft_error)?;
     for (_, t) in tables {
         let mut model = parts::from_craft_table(cx, &t);
+        record_file_table(cx, &t, &model);
         model.id = cx.next_object_id();
         sheet.tables.push(model);
     }
@@ -1040,6 +1042,35 @@ fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, cf_kept_cells: &mut u64
     }
 }
 
+/// Reads worksheet-level `slicer` parts and stores their `(cache, caption, columnCount)` definitions on `cx`.
+fn read_sheet_slicer_defs(cx: &mut Ctx<'_>, rels: &[crate::package::Rel]) -> Result<(), IoError> {
+    cx.sheet_slicer_defs.clear();
+    cx.sheet_slicer_frames.clear();
+    for rel in rels.iter().filter(|r| r.kind.eq_ignore_ascii_case("slicer")) {
+        if let Some(x) = cx.optional_xml(&rel.target)? {
+            for s in x.kids("slicer") {
+                if let Some(sname) = s.attr("name").filter(|n| !n.is_empty()) {
+                    let cache = s.attr("cache").unwrap_or("").to_string();
+                    let caption = xml::decode_xstring(s.attr("caption").unwrap_or(""));
+                    let cols = s.attr_u32("columnCount").unwrap_or(1).max(1);
+                    cx.sheet_slicer_defs.insert(sname.to_string(), (cache, caption, cols));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Records a table's numeric `id`, name, and `tableColumn` id-to-name map on `cx` for `x15:tableSlicerCache` resolution.
+fn record_file_table(cx: &mut Ctx<'_>, t: &craft_xlsx::Table, model: &gridcraft_model::Table) {
+    if model.id == 0 {
+        return;
+    }
+    let col_map: HashMap<u32, String> =
+        t.columns.iter().filter_map(|c| Some((c.id?, xml::decode_xstring(c.name.as_deref().unwrap_or(""))))).collect();
+    cx.file_tables.insert(model.id, (model.name.clone(), col_map));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1109,6 +1140,11 @@ mod tests {
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],
+            file_tables: Default::default(),
+            slicer_caches: Default::default(),
+            sheet_slicer_defs: Default::default(),
+            sheet_slicer_frames: Default::default(),
+            pending_slicers: Default::default(),
         }
     }
 
