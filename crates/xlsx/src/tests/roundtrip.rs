@@ -634,7 +634,7 @@ fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
 fn package_structure() {
     let bytes = write_xlsx(&sample()).unwrap();
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let names: Vec<String> = (0..z.len()).map(|i| z.name_for_index(i).unwrap().to_string()).collect();
+    let names: Vec<String> = (0..z.len()).map(|i| z.name_for_index(i).unwrap().unwrap().to_string()).collect();
     assert_eq!(names[0], "[Content_Types].xml");
     for n in [
         "_rels/.rels",
@@ -928,7 +928,7 @@ fn vba_project_roundtrip() {
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
 
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
-    let names: Vec<String> = (0..z.len()).map(|i| z.name_for_index(i).unwrap().to_string()).collect();
+    let names: Vec<String> = (0..z.len()).map(|i| z.name_for_index(i).unwrap().unwrap().to_string()).collect();
     assert!(names.iter().any(|x| x == "xl/vbaProject.bin"), "missing vbaProject.bin");
     let mut bin = vec![];
     z.by_name("xl/vbaProject.bin").unwrap().read_to_end(&mut bin).unwrap();
@@ -2240,6 +2240,29 @@ fn remove_personal_information_is_kept_and_honoured() {
     let book = pkg.read_xml("xl/workbook.xml").unwrap().unwrap();
     assert_eq!(book.child("workbookPr").and_then(|p| p.attr("filterPrivacy")), None);
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
+}
+
+/// A password set in GridCraft (both forms) is written as its Excel form, which reads back and
+/// verifies; a SHA-256 digest alone has no XLSX form, so its protection is kept without it.
+#[test]
+fn protection_passwords_write_the_form_xlsx_stores() {
+    let mut wb = Workbook::new();
+    wb.protected_structure = true;
+    wb.structure_password = Some(PasswordHash::new_for_files("b00k", b"0123456789abcdef"));
+    let both = PasswordHash::new_for_files("pa55", b"fedcba9876543210");
+    let sheet = wb.sheet_mut(0).unwrap();
+    sheet.protection = Some(SheetProtection { password: Some(both.clone()), ..Default::default() });
+    let mut digest_only = Sheet::new("Digest");
+    digest_only.protection = Some(SheetProtection { password: Some(PasswordHash::new_sha256_digest("pa55")), ..Default::default() });
+    wb.sheets.push(Arc::new(digest_only));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.structure_password.as_ref(), wb.structure_password.as_ref().and_then(PasswordHash::excel));
+    assert!(back.structure_password.as_ref().unwrap().verify("b00k").unwrap());
+    let read = back.sheets[0].protection.as_ref().and_then(|p| p.password.clone());
+    assert_eq!(read.as_ref(), both.excel());
+    assert!(read.unwrap().verify("pa55").unwrap());
+    let digest = back.sheets[1].protection.as_ref().unwrap();
+    assert_eq!(digest.password, None);
 }
 
 #[test]
