@@ -120,6 +120,21 @@ fn move_rows_preserves_formulas_heights_formats_and_undo_redo() {
     assert_eq!(*s.doc().unwrap().wb, *before);
     s.execute("edit.redo", json!({})).unwrap();
     assert_eq!(*s.doc().unwrap().wb, *after);
+
+    // Zoom is view state: undoing or redoing this structural edit keeps the current zoom.
+    s.execute("view.zoom", json!({"percent":200})).unwrap();
+    assert_eq!(s.doc().unwrap().undo.len(), 1, "zoom did not add an undo step");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 200, "undoing a row move keeps current zoom");
+    let mut expected = (*before).clone();
+    expected.sheet_mut(0).unwrap().zoom = 200;
+    assert_eq!(*s.doc().unwrap().wb, expected);
+    s.execute("view.zoom", json!({"percent":150})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().zoom, 150, "redoing a row move keeps current zoom");
+    let mut expected = (*after).clone();
+    expected.sheet_mut(0).unwrap().zoom = 150;
+    assert_eq!(*s.doc().unwrap().wb, expected);
 }
 
 #[test]
