@@ -206,7 +206,11 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
         // Step by step: a rename and a new sheet undone together match up only one step apart.
         super::extra::keep_view_modes(d, &cur_wb);
-        crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
+        // Only the step count bounds the redo history, not the byte budget: undoing moves
+        // snapshots that already exist, but the bulk of a step (a whole-column border) is charged
+        // to its snapshot only once it is undone, so the budget would drop the latest steps and
+        // redoing everything would not give the workbook back (#3865). A new edit clears it.
+        crate::push_history_with_budget(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection, usize::MAX);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
     d.calc.rebuild(&d.wb);
