@@ -17,10 +17,13 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 
 pub mod backstage;
 mod border_preview;
+mod capture;
 mod cell_pictures;
+pub mod channel;
 mod chartcache;
 pub mod chartview;
 pub mod code_editor;
+mod combo_menu;
 pub mod control;
 pub mod control_ui;
 mod craft_fonts_policy;
@@ -37,6 +40,7 @@ pub mod form_controls;
 pub mod formula_bar;
 mod formula_locale;
 pub mod frame;
+pub mod framework;
 pub mod function_library;
 pub mod grid;
 pub mod i18n;
@@ -51,6 +55,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod quick_analysis;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -59,6 +64,8 @@ mod text_direction;
 pub mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates_ui;
+#[cfg(not(target_arch = "wasm32"))]
+mod viewports;
 pub mod widgets;
 mod window_ui;
 pub mod wordart;
@@ -347,6 +354,11 @@ pub struct SheetApp {
     /// The update check, the startup prompt and a running self-update (desktop only).
     #[cfg(not(target_arch = "wasm32"))]
     updates_rt: updates_ui::Runtime,
+    /// The framework dialogs GridCraft keeps as values (the update dialogs), run once per frame
+    /// after GridCraft's own UI in the root window's pass.
+    pub framework_dialogs: craft_ui::dialog::DialogHost,
+    /// Who GridCraft is to the framework's dialogs.
+    framework_host: std::sync::Arc<craft_host::Host>,
 }
 
 /// Strips the engine's error prefixes for message boxes.
