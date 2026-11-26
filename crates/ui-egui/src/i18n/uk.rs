@@ -3,6 +3,8 @@
 /// Returns the Ukrainian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Лінійне наближення",
+        "Growth Trend" => "Експоненційне наближення",
         "Diagram" => "Схема",
         "Decorative Text" => "Декоративний текст",
         "Paste" => "Вставити",
@@ -656,8 +658,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Last month" => "Last month",
         "This month" => "This month",
         "Next month" => "Next month",
-        "Format values where this formula is true:" => "Format values where this formula is true:",
-        "with" => "with",
+        "Format values where this formula is true:" => "Форматувати значення, для яких ця формула істинна:",
+        "with" => "з",
         "Light Red Fill with Dark Red Text" => "Light Red Fill with Dark Red Text",
         "Yellow Fill with Dark Yellow Text" => "Yellow Fill with Dark Yellow Text",
         "Green Fill with Dark Green Text" => "Green Fill with Dark Green Text",
@@ -1147,6 +1149,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Fill Months" => "Заповнити місяці",
         "Fill Years" => "Заповнити роки",
         "Auto Fill Options" => "Параметри автозаповнення",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Нове правило форматування",
+        "Edit Formatting Rule" => "Змінити правило форматування",
+        "Select a Rule Type" => "Виберіть тип правила",
+        "Edit the Rule Description" => "Редагувати опис правила",
+        "Format all cells based on their values" => "Форматувати всі клітинки за їхніми значеннями",
+        "Format only cells that contain" => "Форматувати лише клітинки, що містять",
+        "Format only top or bottom ranked values" => "Форматувати лише значення з найвищим або найнижчим рейтингом",
+        "Format only values that are above or below average" => "Форматувати лише значення вище або нижче середнього",
+        "Format only unique or duplicate values" => "Форматувати лише унікальні або повторювані значення",
+        "Use a formula to determine which cells to format" => "Використати формулу, щоб визначити, які клітинки форматувати",
+        "This rule type isn't available yet." => "Цей тип правила ще недоступний.",
+        "Format Style:" => "Стиль формату:",
+        "2-Color Scale" => "Двоколірна шкала",
+        "3-Color Scale" => "Триколірна шкала",
+        "Midpoint" => "Середина",
+        "Lowest value" => "Найнижче значення",
+        "Highest value" => "Найвище значення",
+        "Percent" => "Відсоток",
+        "Percentile" => "Перцентиль",
+        "Formula" => "Формула",
+        "More Rules…" => "Більше правил…",
         _ => return None,
     })
 }

@@ -199,8 +199,8 @@ impl Default for PrintSettings {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SheetProtection {
-    /// Hash of the password (Excel-compatible, written to XLSX `sheetProtection`; never the
-    /// password itself).
+    /// Hash of the password, never the password itself. XLSX `sheetProtection` writes its Excel
+    /// form ([`crate::PasswordHash::excel`]); a digest alone has none and is not written there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<crate::PasswordHash>,
     /// The internal hash older GridCraft JSON workbooks stored ([`password_hash`]); still
@@ -258,7 +258,8 @@ pub struct LineInfo {
     pub outline: u8,
     pub collapsed: bool,
     pub style: Option<crate::style::StyleId>,
-    /// The size was set by the user (rows): automatic heights follow the content.
+    /// The size was set by the user. Rows without it follow their content's height; columns
+    /// without it widen when a number format makes their numbers wider (`home.increaseDecimal`…).
     #[serde(default)]
     pub custom: bool,
 }
