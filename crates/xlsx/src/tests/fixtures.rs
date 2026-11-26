@@ -1016,7 +1016,7 @@ fn color_filter_keeps_a_dxf_theme_colour_and_tint() {
 }
 
 #[test]
-fn a_solid_conditional_format_dxf_uses_its_foreground_colour() {
+fn color_filter_reads_a_solid_conditional_format_dxfs_foreground() {
     let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor rgb="FFFF0000"/></patternFill></fill></dxf>"#;
     let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
       <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
@@ -1033,7 +1033,7 @@ fn a_solid_conditional_format_dxf_uses_its_foreground_colour() {
 }
 
 #[test]
-fn a_font_colour_filter_reads_the_colour_its_dxf_states_in_the_fill() {
+fn color_filter_reads_a_font_swatch_from_the_dxf_fill() {
     let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFC00000"/><bgColor rgb="FFFFFFFF"/></patternFill></fill></dxf>"#;
     let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
       <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0" cellColor="0"/></filterColumn></autoFilter>"#;
@@ -1041,6 +1041,29 @@ fn a_font_colour_filter_reads_the_colour_its_dxf_states_in_the_fill() {
     let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
     let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
     assert_eq!(af.criteria, vec![(0, FilterCriterion::FontColor(Color::Rgb(0xC00000)))]);
+}
+
+#[test]
+fn color_filter_falls_back_to_the_dxfs_font_colour() {
+    let dxf = r#"<dxf><font><color rgb="FF00FF00"/></font></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FillColor(Color::Rgb(0x00FF00)))]);
+}
+
+#[test]
+fn color_filter_auto_swatches_round_trip_empty() {
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c><c r="B1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:B4"><filterColumn colId="0"><colorFilter dxfId="0"/></filterColumn><filterColumn colId="1"><colorFilter dxfId="0" cellColor="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&["<dxf></dxf>"]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let expected = vec![(0, FilterCriterion::FillColor(Color::Auto)), (1, FilterCriterion::FontColor(Color::Auto))];
+    assert_eq!(wb.sheet(0).unwrap().autofilter.as_ref().unwrap().criteria, expected);
+    let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().autofilter.as_ref().unwrap().criteria, expected);
 }
 
 #[test]
@@ -1083,6 +1106,7 @@ fn a_color_filter_sharing_a_conditional_format_dxf_keeps_the_filters_colour() {
     let saved = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
     let saved = String::from_utf8(saved).unwrap();
     assert!(saved.contains(r#"<dxfs count="2">"#), "{saved}");
+    assert!(saved.contains(r#"<fgColor rgb="FF9C0006"/>"#), "the filter's dxf carries the swatch in its fill: {saved}");
 }
 
 #[test]
