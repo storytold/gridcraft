@@ -515,6 +515,19 @@ fn a_first_row_like_a_sep_line_survives_a_save() {
 }
 
 #[test]
+fn a_field_over_32767_characters_is_cut() {
+    let src = format!("{},{},'{}", "x".repeat(40_000), "y".repeat(32_768), "z".repeat(40_000));
+    for parse_values in [true, false] {
+        let wb = read_csv(src.as_bytes(), &CsvOptions { parse_values, ..Default::default() }).unwrap();
+        assert_eq!(v(&wb, 0, 0), Value::text("x".repeat(32_767)));
+        assert_eq!(v(&wb, 0, 1), Value::text("y".repeat(32_767)));
+    }
+    // The apostrophe is dropped before the cut when values are parsed.
+    let wb = read_csv(src.as_bytes(), &CsvOptions::default()).unwrap();
+    assert_eq!(v(&wb, 0, 2), Value::text("z".repeat(32_767)));
+}
+
+#[test]
 fn csv_used_range_limit_is_enforced_while_reading() {
     let opts = |max| CsvOptions { max_used_cells: Some(max), ..Default::default() };
     // 3 rows x 3 columns: exactly at the limit reads, one cell over is refused.
