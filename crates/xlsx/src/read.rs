@@ -50,6 +50,9 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// The current sheet's charts read from chart parts: (model chart id, chart part name). Their
+    /// original XML is kept for saving (see `passthrough`).
+    pub chart_parts: Vec<(u32, String)>,
     /// Cell elements read so far, across every sheet (capped by `sheet_read::MAX_CELLS`).
     pub cells: u64,
 }
@@ -295,6 +298,14 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
         wb.protected_structure = p.flag("lockStructure", false);
         wb.structure_password = if wb.protected_structure { crate::sheet_read::read_password(p, "workbook") } else { None };
     }
+    if let Some(f) = xml.child("fileSharing") {
+        // The iterated hash has bare attribute names; the legacy one is `reservationPassword`.
+        wb.write_reservation = Some(gridcraft_model::WriteReservation {
+            user_name: f.attr("userName").unwrap_or("").to_string(),
+            read_only_recommended: f.flag("readOnlyRecommended", false),
+            password: crate::sheet_read::read_password(f, "").or_else(|| crate::sheet_read::read_password(f, "reservation")),
+        });
+    }
 }
 
 /// The single window modelled by GridCraft: prefer the first visible window,
@@ -329,6 +340,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        chart_parts: vec![],
         cells: 0,
     };
     let root_rels = cx.pkg.rels("")?;
@@ -381,6 +393,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
     // Legacy formula cells per model sheet, rewritten once names and tables are known.
     let mut legacy_formulas: Vec<(usize, Vec<gridcraft_core::CellRef>)> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
+    pivot_caches.read_connections(&mut cx, &wb_rels);
     let sheet_els: Vec<&El> = wb_xml.child("sheets").map(|s| s.kids("sheet").collect()).unwrap_or_default();
     if sheet_els.len() > MAX_SHEETS {
         return Err(IoError::TooLarge(format!("the workbook has more than {MAX_SHEETS} sheets")));
@@ -420,15 +433,20 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
                 (Sheet::new(name.clone()), Default::default())
             }
         };
+        let mut external_pivots = vec![];
         legacy_formulas.push((wb.sheets.len(), std::mem::take(&mut cx.legacy_formulas)));
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
-            Ok(p) => sheet.pivots = p,
+            Ok(p) => {
+                sheet.pivots = p.tables;
+                external_pivots = p.external;
+            }
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
-        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &external_pivots, &read_controls);
         sheet.preserved = crate::extlist::keep_sheet(&mut cx, &name, sheet.preserved.take(), kept.keeps());
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
+        kept.charts(&mut cx, &mut sheet);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
             Some("veryHidden") => Visibility::VeryHidden,

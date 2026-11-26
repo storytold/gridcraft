@@ -962,11 +962,13 @@ fn rich_clipboard_omits_html_for_large_ranges_without_truncating_text() {
 #[test]
 fn rich_clipboard_omits_html_when_escaping_exceeds_byte_budget() {
     let mut s = s();
-    let text = "&".repeat(1_000_000);
-    s.execute("range.setValues", json!({"range": "A1", "values": [[text]]})).unwrap();
-    let copied = s.execute("edit.copy", json!({"range": "A1", "html": true})).unwrap();
+    // Cells hold at most 32,767 characters, so 30 full cells of `&` (5 bytes each once escaped)
+    // pass the 4 MiB HTML budget while the plain text stays far below it.
+    let cell = "&".repeat(32_767);
+    s.execute("range.setValues", json!({"range": "A1", "values": [vec![cell; 30]]})).unwrap();
+    let copied = s.execute("edit.copy", json!({"range": "A1:AD1", "html": true})).unwrap();
     assert!(copied.get("html").is_none(), "an oversized escaped value must not produce partial HTML");
-    assert_eq!(copied["text"].as_str().unwrap().len(), 1_000_001);
+    assert_eq!(copied["text"].as_str().unwrap().len(), 30 * 32_767 + 30);
     assert!(copied["text"].as_str().unwrap().ends_with("&\n"));
 }
 
@@ -2164,7 +2166,7 @@ fn filter_with_a_sheet_prefix_toggles_the_table_at_the_range() {
         wb.sheet(wb.sheet_index("Prices").unwrap()).unwrap().clone()
     };
     assert!(prices(&s).tables[0].filter_button);
-    s.execute("data.filter", json!({"range": "Prices!A2:B3"})).unwrap();
+    s.execute("data.filter", json!({"range": "Prices!A1:B3"})).unwrap();
     assert!(!prices(&s).tables[0].filter_button);
     assert!(prices(&s).autofilter.is_none());
     assert!(s.doc().unwrap().wb.active().unwrap().autofilter.is_none());
@@ -5590,6 +5592,75 @@ fn encrypted_book(password: &str) -> Vec<u8> {
 }
 
 #[test]
+fn a_password_to_modify_asks_for_it_or_a_read_only_open() {
+    const PW: &str = "synthetic-modify-pw";
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    let b64 = crate::io::base64_encode(&bytes);
+    let open = |s: &mut Session, extra: serde_json::Value| {
+        let mut p = json!({"name": "Reserved.xlsx", "base64": b64});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        s.execute("file.open", p)
+    };
+    let mut s = Session::new();
+    let err = open(&mut s, json!({})).unwrap_err().to_string();
+    assert!(err.contains(crate::io::MODIFY_PASSWORD_REQUIRED), "{err}");
+    assert!(s.take_ui_requests().is_empty(), "programmatic calls never open dialogs");
+    for wrong in ["not-it", ""] {
+        let err = open(&mut s, json!({"modifyPassword": wrong})).unwrap_err().to_string();
+        assert!(err.contains(crate::io::WRONG_PASSWORD), "{err}");
+    }
+    assert!(s.documents().is_empty());
+
+    // Read-only: opens, keeps the reservation, but has no file to save over.
+    open(&mut s, json!({"readOnly": true})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    assert!(s.doc().unwrap().wb.write_reservation.is_some());
+
+    // The password: opens, and the reservation survives a save.
+    let mut s = Session::new();
+    open(&mut s, json!({"modifyPassword": PW})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    let saved = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (back, _) = crate::io::open_bytes("book.xlsx", &saved).unwrap();
+    assert!(back.write_reservation.and_then(|r| r.password).is_some_and(|h| h.verify(PW) == Ok(true)));
+}
+
+#[test]
+fn a_read_only_open_never_saves_over_its_reserved_file() {
+    const PW: &str = "synthetic-modify-pw";
+    let dir = std::env::temp_dir().join(format!("gridcraft-read-only-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("reserved.xlsx").to_string_lossy().into_owned();
+    let copy = dir.join("copy.xlsx").to_string_lossy().into_owned();
+    let mut src = s();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path, "readOnly": true})).unwrap();
+    let err = s.execute("file.save", json!({"path": path})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    let dotted = dir.join(".").join("reserved.xlsx").to_string_lossy().into_owned();
+    let err = s.execute("file.save", json!({"path": dotted})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "the same file under another spelling: {err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    s.execute("file.saveAs", json!({"path": copy})).unwrap();
+    assert!(std::fs::metadata(&copy).is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn encrypted_workbooks_open_with_their_password() {
     const PW: &str = "synthetic-pw-5521";
     let b64 = crate::io::base64_encode(&encrypted_book(PW));
@@ -8099,6 +8170,99 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+#[test]
+fn tables_never_hold_merged_cells() {
+    // Excel removes a table that contains a merged cell when it opens the file. Merging in a
+    // table is refused; making or resizing a table over merged cells unmerges them; pasting into
+    // a table skips the merges.
+    let base = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1:D4", "values": [["A", "B", "C", "D"], [1, 2, 3, 4], [5, 6, 7, 8], [9, 10, 11, 12]]}))
+            .unwrap();
+        s
+    };
+    let merges = |s: &Session| s.doc().unwrap().wb.active().unwrap().merges.clone();
+
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    for id in ["home.mergeCells", "home.mergeCenter", "home.mergeAcross"] {
+        for range in ["A2:B2", "A1:B1", "C3:D3"] {
+            let e = s.execute(id, json!({"range": range})).unwrap_err().to_string();
+            assert!(e.contains("can't merge cells in a table"), "{id} {range}: {e}");
+        }
+    }
+    assert!(merges(&s).is_empty());
+    s.execute("home.mergeCells", json!({"range": "E2:F2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F2").unwrap()]);
+
+    // A table over merged cells unmerges them; undo brings them back.
+    let mut s = base();
+    s.execute("home.mergeCells", json!({"range": "A2:B2"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C3:D4"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "F1:G1"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("F1:G1").unwrap()]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(merges(&s).len(), 3);
+    s.execute("edit.redo", json!({})).unwrap();
+
+    // Resizing a table over merged cells is refused, as in Excel; the merge stays.
+    let mut s = base();
+    s.execute("insert.table", json!({"range": "A1:B4", "name": "T"})).unwrap();
+    s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    let e = s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap_err().to_string();
+    assert!(e.contains("can't overlap merged cells"), "{e}");
+    s.execute("home.unmergeCells", json!({"range": "C2:D2"})).unwrap();
+    s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap();
+
+    // Merged cells pasted into a table arrive unmerged; elsewhere they stay merged.
+    s.execute("home.mergeCells", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.copy", json!({"range": "E2:F3"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H2"})).unwrap();
+    assert_eq!(merges(&s), vec![gridcraft_core::RangeRef::parse("E2:F3").unwrap(), gridcraft_core::RangeRef::parse("H2:I3").unwrap()]);
+
+    // The saved file has no merge inside the table.
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let bytes = crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap();
+    let (back, _) = crate::io::open_bytes("t.xlsx", &bytes).unwrap();
+    let sh = back.active().unwrap();
+    assert_eq!(sh.tables.len(), 1);
+    assert_eq!(sh.tables[0].range, gridcraft_core::RangeRef::parse("A1:C4").unwrap());
+    assert!(sh.merges.iter().all(|m| sh.tables.iter().all(|t| !t.range.intersects(m))));
+}
+
+#[test]
+fn hyperlink_function_makes_a_cell_link() {
+    let mut s = s();
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    s.execute("cell.set", json!({"cell": "A1", "input": "https://example.com/x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=HYPERLINK(A1,\"Go\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=HYPERLINK(\"google.com\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "B2"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.com/x".into())]);
+    s.execute("link.open", json!({"cell": "C3"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://google.com".into())]);
+    assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
+    // a scheme-less address with a query, fragment or port opens over https too
+    for (cell, input, url) in [
+        ("D1", "=HYPERLINK(\"google.com?q=rust\")", "https://google.com?q=rust"),
+        ("D2", "=HYPERLINK(\"google.com#results\")", "https://google.com#results"),
+        ("D3", "=HYPERLINK(\"example.com:8443/x\")", "https://example.com:8443/x"),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        s.execute("link.open", json!({"cell": cell})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(url.into())], "{input}");
+    }
+    // a table named like an address stays an internal target
+    s.execute("range.setValues", json!({"range": "F1:G2", "values": [["a", "b"], [1, 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "F1:G2", "name": "sales.data"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D4", "input": "=HYPERLINK(\"sales.data\")"})).unwrap();
+    let link = crate::links::cell_link(&s.doc().unwrap().wb, 0, gridcraft_core::CellRef::parse("D4").unwrap()).unwrap();
+    assert_eq!(link.target, "sales.data");
 }
 
 /// #1348: the selection a workbook opens with, and the one a sheet gets on its first visit, take

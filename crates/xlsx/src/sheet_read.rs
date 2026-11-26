@@ -426,6 +426,7 @@ struct RawCol {
     max: u32,
     width: Option<f64>,
     custom_width: bool,
+    best_fit: bool,
     hidden: bool,
     outline_level: u8,
     collapsed: bool,
@@ -441,6 +442,9 @@ fn apply_col_entry(cx: &Ctx<'_>, c: RawCol, remaining: &mut u64, sheet: &mut She
     let mut info = LineInfo::default();
     if let Some(w) = c.width {
         let px = col_width_to_px(w);
+        // Excel writes customWidth for every width it stores, and bestFit as well for one that
+        // AutoFit or a number format sized: only customWidth without bestFit was set by hand.
+        info.custom = c.custom_width && !c.best_fit;
         if c.custom_width || px != sheet.default_col_width {
             info.size = Some(px);
         }
@@ -474,6 +478,7 @@ fn apply_craft_cols(cx: &Ctx<'_>, cols: &[craft_xlsx::Column], sheet: &mut Sheet
             max: c.last + 1,
             width: c.width,
             custom_width: c.custom_width,
+            best_fit: c.best_fit,
             hidden: c.hidden,
             outline_level: c.outline_level,
             collapsed: c.collapsed,
@@ -497,6 +502,7 @@ fn apply_xml_cols(cx: &Ctx<'_>, sp: &CraftSheetPart, sheet: &mut Sheet) -> Resul
                     max: c.attr_u32("max").unwrap_or(0),
                     width: c.attr_f64("width"),
                     custom_width: c.flag("customWidth", false),
+                    best_fit: c.flag("bestFit", false),
                     hidden: c.flag("hidden", false),
                     outline_level: c.attr_u32("outlineLevel").unwrap_or(0).min(7) as u8,
                     collapsed: c.flag("collapsed", false),
@@ -1114,6 +1120,7 @@ mod tests {
             sheet_exts_dropped: vec![],
             known_function: None,
             python: Default::default(),
+            chart_parts: vec![],
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],
