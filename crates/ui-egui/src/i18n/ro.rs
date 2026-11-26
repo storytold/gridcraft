@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Tendință liniară",
+        "Growth Trend" => "Tendință de creștere",
         "Diagram" => "Schemă",
         "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
@@ -373,6 +375,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recente",
         "No recent workbooks yet." => "Încă niciun registru recent.",
         "More workbooks" => "Mai multe registre",
+        "More entries not shown" => "Alte elemente nu sunt afișate",
         "Modified" => "Modificat",
         "Not available" => "Indisponibil",
         "Just now" => "Chiar acum",
@@ -767,7 +770,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Culoare celulă",
         "A to Z" => "De la A la Z",
         "Z to A" => "De la Z la A",
-        "+ Add Level" => "+ Adăugare nivel",
+        "Add Level" => "Adăugare nivel",
+        "Delete Level" => "Ștergere nivel",
+        "Copy Level" => "Copiere nivel",
+        "Move Up" => "Mutare în sus",
+        "Move Down" => "Mutare în jos",
+        "Order" => "Ordine",
+        "Sort On" => "Sortare pe baza",
+        "Sort|Column" => "Coloană",
+        "Column {letters}" => "Coloană {letters}",
+        "Smallest to Largest" => "De la cel mai mic la cel mai mare",
+        "Largest to Smallest" => "De la cel mai mare la cel mai mic",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Închideți caseta de dialog Sortare înainte de a comuta sau a modifica foile de lucru."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Reveniți la foaia de lucru inițială pentru a sorta sau anulați.",
         "New…" => "Nou…",
         "Edit…" => "Editare…",
         "Name" => "Nume",
@@ -999,6 +1016,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show as Running Total" => "Afișare ca total cumulat",
         "Summarize by Average" => "Rezumare după medie",
         "Summarize by Count" => "Rezumare după numărare",
+        "Summarize by Distinct Count" => "Rezumare după numărare distinctă",
         "Summarize by Max" => "Rezumare după maxim",
         "Summarize by Min" => "Rezumare după minim",
         "Summarize by Sum" => "Rezumare după sumă",
@@ -1071,6 +1089,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        "Distinct Count" => "Numărare distinctă",
+        "A calculated field can't use Distinct Count." => "Un câmp calculat nu poate folosi numărarea distinctă.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Acest registru de lucru conține un tabel pivot cu un câmp de valori „Numărare distinctă”. În fișierul .xlsx este salvat ca o Numărare simplă, împreună cu un marcaj pe care îl citește doar GridCraft, așa că Reîmprospătare în Excel îl transformă într-o numărare simplă."
+        }
         "Numerical Count" => "Numărare numerică",
         "Minimum" => "Minim",
         "Maximum" => "Maxim",
@@ -1175,6 +1198,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char are un argument nenumeric {argument}",
         "\\@char with invalid code point {code}" => "\\@char cu punct de cod nevalid {code}",
         "Invalid environment name character: {character}" => "Caracter nevalid în numele mediului: {character}",
+        "Copy Cells" => "Copiere celule",
+        "Fill Series" => "Umplere serie",
+        "Fill Formatting Only" => "Umplere doar formate",
+        "Fill Without Formatting" => "Umplere fără formatare",
+        "Fill Days" => "Umplere zile",
+        "Fill Weekdays" => "Umplere zile lucrătoare",
+        "Fill Months" => "Umplere luni",
+        "Fill Years" => "Umplere ani",
+        "Auto Fill Options" => "Opțiuni de umplere automată",
         _ => return None,
     })
 }

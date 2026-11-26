@@ -1,6 +1,8 @@
 /// Returns the Polish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Trend liniowy",
+        "Growth Trend" => "Trend wykładniczy",
         "Diagram" => "Diagram",
         "Decorative Text" => "Tekst ozdobny",
         "Paste" => "Wklej",
@@ -366,6 +368,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Ostatnie",
         "No recent workbooks yet." => "Nie masz jeszcze ostatnio używanych skoroszytów.",
         "More workbooks" => "Więcej skoroszytów",
+        "More entries not shown" => "Więcej elementów nie jest wyświetlanych",
         "Modified" => "Zmodyfikowano",
         "Not available" => "Niedostępne",
         "Just now" => "Przed chwilą",
@@ -761,7 +764,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Kolor komórki",
         "A to Z" => "Od A do Z",
         "Z to A" => "Od Z do A",
-        "+ Add Level" => "+ Dodaj poziom",
+        "Add Level" => "Dodaj poziom",
+        "Delete Level" => "Usuń poziom",
+        "Copy Level" => "Kopiuj poziom",
+        "Move Up" => "Przesuń w górę",
+        "Move Down" => "Przesuń w dół",
+        "Order" => "Kolejność",
+        "Sort On" => "Sortuj na podstawie",
+        "Sort|Column" => "Kolumna",
+        "Column {letters}" => "Kolumna {letters}",
+        "Smallest to Largest" => "Od najmniejszych do największych",
+        "Largest to Smallest" => "Od największych do najmniejszych",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Zamknij okno dialogowe Sortowanie przed przełączeniem lub zmianą arkuszy."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Wróć do oryginalnego arkusza, aby posortować, lub anuluj.",
         "New…" => "Nowy…",
         "Edit…" => "Edytuj…",
         "Name" => "Nazwa",
@@ -983,6 +1000,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Przenieś do wartości",
         "Summarize by Sum" => "Podsumuj według: Suma",
         "Summarize by Count" => "Podsumuj według: Licznik",
+        "Summarize by Distinct Count" => "Podsumuj według: Licznik unikatowych",
         "Summarize by Average" => "Podsumuj według: Średnia",
         "Summarize by Max" => "Podsumuj według: Maksimum",
         "Summarize by Min" => "Podsumuj według: Minimum",
@@ -1009,6 +1027,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Pokaż",
         "Collapse dialog" => "Zwiń okno dialogowe",
         "Expand dialog" => "Rozwiń okno dialogowe",
+        "Distinct Count" => "Licznik unikatowych",
+        "A calculated field can't use Distinct Count." => "Pole obliczeniowe nie może używać licznika unikatowych.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Ten skoroszyt zawiera tabelę przestawną z polem wartości „Licznik unikatowych”. W pliku .xlsx jest ona zapisana jako zwykły Licznik wraz ze znacznikiem, który odczytuje tylko GridCraft, więc Odśwież w programie Excel zamienia ją w zwykły licznik."
+        }
         "Numerical Count" => "Liczba wartości liczbowych",
         "Minimum" => "Minimum",
         "Maximum" => "Maksimum",
@@ -1113,6 +1136,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char ma nienumeryczny argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char z nieprawidłowym punktem kodowym {code}",
         "Invalid environment name character: {character}" => "Nieprawidłowy znak w nazwie środowiska: {character}",
+        "Copy Cells" => "Kopiuj komórki",
+        "Fill Series" => "Wypełnij serią",
+        "Fill Formatting Only" => "Wypełnij tylko formatami",
+        "Fill Without Formatting" => "Wypełnij bez formatowania",
+        "Fill Days" => "Wypełnij dniami",
+        "Fill Weekdays" => "Wypełnij dniami roboczymi",
+        "Fill Months" => "Wypełnij miesiącami",
+        "Fill Years" => "Wypełnij latami",
+        "Auto Fill Options" => "Opcje autowypełniania",
         _ => return None,
     })
 }

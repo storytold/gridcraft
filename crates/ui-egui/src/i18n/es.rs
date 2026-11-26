@@ -5,6 +5,8 @@
 /// Returns the Spanish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Tendencia lineal",
+        "Growth Trend" => "Tendencia geométrica",
         "Diagram" => "Diagrama",
         "Decorative Text" => "Texto decorativo",
         "Paste" => "Pegar",
@@ -299,6 +301,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recientes",
         "No recent workbooks yet." => "Todavía no hay libros recientes.",
         "More workbooks" => "Más libros",
+        "More entries not shown" => "Hay más elementos que no se muestran",
         "Modified" => "Modificado",
         "Not available" => "No disponible",
         "Just now" => "Ahora mismo",
@@ -479,6 +482,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Mover a valores",
         "Summarize by Sum" => "Resumir por suma",
         "Summarize by Count" => "Resumir por cuenta",
+        "Summarize by Distinct Count" => "Resumir por recuento distinto",
         "Summarize by Average" => "Resumir por promedio",
         "Summarize by Max" => "Resumir por máximo",
         "Summarize by Min" => "Resumir por mínimo",
@@ -526,6 +530,33 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Contraer diálogo",
         "Expand dialog" => "Expandir diálogo",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Este libro tiene una tabla dinámica con un campo de valor «Recuento distinto». En el archivo .xlsx se guarda como un Recuento normal con una marca que solo lee GridCraft; Actualizar en Excel lo convierte en un recuento normal."
+        }
+        "Distinct Count" => "Recuento distinto",
+        "A calculated field can't use Distinct Count." => "Un campo calculado no puede usar «Recuento distinto».",
+        "My list has headers" => "Mis datos tienen encabezados",
+        "Sort by" => "Ordenar por",
+        "Then by" => "Luego por",
+        "Cell Values" => "Valores de celda",
+        "Cell Color" => "Color de celda",
+        "A to Z" => "De A a Z",
+        "Z to A" => "De Z a A",
+        "Add Level" => "Agregar nivel",
+        "Delete Level" => "Eliminar nivel",
+        "Copy Level" => "Copiar nivel",
+        "Move Up" => "Subir",
+        "Move Down" => "Bajar",
+        "Order" => "Orden",
+        "Sort On" => "Ordenar según",
+        "Sort|Column" => "Columna",
+        "Column {letters}" => "Columna {letters}",
+        "Smallest to Largest" => "De menor a mayor",
+        "Largest to Smallest" => "De mayor a menor",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Cierre el cuadro de diálogo Ordenar antes de cambiar de hoja o modificar las hojas."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Vuelva a la hoja original para ordenar o cancele.",
         "Numerical Count" => "Recuento numérico",
         "Minimum" => "Mínimo",
         "Maximum" => "Máximo",
@@ -634,6 +665,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char tiene un argumento no numérico {argument}",
         "\\@char with invalid code point {code}" => "\\@char con un punto de código no válido {code}",
         "Invalid environment name character: {character}" => "Carácter no válido en el nombre del entorno: {character}",
+        "Copy Cells" => "Copiar celdas",
+        "Fill Series" => "Rellenar serie",
+        "Fill Formatting Only" => "Rellenar solo formatos",
+        "Fill Without Formatting" => "Rellenar sin formato",
+        "Fill Days" => "Rellenar días",
+        "Fill Weekdays" => "Rellenar días laborables",
+        "Fill Months" => "Rellenar meses",
+        "Fill Years" => "Rellenar años",
+        "Auto Fill Options" => "Opciones de autorrelleno",
+        "Series…" => "Serie…",
+        "Down" => "Hacia abajo",
+        "Up" => "Hacia arriba",
         _ => return None,
     })
 }

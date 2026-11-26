@@ -3,6 +3,8 @@
 /// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Linearni trend",
+        "Growth Trend" => "Eksponencijalni trend",
         "Diagram" => "Dijagram",
         "Decorative Text" => "Ukrasni tekst",
         "Paste" => "Nalepi",
@@ -379,6 +381,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Nedavno",
         "No recent workbooks yet." => "Još nema nedavnih radnih svezaka.",
         "More workbooks" => "Više radnih svezaka",
+        "More entries not shown" => "Još stavki nije prikazano",
         "Modified" => "Izmenjeno",
         "Not available" => "Nije dostupno",
         "Just now" => "Upravo sada",
@@ -481,6 +484,34 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Prikaži",
         "Collapse dialog" => "Skupi dijalog",
         "Expand dialog" => "Proširi dijalog",
+        "Distinct Count" => "Broj različitih",
+        "Summarize by Distinct Count" => "Sažmi po broju različitih",
+        "A calculated field can't use Distinct Count." => "Izračunato polje ne može koristiti broj različitih.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Ova radna sveska ima zaokretnu tabelu sa poljem vrednosti „Broj različitih“. U .xlsx datoteci čuva se kao običan Broj uz oznaku koju čita samo GridCraft, pa ga Osveži u Excelu pretvara u običan broj."
+        }
+        "My list has headers" => "Moji podaci imaju zaglavlja",
+        "Sort by" => "Sortiraj po",
+        "Then by" => "Zatim po",
+        "Cell Values" => "Vrednosti ćelija",
+        "Cell Color" => "Boja ćelije",
+        "A to Z" => "Od A do Z",
+        "Z to A" => "Od Z do A",
+        "Add Level" => "Dodaj nivo",
+        "Delete Level" => "Izbriši nivo",
+        "Copy Level" => "Kopiraj nivo",
+        "Move Up" => "Pomeri nagore",
+        "Move Down" => "Pomeri nadole",
+        "Order" => "Redosled",
+        "Sort On" => "Sortiraj po",
+        "Sort|Column" => "Kolona",
+        "Column {letters}" => "Kolona {letters}",
+        "Smallest to Largest" => "Od najmanjeg do najvećeg",
+        "Largest to Smallest" => "Od najvećeg do najmanjeg",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Zatvorite dijalog Sortiranje pre nego što promenite ili izmenite radne listove."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Vratite se na prvobitni radni list da biste sortirali, ili otkažite.",
         "Numerical Count" => "Broj numeričkih vrednosti",
         "Minimum" => "Minimum",
         "Maximum" => "Maksimum",
@@ -587,6 +618,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char ima nenumerički argument {argument}",
         "\\@char with invalid code point {code}" => "\\@char sa nevažećom kodnom tačkom {code}",
         "Invalid environment name character: {character}" => "Nevažeći znak u nazivu okruženja: {character}",
+        "Copy Cells" => "Kopiraj ćelije",
+        "Fill Series" => "Popuni niz",
+        "Fill Formatting Only" => "Popuni samo oblikovanja",
+        "Fill Without Formatting" => "Popuni bez oblikovanja",
+        "Fill Days" => "Popuni dane",
+        "Fill Weekdays" => "Popuni radne dane",
+        "Fill Months" => "Popuni mesece",
+        "Fill Years" => "Popuni godine",
+        "Auto Fill Options" => "Opcije automatskog popunjavanja",
+        "Series…" => "Niz…",
+        "Down" => "Nadole",
+        "Up" => "Nagore",
         _ => return None,
     })
 }

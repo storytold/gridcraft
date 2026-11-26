@@ -434,24 +434,41 @@ fn secondary_weights(s: &str) -> impl Iterator<Item = u16> + '_ {
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
+/// Numbers compare exactly, not at the 15 digits of [`compare`]. Observed in Excel 365: SORT,
+/// SORTBY, Data > Sort, the AutoFilter sort and table sort all put 0.3 before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
 pub fn sort_compare(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Empty, Value::Empty) => Ordering::Equal,
         (Value::Empty, _) => Ordering::Greater,
         (_, Value::Empty) => Ordering::Less,
         (Value::Error(_), Value::Error(_)) => Ordering::Equal,
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
         _ => compare(a, b),
     }
 }
 
-/// Number → text the way Excel converts in `&` and `TEXT(x,"General")`-free contexts: up to 15
-/// significant digits, scientific for very large or very small magnitudes.
+/// Number → text the way Excel converts in `&`, CONCAT and TEXTJOIN: at most 15 significant
+/// digits, rounded first; scientific from 1E+15, below 1E-9, and wherever the decimal would be
+/// longer than 21 characters, not counting the sign (`0.` plus 19 decimals). Excel-verified only
+/// for positive 15-digit mantissas: `0.0000692361330972509` stays decimal and
+/// `1.28233995888454E-06` does not, as Excel caches them. The limit for shorter mantissas from
+/// 1E-6 to 1E-9 (e.g. `0.0000099999999999999` decimal) and for negatives (sign excluded) are
+/// inferred.
 pub fn number_to_text(n: f64) -> String {
     if n == 0.0 || !n.is_finite() {
         return "0".into();
     }
+    // Round to 15 significant digits first, then pick decimal or scientific from the rounded
+    // magnitude, so 999999999999999.5 reads `1E+15`, never a 16-digit integer.
     let a = n.abs();
-    if !(1e-9..1e15).contains(&a) && a.round() != a || a >= 1e15 {
+    let sci = format!("{:.14e}", n);
+    let (mant, exp) = sci.split_once('e').unwrap_or((&sci, "0"));
+    let mag: i32 = exp.parse().unwrap_or(0);
+    let sig = mant.bytes().filter(u8::is_ascii_digit).count() - mant.bytes().rev().take_while(|&b| b == b'0').count();
+    // Characters after `0.` for |n| < 1: the leading zeros, then the significant digits.
+    let decimals_below_one = -mag - 1 + sig as i32;
+    if !(-9..15).contains(&mag) || decimals_below_one > 19 {
         return sci_text(n, 15);
     }
     // A value just below 1e15 can round up to 1e15 at 15 significant digits. Only that narrow
@@ -460,7 +477,6 @@ pub fn number_to_text(n: f64) -> String {
         return sci_text(n, 15);
     }
     // 15 significant digits, trailing zeros trimmed.
-    let mag = a.log10().floor() as i32;
     let decimals = (14 - mag).clamp(0, 30) as usize;
     let s = format!("{:.*}", decimals, n);
     trim_decimal(&s)
@@ -499,7 +515,42 @@ mod tests {
         assert_eq!(number_to_text(1234567890123456.0), "1.23456789012346E+15");
         assert_eq!(number_to_text(0.0001), "0.0001");
         assert_eq!(number_to_text(1e-10), "1E-10");
+        assert_eq!(number_to_text(1e15 - 0.5), "1E+15");
+        assert_eq!(number_to_text(1e15 - 0.1), "1E+15");
+        assert_eq!(number_to_text(-(1e15 - 0.5)), "-1E+15");
+        assert_eq!(number_to_text(999999999999999.0), "999999999999999");
+        assert_eq!(number_to_text(9.999999999999999e-10), "0.000000001");
+        assert_eq!(number_to_text(-9.999999999999999e-10), "-0.000000001");
         assert_eq!(number_to_text(1.0 / 3.0), "0.333333333333333");
+    }
+
+    /// Excel switches to scientific when the 15-digit decimal would be longer than 21 characters
+    /// (`0.` plus 19 decimals). Excel-verified: IMTAN, IMSECH, IMCSCH and IMEXP results cached by
+    /// Excel for Mac in the `formulas` project's test.xlsx (ENGINEERING!S53, R47, S37, V37, V39).
+    #[test]
+    fn number_text_small_magnitudes() {
+        assert_eq!(number_to_text(6.92361330972509e-5), "0.0000692361330972509");
+        assert_eq!(number_to_text(2.41377759972715e-4), "0.000241377759972715");
+        assert_eq!(number_to_text(1.28233995888454e-6), "1.28233995888454E-06");
+        assert_eq!(number_to_text(-4.48088972789593e-6), "-4.48088972789593E-06");
+        assert_eq!(number_to_text(5.98317105631764e-7), "5.98317105631764E-07");
+        assert_eq!(number_to_text(-2.99158552811404e-7), "-2.99158552811404E-07");
+        // Just below powers of ten: the 21-character limit, and the rounded magnitude.
+        assert_eq!(number_to_text(9.99999999999999e-5), "0.0000999999999999999");
+        assert_eq!(number_to_text(9.99999999999999e-6), "9.99999999999999E-06");
+        assert_eq!(number_to_text(9.9999999999999e-6), "0.0000099999999999999");
+        assert_eq!(number_to_text(9.99999999999999e-9), "9.99999999999999E-09");
+        assert_eq!(number_to_text(-9.99999999999999e-9), "-9.99999999999999E-09");
+        assert_eq!(number_to_text(9.99999999999999e-10), "9.99999999999999E-10");
+        assert_eq!(number_to_text(9.999999999999999e-6), "0.00001");
+        assert_eq!(number_to_text(0.00001), "0.00001");
+        assert_eq!(number_to_text(0.000001), "0.000001");
+        assert_eq!(number_to_text(1.5e-9), "0.0000000015");
+        // Large side: 15 significant digits, scientific from 1E+15.
+        assert_eq!(number_to_text(99999999999999.9), "99999999999999.9");
+        assert_eq!(number_to_text(999999999999999.4), "999999999999999");
+        assert_eq!(number_to_text(9999999999999998.0), "1E+16");
+        assert_eq!(number_to_text(9.99999999999999e15), "9.99999999999999E+15");
     }
 
     #[test]
@@ -726,6 +777,19 @@ mod tests {
         assert_ne!(compare(&num(0.1 + 0.2), &num(0.3)), Ordering::Greater);
         assert_eq!(compare(&num(1.0), &num(1.00000000000001)), Ordering::Less);
         assert_eq!(compare(&num(1.0), &num(2.0)), Ordering::Less);
+    }
+
+    #[test]
+    fn sort_orders_numbers_exactly() {
+        let num = Value::Number;
+        let e = 0.1 + 0.2;
+        assert_eq!(sort_compare(&num(0.3), &num(e)), Ordering::Less);
+        assert_eq!(sort_compare(&num(e), &num(0.3)), Ordering::Greater);
+        assert_eq!(sort_compare(&num(100.0), &num(100.0 + 1e-14)), Ordering::Less);
+        assert_eq!(sort_compare(&num(0.0), &num(-0.0)), Ordering::Equal);
+        assert_eq!(sort_compare(&num(1.0), &Value::from("a")), Ordering::Less);
+        // `=` keeps its 15-digit comparison.
+        assert_eq!(compare(&num(0.3), &num(e)), Ordering::Equal);
     }
 
     #[test]
