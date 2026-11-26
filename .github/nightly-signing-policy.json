@@ -7,7 +7,7 @@
   "producer_tooling_revision": "be00e5ccd18b68e950c8a08532f2230e7c3d0cba",
   "producer_workflow_ref": "storytold/craft-common-actions/.github/workflows/nightly-unsigned.yml@be00e5ccd18b68e950c8a08532f2230e7c3d0cba",
   "signer_workflow_path": ".github/workflows/nightly-sign.yml",
-  "signer_tooling_revision": "be00e5ccd18b68e950c8a08532f2230e7c3d0cba",
+  "signer_tooling_revision": "8389cad8b849ea6bdb5e15fbce16772c3457565a",
   "release_branch": "nightly-signer",
   "manual_actors": [
     "bflatastic",
