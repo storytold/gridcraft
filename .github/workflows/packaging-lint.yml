@@ -5,9 +5,9 @@ name: Packaging lint
 on:
   push:
     branches: [main, release]
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", ".github/nightly-linux-signing-key.asc", "packaging/**", "assets/app-icon/**", "sonar-project.properties"]
   pull_request:
-    paths: [".github/workflows/**", "packaging/**", "assets/app-icon/**"]
+    paths: [".github/workflows/**", ".github/nightly-linux-signing-key.asc", "packaging/**", "assets/app-icon/**", "sonar-project.properties"]
   workflow_dispatch:
 
 permissions:
@@ -21,6 +21,25 @@ jobs:
   lint:
     # Intentionally tracked at @main (not SHA-pinned) so org-wide CI improvements, security fixes, and build optimizations propagate without PR churn across all craftapp repos.
     uses: storytold/craft-common-actions/.github/workflows/packaging-lint.yml@main
+
+  nightly-source-contract:
+    name: Nightly source contracts (no build or signing)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@v2.22.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Run the synthetic nightly packaging suites
+        run: python3 packaging/nightly-tests.py
+      - name: Check the committed nightly icons still match their provenance
+        run: python3 packaging/nightly-icons.py --check
 
   windows-install-policy:
     timeout-minutes: 10

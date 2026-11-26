@@ -159,7 +159,7 @@ fn grow_for_overflow(wb: &Workbook, si: usize, sh: &Sheet, r: RangeRef) -> Range
     if sh.print.print_area.is_some() || sh.show_formulas || last + 1 >= MAX_COLS {
         return r;
     }
-    let mut cf = if sh.cond_formats.is_empty() { None } else { Some(crate::cf::CfCache::new()) };
+    let mut cf = crate::cf::CfCache::new();
     let mut extra = 0.0f32;
     for (c, _) in sh.cells.iter_range(r) {
         let v = sh.value(c);

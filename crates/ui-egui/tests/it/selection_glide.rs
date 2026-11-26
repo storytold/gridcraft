@@ -190,6 +190,7 @@ fn view_animations_sets_and_toggles_without_a_dialog() {
 fn agents_find_run_and_read_the_setting_over_the_control_channel() {
     let mut a = app();
     let ctx = egui::Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     let found = reply(control::handle(&mut a, &ctx, "engine.commands", &json!({"search": "animations"})));
     let entry = found["result"].as_array().and_then(|all| all.iter().find(|c| c["id"] == "view.animations")).cloned().unwrap();
     assert_eq!((&entry["label"], &entry["ui"]), (&json!("Animations"), &json!(true)));

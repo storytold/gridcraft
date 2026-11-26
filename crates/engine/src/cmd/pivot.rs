@@ -86,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Field",
             [],
             None,
-            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|stdDev|stdDevP|var|varP, name?, position?: index, replace?}",
+            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|distinctCount|stdDev|stdDevP|var|varP, name?, position?: index, replace?}",
             has_doc,
             add_field
         ),

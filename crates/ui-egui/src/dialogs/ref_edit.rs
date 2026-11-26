@@ -186,7 +186,7 @@ pub(super) fn place_window<'a>(
         // Escape and Enter are used up either way: left in the frame's input, the dialog would
         // read them as its own and close or confirm. When another field owned them, that field
         // (drawn before the dialogs) has read them already, and nothing more happens here.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) | i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        if crate::framework::consume_escape(ctx) | ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
             if !other_field {
                 d.refs.collapsed = None;
             }
@@ -326,6 +326,8 @@ fn active_sheet_name(app: &SheetApp) -> String {
 /// dialog about to run its command must not, since references without a sheet name would be
 /// read against the sheet still shown.
 pub(super) fn end_pick(app: &mut SheetApp, d: &mut Dialog) -> Result<(), String> {
+    // Custom Sort puts back the selection it changed whenever it lets go of the grid.
+    super::sort_dialog::restore_selection(app, d);
     d.refs.target = None;
     d.refs.collapsed = None;
     let Some(home) = d.refs.home.as_mut() else { return Ok(()) };

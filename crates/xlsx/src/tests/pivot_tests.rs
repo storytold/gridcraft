@@ -545,6 +545,68 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
 }
 
+/// #2159: a field repeated on the axes or as a page field is used once (each use walks the
+/// field's items and copied its labels), and the lists are capped.
+#[test]
+fn repeated_pivot_fields_are_used_once() {
+    let items: String = (0..2_000).map(|_| r#"<item x="0" sd="0"/>"#).collect();
+    let rows = r#"<field x="0"/>"#.repeat(20_000);
+    let pages = r#"<pageField fld="0"/>"#.repeat(20_000);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField axis="axisRow"><items>{items}</items></pivotField></pivotFields><rowFields>{rows}<field x="-2"/></rowFields><colFields>{rows}</colFields><pageFields>{pages}</pageFields></pivotTableDefinition>"#
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!(pt.rows.len(), 1, "{:?}", report.warnings);
+    assert!(pt.columns.is_empty());
+    assert_eq!(pt.rows[0].collapsed_items.len(), 2_000);
+    assert_eq!(pt.filters.iter().filter(|f| f.source_col == "K").count(), 1);
+    // One page field: the table's range starts two rows above its location.
+    assert_eq!(pt.last_range, Some(rr("D3:F9")));
+}
+
+/// #2159: a field list cut at the 16,384-entry cap is reported, so an incomplete PivotTable can be
+/// told apart from a complete one.
+#[test]
+fn capped_pivot_field_lists_warn() {
+    let fields = r#"<pivotField/>"#.repeat(16_385);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="16385">{fields}</pivotFields></pivotTableDefinition>"#
+    );
+    let (_, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("field lists past 16384 entries")), "{:?}", report.warnings);
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("field lists past")), "{:?}", report.warnings);
+}
+
+/// #2159: a cache cut at 16,384 fields is reported too, as the table field lists are.
+#[test]
+fn capped_cache_fields_warn() {
+    let fields = r#"<cacheField name="F"><sharedItems/></cacheField>"#.repeat(16_385);
+    let cache = format!(
+        r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="16385">{fields}</cacheFields></pivotCacheDefinition>"#
+    );
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(&cache))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("cache fields past 16384")), "{:?}", report.warnings);
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("cache fields past")), "{:?}", report.warnings);
+}
+
+/// #2159: axis filters and calculated fields are deduplicated through a set of lower-cased names;
+/// the first of names equal but for case still wins, as with the scan it replaced.
+#[test]
+fn axis_filters_and_calculated_fields_dedupe_ignoring_case() {
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="4"><cacheField name="K"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="k"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="Price" formula="1" databaseField="0"/><cacheField name="PRICE" formula="2" databaseField="0"/></cacheFields></pivotCacheDefinition>"#;
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item x="1" h="1"/></items></pivotField><pivotField axis="axisCol"><items><item x="0" h="1"/><item x="1"/></items></pivotField></pivotFields><rowFields><field x="0"/></rowFields><colFields><field x="1"/></colFields></pivotTableDefinition>"#;
+    let (wb, report) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!((pt.rows.len(), pt.columns.len()), (1, 1), "{:?}", report.warnings);
+    assert_eq!(pt.filters, vec![PivotFilter { source_col: "K".into(), selected: Some(vec!["a".into()]) }]);
+    assert_eq!(pt.calculated_fields, vec![PivotCalcField { name: "Price".into(), formula: "=1".into() }]);
+}
+
 #[test]
 fn cache_found_by_workbook_cache_id() {
     let rels_extra = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/>"#;
@@ -806,4 +868,78 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+/// The "Trend" pivot of [`workbook`] with `values` as its value fields, written; returns the file
+/// and its PivotTable and cache parts.
+fn trend_with(values: impl FnOnce(&PivotValue) -> Vec<PivotValue>) -> (Vec<u8>, String, String) {
+    let mut wb = workbook();
+    let pivot = wb.sheet_mut(1).unwrap().pivots.iter_mut().find(|p| p.name == "Trend").unwrap();
+    pivot.values = values(&pivot.values[0]);
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let (path, table) = parts
+        .iter()
+        .filter(|(path, _)| path.starts_with("xl/pivotTables/pivotTable"))
+        .map(|(path, xml)| (path.clone(), String::from_utf8_lossy(xml).into_owned()))
+        .find(|(_, xml)| xml.contains("name=\"Trend\""))
+        .unwrap();
+    let n = path.trim_start_matches("xl/pivotTables/pivotTable").trim_end_matches(".xml");
+    let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+    let rels = String::from_utf8_lossy(&parts[&format!("xl/pivotTables/_rels/pivotTable{n}.xml.rels")]).into_owned();
+    assert!(rels.contains(&format!("../pivotCache/pivotCacheDefinition{n}.xml")), "{rels}");
+    let cache = String::from_utf8_lossy(&parts[&cache_part]).into_owned();
+    (bytes, table, cache)
+}
+
+fn trend_values(bytes: &[u8]) -> Vec<PivotValue> {
+    let (back, report) = read_xlsx(bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    back.sheet(1).unwrap().pivots.iter().find(|p| p.name == "Trend").unwrap().values.clone()
+}
+
+const GC_DISTINCT: &str = "<ext uri=\"{80B1AD42-0C9F-45FF-B109-D57FB0F4F0B4}\" xmlns:gc=\"https://github.com/storytold/gridcraft/ns/pivot/2026\"><gc:summary func=\"distinctCount\"/></ext>";
+
+#[test]
+fn distinct_count_round_trips_through_a_gridcraft_extension() {
+    // The file format's subtotal list has no distinct count: the field is written as Count, which
+    // other readers use, with a GridCraft marker that brings Distinct Count back on open.
+    let (bytes, table, cache) =
+        trend_with(|v| vec![PivotValue { func: PivotFunc::DistinctCount, name: "Distinct Count of Sales".into(), ..v.clone() }]);
+    assert!(table.contains("<dataField name=\"Distinct Count of Sales\" fld=\"4\" subtotal=\"count\""), "{table}");
+    assert!(table.contains(&format!("<extLst>{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    // A refresh on open would recompute it as Count in Excel, over the values on the sheet.
+    assert!(!cache.contains("refreshOnLoad"), "{cache}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].name.as_str()), (PivotFunc::DistinctCount, "Distinct Count of Sales"));
+}
+
+#[test]
+fn rank_and_distinct_count_write_one_extension_each() {
+    let (bytes, table, _) = trend_with(|v| {
+        vec![PivotValue { func: PivotFunc::DistinctCount, show_as: PivotShowAs::Rank, name: "Rank of Distinct Sales".into(), ..v.clone() }]
+    });
+    let rank = "<ext uri=\"{E15A36E0-9728-4e99-A89B-3F7291B0FE68}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext>";
+    assert!(table.contains(&format!("<extLst>{rank}{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].show_as), (PivotFunc::DistinctCount, PivotShowAs::Rank));
+}
+
+#[test]
+fn count_without_the_gridcraft_extension_reads_as_count() {
+    // Plain `subtotal="count"`, as Excel writes it, stays Count; so does a stale marker on a field
+    // whose function was changed to something else.
+    let (bytes, table, cache) = trend_with(|v| vec![PivotValue { func: PivotFunc::Count, name: "Count of Sales".into(), ..v.clone() }]);
+    assert!(!table.contains("extLst"), "{table}");
+    assert!(cache.contains("refreshOnLoad=\"1\""), "{cache}");
+    assert_eq!(trend_values(&bytes)[0].func, PivotFunc::Count);
+    let marked = |subtotal: &str| {
+        format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields><pivotField/><pivotField dataField="1"/></pivotFields><dataFields><dataField name="V" fld="1"{subtotal}><extLst>{GC_DISTINCT}</extLst></dataField></dataFields></pivotTableDefinition>"#
+        )
+    };
+    let func = |table: &str| read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap().0.sheet(0).unwrap().pivots[0].values[0].func;
+    assert_eq!(func(&marked(" subtotal=\"count\"")), PivotFunc::DistinctCount);
+    assert_eq!(func(&marked("")), PivotFunc::Sum);
+    assert_eq!(func(&marked(" subtotal=\"max\"")), PivotFunc::Max);
 }
