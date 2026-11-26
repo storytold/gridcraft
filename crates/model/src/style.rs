@@ -197,6 +197,11 @@ pub struct Font {
     /// theme's minor font. Fonts derived from it (bold, a colour, a size) keep the link.
     #[serde(default = "default_minor")]
     pub minor: bool,
+    /// Outlined (hollow) letters: an XLSX `<outline/>`. Kept and saved; GridCraft does not
+    /// draw it yet (the letters render solid). Always serialized, like the other flags, so a
+    /// whole style sent back through `home.formatCells` (the Format Cells dialog) clears it.
+    #[serde(default)]
+    pub outline: bool,
 }
 
 fn default_minor() -> bool {
@@ -208,7 +213,7 @@ impl Hash for Font {
     fn hash<H: Hasher>(&self, h: &mut H) {
         self.name.hash(h);
         self.size.to_bits().hash(h);
-        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family, self.minor).hash(h);
+        (self.bold, self.italic, self.underline, self.strike, self.color, self.vert, self.charset, self.family, self.minor, self.outline).hash(h);
     }
 }
 
@@ -226,6 +231,7 @@ impl Default for Font {
             charset: None,
             family: None,
             minor: true,
+            outline: false,
         }
     }
 }
@@ -351,6 +357,14 @@ pub enum VAlign {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ReadingOrder {
+    #[default]
+    Context,
+    LeftToRight,
+    RightToLeft,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Alignment {
     pub h: HAlign,
     pub v: VAlign,
@@ -359,6 +373,20 @@ pub struct Alignment {
     pub indent: u8,
     /// Degrees -90..=90, or 255 for vertical stacked text.
     pub rotation: i16,
+    /// Unspecified inherits in differential styles and uses context for ordinary cells.
+    #[serde(default)]
+    pub reading_order: Option<ReadingOrder>,
+    /// Space between the cell's edges and its text, left, right, top, bottom, in hundredths
+    /// of a point; `None` where the file stated none (the application's own). An OpenDocument
+    /// cell's padding; Excel has none. Not drawn yet.
+    #[serde(default, skip_serializing_if = "Alignment::no_padding")]
+    pub padding: [Option<u16>; 4],
+}
+
+impl Alignment {
+    fn no_padding(p: &[Option<u16>; 4]) -> bool {
+        p.iter().all(Option::is_none)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -397,6 +425,9 @@ pub struct DxfStated {
     pub bold: bool,
     pub italic: bool,
     pub strike: bool,
+    /// Outlined letters turned off (`<outline val="0"/>`). Defaulted so JSON saved before it opens.
+    #[serde(default)]
+    pub outline: bool,
     pub underline: bool,
     pub size: bool,
     pub name: bool,
@@ -489,6 +520,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reading_order_defaults_for_older_json_and_distinguishes_styles() {
+        let align: Alignment = serde_json::from_str(r#"{"h":"General","v":"Bottom","wrap":false,"shrink":false,"indent":0,"rotation":0}"#).unwrap();
+        assert_eq!(align.reading_order, None);
+        let mut styles = StyleTable::default();
+        let context = styles.derive(StyleId::DEFAULT, |s| s.align.reading_order = Some(ReadingOrder::Context));
+        let ltr = styles.derive(StyleId::DEFAULT, |s| s.align.reading_order = Some(ReadingOrder::LeftToRight));
+        let rtl = styles.derive(StyleId::DEFAULT, |s| s.align.reading_order = Some(ReadingOrder::RightToLeft));
+        assert_ne!(ltr, rtl);
+        assert_ne!(context, StyleId::DEFAULT);
+        assert_ne!(context, ltr);
+        assert_ne!(context, rtl);
+        assert_ne!(ltr, StyleId::DEFAULT);
+        assert_ne!(rtl, StyleId::DEFAULT);
+        assert_eq!(styles.derive(ltr, |s| s.align.reading_order = Some(ReadingOrder::RightToLeft)), rtl);
+        assert_eq!(styles.derive(rtl, |s| s.align.reading_order = Some(ReadingOrder::Context)), context);
+        assert_eq!(styles.derive(context, |s| s.align.reading_order = None), StyleId::DEFAULT);
+    }
+
+    #[test]
     fn interning() {
         let mut t = StyleTable::default();
         let bold = t.derive(StyleId::DEFAULT, |s| s.font.bold = true);
@@ -497,6 +547,49 @@ mod tests {
         assert_eq!(t.derive(bold, |s| s.font.bold = false), StyleId::DEFAULT);
         assert_eq!(t.len(), 2);
         assert!(!t.get(StyleId(999)).font.bold);
+    }
+
+    /// Two fonts differing only in outlined letters are different styles; JSON states the flag
+    /// even when off, and JSON saved before it existed reads as not outlined.
+    #[test]
+    fn outline_makes_a_distinct_style() -> Result<(), Box<dyn std::error::Error>> {
+        let mut t = StyleTable::default();
+        let outlined = t.derive(StyleId::DEFAULT, |s| s.font.outline = true);
+        assert_ne!(outlined, StyleId::DEFAULT);
+        assert_ne!(Font { outline: true, ..Font::default() }, Font::default());
+        assert_eq!(t.derive(outlined, |s| s.font.outline = false), StyleId::DEFAULT);
+        let mut json = serde_json::to_value(Font::default())?;
+        assert_eq!(json.get("outline"), Some(&serde_json::Value::Bool(false)));
+        assert!(json.as_object_mut().ok_or("none")?.remove("outline").is_some());
+        assert_eq!(serde_json::from_value::<Font>(json)?, Font::default());
+        let on = serde_json::to_value(Font { outline: true, ..Font::default() })?;
+        assert_eq!(on.get("outline"), Some(&serde_json::Value::Bool(true)));
+        let mut stated = serde_json::to_value(DxfStated::default())?;
+        assert!(stated.as_object_mut().ok_or("none")?.remove("outline").is_some());
+        assert_eq!(serde_json::from_value::<DxfStated>(stated)?, DxfStated::default());
+        Ok(())
+    }
+
+    #[test]
+    fn padding_keeps_styles_apart_and_survives_json() -> Result<(), Box<dyn std::error::Error>> {
+        let mut t = StyleTable::default();
+        let padded = t.derive(StyleId::DEFAULT, |s| s.align.padding = [Some(10), None, Some(0), Some(65535)]);
+        let other = t.derive(StyleId::DEFAULT, |s| s.align.padding = [Some(10), None, Some(0), Some(1)]);
+        assert_ne!(padded, StyleId::DEFAULT);
+        assert_ne!(padded, other);
+        assert_eq!(t.derive(StyleId::DEFAULT, |s| s.align.padding = [Some(10), None, Some(0), Some(65535)]), padded);
+        assert_eq!(t.derive(padded, |s| s.align.padding = [None; 4]), StyleId::DEFAULT);
+
+        let style = t.get(padded).clone();
+        let json = serde_json::to_string(&style)?;
+        assert!(json.contains("padding"), "{json}");
+        assert_eq!(serde_json::from_str::<Style>(&json)?, style);
+
+        // No padding: nothing written, and JSON written before the field existed still reads.
+        let plain = serde_json::to_string(&Alignment::default())?;
+        assert!(!plain.contains("padding"), "{plain}");
+        assert_eq!(serde_json::from_str::<Alignment>(&plain)?, Alignment::default());
+        Ok(())
     }
 
     #[test]

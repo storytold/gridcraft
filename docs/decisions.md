@@ -26,9 +26,9 @@ GridCraft evaluates ordinary formulas with array semantics even when the final r
 
 The exporter inspects the parsed formula without evaluating it. It distinguishes range-taking functions such as `SUM` from scalar arguments and operators: `SUM(A1:A3)` and `A1*2` stay ordinary, while `SUM(A1:A3*B1:B3)` and `SQRT(A1:A3)` retain array evaluation. Legacy array-aware contexts such as `SUMPRODUCT` do not need an extra marker. Explicit `@` scalarizes its result without hiding array-sensitive operations inside it.
 
-Names are resolved using workbook/sheet scope, and structured references distinguish one table-row cell from a column. Literal `INDIRECT` and `INDEX` arguments permit tighter classification; unresolved reference dimensions are conservatively treated as potentially multiple cells. Name/AST traversal is bounded, with array preservation as the fallback. This is an export classifier, not a claim of exact Excel metadata parity for every function or user-defined function. It stays within the format crate's existing dependencies and does not change calculation or import behavior.
+Names are resolved using workbook/sheet scope, and structured references distinguish one table-row cell from a column. Literal `INDIRECT` and `INDEX` arguments permit tighter classification; unresolved reference dimensions are conservatively treated as potentially multiple cells. Name/AST traversal is bounded. A formula whose array behaviour the analysis doesn't know (a user-defined or unknown function, an uncertain parameter, a recursive name) is saved with `cm`, unless it has an explicit `@` (below). One without an explicit `@` that the analysis cannot finish, but whose parts are all known, is saved as read, without `cm`. One with an explicit `@` that the analysis cannot finish or doesn't know is saved as the legacy text the reader turns back into it (the formula without its `@`, or without a whole-formula `@`) when there is one, and with `cm` otherwise. This is an export classifier, not a claim of exact Excel metadata parity for every function or user-defined function. It stays within the format crate's existing dependencies.
 
-This is a writer policy; interpreting implicit intersection in imported legacy formulas remains separate work. See Microsoft's [Formula vs. Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2).
+The reader applies the same classification in reverse: a formula without dynamic-array metadata (`cm`) and not entered as a CSE array is a legacy formula, and gets the `@` Excel implies where a range meets a single-value parameter, an operator or the cell result. Inside SUMPRODUCT and other array-evaluating parameters, IF's condition and IFERROR's and IFNA's arguments are still intersected, as legacy Excel does without Ctrl+Shift+Enter; IF's results are not. The writer drops an `@` that legacy Excel would imply (also when an edit has shrunk its range to one cell) and saves that formula without `cm`; an `@` of a single value stays `_xlfn.SINGLE` in that legacy formula, as Excel writes it; any other `@` makes the formula a dynamic-array one. A legacy formula too large to analyse, or using functions whose legacy argument semantics are unknown (the array arguments of dynamic-array functions, LAMBDA), is read as it is with only a whole-formula `@` when its result may be several values, so it never spills, and is saved as it was read, without `cm`. Which names are built-in functions and which parameters take a single value comes from the function library, which the format crate may not depend on: the caller passes a `gridcraft_xlsx::FunctionInfo` (`read_xlsx_with`, `write_xlsx_with`; the engine supplies the library's answers), and `read_xlsx`/`write_xlsx`/`write_xlsx_as` use the crate's own table alone. See Microsoft's [Formula vs. Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2).
 
 ## Static cell pictures
 
@@ -95,7 +95,10 @@ LaTeX subset:
   access. Indexing is not counted; the fuzz run covers it.
 - **Fuzzing.** 70,000 random token strings and 50,000 mutations of valid equations: no panic,
   no input slower than 5 ms. Self-referencing and exponential macros stop at the parser's
-  1,000-expansion limit. Nesting deeper than 32 is refused ("Recursion limit exceeded"), and
+  1,000-expansion limit, which counts expansions and not their size: a definition whose
+  argument doubles on every call never reaches it. The wrapper therefore refuses macro
+  definitions (`\def`, `\newcommand`, `\let` and the like) before RaTeX sees the source, and
+  caps the padded size of matrices at 2,500 cells. Nesting deeper than 32 is refused ("Recursion limit exceeded"), and
   the deepest accepted input needs under 256 KB of stack in a release build, well inside the
   smallest main-thread stack we run on (1 MB on Windows). Absurd sizes (`\rule{1e308em}{1em}`)
   lay out with huge dimensions, so the wrapper caps them.
@@ -124,3 +127,35 @@ so there the caps and the fuzzed input space are the protection. `crates/math/te
 gate on every test run, so a version bump has to pass it. RaTeX positions glyphs with KaTeX
 font metrics; GridCraft never bundles the KaTeX fonts, so glyphs are drawn with system fonts
 and a glyph no font has is drawn as a `[?]` box.
+
+## Number formats widen columns that weren't sized by hand (#1077)
+
+Increase/Decrease Decimal, the ribbon's other number formats (the Number Format list, Accounting,
+Percent, Comma) and a number format set in Format Cells widen a column so the formatted numbers in
+the target fit, instead of showing `####`.
+Microsoft's support article "Stop showing rounded numbers" says only that "the column width adjusts
+automatically", so the rule comes from observing Excel 16.0 (build 17932, Windows) with synthetic
+workbooks:
+
+- A column at the default width, AutoFitted, or widened this way before widens to the widest number
+  in the formatted range, also with Wrap Text and a large bold font. It never narrows.
+- A width set with Column Width (or by dragging the border) stays, even when it equals the default:
+  the number shows `####`. AutoFit makes such a column automatic again.
+- Hidden columns, text, General numbers (they round to fit instead), merged cells and shrink-to-fit
+  cells don't widen.
+- In XLSX, Excel writes `customWidth="1"` for every width it stores and adds `bestFit="1"` for widths
+  that AutoFit or a number format set. Only `customWidth` without `bestFit` is read as set by hand: a
+  width with no flags, `bestFit` alone, or both, keeps widening after the file is opened again.
+
+`LineInfo::custom`, already used for rows set by hand, now marks columns set by hand too; GridCraft
+writes and reads the two flags as Excel does. In `.xls`, COLINFO's fUserSet marks a column set by
+hand; the shared craft-xls reader does not report fBestFit, so a `.xls` width with both flags also
+counts as set by hand.
+Files that earlier GridCraft versions saved have `customWidth` without `bestFit` on every stored
+width, so those columns open as set by hand and keep their width.
+
+The engine has no font metrics, so the width is the same estimate AutoFit Column Width uses, which
+errs on the wide side; a UI test checks that the real font then draws the number, not `####`.
+Excel doesn't widen when a value is entered into a cell that already has the format (observed through
+the `Value` property: the cell shows `####`), and neither does GridCraft. Typing into such a cell
+wasn't observed.

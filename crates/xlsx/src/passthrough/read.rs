@@ -53,9 +53,17 @@ pub struct KeptReader {
     overrides: HashMap<String, String>,
     budget: usize,
     parts_left: usize,
+    /// Cache definition parts of the PivotTables kept with their sheets (source in another
+    /// workbook, a data connection or the Data Model), kept with the workbook.
+    pivot_caches: Vec<(String, KeptSource)>,
 }
 
 impl KeptReader {
+    /// Whether unmodelled content is kept for this package (not for Strict Open XML files).
+    pub fn keeps(&self) -> bool {
+        self.on
+    }
+
     pub fn new(cx: &mut Ctx<'_>) -> KeptReader {
         let mut k = KeptReader {
             on: true,
@@ -64,6 +72,7 @@ impl KeptReader {
             overrides: HashMap::new(),
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
+            pivot_caches: vec![],
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -141,7 +150,12 @@ impl KeptReader {
                 }
                 queue.push_back((r.target.clone(), depth + 1));
             }
-            parts.push(PreservedPart { name, content_type, data: Arc::from(data), rels });
+            let (dxfs, num_fmts) = if content_type == CT_PIVOT_TABLE || content_type == CT_PIVOT_CACHE_DEF {
+                style_refs(cx, &data).ok_or_else(|| format!("{name} is damaged"))?
+            } else {
+                (vec![], vec![])
+            };
+            parts.push(PreservedPart { name, content_type, data: Arc::from(data), rels, dxfs, num_fmts });
         }
         self.budget = self.budget.saturating_sub(bytes);
         self.parts_left = self.parts_left.saturating_sub(parts.len());
@@ -212,6 +226,20 @@ impl KeptReader {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
             }
         }
+        // The Data Model: its tables are loaded through the workbook's connections, so it is kept
+        // only with them.
+        let connections = p.rels.iter().any(|r| is_kind(r, &["connections"]));
+        for r in wb_rels.iter().filter(|r| !r.external && is_kind(r, DATA_MODEL_GRAPH)).take(1) {
+            let kept = if connections {
+                self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut seen, DATA_MODEL_GRAPH)
+            } else {
+                Err("the workbook's data connections were not kept".into())
+            };
+            match kept {
+                Ok(()) => cx.warn("the workbook's Data Model is kept for saving as it is; it can't be viewed, edited or refreshed here"),
+                Err(why) => cx.warn(format!("the workbook's Data Model was dropped: {why}")),
+            }
+        }
         // Chart sheets: the sheet entry (name, state, position) plus the chart sheet part and the
         // drawing, chart, style and colour parts behind it.
         for (worksheets, se) in chart_sheet_entries(wb_xml, &wb_rels, file_to_model) {
@@ -256,6 +284,7 @@ impl KeptReader {
                 Err(why) => cx.warn(format!("links to external workbooks were dropped: {why}")),
             }
         }
+        self.keep_pivot_caches(cx, wb_xml, &wb_rels, &mut p, &mut seen);
         // Excel trusts the saved cell values only when both are present; without them it
         // recalculates everything on open, and links into closed workbooks come back as errors.
         if let Some(v) = wb_xml.child("fileVersion") {
@@ -268,24 +297,82 @@ impl KeptReader {
             x.push_str("/>");
             p.elements.push(PreservedXml { slot: "fileVersion".into(), xml: x });
         }
-        let calc_features = wb_xml
-            .child("extLst")
-            .and_then(|l| l.kids("ext").find(|e| e.attr("uri").is_some_and(|u| u.eq_ignore_ascii_case(CALC_FEATURES_URI))))
-            .and_then(|e| e.child("calcFeatures"));
-        if let Some(c) = calc_features {
-            let mut x = format!("<ext uri=\"{CALC_FEATURES_URI}\" xmlns:xcalcf=\"{NS_CALC_FEATURES}\"><xcalcf:calcFeatures>");
-            for name in c.kids("feature").filter_map(|f| f.attr("name")) {
-                let _ = write!(x, "<xcalcf:feature name=\"{}\"/>", esc_attr(name));
-            }
-            x.push_str("</xcalcf:calcFeatures></ext>");
-            p.elements.push(PreservedXml { slot: "ext".into(), xml: x });
-        }
+        // calcFeatures and the self-contained extensions (x14/x15 workbookPr, Mac entries).
+        crate::extlist::keep_workbook(cx, wb_xml.child("extLst"), &mut p);
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
-    /// Sheet-level content of the sheet part `part`.
-    pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str) -> Option<Arc<Preserved>> {
+    /// The caches of the kept PivotTables, each with its `<pivotCache>` entry (original `cacheId`
+    /// and relationship id).
+    fn keep_pivot_caches(&mut self, cx: &mut Ctx<'_>, wb_xml: &xml::El, wb_rels: &[PreservedRel], p: &mut Preserved, seen: &mut HashSet<String>) {
+        let caches = std::mem::take(&mut self.pivot_caches);
+        // A cache names its connection by id in the kept connections part, and a Data Model cache
+        // reads the kept model: without them Excel refuses the file or can't refresh it.
+        let connections = p.rels.iter().any(|r| is_kind(r, &["connections"]));
+        let model = p.rels.iter().any(|r| is_kind(r, DATA_MODEL_GRAPH));
+        let (mut no_connections, mut no_model) = (0usize, 0usize);
+        for (cache, source) in &caches {
+            match source {
+                KeptSource::Connection | KeptSource::DataModel if !connections => {
+                    no_connections += 1;
+                    continue;
+                }
+                KeptSource::DataModel if !model => {
+                    no_model += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            let entry = wb_xml.child("pivotCaches").into_iter().flat_map(|c| c.kids("pivotCache")).find_map(|c| {
+                let id = c.attr_u32("cacheId")?;
+                let r = wb_rels.iter().find(|r| Some(r.id.as_str()) == c.attr("id") && !r.external && is_kind(r, &["pivotCacheDefinition"]))?;
+                (normalize(&r.target) == normalize(cache)).then(|| (id, r.clone()))
+            });
+            let Some((id, r)) = entry else {
+                cx.warn(format!(
+                    "the cache {cache} of a PivotTable on {} is not in the workbook's list; the PivotTable was dropped",
+                    source.describe()
+                ));
+                continue;
+            };
+            match self.keep_through(cx, p, std::slice::from_ref(&r), seen, PIVOT_CACHE_GRAPH) {
+                Ok(()) => p.elements.push(PreservedXml {
+                    slot: "pivotCache".into(),
+                    xml: format!("<pivotCache xmlns:r=\"{NS_REL}\" cacheId=\"{id}\" r:id=\"{}\"/>", esc_attr(&r.id)),
+                }),
+                Err(why) => cx.warn(format!("the cache of a PivotTable on {} was dropped with its PivotTables: {why}", source.describe())),
+            }
+        }
+        if no_connections > 0 {
+            cx.warn(format!(
+                "{no_connections} PivotTable cache(s) on a data connection or the Data Model were dropped with their PivotTables (kept as plain cells): the workbook's data connections were not kept"
+            ));
+        }
+        if no_model > 0 {
+            cx.warn(format!(
+                "{no_model} PivotTable cache(s) on the workbook's Data Model were dropped with their PivotTables (kept as plain cells): the Data Model was not kept"
+            ));
+        }
+    }
+
+    /// Sheet-level content of the sheet part `part`; `pivots` are its PivotTables whose source is
+    /// in another workbook. `controls` says which form controls the
+    /// sheet reader modelled (their VML shapes are left out of the kept content) and whether the
+    /// VML drawing holds others that only it lists.
+    pub fn sheet(
+        &mut self,
+        cx: &mut Ctx<'_>,
+        part: &str,
+        name: &str,
+        pivots: &[ExternalPivot],
+        controls: &crate::controls::ReadControls,
+    ) -> Option<Arc<Preserved>> {
         if !self.on {
+            if !pivots.is_empty() {
+                cx.warn(format!(
+                    "sheet \"{name}\": PivotTables on another workbook, a data connection or the Data Model are not kept on save in this file"
+                ));
+            }
             return None;
         }
         let rels = match raw_rels(cx, part) {
@@ -305,13 +392,40 @@ impl KeptReader {
         // Notes have one VML drawing per sheet; another one holds the header and footer pictures.
         let vml_drawings = rels.iter().filter(|r| is_kind(r, &["vmlDrawing"])).count();
         let notes = rels.iter().filter(|r| is_kind(r, &["comments"])).count();
-        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes {
-            self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen);
+        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes || controls.vml_only_unmodelled {
+            self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen, controls);
+        }
+        for ep in pivots {
+            let Some(r) = rels.iter().find(|r| r.id == ep.rel_id && !r.external && is_kind(r, &["pivotTable"])) else { continue };
+            // The cache is kept with the workbook, not followed from here.
+            let mut scoped = seen.clone();
+            scoped.insert(normalize(&ep.cache_part));
+            match self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut scoped, PIVOT_TABLE_GRAPH) {
+                Ok(()) => {
+                    scoped.remove(&normalize(&ep.cache_part));
+                    seen = scoped;
+                    if !self.pivot_caches.iter().any(|(c, _)| normalize(c) == normalize(&ep.cache_part)) {
+                        self.pivot_caches.push((ep.cache_part.clone(), ep.source));
+                    }
+                }
+                Err(why) => cx.warn(format!("sheet \"{name}\": a PivotTable on {} was dropped: {why}", ep.source.describe())),
+            }
         }
         (!p.is_empty()).then(|| Arc::new(p))
     }
 
-    fn sheet_elements(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, rels: &[PreservedRel], p: &mut Preserved, seen: &mut HashSet<String>) {
+    #[allow(clippy::too_many_arguments)]
+    fn sheet_elements(
+        &mut self,
+        cx: &mut Ctx<'_>,
+        part: &str,
+        name: &str,
+        rels: &[PreservedRel],
+        p: &mut Preserved,
+        seen: &mut HashSet<String>,
+        controls: &crate::controls::ReadControls,
+    ) {
+        let read_controls = &controls.modelled;
         let scan = match cx.pkg.read(part) {
             Ok(Some(bytes)) => scan_sheet(&bytes),
             _ => None,
@@ -344,10 +458,16 @@ impl KeptReader {
                 Err(why) => cx.warn(format!("sheet \"{name}\": header and footer pictures were dropped: {why}")),
             }
         }
-        let mut frags = scan.fragments;
-        // Controls and OLE objects are drawn from shapes in the legacy VML drawing.
-        if frags.iter().any(|(slot, _)| slot != "picture") {
-            match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen) {
+        // Form controls the sheet reader modelled are written from the model; the others stay.
+        let mut frags: Vec<(String, String)> = scan
+            .fragments
+            .into_iter()
+            .filter_map(|(slot, x)| if slot == "controls" { without_controls(&x, read_controls).map(|x| (slot, x)) } else { Some((slot, x)) })
+            .collect();
+        // Controls and OLE objects are drawn from shapes in the legacy VML drawing. Controls only
+        // the drawing lists need it too, whether or not a `<controls>` element is left.
+        if frags.iter().any(|(slot, _)| slot != "picture") || controls.vml_only_unmodelled {
+            match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen, read_controls) {
                 Ok((vml, parts)) => {
                     p.parts.extend(parts);
                     p.vml = Some(vml);
@@ -376,21 +496,22 @@ impl KeptReader {
                 Err(why) => cx.warn(format!("sheet \"{name}\": {slot} were dropped: {why}")),
             }
         }
-        if p.elements.iter().any(|e| e.slot == "oleObjects" || e.slot == "controls") {
+        if p.elements.iter().any(|e| e.slot == "oleObjects" || e.slot == "controls") || (controls.vml_only_unmodelled && p.vml.is_some()) {
             cx.warn(format!("sheet \"{name}\": embedded objects and form controls are not shown; they are kept for saving"));
         } else {
             p.vml = None;
         }
     }
 
-    /// The sheet's VML drawing without its notes (GridCraft writes those), and the parts its
-    /// shapes refer to (preview images).
+    /// The sheet's VML drawing without its notes and the form controls read into the model
+    /// (GridCraft writes those), and the parts its shapes refer to (preview images).
     fn vml(
         &mut self,
         cx: &mut Ctx<'_>,
         rels: &[PreservedRel],
         rid: Option<&str>,
         seen: &mut HashSet<String>,
+        read_controls: &HashSet<u64>,
     ) -> Result<(PreservedPart, Vec<PreservedPart>), String> {
         let rel = rid.and_then(|id| rels.iter().find(|r| r.id == id && !r.external)).ok_or("the sheet has no VML drawing")?;
         // Charged to the kept total like any other part: many sheets can point at one highly
@@ -407,14 +528,71 @@ impl KeptReader {
         };
         self.budget = self.budget.saturating_sub(data.len());
         let text = String::from_utf8(data).map_err(|_| "the VML drawing is not UTF-8".to_string())?;
-        let text = strip_notes(&text);
+        let text = strip_shapes(&text, read_controls);
         let vrels = raw_rels(cx, &rel.target)?;
         let mut q = Preserved::default();
         let roots: Vec<PreservedRel> = vrels.iter().filter(|r| !r.external).cloned().collect();
         self.keep(cx, &mut q, &roots, seen)?;
-        let vml = PreservedPart { name: rel.target.clone(), content_type: CT_VML.into(), data: Arc::from(text.into_bytes()), rels: vrels };
+        let vml = PreservedPart {
+            name: rel.target.clone(),
+            content_type: CT_VML.into(),
+            data: Arc::from(text.into_bytes()),
+            rels: vrels,
+            ..Default::default()
+        };
         Ok((vml, q.parts))
     }
+}
+
+/// Attribute values of `local` (any prefix) in an XML part, in document order. `None` when the
+/// XML is damaged.
+fn attr_values(data: &[u8], local: &[&[u8]], mut f: impl FnMut(&[u8], &str)) -> Option<()> {
+    let text = xml::to_utf8(data);
+    let mut reader = Reader::from_reader(text.as_ref());
+    let mut buf = vec![];
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Eof => return Some(()),
+            Event::Start(e) | Event::Empty(e) => {
+                for a in e.attributes().with_checks(false) {
+                    let a = a.ok()?;
+                    let k = a.key.local_name();
+                    if let Some(name) = local.iter().find(|n| **n == k.as_ref())
+                        && let Ok(v) = std::str::from_utf8(&a.value)
+                    {
+                        f(name, v);
+                    }
+                }
+            }
+            _ => {}
+        }
+        buf.clear();
+    }
+}
+
+/// The differential formats (`dxfId`) and custom number formats (`numFmtId`) of the source
+/// styles part a kept PivotTable or pivot cache refers to. `None` when its XML is damaged.
+type StyleRefs = (Vec<(u32, gridcraft_model::Style)>, Vec<(u32, String)>);
+fn style_refs(cx: &Ctx<'_>, data: &[u8]) -> Option<StyleRefs> {
+    let mut dxfs: Vec<(u32, gridcraft_model::Style)> = vec![];
+    let mut fmts: Vec<(u32, String)> = vec![];
+    // Membership sets: a crafted part can name many distinct ids, so scanning the vectors would be quadratic.
+    let (mut seen_dxfs, mut seen_fmts) = (HashSet::new(), HashSet::new());
+    attr_values(data, &[b"dxfId", b"numFmtId"], |name, v| {
+        let Ok(id) = v.trim().parse::<u32>() else { return };
+        if name == b"dxfId" {
+            if let Some(s) = cx.dxfs.get(id as usize)
+                && seen_dxfs.insert(id)
+            {
+                dxfs.push((id, s.clone()));
+            }
+        } else if let Some(code) = cx.num_fmts.get(&id)
+            && seen_fmts.insert(id)
+        {
+            fmts.push((id, code.clone()));
+        }
+    })?;
+    Some((dxfs, fmts))
 }
 
 /// What a sheet part holds for pass-through.
@@ -557,13 +735,20 @@ fn shape_spans(vml: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// VML without its note shapes (`ObjectType="Note"`).
-fn strip_notes(vml: &str) -> String {
+/// VML without its note shapes and the shapes numbered in `drop`, each judged as the control
+/// reader judges it, from the shape's own tags and never from text elsewhere in it: a note by its
+/// client data's `ObjectType` ([`crate::controls::is_note_data`]), its number from its `id`, else
+/// its `o:spid` ([`crate::controls::number_of`]). Each tag is read on its own ([`xml::first_start`]),
+/// so a caption's unclosed `<br>` doesn't hide the client data after it. A shape with no number
+/// that isn't a note is kept.
+fn strip_shapes(vml: &str, drop: &HashSet<u64>) -> String {
     let mut out = String::with_capacity(vml.len());
     let mut last = 0;
     for (a, b) in shape_spans(vml) {
-        let shape = vml.get(a..b).unwrap_or("");
-        if shape.contains("ObjectType=\"Note\"") {
+        let shape = vml.get(a..b).unwrap_or("").as_bytes();
+        let note = xml::first_start(shape, "ClientData").is_some_and(|d| crate::controls::is_note_data(&d));
+        let numbered = xml::first_start(shape, "shape").and_then(|s| crate::controls::number_of(&s)).is_some_and(|n| drop.contains(&n));
+        if note || numbered {
             out.push_str(vml.get(last..a).unwrap_or(""));
             last = b;
         }
@@ -595,19 +780,32 @@ pub(super) fn vml_block_max(vml: &str) -> u64 {
     used.max(claimed)
 }
 
-/// Kept VML (controls, OLE objects) plus GridCraft's note shapes: the notes get ids in a fresh
-/// shape block so they can't collide with the kept shapes the sheet XML refers to.
+/// The first shape block free in kept VML: GridCraft's own shapes (notes, then form controls) are
+/// numbered from `block * 1024 + 1` when they join it ([`merge_vml`]).
+pub(super) fn first_free_block(kept: &str) -> u64 {
+    shape_numbers(kept).into_iter().max().unwrap_or(0) / 1024 + 1
+}
+
+/// Kept VML (controls, OLE objects) plus GridCraft's note and form control shapes: ours get ids
+/// in fresh shape blocks so they can't collide with the kept shapes the sheet XML refers to.
 pub(super) fn merge_vml(kept: &str, ours: &str) -> String {
     let Some(close) = kept.rfind("</xml>") else { return ours.to_string() };
-    let block = shape_numbers(kept).into_iter().max().unwrap_or(0) / 1024 + 1;
+    let block = first_free_block(kept);
     let mut add = String::new();
-    if !kept.contains("id=\"_x0000_t202\"")
-        && let Some(i) = ours.find("<v:shapetype")
-        && let Some(j) = ours.get(i..).and_then(|s| s.find("</v:shapetype>"))
-    {
-        add.push_str(ours.get(i..i + j + "</v:shapetype>".len()).unwrap_or(""));
+    // Our shape types (notes, form controls) that the kept drawing doesn't define.
+    let mut from = 0;
+    while let Some(i) = ours.get(from..).and_then(|s| s.find("<v:shapetype")).map(|i| i + from) {
+        let Some(j) = ours.get(i..).and_then(|s| s.find("</v:shapetype>")).map(|j| i + j + "</v:shapetype>".len()) else { break };
+        let ty = ours.get(i..j).unwrap_or("");
+        let id = attr_value(ty, "id").unwrap_or("");
+        if !id.is_empty() && !kept.contains(&format!("id=\"{id}\"")) && !kept.contains(&format!("id='{id}'")) {
+            add.push_str(ty);
+        }
+        from = j;
     }
-    for (k, (a, b)) in shape_spans(ours).into_iter().enumerate() {
+    let spans = shape_spans(ours);
+    let blocks = (spans.len() as u64 + 1).div_ceil(1024).max(1);
+    for (k, (a, b)) in spans.into_iter().enumerate() {
         let shape = ours.get(a..b).unwrap_or("");
         let id = block.saturating_mul(1024).saturating_add(1 + k as u64);
         match (shape.find("id=\"_x0000_s"), shape.find("id=\"_x0000_s").and_then(|i| shape.get(i + 4..)?.find('"').map(|j| i + 4 + j))) {
@@ -618,14 +816,132 @@ pub(super) fn merge_vml(kept: &str, ours: &str) -> String {
         }
     }
     let mut head = kept.get(..close).unwrap_or("").to_string();
-    // Claim the block in the drawing's id map.
+    // Claim the blocks in the drawing's id map.
     if let Some(i) = head.find("<o:idmap")
         && let Some(d) = head.get(i..).and_then(|s| s.find("data=\"")).map(|d| i + d + "data=\"".len())
         && let Some(e) = head.get(d..).and_then(|s| s.find('"')).map(|e| d + e)
     {
-        head.insert_str(e, &format!(",{block}"));
+        let claimed: String = (block..block.saturating_add(blocks)).map(|b| format!(",{b}")).collect();
+        head.insert_str(e, &claimed);
     }
     format!("{head}{add}{}", kept.get(close..).unwrap_or(""))
+}
+
+/// The value of the first attribute `name` in XML text `x`, in either quote style (`name="v"` or
+/// `name='v'`), when it has one. The name must start a token (`id` is not the end of `spid`).
+fn attr_value<'a>(x: &'a str, name: &str) -> Option<&'a str> {
+    let mut from = 0;
+    while let Some(i) = x.get(from..)?.find(name).map(|i| i + from) {
+        from = i + name.len();
+        let starts_token = x.get(..i).is_some_and(|before| before.ends_with(|c: char| c.is_whitespace() || c == '<'));
+        let Some(rest) = x.get(from..).map(str::trim_start).and_then(|r| r.strip_prefix('=')).map(str::trim_start) else { continue };
+        if !starts_token {
+            continue;
+        }
+        if let Some(q) = rest.chars().next().filter(|q| *q == '"' || *q == '\'') {
+            let body = rest.get(q.len_utf8()..)?;
+            return body.find(q).and_then(|e| body.get(..e));
+        }
+    }
+    None
+}
+
+/// A kept `<controls>` fragment without the controls whose `shapeId` is in `drop` (they are
+/// written from the model): a bare `<control>` child goes when it is one of them, and within an
+/// `mc:AlternateContent` child only those controls go, in each of its branches, the wrapper
+/// staying while a control remains. `None` when nothing is left. A fragment that doesn't parse
+/// is returned unchanged.
+fn without_controls(frag: &str, drop: &HashSet<u64>) -> Option<String> {
+    if drop.is_empty() {
+        return Some(frag.to_string());
+    }
+    let mut reader = Reader::from_str(frag);
+    let mut out = String::with_capacity(frag.len());
+    let (mut last, mut left, mut inside) = (0usize, 0usize, false);
+    loop {
+        let Ok(start) = usize::try_from(reader.buffer_position()) else { return Some(frag.to_string()) };
+        let ev = match reader.read_event() {
+            Ok(ev) => ev,
+            Err(_) => return Some(frag.to_string()),
+        };
+        let child = match ev {
+            Event::Eof => break,
+            Event::Start(e) if e.local_name().as_ref() == b"controls" => {
+                inside = true;
+                continue;
+            }
+            Event::End(e) if e.local_name().as_ref() == b"controls" => {
+                inside = false;
+                continue;
+            }
+            Event::Start(e) if inside => {
+                if reader.read_to_end(e.name()).is_err() {
+                    return Some(frag.to_string());
+                }
+                true
+            }
+            Event::Empty(_) if inside => true,
+            _ => false,
+        };
+        if !child {
+            continue;
+        }
+        let Ok(end) = usize::try_from(reader.buffer_position()) else { return Some(frag.to_string()) };
+        let text = frag.get(start..end).unwrap_or("");
+        let Some((kept, controls, dropped)) = controls_kept(text, drop) else { return Some(frag.to_string()) };
+        if dropped == 0 {
+            // Nothing of ours in it: the child stays as it is.
+            left += 1;
+        } else {
+            out.push_str(frag.get(last..start).unwrap_or(""));
+            if controls > 0 {
+                out.push_str(&kept);
+                left += 1;
+            }
+            last = end;
+        }
+    }
+    out.push_str(frag.get(last..).unwrap_or(""));
+    (left > 0).then_some(out)
+}
+
+/// One child of a `<controls>` element with the `<control>` elements numbered in `drop` taken
+/// out, wherever they are in it (a bare control, or the Choice and Fallback branches of an
+/// `mc:AlternateContent`), as (the text, the controls that remain, the controls taken out). The
+/// `shapeId` is read as the control reader reads it (an attribute, in either quote style). `None`
+/// when the child doesn't parse.
+fn controls_kept(child: &str, drop: &HashSet<u64>) -> Option<(String, usize, usize)> {
+    let mut reader = Reader::from_str(child);
+    let mut out = String::with_capacity(child.len());
+    let (mut last, mut kept, mut dropped) = (0usize, 0usize, 0usize);
+    loop {
+        let start = usize::try_from(reader.buffer_position()).ok()?;
+        let (e, has_end) = match reader.read_event().ok()? {
+            Event::Eof => break,
+            Event::Start(e) => (e, true),
+            Event::Empty(e) => (e, false),
+            _ => continue,
+        };
+        if e.local_name().as_ref() != b"control" {
+            // A wrapper or a branch: its controls are the events that follow.
+            continue;
+        }
+        let number =
+            e.try_get_attribute("shapeId").ok().flatten().and_then(|a| std::str::from_utf8(&a.value).ok().and_then(crate::controls::shape_number));
+        if has_end {
+            reader.read_to_end(e.name()).ok()?;
+        }
+        let end = usize::try_from(reader.buffer_position()).ok()?;
+        if number.is_some_and(|n| drop.contains(&n)) {
+            out.push_str(child.get(last..start)?);
+            last = end;
+            dropped += 1;
+        } else {
+            kept += 1;
+        }
+    }
+    out.push_str(child.get(last..)?);
+    Some((out, kept, dropped))
 }
 
 /// Rewrites relationship-id attributes (`r:id`, `r:embed`…: any attribute in the relationships

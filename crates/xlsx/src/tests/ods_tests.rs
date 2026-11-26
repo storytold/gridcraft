@@ -112,6 +112,19 @@ fn ods_repeats_merges_sheet_names_and_empty_tail_remain_sparse() {
 }
 
 #[test]
+fn ods_tables_are_the_only_sheets_with_unique_valid_names() {
+    let cell = r#"<table:table-row><table:table-cell office:value-type="float" office:value="1"/></table:table-row>"#;
+    let bytes = ods(&format!(
+        r#"<table:table table:name="Data">{cell}</table:table><table:table table:name="data">{cell}</table:table><table:table table:name="a/b">{cell}</table:table>"#
+    ));
+    let (wb, report) = read_ods(&bytes).unwrap();
+    let names: Vec<&str> = wb.sheets.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Data", "data (2)", "ab"]);
+    assert!(wb.sheets.iter().all(|s| s.value(CellRef::new(0, 0)) == Value::Number(1.0)));
+    assert!(report.warnings.iter().any(|w| w.contains("renamed")));
+}
+
+#[test]
 fn ods_dates_and_durations_use_formats_and_unsupported_values_stay_text() {
     let bytes = row(r#"
         <table:table-cell office:value-type="date" office:date-value="1900-02-28"/>
@@ -158,8 +171,8 @@ fn ods_rejects_bad_packages_encryption_and_truncated_xml() {
     for mime in [b"application/zip".as_slice(), b"application/vnd.oasis.opendocument.spreadsheet "] {
         assert!(read_ods(&make_zip(&[("mimetype", mime), ("content.xml", xml.as_bytes())])).is_err());
     }
-    let encrypted =
-        br#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:encryption-data/></manifest:manifest>"#;
+    // As LibreOffice writes it: the encryption data belongs to the encrypted file's entry.
+    let encrypted = br#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"><manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"><manifest:encryption-data manifest:checksum-type="SHA1/1K" manifest:checksum="AAAA"/></manifest:file-entry></manifest:manifest>"#;
     assert!(
         read_ods(&make_zip(&[("mimetype", MIME), ("META-INF/manifest.xml", encrypted), ("content.xml", xml.as_bytes())]))
             .unwrap_err()
@@ -200,6 +213,18 @@ fn ods_expansion_bounds_stop_small_repeat_bombs() {
         "x".repeat(1024)
     );
     assert!(matches!(read_ods(&ods(&text)), Err(IoError::TooLarge(_))));
+    // One row of cells each just under the 1 MiB cell limit, past 64 MiB in all: refused while
+    // the row is read, before it holds them all. The row's end is never reached.
+    let long = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "x".repeat(1024 * 1024 - 1));
+    let cells = ods(&format!(r#"<table:table table:name="Data"><table:table-row>{}"#, long.repeat(65)));
+    assert!(matches!(read_ods(&cells), Err(IoError::TooLarge(_))));
+    // A row repeated once more than its cells' text allows is refused too, and one that fits reads.
+    let cell = format!(r#"<table:table-cell office:value-type="string" office:string-value="{}"/>"#, "y".repeat(1024));
+    let rows = |n: u32| {
+        ods(&format!(r#"<table:table table:name="Data"><table:table-row table:number-rows-repeated="{n}">{cell}</table:table-row></table:table>"#))
+    };
+    assert!(read_ods(&rows(65_536)).is_ok());
+    assert!(matches!(read_ods(&rows(65_537)), Err(IoError::TooLarge(_))));
 }
 
 #[test]
