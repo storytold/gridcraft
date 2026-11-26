@@ -129,7 +129,7 @@ impl Unpacked {
             let mut f = z.by_index(i).unwrap();
             let mut v = vec![];
             f.read_to_end(&mut v).unwrap();
-            parts.insert(f.name().to_string(), v);
+            parts.insert(f.name().unwrap().to_string(), v);
         }
         Unpacked { parts }
     }
@@ -707,7 +707,7 @@ fn chart_sheet_entries_sharing_a_graph_are_checked_once() {
         let mut f = z.by_index(i).unwrap();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
-        parts.push((f.name().to_string(), data));
+        parts.push((f.name().unwrap().to_string(), data));
     }
     let extra: String = (0..3_000).map(|i| format!(r#"<sheet name="Copy{i}" sheetId="{}" r:id="rId2"/>"#, 100 + i)).collect();
     for (name, data) in &mut parts {
