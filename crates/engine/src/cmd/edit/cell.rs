@@ -27,7 +27,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
-        return Ok(Some(Cell { value: Value::text(input), formula: None, style, py: None }));
+        return Ok(Some(Cell { value: gridcraft_core::cap_value(Value::text(input)), formula: None, style, py: None }));
     }
     let is_formula = is_formula_input(input);
     if is_formula && gridcraft_model::python::is_py_formula(input) {
@@ -71,6 +71,8 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         return Ok(Some(cell));
     }
     let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    // Excel cuts typed text to 32,767 characters (after any leading apostrophe is dropped).
+    parsed.value = gridcraft_core::cap_value(parsed.value);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
     // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
     if parsed.format.is_none()
@@ -149,24 +151,66 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
             let selected = cx.sel.current();
             let range = if sheet == active_sheet && selected.contains(at) { selected } else { RangeRef::cell(at) };
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            // Excel forms no array from a constant: every cell of the selection takes the value.
+            if cell.formula.is_none() && !range.is_single() {
+                if range.count() > crate::fill::MAX_FILL_CELLS {
+                    return Err(EngineError::Other("That selection is too large to fill.".into()));
+                }
+                let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
+                for c in range.iter() {
+                    let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                    let filled = match by_style.get(&style) {
+                        Some(filled) => filled.clone(),
+                        None => {
+                            let filled = input_to_cell(&input, sheet, c, &mut cx.wb)?;
+                            by_style.insert(style, filled.clone());
+                            filled
+                        }
+                    };
+                    let sh = cx.sheet_mut(sheet)?;
+                    match filled {
+                        Some(f) => {
+                            sh.set_cell(c, f);
+                            crate::cmd::data::grow_autofilter(sh, c);
+                        }
+                        None => {
+                            sh.remove_cell(c);
+                        }
+                    }
+                    cx.touch(sheet, c);
+                }
+                return Ok(Json::Null);
+            }
             // A table header can't hold an array's value, and a table resizes under it.
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
             let sh = cx.sheet_mut(sheet)?;
-            // The array takes the whole range: other cells in it lose their contents.
-            for c in range.iter().skip(1).take(1_000_000) {
-                if let Some(old) = sh.cells.get(c).filter(|x| x.has_content()) {
-                    let style = old.style;
-                    sh.set_cell(c, Cell { style, ..Cell::default() });
-                }
+            // The array takes the whole range: other cells in it lose their contents. Walk the
+            // cells the sheet holds rather than every address, so a whole-column array clears
+            // all of its area, and mark each cleared cell so formulas reading it recalculate.
+            let cleared: Vec<(CellRef, StyleId)> =
+                sh.cells.iter_range(range).filter(|(c, x)| *c != range.start && x.has_content()).map(|(c, x)| (c, x.style)).collect();
+            for &(c, style) in &cleared {
+                sh.set_cell(c, Cell { style, ..Cell::default() });
             }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
+            // The array's results land in every cell of the range, stored or not, so readers of
+            // an empty result cell need the touch too. A huge range marks only the cells it held.
+            if range.count() <= 1_000_000 {
+                for c in range.iter() {
+                    cx.touch(sheet, c);
+                }
+            } else {
+                for (c, _) in cleared {
+                    cx.touch(sheet, c);
+                }
+            }
             return Ok(Json::Null);
         }
         let cell = input_to_cell(&input, sheet, at, &mut cx.wb)?;
@@ -275,7 +319,7 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                             if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                                 style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                             }
-                            Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style, py: None })
+                            Some(Cell { value: gridcraft_core::cap_value(Value::Text(text.as_str().into())), formula: None, style, py: None })
                         }
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
