@@ -517,7 +517,7 @@ fn grow_down(
     // neither its format nor anything else from it.
     let first_data_row = t_range.start.row.saturating_add(u32::from(t_header));
     // The cells this growth gives a calculated column's formula.
-    let mut filled: Vec<CellRef> = Vec::new();
+    let mut filled: std::collections::HashSet<CellRef> = std::collections::HashSet::new();
     let new_cells: Vec<CellRef> = if old_end_row < first_data_row {
         Vec::new()
     } else {
@@ -611,7 +611,7 @@ fn grow_down(
             if let Some(shifted) = shifted {
                 let formula = Some(std::sync::Arc::new(shifted));
                 sh_mut.set_cell(target_cell, Cell { value: gridcraft_core::Value::Empty, formula, style, py: None });
-                filled.push(target_cell);
+                filled.insert(target_cell);
             } else if style != own_style {
                 sh_mut.set_cell(target_cell, Cell { value: gridcraft_core::Value::Empty, formula: None, style, py: None });
             }
