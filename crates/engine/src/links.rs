@@ -106,16 +106,25 @@ pub fn cell_link(wb: &Workbook, sheet: usize, at: CellRef) -> Option<Hyperlink> 
     if target.is_empty() || matches!(value, gridcraft_core::Value::Error(_)) {
         return None;
     }
-    let target = if looks_like_web_address(&target) && wb.name(&target, sheet).is_none() { format!("https://{target}") } else { target };
+    // a defined name or a table of that spelling (`sales.data`) stays an internal target
+    let internal_name = wb.name(&target, sheet).is_some() || wb.table(&target).is_some();
+    let target = if looks_like_web_address(&target) && !internal_name { format!("https://{target}") } else { target };
     let external = !matches!(classify(&target), LinkKind::Internal(_));
     Some(Hyperlink { target, tooltip: None, external })
 }
 
 fn looks_like_web_address(t: &str) -> bool {
-    if t.contains(|c: char| c.is_whitespace() || matches!(c, '\\' | '!' | '#' | ':')) {
+    if t.contains(|c: char| c.is_whitespace() || matches!(c, '\\' | '!')) {
         return false;
     }
-    let host = t.split('/').next().unwrap_or(t);
+    // the host ends at the path, query or fragment (`google.com/x`, `google.com?q=1`, `google.com#top`)
+    let host = t.split(['/', '?', '#']).next().unwrap_or(t);
+    // with an optional port (`example.com:8443`); any other colon is a scheme or a sheet reference
+    let host = match host.split_once(':') {
+        Some((h, port)) if !port.is_empty() && port.len() <= 5 && port.bytes().all(|b| b.is_ascii_digit()) => h,
+        Some(_) => return false,
+        None => host,
+    };
     let Some((_, tld)) = host.rsplit_once('.') else { return false };
     tld.len() >= 2
         && tld.chars().all(|c| c.is_ascii_alphabetic())
