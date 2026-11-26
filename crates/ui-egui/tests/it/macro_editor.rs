@@ -20,14 +20,18 @@ fn harness_with(services: Services) -> Harness {
     session.new_workbook();
     let mut app = SheetApp::new(session, services);
     app.ui.ribbon_tab = "Automate".into();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(egui::vec2(1400.0, 900.0))
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.close_path(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(4);
     h
 }
@@ -566,14 +570,16 @@ fn the_editor_fits_a_narrow_window() {
         let mut session = Session::new();
         session.new_workbook();
         let app = SheetApp::new(session, Default::default());
-        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
-            |ui, app: &mut SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h =
+            egui_kittest::Harness::builder().with_context_setup(gridcraft_ui_egui::framework::install_headless).with_size(size).build_ui_state(
+                |ui, app: &mut SheetApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.close_path(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run_steps(4);
         three(&mut h);
         h.run_steps(4);

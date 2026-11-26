@@ -368,6 +368,24 @@ fn iterative_calculation_of_text_and_errors() {
     assert_eq!(t.get("B1"), Value::Error(CellError::Div0));
 }
 
+/// `&`, CONCAT and TEXTJOIN turn a number into at most 15 significant digits, decimal unless that
+/// would need 16 integer digits or more than 21 characters below 1.
+#[test]
+fn text_joins_convert_numbers_to_15_significant_digits() {
+    let mut t = T::new();
+    for (formula, text) in [
+        ("=(1E15-0.5)&\"\"", "1E+15"),
+        ("=(999999999999999)&\"\"", "999999999999999"),
+        ("=1234567890123456&\"\"", "1.23456789012346E+15"),
+        ("=(9.99999999999999E-9)&\"\"", "9.99999999999999E-09"),
+        ("=CONCAT(1/3*1E-5)", "3.33333333333333E-06"),
+        ("=TEXTJOIN(\",\",TRUE,1/3*1E-4,0.1+0.2)", "0.0000333333333333333,0.3"),
+    ] {
+        t.set("A1", formula);
+        assert_eq!(t.get("A1"), Value::from(text), "{formula}");
+    }
+}
+
 #[test]
 fn circular_references_without_iterative_calculation() {
     let mut t = T::new();
@@ -707,6 +725,53 @@ fn spill_into_the_old_area_of_a_blocked_neighbour() {
 }
 
 #[test]
+fn a_full_recalc_keeps_a_spill_from_an_array_that_grew_into_it() {
+    // Both arrays spill; in manual calculation F13 then grows over F14:G14, which C14's array
+    // fills. A full recalculation gives what an automatic one would: C14 keeps its cells and F13
+    // is #SPILL!, although F13 comes first in reading order.
+    let mut t = T::new();
+    t.set("J1", "1");
+    t.set("C14", "=SEQUENCE(1,7)");
+    t.set("F13", "=SEQUENCE(J1,2)");
+    assert_eq!([t.num("F13"), t.num("G13")], [1.0, 2.0]);
+    t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+    t.set("J1", "5");
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("F13"), Value::Error(CellError::Spill));
+    assert_eq!([t.num("C14"), t.num("F14"), t.num("G14"), t.num("I14")], [1.0, 4.0, 5.0, 7.0]);
+}
+
+#[test]
+fn a_full_recalc_lays_out_arrays_as_an_automatic_one_when_one_shrinks_for_another() {
+    // C1 grows into C3, which A3's array fills, and A3 grows into E3, which E1's array leaves.
+    // Automatic recalculation lays them out in reading order with each former area still filled:
+    // C1 is #SPILL! and A3 takes A3:E3. A full recalculation after the same edit in manual
+    // calculation gives the same sheet.
+    let build = |manual: bool| {
+        let mut t = T::new();
+        t.set("J1", "2");
+        t.set("C1", "=SEQUENCE(J1)");
+        t.set("A3", "=SEQUENCE(1,J1+1)");
+        t.set("E1", "=SEQUENCE(5-J1)");
+        assert_eq!([t.num("C2"), t.num("C3"), t.num("E3")], [2.0, 3.0, 3.0]);
+        if manual {
+            t.wb.calc.mode = gridcraft_model::CalcMode::Manual;
+        }
+        t.set("J1", "4");
+        if manual {
+            t.calc.recalc_all(&mut t.wb);
+        }
+        t
+    };
+    let (automatic, full) = (build(false), build(true));
+    assert_eq!(automatic.get("C1"), Value::Error(CellError::Spill));
+    assert_eq!([automatic.num("A3"), automatic.num("C3"), automatic.num("E3")], [1.0, 3.0, 5.0]);
+    for cell in ["A1", "C1", "C2", "C3", "C4", "E1", "E2", "A3", "B3", "C3", "D3", "E3"] {
+        assert_eq!(full.get(cell), automatic.get(cell), "{cell}");
+    }
+}
+
+#[test]
 fn formulas_reading_an_array_that_loses_a_spill_conflict_read_spill_errors() {
     // Two arrays of one recalculation want the same empty cell: the one laid out second is
     // #SPILL!, and the formulas that read it in that pass (at its anchor, through `A2#`, or over
@@ -753,6 +818,42 @@ fn arrays_do_not_spill_in_tables() {
     assert_eq!(t.get("C5"), Value::Empty);
     assert_eq!(t.get("H1"), Value::Error(CellError::Spill));
     assert_eq!(t.num("E4"), 4.0);
+}
+
+#[test]
+fn one_value_array_in_a_table_is_not_a_spill() {
+    // Excel shows a one-value dynamic-array result in a table column; two or more is #SPILL! (#2335).
+    let table = |range: &str| gridcraft_model::Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse(range).unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![],
+        style: String::new(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    };
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().tables.push(table("B3:C6"));
+    t.set("A1", "7");
+    t.set("A2", "8");
+    t.set("C4", "=FILTER(A1:A2,A1:A2>7)");
+    t.set("C5", "=FILTER(A1:A2,A1:A2>0)");
+    t.set("H4", "=FILTER(A1:A2,A1:A2>7)");
+    t.set("D4", "=ROWS(C4#)");
+    assert_eq!((t.num("C4"), t.num("H4"), t.num("D4")), (8.0, 8.0, 1.0));
+    assert_eq!(t.get("C5"), Value::Error(CellError::Spill));
+    // Recalculating again keeps the one-value result.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("C4"), 8.0);
+    assert_eq!(t.num("D4"), 1.0);
 }
 
 #[test]
@@ -1970,6 +2071,65 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// Sorting and ranking compare numbers exactly while `=` and COUNTIF compare them at 15
+/// significant digits. Every expectation was observed in Excel 365 with these fixtures
+/// (`=0.1+0.2` is 0.30000000000000004): 0.3 sorts first whatever the input order.
+#[test]
+fn sorts_and_ranks_compare_numbers_exactly() {
+    let mut t = T::new();
+    for (at, input) in [
+        // The noisy value first, then the exact one first.
+        ("A1", "=0.1+0.2"),
+        ("B1", "e"),
+        ("A2", "0.3"),
+        ("B2", "t"),
+        ("D1", "0.3"),
+        ("E1", "t"),
+        ("D2", "=0.1+0.2"),
+        ("E2", "e"),
+        ("G1", "=100+1E-14"),
+        ("H1", "e"),
+        ("G2", "100"),
+        ("H2", "t"),
+    ] {
+        t.set(at, input);
+    }
+    let e = 0.1 + 0.2;
+    let n = Value::Number;
+    let s = |x: &str| Value::from(x);
+    let cases: Vec<(&str, Value)> = vec![
+        ("=A1=A2", Value::Bool(true)),
+        ("=COUNTIF(A1:A2,0.3)", n(2.0)),
+        ("=INDEX(SORT(A1:B2),1,2)", s("t")),
+        ("=INDEX(SORT(D1:E2),1,2)", s("t")),
+        ("=INDEX(SORT(A1:B2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORT(D1:E2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORT(G1:H2),1,2)", s("t")),
+        ("=INDEX(SORT(G1:H2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORTBY(B1:B2,A1:A2),1,1)", s("t")),
+        ("=INDEX(SORTBY(E1:E2,D1:D2),1,1)", s("t")),
+        ("=INDEX(SORTBY(B1:B2,A1:A2,-1),1,1)", s("e")),
+        ("=INDEX(SORTBY(E1:E2,D1:D2,-1),1,1)", s("e")),
+        // Already exact: UNIQUE, RANK, LARGE/SMALL, MODE.
+        ("=ROWS(UNIQUE(A1:A2))", n(2.0)),
+        ("=RANK.EQ(0.3,A1:A2)", n(2.0)),
+        ("=RANK.EQ(0.3,A1:A2,1)", n(1.0)),
+        ("=RANK.AVG(0.3,A1:A2)", n(2.0)),
+        ("=RANK.EQ(0.3,A1)", Value::Error(CellError::NA)),
+        ("=LARGE(A1:A2,1)", n(e)),
+        ("=SMALL(A1:A2,1)", n(0.3)),
+        ("=MODE.SNGL(A1:A2,5)", Value::Error(CellError::NA)),
+    ];
+    let mut wrong = Vec::new();
+    for (formula, expected) in cases {
+        let got = crate::evaluate(&t.wb, 0, c("Z1"), formula);
+        if got != expected {
+            wrong.push(format!("{formula}: got {got:?}, Excel {expected:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 /// `@` intersects a reference with the formula's row (a column range) or column (a row range);
 /// a 2D range both (circular when it includes the formula's cell); a range the formula does not
 /// line up with gives #VALUE!. An array gives its top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
@@ -2329,6 +2489,85 @@ fn median_large_values_recalculate_dependents() {
     for cell in ["C1", "C2"] {
         assert!((t.num(cell) + 1.3).abs() < 1e-14);
     }
+}
+
+/// #2183: `INDEX(…):INDEX(…):…` used to re-walk each operand of the left-associative range chain,
+/// costing 2^k for k operands (28 took 40 s; 60 would take millennia), on open and on every edit.
+#[test]
+fn range_operator_chain_precedents_are_linear() {
+    let operands: Vec<String> = (1..=60).map(|i| format!("INDEX(A{i},1)")).collect();
+    let src = format!("=SUM({})", operands.join(":"));
+    let e = gridcraft_formula::parse(&src).unwrap();
+    let wb = Workbook::new();
+    // With the old 2^k walk this call would never return; #2183 asks for under 100 ms.
+    #[allow(clippy::disallowed_methods)] // a native test: the clock is there
+    let t0 = std::time::Instant::now();
+    let (areas, dynamic) = crate::eval::precedents(&wb, 0, &e);
+    let took = t0.elapsed();
+    assert!(took < std::time::Duration::from_millis(100), "precedents took {took:?}");
+    assert!(!dynamic);
+    // The chain covers A1:A60, not only the 60 cells named in it.
+    let whole = gridcraft_core::RangeRef::new(c("A1"), c("A60"));
+    assert!(areas.iter().any(|a| a.sheet == 0 && a.range == whole), "{areas:?}");
+    // Each node is visited once: 60 references plus one box per range operator.
+    assert!(areas.len() < 200, "{} areas", areas.len());
+
+    // Through the recalculation engine: setting it finishes and editing a cell in the box recalculates.
+    let mut t = T::new();
+    for i in 1..=60 {
+        t.set(&format!("A{i}"), "1");
+    }
+    t.set("B1", &src);
+    assert_eq!(t.num("B1"), 60.0);
+    t.set("A30", "5");
+    assert_eq!(t.num("B1"), 64.0);
+}
+
+/// A chained range of plain references (`A1:B2:C3`, which the parser can't fold into one
+/// reference) covers their bounding box, as the evaluator expands it: an edit inside the box but
+/// outside each operand still recalculates.
+#[test]
+fn chained_plain_range_precedents_cover_the_bounding_box() {
+    let e = gridcraft_formula::parse("=SUM(A1:B2:C3)").unwrap();
+    let (areas, dynamic) = crate::eval::precedents(&Workbook::new(), 0, &e);
+    assert!(!dynamic);
+    let whole = gridcraft_core::RangeRef::new(c("A1"), c("C3"));
+    assert!(areas.iter().any(|a| a.sheet == 0 && a.range == whole), "{areas:?}");
+
+    let mut t = T::new();
+    t.set("A1", "1");
+    t.set("E1", "=SUM(A1:B2:C3)");
+    assert_eq!(t.num("E1"), 1.0);
+    t.set("C1", "4");
+    assert_eq!(t.num("E1"), 5.0);
+}
+
+/// `precedents` walks with an explicit stack: an expression nested deeper than any formula
+/// within the length limit can build still finds its references, on a small stack.
+#[test]
+fn precedents_of_deep_nesting_do_not_recurse() {
+    let (areas, dynamic) = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(|| {
+            let mut e = gridcraft_formula::parse("=A1").unwrap();
+            for _ in 0..10_000 {
+                e = gridcraft_formula::Expr::Paren(Box::new(e));
+            }
+            let found = crate::eval::precedents(&Workbook::new(), 0, &e);
+            // Dropping the deep tree recurses; leak it so only `precedents` is under test.
+            std::mem::forget(e);
+            found
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(!dynamic);
+    assert_eq!(areas.len(), 1);
+    // Shallow nesting stays static.
+    let e = gridcraft_formula::parse("=((((A1))))").unwrap();
+    let (areas, dynamic) = crate::eval::precedents(&Workbook::new(), 0, &e);
+    assert!(!dynamic);
+    assert_eq!(areas.len(), 1);
 }
 
 #[test]
@@ -2879,6 +3118,105 @@ fn formulas_read_a_dirty_python_cell_after_it_is_laid_out() {
     t.set("B2", "");
     assert_eq!((t.num("B1"), t.num("B2")), (5.0, 6.0));
     assert_eq!((t.num("A1"), t.num("A2"), t.num("A3")), (5.0, 100.0, 111.0));
+}
+
+#[test]
+fn disjoint_spills_do_not_scan_every_spill_owner() {
+    // Many independent two-cell arrays: write-back must not walk all earlier owners for each one.
+    let mut t = T::new();
+    for i in 1..=2000 {
+        t.wb.sheet_mut(0).unwrap().cells.set(c(&format!("A{}", i * 2 - 1)), Cell::formula(Formula::new("=SEQUENCE(2)")));
+    }
+    crate::recalc::OWNER_SCANS.with(|n| n.set(0));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!((t.num("A2"), t.num("A4000")), (2.0, 2.0));
+    let scans = crate::recalc::OWNER_SCANS.with(|n| n.get());
+    assert!(scans < 10, "{scans} owner scans for 2000 disjoint spills");
+}
+
+#[test]
+fn overlapping_spill_edit_sequences_match_a_full_recalc() {
+    // Random short edit sequences on a small grid of arrays that run into each other (sizes from
+    // shared cells, so one edit resizes several at once), with constants and clears in their way.
+    // After every edit the incremental result must equal a full recalc of the same workbook.
+    let seeds: u64 = std::env::var("GRIDCRAFT_SPILL_SEEDS").ok().and_then(|v| v.parse().ok()).unwrap_or(200);
+    let steps: usize = std::env::var("GRIDCRAFT_SPILL_STEPS").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let only: Option<u64> = std::env::var("GRIDCRAFT_SPILL_SEED").ok().and_then(|v| v.parse().ok());
+    let next = |state: &mut u64| {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    };
+    let seeds: Vec<u64> = match only {
+        Some(s) => vec![s],
+        None => (0..seeds).collect(),
+    };
+    for seed in seeds {
+        let mut state = seed;
+        let mut t = T::new();
+        // Sizes in J1:J4.
+        for (i, n) in [2, 3, 1, 4].iter().enumerate() {
+            t.set(&format!("J{}", i + 1), &n.to_string());
+        }
+        let mut log: Vec<(String, String)> = Vec::new();
+        for step in 0..steps {
+            let r = next(&mut state);
+            let at = format!("{}{}", (b'A' + (r % 6) as u8) as char, 1 + (r >> 8) % 6);
+            let kind = (r >> 16) % 14;
+            let (at, input) = match kind {
+                0..=3 => {
+                    let a = 1 + (r >> 24) % 4;
+                    let b = 1 + (r >> 28) % 4;
+                    (at, format!("=SEQUENCE($J${a},$J${b})"))
+                }
+                4 => (at, format!("=SEQUENCE({},{})", 1 + (r >> 24) % 3, 1 + (r >> 28) % 3)),
+                5 => (format!("J{}", 1 + (r >> 24) % 4), (1 + (r >> 28) % 4).to_string()),
+                6 => (at, "x".to_string()),
+                7 | 8 => (at, String::new()),
+                9 => (format!("K{}", 1 + (r >> 24) % 6), "=SUM(A1:F6)".to_string()),
+                10 => {
+                    // An earlier edit again (often putting back what a cell held before, as undo does).
+                    match log.len() {
+                        0 => (at, String::new()),
+                        n => log[(r >> 24) as usize % n].clone(),
+                    }
+                }
+                11 => (format!("{}{}", (b'A' + ((r >> 24) % 6) as u8) as char, 1 + (r >> 32) % 6), (1 + (r >> 40) % 3).to_string()),
+                // Several cells in one edit (a fill, or clearing a range): a 2x2 block from `at`.
+                12 => (format!("{at}+"), String::new()),
+                _ => (format!("{at}+"), format!("=SEQUENCE($J${},$J${})", 1 + (r >> 24) % 4, 1 + (r >> 28) % 4)),
+            };
+            log.push((at.clone(), input.clone()));
+            if let Some(from) = at.strip_suffix('+') {
+                let from = c(from);
+                let keys: Vec<(usize, CellRef)> =
+                    (0..2).flat_map(|dr| (0..2).map(move |dc| (0, CellRef { row: from.row + dr, col: from.col + dc }))).collect();
+                for k in &keys {
+                    let cell = if input.is_empty() { Cell::value(Value::Empty) } else { Cell::formula(Formula::new(&input)) };
+                    t.wb.sheet_mut(0).unwrap().cells.set(k.1, cell);
+                }
+                t.calc.cells_changed(&mut t.wb, &keys);
+            } else {
+                t.set(&at, &input);
+            }
+            let mut fresh = t.wb.clone();
+            Calc::new().recalc_all(&mut fresh);
+            let (a, b) = (t.wb.sheet(0).unwrap(), fresh.sheet(0).unwrap());
+            for row in 0..12 {
+                for col in 0..12 {
+                    let cell = CellRef { row, col };
+                    assert_eq!(a.value(cell), b.value(cell), "seed {seed} step {step}: {cell} incremental vs full recalc after {log:?}");
+                }
+            }
+            let mut ka: Vec<_> = a.spill_ranges.iter().map(|(k, v)| (*k, *v)).collect();
+            let mut kb: Vec<_> = b.spill_ranges.iter().map(|(k, v)| (*k, *v)).collect();
+            ka.sort_by_key(|(k, _)| (k.row, k.col));
+            kb.sort_by_key(|(k, _)| (k.row, k.col));
+            assert_eq!(ka, kb, "seed {seed} step {step}: spill layout after {log:?}");
+        }
+    }
 }
 
 /// A computed criterion whose formula runs a database function over the same criteria counts as

@@ -58,4 +58,7 @@ if command -v iconutil >/dev/null; then
 else
   echo "warning: iconutil not found (macOS only); gridcraft.icns not regenerated" >&2
 fi
+# The nightly channel's set: same artwork, deeper field; every frame rendered at its own size.
+python3 "$ROOT/packaging/nightly-icons.py"
+
 echo "icons written to $DIR"

@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Tendință liniară",
+        "Growth Trend" => "Tendință de creștere",
         "Diagram" => "Schemă",
         "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
@@ -364,12 +366,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Salvare",
         "Save As" => "Salvare ca",
         "Export" => "Exportare",
+        "Minimize" => "Minimizare",
+        "Maximize" => "Maximizare",
+        "Restore Down" => "Restaurare",
         "Close" => "Închidere",
         "Options" => "Opțiuni",
         "Blank workbook" => "Registru gol",
         "Recent" => "Recente",
         "No recent workbooks yet." => "Încă niciun registru recent.",
         "More workbooks" => "Mai multe registre",
+        "More entries not shown" => "Alte elemente nu sunt afișate",
         "Modified" => "Modificat",
         "Not available" => "Indisponibil",
         "Just now" => "Chiar acum",
@@ -764,7 +770,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Culoare celulă",
         "A to Z" => "De la A la Z",
         "Z to A" => "De la Z la A",
-        "+ Add Level" => "+ Adăugare nivel",
+        "Add Level" => "Adăugare nivel",
+        "Delete Level" => "Ștergere nivel",
+        "Copy Level" => "Copiere nivel",
+        "Move Up" => "Mutare în sus",
+        "Move Down" => "Mutare în jos",
+        "Order" => "Ordine",
+        "Sort On" => "Sortare pe baza",
+        "Sort|Column" => "Coloană",
+        "Column {letters}" => "Coloană {letters}",
+        "Smallest to Largest" => "De la cel mai mic la cel mai mare",
+        "Largest to Smallest" => "De la cel mai mare la cel mai mic",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Închideți caseta de dialog Sortare înainte de a comuta sau a modifica foile de lucru."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Reveniți la foaia de lucru inițială pentru a sorta sau anulați.",
         "New…" => "Nou…",
         "Edit…" => "Editare…",
         "Name" => "Nume",
@@ -996,6 +1016,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show as Running Total" => "Afișare ca total cumulat",
         "Summarize by Average" => "Rezumare după medie",
         "Summarize by Count" => "Rezumare după numărare",
+        "Summarize by Distinct Count" => "Rezumare după numărare distinctă",
         "Summarize by Max" => "Rezumare după maxim",
         "Summarize by Min" => "Rezumare după minim",
         "Summarize by Sum" => "Rezumare după sumă",
@@ -1068,6 +1089,124 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Afișare",
         "Collapse dialog" => "Restrângere casetă de dialog",
         "Expand dialog" => "Extindere casetă de dialog",
+        "Distinct Count" => "Numărare distinctă",
+        "A calculated field can't use Distinct Count." => "Un câmp calculat nu poate folosi numărarea distinctă.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Acest registru de lucru conține un tabel pivot cu un câmp de valori „Numărare distinctă”. În fișierul .xlsx este salvat ca o Numărare simplă, împreună cu un marcaj pe care îl citește doar GridCraft, așa că Reîmprospătare în Excel îl transformă într-o numărare simplă."
+        }
+        "Numerical Count" => "Numărare numerică",
+        "Minimum" => "Minim",
+        "Maximum" => "Maxim",
+        "Circular References: {cell}" => "Referințe circulare: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Lățime: {chars} ({pixels} pixeli)",
+        "Height: {points} ({pixels} pixels)" => "Înălțime: {points} ({pixels} pixeli)",
+        "Picture in cell" => "Imagine în celulă",
+        "Picture: {alt}" => "Imagine: {alt}",
+        "Format Control: {name}" => "Formatare control: {name}",
+        "Error at character {position}: {message}" => "Eroare la caracterul {position}: {message}",
+        "Macro definitions are not supported in equations." => "Definițiile de macrocomenzi nu sunt acceptate în ecuații.",
+        "A % can't be combined with a link in an equation." => "Un % nu poate fi combinat cu un link într-o ecuație.",
+        "Equations can nest at most 32 levels deep." => "Ecuațiile pot fi imbricate pe cel mult 32 de niveluri.",
+        "An equation can be at most 4096 bytes long." => "O ecuație poate avea cel mult 4096 de octeți.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "O ecuație poate avea cel mult 2500 de celule de matrice (rânduri înmulțite cu cel mai lat rând)."
+        }
+        "This equation is too large to draw." => "Această ecuație este prea mare pentru a fi desenată.",
+        "This equation could not be laid out." => "Această ecuație nu a putut fi așezată în pagină.",
+        "Saved macro “{name}” ({steps} step)" => "Macrocomanda „{name}” a fost salvată ({steps} pas)",
+        "Saved macro “{name}” ({steps} steps)" => "Macrocomanda „{name}” a fost salvată (pași: {steps})",
+        "without {key}: another macro took it while recording" => "fără {key}: altă macrocomandă l-a preluat în timpul înregistrării",
+        "Recording stopped" => "Înregistrare oprită",
+        "Macro “{name}” stopped: {message}" => "Macrocomanda „{name}” s-a oprit: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Macrocomanda „{name}” a rulat ({steps} pas)",
+        "Ran macro “{name}” ({steps} steps)" => "Macrocomanda „{name}” a rulat (pași: {steps})",
+        "Double superscript" => "Exponent dublu",
+        "Double subscript" => "Indice dublu",
+        "Extra }" => "} în plus",
+        "Unexpected end of input in a macro argument" => "Sfârșit neașteptat al intrării într-un argument de macro",
+        "Expected \\right after \\left" => "Se aștepta \\right după \\left",
+        "\\middle must be within \\left and \\right" => "\\middle trebuie să fie între \\left și \\right",
+        "Invalid environment name" => "Nume de mediu nevalid",
+        "Expected \\end after environment body" => "Se aștepta \\end după conținutul mediului",
+        "Expected URL" => "Se aștepta un URL",
+        "\\tag requires an argument" => "\\tag necesită un argument",
+        "only one infix operator per group" => "Un singur operator infix per grup",
+        "Expected color token" => "Se aștepta o culoare",
+        "Expected size for \\raisebox" => "Se aștepta o dimensiune pentru \\raisebox",
+        "Expected size for \\rule width" => "Se aștepta o dimensiune pentru lățimea \\rule",
+        "Expected size for \\rule height" => "Se aștepta o dimensiune pentru înălțimea \\rule",
+        "Cannot use both \\tag and \\nonumber in the same row" => "\\tag și \\nonumber nu pot fi folosite pe același rând",
+        "Multiple \\tag in a row" => "Mai multe \\tag pe un rând",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag trebuie să fie la sfârșitul rândului, după corpul ecuației",
+        "Multiple \\nonumber in a row" => "Mai multe \\nonumber pe un rând",
+        "\\nonumber must appear at the end of the row" => "\\nonumber trebuie să fie la sfârșitul rândului",
+        "Too many tab characters: &" => "Prea multe caractere de tabulare: &",
+        "Invalid column alignment for array" => "Aliniere de coloană nevalidă pentru array",
+        "Expected column alignment character" => "Se aștepta un caracter de aliniere a coloanei",
+        "Expected l or c or r" => "Se aștepta l, c sau r",
+        "Expected ]" => "Se aștepta ]",
+        "Unexpected end of CD row after @" => "Sfârșit neașteptat al rândului CD după @",
+        "Invalid column alignment for subarray" => "Aliniere de coloană nevalidă pentru subarray",
+        "{subarray} can contain only one column" => "{subarray} poate conține o singură coloană",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "prooftree are un \\LeftLabel sau \\RightLabel fără o comandă de inferență după el"
+        }
+        "Recursion limit exceeded" => "Limita de recursivitate a fost depășită",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Prea multe expandări de macro: buclă infinită sau setarea maxExpand prea mică"
+        }
+        "Expected raw style for \\htmlStyle" => "Se aștepta un stil brut pentru \\htmlStyle",
+        "\\verb assertion failed" => "Verificarea \\verb a eșuat",
+        "Undefined control sequence: {name}" => "Secvență de control nedefinită: {name}",
+        "Expected '{expected}', got '{got}'" => "Se aștepta '{expected}', s-a găsit '{got}'",
+        "Expected group after '{symbol}'" => "Se aștepta un grup după '{symbol}'",
+        "Expected delimiter as argument to '{function}'" => "Se aștepta un delimitator ca argument pentru '{function}'",
+        "Expected group as argument to '{function}'" => "Se aștepta un grup ca argument pentru '{function}'",
+        "Got function '{function}' with no arguments as superscript" => "Funcția '{function}' fără argumente folosită ca exponent",
+        "Got function '{function}' with no arguments as subscript" => "Funcția '{function}' fără argumente folosită ca indice",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Funcția '{function}' fără argumente folosită ca argument pentru '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Funcția '{function}' fără argumente folosită ca \\tag",
+        "Can't use function '{function}' in text mode" => "Funcția '{function}' nu poate fi folosită în modul text",
+        "Can't use function '{function}' in math mode" => "Funcția '{function}' nu poate fi folosită în modul matematic",
+        "Invalid color: '{color}'" => "Culoare nevalidă: '{color}'",
+        "Invalid size: '{size}'" => "Dimensiune nevalidă: '{size}'",
+        "Invalid unit: '{unit}'" => "Unitate nevalidă: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Delimitator '{delimiter}' nevalid după '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Tip de delimitator '{type}' nevalid după '{function}'",
+        "Invalid delimiter type '{type}'" => "Tip de delimitator '{type}' nevalid",
+        "No such environment: {name}" => "Mediu necunoscut: {name}",
+        "Expected argument to \\begin{{name}}" => "Se aștepta un argument pentru \\begin{{name}}",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Nepotrivire: \\begin{{begin}} închis de \\end{{end}}",
+        "{command} valid only within array environment" => "{command} este valid doar într-un mediu array",
+        "Mismatched {command}" => "{command} fără pereche",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "Se aștepta &, \\\\, \\cr sau \\end, s-a găsit '{got}'",
+        "Unknown column alignment: {alignment}" => "Aliniere de coloană necunoscută: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Prea multe formule pe un rând: se așteptau {expected}, s-au găsit {got}",
+        "Unknown CD directive: @{directive}" => "Directivă CD necunoscută: @{directive}",
+        "Expected argument for {command}" => "Se aștepta un argument pentru {command}",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "{command} necesită {count} premisă(e), dar sunt disponibile doar {available}"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} este valid doar ca o comandă bussproofs acceptată în prooftree"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => {
+            "prooftree s-a încheiat cu {count} element(e) în stiva de demonstrație, se aștepta 1"
+        }
+        "\\@char has non-numeric argument {argument}" => "\\@char are un argument nenumeric {argument}",
+        "\\@char with invalid code point {code}" => "\\@char cu punct de cod nevalid {code}",
+        "Invalid environment name character: {character}" => "Caracter nevalid în numele mediului: {character}",
+        "Copy Cells" => "Copiere celule",
+        "Fill Series" => "Umplere serie",
+        "Fill Formatting Only" => "Umplere doar formate",
+        "Fill Without Formatting" => "Umplere fără formatare",
+        "Fill Days" => "Umplere zile",
+        "Fill Weekdays" => "Umplere zile lucrătoare",
+        "Fill Months" => "Umplere luni",
+        "Fill Years" => "Umplere ani",
+        "Auto Fill Options" => "Opțiuni de umplere automată",
         _ => return None,
     })
 }
