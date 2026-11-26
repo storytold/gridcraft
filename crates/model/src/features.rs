@@ -663,6 +663,12 @@ pub struct Chart {
     #[serde(default)]
     pub data_table: Option<ChartDataTable>,
     pub gridlines: bool,
+    /// Colour of the major gridlines; `None` is GridCraft's light grey.
+    #[serde(default)]
+    pub gridline_color: Option<Color>,
+    /// Width of the major gridlines in points; `None` is the default hairline.
+    #[serde(default)]
+    pub gridline_width: Option<f32>,
     pub style: u32,
     /// Doughnut hole size as a percentage of the plot radius (Excel's 10–90 range). New charts and
     /// XLSX imports use Excel's 75; a document saved before this field existed reads as 50.
@@ -1367,6 +1373,8 @@ mod series_kind_tests {
             style: 2,
             hole_size: 75,
             first_slice_angle: 0,
+            gridline_color: Default::default(),
+            gridline_width: Default::default(),
             x_title: None,
             y_title: None,
             source: None,
@@ -1505,6 +1513,8 @@ mod tests {
     #[test]
     fn chart_without_hole_size_keeps_the_legacy_hole() {
         let chart = Chart {
+            gridline_width: None,
+            gridline_color: None,
             id: 1,
             kind: ChartKind::Doughnut,
             anchor: Anchor::default(),

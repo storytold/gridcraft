@@ -920,6 +920,8 @@ mod tests {
     fn push_object(s: &mut Sheet, kind: ObjKind, id: u32, anchor: Anchor) {
         match kind {
             ObjKind::Chart => s.charts.push(Chart {
+                gridline_width: None,
+                gridline_color: None,
                 id,
                 kind: ChartKind::default(),
                 anchor,

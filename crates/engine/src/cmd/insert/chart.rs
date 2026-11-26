@@ -291,6 +291,8 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
+        gridline_color: None,
+        gridline_width: None,
     };
     Ok((sheet, chart))
 }

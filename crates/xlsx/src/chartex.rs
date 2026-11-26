@@ -150,6 +150,8 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         (!text.trim().is_empty()).then_some(text)
     };
     Some(Chart {
+        gridline_width: None,
+        gridline_color: None,
         id: 0,
         kind,
         anchor: Default::default(),

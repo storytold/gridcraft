@@ -35,6 +35,8 @@ fn all_trendlines() -> Vec<Trendline> {
 
 fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
     Chart {
+        gridline_width: None,
+        gridline_color: None,
         id,
         kind,
         anchor: Anchor { cell: CellRef::new(id * 16, 3), width: 480.0, height: 300.0, ..Anchor::default() },

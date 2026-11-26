@@ -1,4 +1,4 @@
-use super::{AXIS, AXIS_TITLE_SIZE, Chart, ChartData, Ctx, DARK_TEXT, Fmt, GRID, HAlign, LABEL_SIZE, PI, Prim, Rgba, Scale, TEXT, VAlign, WHITE};
+use super::{AXIS, AXIS_TITLE_SIZE, Chart, ChartData, Ctx, DARK_TEXT, Fmt, HAlign, LABEL_SIZE, PI, Prim, Rgba, Scale, TEXT, VAlign, WHITE};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Bx {
@@ -127,7 +127,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         for (v, t) in &ylabels {
             let yy = plot.bottom() - y.scale.frac(*v) * plot.h;
             if grid {
-                ctx.hline(plot.x, plot.right(), yy, GRID, 0.75);
+                ctx.hline(plot.x, plot.right(), yy, ctx.grid.0, ctx.grid.1);
             }
             ctx.text(plot.x - 4.0, yy, t, ls, TEXT, (HAlign::Right, VAlign::Middle));
         }
@@ -208,7 +208,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         for (i, (v, t)) in ylabels.iter().enumerate() {
             let xx = plot.x + y.scale.frac(*v) * plot.w;
             if grid {
-                ctx.vline(xx, plot.y, plot.bottom(), GRID, 0.75);
+                ctx.vline(xx, plot.y, plot.bottom(), ctx.grid.0, ctx.grid.1);
             }
             if i % k == 0 {
                 ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, (HAlign::Center, VAlign::Top));

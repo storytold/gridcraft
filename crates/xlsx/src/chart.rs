@@ -197,6 +197,33 @@ const DASHES: [(LineDash, &str); 11] = [
 
 const EMU_PER_PT: f64 = 12_700.0;
 
+/// Excel's gridlines when the file doesn't format them (measured on a synthetic chart): mid grey
+/// in a chart saved by Excel 2010 or later (it has a `c14:style`), black in an older one.
+const GRID_C14: u32 = 0x898989;
+/// GridCraft's own gridlines, written out so Excel shows the same.
+const GRID_DEFAULT: u32 = 0xD9D9D9;
+
+/// The major gridlines of the value axes: whether there are any, their colour and their width.
+/// An `a:noFill` line hides them; a colour the file doesn't give is Excel's default for the file.
+fn read_gridlines(root: &El, val_axes: &[&El]) -> (bool, Option<Color>, Option<f32>) {
+    let Some(g) = val_axes.iter().find_map(|a| a.child("majorGridlines")) else { return (false, None, None) };
+    let ln = g.path(&["spPr", "ln"]);
+    if ln.is_some_and(|l| l.child("noFill").is_some()) {
+        return (false, None, None);
+    }
+    let c14 = root.kids("AlternateContent").any(|a| a.path(&["Choice", "style"]).is_some());
+    let color = ln.and_then(|l| l.child("solidFill")).and_then(dml_color).unwrap_or(Color::Rgb(if c14 { GRID_C14 } else { 0 }));
+    let width = ln.and_then(|l| l.attr_f64("w")).map(|w| w / EMU_PER_PT).filter(|w| w.is_finite() && *w >= 0.0).map(|w| w.min(1584.0) as f32);
+    (true, Some(color), width)
+}
+
+/// The `c:spPr` of a chart's gridlines: its colour, else GridCraft's; its width, else 0.75 pt.
+fn gridlines_sp(ch: &Chart, wb: &Workbook) -> String {
+    let color = ch.gridline_color.and_then(|c| srgb(&c, &wb.theme)).unwrap_or_else(|| format!("<a:srgbClr val=\"{GRID_DEFAULT:06X}\"/>"));
+    let w = ch.gridline_width.filter(|w| w.is_finite() && *w >= 0.0).map_or(9525, |w| (f64::from(w).min(1584.0) * EMU_PER_PT).round() as i64);
+    format!("<c:spPr><a:ln w=\"{w}\"><a:solidFill>{color}</a:solidFill></a:ln></c:spPr>")
+}
+
 fn group_kind(g: &El) -> Option<ChartKind> {
     let grouping = g.child_val("grouping").unwrap_or("standard");
     let stacked = grouping == "stacked";
@@ -426,6 +453,8 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         Some("l") => LegendPos::Left,
         Some(_) => LegendPos::Right,
     };
+    let val_axes: Vec<&El> = plot.map(|p| p.kids("valAx").collect()).unwrap_or_default();
+    let (gridlines, gridline_color, gridline_width) = root.map_or((dc.gridlines, None, None), |r| read_gridlines(r, &val_axes));
     let hole_size =
         if plot.is_some_and(|p| p.child("doughnutChart").is_some()) { (dc.hole_size * 100.0).round().clamp(10.0, 90.0) as u8 } else { 75 };
     let mut ch = Chart {
@@ -442,7 +471,9 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
             vertical_border: t.vertical_border,
             outline: t.outline,
         }),
-        gridlines: dc.gridlines,
+        gridlines,
+        gridline_color,
+        gridline_width,
         style: dc.style,
         hole_size,
         first_slice_angle: dc.first_slice_angle,
@@ -943,6 +974,8 @@ struct Ax<'a> {
     pos: &'a str,
     delete: bool,
     grid: bool,
+    /// The gridlines' `c:spPr`.
+    grid_sp: &'a str,
     title: Option<&'a str>,
     crosses_max: bool,
 }
@@ -956,7 +989,7 @@ fn axis_xml(a: &Ax<'_>) -> String {
         a.pos
     );
     if a.grid {
-        s.push_str("<c:majorGridlines/>");
+        let _ = write!(s, "<c:majorGridlines>{}</c:majorGridlines>", a.grid_sp);
     }
     if let Some(t) = a.title {
         s.push_str(&title_xml(t));
@@ -1003,6 +1036,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         _ => s.push_str("<c:autoTitleDeleted val=\"1\"/>"),
     }
     s.push_str("<c:plotArea><c:layout/>");
+    let grid_sp = gridlines_sp(ch, wb);
     let all: Vec<(usize, &Series)> = ch.series.iter().enumerate().collect();
     // A stock chart is one group of its 3 or 4 series (high-low-close, open-high-low-close);
     // other charts get one group per kind their series are drawn as, on each axis, in the order
@@ -1093,6 +1127,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             pos: cat_pos,
             delete: false,
             grid: false,
+            grid_sp: "",
             title: ch.x_title.as_deref(),
             crosses_max: false,
         }));
@@ -1103,6 +1138,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             pos: val_pos,
             delete: false,
             grid: ch.gridlines,
+            grid_sp: &grid_sp,
             title: ch.y_title.as_deref(),
             crosses_max: false,
         }));
@@ -1115,8 +1151,18 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         Axes::Category => (true, "b", "r"),
     };
     if !cat_pos.is_empty() {
-        s.push_str(&axis_xml(&Ax { cat, id: 3, cross: 4, pos: cat_pos, delete: true, grid: false, title: None, crosses_max: false }));
-        s.push_str(&axis_xml(&Ax { cat: false, id: 4, cross: 3, pos: val_pos, delete: false, grid: false, title: None, crosses_max: true }));
+        s.push_str(&axis_xml(&Ax { cat, id: 3, cross: 4, pos: cat_pos, delete: true, grid: false, grid_sp: "", title: None, crosses_max: false }));
+        s.push_str(&axis_xml(&Ax {
+            cat: false,
+            id: 4,
+            cross: 3,
+            pos: val_pos,
+            delete: false,
+            grid: false,
+            grid_sp: "",
+            title: None,
+            crosses_max: true,
+        }));
     }
     if let Some(t) = &ch.data_table {
         let _ = write!(

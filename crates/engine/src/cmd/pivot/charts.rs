@@ -51,6 +51,8 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
     let pivot_name = pt.name.clone();
     let n = series.len();
     let chart = Chart {
+        gridline_width: None,
+        gridline_color: None,
         id,
         kind,
         anchor: Anchor {

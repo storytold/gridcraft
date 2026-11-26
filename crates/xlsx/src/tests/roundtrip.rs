@@ -407,6 +407,8 @@ fn sample() -> Workbook {
         rotation: 0.0,
     });
     let base_chart = Chart {
+        gridline_width: None,
+        gridline_color: None,
         id: 20,
         kind: ChartKind::ColumnClustered,
         anchor: Anchor { cell: at("J5"), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, ..Default::default() },
@@ -2340,6 +2342,8 @@ fn issue_778_xlsx_xml_import_save_reopen_roundtrip() {
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        gridline_color: None,
+        gridline_width: None,
         x_title: None,
         y_title: None,
         source: None,
