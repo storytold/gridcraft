@@ -162,6 +162,8 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        gap_width: None,
+        overlap: None,
         x_title: dc.axis_titles.0.or_else(|| axis_title(false)),
         y_title: dc.axis_titles.1.or_else(|| axis_title(true)),
         source: None,

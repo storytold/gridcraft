@@ -671,6 +671,14 @@ pub struct Chart {
     /// Pie/doughnut first slice angle in degrees clockwise from 12 o'clock (0–359).
     #[serde(default)]
     pub first_slice_angle: u16,
+    /// Column and bar charts: the gap between categories, as a percentage of a bar's width (0–500).
+    /// `None`: 150, the default of the file format.
+    #[serde(default)]
+    pub gap_width: Option<u16>,
+    /// Column and bar charts: how much the bars of a category overlap, as a percentage of a bar's
+    /// width (-100–100, negative for a space between them). `None`: 0.
+    #[serde(default)]
+    pub overlap: Option<i16>,
     pub x_title: Option<String>,
     pub y_title: Option<String>,
     /// Source range when created from a selection (for Switch Row/Column).
@@ -1367,6 +1375,8 @@ mod series_kind_tests {
             style: 2,
             hole_size: 75,
             first_slice_angle: 0,
+            gap_width: Default::default(),
+            overlap: Default::default(),
             x_title: None,
             y_title: None,
             source: None,
@@ -1517,6 +1527,8 @@ mod tests {
             style: 1,
             hole_size: 75,
             first_slice_angle: 0,
+            gap_width: None,
+            overlap: None,
             x_title: None,
             y_title: None,
             source: None,

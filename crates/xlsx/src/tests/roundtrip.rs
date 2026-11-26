@@ -430,6 +430,8 @@ fn sample() -> Workbook {
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        gap_width: None,
+        overlap: None,
         x_title: Some("Region".into()),
         y_title: Some("Amount".into()),
         source: None,
@@ -469,6 +471,7 @@ fn sample() -> Workbook {
     });
     s.charts.push(combo);
     s.charts.push(Chart { kind: ChartKind::Waterfall, legend: LegendPos::None, title: None, ..base_chart.clone() });
+    s.charts.push(Chart { kind: ChartKind::ColumnClustered, gap_width: Some(219), overlap: Some(-27), ..base_chart.clone() });
     let mut doughnut = Chart { kind: ChartKind::Doughnut, hole_size: 25, first_slice_angle: 180, legend: LegendPos::Right, ..base_chart.clone() };
     doughnut.series.push(base_chart.series[0].clone());
     s.charts.push(doughnut);
@@ -614,6 +617,7 @@ fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
         assert_eq!(y.legend, x.legend);
         assert_eq!(y.data_labels, x.data_labels);
         assert_eq!((y.hole_size, y.first_slice_angle), (x.hole_size, x.first_slice_angle));
+        assert_same_bar_spacing(x, y);
         if !matches!(x.kind, ChartKind::Pie | ChartKind::Doughnut) {
             assert_eq!(y.gridlines, x.gridlines);
             assert_eq!((&y.x_title, &y.y_title), (&x.x_title, &x.y_title));
@@ -2242,6 +2246,13 @@ fn remove_personal_information_is_kept_and_honoured() {
     assert!(String::from_utf8(pkg.read("docProps/core.xml").unwrap().unwrap()).unwrap().contains("Jane Example"));
 }
 
+/// A chart with its own spacing keeps it; without one, reading gives the values the writer chose.
+fn assert_same_bar_spacing(x: &Chart, y: &Chart) {
+    if x.gap_width.is_some() {
+        assert_eq!((y.gap_width, y.overlap), (x.gap_width, x.overlap));
+    }
+}
+
 #[test]
 fn cell_padding_is_dropped_by_xlsx_and_nothing_else_is() {
     // SpreadsheetML has no cell padding: it is not written, and everything else in the style is.
@@ -2340,6 +2351,8 @@ fn issue_778_xlsx_xml_import_save_reopen_roundtrip() {
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        gap_width: None,
+        overlap: None,
         x_title: None,
         y_title: None,
         source: None,

@@ -428,6 +428,19 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
     };
     let hole_size =
         if plot.is_some_and(|p| p.child("doughnutChart").is_some()) { (dc.hole_size * 100.0).round().clamp(10.0, 90.0) as u8 } else { 75 };
+    let bars = plot.and_then(|p| p.child("barChart").or_else(|| p.child("bar3DChart")));
+    // Strict files write these as percentages (`219%`).
+    let percent = |v: &str| v.trim().trim_end_matches('%').trim().parse::<f64>().ok();
+    let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(percent).map(|v| v.clamp(0.0, 500.0) as u16);
+    // Stacked series share a slot, so the 100 written for them means nothing to keep when every bar
+    // group is stacked; a combo with a clustered bar group draws with it. Any other value is the
+    // file's own.
+    let stacked = plot.is_some_and(|p| {
+        bars.is_some()
+            && p.kids("barChart").chain(p.kids("bar3DChart")).all(|g| matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")))
+    });
+    let overlap =
+        bars.and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16).filter(|v| !(stacked && *v == 100));
     let mut ch = Chart {
         id: 0,
         kind: first_kind,
@@ -446,6 +459,8 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         style: dc.style,
         hole_size,
         first_slice_angle: dc.first_slice_angle,
+        gap_width,
+        overlap,
         x_title: axis_titles.0,
         y_title: axis_titles.1,
         source: None,
@@ -895,9 +910,14 @@ fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart,
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
         G::Bar { bar, grouping } => {
-            let overlap = if grouping == "clustered" { String::new() } else { "<c:overlap val=\"100\"/>".into() };
+            let overlap = match ch.overlap {
+                Some(o) => format!("<c:overlap val=\"{o}\"/>"),
+                None if grouping == "clustered" => String::new(),
+                None => "<c:overlap val=\"100\"/>".into(),
+            };
+            let gap = ch.gap_width.unwrap_or(150);
             format!(
-                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"150\"/>{overlap}{ax}</c:barChart>",
+                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"{gap}\"/>{overlap}{ax}</c:barChart>",
                 if bar { "bar" } else { "col" }
             )
         }
