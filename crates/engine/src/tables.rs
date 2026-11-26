@@ -653,15 +653,30 @@ fn grow_right(
 
     // The header cell names the column when it holds something (entered in this edit or
     // earlier); otherwise the column gets the lowest free `ColumnN`, as in Excel. A table
-    // without a header row keeps the name on the column only: its first row is data.
+    // without a header row keeps the name on the column only: its first row is data. Headers
+    // hold constant text, as Resize Table leaves them: a formula there (not yet calculated in
+    // this edit) is named by its result and replaced by it, and a number becomes its text.
     let header_cell = CellRef::new(t_range.start.row, c.col);
     let (header_name, write_header) = match cx.wb.sheet(si) {
         Some(sh) => {
             let Some(t) = sh.tables.get(ti) else { return };
-            let entered = if t.header_row { sh.value(header_cell).display() } else { String::new() };
+            let (entered, constant_text) = if t.header_row {
+                let cell = sh.cell(header_cell);
+                let value = match cell.and_then(|x| x.formula.as_ref()).and_then(|f| f.expr()) {
+                    Some(e) => gridcraft_calc::recalc::evaluate_expr(&cx.wb, si, header_cell, &e).scalar(),
+                    None => sh.value(header_cell),
+                };
+                let text = match value.as_text() {
+                    Some(x) => x.to_string(),
+                    None => crate::display::value_text_of(&cx.wb, sh, header_cell, &value),
+                };
+                (text, value.is_text() && cell.is_some_and(|x| x.formula.is_none()))
+            } else {
+                (String::new(), true)
+            };
             let wanted = if entered.trim().is_empty() { "" } else { entered.as_str() };
             let name = unique_column_name(&t.columns, wanted);
-            let write = t.header_row && name != entered;
+            let write = t.header_row && (name != entered || !constant_text);
             (name, write)
         }
         None => return,
@@ -1040,6 +1055,33 @@ mod tests {
         assert_eq!(sh.tables[0].range.a1(), "A2:D3");
         assert_eq!(sh.value(CellRef::new(1, 3)), Value::number(42.0));
         assert_eq!(names(&s), ["x", "y", "Column1", "Column2"]);
+    }
+
+    #[test]
+    fn table_auto_expand_names_a_formula_header_by_its_result() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["x", "y"], [1, 2]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B2", "header": true})).unwrap();
+
+        // A formula typed next to the header row grows the table, names the column by its result
+        // and leaves that result as constant text (headers hold no formulas).
+        s.execute("cell.set", json!({"cell": "C1", "input": "=1+1"})).unwrap();
+        let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+        assert_eq!(sh.tables[0].range.a1(), "A1:C2");
+        assert_eq!(names(&s), ["x", "y", "2"]);
+        assert_eq!(sh.value(CellRef::new(0, 2)), Value::from("2"));
+        assert!(sh.cell(CellRef::new(0, 2)).is_some_and(|c| c.formula.is_none()));
+
+        // A formula whose result repeats a name is made unique, like a typed header.
+        s.execute("cell.set", json!({"cell": "D1", "input": "=A1"})).unwrap();
+        let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+        assert_eq!(names(&s), ["x", "y", "2", "x2"]);
+        assert_eq!(sh.value(CellRef::new(0, 3)), Value::from("x2"));
+
+        // A formula with an empty result gets a generated name.
+        s.execute("cell.set", json!({"cell": "E1", "input": "=\"\""})).unwrap();
+        assert_eq!(names(&s), ["x", "y", "2", "x2", "Column1"]);
     }
 
     #[test]
