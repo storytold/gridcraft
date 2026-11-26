@@ -45,6 +45,9 @@ echo "==> GridCraft $VERSION for FreeBSD $ARCH"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked -p gridcraft -p gridcraft-cli ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"})
+  # The man-and-completions example writes gridcraft-cli's man pages and shell completions below. It is built in its own
+  # cargo run: built with the binaries, its dev-dependencies' features would be unified into them.
+  (cd "$ROOT" && cargo build --release --locked -p gridcraft-cli --example man-and-completions ${CARGO_BUILD_TARGET:+--target "$CARGO_BUILD_TARGET"})
 fi
 BIN="$CARGO_TARGET_DIR/${CARGO_BUILD_TARGET:+$CARGO_BUILD_TARGET/}release"
 WORK="$CARGO_TARGET_DIR/freebsd-package"
@@ -55,6 +58,21 @@ install -d "$TREE/bin" "$TREE/share/applications" "$TREE/share/metainfo" "$TREE/
   "$TREE/share/icons" "$TREE/share/doc/gridcraft"
 install -m 755 "$BIN/gridcraft" "$BIN/gridcraft-cli" "$TREE/bin/"
 strip "$TREE/bin/gridcraft" "$TREE/bin/gridcraft-cli" 2>/dev/null || true
+# gridcraft-cli's man pages and shell completions, from its clap definition, written by the example built above (a
+# --skip-build run needs it built too). Under /usr/local, man pages go in man/ and the completions in the directories
+# bash, zsh and fish read there.
+CLI_DOCS="$BIN/examples/man-and-completions"
+if [[ ! -x "$CLI_DOCS" ]]; then
+  echo "error: $CLI_DOCS is not built (cargo build --release -p gridcraft-cli --example man-and-completions)" >&2
+  exit 1
+fi
+"$CLI_DOCS" "$WORK/cli-docs"
+install -d "$TREE/man/man1" "$TREE/share/bash-completion/completions" "$TREE/share/zsh/site-functions" \
+  "$TREE/share/fish/vendor_completions.d"
+install -m 644 "$WORK"/cli-docs/*.1 "$TREE/man/man1/"
+install -m 644 "$WORK/cli-docs/gridcraft-cli.bash" "$TREE/share/bash-completion/completions/gridcraft-cli"
+install -m 644 "$WORK/cli-docs/_gridcraft-cli" "$TREE/share/zsh/site-functions/_gridcraft-cli"
+install -m 644 "$WORK/cli-docs/gridcraft-cli.fish" "$TREE/share/fish/vendor_completions.d/gridcraft-cli.fish"
 install -m 644 "$LINUX/$APP_ID.desktop" "$TREE/share/applications/$APP_ID.desktop"
 install -m 644 "$LINUX/$APP_ID.mime.xml" "$TREE/share/mime/packages/$APP_ID.xml"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$GRIDCRAFT_BUILD_DATE/g" \

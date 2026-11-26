@@ -25,12 +25,18 @@ fn tmpdir(name: &str) -> PathBuf {
 #[test]
 fn version_and_usage() {
     assert_eq!(ok(&["--version"]).trim(), format!("gridcraft-cli {}", env!("CARGO_PKG_VERSION")));
-    assert_eq!(ok(&["version"]).trim(), format!("gridcraft-cli {}", env!("CARGO_PKG_VERSION")));
-    let o = run(&["frobnicate"]);
-    assert!(!o.status.success());
-    assert!(String::from_utf8_lossy(&o.stderr).contains("unknown subcommand"));
+    assert_eq!(ok(&["-V"]).trim(), format!("gridcraft-cli {}", env!("CARGO_PKG_VERSION")));
+    // `--version` reaches the subcommands, and there is no `version` subcommand.
+    assert!(ok(&["run", "--version"]).starts_with("gridcraft-cli-run "));
+    for unknown in ["frobnicate", "version"] {
+        let o = run(&[unknown]);
+        assert_eq!(o.status.code(), Some(2), "{unknown}");
+        assert!(String::from_utf8_lossy(&o.stderr).contains("unrecognized subcommand"));
+    }
+    // No arguments: the usage on stderr, a usage error.
     let o = run(&[]);
-    assert!(!o.status.success());
+    assert_eq!(o.status.code(), Some(2));
+    assert!(o.stdout.is_empty() && String::from_utf8_lossy(&o.stderr).contains("Usage: gridcraft-cli"));
 }
 
 #[test]
@@ -275,7 +281,7 @@ fn a_script_line_with_an_unknown_key_stops_the_run() {
     assert!(!info.contains("Sheet2"), "and no sheet was added with a default name: {info}");
 
     // The usage text says what a line looks like, which is how this was found.
-    let usage = String::from_utf8_lossy(&run(&[]).stderr).into_owned() + &String::from_utf8_lossy(&run(&["--help"]).stdout);
+    let usage = ok(&["run", "--help"]);
     assert!(usage.contains(r#"{"command": "id", "params": {…}}"#), "{usage}");
 
     let _ = std::fs::remove_dir_all(&dir);

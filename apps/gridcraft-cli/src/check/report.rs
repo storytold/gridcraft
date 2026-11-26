@@ -131,15 +131,16 @@ fn fit(s: &str, w: usize) -> String {
     if n <= w { s.to_string() } else { format!("…{}", s.chars().skip(n + 1 - w).collect::<String>()) }
 }
 
-fn print_file_reports(reports: &[FileReport]) {
+fn print_file_reports(io: &mut Io, reports: &[FileReport]) -> Result<(), CliError> {
     for r in reports {
-        outln!("== {}", r.path);
+        outln!(io, "== {}", r.path);
         if let Some(e) = &r.error {
-            outln!("  can't open: {e}");
+            outln!(io, "  can't open: {e}");
             continue;
         }
         let c = &r.calc;
         outln!(
+            io,
             "  formulas {}: {} checked, {} matched, {} mismatched, {} no oracle, {} volatile",
             c.formula_cells,
             c.checked,
@@ -149,14 +150,15 @@ fn print_file_reports(reports: &[FileReport]) {
             c.volatile
         );
         if c.stale_cache {
-            outln!("  (the producer asked for a full recalculation on load: its cached values aren't results)");
+            outln!(io, "  (the producer asked for a full recalculation on load: its cached values aren't results)");
         }
         if c.bool_as_number > 0 {
-            outln!("  ({} matched TRUE/FALSE results were saved by the producer as 1/0, without t=\"b\")", c.bool_as_number);
+            outln!(io, "  ({} matched TRUE/FALSE results were saved by the producer as 1/0, without t=\"b\")", c.bool_as_number);
         }
         for m in &c.mismatches {
             let tag = if m.primary { "mismatch" } else { "  (downstream)" };
             outln!(
+                io,
                 "  {tag} {}  {}  expected {}  got {}  [{}]",
                 m.cell,
                 one_line(&m.formula),
@@ -166,31 +168,33 @@ fn print_file_reports(reports: &[FileReport]) {
             );
         }
         if c.mismatched > c.mismatches.len() {
-            outln!("  … {} more mismatches", c.mismatched - c.mismatches.len());
+            outln!(io, "  … {} more mismatches", c.mismatched - c.mismatches.len());
         }
         let rt = &r.round_trip;
         if let Some(e) = &rt.error {
-            outln!("  round trip: {e}");
+            outln!(io, "  round trip: {e}");
         }
         let differing: Vec<&Category> = rt.categories.iter().filter(|c| c.diffs > 0).collect();
         if differing.is_empty() && rt.error.is_none() {
-            outln!("  round trip: all equal");
+            outln!(io, "  round trip: all equal");
         }
         for cat in differing {
-            outln!("  round trip {}: {} difference(s)", cat.name, cat.diffs);
+            outln!(io, "  round trip {}: {} difference(s)", cat.name, cat.diffs);
             for e in &cat.examples {
-                outln!("    {}", one_line(e));
+                outln!(io, "    {}", one_line(e));
             }
             if cat.diffs > cat.examples.len() {
-                outln!("    … {} more", cat.diffs - cat.examples.len());
+                outln!(io, "    … {} more", cat.diffs - cat.examples.len());
             }
         }
     }
+    Ok(())
 }
 
-fn print_file_table(reports: &[FileReport]) {
+fn print_file_table(io: &mut Io, reports: &[FileReport]) -> Result<(), CliError> {
     let w = reports.iter().map(|r| r.path.chars().count()).max().unwrap_or(4).clamp(4, 50);
     outln!(
+        io,
         "{:<w$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>9}  {:>8}  round trip",
         "file",
         "formulas",
@@ -203,7 +207,7 @@ fn print_file_table(reports: &[FileReport]) {
     for r in reports {
         let label = fit(&r.path, w);
         if let Some(e) = &r.error {
-            outln!("{label:<w$}  can't open: {}", one_line(&fit(e, 100)));
+            outln!(io, "{label:<w$}  can't open: {}", one_line(&fit(e, 100)));
             continue;
         }
         let c = &r.calc;
@@ -213,6 +217,7 @@ fn print_file_table(reports: &[FileReport]) {
             (None, d) => d.join(","),
         };
         outln!(
+            io,
             "{label:<w$}  {:>8}  {:>8}  {:>8}  {:>8}  {:>9}  {:>8}  {rt}",
             c.formula_cells,
             c.checked,
@@ -222,33 +227,36 @@ fn print_file_table(reports: &[FileReport]) {
             c.volatile
         );
     }
+    Ok(())
 }
 
-fn print_rankings(t: &Totals, opts: &Options) {
+fn print_rankings(io: &mut Io, t: &Totals, opts: &Options) -> Result<(), CliError> {
     let top = ranked(&t.functions);
     if !top.is_empty() {
-        outln!("");
-        outln!("top mismatching functions (primary = no mismatching precedent):");
-        outln!("  {:<20}  {:>8}  {:>10}  {:>8}", "function", "primary", "mismatched", "checked");
+        outln!(io, "");
+        outln!(io, "top mismatching functions (primary = no mismatching precedent):");
+        outln!(io, "  {:<20}  {:>8}  {:>10}  {:>8}", "function", "primary", "mismatched", "checked");
         for (n, s) in top.iter().take(opts.max_report.max(1)) {
-            outln!("  {:<20}  {:>8}  {:>10}  {:>8}", n, s.primary, s.mismatched, s.checked);
+            outln!(io, "  {:<20}  {:>8}  {:>10}  {:>8}", n, s.primary, s.mismatched, s.checked);
         }
     }
     let mut sigs: Vec<(&String, &usize)> = t.signatures.iter().collect();
     sigs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
     if !sigs.is_empty() {
-        outln!("");
-        outln!("mismatch signatures (expected → GridCraft):");
+        outln!(io, "");
+        outln!(io, "mismatch signatures (expected → GridCraft):");
         for (sig, n) in sigs.iter().take(opts.max_report.max(1)) {
-            outln!("  {n:>8}  {sig}");
+            outln!(io, "  {n:>8}  {sig}");
         }
     }
+    Ok(())
 }
 
-fn print_totals(t: &Totals) {
-    outln!("");
-    outln!("files: {} ({} opened, {} failed to open)", t.files, t.opened, t.failed);
+fn print_totals(io: &mut Io, t: &Totals) -> Result<(), CliError> {
+    outln!(io, "");
+    outln!(io, "files: {} ({} opened, {} failed to open)", t.files, t.opened, t.failed);
     outln!(
+        io,
         "formula cells: {} ({} checked: {} matched, {} mismatched; {} no oracle; {} volatile)",
         t.formula_cells,
         t.checked,
@@ -258,23 +266,25 @@ fn print_totals(t: &Totals) {
         t.volatile
     );
     if t.bool_as_number > 0 {
-        outln!("booleans saved as 1/0 by the producer: {} (counted as matched)", t.bool_as_number);
+        outln!(io, "booleans saved as 1/0 by the producer: {} (counted as matched)", t.bool_as_number);
     }
     let cats: Vec<String> = t.categories.iter().map(|(c, n)| format!("{c} {n}")).collect();
     outln!(
+        io,
         "round trip: {} of {} files differ{}{}",
         t.round_trip_differing,
         t.opened,
         if t.round_trip_failed > 0 { format!(" ({} failed)", t.round_trip_failed) } else { String::new() },
         if cats.is_empty() { String::new() } else { format!("; categories (files): {}", cats.join(", ")) }
     );
+    Ok(())
 }
 
-pub(super) fn print_human(reports: &[FileReport], opts: &Options) {
-    print_file_reports(reports);
-    outln!("");
-    print_file_table(reports);
+pub(super) fn print_human(io: &mut Io, reports: &[FileReport], opts: &Options) -> Result<(), CliError> {
+    print_file_reports(io, reports)?;
+    outln!(io, "");
+    print_file_table(io, reports)?;
     let t = totals(reports);
-    print_rankings(&t, opts);
-    print_totals(&t);
+    print_rankings(io, &t, opts)?;
+    print_totals(io, &t)
 }
