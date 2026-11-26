@@ -1817,6 +1817,27 @@ fn case_sensitive_sort_puts_lowercase_first() {
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
 }
 
+/// Data > Sort orders numbers exactly, like Excel 365: 0.3 sorts before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
+#[test]
+fn sort_orders_numbers_exactly() {
+    for first_noisy in [true, false] {
+        let mut s = s();
+        let (a1, a2, b1, b2) = if first_noisy { ("=0.1+0.2", "0.3", "e", "t") } else { ("0.3", "=0.1+0.2", "t", "e") };
+        for (cell, input) in [("A1", a1), ("A2", a2), ("B1", b1), ("B2", b2)] {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        let labels = |s: &Session| [v(s, "B1"), v(s, "B2")];
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A"}]})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "ascending, noisy first: {first_noisy}");
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A", "order": "desc"}]})).unwrap();
+        assert_eq!(labels(&s), ["e", "t"].map(Value::from), "descending, noisy first: {first_noisy}");
+        s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+        s.execute("data.sortAscending", json!({"range": "A1:B2", "column": "A"})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "quick sort, noisy first: {first_noisy}");
+    }
+}
+
 /// #3949: Excel sorts values that are not in the custom list A to Z after the listed ones.
 #[test]
 fn custom_list_sort_puts_unlisted_values_after_the_list_in_order() {
