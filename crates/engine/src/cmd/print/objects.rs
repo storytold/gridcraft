@@ -1,6 +1,6 @@
 use super::draw::{Block, PdfMeasure, Xf, draw_prims, rgb_of};
 use super::text::wrap_lines;
-use super::{Anchor, Font, Page, RangeRef, Rect, ShapeKind, Sheet, Value, Workbook};
+use super::{Anchor, Baseline, Font, Page, Point, RangeRef, Rect, ShapeKind, Sheet, TextDirection, Value, Workbook};
 
 /// Cell pictures fit the current cell (or merged-cell) rectangle without changing aspect ratio.
 pub(super) fn draw_cell_picture(pg: &mut Page, data: &[u8], rect: (f32, f32, f32, f32), k: f32) {
@@ -76,9 +76,11 @@ pub(super) fn draw_objects(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, 
     let (bx, by) = (b.xs.first().copied().unwrap_or(0.0), b.ys.first().copied().unwrap_or(0.0));
     let (bw, bh) = (b.xs.last().copied().unwrap_or(bx) - bx, b.ys.last().copied().unwrap_or(by) - by);
     let visible = |r: (f64, f64, f64, f64)| r.2 > 0.0 && r.3 > 0.0 && r.0 < sx1 && r.0 + r.2 > sx0 && r.1 < sy1 && r.1 + r.3 > sy0;
-    let place = |r: (f64, f64, f64, f64)| (bx + ((r.0 - sx0) as f32) * b.k, by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k);
+    let place = |r: (f64, f64, f64, f64)| {
+        (b.text_x(bx + ((r.0 - sx0) as f32) * b.k, r.2 as f32 * b.k), by + ((r.1 - sy0) as f32) * b.k, r.2 as f32 * b.k, r.3 as f32 * b.k)
+    };
     pg.save();
-    pg.clip_rect(bx, by, bw, bh);
+    pg.clip_rect(b.text_x(bx, bw), by, bw, bh);
     draw_sparklines(pg, wb, si, sh, b, block);
     for (imi, im) in sh.images.iter().enumerate() {
         let r = anchor_rect(sh, &im.anchor);
@@ -153,9 +155,19 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
             v => vec![v.as_f64()],
         };
         let color = rgb_of(sp.color, wb).unwrap_or([0x15, 0x60, 0x82]);
-        let (x, y, w, h) = b.rect(RangeRef::cell(sp.cell));
+        let (x, y, w, h) = b.drawn_rect(RangeRef::cell(sp.cell));
         let (wpx, hpx) = (w / b.k, h / b.k);
-        let prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        let mut prims = gridcraft_chart::render_sparkline(sp.kind, &vals, [color[0], color[1], color[2], 255], sp.markers, wpx, hpx);
+        if sh.right_to_left {
+            for prim in &mut prims {
+                match prim {
+                    gridcraft_chart::Prim::Rect { x, w, .. } => *x = wpx - *x - *w,
+                    gridcraft_chart::Prim::Line { pts, .. } => pts.iter_mut().for_each(|p| p[0] = wpx - p[0]),
+                    gridcraft_chart::Prim::Circle { cx, .. } => *cx = wpx - *cx,
+                    _ => {}
+                }
+            }
+        }
         draw_prims(pg, &prims, Xf { ox: x, oy: y, k: b.k });
     }
 }
@@ -163,29 +175,42 @@ fn draw_sparklines(pg: &mut Page, wb: &Workbook, si: usize, sh: &Sheet, b: &Bloc
 fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Block, (x, y, w, h): (f32, f32, f32, f32)) {
     let fill = rgb_of(shp.fill, wb);
     let line = rgb_of(shp.line, wb).filter(|_| !shp.format.no_line).map(|c| (c, (0.75 * b.k).max(0.25)));
+    let angle = if shp.rotation.is_finite() { shp.rotation.to_radians() } else { 0.0 };
+    let (sn, cs) = angle.sin_cos();
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let turn = |[px, py]: [f32; 2]| {
+        let (dx, dy) = (px - cx, py - cy);
+        [cx + dx * cs - dy * sn, cy + dx * sn + dy * cs]
+    };
     match shp.kind {
         ShapeKind::Ellipse => {
             let pts: Vec<[f32; 2]> = (0..72)
                 .map(|i| {
                     let a = i as f32 / 72.0 * std::f32::consts::TAU;
-                    [x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()]
+                    turn([x + w / 2.0 + w / 2.0 * a.cos(), y + h / 2.0 + h / 2.0 * a.sin()])
                 })
                 .collect();
             pg.polygon(&pts, fill, line);
         }
-        ShapeKind::Triangle => pg.polygon(&[[x + w / 2.0, y], [x + w, y + h], [x, y + h]], fill, line),
+        ShapeKind::Triangle => {
+            let pts = [[x + w / 2.0, y], [x + w, y + h], [x, y + h]].map(turn);
+            pg.polygon(&pts, fill, line);
+        }
         ShapeKind::Line | ShapeKind::Arrow => {
             let c = line.map(|l| l.0).or(fill).unwrap_or([0, 0, 0]);
-            pg.stroke_line(x, y, x + w, y + h, (1.0 * b.k).max(0.3), c);
+            let [x0, y0] = turn([x, y]);
+            let [x1, y1] = turn([x + w, y + h]);
+            pg.stroke_line(x0, y0, x1, y1, (1.0 * b.k).max(0.3), c);
             if shp.kind == ShapeKind::Arrow {
                 let ang = h.atan2(w);
                 let al = 8.0 * b.k;
-                let p = |da: f32| [x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()];
-                pg.polygon(&[[x + w, y + h], p(0.4), p(-0.4)], Some(c), None);
+                let p = |da: f32| turn([x + w - al * (ang + da).cos(), y + h - al * (ang + da).sin()]);
+                pg.polygon(&[turn([x + w, y + h]), p(0.4), p(-0.4)], Some(c), None);
             }
         }
         _ => {
-            pg.polygon(&[[x, y], [x + w, y], [x + w, y + h], [x, y + h]], fill, line);
+            let pts = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].map(turn);
+            pg.polygon(&pts, fill, line);
         }
     }
     if shp.text.is_empty() {
@@ -199,7 +224,7 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
     let color = fm.text_color.and_then(|c| rgb_of(c, wb)).unwrap_or([0, 0, 0]);
     let align = fm.align.unwrap_or(if text_box { ShapeTextAlign::Left } else { ShapeTextAlign::Center });
     let anchor = fm.anchor.unwrap_or(if text_box { ShapeTextAnchor::Top } else { ShapeTextAnchor::Middle });
-    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size));
+    let lines = wrap_lines(&shp.text, font, size, (w - 4.0 * b.k).max(size), TextDirection::Auto);
     let block_h = lines.len().min(500) as f32 * size * 1.2;
     let mut yy = match anchor {
         ShapeTextAnchor::Top => y + 2.0 * b.k,
@@ -207,7 +232,7 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         ShapeTextAnchor::Bottom => y + h - 2.0 * b.k - block_h,
     } + size * 0.8;
     for l in lines.iter().take(500) {
-        let lw = gridcraft_pdf::text_width(font, size, l);
+        let lw = gridcraft_pdf::text_width_with_direction(font, size, &l.text, l.direction);
         let lx = match align {
             ShapeTextAlign::Left => x + 2.0 * b.k,
             ShapeTextAlign::Center => x + (w - lw) / 2.0,
@@ -216,7 +241,8 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         // WordArt's drop shadow: the line again, offset, in the shadow colour (under the text).
         if let Some(sc) = fm.text_shadow.and_then(|c| rgb_of(c, wb)) {
             let off = (size * 0.06).max(0.5);
-            pg.text(lx + off, yy + off, size, font, sc, l);
+            let [sx, sy] = turn([lx + off, yy + off]);
+            pg.text_rotated_with_direction(Baseline { origin: Point::new(sx, sy), angle }, size, font, sc, &l.text, l.direction);
         }
         // WordArt's text outline, as on screen: the line in the outline colour, offset in eight
         // directions by half the outline width, under the filled text.
@@ -225,10 +251,12 @@ fn draw_shape(pg: &mut Page, wb: &Workbook, shp: &gridcraft_model::Shape, b: &Bl
         {
             let d = (ow * b.scale / 2.0).clamp(0.25, 20.0);
             for (dx, dy) in [(-1.0, -1.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 0.0), (1.0, 0.0), (-1.0, 1.0), (0.0, 1.0), (1.0, 1.0)] {
-                pg.text(lx + dx * d, yy + dy * d, size, font, oc, l);
+                let [ox, oy] = turn([lx + dx * d, yy + dy * d]);
+                pg.text_rotated_with_direction(Baseline { origin: Point::new(ox, oy), angle }, size, font, oc, &l.text, l.direction);
             }
         }
-        pg.text(lx, yy, size, font, color, l);
+        let [tx, ty] = turn([lx, yy]);
+        pg.text_rotated_with_direction(Baseline { origin: Point::new(tx, ty), angle }, size, font, color, &l.text, l.direction);
         yy += size * 1.2;
     }
 }

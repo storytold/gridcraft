@@ -292,6 +292,60 @@ print("socket quiet")
     assert!(String::from_utf8_lossy(&o.stdout).contains("socket quiet"), "{out}");
 }
 
+/// The same inherited socket, by both ioctls that name the process to notify, `FIOSETOWN` (0x8901)
+/// and `SIOCSPGRP` (0x8902), with the argument a real pointer. Named by value the kernel reads the
+/// number as an address and fails with `EFAULT` whether or not the filter refuses it, so that form
+/// shows only that a rule matched a request number; by pointer each call succeeds unconfined and is
+/// `EPERM` confined, which is the transition the page claims. Kept apart from the test above so a
+/// rule dropped for one request number fails for that request, not behind another. Linux only, as
+/// those rules are: macOS's profile has none, and its standard streams here are pipes.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_confined_program_cant_point_an_inherited_socket_at_another_process_by_pointer() {
+    if !confines() {
+        return;
+    }
+    let Some((python, prefix)) = system_python() else {
+        return;
+    };
+    let code = r#"
+import fcntl, socket, struct, sys
+other = int(sys.argv[1])
+def refused(call, *args):
+    try:
+        call(*args)
+    except PermissionError:
+        return True
+    except OSError as e:
+        print("other error", e)
+    return False
+# Read first, so a standard stream that is not a socket can't pass for one: a pipe has no socket name.
+# Detached, not dropped: a socket object closes the descriptor it wrapped when it is collected, and then
+# the refusals below would be read off an invalid descriptor.
+wrapped = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM, fileno=0)
+name = wrapped.getsockname()
+wrapped.detach()
+assert name == ""
+# The process group is a pointer, as a C caller passes it; naming it by value has the kernel read the
+# number as an address and fail with EFAULT, which would leave the refusal unexplained by the filter.
+group = bytearray(struct.pack("i", other))
+assert refused(fcntl.ioctl, 0, 0x8901, group), "giving a socket's notifications to another process"
+assert refused(fcntl.ioctl, 0, 0x8902, group), "giving a socket's notifications to another process's group"
+print("socket owner quiet")
+"#;
+    let (mine, _) = std::os::unix::net::UnixStream::pair().unwrap();
+    let socket: std::os::fd::OwnedFd = mine.into();
+    let me = std::process::id().to_string();
+    let o = Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+        .args(["sandbox-check", "--read", &prefix, "--", &python, "-I", "-c", code, &me])
+        .stdin(std::process::Stdio::from(socket))
+        .output()
+        .unwrap();
+    let out = text(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(String::from_utf8_lossy(&o.stdout).contains("socket owner quiet"), "{out}");
+}
+
 /// Confined, a program changes no file, whether the policy lets it read that file or not, by path or
 /// by a descriptor: not its contents, permissions, owner, extended attributes, times or flags.
 /// Skipped when there is no `python3`.
