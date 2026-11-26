@@ -14,12 +14,12 @@ fn harness(input: &str) -> Harness {
     session.new_workbook();
     session.execute("home.mergeCells", json!({"range": "A1:B2"})).unwrap();
     session.execute("cell.set", json!({"cell": "A1", "input": input})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h
@@ -39,7 +39,9 @@ fn click_cell(h: &mut Harness, cell: &str) {
         Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
         Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
     ]);
-    h.run_steps(2);
+    // The runtime takes one press per frame: the release arrives in the next frame, and the frame
+    // after it shows what the click did.
+    h.run_steps(3);
 }
 
 fn text(h: &mut Harness, text: &str) {

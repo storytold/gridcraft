@@ -32,10 +32,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use gridcraft_engine::calc::Calc;
-use gridcraft_engine::model::{CalcMode, Formula, Sheet, Workbook};
-use gridcraft_engine::{EngineError, Session, command_specs, find_command, io};
+use gridcraft_engine::model::{CalcMode, Formula, Sheet, SheetViewMode, Workbook};
+use gridcraft_engine::{EngineError, HistoryEntry, Session, command_specs, find_command, io};
 use serde_json::{Value as Json, json};
 
 const SAMPLES: [&str; 3] = ["sales", "budget", "grades"];
@@ -59,7 +59,8 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("file.exportPdf", "renders a PDF: slow, and may write files"),
     ("file.print", "renders a PDF: slow"),
     ("window.activate", "switches documents"),
-    ("view.newWindow", "opens another document"),
+    ("window.close", "closes the document under test"),
+    ("view.newWindow", "opens another window, whose view swaps with the first"),
     ("insert.picture", "reads files"),
     ("pageLayout.background", "reads files"),
     ("formulas.calculationOptions", "manual and iterative calculation differ from a full recalc by design"),
@@ -218,8 +219,24 @@ fn shrink(sample: &str, steps: &[Step], kind: &str) -> Vec<Step> {
 
 struct Harness {
     s: Session,
-    /// The workbook at the start of the current episode (what undoing everything gives back).
-    base: Arc<Workbook>,
+    /// What undoing everything gives back: the workbook at the start of the current episode or,
+    /// once the undo history has dropped its oldest steps (it is bounded by count and by the
+    /// memory its snapshots hold), the state before the oldest step it kept.
+    floor: Arc<Workbook>,
+    /// The workbook of the oldest undo step when the history was last looked at, to notice the
+    /// history dropping it.
+    oldest: Option<Arc<Workbook>>,
+}
+
+/// Where redoing the `n` steps just undone ends. The first of them went onto the redo history
+/// with the final workbook `end`. The redo history is bounded like undo and drops its oldest
+/// entries first, so when that entry is gone every older one is too, and redo stops after fewer
+/// than `n` steps at the oldest entry it kept.
+fn redo_target(end: &Arc<Workbook>, redo: &[HistoryEntry], n: usize) -> Arc<Workbook> {
+    if n == 0 || redo.iter().rev().take(n).any(|e| Arc::ptr_eq(&e.wb, end)) {
+        return end.clone();
+    }
+    redo.first().map_or_else(|| end.clone(), |e| e.wb.clone())
 }
 
 fn fail(step: usize, kind: &'static str, what: impl Into<String>) -> Failure {
@@ -232,7 +249,7 @@ fn guarded<T>(step: usize, kind: &'static str, f: impl FnOnce() -> Result<T, Str
         Ok(Ok(v)) => Ok(v),
         Ok(Err(e)) => Err(fail(step, kind, e)),
         Err(p) => {
-            let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+            let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
             Err(fail(step, kind, format!("panicked: {msg}")))
         }
     }
@@ -242,8 +259,8 @@ impl Harness {
     fn new(sample: &str) -> Harness {
         let mut s = Session::new();
         s.execute("file.new", json!({"sample": sample})).expect("sample opens");
-        let base = s.doc().expect("document").wb.clone();
-        Harness { s, base }
+        let floor = s.doc().expect("document").wb.clone();
+        Harness { s, floor, oldest: None }
     }
 
     fn wb(&self) -> Arc<Workbook> {
@@ -261,6 +278,7 @@ impl Harness {
             return Err(fail(i, "documents", format!("`{id}` changed the number of open documents; exclude it in EXCLUDED")));
         }
         let after = self.wb();
+        self.track_history();
         let spec = find_command(id).expect("generated ids are registered");
         if !spec.undoable
             && !matches!(id, "edit.undo" | "edit.redo")
@@ -292,6 +310,7 @@ impl Harness {
     /// and reload; the next episode starts from here with an empty history.
     fn end_episode(&mut self, i: usize) -> Result<(), Failure> {
         let end = self.wb();
+        self.track_history();
         let mut n = 0;
         while !self.s.doc().expect("document").undo.is_empty() {
             if let Err(EngineError::Internal(_, msg)) = self.s.execute("edit.undo", json!({})) {
@@ -303,7 +322,7 @@ impl Harness {
             }
         }
         let undone = self.wb();
-        if let Some(diff) = workbook_diff(&self.base, &undone) {
+        if let Some(diff) = workbook_diff(&self.floor, &undone) {
             return Err(fail(i, "undo", format!("undoing all {n} steps doesn't give back the starting workbook: {diff}")));
         }
         if watch_list(&end) != watch_list(&undone) {
@@ -311,21 +330,37 @@ impl Harness {
         }
         self.check_state(i)?;
         // Only the steps undone here: an `edit.undo {steps}` in the sequence may have left more.
+        let target = redo_target(&end, &self.s.doc().expect("document").redo, n);
         for _ in 0..n {
             if let Err(EngineError::Internal(_, msg)) = self.s.execute("edit.redo", json!({})) {
                 return Err(fail(i, "panic", format!("`edit.redo` panicked while redoing everything: {msg}")));
             }
         }
-        if let Some(diff) = workbook_diff(&end, &self.wb()) {
-            return Err(fail(i, "redo", format!("redoing all {n} steps doesn't give back the final workbook: {diff}")));
+        if let Some(diff) = workbook_diff(&target, &self.wb()) {
+            let what = if Arc::ptr_eq(&target, &end) { "the final workbook" } else { "the newest step the redo history kept" };
+            return Err(fail(i, "redo", format!("redoing all {n} steps doesn't give back {what}: {diff}")));
         }
         self.check_state(i)?;
         guarded(i, "xlsx roundtrip", || roundtrip_diff(&end))?;
         let d = self.s.active_mut().expect("document");
         d.undo.clear();
         d.redo.clear();
-        self.base = d.wb.clone();
+        self.floor = d.wb.clone();
+        self.oldest = None;
         Ok(())
+    }
+
+    /// Notices the undo history dropping its oldest step: its oldest entry changed without the
+    /// history emptying in between. From then on undoing everything stops at the new oldest entry,
+    /// including after an `edit.undo` in the sequence has already used up what is left.
+    fn track_history(&mut self) {
+        let oldest = self.s.doc().expect("document").undo.first().map(|e| e.wb.clone());
+        if let (Some(was), Some(now)) = (&self.oldest, &oldest)
+            && !Arc::ptr_eq(was, now)
+        {
+            self.floor = now.clone();
+        }
+        self.oldest = oldest;
     }
 
     fn finish(&mut self, steps: usize) -> Result<(), Failure> {
@@ -372,8 +407,8 @@ fn structure_problem(wb: &Workbook, sel: &gridcraft_engine::Selection) -> Option
     if wb.sheets.is_empty() {
         return Some("no sheets left".into());
     }
-    if wb.active_sheet >= wb.sheets.len() {
-        return Some(format!("active sheet {} of {}", wb.active_sheet, wb.sheets.len()));
+    if wb.active_sheet() >= wb.sheets.len() {
+        return Some(format!("active sheet {} of {}", wb.active_sheet(), wb.sheets.len()));
     }
     let mut tables = BTreeSet::new();
     for (i, sh) in wb.sheets.iter().enumerate() {
@@ -432,7 +467,12 @@ fn value_diff(a: &Workbook, b: &Workbook, what: &str) -> Option<String> {
         }
         for c in keys {
             let (va, vb) = (x.value(c), y.value(c));
-            if !same_value(&va, &vb) {
+            // A file caches the Python errors as #VALUE! (they aren't error codes of the file
+            // format), in a Python cell and in the formulas that read one; reading it back runs
+            // nothing.
+            let python_error = matches!(va, Value::Error(CellError::Python | CellError::Busy | CellError::Timeout | CellError::Blocked))
+                && vb == Value::Error(CellError::Value);
+            if !same_value(&va, &vb) && !python_error {
                 let f = x.cell(c).and_then(|c| c.formula.as_ref()).map(|f| format!(" (formula ={})", f.text)).unwrap_or_default();
                 return Some(format!("{}!{c}{f}: {va:?} in memory, {vb:?} after {what}", x.name));
             }
@@ -485,16 +525,19 @@ fn watch_list(wb: &Workbook) -> Option<&str> {
     wb.names.iter().find(|n| n.name == WATCH_NAME).map(|n| n.formula.as_str())
 }
 
-/// The workbook with view state (active sheet, scroll, active cell) and the Watch Window list
-/// reset: undo restores view state as it was, but switching sheets isn't an undoable edit.
+/// The workbook with view state (active sheet, scroll, active cell, zoom, Normal / Page Layout /
+/// Page Break Preview) and the Watch Window list reset: undo restores view state as it was, but
+/// switching sheets, zooming or switching views isn't an undoable edit.
 fn canonical(wb: &Workbook) -> Workbook {
     let mut wb = wb.clone();
-    wb.active_sheet = 0;
+    wb.set_active_sheet(0);
     wb.names.retain(|n| n.name != WATCH_NAME);
     for sh in wb.sheets.iter_mut() {
         let sh = Arc::make_mut(sh);
         sh.view_active = CellRef::default();
         sh.view_top_left = CellRef::default();
+        sh.zoom = 100;
+        sh.view = SheetViewMode::Normal;
     }
     wb
 }
@@ -784,6 +827,8 @@ const CURATED: &[(&str, usize)] = &[
     ("formulas.defineName", 2),
     ("formulas.deleteName", 1),
     ("edit.replace", 1),
+    ("python.set", 3),
+    ("python.output", 2),
 ];
 
 fn generate(rng: &mut Rng, s: &Session) -> Step {
@@ -817,6 +862,33 @@ fn curated_params(rng: &mut Rng, wb: &Workbook, id: &str) -> Json {
             p
         }
         "range.setValues" => json!({"range": near_cell(rng).a1(), "values": values_2d(rng, wb)}),
+        "python.set" => {
+            // Code with xl() references (which follow structural edits), quotes and line breaks;
+            // sometimes long enough to meet the formula limit.
+            let mut code = match rng.below(5) {
+                0 => format!("xl(\"{}\") + 1", near_range(rng).a1()),
+                1 => format!("a = xl('{}')\nb = \"q\\\"uote\"\na", near_cell(rng).a1()),
+                2 => "[[1, 2], [3, 4]]".to_string(),
+                3 => String::new(),
+                _ => "\"".repeat(rng.int(1, 5000) as usize),
+            };
+            if rng.chance(5) {
+                code.push_str(&"x".repeat(8_100));
+            }
+            let mut p = json!({"cell": near_cell(rng).a1(), "code": code});
+            if rng.chance(30) {
+                p["output"] = json!(if rng.chance(50) { "object" } else { "value" });
+            }
+            p
+        }
+        "python.output" => {
+            // Mostly the cells python.set writes to; a missing mode switches.
+            let mut p = json!({"cell": near_cell(rng).a1()});
+            if rng.chance(50) {
+                p["mode"] = json!(if rng.chance(50) { "object" } else { "value" });
+            }
+            p
+        }
         "range.fill" => json!({"range": near_range(rng).a1(), "input": input(rng, wb)}),
         "selection.set" => {
             let mut p = json!({"range": range(rng)});
@@ -1087,4 +1159,53 @@ fn params_docs_parse_into_keys() {
     for (id, _) in CURATED {
         assert!(find_command(id).is_some(), "CURATED names unknown command `{id}`");
     }
+}
+
+/// Seed 177: switching a sheet to Page Break Preview isn't an undo step (as in Excel), so undoing
+/// everything leaves the view mode alone and the undo check must not count it as an edit.
+#[test]
+fn view_mode_switch_is_not_an_undo_difference() {
+    for id in ["view.pageBreakPreview", "view.pageLayout"] {
+        let failure = replay("sales", &[(id.to_string(), json!({"sheet": 0}))]);
+        assert!(failure.is_none(), "`{id}`: {failure:?}");
+    }
+}
+
+/// Review of #2332: once the undo history has dropped its oldest steps, an `edit.undo` in the
+/// sequence can use up everything it kept before the episode ends. Undoing everything then has
+/// nothing left to do, and the workbook is the state before the oldest step kept, not the
+/// episode's start.
+#[test]
+fn a_trimmed_history_undone_in_the_sequence_stops_at_its_oldest_step() {
+    let mut h = Harness::new("sales");
+    // Past the engine's 100-step undo limit, so it drops the oldest 5 steps.
+    for i in 0..105 {
+        h.s.execute("cell.set", json!({"cell": format!("Z{}", i + 1), "input": i.to_string()})).expect("cell.set");
+        h.track_history();
+    }
+    assert_eq!(h.s.doc().expect("document").undo.len(), 100, "the history dropped its oldest steps");
+    if let Err(f) = h.step(0, "edit.undo", &json!({"steps": 100})) {
+        panic!("{f:?}");
+    }
+    assert!(h.s.doc().expect("document").undo.is_empty());
+    if let Err(f) = h.end_episode(0) {
+        panic!("{f:?}");
+    }
+}
+
+/// Review of #2332: the redo history is bounded too, so undoing `n` steps may leave fewer than
+/// `n` to redo, and redo then stops at the oldest entry it kept rather than at the final workbook.
+#[test]
+fn redo_stops_at_the_oldest_step_its_history_kept() {
+    let h = Harness::new("sales");
+    let selection = h.s.doc().expect("document").selection.clone();
+    let entry = |wb: &Arc<Workbook>| HistoryEntry { label: String::new(), wb: wb.clone(), selection: selection.clone(), retained_bytes: 0 };
+    let end = Arc::new((*h.wb()).clone());
+    let kept = Arc::new((*h.wb()).clone());
+    // Both steps kept: the first one undone went onto the redo history with the final workbook.
+    assert!(Arc::ptr_eq(&redo_target(&end, &[entry(&end), entry(&kept)], 2), &end));
+    // Its entry dropped: redo stops at the oldest entry left.
+    assert!(Arc::ptr_eq(&redo_target(&end, &[entry(&kept)], 2), &kept));
+    // Nothing undone, so nothing to redo, whatever an earlier `edit.undo` left there.
+    assert!(Arc::ptr_eq(&redo_target(&end, &[entry(&kept)], 0), &end));
 }

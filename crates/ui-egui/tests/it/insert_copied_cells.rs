@@ -13,12 +13,12 @@ fn harness() -> Harness {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4]]})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h
@@ -37,7 +37,9 @@ fn right_click_row_header(h: &mut Harness, cell: &str) {
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
+    // The runtime takes one press per frame: the release arrives in the next frame, and the frame
+    // after it shows what the click did.
+    h.run_steps(3);
 }
 
 #[test]
@@ -68,7 +70,9 @@ fn right_click_col_header(h: &mut Harness, cell: &str) {
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
+    // The runtime takes one press per frame: the release arrives in the next frame, and the frame
+    // after it shows what the click did.
+    h.run_steps(3);
 }
 
 /// As in Excel, the row and column header menus offer Format Cells… for the selected lines.

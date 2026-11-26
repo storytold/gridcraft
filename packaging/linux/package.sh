@@ -5,9 +5,14 @@
 #   $DIST/gridcraft-<version>-linux-<arch>.AppImage.zsync  delta updates (needs zsyncmake)
 #   $DIST/gridcraft-<version>-linux-<arch>.deb       Debian, Ubuntu, Mint, Pop!_OS, ...
 #   $DIST/gridcraft-<version>-linux-<arch>.rpm       Fedora, openSUSE, RHEL, ...
-#   $DIST/gridcraft-<version>-linux-<arch>.tar.gz    plain FHS-style tree (bin/, share/)
+#   $DIST/gridcraft-<version>-linux-<arch>.tar.gz    plain tree (bin/, share/)
 #
-# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"]
+# A nightly build (`GRIDCRAFT_BUILD_CHANNEL=nightly-v1`) starts through the flavor's launcher in
+# every format: usr/bin/gridcraft-nightly (deb/rpm, beside the GUI in usr/lib), the AppImage's
+# AppRun script, and bin/gridcraft-nightly in the plain tree tarball. A nightly build refuses to
+# start without `--launch-profile nightly-v1 --profile-root <dir>`, so every format ships one.
+#
+# Usage: packaging/linux/package.sh [--skip-build] [--formats "appimage deb rpm tar"] [--arch-tar-dir DIRECTORY]
 #
 # Needs: cargo; nfpm for deb/rpm (https://nfpm.goreleaser.com); appimagetool and the AppImage
 # runtime for the AppImage (pinned downloads into $CARGO_TARGET_DIR, or APPIMAGETOOL and
@@ -22,10 +27,16 @@ APP_ID=ai.storyteller.gridcraft
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
+ARCH_TAR_DIR=
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
+    --arch-tar-dir)
+      [[ -n "${2:-}" ]] || { echo "error: --arch-tar-dir needs a directory" >&2; exit 2; }
+      ARCH_TAR_DIR="$2"
+      shift 2
+      ;;
     -h | --help) sed -n '2,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -39,9 +50,20 @@ case "$ARCH" in
   *) echo "unsupported architecture $ARCH" >&2; exit 2 ;;
 esac
 export GRIDCRAFT_MAINTAINER="${GRIDCRAFT_MAINTAINER:-GridCraft maintainers <gridcraft@storyteller.ai>}"
+IS_NIGHTLY=0
+if [[ "${GRIDCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* ]]; then
+  IS_NIGHTLY=1
+  export GRIDCRAFT_BUILD_CHANNEL=nightly-v1
+  export GRIDCRAFT_OVERRIDE_VERSION="$VERSION"
+fi
 BASENAME="gridcraft-$VERSION-linux-$ARCH"
 
-echo "==> GridCraft $VERSION for Linux $ARCH ($FORMATS)"
+if [[ -n "$ARCH_TAR_DIR" && "$IS_NIGHTLY" != 1 ]]; then
+  echo "error: --arch-tar-dir is only for Nightly builds" >&2
+  exit 2
+fi
+
+echo "==> GridCraft $VERSION for Linux $ARCH ($FORMATS, channel=${GRIDCRAFT_BUILD_CHANNEL:-stable})"
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   if [[ -n "${CROSS_TARGET:-}" ]]; then
@@ -60,6 +82,11 @@ install -Dm755 "$BIN/gridcraft" "$STAGE/usr/bin/gridcraft"
 install -Dm755 "$BIN/gridcraft-cli" "$STAGE/usr/bin/gridcraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/gridcraft" "$STAGE/usr/bin/gridcraft-cli" 2>/dev/null || true
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
+if [[ "$IS_NIGHTLY" = 1 ]]; then
+  sed -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.gridcraft.nightly-v1|' \
+      "$STAGE/usr/share/applications/$APP_ID.desktop" >"$STAGE/usr/share/applications/$APP_ID.desktop.tmp"
+  mv "$STAGE/usr/share/applications/$APP_ID.desktop.tmp" "$STAGE/usr/share/applications/$APP_ID.desktop"
+fi
 install -Dm644 "$HERE/$APP_ID.mime.xml" "$STAGE/usr/share/mime/packages/$APP_ID.xml"
 mkdir -p "$STAGE/usr/share/metainfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$GRIDCRAFT_BUILD_DATE/g" \
@@ -81,12 +108,59 @@ has() {
   case " $FORMATS " in *" $format "*) return 0 ;; *) return 1 ;; esac
 }
 
+# The deb/rpm launcher: /usr/bin/gridcraft-nightly starts the GUI from /usr/lib with this channel's
+# own launch profile. A nightly build refuses to start without one, and the profile is the only
+# data root it accepts, so a distro package can never share the stable app's settings, prefs or logs.
+nightly_launcher() {
+  local destination="$1" real_bin="$2"
+  cat >"$destination" <<LAUNCHER
+#!/bin/sh
+# GridCraft Nightly. The launch profile, not an environment variable, names its data folder.
+set -eu
+if [ -z "\${XDG_DATA_HOME:-}" ] && [ -z "\${HOME:-}" ]; then
+  echo "gridcraft-nightly: XDG_DATA_HOME and HOME are both unset, so there is no Nightly data folder" >&2
+  exit 2
+fi
+case "\${1-}" in
+  --launch-profile | --profile-root) exec "$real_bin" "\$@" ;;
+esac
+if [ "\$#" -eq 1 ] && { [ "\${1-}" = "--version" ] || [ "\${1-}" = "-V" ]; }; then
+  exec "$real_bin" "\$@"
+fi
+exec "$real_bin" --launch-profile nightly-v1 --profile-root "\${XDG_DATA_HOME:-\$HOME/.local/share}/gridcraft-nightly/profile" -- "\$@"
+LAUNCHER
+  chmod 755 "$destination"
+}
+
 # ---- .tar.gz ------------------------------------------------------------------------------------
 if has tar; then
   mkdir -p "$WORK/tar"
   cp -R "$STAGE/usr" "$WORK/tar/$BASENAME"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    # An unpacked nightly tar is isolated too: bin/gridcraft stays the binary, and the launcher
+    # beside it is how it starts (the binary itself refuses to run without a launch profile).
+    install -Dm755 "$HERE/nightly-launch.sh" "$WORK/tar/$BASENAME/bin/gridcraft-nightly"
+    TAR_DESK="$WORK/tar/$BASENAME/share/applications/$APP_ID.desktop"
+    sed -e "s#^Exec=gridcraft\([[:space:]]\|$\)#Exec=gridcraft-nightly\1#" \
+        -e "s|^TryExec=gridcraft$|TryExec=gridcraft-nightly|" \
+        -e "s|^Name=GridCraft$|Name=GridCraft Nightly|" \
+        -e '/^MimeType=/d' \
+        "$TAR_DESK" >"$TAR_DESK.tmp"
+    mv "$TAR_DESK.tmp" "$TAR_DESK"
+  fi
   tar -C "$WORK/tar" -czf "$DIST/$BASENAME.tar.gz" "$BASENAME"
   echo "wrote $DIST/$BASENAME.tar.gz"
+fi
+
+# The Arch handoff keeps the same basename as the plain tarball in a separate directory.
+# Flatpak, OCI and direct tar consumers still get the original binary, not this launcher.
+if [[ -n "$ARCH_TAR_DIR" ]]; then
+  mkdir -p "$ARCH_TAR_DIR"
+  if [[ "$(cd "$ARCH_TAR_DIR" && pwd -P)" == "$(cd "$DIST" && pwd -P)" ]]; then
+    echo "error: the Arch tar directory must differ from the release directory" >&2
+    exit 2
+  fi
+  bash "$HERE/nightly-arch-tar.sh" "$STAGE/usr" "$WORK/arch-tar" "$ARCH_TAR_DIR" "$BASENAME"
 fi
 
 # ---- .deb / .rpm --------------------------------------------------------------------------------
@@ -94,8 +168,64 @@ if has deb || has rpm; then
   command -v nfpm >/dev/null || { echo "error: nfpm not found (https://nfpm.goreleaser.com/install/)" >&2; exit 1; }
   export VERSION
   export NFPM_ARCH="$DEB_ARCH"
+  NFPM_STAGE="$STAGE"
+  export NFPM_NAME="gridcraft"
+  export NFPM_BIN="gridcraft"
+  export NFPM_CLI="gridcraft-cli"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    NIGHTLY_DESK_ID="$APP_ID.nightly-v1"
+    export NFPM_NAME="gridcraft-nightly"
+    export NFPM_BIN="gridcraft-nightly"
+    export NFPM_CLI="gridcraft-nightly-cli"
+    NFPM_STAGE="$WORK/nfpm-root"
+    rm -rf "$NFPM_STAGE"
+    cp -R "$STAGE" "$NFPM_STAGE"
+    # The GUI keeps its name under /usr/lib; /usr/bin/<app>-nightly is its launcher (see
+    # nightly_launcher), so the desktop entry never starts a binary that refuses to run.
+    install -Dm755 "$NFPM_STAGE/usr/bin/gridcraft" "$NFPM_STAGE/usr/lib/gridcraft-nightly/gridcraft"
+    rm -f "$NFPM_STAGE/usr/bin/gridcraft"
+    nightly_launcher "$NFPM_STAGE/usr/bin/$NFPM_BIN" /usr/lib/gridcraft-nightly/gridcraft
+    mv "$NFPM_STAGE/usr/bin/gridcraft-cli" "$NFPM_STAGE/usr/bin/$NFPM_CLI"
+    mv "$NFPM_STAGE/usr/share/doc/gridcraft" "$NFPM_STAGE/usr/share/doc/$NFPM_NAME"
+    sed -e "s#^Exec=gridcraft\([[:space:]]\|$\)#Exec=$NFPM_BIN\1#" \
+        -e "s|^TryExec=gridcraft$|TryExec=$NFPM_BIN|" \
+        -e "s|^Icon=$APP_ID$|Icon=$NIGHTLY_DESK_ID|" \
+        -e "s|^Name=GridCraft$|Name=GridCraft Nightly|" \
+        -e '/^MimeType=/d' \
+        "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop" >"$NFPM_STAGE/usr/share/applications/$NIGHTLY_DESK_ID.desktop"
+    rm -f "$NFPM_STAGE/usr/share/applications/$APP_ID.desktop"
+    sed -e "s|<id>$APP_ID</id>|<id>$NIGHTLY_DESK_ID</id>|g" \
+        -e "s|<name>GridCraft</name>|<name>GridCraft Nightly</name>|g" \
+        -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$NIGHTLY_DESK_ID.desktop</launchable>|g" \
+        -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$NIGHTLY_DESK_ID</icon>|g" \
+        -e "s|<binary>gridcraft</binary>|<binary>$NFPM_BIN</binary>|g" \
+        -e "s|<binary>gridcraft-cli</binary>|<binary>$NFPM_CLI</binary>|g" \
+        -e '/<mediatype>/d' \
+        "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml" >"$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
+    rm -f "$NFPM_STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
+    # The nightly files are different files: validate those too, not only the stable ones above.
+    if command -v desktop-file-validate >/dev/null; then
+      desktop-file-validate "$NFPM_STAGE/usr/share/applications/$NIGHTLY_DESK_ID.desktop"
+    fi
+    if command -v appstreamcli >/dev/null; then
+      appstreamcli validate --no-net --explain "$NFPM_STAGE/usr/share/metainfo/$NIGHTLY_DESK_ID.metainfo.xml"
+    fi
+    rm -rf "$NFPM_STAGE/usr/share/mime"
+    rm -rf "$NFPM_STAGE/usr/share/icons/hicolor"
+    NIGHTLY_ICON="$ROOT/assets/app-icon/gridcraft-nightly.png"
+    [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+    install -Dm644 "$NIGHTLY_ICON" \
+      "$NFPM_STAGE/usr/share/icons/hicolor/256x256/apps/$NIGHTLY_DESK_ID.png"
+  fi
   # nfpm expands env vars in fields like `version` and `arch`, but not in `contents[].src`.
-  sed "s|\${STAGE}|$STAGE|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  # A nightly package keeps its GUI under /usr/lib behind usr/bin/gridcraft-nightly (see
+  # nightly_launcher). A stable tree has no such file, so this three-line entry is dropped and the
+  # rendered file stays exactly what main renders.
+  DROP_LIB_ENTRY=
+  # shellcheck disable=SC2016
+  [[ -e "$NFPM_STAGE/usr/lib/gridcraft-nightly/gridcraft" ]] || DROP_LIB_ENTRY='\|^  - src: \${STAGE}/usr/lib/gridcraft-nightly/gridcraft|,+2d;'
+  # shellcheck disable=SC2016
+  sed "${DROP_LIB_ENTRY}s|\${STAGE}|$NFPM_STAGE|g;s|\${NFPM_BIN}|$NFPM_BIN|g;s|\${NFPM_CLI}|$NFPM_CLI|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done
@@ -131,11 +261,33 @@ if has appimage; then
   }
   APPDIR="$WORK/GridCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
-  ln -s usr/bin/gridcraft "$APPDIR/AppRun"
-  cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
-  cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
-  ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+  if [[ "$IS_NIGHTLY" = 1 ]]; then
+    # A script, not the stable symlink: AppRun starts the GUI through its launch profile, and the
+    # desktop entry names the same launcher for integrations that read it.
+    install -Dm755 "$HERE/nightly-launch.sh" "$APPDIR/AppRun"
+    install -Dm755 "$HERE/nightly-launch.sh" "$APPDIR/usr/bin/gridcraft-nightly"
+    APPIMAGE_ID="$APP_ID.nightly-v1"
+    sed -e "s#^Exec=gridcraft\([[:space:]]\|$\)#Exec=gridcraft-nightly\1#" \
+        -e "s|^TryExec=gridcraft$|TryExec=gridcraft-nightly|" \
+        -e "s|^Icon=$APP_ID$|Icon=$APPIMAGE_ID|" \
+        -e "s|^Name=GridCraft$|Name=GridCraft Nightly|" \
+        -e '/^MimeType=/d' \
+        "$APPDIR/usr/share/applications/$APP_ID.desktop" >"$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop"
+    rm -f "$APPDIR/usr/share/applications/$APP_ID.desktop"
+    cp "$APPDIR/usr/share/applications/$APPIMAGE_ID.desktop" "$APPDIR/$APPIMAGE_ID.desktop"
+    rm -rf "$APPDIR/usr/share/icons/hicolor"
+    NIGHTLY_ICON="$ROOT/assets/app-icon/gridcraft-nightly.png"
+    [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+    install -Dm644 "$NIGHTLY_ICON" \
+      "$APPDIR/usr/share/icons/hicolor/256x256/apps/$APPIMAGE_ID.png"
+    cp "$NIGHTLY_ICON" "$APPDIR/$APPIMAGE_ID.png"
+    ln -s "$APPIMAGE_ID.png" "$APPDIR/.DirIcon"
+  else
+    ln -s usr/bin/gridcraft "$APPDIR/AppRun"
+    cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
+    cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
+    ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
+  fi
 
   TOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
   if [[ -z "$TOOL" ]] && [[ -z "$APPIMAGETOOL_SHA256" ]]; then
@@ -161,7 +313,11 @@ if has appimage; then
   fi
   # Absolute, because appimagetool runs in $DIST below (CARGO_TARGET_DIR, APPIMAGETOOL or
   # APPIMAGE_RUNTIME may be relative, e.g. target/agent-<name>).
-  OUT="$(cd "$DIST" && pwd)/$BASENAME.AppImage"
+  APPIMAGE_BASENAME="$BASENAME"
+  if [[ "$IS_NIGHTLY" = 1 && "$VERSION" != *-nightly* ]]; then
+    APPIMAGE_BASENAME="gridcraft-$VERSION-nightly-linux-$ARCH"
+  fi
+  OUT="$(cd "$DIST" && pwd)/$APPIMAGE_BASENAME.AppImage"
   APPDIR="$(cd "$APPDIR" && pwd)"
   TOOL="$(cd "$(dirname "$TOOL")" && pwd)/$(basename "$TOOL")"
   RUNTIME="$(cd "$(dirname "$RUNTIME")" && pwd)/$(basename "$RUNTIME")"
@@ -172,11 +328,20 @@ if has appimage; then
   # each AppImage on GitHub Releases. `latest` is the newest published release that is not a
   # pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
   REPO="${GITHUB_REPOSITORY:-storytold/gridcraft}"
-  UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|gridcraft-*-linux-$ARCH.AppImage.zsync"
+  UPDATE_ARGS=()
+  if [[ "$IS_NIGHTLY" = 0 ]]; then
+    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|gridcraft-*-linux-$ARCH.AppImage.zsync"
+    UPDATE_ARGS=(-u "$UPDATE_INFO")
+  else
+    # Nightly releases are GitHub pre-releases (`latest` only selects stable releases), so point
+    # zsync update metadata at pre-release tags matching `-nightly` rather than stable `latest`.
+    UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest-pre|gridcraft-*-nightly*-linux-$ARCH.AppImage.zsync"
+    UPDATE_ARGS=(-u "$UPDATE_INFO")
+  fi
   # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
   # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
-  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$APPDIR" "$OUT")
+  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream --runtime-file "$RUNTIME" "${UPDATE_ARGS[@]}" "$APPDIR" "$OUT")
   echo "wrote $OUT"
   if [[ -s "$OUT.zsync" ]]; then
     echo "wrote $OUT.zsync"

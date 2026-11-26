@@ -16,12 +16,12 @@ fn harness() -> Harness {
     session.new_workbook();
     session.execute("data.validation", json!({"range": "B2", "type": "list", "formula1": "\"Red,Green,Blue\"", "inputMessage": MESSAGE})).unwrap();
     session.execute("selection.set", json!({"cell": "B2"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+    let mut h = crate::common::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
         |ui, app: &mut SheetApp| {
             app.logic(ui.ctx());
             app.ui(ui);
         },
-        SheetApp::new(session, Default::default()),
+        crate::common::app(session),
     );
     h.run_steps(4);
     h
@@ -43,7 +43,9 @@ fn input_message_hides_while_the_list_is_open() {
     h.input_mut().events.push(Event::PointerMoved(pos));
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
     h.input_mut().events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-    h.run_steps(2);
+    // The runtime takes one press per frame: the release arrives in the next frame, and the frame
+    // after it shows what the click did.
+    h.run_steps(3);
 
     assert!(h.state().grid.list_picker.is_some(), "the dropdown arrow opens the list");
     assert!(h.query_by_label("Green").is_some(), "the list shows its items");

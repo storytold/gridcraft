@@ -2,7 +2,10 @@
 //!
 //! `cargo run --release -p gridcraft-ui-egui --example snapshot -- [--sample sales] [--in file.xlsx]
 //!  [--size 1440x900] [--scale 2] [--cmd 'id={json}']... [--tab Insert] [--dark] [--language en|es|zh|ja|ko|ru|pt|de|cs|fr|tr]
-//!  [--dialog 'name={json}'] [--hf-edit header|footer] out.png`
+//!  [--pane name] [--object id] [--dialog 'name={json}'] [--quick-analysis formatting|charts|totals|tables|sparklines] [--refedit key=A1:B2] [--hf-edit header|footer] out.png`
+//!
+//! `--refedit key=range` collapses the open dialog to its reference box `key`, then selects
+//! `range` on the grid, as a person picking a range for that box does.
 
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
@@ -22,6 +25,8 @@ fn main() {
     let mut dialog: Option<String> = None;
     let mut language: Option<String> = None;
     let mut hf_edit: Option<String> = None;
+    let mut quick: Option<String> = None;
+    let mut refedit: Option<String> = None;
     let mut out = "snapshot.png".to_string();
     let mut i = 0;
     while i < args.len() {
@@ -59,13 +64,22 @@ fn main() {
                 i += 1;
                 pane = args.get(i).cloned();
             }
-            "--chart" => {
+            // Selects a floating object of any kind by id (`--chart` is the older spelling).
+            "--object" | "--chart" => {
                 i += 1;
                 chart = args.get(i).and_then(|s| s.parse().ok());
             }
             "--dialog" => {
                 i += 1;
                 dialog = args.get(i).cloned();
+            }
+            "--quick-analysis" => {
+                i += 1;
+                quick = args.get(i).cloned();
+            }
+            "--refedit" => {
+                i += 1;
+                refedit = args.get(i).cloned();
             }
             "--hf-edit" => {
                 i += 1;
@@ -115,14 +129,27 @@ fn main() {
                     app.ui.ribbon_tab = t;
                 }
                 app.grid.pane = pane;
-                app.selected_chart = chart;
+                app.select_object_id(chart);
                 if let Some(d) = &dialog {
                     let (name, p) =
                         d.split_once('=').map(|(a, b)| (a, serde_json::from_str(b).unwrap_or(json!({})))).unwrap_or((d.as_str(), json!({})));
                     app.open_dialog(name, p);
                 }
+                if let Some(name) = &quick {
+                    use gridcraft_ui_egui::quick_analysis::Tab;
+                    app.grid.quick_analysis.tab = match name.as_str() {
+                        "charts" => Tab::Charts,
+                        "totals" => Tab::Totals,
+                        "tables" => Tab::Tables,
+                        "sparklines" => Tab::Sparklines,
+                        _ => Tab::Formatting,
+                    };
+                    if let Err(e) = gridcraft_ui_egui::quick_analysis::toggle(&mut app, Some(true)) {
+                        eprintln!("quick analysis: {e}");
+                    }
+                }
                 // Page Layout view: edit the first page's centre header (or footer) section.
-                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet, s)));
+                let active = app.session.active().and_then(|d| d.wb.active().cloned().map(|s| (d.wb.active_sheet(), s)));
                 if let (Some(part), Some((si, sh))) = (&hf_edit, active) {
                     let zone = gridcraft_engine::paper::HfZone { footer: part == "footer", section: 1 };
                     gridcraft_ui_egui::paper_view::begin(&mut app, si, &sh, (0, 0), zone);
@@ -133,6 +160,15 @@ fn main() {
     // The workbook's installed fonts bind once the font scan is done; frames past the first few
     // apply them, so the snapshot shows them as the app does.
     harness.run_steps(14);
+    if let Some((key, range)) = refedit.as_deref().and_then(|r| r.split_once('=')) {
+        let app = harness.state_mut();
+        if let Some(mut d) = app.dialog.take() {
+            d.collapse_to(app, key);
+            app.dialog = Some(d);
+        }
+        app.session.execute("selection.set", json!({"range": range})).expect("select");
+        harness.run_steps(8);
+    }
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     eprintln!("wrote {out} ({}x{})", img.width(), img.height());

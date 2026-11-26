@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use gridcraft_core::date::{MONTHS, WEEKDAYS, datetime_from_serial, days_in_month, serial_from_ymd};
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::{Cell, Formula};
+use gridcraft_model::{Cell, Formula, Workbook};
 use gridcraft_numfmt::{FormatKind, NumberFormat};
 
 use crate::Result;
@@ -23,13 +23,128 @@ pub enum FillMode {
     ValuesOnly,
     /// Fill Series from the right-drag menu: extends like a plain drag, and a lone number counts up.
     Extend,
+    /// Fill Days, Fill Weekdays, Fill Months or Fill Years: a source of dates steps by that unit.
+    /// A lone date steps by one unit; two or more step by the difference between the first two,
+    /// counted in that unit (one unit when they fall in the same one). A source that isn't dates
+    /// extends like a plain drag.
+    Dates(DateUnit),
+    /// Linear Trend: the targets continue the least-squares line (y = mx + b) through the source's
+    /// numbers. The source keeps its values.
+    LinearTrend,
+    /// Growth Trend: the targets continue the exponential curve (y = b·m^x) fitted to the source's
+    /// numbers. The source keeps its values.
+    GrowthTrend,
+}
+
+/// The step of a [`FillMode::Dates`] fill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DateUnit {
+    Day,
+    /// Monday to Friday: Saturday and Sunday are skipped.
+    Weekday,
+    Month,
+    Year,
 }
 
 impl FillMode {
     /// The modes that continue the source's series rather than copy it.
     fn extends_series(self) -> bool {
-        matches!(self, FillMode::Series | FillMode::Extend | FillMode::ValuesOnly)
+        matches!(self, FillMode::Series | FillMode::Extend | FillMode::ValuesOnly | FillMode::Dates(_))
     }
+}
+
+/// Whether a fill from `src` to `target` runs down or up the sheet rather than across it.
+fn fills_vertically(src: RangeRef, target: RangeRef) -> bool {
+    target.height() != src.height() || target.width() == src.width()
+}
+
+/// The numbers in each lane of `src` that a fill to `target` continues, or `None` when a source
+/// cell is empty or holds text, a logical value, an error, a formula or Python code.
+fn numeric_lanes(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -> Option<Vec<Vec<f64>>> {
+    let sh = wb.sheet(sheet)?;
+    lane_cells(src, target).map(|lane| lane.map(|c| trend_number(sh, c)).collect()).collect()
+}
+
+/// The cells of each lane of `src` that a fill to `target` continues: each column when the fill
+/// runs down or up the sheet, each row when it runs across.
+fn lane_cells(src: RangeRef, target: RangeRef) -> impl Iterator<Item = impl Iterator<Item = CellRef>> {
+    let vertical = fills_vertically(src, target);
+    let (lanes, len) = if vertical { (src.start.col..=src.end.col, src.height()) } else { (src.start.row..=src.end.row, src.width()) };
+    lanes.map(move |lane| (0..len).map(move |i| if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) }))
+}
+
+/// The sign Growth Trend fits a lane's numbers by: 1 when they are all above zero, -1 when they
+/// are all below zero, and `None` otherwise.
+fn growth_sign(nums: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let (mut above, mut below) = (true, true);
+    for y in nums {
+        above &= y > 0.0;
+        below &= y < 0.0;
+    }
+    if above {
+        Some(1.0)
+    } else if below {
+        Some(-1.0)
+    } else {
+        None
+    }
+}
+
+/// The number a trend fill reads from source cell `c`, or `None` when it is empty or holds text, a
+/// logical value, an error, a formula or Python code.
+fn trend_number(sh: &gridcraft_model::Sheet, c: CellRef) -> Option<f64> {
+    let cell = sh.cell(c)?;
+    if cell.formula.is_some() || cell.py.is_some() || !cell.value.is_number() {
+        return None;
+    }
+    cell.value.as_f64()
+}
+
+/// Whether the fill menu offers Linear Trend (`growth` false) or Growth Trend (`growth` true) for a
+/// fill from `src` to `target`: every source cell holds a number, and for Growth Trend the numbers
+/// of each lane are all above zero or all below zero. A source or target larger than
+/// [`MAX_FILL_CELLS`], or a target that doesn't hold the source in a corner, is refused by
+/// `edit.autoFill`, so neither trend applies to it and no source cell is read.
+pub fn trend_applies(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef, growth: bool) -> bool {
+    let (linear, growth_fits) = trends_that_apply(wb, sheet, src, target);
+    if growth { growth_fits } else { linear }
+}
+
+/// [`trend_applies`] for both trends from one read of the source: (Linear Trend, Growth Trend). It
+/// checks each cell's number and sign and fits nothing, so the menu does not wait on a fit.
+pub fn trends_that_apply(wb: &Workbook, sheet: usize, src: RangeRef, target: RangeRef) -> (bool, bool) {
+    if src.count() > MAX_FILL_CELLS || target.count() > MAX_FILL_CELLS || !holds_source_in_corner(src, target) {
+        return (false, false);
+    }
+    let Some(sh) = wb.sheet(sheet) else { return (false, false) };
+    let mut growth = true;
+    // The lanes and the sign rule are the ones the fill uses (`numeric_lanes`, `Pattern::growth`).
+    for lane in lane_cells(src, target) {
+        let mut missing = false;
+        let sign = growth_sign(lane.map_while(|c| {
+            let y = trend_number(sh, c);
+            missing |= y.is_none();
+            y
+        }));
+        if missing {
+            return (false, false);
+        }
+        growth &= sign.is_some();
+    }
+    (true, growth)
+}
+
+/// Whether a number format shows a calendar date (`YYYY-MM-DD` and `m/d/yyyy h:mm` do; `0 "days"`
+/// and `h:mm` don't).
+fn is_date_format(fmt: &str) -> bool {
+    NumberFormat::parse(fmt).kind() == FormatKind::Date
+}
+
+/// Whether the first cell of `src` holds a date, so a fill from it can step by days, weekdays,
+/// months or years: a number (not a formula) shown in a date format.
+pub fn starts_with_date(wb: &Workbook, sheet: usize, src: RangeRef) -> bool {
+    let Some(cell) = wb.sheet(sheet).and_then(|sh| sh.cell(src.start)) else { return false };
+    cell.formula.is_none() && cell.value.is_number() && is_date_format(wb.styles.get(cell.style).num_fmt.as_str())
 }
 
 /// Built-in custom lists.
@@ -59,10 +174,22 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
+    fill_except(cx, sheet, src, target, mode, &std::collections::BTreeSet::new())
+}
+
+/// [`fill`], leaving the rows in `skip_rows` untouched (Fill Down over a filtered range).
+pub fn fill_except(
+    cx: &mut Ctx,
+    sheet: usize,
+    src: RangeRef,
+    target: RangeRef,
+    mode: FillMode,
+    skip_rows: &std::collections::BTreeSet<u32>,
+) -> Result<()> {
     let custom = cx.wb.custom_lists.clone();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     // Direction: down/up if target extends rows, else right/left.
-    let vertical = target.height() != src.height() || target.width() == src.width();
+    let vertical = fills_vertically(src, target);
     let forward = if vertical {
         target.end.row > src.end.row || target.start.row == src.start.row
     } else {
@@ -80,18 +207,32 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
     if u64::from(lane_count).saturating_mul(u64::from(steps)) > MAX_FILL_CELLS {
         return Err(crate::EngineError::Other("The fill is too large.".into()));
     }
+    // Linear Trend and Growth Trend fit each lane's numbers.
+    let trends: Vec<Pattern> = match mode {
+        FillMode::LinearTrend | FillMode::GrowthTrend => {
+            let Some(lanes) = numeric_lanes(&cx.wb, sheet, src, target) else {
+                return Err(crate::EngineError::Other("Linear Trend and Growth Trend need a number in every source cell.".into()));
+            };
+            let fit = |nums: &Vec<f64>| if mode == FillMode::GrowthTrend { Pattern::growth(nums) } else { Some(Pattern::linear(nums)) };
+            let Some(trends) = lanes.iter().map(fit).collect() else {
+                return Err(crate::EngineError::Other("Growth Trend needs numbers that are all above zero or all below zero.".into()));
+            };
+            trends
+        }
+        _ => Vec::new(),
+    };
     let lanes: Vec<u32> = if vertical { (src.start.col..=src.end.col).collect() } else { (src.start.row..=src.end.row).collect() };
     let src_len = if vertical { src.height() } else { src.width() };
     let mut writes: Vec<(CellRef, Option<Cell>)> = Vec::new();
     let mut pictures = Vec::new();
-    for lane in lanes {
+    for (lane_i, lane) in lanes.into_iter().enumerate() {
         let src_cells: Vec<(CellRef, Option<Cell>)> = (0..src_len)
             .map(|i| {
                 let c = if vertical { CellRef::new(src.start.row + i, lane) } else { CellRef::new(lane, src.start.col + i) };
                 (c, sh.cell(c).cloned())
             })
             .collect();
-        let targets: Vec<CellRef> = if vertical {
+        let mut targets: Vec<CellRef> = if vertical {
             let rows: Vec<u32> =
                 if forward { (src.end.row + 1..=target.end.row).collect() } else { (target.start.row..src.start.row).rev().collect() };
             rows.into_iter().map(|r| CellRef::new(r, lane)).collect()
@@ -100,9 +241,17 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                 if forward { (src.end.col + 1..=target.end.col).collect() } else { (target.start.col..src.start.col).rev().collect() };
             cols.into_iter().map(|c| CellRef::new(lane, c)).collect()
         };
+        targets.retain(|t| !skip_rows.contains(&t.row));
         let fmt = |c: &(CellRef, Option<Cell>)| cx.wb.styles.get(c.1.as_ref().map(|c| c.style).unwrap_or_default()).num_fmt.as_str();
-        let pattern = if mode.extends_series() || mode == FillMode::Alternate {
-            let detected = Pattern::detect(&src_cells, &custom, cx.wb.date_system, src_cells.first().map(fmt).unwrap_or_default());
+        let pattern = if let Some(trend) = trends.get(lane_i) {
+            trend.clone()
+        } else if mode.extends_series() || mode == FillMode::Alternate {
+            let first_fmt = src_cells.first().map(fmt).unwrap_or_default();
+            let dates = match mode {
+                FillMode::Dates(unit) => Pattern::dates(&src_cells, unit, cx.wb.date_system, first_fmt),
+                _ => None,
+            };
+            let detected = dates.unwrap_or_else(|| Pattern::detect(&src_cells, &custom, cx.wb.date_system, first_fmt));
             match (mode, detected) {
                 (FillMode::Alternate, p) | (FillMode::Extend, p @ Pattern::Copy) => p.alternate(&src_cells),
                 (_, p) => p,
@@ -130,7 +279,14 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                     writes.push((*t, Some(existing)));
                     continue;
                 }
-                FillMode::ValuesOnly | FillMode::Series | FillMode::Alternate | FillMode::Copy | FillMode::Extend => {
+                FillMode::ValuesOnly
+                | FillMode::Series
+                | FillMode::Alternate
+                | FillMode::Copy
+                | FillMode::Extend
+                | FillMode::Dates(_)
+                | FillMode::LinearTrend
+                | FillMode::GrowthTrend => {
                     let style = if mode == FillMode::ValuesOnly { sh.cell(*t).map(|c| c.style).unwrap_or_default() } else { cell.style };
                     if let Some(f) = &cell.formula {
                         if let Some(e) = f.expr() {
@@ -138,10 +294,12 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                             cell.formula = Some(Arc::new(Formula::from_expr(shifted)));
                             cell.value = Value::Empty;
                         }
-                    } else if let Some(v) = match per_cell.get(src_i) {
-                        Some(p) => p.value(k as i64 / src_cells.len() as i64 + 1, forward, 1),
-                        None => pattern.value(step, forward, src_cells.len()),
-                    } {
+                    } else if cell.py.is_none()
+                        && let Some(v) = match per_cell.get(src_i) {
+                            Some(p) => p.value(k as i64 / src_cells.len() as i64 + 1, forward, 1),
+                            None => pattern.value(step, forward, src_cells.len()),
+                        }
+                    {
                         cell.value = v;
                     }
                     cell.style = style;
@@ -204,12 +362,100 @@ enum Pattern {
         months: i64,
         sys: gridcraft_core::DateSystem,
     },
+    /// Dates stepping by weekdays, skipping Saturday and Sunday.
+    Weekdays {
+        last: f64,
+        first: f64,
+        step: i64,
+        sys: gridcraft_core::DateSystem,
+    },
+    /// Growth Trend, kept as logarithms so that a value the curve reaches is not lost to an
+    /// overflow or underflow on the way: the logarithms of the fitted magnitudes at the source's
+    /// last and first cells, the logarithm of the factor between neighboring cells, and the sign
+    /// of every value (1 or -1).
+    Growth {
+        last: f64,
+        first: f64,
+        step: f64,
+        sign: f64,
+    },
 }
 
 impl Pattern {
+    /// Linear Trend: the least-squares line through `nums`. A lone number is copied unchanged.
+    fn linear(nums: &[f64]) -> Pattern {
+        if nums.len() == 1 {
+            return Pattern::Copy;
+        }
+        let (first, last, step) = least_squares(nums);
+        Pattern::Linear { last, first, step }
+    }
+
+    /// The exponential curve y = b·m^x fitted to `nums` at positions 0, 1, 2… by least squares on
+    /// the logarithms, as the GROWTH function fits positive numbers. Numbers below zero are fitted
+    /// by their magnitudes and keep their sign. `None` when the numbers are not all above zero or
+    /// all below zero. A lone number, or the same number repeated, is copied unchanged.
+    fn growth(nums: &[f64]) -> Option<Pattern> {
+        let sign = growth_sign(nums.iter().copied())?;
+        if nums.windows(2).all(|w| w.first() == w.last()) {
+            return Some(Pattern::Copy);
+        }
+        let logs: Vec<f64> = nums.iter().map(|y| (y * sign).ln()).collect();
+        let (first, last, step) = least_squares(&logs);
+        Some(Pattern::Growth { last, first, step, sign })
+    }
+
+    /// The pattern of Fill Days, Fill Weekdays, Fill Months or Fill Years, or `None` when the
+    /// source isn't all dates (numbers, not formulas, under a date format in its first cell).
+    fn dates(cells: &[(CellRef, Option<Cell>)], unit: DateUnit, sys: gridcraft_core::DateSystem, fmt: &str) -> Option<Pattern> {
+        if !is_date_format(fmt) {
+            return None;
+        }
+        let mut nums = Vec::with_capacity(cells.len());
+        for (_, cell) in cells {
+            let cell = cell.as_ref()?;
+            if cell.formula.is_some() || !cell.value.is_number() {
+                return None;
+            }
+            nums.push(cell.value.as_f64()?);
+        }
+        let first = *nums.first()?;
+        let last = *nums.last()?;
+        let second = nums.get(1).copied();
+        // The difference between the first two dates in the unit, and one unit when they fall in
+        // the same one.
+        let at_least_one = |n: i64| if n == 0 { 1 } else { n };
+        Some(match unit {
+            DateUnit::Day => {
+                let days = second.map_or(1.0, |b| b.floor() - first.floor());
+                Pattern::Linear { last, first, step: if days == 0.0 { 1.0 } else { days } }
+            }
+            DateUnit::Weekday => {
+                let step = match second {
+                    Some(b) => at_least_one(weekdays_between(sys, first, b)?),
+                    None => 1,
+                };
+                Pattern::Weekdays { last, first, step, sys }
+            }
+            DateUnit::Month | DateUnit::Year => {
+                let months = match second {
+                    Some(b) => {
+                        let (a, b) = (datetime_from_serial(sys, first)?, datetime_from_serial(sys, b)?);
+                        let years = b.year as i64 - a.year as i64;
+                        if unit == DateUnit::Year { at_least_one(years) * 12 } else { at_least_one(years * 12 + b.month as i64 - a.month as i64) }
+                    }
+                    None if unit == DateUnit::Year => 12,
+                    None => 1,
+                };
+                Pattern::Months { last, first, months, sys }
+            }
+        })
+    }
+
     fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
         let vals: Vec<Value> = cells.iter().map(|(_, c)| c.as_ref().map(|c| c.value.clone()).unwrap_or_default()).collect();
-        if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some())) {
+        // Formulas and Python cells copy.
+        if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
             return Pattern::Copy;
         }
         // Numbers.
@@ -241,19 +487,7 @@ impl Pattern {
                 }
             }
             // Least-squares step for 2+ values (Excel uses a linear trend).
-            let n = nums.len() as f64;
-            let mean_x = (n - 1.0) / 2.0;
-            let mean_y = nums.iter().sum::<f64>() / n;
-            let mut num = 0.0;
-            let mut den = 0.0;
-            for (i, y) in nums.iter().enumerate() {
-                num += (i as f64 - mean_x) * (y - mean_y);
-                den += (i as f64 - mean_x).powi(2);
-            }
-            let step = if den == 0.0 { 0.0 } else { num / den };
-            let fitted_last = mean_y + step * (n - 1.0 - mean_x);
-            let fitted_first = mean_y - step * mean_x;
-            return Pattern::Linear { last: fitted_last, first: fitted_first, step };
+            return Pattern::linear(&nums);
         }
         // Text.
         if !vals.is_empty() && vals.iter().all(|v| v.is_text()) {
@@ -343,29 +577,130 @@ impl Pattern {
                 let s = add_months_clamped(*sys, base, months.checked_mul(k * sign)?)?;
                 Some(Value::number(s))
             }
+            Pattern::Weekdays { last, first, step, sys } => {
+                let base = if forward { *last } else { *first };
+                Some(Value::number(add_weekdays(*sys, base, step.checked_mul(k)?.checked_mul(sign)?)?))
+            }
+            Pattern::Growth { last, first, step, sign: growth_sign } => {
+                let base = if forward { *last } else { *first };
+                Some(Value::number(round15(growth_sign * (base + step * (k * sign) as f64).exp())))
+            }
         }
     }
 }
 
+/// 2^600 and 2^-600, both exact.
+const TWO_POW_600: f64 = f64::from_bits((1023 + 600) << 52);
+const TWO_POW_MINUS_600: f64 = f64::from_bits((1023 - 600) << 52);
+
+/// The least-squares line through `nums` at positions 0, 1, 2…: its values at the first and last
+/// positions, and its step. A lone number gives a step of zero. When a number is larger than 2^600,
+/// the fit runs on the numbers multiplied by 2^-600 and its results are multiplied by 2^600, so the
+/// sums stay finite for numbers up to the largest double. When every number is smaller than 2^-600,
+/// the fit runs on the numbers multiplied by 2^600 and its results are multiplied by 2^-600, so
+/// subnormal numbers keep their step instead of rounding it to zero.
+fn least_squares(nums: &[f64]) -> (f64, f64, f64) {
+    let (down, up) = if nums.iter().any(|y| y.abs() > TWO_POW_600) {
+        (TWO_POW_MINUS_600, TWO_POW_600)
+    } else if nums.iter().all(|y| y.abs() < TWO_POW_MINUS_600) {
+        (TWO_POW_600, TWO_POW_MINUS_600)
+    } else {
+        (1.0, 1.0)
+    };
+    let n = nums.len() as f64;
+    let mean_x = (n - 1.0) / 2.0;
+    let mean_y = nums.iter().map(|y| y * down).sum::<f64>() / n;
+    let mut num = 0.0;
+    let mut den = 0.0;
+    for (i, y) in nums.iter().enumerate() {
+        num += (i as f64 - mean_x) * (y * down - mean_y);
+        den += (i as f64 - mean_x).powi(2);
+    }
+    let step = if den == 0.0 { 0.0 } else { num / den };
+    ((mean_y - step * mean_x) * up, (mean_y + step * (n - 1.0 - mean_x)) * up, step * up)
+}
+
+/// Whether `serial` falls on Monday to Friday; `None` outside the supported date range.
+fn is_weekday(sys: gridcraft_core::DateSystem, serial: f64) -> Option<bool> {
+    datetime_from_serial(sys, serial).map(|d| d.weekday != 0 && d.weekday != 6)
+}
+
+/// `serial` moved by `n` weekdays (back when `n` is negative), keeping its time of day. A start on
+/// a Saturday or Sunday moves to the next (or previous) weekday for the first step.
+fn add_weekdays(sys: gridcraft_core::DateSystem, serial: f64, n: i64) -> Option<f64> {
+    if n == 0 {
+        return Some(serial);
+    }
+    let dir = n.signum() as f64;
+    let mut d = serial;
+    let next_weekday = |d: &mut f64| -> Option<()> {
+        loop {
+            *d += dir;
+            if is_weekday(sys, *d)? {
+                return Some(());
+            }
+        }
+    };
+    next_weekday(&mut d)?;
+    // From a weekday, every seven days hold five weekdays.
+    let rest = n.unsigned_abs() - 1;
+    d += dir * (rest / 5 * 7) as f64;
+    for _ in 0..rest % 5 {
+        next_weekday(&mut d)?;
+    }
+    datetime_from_serial(sys, d)?;
+    Some(d)
+}
+
+/// How many weekdays lie after `a` up to and including `b` (negative when `b` comes first),
+/// counting whole days; `None` outside the supported date range.
+fn weekdays_between(sys: gridcraft_core::DateSystem, a: f64, b: f64) -> Option<i64> {
+    let (lo, hi, sign) = if b >= a { (a.floor(), b.floor(), 1) } else { (b.floor(), a.floor(), -1) };
+    let days = (hi - lo) as i64;
+    let mut count = days / 7 * 5;
+    let mut d = lo + (days / 7 * 7) as f64;
+    for _ in 0..days % 7 {
+        d += 1.0;
+        if is_weekday(sys, d)? {
+            count += 1;
+        }
+    }
+    Some(count * sign)
+}
+
 /// `serial` shifted by `months` calendar months, keeping the day of month but clamping it to the
 /// target month's last day (Jan 31 + 1 month = Feb 28/29). Always measured from the original date,
-/// so a series does not drift: Jan 31, Feb 28, Mar 31, Apr 30.
+/// so a series does not drift: Jan 31, Feb 28, Mar 31, Apr 30. The time of day is kept.
 fn add_months_clamped(sys: gridcraft_core::DateSystem, serial: f64, months: i64) -> Option<f64> {
     let d = datetime_from_serial(sys, serial)?;
     let total = (d.year as i64).checked_mul(12)?.checked_add(d.month as i64 - 1)?.checked_add(months)?;
     let year = total.div_euclid(12);
     let month = total.rem_euclid(12) + 1;
     let last = days_in_month(i32::try_from(year).ok()?, month as u32);
-    serial_from_ymd(sys, year, month, (d.day as i64).min(last as i64))
+    serial_from_ymd(sys, year, month, (d.day as i64).min(last as i64)).map(|day| day + serial - serial.floor())
 }
 
+/// `x` rounded to 15 significant digits through its exact decimal expansion, so a number that
+/// already has 15 or fewer digits comes back unchanged at any size. A number near the largest
+/// double whose rounding would pass it keeps its value. A whole number below 10^15 is returned
+/// as it is, and other numbers are written to a buffer on the stack, so a fill does not allocate
+/// for each cell.
 fn round15(x: f64) -> f64 {
-    if x == 0.0 || !x.is_finite() {
+    use std::io::Write;
+    if x == 0.0 || !x.is_finite() || (x.fract() == 0.0 && x.abs() < 1e15) {
         return x;
     }
-    let mag = x.abs().log10().floor() as i32;
-    let p = 10f64.powi(14 - mag);
-    if !p.is_finite() || p == 0.0 { x } else { (x * p).round() / p }
+    // "-1.23456789012345e-308" is the longest expansion: 22 bytes.
+    let mut buf = [0u8; 32];
+    let mut out = &mut buf[..];
+    if write!(out, "{x:.14e}").is_err() {
+        return x;
+    }
+    let len = 32 - out.len();
+    match buf.get(..len).and_then(|b| std::str::from_utf8(b).ok()).and_then(|s| s.parse::<f64>().ok()) {
+        Some(r) if r.is_finite() => r,
+        _ => x,
+    }
 }
 
 /// `1st Period` → `2nd Period`: an English ordinal ending is rewritten to suit the new number.
@@ -388,9 +723,9 @@ fn ordinal_suffix(n: i64, suffix: &str) -> String {
 /// `Item 007` → ("Item ", 7, "", 3); `3rd` style leading numbers → ("", 3, "rd", 1).
 fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     let chars: Vec<char> = t.chars().collect();
-    let end = chars.iter().rposition(|c| c.is_ascii_digit())?;
+    let end = chars.iter().rposition(char::is_ascii_digit)?;
     let mut start = end;
-    while start > 0 && chars.get(start - 1).is_some_and(|c| c.is_ascii_digit()) {
+    while start > 0 && chars.get(start - 1).is_some_and(char::is_ascii_digit) {
         start -= 1;
     }
     let digits: String = chars.get(start..=end)?.iter().collect();
@@ -401,8 +736,19 @@ fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     Some((prefix, n, suffix, width))
 }
 
+/// Options for filling a numeric or date series.
+pub struct SeriesOptions<'a> {
+    pub range: RangeRef,
+    pub rows: bool,
+    pub kind: &'a str,
+    pub step: f64,
+    pub stop: Option<f64>,
+    pub unit: &'a str,
+}
+
 /// Home › Fill › Series.
-pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, step: f64, stop: Option<f64>, unit: &str) -> Result<()> {
+pub fn series(cx: &mut Ctx, sheet: usize, options: SeriesOptions<'_>) -> Result<()> {
+    let SeriesOptions { range: r, rows, kind, step, stop, unit } = options;
     let sys = cx.wb.date_system;
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     let lanes: Vec<u32> = if rows { (r.start.row..=r.end.row).collect() } else { (r.start.col..=r.end.col).collect() };
@@ -422,20 +768,9 @@ pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, s
                     match (unit, d) {
                         ("month", Some(_)) => (step as i64).checked_mul(i as i64).and_then(|m| add_months_clamped(sys, start, m)).unwrap_or(v),
                         ("year", Some(_)) => (step as i64).checked_mul(i as i64 * 12).and_then(|m| add_months_clamped(sys, start, m)).unwrap_or(v),
-                        ("weekday", Some(_)) => {
-                            let mut n = v;
-                            let mut left = step.abs() as i64;
-                            while left > 0 {
-                                n += step.signum();
-                                let Some(day) = datetime_from_serial(sys, n) else {
-                                    return Err(crate::EngineError::Other("The weekday series runs past the supported date range.".into()));
-                                };
-                                if day.weekday != 0 && day.weekday != 6 {
-                                    left -= 1;
-                                }
-                            }
-                            n
-                        }
+                        // Whole weeks at a time: a huge step costs no more than a small one.
+                        ("weekday", Some(_)) => add_weekdays(sys, v, step as i64)
+                            .ok_or_else(|| crate::EngineError::Other("The weekday series runs past the supported date range.".into()))?,
                         _ => v + step,
                     }
                 }
@@ -443,12 +778,12 @@ pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, s
             };
             // The stop value bounds the series in the direction it runs (a growth by 0.5 falls).
             if let Some(s) = stop
-                && ((v >= prev && v > s) || (v < prev && v < s))
+                && ((v >= prev && round15(v) > s) || (v < prev && round15(v) < s))
             {
                 break;
             }
             let c = if rows { CellRef::new(lane, r.start.col + i) } else { CellRef::new(r.start.row + i, lane) };
-            writes.push((c, Cell { value: Value::number(round15(v)), formula: None, style }));
+            writes.push((c, Cell { value: Value::number(round15(v)), formula: None, style, py: None }));
         }
     }
     let sh = cx.sheet_mut(sheet)?;
@@ -507,7 +842,7 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     }
     let sh = cx.sheet_mut(sheet)?;
     for (c, out) in &writes {
-        sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style });
+        sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style, py: None });
     }
     for (c, _) in writes {
         cx.touch(sheet, c);
@@ -654,6 +989,36 @@ mod tests {
         s.execute("data.flashFill", serde_json::json!({})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
         assert_eq!(sh.value(CellRef::new(1, 1)), Value::from("03/12/2023"));
+    }
+
+    #[test]
+    fn round15_matches_the_decimal_expansion_without_allocating() {
+        let by_string = |x: f64| match format!("{x:.14e}").parse::<f64>() {
+            Ok(r) if r.is_finite() => r,
+            _ => x,
+        };
+        let tiny = f64::from_bits(1);
+        let whole = [1.0, -7.0, 999_999_999_999_999.0, 1e15, 1e15 + 1.0, 123_456_789_012_345_680.0];
+        let other = [0.1 + 0.2, -1.0 / 3.0, tiny, -tiny, 1e-308, f64::MAX, -f64::MAX, 1.7976931348623e308];
+        for x in whole.into_iter().chain(other) {
+            assert_eq!(round15(x).to_bits(), by_string(x).to_bits(), "{x:e}");
+        }
+        assert_eq!(round15(-0.0).to_bits(), (-0.0f64).to_bits());
+    }
+
+    #[test]
+    fn series_keeps_value_equal_to_stop_after_float_drift() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+        s.execute("edit.fillSeries", serde_json::json!({"range": "A1:A6", "type": "linear", "step": 0.1, "stop": 1.3})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "B1", "input": "0.1"})).unwrap();
+        s.execute("edit.fillSeries", serde_json::json!({"range": "B1:B4", "type": "growth", "step": 3, "stop": 0.3})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let col = |c: u32, n: u32| (0..n).map(|r| sh.value(CellRef::new(r, c))).collect::<Vec<_>>();
+        let n = Value::number;
+        assert_eq!(col(0, 6), vec![n(1.0), n(1.1), n(1.2), n(1.3), Value::Empty, Value::Empty]);
+        assert_eq!(col(1, 4), vec![n(0.1), n(0.3), Value::Empty, Value::Empty]);
     }
 
     #[test]

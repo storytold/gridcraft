@@ -13,15 +13,7 @@ fn harness() -> egui_kittest::Harness<'static, SheetApp> {
     session.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [3], [4], [5], [6]]})).unwrap();
     session.execute("range.setValues", json!({"range": "B1", "values": [[10], [20], [30]]})).unwrap();
     session.execute("selection.set", json!({"range": "B1:B3"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            app.logic(ui.ctx());
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
-    h.run_steps(4);
-    h
+    crate::support::stepped_harness(session)
 }
 
 fn handle(h: &egui_kittest::Harness<'_, SheetApp>) -> Pos2 {
