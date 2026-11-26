@@ -27,6 +27,13 @@ pub(super) struct PassHost<'a> {
     pub(super) spills: HashMap<Key, std::sync::Arc<Array>>,
     /// Where the areas in `spills` are, so a read finds the ones it meets without scanning them all.
     spill_index: SpillIndex,
+    /// Pre-pass spill areas on `wb` belonging to formulas recalculated in this pass, built per
+    /// sheet on demand so stale stored spills are ignored while those formulas run.
+    stale_spills: SpillIndex,
+    stale_built: HashSet<usize>,
+    /// Formula currently evaluating at the innermost level, so a formula does not read its own
+    /// pre-pass spilled cells while sibling formulas that still await evaluation keep theirs.
+    current: Option<Key>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -99,6 +106,9 @@ impl<'a> PassHost<'a> {
             in_progress: HashSet::default(),
             spills: HashMap::default(),
             spill_index: SpillIndex::default(),
+            stale_spills: SpillIndex::default(),
+            stale_built: HashSet::default(),
+            current: None,
             used: HashMap::default(),
             rng,
             standing: None,
@@ -135,6 +145,55 @@ impl<'a> PassHost<'a> {
         self.pending.extend(python.keys().copied());
         self.python = python;
         self
+    }
+
+    fn ensure_stale_spills(&mut self, sheet: usize) {
+        if !self.stale_built.insert(sheet) {
+            return;
+        }
+        let Some(sh) = self.wb.sheet(sheet) else { return };
+        if sh.spill_ranges.is_empty() {
+            return;
+        }
+        if sh.spill_ranges.len() <= self.exprs.len() + self.python.len() {
+            for (&anchor, &rect) in &sh.spill_ranges {
+                let k = (sheet, anchor);
+                if self.exprs.contains_key(&k) || self.python.contains_key(&k) {
+                    self.stale_spills.insert_rect(k, rect, false);
+                }
+            }
+        } else {
+            for &k in self.exprs.keys().chain(self.python.keys()) {
+                if k.0 == sheet
+                    && let Some(&rect) = sh.spill_ranges.get(&k.1)
+                {
+                    self.stale_spills.insert_rect(k, rect, false);
+                }
+            }
+        }
+    }
+
+    fn has_stale_meeting(&mut self, sheet: usize, range: RangeRef) -> bool {
+        self.ensure_stale_spills(sheet);
+        let mut hits = Vec::new();
+        self.stale_spills.meeting(sheet, range, &mut hits);
+        !hits.is_empty()
+    }
+}
+
+fn stale_covering_hidden(stale_spills: &SpillIndex, pending: &HashSet<Key>, current: Option<Key>, sheet: usize, c: CellRef) -> bool {
+    let is_hidden = |anchor| {
+        let k = (sheet, anchor);
+        !pending.contains(&k) || current == Some(k)
+    };
+    match stale_spills.covering(sheet, c) {
+        Cover::None => false,
+        Cover::One(anchor) => is_hidden(anchor),
+        Cover::Many => {
+            let mut hits = Vec::new();
+            stale_spills.meeting(sheet, RangeRef::new(c, c), &mut hits);
+            hits.into_iter().any(is_hidden)
+        }
     }
 }
 
@@ -329,10 +388,12 @@ impl PassHost<'_> {
         }
         let expr = std::sync::Arc::clone(expr);
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
+        let outer_current = self.current.replace(k);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
+        self.current = outer_current;
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
             // It ran out of the stack left below the formulas that read it: it is calculated
@@ -604,7 +665,18 @@ impl Host for PassHost<'_> {
             }
             return arr.get(dr, dc).cloned().unwrap_or_default();
         }
-        self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
+        let Some(sh) = self.wb.sheet(sheet) else { return Value::Empty };
+        match sh.cells.get(c) {
+            Some(cell) if !cell.value.is_empty() || cell.formula.is_some() => cell.value.clone(),
+            _ => {
+                let Some(v) = sh.spill.get(&c) else { return Value::Empty };
+                self.ensure_stale_spills(sheet);
+                if stale_covering_hidden(&self.stale_spills, &self.pending, self.current, sheet, c) {
+                    return Value::Empty;
+                }
+                v.clone()
+            }
+        }
     }
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         let (h, w) = (range.height() as usize, range.width() as usize);
@@ -621,18 +693,27 @@ impl Host for PassHost<'_> {
                 *slot = cell.value.clone();
             }
         }
-        let _seen = stored_spill_in(sh, range, &mut |c, v| {
-            let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
-            if let Some(slot) = out.get_mut(i)
-                && slot.is_empty()
+        if !sh.spill.is_empty() {
+            let has_stale = self.has_stale_meeting(sheet, range);
+            let stale_spills = &self.stale_spills;
+            let pending = &self.pending;
+            let current = self.current;
+            let _seen = stored_spill_in(sh, range, &mut |c, v| {
+                if has_stale && stale_covering_hidden(stale_spills, pending, current, sheet, c) {
+                    return true;
+                }
+                let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
+                if let Some(slot) = out.get_mut(i)
+                    && slot.is_empty()
+                {
+                    *slot = v.clone();
+                }
+                true
+            });
+            #[cfg(test)]
             {
-                *slot = v.clone();
+                self.spill_visits += _seen;
             }
-            true
-        });
-        #[cfg(test)]
-        {
-            self.spill_visits += _seen;
         }
         for (i, c) in formulas {
             let v = self.cell_value(sheet, c);
@@ -699,8 +780,18 @@ impl Host for PassHost<'_> {
         // produced some): leave such blocks to `range_values`.
         let mut arrays = Vec::new();
         self.spill_index.meeting(sheet, range, &mut arrays);
+        if !arrays.is_empty() {
+            return false;
+        }
+        let has_stale = !sh.spill.is_empty() && self.has_stale_meeting(sheet, range);
+        let stale_spills = &self.stale_spills;
+        let pending = &self.pending;
+        let current = self.current;
         let mut stored = false;
-        let _seen = stored_spill_in(sh, range, &mut |_, _| {
+        let _seen = stored_spill_in(sh, range, &mut |c, _| {
+            if has_stale && stale_covering_hidden(stale_spills, pending, current, sheet, c) {
+                return true;
+            }
             stored = true;
             false
         });
@@ -708,7 +799,7 @@ impl Host for PassHost<'_> {
         {
             self.spill_visits += _seen;
         }
-        if !arrays.is_empty() || stored {
+        if stored {
             return false;
         }
         for (c, cell) in sh.cells.iter_range(range) {

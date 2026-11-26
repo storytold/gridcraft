@@ -3139,3 +3139,49 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
 }
+
+#[test]
+fn self_overlapping_spill_matches_full_recalc_after_incremental_edits() {
+    let mut t = T::new();
+    t.set("G14", "=G12:H19");
+    assert_eq!(t.get("G16"), Value::Error(CellError::Circ));
+    assert_eq!(t.get("G18"), Value::Number(0.0));
+
+    // Touching spilled cells or a precedent cell triggers an incremental recalculation of G14
+    // while its previous spill is still on the sheet (#4646).
+    let touched: Vec<(usize, CellRef)> = (14..=20).map(|row| (0, CellRef { row, col: 6 })).collect();
+    t.calc.cells_changed(&mut t.wb, &touched);
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    for row in 13..=20 {
+        for col in 6..=7 {
+            let cell = CellRef { row, col };
+            assert_eq!(t.wb.sheet(0).unwrap().value(cell), fresh.sheet(0).unwrap().value(cell));
+        }
+    }
+
+    t.set("G12", "5");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("G12"), Value::Number(5.0));
+    assert_eq!(t.get("G14"), Value::Number(5.0));
+    assert_eq!(t.get("G16"), Value::Error(CellError::Circ));
+    assert_eq!(t.get("G18"), Value::Number(0.0));
+    assert_eq!(t.get("G18"), fresh.sheet(0).unwrap().value(c("G18")));
+}
+
+#[test]
+fn spill_feedback_loop_converges_consistently() {
+    let mut t = T::new();
+    t.set("Z1", "1");
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("B1", "=A2+Z1");
+    t.set("A1", "=IF(B1>0,SEQUENCE(3),1)");
+    assert_eq!(t.get("B1"), Value::Number(3.0));
+
+    t.set("Z1", "2");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("B1"), Value::Number(4.0));
+    assert_eq!(t.get("B1"), fresh.sheet(0).unwrap().value(c("B1")));
+}
