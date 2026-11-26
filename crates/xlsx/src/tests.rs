@@ -26,6 +26,7 @@ mod phonetic_tests;
 mod pivot_tests;
 mod richdata_tests;
 mod roundtrip;
+mod saved_selection;
 mod shape_text_rtl;
 mod shared_media;
 mod sheet_data_pin;

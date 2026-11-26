@@ -24,6 +24,21 @@ impl Selection {
     pub fn at(c: CellRef) -> Selection {
         Selection { active: c, anchor: c, ranges: vec![RangeRef::cell(c)] }
     }
+    /// The selection saved with a sheet: its selected areas with the active cell, or the active
+    /// cell alone when the areas do not hold it in the last one.
+    pub fn saved(sheet: Option<&Sheet>) -> Selection {
+        let Some(sh) = sheet else { return Selection::default() };
+        let mut sel = Selection::at(sh.view_active);
+        if sh.view_ranges.last().is_some_and(|r| r.contains(sh.view_active)) {
+            sel.ranges = sh.view_ranges.clone();
+        }
+        sel
+    }
+    /// The selected areas saved with a sheet for this selection: none when only the active cell
+    /// is selected.
+    pub fn saved_ranges(&self) -> Vec<RangeRef> {
+        if self.ranges.len() == 1 && self.ranges[0] == RangeRef::cell(self.active) { vec![] } else { self.ranges.clone() }
+    }
     pub fn range(r: RangeRef) -> Selection {
         Selection { active: r.start, anchor: r.start, ranges: vec![r] }
     }

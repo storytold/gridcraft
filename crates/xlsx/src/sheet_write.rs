@@ -266,8 +266,20 @@ fn build_craft_cols(sheet: &Sheet, sid: &dyn Fn(gridcraft_model::StyleId) -> u32
     cols
 }
 
+/// The saved selected areas, when they hold the active cell in the last one as the model keeps
+/// them; otherwise the active cell alone is written, which Excel always opens.
+fn selected_ranges(sheet: &Sheet) -> Option<&[RangeRef]> {
+    let r = sheet.view_ranges.as_slice();
+    r.last().is_some_and(|last| last.contains(sheet.view_active)).then_some(r)
+}
+
 fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
     let active = sheet.view_active.a1();
+    let ranges = selected_ranges(sheet);
+    let sqref: Vec<CraftRange> =
+        ranges.map_or_else(|| vec![to_craft_range(RangeRef::cell(sheet.view_active))], |r| r.iter().copied().map(to_craft_range).collect());
+    // The active cell's area is last: point at it when it is not the first.
+    let active_cell_id = ranges.filter(|r| r.len() > 1).map(|r| (r.len() - 1) as u32);
     let (pane, selections) = match sheet.freeze {
         Some((rows, cols)) if rows > 0 || cols > 0 => {
             let pane_name = match (rows > 0, cols > 0) {
@@ -291,20 +303,14 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
             let sel = CraftSelection {
                 pane: Some(pane_name.to_string()),
                 active_cell: Some(active),
-                active_cell_id: None,
-                sqref: vec![to_craft_range(RangeRef::cell(sheet.view_active))],
+                active_cell_id,
+                sqref: sqref.clone(),
                 ..Default::default()
             };
             (Some(pane), vec![sel])
         }
         _ => {
-            let sel = CraftSelection {
-                pane: None,
-                active_cell: Some(active),
-                active_cell_id: None,
-                sqref: vec![to_craft_range(RangeRef::cell(sheet.view_active))],
-                ..Default::default()
-            };
+            let sel = CraftSelection { pane: None, active_cell: Some(active), active_cell_id, sqref: sqref.clone(), ..Default::default() };
             (None, vec![sel])
         }
     };

@@ -541,6 +541,32 @@ fn apply_craft_view(v: &craft_xlsx::SheetView, sheet: &mut Sheet) {
     if let Some(c) = sel.and_then(|s| s.active_cell.as_deref()).and_then(CellRef::parse) {
         sheet.view_active = c;
     }
+    if let Some(sel) = sel {
+        read_selected_ranges(sel, sheet);
+    }
+}
+
+/// Most selected areas kept from a file: a selection is view state, and a crafted `sqref` must not
+/// cost memory or time on every redraw.
+const MAX_SELECTED_RANGES: usize = 1024;
+
+/// The selected areas (`sqref`), as Excel opens them: in the file's order, with the active cell
+/// in area `activeCellId` (the first by default), moved to that area's first cell when it lies
+/// outside. GridCraft keeps the active cell's area last.
+fn read_selected_ranges(sel: &craft_xlsx::Selection, sheet: &mut Sheet) {
+    let mut ranges: Vec<RangeRef> = sel.sqref.iter().take(MAX_SELECTED_RANGES).filter_map(|r| RangeRef::parse(&r.a1())).collect();
+    let id = sel.active_cell_id.unwrap_or(0) as usize;
+    if id >= ranges.len() {
+        return;
+    }
+    let current = ranges.remove(id);
+    if !current.contains(sheet.view_active) {
+        sheet.view_active = current.start;
+    }
+    ranges.push(current);
+    if ranges.len() > 1 || !current.is_single() {
+        sheet.view_ranges = ranges;
+    }
 }
 
 fn apply_craft_print(print: &craft_xlsx::Print, fit_to_page: bool, sheet: &mut Sheet) {
