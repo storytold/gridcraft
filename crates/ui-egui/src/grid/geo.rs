@@ -12,6 +12,10 @@ pub struct Geo {
     /// headers; 0 without an outline (see `outline`).
     pub band_w: f32,
     pub band_h: f32,
+    /// A slim lane left of the cells for a pivot row-group's +/- glyph, reserved only when
+    /// headings are off (so there's no row-number gutter to draw it in already) and the sheet has
+    /// a PivotTable with row fields; 0 otherwise (see `crate::grid::pivot_toggle`).
+    pub pivot_gutter_w: f32,
     pub row_outline: Arc<crate::outline::Axis>,
     pub col_outline: Arc<crate::outline::Axis>,
     pub fr: u32,
@@ -72,7 +76,13 @@ impl Geo {
         let ci = lines.ci.clone();
         let last_row = ri.at((scroll.y + rect.height() / z) as f64 + 200.0) + 1;
         let digits = (last_row as f32).log10().floor() as i32 + 1;
-        let header_w = if sh.show_headings { ((digits.max(2) as f32 * 7.0 + 14.0) * zoom.max(0.75)).round() } else { 0.0 };
+        let header_w = if sh.show_headings {
+            let w = ((digits.max(2) as f32 * 7.0 + 14.0) * zoom.max(0.75)).round();
+            // Wide enough for the pivot toggle glyph too, on a sheet that has one to show.
+            if sh.pivots.iter().any(|pt| !pt.rows.is_empty()) { w.max((26.0 * zoom.max(0.75)).round()) } else { w }
+        } else {
+            0.0
+        };
         let (fr, fc) = sh.freeze.unwrap_or((0, 0));
         let frozen_w = (ci.start(fc) as f32) * z;
         let frozen_h = (ri.start(fr) as f32) * z;
@@ -89,7 +99,15 @@ impl Geo {
         if symbols && col_outline.levels > 0 && header_w == 0.0 {
             band_w = band_w.max(crate::outline::lane(zoom) + 3.0);
         }
-        let cells = Rect::from_min_max(pos2(rect.left() + band_w + header_w, rect.top() + band_h + header_h), rect.max);
+        // Headings off hides the row-number gutter a pivot toggle would otherwise share; give it
+        // a lane of its own instead, the same way the outline band gets a minimum lane above.
+        let pivot_gutter_w = if header_w == 0.0 && sh.pivots.iter().any(|pt| !pt.rows.is_empty()) {
+            (crate::outline::lane(zoom) + 3.0).max(26.0 * zoom.max(0.75))
+        } else {
+            0.0
+        };
+        let cells =
+            Rect::from_min_max(pos2(rect.left() + band_w + pivot_gutter_w + header_w, rect.top() + band_h + header_h), rect.max);
         Geo {
             rect,
             cells,
@@ -98,6 +116,7 @@ impl Geo {
             header_h,
             band_w,
             band_h,
+            pivot_gutter_w,
             row_outline,
             col_outline,
             fr,

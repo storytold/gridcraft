@@ -225,8 +225,11 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Headers.
     if sh.show_headings {
         let headings = table_headings(&geo, sh, sel.active);
-        paint_headers(&painter, &geo, sh, &sel, &t, &quads, &headings);
+        paint_headers(HeadersInput { app, p: &painter, geo: &geo, wb: &wb, si, sh, sel: &sel, t: &t, quads: &quads, headings: &headings });
         paint_freeze_handles(&painter, &geo, sh, &app.grid.drag, &t);
+    } else {
+        // No row-number gutter to share: pivot row-group toggles get their own slim lane instead.
+        super::pivot_toggle::paint_gutter(app, &painter, &geo, &wb, si, sh, &quads);
     }
     crate::outline::paint(&painter, &geo, sh, &t);
     if geo.rtl {
@@ -577,15 +580,21 @@ pub(crate) fn horizontal_scrollbar(app: &mut SheetApp, ui: &mut egui::Ui, track:
     }
 }
 
-pub(crate) fn paint_headers(
-    p: &Painter,
-    geo: &Geo,
-    sh: &Sheet,
-    sel: &gridcraft_engine::Selection,
-    t: &Tokens,
-    quads: &[PaneQuad],
-    headings: &[TableHeading],
-) {
+pub(crate) struct HeadersInput<'a> {
+    pub(crate) app: &'a mut SheetApp,
+    pub(crate) p: &'a Painter,
+    pub(crate) geo: &'a Geo,
+    pub(crate) wb: &'a Workbook,
+    pub(crate) si: usize,
+    pub(crate) sh: &'a Sheet,
+    pub(crate) sel: &'a gridcraft_engine::Selection,
+    pub(crate) t: &'a Tokens,
+    pub(crate) quads: &'a [PaneQuad],
+    pub(crate) headings: &'a [TableHeading],
+}
+
+pub(crate) fn paint_headers(input: HeadersInput<'_>) {
+    let HeadersInput { app, p, geo, wb, si, sh, sel, t, quads, headings } = input;
     let font = theme::ui_font(heading_font_size(geo.z));
     // The headers' own area: inside the outline bands.
     let r = Rect::from_min_max(pos2(geo.head_left(), geo.head_top()), geo.rect.max);
@@ -669,7 +678,14 @@ pub(crate) fn paint_headers(
                     }
                 }
                 let color = if row_sel(rr) { t.header_sel_text } else { t.header_text };
-                pr.text(cr.center(), Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
+                if let Some(toggle) = super::pivot_toggle::toggle_at(app, wb, si, rr) {
+                    let glyph = super::pivot_toggle::glyph_rect(geo, cr);
+                    super::pivot_toggle::paint_glyph(&pr, glyph, toggle.collapsed);
+                    let room = Rect::from_min_max(pos2(glyph.right() + 1.0, cr.top()), cr.max);
+                    pr.with_clip_rect(room).text(room.center(), Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
+                } else {
+                    pr.text(cr.center(), Align2::CENTER_CENTER, (rr as u64 + 1).to_string(), font.clone(), color);
+                }
             }
         }
     }

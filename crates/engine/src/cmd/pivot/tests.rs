@@ -351,6 +351,30 @@ fn collapsed_item_puts_values_in_the_values_column() {
 }
 
 #[test]
+fn row_toggles_mark_expanded_and_collapsed_group_headers() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.collapse", json!({"field": "Region", "items": ["East"]})).unwrap();
+    let d = s.doc().unwrap();
+    let wb = &d.wb;
+    let si = wb.active_sheet();
+    let toggles = crate::pivot::row_toggles(wb, si);
+    let p = pt(&s);
+    let (range, rows) = toggles.iter().find(|(r, _)| Some(*r) == p.last_range).expect("the pivot's own area");
+    let east = (range.start.row..=range.end.row).find(|r| val(&s, &CellRef::new(*r, range.start.col).a1()).display() == "East").unwrap();
+    let west = (range.start.row..=range.end.row).find(|r| val(&s, &CellRef::new(*r, range.start.col).a1()).display() == "West").unwrap();
+    let east_toggle = rows[(east - range.start.row) as usize].as_ref().expect("East has sub-items, so it offers a toggle");
+    assert_eq!(east_toggle.field, "Region");
+    assert_eq!(east_toggle.item, "East");
+    assert!(east_toggle.collapsed, "East was collapsed");
+    let west_toggle = rows[(west - range.start.row) as usize].as_ref().expect("West also has sub-items");
+    assert!(!west_toggle.collapsed, "West wasn't collapsed");
+    // A leaf (Product) row has nothing to collapse.
+    let apples = (range.start.row..=range.end.row).find(|r| val(&s, &CellRef::new(*r, range.start.col).a1()).display() == "Apples").unwrap();
+    assert!(rows[(apples - range.start.row) as usize].is_none());
+}
+
+#[test]
 fn values_stay_last_in_columns() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Product"], "columns": ["Region"], "values": ["Sales", "Units"]})).unwrap();

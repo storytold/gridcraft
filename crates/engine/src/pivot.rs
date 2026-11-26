@@ -30,7 +30,7 @@ pub use compute::{NOT_A_VALUE_CELL, detail_cells, detail_records};
 pub use items::{distinct_labels, func_caption, item_label};
 #[cfg(test)]
 use output::data_cols_exceed_sheet;
-pub use output::{CellKind, OutCell, Output, RowKind};
+pub use output::{CellKind, OutCell, Output, RowKind, RowToggle};
 use output::{cell_style, look};
 
 /// Largest source block read (cells).
@@ -190,6 +190,23 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
 pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Output, String> {
     let src = read_source(wb, &pt.source, pivot_sheet)?;
     compute_from(wb, pt, &src, None)
+}
+
+/// The collapsible row-group headers of every PivotTable on sheet `si`, for the UI's row-gutter
+/// +/- glyphs: each pivot's last written area paired with one [`RowToggle`] slot per row of it
+/// (`None` where that row isn't a collapsible group header). Re-derives this from the live
+/// `PivotTable` model (the same `flatten` that wrote the cells) rather than reading anything
+/// stored on the sheet, since the written cells carry no such metadata.
+pub fn row_toggles(wb: &Workbook, si: usize) -> Vec<(RangeRef, Vec<Option<RowToggle>>)> {
+    let Some(sh) = wb.sheet(si) else { return Vec::new() };
+    sh.pivots
+        .iter()
+        .filter_map(|pt| {
+            let range = pt.last_range?;
+            let out = compute(wb, pt, si).ok()?;
+            Some((range, out.row_toggle))
+        })
+        .collect()
 }
 
 /// Recomputes a pivot and writes its report. With `replace` false, refuses when the target area

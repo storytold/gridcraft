@@ -1,5 +1,7 @@
 use super::items::{Acc, FieldItems, build_tree, collect_siblings, is_collapsed, item_label};
-use super::output::{AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, ValSrc, data_cols_exceed_sheet, flatten_cols};
+use super::output::{
+    AggMap, CellKind, ColKind, ColSpec, Ctx, Grid, Line, LineKind, Output, RowKind, RowToggle, ValSrc, data_cols_exceed_sheet, flatten_cols,
+};
 use super::{
     CalcSet, CellError, CellRef, HashMap, HashSet, MAX_AXIS_FIELDS, MAX_COLS, MAX_VALUE_FIELDS, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
     PivotLayout, PivotShowAs, PivotTable, PivotValue, Source, Value, Workbook, read_source,
@@ -516,7 +518,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     let ctx = Ctx { pt, rows: row_fields.clone(), row_items, row_fmts: row_fmts.clone(), vpos, val_names: val_names.clone() };
     let mut lines: Vec<Line> = Vec::new();
     if row_levels == 0 {
-        lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None });
+        lines.push(Line { kind: LineKind::Item(false), leaf: true, path: vec![], values: true, labels: vec![], vi: None, toggle: None });
     } else {
         if pt.layout == PivotLayout::Tabular {
             ctx.flatten_tabular(&row_tree, 0, None, &mut Vec::new(), &[], &mut lines);
@@ -532,6 +534,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
                 values: true,
                 labels: vec![(0, Value::text(text), 0, None)],
                 vi,
+                toggle: None,
             };
             if on_rows {
                 lines.extend(val_names.iter().enumerate().map(|(vi, name)| grand(format!("Total {name}"), Some(vi))));
@@ -589,6 +592,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
     if empty {
         let r = g.push_row(RowKind::Placeholder)?;
         g.set(r, 0, Value::text(format!("{} — choose fields", pt.name)), CellKind::Placeholder, 0, None);
+        let row_toggle = vec![None; g.rows.len()];
         return Ok(Output {
             width: g.width as u32,
             grid: g.rows,
@@ -597,6 +601,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             chart_rows: vec![],
             chart_cols: vec![],
             label_col: None,
+            row_toggle,
         });
     }
 
@@ -619,6 +624,7 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             headers_on: pt.show_headers,
         },
     )?;
+    let mut row_toggle: Vec<Option<RowToggle>> = vec![None; g.rows.len()];
     let val_name = |vi: usize| vals.get(vi).map(|(_, value)| value.name.clone()).unwrap_or_default();
 
     // ---- body
@@ -686,6 +692,9 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
         if line.leaf && k > 0 {
             chart_rows.push(r as u32);
         }
+        row_toggle.push(
+            line.toggle.as_ref().map(|(field, item, collapsed)| RowToggle { field: field.clone(), item: item.clone(), collapsed: *collapsed }),
+        );
         for (c, v, indent, fmt) in &line.labels {
             g.set(r, *c, v.clone(), ck.0, *indent, fmt.clone());
         }
@@ -712,5 +721,5 @@ pub(super) fn compute_from(wb: &Workbook, pt: &PivotTable, src: &Source, mut pro
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, row_toggle })
 }

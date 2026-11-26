@@ -61,6 +61,19 @@ pub struct Output {
     pub chart_cols: Vec<(u32, String)>,
     /// Grid column holding the innermost row labels (`None` without row fields).
     pub label_col: Option<u32>,
+    /// Per grid row, `Some` when that row is a row-field item with further detail to hide or
+    /// show (Excel's +/- outline button): (that field's source column, item label, currently
+    /// collapsed). Parallel to `grid`/`row_kinds`; `None` for rows outside the row-field body
+    /// (filters, headers, Σ Values lines, subtotal/grand lines).
+    pub row_toggle: Vec<Option<RowToggle>>,
+}
+
+/// A collapsible pivot row-group header, as seen by the UI.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowToggle {
+    pub field: String,
+    pub item: String,
+    pub collapsed: bool,
 }
 
 impl Output {
@@ -112,6 +125,9 @@ pub(super) struct Line {
     pub(super) labels: Vec<(usize, Value, u8, Option<String>)>,
     /// The value field of the line when Σ Values sits in Rows (`None`: one per data column).
     pub(super) vi: Option<usize>,
+    /// Set when this line is a row/column-field item that has further detail to hide or show
+    /// (Excel's +/- outline button): (that field's source column, its item label, currently collapsed).
+    pub(super) toggle: Option<(String, String, bool)>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,6 +180,7 @@ impl Ctx<'_> {
                 values: true,
                 labels: vec![(col, Value::text(format!("{label} {name}")), indent, None)],
                 vi: Some(vi),
+                toggle: None,
             });
         }
     }
@@ -175,7 +192,7 @@ impl Ctx<'_> {
         for (vi, name) in self.val_names.iter().enumerate() {
             let labels = vec![(col, Value::text(name.as_str()), indent, None)];
             let leaf = nodes.is_empty();
-            out.push(Line { kind: LineKind::Item(!leaf), leaf, path: prefix.clone(), values: leaf, labels, vi: Some(vi) });
+            out.push(Line { kind: LineKind::Item(!leaf), leaf, path: prefix.clone(), values: leaf, labels, vi: Some(vi), toggle: None });
             if !leaf {
                 self.flatten(nodes, depth, Some(vi), prefix, out);
             }
@@ -196,6 +213,8 @@ impl Ctx<'_> {
             let (v, fmt, label) = self.label_cell(depth, node.item);
             let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
             let leaf = depth + 1 >= n || collapsed || node.children.is_empty();
+            let has_children = depth + 1 < n && !node.children.is_empty();
+            let toggle = has_children.then(|| self.rows.get(depth).map(|f| (f.source_col.clone(), label.clone(), collapsed))).flatten();
             if leaf && !values_below {
                 out.push(Line {
                     kind: LineKind::Item(depth + 1 < n),
@@ -204,6 +223,7 @@ impl Ctx<'_> {
                     values: true,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    toggle,
                 });
             } else if leaf {
                 out.push(Line {
@@ -213,6 +233,7 @@ impl Ctx<'_> {
                     values: false,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    toggle,
                 });
                 // Outline gives each level its own column, so the captions go in the Values
                 // column even when the levels between are collapsed away.
@@ -227,6 +248,7 @@ impl Ctx<'_> {
                     values: false,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    toggle,
                 });
                 self.flatten(&node.children, depth + 1, None, prefix, out);
                 if self.pt.subtotals {
@@ -241,6 +263,7 @@ impl Ctx<'_> {
                     values: top,
                     labels: vec![(col, v, indent, fmt)],
                     vi,
+                    toggle,
                 });
                 self.flatten(&node.children, depth + 1, vi, prefix, out);
                 if self.pt.subtotals && !self.pt.subtotals_top {
@@ -251,6 +274,7 @@ impl Ctx<'_> {
                         values: true,
                         labels: vec![(col, Value::text(format!("{label} Total")), indent, None)],
                         vi,
+                        toggle: None,
                     });
                 }
             }
@@ -271,7 +295,7 @@ impl Ctx<'_> {
             let mut labels: Vec<(usize, Value, u8, Option<String>)> = if vi == 0 { pending.to_vec() } else { vec![] };
             labels.push((depth, Value::text(name.as_str()), 0, None));
             if nodes.is_empty() {
-                out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi) });
+                out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi: Some(vi), toggle: None });
             } else {
                 self.flatten_tabular(nodes, depth, Some(vi), prefix, &labels, out);
             }
@@ -301,10 +325,15 @@ impl Ctx<'_> {
             labels.push((col, v, 0, fmt));
             let collapsed = depth + 1 < n && self.rows.get(depth).is_some_and(|f| is_collapsed(f, &label));
             if depth + 1 >= n || collapsed || node.children.is_empty() {
+                // Only the collapsed case (children hidden) gets a toggle here: the expanded
+                // case's header shares its row with the first child (tabular layout), so its
+                // toggle would need to travel with `pending` -- not wired up yet.
+                let has_children = depth + 1 < n && !node.children.is_empty();
+                let toggle = has_children.then(|| self.rows.get(depth).map(|f| (f.source_col.clone(), label.clone(), collapsed))).flatten();
                 if values_below {
                     self.flatten_tabular_values(&[], self.vpos.unwrap_or(depth + 1), prefix, &labels, out);
                 } else {
-                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi });
+                    out.push(Line { kind: LineKind::Item(false), leaf: true, path: prefix.clone(), values: true, labels, vi, toggle });
                 }
             } else {
                 self.flatten_tabular(&node.children, depth + 1, vi, prefix, &labels, out);
@@ -318,6 +347,7 @@ impl Ctx<'_> {
                         values: true,
                         labels: vec![(col, Value::text(format!("{label} Total")), 0, None)],
                         vi,
+                        toggle: None,
                     });
                 }
             }

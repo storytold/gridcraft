@@ -433,3 +433,71 @@ fn kept_sheet_geometry_and_cf_statistics_follow_every_change() {
     assert!(!Arc::ptr_eq(&kept(&app).0, &ri));
     check_cf(&mut app);
 }
+
+/// A PivotTable row group's +/- glyph (`super::pivot_toggle`): painting a frame finds the
+/// collapsible rows from the live PivotTable model, and running `pivot.collapse` on one flips it
+/// (re-deriving the cache, since the doc's revision moved on).
+#[test]
+fn pivot_row_toggle_follows_collapse_and_expand() {
+    use gridcraft_engine::core::CellRef;
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = crate::SheetApp::new(session, Default::default());
+    app.run(
+        "range.setValues",
+        json!({"range": "A1", "values": [["Region", "Product", "Sales"], ["East", "Apples", 100], ["East", "Pears", 120], ["West", "Plums", 70]]}),
+    )
+    .unwrap();
+    app.run("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+    grid_frame(&mut app);
+    let wb = app.session.active().unwrap().wb.clone();
+    let si = wb.active_sheet();
+    let sh = wb.sheet(si).unwrap();
+    let pt = sh.pivots.last().unwrap().clone();
+    let range = pt.last_range.unwrap();
+    let east = (range.start.row..=range.end.row).find(|r| wb.sheet(si).unwrap().value(CellRef::new(*r, range.start.col)).display() == "East").unwrap();
+    let toggle = super::pivot_toggle::toggle_at(&mut app, &wb, si, east).expect("East has sub-items");
+    assert_eq!(toggle.field, "Region");
+    assert_eq!(toggle.item, "East");
+    assert!(!toggle.collapsed);
+    app.run("pivot.collapse", json!({"field": "Region", "items": ["East"]})).unwrap();
+    grid_frame(&mut app);
+    let wb2 = app.session.active().unwrap().wb.clone();
+    let toggle2 = super::pivot_toggle::toggle_at(&mut app, &wb2, si, east).expect("still collapsible");
+    assert!(toggle2.collapsed, "the cache follows the new revision");
+}
+
+/// A pivot report on a sheet with headings turned off (a clean "dashboard" look, as generated
+/// reports often use) has no row-number gutter to draw the glyph in -- `Geo` reserves a slim lane
+/// of its own for it instead (`pivot_gutter_w`), and a click there still finds the toggle (#this
+/// is the bug a live report hit: no gutter meant no glyph and no click target at all).
+#[test]
+fn pivot_row_toggle_gets_its_own_lane_when_headings_are_off() {
+    use gridcraft_engine::core::CellRef;
+    let mut session = gridcraft_engine::Session::new();
+    session.new_workbook();
+    let mut app = crate::SheetApp::new(session, Default::default());
+    app.run(
+        "range.setValues",
+        json!({"range": "A1", "values": [["Region", "Product", "Sales"], ["East", "Apples", 100], ["East", "Pears", 120], ["West", "Plums", 70]]}),
+    )
+    .unwrap();
+    app.run("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+    app.run("view.headings", json!({"on": false})).unwrap();
+    grid_frame(&mut app);
+    let wb = app.session.active().unwrap().wb.clone();
+    let si = wb.active_sheet();
+    let sh = wb.sheet(si).unwrap().clone();
+    assert!(!sh.show_headings);
+    let pt = sh.pivots.last().unwrap().clone();
+    let range = pt.last_range.unwrap();
+    let east = (range.start.row..=range.end.row).find(|r| sh.value(CellRef::new(*r, range.start.col)).display() == "East").unwrap();
+    let geo = app.grid.geo.clone().unwrap();
+    assert_eq!(geo.header_w, 0.0, "headings are off");
+    assert!(geo.pivot_gutter_w > 0.0, "a lane is reserved for the toggle anyway");
+    let slot = super::pivot_toggle::slot_rect(&geo, &sh, east);
+    let p = super::pivot_toggle::glyph_rect(&geo, slot).center();
+    let (hit_row, toggle) = super::pivot_toggle::hit(&mut app, &wb, si, &geo, &sh, p).expect("the glyph is clickable in its own lane");
+    assert_eq!(hit_row, east);
+    assert_eq!(toggle.field, "Region");
+}

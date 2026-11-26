@@ -21,6 +21,8 @@ pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
 type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
+/// Cached pivot row-group toggles (the row-gutter +/- glyphs), keyed by (doc uid, revision, sheet).
+type PivotToggleCache = ((u64, u64, usize), Vec<(RangeRef, Vec<Option<gridcraft_engine::pivot::RowToggle>>)>);
 
 mod active_row;
 pub use active_row::active_row_band;
@@ -31,6 +33,7 @@ mod geo;
 mod interact;
 mod keyboard;
 mod menus;
+mod pivot_toggle;
 mod quadrant;
 mod selection;
 mod show;
@@ -294,6 +297,9 @@ pub struct GridState {
     /// the whole report. `None` when the report can't be computed or is out of date: every cell
     /// of it offers Show Details, and running it says why.
     pub show_details_cells: Option<DetailsCache>,
+    /// The collapsible pivot row-group headers of the active sheet (row-gutter +/- glyphs),
+    /// cached per (doc uid, revision, sheet): finding them computes every PivotTable on the sheet.
+    pub(crate) pivot_row_toggles: Option<PivotToggleCache>,
     pub header_menu: Option<(Pos2, bool)>,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,

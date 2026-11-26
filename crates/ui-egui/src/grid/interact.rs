@@ -397,6 +397,13 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         }
         return;
     }
+    // A pivot row-group's +/- glyph in the row-number gutter.
+    if let Some((_, toggle)) = super::pivot_toggle::hit(app, wb, wb.active_sheet(), geo, sh, p) {
+        if primary_clicked {
+            super::pivot_toggle::run(app, &toggle);
+        }
+        return;
+    }
     // Freeze handles sit on the header edges (and the corner's edges when nothing is frozen).
     if freeze_cols.contains(p) || freeze_rows.contains(p) {
         app.grid.drag = Drag::Freeze { cols: freeze_cols.contains(p), to: None };
