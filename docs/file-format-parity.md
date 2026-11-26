@@ -14,6 +14,18 @@ support comes from `crates/engine/src/io.rs` (`FileKind`), `crates/xlsx/src` and
 Legacy scalar `INDEX(range, MATCH(...))` formulas remain ordinary formulas on save, including when
 shared formulas are expanded during import (`array_export.rs`, #1505).
 
+Worksheet formulas that resolve a bare name to a nonempty table data body now write
+`Table[]` for Excel (#3638). LET/LAMBDA bindings and visible defined names retain their
+meaning; exporting does not change the model formula. Unresolved names and tables without
+a data body keep their previous error behavior.
+
+The ordinary Prices-table control was checked in Excel for Mac 16.114.4 (26110224),
+French UI, AutoSave off: main `2c58c769` exported `SUM(Prices)` as a name and Excel showed
+`#NAME?`, while the explicit `SUM(Prices[])` control was 12. The fixed worksheet export
+showed 12 in both cells after Calculate Now, save, close and reopen, with both file
+formulas stored as `SUM(Prices[])`. No formula re-entry or preference changes were used.
+This finite Mac control does not establish Windows/web or corpus-wide acceptance.
+
 Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic glyph outlines with ToUnicode and logical ActualText. Cells, headers and chart labels support marks, digits, rotation and style. Bundled builds use the optional `CRAFT_FONTS_DIR` input; unbundled native builds look for Noto Sans Arabic. Characters the Arabic face lacks fall back to the standard and CID fonts, and without an Arabic face for the text's weight Arabic is set in the CID font, which has no Arabic glyphs, with a message. Cell Context/LTR/RTL direction is carried through measurement, wrapping and drawing. RTL sheet geometry mirrors while text stays readable. Latin-only RTL text uses bidi ordering without requiring an Arabic font.
 
 Cell text now uses shared Unicode bidi layout while retaining logical source indexes for editing, copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction, independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional direction preserves absent versus explicit Context in differential styles. The renderer is pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM checks. Physical screen-reader behavior remains unverified.
@@ -168,6 +180,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-12 | minor | .xls import reads the file with craft-xls (storytold/craft-libs), the reader that moved there from this repository; GridCraft keeps the mapping onto its model. The workbook now opens on the sheet it was saved on (WINDOW1 `itabCur`), falling back to the first visible sheet as before (from #3551), and cells saved as RString records (text with formatting runs) are read as text instead of skipped |
 | 2026-11-10 | minor | `.xls` import: every formula except a Ctrl+Shift+Enter array is read as a legacy one with Excel's implicit `@` (a title row `=Other!A1:G1` shows its first cell instead of `#SPILL!`), one-cell Ctrl+Shift+Enter arrays stay arrays, and `@` of a 2-D range meets the formula's row and column (#410, PR #1367) |
 | 2026-11-09 | minor | Arabic PDF export no longer fails on a character the Arabic face lacks (it falls back like other text) or when no Arabic font is available (Arabic is set in the CID font, which has no Arabic glyphs, and a message says so) |
+| 2026-11-08 | minor | Worksheet bare table references write explicit `Table[]` data references; LET/LAMBDA and defined-name scopes, qualified names and empty-table error semantics preserved (#3638) |
 | 2026-11-03 | trivial | The PDF row lists Arabic's shaped, embedded Noto glyphs beside the non-embedded standard faces, Symbol and the Adobe-GB1 CID font; Symbol text keeps its own encoding and is never shaped as Arabic |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |

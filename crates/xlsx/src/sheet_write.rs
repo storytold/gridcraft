@@ -328,6 +328,8 @@ fn build_craft_view(sheet: &Sheet, selected: bool) -> CraftSheetView {
 }
 
 struct CellWriteInput<'a> {
+    workbook: &'a Workbook,
+    sheet_index: usize,
     reference: CellRef,
     cell: Option<&'a Cell>,
     picture: Option<&'a std::sync::Arc<gridcraft_model::CellPicture>>,
@@ -704,6 +706,8 @@ fn build_craft_rows(data: SheetCellData<'_>, sid: &dyn Fn(gridcraft_model::Style
             }
             craft_cells.push(build_craft_cell(
                 CellWriteInput {
+                    workbook,
+                    sheet_index: index,
                     reference: cell_ref,
                     cell,
                     picture: sheet.cell_pictures.get(&cell_ref),
@@ -731,7 +735,8 @@ fn build_craft_rows(data: SheetCellData<'_>, sid: &dyn Fn(gridcraft_model::Style
 }
 
 fn build_craft_cell(input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::StyleId) -> u32, out: &mut Out) -> CraftCell {
-    let CellWriteInput { reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } = input;
+    let CellWriteInput { workbook, sheet_index, reference: c, cell, picture, header_override: ov, spill_value: extra, dynamic_range: dynamic } =
+        input;
     let style = cell.map(|x| sid(x.style)).unwrap_or(0);
     let at = to_craft_cell_ref(c);
     if let Some(picture) = picture {
@@ -771,7 +776,7 @@ fn build_craft_cell(input: CellWriteInput<'_>, sid: &dyn Fn(gridcraft_model::Sty
     } else {
         None
     };
-    let text = formula.map(|f| crate::fmla::to_file(f)).or(py_text);
+    let text = formula.map(|f| crate::fmla::cell_to_file(f, workbook, sheet_index)).or(py_text);
     if let Some(text) = text {
         let (kind, range) = match (formula.and_then(|f| f.array), dynamic) {
             (Some(r), _) => (CraftFormulaKind::Array, Some(to_craft_range(r))),
