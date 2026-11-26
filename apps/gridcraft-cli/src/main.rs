@@ -11,6 +11,7 @@
 //! gridcraft-cli functions [--json] [--search X] [--category C]
 //! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
 //! gridcraft-cli send <port> <method> [json]
+//! gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
 //! gridcraft-cli version | --version
 //! ```
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -30,6 +31,7 @@ macro_rules! outln {
 }
 
 mod check;
+mod sandbox_check;
 
 use gridcraft_engine::Session;
 use serde_json::{Value, json};
@@ -49,6 +51,8 @@ const USAGE: &str = "usage:
   gridcraft-cli functions [--json] [--search X] [--category C]
   gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
   gridcraft-cli send <port> <method> [json]
+  gridcraft-cli sandbox-check [--read PATH]... [--exec PATH]... [-- PROGRAM ARGS...]
+                     whether this system confines programs (no program: a confined self-test)
   gridcraft-cli version";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
@@ -61,7 +65,35 @@ fn stdout_failed(e: std::io::Error) -> ! {
     std::process::exit(1);
 }
 
+/// The first Launcher-profile argument in `args`, in either its separate or `=` form. Only the
+/// tokens a shell would see before `--` count: after it they are file names.
+fn launch_profile_argument(args: &[std::ffi::OsString]) -> Option<String> {
+    for arg in args {
+        if arg == "--" {
+            return None;
+        }
+        let text = arg.to_string_lossy();
+        for flag in ["--launch-profile", "--profile-root"] {
+            if text == flag || text.starts_with(&format!("{flag}=")) {
+                return Some(flag.to_string());
+            }
+        }
+    }
+    None
+}
+
 fn main() -> ExitCode {
+    // A confined launcher run (and its probes) comes first, before anything else starts.
+    let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
+        return ExitCode::from(u8::try_from(code).unwrap_or(1));
+    }
+    // The nightly profile protocol belongs to the desktop app: the Launcher's selector is not a
+    // CLI option, and a CLI that silently ignored it would act on the wrong files.
+    if let Some(flag) = launch_profile_argument(&raw) {
+        eprintln!("gridcraft-cli: {flag} belongs to the GridCraft desktop app, not this CLI");
+        return ExitCode::from(2);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
@@ -79,6 +111,7 @@ fn main() -> ExitCode {
         Some("cat") => cat(rest),
         Some("run") => run(rest),
         Some("check") => return check::main(rest),
+        Some("sandbox-check") => return sandbox_check::main(rest),
         Some("commands") => commands(rest),
         Some("functions") => functions(rest),
         Some("mcp") => mcp(rest),
@@ -579,6 +612,22 @@ fn send(args: &[String]) -> Result<(), String> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    /// The Launcher's nightly selector belongs to the desktop app; the CLI says so and exits 2
+    /// rather than acting on whatever it thinks the file list is.
+    #[test]
+    fn launcher_profile_arguments_are_refused_in_both_forms_and_only_before_the_delimiter() {
+        let args = |values: &[&str]| values.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        assert_eq!(launch_profile_argument(&args(&["--launch-profile", "nightly-v1"])).as_deref(), Some("--launch-profile"));
+        assert_eq!(launch_profile_argument(&args(&["--profile-root", "/tmp/p", "info", "a.xlsx"])).as_deref(), Some("--profile-root"));
+        assert_eq!(launch_profile_argument(&args(&["--profile-root=/tmp/p"])).as_deref(), Some("--profile-root"));
+        assert_eq!(launch_profile_argument(&args(&["info", "--launch-profile=nightly-v1"])).as_deref(), Some("--launch-profile"));
+        // After `--` they are file names, exactly as the desktop app parses them.
+        assert_eq!(launch_profile_argument(&args(&["--", "--launch-profile", "nightly-v1"])), None);
+        assert_eq!(launch_profile_argument(&args(&["--", "--profile-root=/tmp/p"])), None);
+        assert_eq!(launch_profile_argument(&args(&["info", "a.xlsx", "--json"])), None);
+        assert_eq!(launch_profile_argument(&[]), None);
+    }
 
     #[test]
     fn parses_commands() {

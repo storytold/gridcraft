@@ -169,27 +169,27 @@ pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, filter:
         }
         let _ = write!(s, " name=\"{}\"", esc_attr(&encode_xstring(name)));
         let totals = col.map(|c| c.totals).unwrap_or_default();
-        if t.totals_row {
-            let f = match totals {
-                TotalsFn::None => None,
-                TotalsFn::Average => Some("average"),
-                TotalsFn::Count => Some("count"),
-                TotalsFn::CountNums => Some("countNums"),
-                TotalsFn::Max => Some("max"),
-                TotalsFn::Min => Some("min"),
-                TotalsFn::Sum => Some("sum"),
-                TotalsFn::StdDev => Some("stdDev"),
-                TotalsFn::Var => Some("var"),
-                TotalsFn::Custom => Some("custom"),
-            };
-            if let Some(f) = f {
-                let _ = write!(s, " totalsRowFunction=\"{f}\"");
-            } else if let Some(l) = col.and_then(|c| c.totals_label.as_ref()) {
-                let _ = write!(s, " totalsRowLabel=\"{}\"", esc_attr(l));
-            }
+        // A hidden Total Row keeps each column's calculation, as Excel's files do: turning the row
+        // back on restores it (#4296). The reader takes them whether the row is shown or not.
+        let f = match totals {
+            TotalsFn::None => None,
+            TotalsFn::Average => Some("average"),
+            TotalsFn::Count => Some("count"),
+            TotalsFn::CountNums => Some("countNums"),
+            TotalsFn::Max => Some("max"),
+            TotalsFn::Min => Some("min"),
+            TotalsFn::Sum => Some("sum"),
+            TotalsFn::StdDev => Some("stdDev"),
+            TotalsFn::Var => Some("var"),
+            TotalsFn::Custom => Some("custom"),
+        };
+        if let Some(f) = f {
+            let _ = write!(s, " totalsRowFunction=\"{f}\"");
+        } else if let Some(l) = col.and_then(|c| c.totals_label.as_ref()) {
+            let _ = write!(s, " totalsRowLabel=\"{}\"", esc_attr(l));
         }
         let calc = col.and_then(|c| c.formula.as_ref()).filter(|f| !f.is_empty());
-        let custom = if t.totals_row && totals == TotalsFn::Custom { col.and_then(|c| c.totals_label.as_ref()) } else { None };
+        let custom = if totals == TotalsFn::Custom { col.and_then(|c| c.totals_label.as_ref()) } else { None };
         let xml = col.and_then(|c| c.xml.as_ref());
         if calc.is_none() && custom.is_none() && xml.is_none() {
             s.push_str("/>");
@@ -344,7 +344,11 @@ pub(super) fn threaded_xml(sheet: &Sheet, ids: &BTreeMap<CellRef, Vec<String>>, 
 /// [`crate::sheet_read::read_password`]).
 pub(crate) fn password_attrs(h: &gridcraft_model::PasswordHash, prefix: &str) -> String {
     let name = |base: &str| crate::sheet_read::password_attr(prefix, base);
+    // A SHA-256 digest alone (OpenDocument's form) has no Excel form: the protection is kept
+    // without its password. A password set in GridCraft writes its Excel form.
+    let Some(h) = h.excel() else { return String::new() };
     match h {
+        gridcraft_model::PasswordHash::Sha256Digest(_) | gridcraft_model::PasswordHash::Both { .. } => String::new(),
         gridcraft_model::PasswordHash::Legacy(h) => format!(" {}=\"{h:04X}\"", name("password")),
         gridcraft_model::PasswordHash::Iterated { algorithm, hash, salt, spin_count } => format!(
             " {}=\"{}\" {}=\"{}\" {}=\"{}\" {}=\"{spin_count}\"",
@@ -385,13 +389,14 @@ fn note_anchor(cell: CellRef, b: Option<&NoteBox>) -> (String, (f64, f64)) {
     (format!("{}, {}", corner(&b.from), corner(&b.to)), b.size_pt.unwrap_or(DEFAULT_NOTE_SIZE_PT))
 }
 
-/// Legacy VML shapes Excel uses to display notes.
-pub(super) fn vml_xml(sheet: &Sheet, n: u32) -> String {
+/// Legacy VML shapes Excel uses to display notes (numbered from `base + 1`), followed by the
+/// form control shapes `controls`. `idmap` lists the shape blocks the drawing uses.
+pub(super) fn vml_xml(sheet: &Sheet, idmap: &str, base: u64, controls: &str) -> String {
     let mut s = format!(
-        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{n}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{idmap}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
     );
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
-        let id = n as u64 * 1024 + 1 + i as u64;
+        let id = base + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
         let (anchor, (w, h)) = note_anchor(*cell, c.note_box.as_ref());
         let _ = write!(
@@ -405,6 +410,7 @@ pub(super) fn vml_xml(sheet: &Sheet, n: u32) -> String {
             if c.visible { "<x:Visible/>" } else { "" }
         );
     }
+    s.push_str(controls);
     s.push_str("</xml>");
     s
 }

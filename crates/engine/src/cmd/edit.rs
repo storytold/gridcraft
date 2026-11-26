@@ -35,7 +35,7 @@ use go_to::go_to_special;
 #[cfg(test)]
 use go_to::{GO_TO_MAX_AREAS, GO_TO_RECENT, reference_parts};
 use paste_special::paste_special;
-pub(crate) use paste_special::{rewrite_all_formulas, rewrite_cell_links, rewrite_python_refs};
+pub(crate) use paste_special::{place_moved_rules, rewrite_all_formulas_many, rewrite_python_refs};
 use selection::{select_all, select_col, select_region, select_row, selection_move, selection_next, selection_next_corner, selection_set};
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -130,7 +130,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "AutoFill",
             [],
             None,
-            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend|days|weekdays|months|years}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up; days, weekdays, months, years = Fill Days, Fill Weekdays, Fill Months, Fill Years: dates step by one unit, or by the difference between the first two dates in that unit, and weekdays skip Saturday and Sunday)",
+            "{source: \"A1:A2\", target: \"A1:A10\", mode?: series|alternate|copy|formats|values|extend|days|weekdays|months|years|linearTrend|growthTrend}: the fill-handle drag (alternate = Ctrl+drag: a lone number counts up, any other series copies; values = Fill Without Formatting: the series, targets keep their formats; extend = Fill Series: the series, and a lone number counts up; days, weekdays, months, years = Fill Days, Fill Weekdays, Fill Months, Fill Years: dates step by one unit, or by the difference between the first two dates in that unit, and weekdays skip Saturday and Sunday; linearTrend, growthTrend = Linear Trend, Growth Trend: the targets continue the least-squares line or the exponential curve fitted to each row or column of source numbers, and the source keeps its values; an error when a source cell is not a number or holds a formula, or for growthTrend when a row or column mixes signs or holds zero)",
             has_doc,
             auto_fill
         ),
@@ -206,6 +206,7 @@ fn undo(s: &mut Session, p: &Json) -> Result<Json> {
         d.selection = e.selection;
         // Step by step: a rename and a new sheet undone together match up only one step apart.
         super::extra::keep_view_modes(d, &cur_wb);
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.redo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -227,6 +228,7 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
         d.wb = e.wb;
         d.selection = e.selection;
         super::extra::keep_view_modes(d, &cur_wb);
+        super::view::keep_zoom(d, &cur_wb);
         crate::push_history(&mut d.undo, label.clone(), cur_wb, &d.wb, cur_selection);
     }
     super::extra::keep_watch_list(&now, &mut d.wb);
@@ -239,7 +241,12 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// The rows of `range` an applied filter hides (rows hidden by hand are not among them).
 fn filtered_rows(sh: &gridcraft_model::Sheet, range: RangeRef) -> std::collections::BTreeSet<u32> {
-    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && sh.is_row_filtered(**r)).map(|(r, _)| *r).collect()
+    let spans = sh.filter_row_spans();
+    if spans.is_empty() {
+        return Default::default();
+    }
+    let filtered = |row: u32| spans.iter().any(|&(first, last)| row >= first && row <= last);
+    sh.rows.range(range.start.row..=range.end.row).filter(|(r, info)| info.hidden && filtered(**r)).map(|(r, _)| *r).collect()
 }
 
 /// The Clear commands (Delete is Clear Contents). As in Excel, the rows an applied filter hides

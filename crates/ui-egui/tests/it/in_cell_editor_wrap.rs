@@ -23,6 +23,7 @@ fn frames(ctx: &Context, app: &mut SheetApp) {
 /// The editor's text field rect while A1 (narrow, wrap on or off) is edited with [`TEXT`].
 fn editor_rect(wrap: bool) -> Rect {
     let ctx = Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     let mut session = Session::new();
     session.new_workbook();
     session.execute("home.columnWidth", json!({"cols": "A:A", "chars": 12})).unwrap();
@@ -47,6 +48,7 @@ fn a_wrap_text_cell_edits_wrapped_at_the_column_width() {
 #[test]
 fn a_short_wrap_text_edit_stays_one_line_tall() {
     let ctx = Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     let mut session = Session::new();
     session.new_workbook();
     session.execute("home.wrapText", json!({"range": "A1", "on": true})).unwrap();
@@ -64,6 +66,7 @@ fn a_short_wrap_text_edit_stays_one_line_tall() {
 #[test]
 fn the_editor_measures_the_text_at_the_fields_wrap_width() {
     let ctx = Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     let mut session = Session::new();
     session.new_workbook();
     session.execute("home.columnWidth", json!({"cols": "A:A", "chars": 12})).unwrap();
@@ -91,6 +94,7 @@ fn the_editor_measures_the_text_at_the_fields_wrap_width() {
 fn an_unwrapped_multiline_edit_shows_every_line() {
     let field = |text: &str| {
         let ctx = Context::default();
+        gridcraft_ui_egui::framework::install_headless(&ctx);
         let mut session = Session::new();
         session.new_workbook();
         let mut app = crate::common::app(session);
