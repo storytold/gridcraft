@@ -11,6 +11,8 @@
 
 use fmv_macos_events::{Event, Inbox, Registration};
 use gridcraft_ui_egui::SheetApp;
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSRequestUserAttentionType};
 
 /// Keeps the Apple-event handlers registered; hold it until the event loop returns.
 pub struct AppleEvents {
@@ -44,7 +46,32 @@ pub fn poll(inbox: &Inbox, app: &mut SheetApp, ctx: &egui::Context) {
                 }
             }
             // Quit from the Dock or the system: each unsaved workbook is asked about in its window.
-            Event::Quit => app.request_quit(ctx),
+            Event::Quit => {
+                app.request_quit(ctx);
+                if app.dialog.is_some() {
+                    bring_app_forward();
+                }
+            }
         }
+    }
+}
+
+/// A Dock quit reaches GridCraft behind other apps, hidden or minimized, and its question has to
+/// be seen. egui's Focus goes through winit, which skips a minimized window or a hidden app, and
+/// macOS may refuse an activation it didn't expect, so ask AppKit directly and bounce the Dock
+/// icon until the user switches over.
+fn bring_app_forward() {
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let ns_app = NSApplication::sharedApplication(mtm);
+    ns_app.unhide(None);
+    for window in ns_app.windows().to_vec() {
+        if window.isMiniaturized() {
+            window.deminiaturize(None);
+        }
+    }
+    #[allow(deprecated)] // `activate` needs macOS 14; this works on every supported version.
+    ns_app.activateIgnoringOtherApps(true);
+    if !ns_app.isActive() {
+        ns_app.requestUserAttention(NSRequestUserAttentionType::CriticalRequest);
     }
 }

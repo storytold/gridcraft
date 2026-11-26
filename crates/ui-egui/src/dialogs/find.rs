@@ -1,8 +1,23 @@
+use egui::Modifiers;
+
 use super::show::ok_cancel;
 use super::{Dialog, Json, Key, SheetApp, json};
 
 /// Draws the Find/Replace form with case, whole-cell and workbook options, requests field focus once, and runs find/replace with the current parameters.
 pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
+    // The dialog stays open over the sheet, so Undo and Redo reach the workbook (a Replace All
+    // is undone without closing it first); inside a text box they edit the typed text instead.
+    // A modal message blocks workbook shortcuts; otherwise use the grid's own shortcut table.
+    if app.message.is_none() && !ui.ctx().text_edit_focused() {
+        let pressed = ui.input_mut(|i| {
+            [(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z), (Modifiers::COMMAND, Key::Z), (Modifiers::COMMAND, Key::Y)]
+                .into_iter()
+                .find(|&(m, key)| i.consume_key(m, key))
+        });
+        if let Some((m, key)) = pressed {
+            crate::ribbon::shortcut(app, key, m);
+        }
+    }
     ui.horizontal(|ui| {
         for tab in ["Find", "Replace"] {
             if ui.selectable_label(d.tab == tab, tab).clicked() {
@@ -40,7 +55,21 @@ pub(super) fn find(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     d.values.insert("matchCase".into(), json!(case));
     d.values.insert("wholeCell".into(), json!(whole));
     d.values.insert("within".into(), json!(if wb { "workbook" } else { "sheet" }));
-    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": if wb { "workbook" } else { "sheet" }});
+    // As in Excel, a selected range (more than one cell) limits the search on the sheet to it.
+    // One selected cell, merged or not, searches the sheet, as in Excel.
+    let range_selected = app.session.active().is_some_and(|doc| {
+        let sel = &doc.selection;
+        let one_merged = sel.ranges.len() == 1 && doc.wb.active().and_then(|sh| sh.merge_at(sel.current().start)).is_some_and(|m| m == sel.current());
+        !sel.is_single_cell() && !one_merged
+    });
+    let within = if wb {
+        "workbook"
+    } else if range_selected {
+        "selection"
+    } else {
+        "sheet"
+    };
+    let base = json!({"what": what, "matchCase": case, "wholeCell": whole, "within": within});
     ui.horizontal(|ui| {
         if d.tab == "Replace" {
             if ui.button("Replace All").clicked() {

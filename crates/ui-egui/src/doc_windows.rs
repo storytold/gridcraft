@@ -18,10 +18,12 @@
 //!
 //! [`Session::windows`]: gridcraft_engine::Session::windows
 
-use craft_window::{CASCADE_STEP, Frame, Rect, Viewports, WindowEvent, WindowId, WindowList, cascade};
+use craft_window::{WindowId, WindowList};
+use egui::Rect;
 use serde_json::json;
 
 use crate::SheetApp;
+use crate::viewports::{CASCADE_STEP, Viewports, WindowEvent};
 
 /// The native windows (see the module docs).
 pub struct DocWindows {
@@ -40,8 +42,7 @@ impl DocWindows {
     /// Takes over `app`'s windows. `base` is the root window's builder, used for new windows.
     pub fn new(app: &mut SheetApp, base: egui::ViewportBuilder, quit_with_last_window: bool) -> DocWindows {
         app.native_windows = true;
-        // The root window keeps the desktop's frame, so every window does.
-        DocWindows { list: WindowList::new(), viewports: Viewports::new(Frame::Desktop), base, quit_with_last_window, root_hidden: false }
+        DocWindows { list: WindowList::new(), viewports: Viewports::default(), base, quit_with_last_window, root_hidden: false }
     }
 
     /// The platform default for the last window closing: macOS keeps running, others quit.
@@ -91,7 +92,7 @@ impl DocWindows {
         let (monitor, infos) = ctx.input(|i| (i.viewport().monitor_size, i.raw.viewports.clone()));
         // Platforms that don't report the monitor (Wayland, tests) get a common laptop screen.
         let size = monitor.filter(|m| m.x > 0.0 && m.y > 0.0).unwrap_or(egui::vec2(1280.0, 800.0));
-        let mut rects = arrange_rects(arrange, ids.len(), Rect::new(0.0, 0.0, size.x, size.y));
+        let mut rects = arrange_rects(arrange, ids.len(), Rect::from_min_size(egui::Pos2::ZERO, size));
         if arrange == "cascade" {
             // The active window goes in front: the last step of the cascade.
             rects.reverse();
@@ -100,8 +101,8 @@ impl DocWindows {
             let vp = self.viewports.viewport_id(*id);
             // Inner size is what can be set: take off the frame the window has now.
             let frame = infos.get(&vp).and_then(|v| Some(v.outer_rect?.size() - v.inner_rect?.size())).unwrap_or(egui::Vec2::ZERO);
-            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::OuterPosition(egui::pos2(r.x, r.y)));
-            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::InnerSize((egui::vec2(r.width, r.height) - frame).max(egui::vec2(240.0, 160.0))));
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::OuterPosition(r.min));
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::InnerSize((r.size() - frame).max(egui::vec2(240.0, 160.0))));
         }
         if let Some(first) = ids.first() {
             self.viewports.focus(ctx, *first);
@@ -123,7 +124,7 @@ impl DocWindows {
             // The window the engine brought forward, else the most recently focused.
             let next = app.session.active_window().and_then(|w| self.find(w)).or_else(|| self.list.active());
             match next {
-                Some(id) => self.viewports.adopt(ctx, &self.list, id),
+                Some(id) => self.viewports.adopt(ctx, id),
                 None => self.viewports.set_root(None),
             }
         }
@@ -159,6 +160,15 @@ impl DocWindows {
         {
             self.list.focus(id);
             self.viewports.focus(ctx, id);
+        }
+        // macOS ignores Focus for a minimized window or a hidden app, so restore and show first.
+        if std::mem::take(&mut app.bring_forward)
+            && let Some(id) = self.list.active()
+        {
+            let vp = self.viewports.viewport_id(id);
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(vp, egui::ViewportCommand::Focus);
         }
     }
 
@@ -196,7 +206,7 @@ impl DocWindows {
             match event {
                 WindowEvent::Focused(_) => {}
                 WindowEvent::CloseRequested(id) => {
-                    if let Some(w) = self.close_requested(app, &ctx, id) {
+                    if let Some(w) = self.close_requested(app, id) {
                         requested = Some(w);
                     }
                 }
@@ -219,15 +229,12 @@ impl DocWindows {
 
     /// A window's close button. Returns the window to bring forward when the close needs an
     /// answer (or moved focus); `None` when nothing changed.
-    fn close_requested(&mut self, app: &mut SheetApp, ctx: &egui::Context, id: WindowId) -> Option<u64> {
-        let is_root = self.viewports.root() == Some(id);
+    /// The root window's close request is held by the app's close path ([`SheetApp::close_decision`]),
+    /// so closing it closes only its workbook window, as for any other window.
+    fn close_requested(&mut self, app: &mut SheetApp, id: WindowId) -> Option<u64> {
         if app.allow_close {
             // Quitting: every workbook has been answered for; the root's close ends the app.
             return None;
-        }
-        if is_root {
-            // eframe would end the app with the root window; closing it is the app's decision.
-            ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::CancelClose);
         }
         let window = *self.list.get(id)?;
         app.enter_window(window);
@@ -248,7 +255,9 @@ fn visible_windows(app: &SheetApp) -> Vec<u64> {
 fn window_title(app: &SheetApp, window: u64) -> String {
     let title = app.session.window_title(window).unwrap_or_default();
     let dirty = app.session.window(window).and_then(|w| app.session.documents().iter().find(|d| d.uid == w.doc_uid)).is_some_and(|d| d.is_dirty());
-    if dirty { format!("{title} — Edited") } else { title }
+    let title = if dirty { format!("{title} — Edited") } else { title };
+    // Nightly says which channel the window belongs to; stable titles are unchanged.
+    crate::channel::window_title(&title)
 }
 
 /// Outer rectangles for `n` windows arranged within `bounds` as View › Arrange All's `arrange`
@@ -262,34 +271,28 @@ pub fn arrange_rects(arrange: &str, n: usize, bounds: Rect) -> Vec<Rect> {
     let count = n as f32;
     match arrange {
         "horizontal" => {
-            let h = bounds.height / count;
-            (0..n).map(|i| Rect::new(bounds.x, bounds.y + h * i as f32, bounds.width, h)).collect()
+            let h = bounds.height() / count;
+            (0..n).map(|i| Rect::from_min_size(bounds.min + egui::vec2(0.0, h * i as f32), egui::vec2(bounds.width(), h))).collect()
         }
         "vertical" => {
-            let w = bounds.width / count;
-            (0..n).map(|i| Rect::new(bounds.x + w * i as f32, bounds.y, w, bounds.height)).collect()
+            let w = bounds.width() / count;
+            (0..n).map(|i| Rect::from_min_size(bounds.min + egui::vec2(w * i as f32, 0.0), egui::vec2(w, bounds.height()))).collect()
         }
         "cascade" => {
             let shift = CASCADE_STEP * (count - 1.0);
-            let size = [(bounds.width - shift).max(bounds.width * 0.5), (bounds.height - shift).max(bounds.height * 0.5)];
-            let mut previous = Rect::new(bounds.x - CASCADE_STEP, bounds.y - CASCADE_STEP, size[0], size[1]);
-            (0..n)
-                .map(|_| {
-                    previous = cascade(previous, size, bounds, CASCADE_STEP);
-                    previous
-                })
-                .collect()
+            let size = egui::vec2((bounds.width() - shift).max(bounds.width() * 0.5), (bounds.height() - shift).max(bounds.height() * 0.5));
+            craft_behavior::placement::cascade_rects(bounds, size, n, CASCADE_STEP)
         }
         _ => {
             let cols = (count.sqrt().ceil() as usize).max(1);
             let rows = n.div_ceil(cols);
-            let h = bounds.height / rows as f32;
+            let h = bounds.height() / rows as f32;
             (0..n)
                 .map(|i| {
                     let (row, col) = (i / cols, i % cols);
                     let in_row = if row + 1 == rows { n - row * cols } else { cols };
-                    let w = bounds.width / in_row as f32;
-                    Rect::new(bounds.x + w * col as f32, bounds.y + h * row as f32, w, h)
+                    let w = bounds.width() / in_row as f32;
+                    Rect::from_min_size(bounds.min + egui::vec2(w * col as f32, h * row as f32), egui::vec2(w, h))
                 })
                 .collect()
         }
