@@ -221,7 +221,11 @@ fn sheet_of(s: &x::Sheet, styles: &[StyleId], unparsed: &mut bool) -> Sheet {
     }
     sheet.merges = s.merges.iter().map(|r| range(*r)).collect();
     if let Some(h) = s.default_row_height {
-        sheet.default_row_height = pt_to_px(f64::from(h) / 20.0);
+        let px = pt_to_px(f64::from(h) / 20.0);
+        sheet.default_row_height = px;
+        if (px - gridcraft_model::DEFAULT_ROW_HEIGHT).abs() > 0.01 {
+            sheet.default_row_height_custom = Some(true);
+        }
     }
     for (&col, c) in &s.columns {
         let px = col_width_to_px(f64::from(c.width) / 256.0);

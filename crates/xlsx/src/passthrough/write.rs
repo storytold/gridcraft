@@ -44,7 +44,7 @@ impl KeptOut {
 
     /// A part name for a kept part: its original name when that can't collide with anything
     /// written, otherwise a fresh one in the same folder.
-    pub(super) fn claim(&mut self, original: &str) -> String {
+    pub(crate) fn claim(&mut self, original: &str) -> String {
         let lower = original.to_ascii_lowercase();
         let own = OWN_DIRS.iter().any(|d| lower.starts_with(d));
         if own && self.used.insert(lower) {
@@ -127,6 +127,16 @@ impl KeptOut {
         }
         v
     }
+
+    /// Registers a written kept part's style references (`dxfs` and `num_fmts`) so
+    /// [`finish_style_ids`] remaps its `dxfId` and `numFmtId` attributes once `styles.xml` is
+    /// built.
+    pub(crate) fn queue_style_patch(&mut self, out_dxfs: &mut Vec<gridcraft_model::Style>, name: String, data: Arc<[u8]>, part: &PreservedPart) {
+        if !part.dxfs.is_empty() || !part.num_fmts.is_empty() {
+            let dxfs = part.dxfs.iter().map(|(old, s)| (*old, crate::styles::dxf_id(out_dxfs, s))).collect();
+            self.patches.list.push((name, data, dxfs, part.num_fmts.clone()));
+        }
+    }
 }
 
 /// Renumbers the `dxfId` and `numFmtId` attributes of kept PivotTables and pivot caches to the
@@ -185,10 +195,7 @@ fn write_parts_named(out: &mut Out, parts: &[PreservedPart], mut names: NameMap)
             continue;
         }
         out.part(&new, Some(&p.content_type), p.data.to_vec());
-        if !p.dxfs.is_empty() || !p.num_fmts.is_empty() {
-            let dxfs = p.dxfs.iter().map(|(old, s)| (*old, crate::styles::dxf_id(&mut out.dxfs, s))).collect();
-            out.kept.patches.list.push((new.clone(), p.data.clone(), dxfs, p.num_fmts.clone()));
-        }
+        out.kept.queue_style_patch(&mut out.dxfs, new.clone(), p.data.clone(), p);
         if !p.rels.is_empty() {
             out.part(&rels_part_name(&new), None, part_rels_xml(&p.rels, &names).into_bytes());
         }
@@ -297,7 +304,7 @@ impl WorkbookKept {
 }
 
 /// The part names reachable from `root` through kept parts' relationships (normalized).
-fn reachable(p: &Preserved, root: &PreservedRel) -> HashSet<String> {
+pub(super) fn reachable(p: &Preserved, root: &PreservedRel) -> HashSet<String> {
     let by_name: HashMap<String, &PreservedPart> = p.parts.iter().map(|q| (normalize(&q.name), q)).collect();
     let mut seen = HashSet::new();
     let mut queue = VecDeque::from([normalize(&root.target)]);

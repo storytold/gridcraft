@@ -1031,3 +1031,446 @@ fn count_without_the_gridcraft_extension_reads_as_count() {
     assert_eq!(func(&marked("")), PivotFunc::Sum);
     assert_eq!(func(&marked(" subtotal=\"max\"")), PivotFunc::Max);
 }
+
+#[test]
+fn external_and_unresolved_worksheet_source_pivots_are_preserved_on_round_trip() {
+    // Build a synthetic workbook with one local PivotTable (cacheId=1) AND two unresolvable
+    // PivotTables: one pointing to an external workbook (<worksheetSource ref="A1:C10" sheet="Ext" r:id="rId2"/>)
+    // and one pointing to an unresolved named table (<worksheetSource name="missing_table"/>).
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let base = write_xlsx(&wb).unwrap();
+    let mut parts = unzip(&base);
+
+    let ext_cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" recordCount="1">
+<cacheSource type="worksheet"><worksheetSource ref="A1:C10" sheet="Ext" r:id="rId2"/></cacheSource>
+<cacheFields count="2"><cacheField name="Region"><sharedItems count="1"><s v="North"/></sharedItems></cacheField><cacheField name="Sales"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" minValue="10" maxValue="10"/></cacheField></cacheFields>
+</pivotCacheDefinition>"#;
+    let ext_cache_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords2.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/externalLinkPath" Target="file:///C:/ext/BookExt.xlsx" TargetMode="External"/>
+</Relationships>"#;
+    let ext_records_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="1"><r><x v="0"/><n v="10"/></r></pivotCacheRecords>"#;
+    let ext_table_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="ExtPivot" cacheId="99">
+<location ref="A15:B17" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/>
+<pivotFields count="2"><pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField><pivotField dataField="1" showAll="0"/></pivotFields>
+<rowFields count="1"><field x="0"/></rowFields>
+<dataFields count="1"><dataField name="Sum of Sales" fld="1" baseField="0" baseItem="0"/></dataFields>
+</pivotTableDefinition>"#;
+    let ext_table_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition2.xml"/>
+</Relationships>"#;
+
+    let missing_cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" recordCount="1">
+<cacheSource type="worksheet"><worksheetSource name="missing_table"/></cacheSource>
+<cacheFields count="2"><cacheField name="Item"><sharedItems count="1"><s v="Widget"/></sharedItems></cacheField><cacheField name="Qty"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" minValue="5" maxValue="5"/></cacheField></cacheFields>
+</pivotCacheDefinition>"#;
+    let missing_cache_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords3.xml"/>
+</Relationships>"#;
+    let missing_records_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="1"><r><x v="0"/><n v="5"/></r></pivotCacheRecords>"#;
+    let missing_table_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="MissingNamePivot" cacheId="100">
+<location ref="E15:F17" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/>
+<pivotFields count="2"><pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField><pivotField dataField="1" showAll="0"/></pivotFields>
+<rowFields count="1"><field x="0"/></rowFields>
+<dataFields count="1"><dataField name="Sum of Qty" fld="1" baseField="0" baseItem="0"/></dataFields>
+</pivotTableDefinition>"#;
+    let missing_table_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition3.xml"/>
+</Relationships>"#;
+
+    parts.insert("xl/pivotCache/pivotCacheDefinition2.xml".into(), ext_cache_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/_rels/pivotCacheDefinition2.xml.rels".into(), ext_cache_rels.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/pivotCacheRecords2.xml".into(), ext_records_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/pivotTable2.xml".into(), ext_table_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/_rels/pivotTable2.xml.rels".into(), ext_table_rels.as_bytes().to_vec());
+
+    parts.insert("xl/pivotCache/pivotCacheDefinition3.xml".into(), missing_cache_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/_rels/pivotCacheDefinition3.xml.rels".into(), missing_cache_rels.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/pivotCacheRecords3.xml".into(), missing_records_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/pivotTable3.xml".into(), missing_table_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/_rels/pivotTable3.xml.rels".into(), missing_table_rels.as_bytes().to_vec());
+
+    // Wire into workbook.xml, workbook.xml.rels, sheet2.xml.rels, and [Content_Types].xml.
+    let wb_xml = String::from_utf8(parts["xl/workbook.xml"].clone())
+        .unwrap()
+        .replace("</pivotCaches>", r#"<pivotCache cacheId="99" r:id="rId99"/><pivotCache cacheId="100" r:id="rId100"/></pivotCaches>"#);
+    parts.insert("xl/workbook.xml".into(), wb_xml.into_bytes());
+    let wb_rels = String::from_utf8(parts["xl/_rels/workbook.xml.rels"].clone()).unwrap().replace(
+        "</Relationships>",
+        r#"<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition2.xml"/><Relationship Id="rId100" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition3.xml"/></Relationships>"#,
+    );
+    parts.insert("xl/_rels/workbook.xml.rels".into(), wb_rels.into_bytes());
+    let s2_rels = String::from_utf8(parts["xl/worksheets/_rels/sheet2.xml.rels"].clone()).unwrap().replace(
+        "</Relationships>",
+        r#"<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable2.xml"/><Relationship Id="rId100" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable3.xml"/></Relationships>"#,
+    );
+    parts.insert("xl/worksheets/_rels/sheet2.xml.rels".into(), s2_rels.into_bytes());
+    let ct_xml = String::from_utf8(parts["[Content_Types].xml"].clone()).unwrap().replace(
+        "</Types>",
+        concat!(
+            r#"<Override PartName="/xl/pivotTables/pivotTable2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheDefinition2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheRecords2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>"#,
+            r#"<Override PartName="/xl/pivotTables/pivotTable3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheDefinition3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheRecords3.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>"#,
+            "</Types>",
+        ),
+    );
+    parts.insert("[Content_Types].xml".into(), ct_xml.into_bytes());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    // Round-trip twice to verify preservation is stable across repeated open/save cycles.
+    let mut bytes = buf.into_inner();
+    for pass in 0..2 {
+        let (read_wb, _) = read_xlsx(&bytes).unwrap();
+        // Local resolvable pivot + unresolved local-name pivot are modelled; external-book pivot
+        // is preserved unchanged via ExternalPivot passthrough.
+        assert_eq!(read_wb.sheet(1).unwrap().pivots.len(), 2, "pass {pass}: 2 local pivots must be modelled");
+        bytes = write_xlsx(&read_wb).unwrap();
+        let saved = unzip(&bytes);
+        assert_relationship_targets_exist(&saved);
+        let ids = assert_workbook_cache_relationships(&saved);
+        assert_eq!(ids.len(), 3, "pass {pass}: all 3 pivot caches must be registered");
+        let table_parts: Vec<&String> =
+            saved.keys().filter(|k| k.starts_with("xl/pivotTables/") && k.ends_with(".xml") && !k.contains("/_rels/")).collect();
+        assert_eq!(table_parts.len(), 3, "pass {pass}: all 3 pivot tables must be written: {table_parts:?}");
+        for tp in &table_parts {
+            let table = xml::parse(saved.get(*tp).unwrap()).unwrap();
+            assert!(ids.contains(table.attr("cacheId").unwrap()), "pass {pass}: table {tp} cacheId missing");
+            let rels_path = tp.replace("xl/pivotTables/", "xl/pivotTables/_rels/") + ".rels";
+            let table_rels = xml::parse(saved.get(&rels_path).unwrap()).unwrap();
+            let cache_path = crate::package::resolve("xl/pivotTables", table_rels.kids("Relationship").next().unwrap().attr("Target").unwrap());
+            let cache = xml::parse(saved.get(&cache_path).unwrap()).unwrap();
+            assert_pivot_table_fields_match_cache(&table, &cache);
+        }
+        assert_sheet_pivot_relationships(&saved);
+
+        let all_caches: Vec<String> = saved
+            .iter()
+            .filter(|(k, _)| k.starts_with("xl/pivotCache/") && k.ends_with(".xml") && !k.contains("/_rels/") && !k.contains("Records"))
+            .filter_map(|(_, v)| String::from_utf8(v.clone()).ok())
+            .collect();
+        assert!(all_caches.iter().any(|c| c.contains(r#"<worksheetSource ref="A1:C10" sheet="Ext""#)), "pass {pass}: external cache missing");
+        assert!(all_caches.iter().any(|c| c.contains(r#"<worksheetSource name="missing_table"/>"#)), "pass {pass}: missing_table cache missing");
+        let all_cache_rels: Vec<String> = saved
+            .iter()
+            .filter(|(k, _)| k.starts_with("xl/pivotCache/_rels/") && k.ends_with(".rels"))
+            .filter_map(|(_, v)| String::from_utf8(v.clone()).ok())
+            .collect();
+        assert!(all_cache_rels.iter().any(|r| r.contains("externalLinkPath") && r.contains("BookExt.xlsx")), "pass {pass}: externalLinkPath missing");
+        let rec_count = saved.keys().filter(|k| k.starts_with("xl/pivotCache/") && k.contains("Records") && k.ends_with(".xml")).count();
+        assert!(rec_count >= 2, "pass {pass}: preserved pivotCacheRecords parts missing");
+    }
+}
+
+#[test]
+fn preserved_unresolved_local_pivot_reflects_rename_and_shifted_location_on_save() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    let base = write_xlsx(&wb).unwrap();
+    let mut parts = unzip(&base);
+
+    let ext_cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" recordCount="1">
+<cacheSource type="worksheet"><worksheetSource name="missing_table"/></cacheSource>
+<cacheFields count="2"><cacheField name="Region"><sharedItems count="1"><s v="North"/></sharedItems></cacheField><cacheField name="Sales"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" minValue="10" maxValue="10"/></cacheField></cacheFields>
+</pivotCacheDefinition>"#;
+    // Include two pivotCacheRecords relationships (malformed input) to verify dedup prevents duplicate ZIP entries.
+    let ext_cache_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords2.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords2b.xml"/>
+</Relationships>"#;
+    let ext_records_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="1"><r><x v="0"/><n v="10"/></r></pivotCacheRecords>"#;
+    let ext_table_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="ExtPivot" cacheId="99">
+<location ref="A15:B17" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/>
+<pivotFields count="2"><pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField><pivotField dataField="1" showAll="0"/></pivotFields>
+<rowFields count="1"><field x="0"/></rowFields>
+<dataFields count="1"><dataField name="Sum of Sales" fld="1" baseField="0" baseItem="0"/></dataFields>
+</pivotTableDefinition>"#;
+    let ext_table_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition2.xml"/>
+</Relationships>"#;
+
+    parts.insert("xl/pivotCache/pivotCacheDefinition2.xml".into(), ext_cache_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/_rels/pivotCacheDefinition2.xml.rels".into(), ext_cache_rels.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/pivotCacheRecords2.xml".into(), ext_records_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/pivotCacheRecords2b.xml".into(), ext_records_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/pivotTable2.xml".into(), ext_table_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/_rels/pivotTable2.xml.rels".into(), ext_table_rels.as_bytes().to_vec());
+
+    let wb_xml = String::from_utf8(parts["xl/workbook.xml"].clone())
+        .unwrap()
+        .replace("</pivotCaches>", r#"<pivotCache cacheId="99" r:id="rId99"/></pivotCaches>"#);
+    parts.insert("xl/workbook.xml".into(), wb_xml.into_bytes());
+    let wb_rels = String::from_utf8(parts["xl/_rels/workbook.xml.rels"].clone()).unwrap().replace(
+        "</Relationships>",
+        r#"<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition2.xml"/></Relationships>"#,
+    );
+    parts.insert("xl/_rels/workbook.xml.rels".into(), wb_rels.into_bytes());
+    let s2_rels = String::from_utf8(parts["xl/worksheets/_rels/sheet2.xml.rels"].clone()).unwrap().replace(
+        "</Relationships>",
+        r#"<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable2.xml"/></Relationships>"#,
+    );
+    parts.insert("xl/worksheets/_rels/sheet2.xml.rels".into(), s2_rels.into_bytes());
+    let ct_xml = String::from_utf8(parts["[Content_Types].xml"].clone()).unwrap().replace(
+        "</Types>",
+        concat!(
+            r#"<Override PartName="/xl/pivotTables/pivotTable2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheDefinition2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheRecords2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheRecords2b.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>"#,
+            "</Types>",
+        ),
+    );
+    parts.insert("[Content_Types].xml".into(), ct_xml.into_bytes());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    let (mut read_wb, _) = read_xlsx(buf.get_ref()).unwrap();
+    let pt = read_wb.sheet_mut(1).unwrap().pivots.iter_mut().find(|p| p.name == "ExtPivot").expect("unresolved local pivot read");
+    assert_eq!(pt.anchor, at("A15"));
+    assert_eq!(pt.last_range, Some(rr("A15:B17")));
+
+    // Simulate inserting 5 rows above the pivot and renaming it (including XML-special chars).
+    pt.anchor = CellRef::new(pt.anchor.row + 5, pt.anchor.col);
+    pt.last_range = pt.last_range.map(|r| RangeRef::new(CellRef::new(r.start.row + 5, r.start.col), CellRef::new(r.end.row + 5, r.end.col)));
+    pt.name = r#"Sales & "Ext" Pivot"#.into();
+
+    let saved_bytes = write_xlsx(&read_wb).unwrap();
+    // Verify ZIP has no duplicate entry names (guards L3 pivotCacheRecords dedup).
+    {
+        let mut za = zip::ZipArchive::new(std::io::Cursor::new(&saved_bytes)).unwrap();
+        let mut names = std::collections::HashSet::new();
+        for i in 0..za.len() {
+            let name = za.by_index(i).unwrap().name().unwrap().into_owned();
+            assert!(names.insert(name.clone()), "duplicate ZIP entry emitted: {name}");
+        }
+    }
+
+    let saved = unzip(&saved_bytes);
+    assert_relationship_targets_exist(&saved);
+    let wb_xml = xml::parse(saved.get("xl/workbook.xml").unwrap()).unwrap();
+    let wb_rels = xml::parse(saved.get("xl/_rels/workbook.xml.rels").unwrap()).unwrap();
+    let caches: Vec<&xml::El> = wb_xml.child("pivotCaches").unwrap().kids("pivotCache").collect();
+    assert_eq!(caches.len(), 2);
+    let mut ids = HashSet::new();
+    for cache in &caches {
+        assert!(ids.insert(cache.attr("cacheId").unwrap().to_string()));
+        let rid = cache.attr("id").unwrap();
+        let rel = wb_rels.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
+        assert!(rel.attr("Type").unwrap().ends_with("/pivotCacheDefinition"));
+    }
+
+    let table = xml::parse(saved.get("xl/pivotTables/pivotTable2.xml").unwrap()).unwrap();
+    assert_eq!(table.attr("name"), Some(r#"Sales & "Ext" Pivot"#));
+    assert_eq!(table.child("location").and_then(|l| l.attr("ref")), Some("A20:B22"));
+    let cache_id = table.attr("cacheId").expect("cacheId present");
+    assert!(ids.contains(cache_id), "cacheId {cache_id} not registered in workbook pivotCaches: {ids:?}");
+    // Re-read to confirm the renamed and moved pivot round-trips cleanly.
+    let (reloaded, _) = read_xlsx(&saved_bytes).unwrap();
+    let pt2 = reloaded.sheet(1).unwrap().pivots.iter().find(|p| p.name == r#"Sales & "Ext" Pivot"#).expect("renamed unresolved local pivot reloaded");
+    assert_eq!(pt2.anchor, at("A20"));
+    assert_eq!(pt2.last_range, Some(rr("A20:B22")));
+}
+
+#[test]
+fn preserved_unresolved_local_pivot_remaps_dxf_and_num_fmt_ids_on_save() {
+    let mut wb = workbook();
+    wb.sheet_mut(1).unwrap().pivots.truncate(1);
+    // Add a custom cell number format and a conditional format on Sheet 0 so saved styles.xml
+    // assigns them earlier indices and shifts our preserved pivot's dxfId and numFmtId.
+    let custom_cell_style =
+        wb.styles.intern(gridcraft_model::Style { num_fmt: gridcraft_model::NumFmt::new("#,##0.00 \"eur\""), ..Default::default() });
+    wb.sheet_mut(0)
+        .unwrap()
+        .cells
+        .set(at("D1"), gridcraft_model::Cell { value: Value::Number(42.0), style: custom_cell_style, ..Default::default() });
+    wb.sheet_mut(0).unwrap().cond_formats.push(gridcraft_model::CondFormat {
+        ranges: vec![rr("D1:D1")],
+        rule: gridcraft_model::CfRule::CellIs {
+            op: gridcraft_model::CfOperator::Greater,
+            a: "0".into(),
+            b: None,
+            style: Box::new(gridcraft_model::Style {
+                font: gridcraft_model::Font { bold: true, color: gridcraft_model::Color::Rgb(0xFF0000), ..Default::default() },
+                ..Default::default()
+            }),
+        },
+        stop_if_true: false,
+        priority: 1,
+    });
+
+    let base = write_xlsx(&wb).unwrap();
+    let mut parts = unzip(&base);
+
+    // Append pivot numFmt at numFmtId=200 and prepend the pivot dxf at index 0 in source
+    // xl/styles.xml so the pivot's original ids (dxfId=0, numFmtId=200) MUST shift when
+    // styles.xml is rebuilt on save (CF takes dxfId=0; custom numFmts renumber from 164).
+    let orig_styles = String::from_utf8(parts["xl/styles.xml"].clone()).unwrap();
+    let styles_el = xml::parse(orig_styles.as_bytes()).unwrap();
+    let existing_dxf_count = styles_el.child("dxfs").map(|d| d.kids("dxf").count()).unwrap_or(0);
+    assert_eq!(existing_dxf_count, 1, "base workbook should have 1 CF dxf: {orig_styles}");
+    let existing_fmt_count = styles_el.child("numFmts").map(|n| n.kids("numFmt").count()).unwrap_or(0);
+    assert!(existing_fmt_count >= 1, "base workbook should have custom numFmts: {orig_styles}");
+    let patched_styles = orig_styles
+        .replace(&format!(r#"<numFmts count="{existing_fmt_count}">"#), &format!(r#"<numFmts count="{}">"#, existing_fmt_count + 1))
+        .replace("</numFmts>", r##"<numFmt numFmtId="200" formatCode="#,##0 &quot;widgets&quot;"/></numFmts>"##)
+        .replace(
+            r#"<dxfs count="1">"#,
+            r#"<dxfs count="2"><dxf><font><u/></font><fill><patternFill patternType="solid"><bgColor rgb="FF00AA00"/></patternFill></fill></dxf>"#,
+        );
+    assert!(patched_styles.contains(r#"numFmtId="200""#), "patched styles must contain numFmtId 200: {patched_styles}");
+    // In patched_styles, dxfs are: [0]=underline+green (pivot), [1]=CF bold red.
+    // Update sheet1 CF dxfId from 0 -> 1 so CF still references bold red.
+    let patched_sheet1 = String::from_utf8(parts["xl/worksheets/sheet1.xml"].clone()).unwrap().replace(r#"dxfId="0""#, r#"dxfId="1""#);
+    parts.insert("xl/styles.xml".into(), patched_styles.into_bytes());
+    parts.insert("xl/worksheets/sheet1.xml".into(), patched_sheet1.into_bytes());
+
+    // Build unresolved local PivotTable referencing dxfId="0" and numFmtId="200" in both table and cache.
+    let cache_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="rId1" recordCount="1">
+<cacheSource type="worksheet"><worksheetSource name="missing_styled_table"/></cacheSource>
+<cacheFields count="2"><cacheField name="Item"><sharedItems count="1"><s v="Widget"/></sharedItems></cacheField><cacheField name="Qty" numFmtId="200"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1" minValue="5" maxValue="5"/></cacheField></cacheFields>
+</pivotCacheDefinition>"#;
+    let cache_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheRecords" Target="pivotCacheRecords2.xml"/>
+</Relationships>"#;
+    let records_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" count="1"><r><x v="0"/><n v="5"/></r></pivotCacheRecords>"#;
+    let table_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<pivotTableDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" name="StyledUnresolvedPivot" cacheId="99">
+<location ref="E15:F17" firstHeaderRow="1" firstDataRow="1" firstDataCol="1"/>
+<pivotFields count="2"><pivotField axis="axisRow" showAll="0"><items count="1"><item x="0"/></items></pivotField><pivotField dataField="1" showAll="0"/></pivotFields>
+<rowFields count="1"><field x="0"/></rowFields>
+<dataFields count="1"><dataField name="Sum of Qty" fld="1" numFmtId="200" baseField="0" baseItem="0"/></dataFields>
+<formats count="1"><format dxfId="0"><pivotArea/></format></formats>
+</pivotTableDefinition>"#;
+    let table_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="../pivotCache/pivotCacheDefinition2.xml"/>
+</Relationships>"#;
+
+    parts.insert("xl/pivotCache/pivotCacheDefinition2.xml".into(), cache_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/_rels/pivotCacheDefinition2.xml.rels".into(), cache_rels.as_bytes().to_vec());
+    parts.insert("xl/pivotCache/pivotCacheRecords2.xml".into(), records_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/pivotTable2.xml".into(), table_xml.as_bytes().to_vec());
+    parts.insert("xl/pivotTables/_rels/pivotTable2.xml.rels".into(), table_rels.as_bytes().to_vec());
+
+    let wb_xml = String::from_utf8(parts["xl/workbook.xml"].clone())
+        .unwrap()
+        .replace("</pivotCaches>", r#"<pivotCache cacheId="99" r:id="rId99"/></pivotCaches>"#);
+    parts.insert("xl/workbook.xml".into(), wb_xml.into_bytes());
+    let wb_rels = String::from_utf8(parts["xl/_rels/workbook.xml.rels"].clone()).unwrap().replace(
+        "</Relationships>",
+        r#"<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition2.xml"/></Relationships>"#,
+    );
+    parts.insert("xl/_rels/workbook.xml.rels".into(), wb_rels.into_bytes());
+    let s2_rels = String::from_utf8(parts["xl/worksheets/_rels/sheet2.xml.rels"].clone()).unwrap().replace(
+        "</Relationships>",
+        r#"<Relationship Id="rId99" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotTable" Target="../pivotTables/pivotTable2.xml"/></Relationships>"#,
+    );
+    parts.insert("xl/worksheets/_rels/sheet2.xml.rels".into(), s2_rels.into_bytes());
+    let ct_xml = String::from_utf8(parts["[Content_Types].xml"].clone()).unwrap().replace(
+        "</Types>",
+        concat!(
+            r#"<Override PartName="/xl/pivotTables/pivotTable2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheDefinition2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheDefinition+xml"/>"#,
+            r#"<Override PartName="/xl/pivotCache/pivotCacheRecords2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.pivotCacheRecords+xml"/>"#,
+            "</Types>",
+        ),
+    );
+    parts.insert("[Content_Types].xml".into(), ct_xml.into_bytes());
+
+    let mut buf = std::io::Cursor::new(Vec::new());
+    {
+        let mut zw = zip::ZipWriter::new(&mut buf);
+        let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in &parts {
+            zw.start_file(name, opts).unwrap();
+            std::io::Write::write_all(&mut zw, data).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    let (mut read_wb, _) = read_xlsx(buf.get_ref()).unwrap();
+    // Also rename the pivot to verify rewrite_preserved_pivot_table + finish_style_ids compose.
+    let pt = read_wb.sheet_mut(1).unwrap().pivots.iter_mut().find(|p| p.name == "StyledUnresolvedPivot").expect("styled pivot read");
+    pt.name = "RenamedStyledPivot".into();
+
+    let saved_bytes = write_xlsx(&read_wb).unwrap();
+    let saved = unzip(&saved_bytes);
+    let saved_styles = xml::parse(saved.get("xl/styles.xml").unwrap()).unwrap();
+
+    // Locate the saved custom numFmt for our pivot and verify it shifted away from 200.
+    let saved_fmt_id = saved_styles
+        .child("numFmts")
+        .expect("saved numFmts")
+        .kids("numFmt")
+        .find(|f| f.attr("formatCode") == Some(r#"#,##0 "widgets""#))
+        .and_then(|f| f.attr_u32("numFmtId"))
+        .expect("pivot custom numFmt must be registered in saved styles.xml");
+    assert_ne!(saved_fmt_id, 200, "numFmtId should shift from source id 200");
+
+    // Locate the saved dxf for our pivot (underlined font + green fill).
+    let saved_dxfs: Vec<&xml::El> = saved_styles.child("dxfs").expect("saved dxfs").kids("dxf").collect();
+    let saved_dxf_id = saved_dxfs
+        .iter()
+        .position(|d| d.child("font").and_then(|f| f.child("u")).is_some())
+        .expect("pivot dxf must be registered in saved styles.xml") as u32;
+    assert_ne!(saved_dxf_id, 0, "dxfId should shift from source index 0 after CF takes index 0");
+    let saved_table = xml::parse(saved.get("xl/pivotTables/pivotTable2.xml").unwrap()).unwrap();
+    assert_eq!(saved_table.attr("name"), Some("RenamedStyledPivot"), "table rewrite must survive finish_style_ids");
+    let table_dxf_id =
+        saved_table.child("formats").and_then(|fs| fs.child("format")).and_then(|f| f.attr_u32("dxfId")).expect("saved pivotTable format dxfId");
+    assert_eq!(table_dxf_id, saved_dxf_id, "pivotTable <format dxfId> must match saved styles.xml <dxfs> index");
+    let table_fmt_id = saved_table
+        .child("dataFields")
+        .and_then(|dfs| dfs.child("dataField"))
+        .and_then(|df| df.attr_u32("numFmtId"))
+        .expect("saved pivotTable dataField numFmtId");
+    assert_eq!(table_fmt_id, saved_fmt_id, "pivotTable <dataField numFmtId> must match saved styles.xml <numFmts>");
+
+    let saved_cache = xml::parse(saved.get("xl/pivotCache/pivotCacheDefinition2.xml").unwrap()).unwrap();
+    let cache_fmt_id = saved_cache
+        .child("cacheFields")
+        .and_then(|cfs| cfs.kids("cacheField").find(|cf| cf.attr("name") == Some("Qty")))
+        .and_then(|cf| cf.attr_u32("numFmtId"))
+        .expect("saved pivotCacheDefinition cacheField numFmtId");
+    assert_eq!(cache_fmt_id, saved_fmt_id, "pivotCacheDefinition <cacheField numFmtId> must match saved styles.xml <numFmts>");
+}

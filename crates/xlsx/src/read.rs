@@ -401,6 +401,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
     let mut legacy_formulas: Vec<(usize, Vec<gridcraft_core::CellRef>)> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     pivot_caches.read_connections(&mut cx, &wb_rels);
+    let mut pending_pivot_sources: Vec<(usize, crate::pivot::ReadPivotSource)> = vec![];
     let sheet_els: Vec<&El> = wb_xml.child("sheets").map(|s| s.kids("sheet").collect()).unwrap_or_default();
     if sheet_els.len() > MAX_SHEETS {
         return Err(IoError::TooLarge(format!("the workbook has more than {MAX_SHEETS} sheets")));
@@ -442,10 +443,13 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         };
         let mut external_pivots = vec![];
         legacy_formulas.push((wb.sheets.len(), std::mem::take(&mut cx.legacy_formulas)));
-        match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
+        let mut sheet_pivot_sources = vec![];
+        match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name, &mut sheet_pivot_sources) {
             Ok(p) => {
                 sheet.pivots = p.tables;
                 external_pivots = p.external;
+                let si = wb.sheets.len();
+                pending_pivot_sources.extend(sheet_pivot_sources.into_iter().map(|s| (si, s)));
             }
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
@@ -562,6 +566,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             Err(e) => cx.warn(format!("macros (VBA project) could not be read and were dropped: {e}")),
         }
     }
+    preserve_unresolvable_pivots(&mut cx, &mut kept, &mut wb, pending_pivot_sources);
     wb.preserved = kept.workbook(&mut cx, &wb_part, &wb_xml, &file_to_model);
     if let Some(w) = cx.python.warning() {
         cx.warn(w);
@@ -573,6 +578,28 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
     wb.styles = cx.styles;
     wb.phonetics = cx.phonetics;
     Ok((wb, cx.report))
+}
+
+fn preserve_unresolvable_pivots(
+    cx: &mut Ctx<'_>,
+    kept: &mut crate::passthrough::KeptReader,
+    wb: &mut Workbook,
+    sources: Vec<(usize, crate::pivot::ReadPivotSource)>,
+) {
+    for (si, src) in sources {
+        let Some((sheet_name, pt_source)) =
+            wb.sheet(si).and_then(|s| s.pivots.iter().find(|p| p.id == src.pivot_id).map(|p| (s.name.clone(), p.source.clone())))
+        else {
+            continue;
+        };
+        if crate::pivot::resolve_source(wb, &pt_source, si, 0).is_none() {
+            let mut preserved = wb.sheet(si).and_then(|s| s.preserved.clone());
+            kept.keep_pivot_passthrough(cx, &mut preserved, &sheet_name, &src, &pt_source);
+            if let Some(sheet) = wb.sheet_mut(si) {
+                sheet.preserved = preserved;
+            }
+        }
+    }
 }
 
 /// Strips a sheet qualifier (`'My Sheet'!$A$1` → `$A$1`).
