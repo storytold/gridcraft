@@ -1067,6 +1067,20 @@ mod tests {
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
     }
 
+    /// A table draws its header row bold; AutoFit measures that, not the cell's own plain font.
+    #[test]
+    fn autofit_measures_a_table_header_in_the_table_style_font() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        let heading = "Quarterly Revenue by Region";
+        s.execute("range.setValues", json!({"range": "A1", "values": [[heading, heading], [1, 1]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:A2", "header": true})).unwrap();
+        s.execute("home.autofitColumnWidth", json!({"cols": "A:B"})).unwrap();
+        let sh = s.active().unwrap().wb.active().unwrap();
+        let (table, plain) = (sh.col_width(0) - sh.filter_button_space(CellRef::new(0, 0)), sh.col_width(1));
+        assert!(table > plain, "the bold table header is wider than the same plain text: {table} vs {plain}");
+    }
+
     /// Outlined letters have no Font-group command; Format Cells' style JSON sets and clears them.
     #[test]
     fn format_cells_sets_outlined_letters() {
