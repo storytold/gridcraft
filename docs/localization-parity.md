@@ -118,11 +118,10 @@ separators, number/date formats, machine translation with agent review, and scri
 | German | de | 266 (~12%) | no | Latin: yes | no | menus only | 4–8 h |
 | Italian | it | 971 (~44%) | dialogs, tooltips, pivot pane | Latin: yes | no | menus, File view, dialogs, pivot pane | 3–5 h |
 | Korean | ko | 266 (~12%) | no | Hangul via the CJK fallback; IME unverified | no | menus only | 6–10 h |
-| Vietnamese | vi | 0 (0%) | no | Latin with stacked diacritics: unverified | no | none | 6–10 h |
+| Vietnamese | vi | 1,170 (~53%) | dialogs, PivotTable pane and tooltips | Latin with stacked diacritics: unverified | no | menus, File view, dialogs, pivot pane | 2–4 h |
 | Turkish | tr | 382 (~17%) | no | Latin: yes | yes | menus only | 4–8 h |
 
 Other shipped languages: Russian (ru), German (de), Czech (cs), French (fr) and Turkish (tr), menus only.
-| Vietnamese | vi | 398 (~18%) | no | Latin with stacked diacritics: unverified | no | menus, File view | 5–9 h |
 Other shipped languages: Russian (ru) and German (de), 266 labels each (~12%), menus only; Dutch (nl), 518 labels (~24%): ribbon, context menus, File view, dialog titles and the Options page.
 
 **Total:** catalog work 10–20 h + languages 92–144 h ≈ **100–165 h**. Parallelizes almost fully
@@ -153,6 +152,7 @@ language (none so far) and of localized function names.
 | 2026-11-09 | minor | Arabic PDF export no longer fails on a character the Arabic face lacks (it falls back like other text) or when no Arabic font is available (Arabic is set in the CID font, which has no Arabic glyphs, and a message says so) |
 | 2026-10-31 | minor | System and embedded CJK text fallbacks share the Latin baseline in cells, editors and window titles; other scripts, symbols and emoji keep their alignment |
 | 2026-11-08 | minor | Strings built with `format!` in English now translate their template first and fill it in once (`Language::tr_fill`): status bar statistics and the circular-reference note, the column width / row height drag tip, the formula bar text for a picture in a cell, the Move or Copy and Unhide notes, the Format Control title, the equation editor's error prefix and its own check messages (macro definitions, `%` with a link, nesting, length, matrix-cell and size limits; RaTeX parser errors stay English), and the Goal Seek and macro recorder/runner toasts (#3600, #3602, #3603, #3605, #3607–#3611). 24 new keys in every catalog; Average, Count, Sum and the three existing templates added to the 11 catalogs that lacked them, and Ukrainian's English placeholders for those six replaced. Numbers in these strings keep the `.` decimal point |
+| 2026-11-02 | minor | Vietnamese catalog (`i18n/vi.rs`) expanded to 1,170 entries (~53%), covering every key across all catalogs (dialogs, File backstage, PivotTable pane, print settings, cell styles, conditional formatting, chart types, macros, context menus and tooltips; 0 missing in `cargo xtask i18n-report`) |
 | 2026-10-26 | minor | Arabic PDF cells inherit explicit or contextual direction; wrapped lines retain paragraph direction, and RTL pages mirror cell and object geometry |
 | 2026-10-26 | minor | Shared bidi layout supports Arabic clusters, marks, visual cursor navigation and directional accessibility; cell Context/LTR/RTL is stored separately from sheet RTL and round-trips through XLSX |
 | 2026-10-26 | minor | Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
