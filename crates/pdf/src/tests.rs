@@ -934,6 +934,10 @@ fn image_bytes_are_bounded_across_pages() -> Result<(), Box<dyn Error>> {
     assert_eq!(d.add_page(100.0, 100.0).image_room(), MAX_DOC_IMAGE_BYTES);
     d.set_image_budget(u64::MAX);
     assert_eq!(d.add_page(100.0, 100.0).image_room(), MAX_DOC_IMAGE_BYTES, "the budget is never raised");
+    let mut d = PdfDoc::new();
+    d.set_image_budget(4);
+    d.set_image_budget(8);
+    assert_eq!(d.add_page(100.0, 100.0).image_room(), 4, "a later, higher budget doesn't raise a lower one");
 
     let mut d = PdfDoc::new();
     d.set_image_budget(10_000);

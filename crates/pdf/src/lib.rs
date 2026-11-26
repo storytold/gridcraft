@@ -1099,9 +1099,10 @@ impl PdfDoc {
     }
 
     /// Lowers the bytes of image data the whole document keeps (never above
-    /// [`MAX_DOC_IMAGE_BYTES`]); images drawn past it are left out.
+    /// [`MAX_DOC_IMAGE_BYTES`], nor above a budget set before); images drawn past it are left out.
     pub fn set_image_budget(&mut self, bytes: u64) {
-        self.image_budget = Some(bytes.min(MAX_DOC_IMAGE_BYTES));
+        let cap = self.image_budget.unwrap_or(MAX_DOC_IMAGE_BYTES);
+        self.image_budget = Some(bytes.min(cap));
     }
 
     /// Image bytes the document may still keep: its budget minus what every closed page holds
