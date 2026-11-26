@@ -344,6 +344,84 @@ fn enter_values_and_formulas() {
 }
 
 #[test]
+fn a_leading_plus_or_minus_starts_a_formula() {
+    // #2023: like Excel (and Lotus 1-2-3 before it), typing `+5+4` enters the formula `=+5+4`.
+    let mut s = s();
+    let input = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).map(|c| c.input_text());
+    for (cell, typed, value) in [
+        ("A1", "+5+4", 9.0),
+        ("A2", "-5+4", -1.0),
+        ("A3", "--5", 5.0),
+        ("A4", "-3/4", -0.75),
+        ("A5", "+A1*2", 18.0),
+        ("A6", "-(A1)", -9.0),
+        ("A7", "+1/30", 1.0 / 30.0),
+        ("A8", "-1/30", -1.0 / 30.0),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(input(&s, cell), Some(format!("={typed}")), "{typed}");
+        assert_eq!(v(&s, cell), Value::Number(value), "{typed}");
+    }
+    // A signed number is a number, a lone sign is text, and an apostrophe keeps the text.
+    for (typed, value) in [
+        ("+5", Value::Number(5.0)),
+        ("-5", Value::Number(-5.0)),
+        ("-12%", Value::Number(-0.12)),
+        ("-$5", Value::Number(-5.0)),
+        ("-", Value::text("-")),
+        ("+", Value::text("+")),
+        ("'+5+4", Value::text("+5+4")),
+    ] {
+        s.execute("cell.set", json!({"cell": "B1", "input": typed})).unwrap();
+        assert_eq!(v(&s, "B1"), value, "{typed}");
+        assert!(!input(&s, "B1").is_some_and(|t| t.starts_with('=')), "{typed}");
+    }
+    // Text that would read as a formula is edited with its apostrophe, so confirming the editor
+    // unchanged keeps it text; text that wouldn't is edited as it is.
+    for (typed, shown) in [
+        ("'+5+4", "'+5+4"),
+        ("'-5+4", "'-5+4"),
+        ("'+1-555-1234", "'+1-555-1234"),
+        ("'-abc", "'-abc"),
+        ("--", "--"),
+        ("+49 170 1234567", "+49 170 1234567"),
+        ("+1:30", "+1:30"),
+    ] {
+        s.execute("cell.set", json!({"cell": "B2", "input": typed})).unwrap();
+        let before = v(&s, "B2");
+        let edit = {
+            let d = s.doc().unwrap();
+            crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("B2").unwrap())
+        };
+        assert_eq!(edit, shown, "{typed}");
+        s.execute("cell.set", json!({"cell": "B2", "input": edit})).unwrap();
+        assert_eq!(v(&s, "B2"), before, "{typed} stays text after an unchanged edit");
+    }
+    // As observed in Excel for the web, an entry that doesn't read as a formula stays text, and
+    // one that does but names nothing known is #NAME?. Only `=` entries are refused.
+    for typed in ["--", "-----", "+5+", "+49 170 1234567", "+1:30"] {
+        s.execute("cell.set", json!({"cell": "C1", "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(v(&s, "C1"), Value::text(typed), "{typed}");
+        assert_eq!(input(&s, "C1").as_deref(), Some(typed), "{typed}");
+    }
+    s.execute("cell.set", json!({"cell": "C2", "input": "- item"})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Error(gridcraft_core::CellError::Name));
+    // Excel for the web keeps `+1:30` as text (above) but reads `-1:30` as a formula (rows 1 to 30).
+    s.execute("cell.set", json!({"cell": "C40", "input": "-1:30"})).unwrap();
+    assert_eq!(input(&s, "C40").as_deref(), Some("=-1:30"));
+    let e = s.execute("cell.set", json!({"cell": "C1", "input": "=--"})).unwrap_err().to_string();
+    assert!(e.contains("problem with this formula"), "{e}");
+    assert_eq!(v(&s, "C1"), Value::text("+1:30"), "a refused entry keeps the cell");
+    // Pasted or split by Text to Columns, the same rule applies.
+    s.execute("edit.paste", json!({"at": "D1", "text": "--\t-5+4\n"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::text("--"));
+    assert_eq!(v(&s, "E1"), Value::Number(-1.0));
+    s.execute("cell.set", json!({"cell": "F1", "input": "a,--,b"})).unwrap();
+    s.execute("data.textToColumns", json!({"range": "F1", "delimiters": [","]})).unwrap();
+    assert_eq!([v(&s, "F1"), v(&s, "G1"), v(&s, "H1")], [Value::text("a"), Value::text("--"), Value::text("b")]);
+}
+
+#[test]
 fn formulas_with_the_wrong_argument_count_are_refused_on_entry() {
     // #363: =DATEDIF(start, end) was stored and showed #VALUE!. Like Excel, entry refuses it and
     // the message gives the signature, so the missing unit argument is visible.
@@ -1737,6 +1815,27 @@ fn case_sensitive_sort_puts_lowercase_first() {
     s.execute("data.sort", json!({"range": "A1:A6", "header": false, "matchCase": true, "keys": [{"column": "A"}]})).unwrap();
     let col: Vec<Value> = (1..=6).map(|r| v(&s, &format!("A{r}"))).collect();
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
+}
+
+/// Data > Sort orders numbers exactly, like Excel 365: 0.3 sorts before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
+#[test]
+fn sort_orders_numbers_exactly() {
+    for first_noisy in [true, false] {
+        let mut s = s();
+        let (a1, a2, b1, b2) = if first_noisy { ("=0.1+0.2", "0.3", "e", "t") } else { ("0.3", "=0.1+0.2", "t", "e") };
+        for (cell, input) in [("A1", a1), ("A2", a2), ("B1", b1), ("B2", b2)] {
+            s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        let labels = |s: &Session| [v(s, "B1"), v(s, "B2")];
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A"}]})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "ascending, noisy first: {first_noisy}");
+        s.execute("data.sort", json!({"range": "A1:B2", "header": false, "keys": [{"column": "A", "order": "desc"}]})).unwrap();
+        assert_eq!(labels(&s), ["e", "t"].map(Value::from), "descending, noisy first: {first_noisy}");
+        s.execute("selection.set", json!({"range": "A1:B2"})).unwrap();
+        s.execute("data.sortAscending", json!({"range": "A1:B2", "column": "A"})).unwrap();
+        assert_eq!(labels(&s), ["t", "e"].map(Value::from), "quick sort, noisy first: {first_noisy}");
+    }
 }
 
 /// #3949: Excel sorts values that are not in the custom list A to Z after the listed ones.
@@ -7329,6 +7428,45 @@ fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
         assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
     }
     assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+/// A password set in GridCraft is kept in every form a file stores; XLSX writes its Excel form,
+/// so a sheet or workbook password survives saving and reopening and still unprotects.
+#[test]
+fn passwords_set_in_gridcraft_survive_xlsx_saving() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({"password": "pa55"})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true, "password": "b00k"})).unwrap();
+    // The workbook password, like the sheet's, also keeps OpenDocument's SHA-256 digest.
+    let book = s.doc().unwrap().wb.structure_password.clone().unwrap();
+    assert_eq!(book.odf_key(), gridcraft_model::PasswordHash::new_sha256_digest("b00k").odf_key());
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let mut t = super::tests::s();
+    t.execute("file.open", json!({"name": "book.xlsx", "base64": saved["base64"]})).unwrap();
+    assert!(t.execute("review.unprotectSheet", json!({})).is_err());
+    assert!(t.execute("review.unprotectSheet", json!({"password": "nope"})).is_err());
+    t.execute("review.unprotectSheet", json!({"password": "pa55"})).unwrap();
+    assert!(t.execute("review.protectWorkbook", json!({"on": false, "password": "nope"})).is_err());
+    t.execute("review.protectWorkbook", json!({"on": false, "password": "b00k"})).unwrap();
+    assert!(!t.doc().unwrap().wb.protected_structure);
+}
+
+/// A password held only as a SHA-256 digest (as OpenDocument stores it) unprotects with the
+/// password; XLSX has no form for it, so saving keeps the protection without the password.
+#[test]
+fn sha256_digest_passwords_unprotect_and_save_to_xlsx_without_the_password() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let digest = gridcraft_model::PasswordHash::new_sha256_digest("pa55");
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().protection.as_mut().unwrap().password = Some(digest);
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    assert!(s.execute("review.unprotectSheet", json!({"password": "nope"})).is_err());
+    s.execute("review.unprotectSheet", json!({"password": "pa55"})).unwrap();
+    let mut t = super::tests::s();
+    t.execute("file.open", json!({"name": "book.xlsx", "base64": saved["base64"]})).unwrap();
+    let prot = t.doc().unwrap().wb.sheets[0].protection.clone().unwrap();
+    assert_eq!(prot.password, None);
+    t.execute("review.unprotectSheet", json!({})).unwrap();
 }
 
 /// Renaming a sheet renames a PivotTable's source to it, and the PivotTable still refreshes.
