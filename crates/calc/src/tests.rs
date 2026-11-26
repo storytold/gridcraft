@@ -3174,14 +3174,44 @@ fn self_overlapping_spill_matches_full_recalc_after_incremental_edits() {
 fn spill_feedback_loop_converges_consistently() {
     let mut t = T::new();
     t.set("Z1", "1");
-    t.set("A1", "=SEQUENCE(3)");
-    t.set("B1", "=A2+Z1");
-    t.set("A1", "=IF(B1>0,SEQUENCE(3),1)");
-    assert_eq!(t.get("B1"), Value::Number(3.0));
+    t.set("C1", "=SEQUENCE(3)");
+    t.set("A1", "=C2+Z1");
+    t.set("C1", "=IF(A1>0,SEQUENCE(3),1)");
+    assert_eq!(t.get("A1"), Value::Number(3.0));
 
     t.set("Z1", "2");
     let mut fresh = t.wb.clone();
     Calc::new().recalc_all(&mut fresh);
-    assert_eq!(t.get("B1"), Value::Number(4.0));
+    assert_eq!(t.get("A1"), Value::Number(4.0));
+    assert_eq!(t.get("A1"), fresh.sheet(0).unwrap().value(c("A1")));
+}
+
+#[test]
+fn active_ancestor_stale_spill_is_hidden_during_on_demand_read() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("B1", "=SUM(A2:A3)");
+    assert_eq!(t.get("B1"), Value::Number(5.0));
+
+    t.set("A1", "=SEQUENCE(MAX(1,B1+SUM(A2:A3)))");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("A1"), Value::Number(1.0));
+    assert_eq!(t.get("A2"), Value::Empty);
+    assert_eq!(t.get("B1"), Value::Number(0.0));
+    assert_eq!(t.wb.sheet(0).unwrap().spill_ranges.get(&c("A1")), fresh.sheet(0).unwrap().spill_ranges.get(&c("A1")));
+}
+
+#[test]
+fn range_values_hides_stale_spill_when_contained_anchor_stops_spilling() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(2)");
+    t.set("B1", "=INDEX(A1:A2,2,1)");
+    assert_eq!(t.get("B1"), Value::Number(2.0));
+
+    t.set("A1", "=42");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("B1"), Value::Number(0.0));
     assert_eq!(t.get("B1"), fresh.sheet(0).unwrap().value(c("B1")));
 }

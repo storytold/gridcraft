@@ -31,9 +31,6 @@ pub(super) struct PassHost<'a> {
     /// sheet on demand so stale stored spills are ignored while those formulas run.
     stale_spills: SpillIndex,
     stale_built: HashSet<usize>,
-    /// Formula currently evaluating at the innermost level, so a formula does not read its own
-    /// pre-pass spilled cells while sibling formulas that still await evaluation keep theirs.
-    current: Option<Key>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -108,7 +105,6 @@ impl<'a> PassHost<'a> {
             spill_index: SpillIndex::default(),
             stale_spills: SpillIndex::default(),
             stale_built: HashSet::default(),
-            current: None,
             used: HashMap::default(),
             rng,
             standing: None,
@@ -181,10 +177,17 @@ impl<'a> PassHost<'a> {
     }
 }
 
-fn stale_covering_hidden(stale_spills: &SpillIndex, pending: &HashSet<Key>, current: Option<Key>, sheet: usize, c: CellRef) -> bool {
+fn stale_covering_hidden(
+    stale_spills: &SpillIndex,
+    pending: &HashSet<Key>,
+    in_progress: &HashSet<Key>,
+    waiting: &HashSet<Key>,
+    sheet: usize,
+    c: CellRef,
+) -> bool {
     let is_hidden = |anchor| {
         let k = (sheet, anchor);
-        !pending.contains(&k) || current == Some(k)
+        !pending.contains(&k) || in_progress.contains(&k) || waiting.contains(&k)
     };
     match stale_spills.covering(sheet, c) {
         Cover::None => false,
@@ -388,12 +391,10 @@ impl PassHost<'_> {
         }
         let expr = std::sync::Arc::clone(expr);
         let outer_out_of_stack = std::mem::replace(&mut self.out_of_stack, false);
-        let outer_current = self.current.replace(k);
         let v = {
             let mut ev = Evaluator::new(self, k.0, k.1);
             ev.value(&expr)
         };
-        self.current = outer_current;
         let out_of_stack = std::mem::replace(&mut self.out_of_stack, outer_out_of_stack);
         if out_of_stack && self.depth > 1 && self.suspend.is_none() {
             // It ran out of the stack left below the formulas that read it: it is calculated
@@ -671,7 +672,7 @@ impl Host for PassHost<'_> {
             _ => {
                 let Some(v) = sh.spill.get(&c) else { return Value::Empty };
                 self.ensure_stale_spills(sheet);
-                if stale_covering_hidden(&self.stale_spills, &self.pending, self.current, sheet, c) {
+                if stale_covering_hidden(&self.stale_spills, &self.pending, &self.in_progress, &self.waiting, sheet, c) {
                     return Value::Empty;
                 }
                 v.clone()
@@ -693,13 +694,20 @@ impl Host for PassHost<'_> {
                 *slot = cell.value.clone();
             }
         }
+        for (i, c) in formulas {
+            let v = self.cell_value(sheet, c);
+            if let Some(slot) = out.get_mut(i) {
+                *slot = v;
+            }
+        }
         if !sh.spill.is_empty() {
             let has_stale = self.has_stale_meeting(sheet, range);
             let stale_spills = &self.stale_spills;
             let pending = &self.pending;
-            let current = self.current;
+            let in_progress = &self.in_progress;
+            let waiting = &self.waiting;
             let _seen = stored_spill_in(sh, range, &mut |c, v| {
-                if has_stale && stale_covering_hidden(stale_spills, pending, current, sheet, c) {
+                if has_stale && stale_covering_hidden(stale_spills, pending, in_progress, waiting, sheet, c) {
                     return true;
                 }
                 let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
@@ -713,12 +721,6 @@ impl Host for PassHost<'_> {
             #[cfg(test)]
             {
                 self.spill_visits += _seen;
-            }
-        }
-        for (i, c) in formulas {
-            let v = self.cell_value(sheet, c);
-            if let Some(slot) = out.get_mut(i) {
-                *slot = v;
             }
         }
         if !self.spills.is_empty() {
@@ -786,10 +788,11 @@ impl Host for PassHost<'_> {
         let has_stale = !sh.spill.is_empty() && self.has_stale_meeting(sheet, range);
         let stale_spills = &self.stale_spills;
         let pending = &self.pending;
-        let current = self.current;
+        let in_progress = &self.in_progress;
+        let waiting = &self.waiting;
         let mut stored = false;
         let _seen = stored_spill_in(sh, range, &mut |c, _| {
-            if has_stale && stale_covering_hidden(stale_spills, pending, current, sheet, c) {
+            if has_stale && stale_covering_hidden(stale_spills, pending, in_progress, waiting, sheet, c) {
                 return true;
             }
             stored = true;
