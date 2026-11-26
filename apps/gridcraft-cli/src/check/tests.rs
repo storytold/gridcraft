@@ -511,3 +511,18 @@ fn json_schema_keys() {
     );
     assert_eq!(keys(&v["functions"][0]), set(&["name", "checked", "mismatched", "primary"]));
 }
+
+#[test]
+/// Apply the selected region before checking cached DATEVALUE results and their dependent formulas.
+fn region_is_applied_before_oracle_recalculation() {
+    for (tag, text) in [("en-GB", "13/01/2026"), ("ja-JP", "26/01/13")] {
+        let formula = format!("=DATEVALUE(\"{text}\")");
+        let wb = book(&[("A1", &formula, n(46035.0)), ("B1", "=MONTH(A1)", n(1.0))]);
+        let selected = check(&wb, &Options { region: gridcraft_engine::find_region(tag).unwrap(), ..Default::default() });
+        assert_eq!((selected.calc.checked, selected.calc.matched, selected.calc.mismatched), (2, 2, 0));
+        assert!(selected.is_clean(), "{selected:?}");
+        let default = check(&wb, &Options::default());
+        assert_eq!(default.calc.mismatched, 2);
+        assert_eq!(default.calc.mismatches[0].actual, Value::Error(CellError::Value));
+    }
+}

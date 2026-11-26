@@ -1,3 +1,5 @@
+use gridcraft_core::{DateSystem, Region, region::EN_US};
+
 use super::{Array, BinOp, CellError, MAX_CELLS, Value, compare};
 
 /// The aggregates that can fold a reference without building an array.
@@ -53,12 +55,14 @@ impl Acc {
 
 // ---------------------------------------------------------------- operators
 
-pub(super) fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: gridcraft_core::DateSystem) -> Value {
+pub(super) fn map_unary(v: &Value, f: &dyn Fn(f64) -> Value, plus: bool, sys: DateSystem, region: &Region) -> Value {
     match v {
-        Value::Array(a) => Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys)).collect() }),
+        Value::Array(a) => {
+            Value::from(Array { rows: a.rows, cols: a.cols, data: a.data.iter().map(|x| map_unary(x, f, plus, sys, region)).collect() })
+        }
         Value::Error(e) => Value::Error(*e),
         Value::Text(_) if plus => v.clone(),
-        other => match other.to_number_in(sys) {
+        other => match other.to_number_with_date_region(sys, region) {
             Ok(n) => f(n),
             Err(e) => Value::Error(e),
         },
@@ -165,19 +169,25 @@ pub(super) fn single(v: Value) -> Option<Value> {
 /// error for a result too large to hold, before the rest is built.
 pub(super) const MAX_CONCAT_ARRAY_BYTES: usize = 512 * 1024 * 1024;
 
-pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: gridcraft_core::DateSystem) -> Value {
+/// Apply an operator with canonical en-US text coercion.
+pub fn binary_values(op: BinOp, x: &Value, y: &Value, sys: DateSystem) -> Value {
+    binary_values_in(op, x, y, sys, &EN_US)
+}
+
+/// Apply an operator with the workbook's region for date/time text in arithmetic.
+pub(super) fn binary_values_in(op: BinOp, x: &Value, y: &Value, sys: DateSystem, region: &Region) -> Value {
     if op == BinOp::Concat && (matches!(x, Value::Array(_)) || matches!(y, Value::Array(_))) {
         return concat_arrays(x, y, sys, MAX_CONCAT_ARRAY_BYTES);
     }
-    zip2(x, y, |a, b| binary_scalar(op, a, b, sys))
+    zip2(x, y, |a, b| binary_scalar(op, a, b, sys, region))
 }
 
 /// `x & y` with at least one array operand, giving `#NUM!` once the texts built so far pass `budget`
 /// bytes.
-fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: usize) -> Value {
+fn concat_arrays(x: &Value, y: &Value, sys: DateSystem, budget: usize) -> Value {
     let mut used = 0usize;
     try_zip2(x, y, |a, b| {
-        let v = binary_scalar(BinOp::Concat, a, b, sys);
+        let v = binary_scalar(BinOp::Concat, a, b, sys, &EN_US);
         if let Value::Text(t) = &v {
             used = used.saturating_add(t.len());
             if used > budget {
@@ -189,14 +199,14 @@ fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: 
     .unwrap_or(Value::Error(CellError::Num))
 }
 
-fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
+fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: DateSystem, region: &Region) -> Value {
     if let Value::Error(e) = a {
         return Value::Error(*e);
     }
     if let Value::Error(e) = b {
         return Value::Error(*e);
     }
-    let num = |f: fn(f64, f64) -> Value| match (a.to_number_in(sys), b.to_number_in(sys)) {
+    let num = |f: fn(f64, f64) -> Value| match (a.to_number_with_date_region(sys, region), b.to_number_with_date_region(sys, region)) {
         (Ok(x), Ok(y)) => f(x, y),
         (Err(e), _) | (_, Err(e)) => Value::Error(e),
     };
