@@ -2087,3 +2087,108 @@ fn renaming_a_defined_name_leaves_a_table_source_on_its_table() {
     let gt = find_row(&s, "Grand Total").unwrap();
     assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
 }
+
+fn pivot_with_filter(rows: serde_json::Value, fmt: &str, fmt_range: &str, filter_col: &str, sys: gridcraft_core::DateSystem) -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).date_system = sys;
+    let last_row = rows.as_array().unwrap().len();
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("home.numberFormat", json!({"range": fmt_range, "format": fmt})).unwrap();
+    s.execute(
+        "insert.pivotTable",
+        json!({"source": format!("Sheet1!$A$1:$C${last_row}"), "destination": "Sheet1!E3", "rows": ["Region"], "values": ["Amount"], "filters": [filter_col]}),
+    )
+    .unwrap();
+    s
+}
+
+fn assert_filter_and_round_trip(s: &Session, expected_label: &str, expected_total: f64) {
+    assert_eq!(text(s, "F1"), expected_label);
+    let gt = find_row(s, "Grand Total").unwrap();
+    assert_eq!(val(s, &CellRef::new(gt, 5).a1()), Value::Number(expected_total));
+    let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "pivot.xlsx").unwrap();
+    let mut back = Session::new();
+    back.execute("file.open", json!({"name": "pivot.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    back.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
+    assert_eq!(text(&back, "F1"), expected_label);
+    let gt = find_row(&back, "Grand Total").unwrap();
+    assert_eq!(val(&back, &CellRef::new(gt, 5).a1()), Value::Number(expected_total));
+}
+
+#[test]
+fn date_page_filter_matches_formatted_dates_and_survives_xlsx_round_trip() {
+    let d1900 = gridcraft_core::DateSystem::D1900;
+    let d1904 = gridcraft_core::DateSystem::D1904;
+
+    // #4754: serial, ISO `<d>`, and formatted selections all display as dates and survive save/reopen.
+    let rows = json!([["Date", "Region", "Amount"], [46350, "East", 100], [46351, "West", 200], [46350, "East", 50]]);
+    for (fmt, label) in [("yyyy-mm-dd", "2026-11-24"), ("m/d/yyyy", "11/24/2026")] {
+        let mut s = pivot_with_filter(rows.clone(), fmt, "A2:A4", "Date", d1900);
+        for item in ["46350", "2026-11-24", label] {
+            s.execute("pivot.filter", json!({"field": "Date", "selected": [item]})).unwrap();
+            assert_eq!(text(&s, "F1"), label);
+            let gt = find_row(&s, "Grand Total").unwrap();
+            assert_eq!(val(&s, &CellRef::new(gt, 5).a1()), Value::Number(150.0));
+        }
+        assert_filter_and_round_trip(&s, label, 150.0);
+    }
+
+    // Ambiguous DMY, year-only `yyyy`, minute-rounded datetime, long date, and 1904 workbook.
+    let apr3 = gridcraft_core::date::serial_from_ymd(d1900, 2026, 4, 3).unwrap();
+    let mar4 = gridcraft_core::date::serial_from_ymd(d1900, 2026, 3, 4).unwrap();
+    let d1904_a = gridcraft_core::date::serial_from_ymd(d1904, 2026, 11, 24).unwrap();
+    let d1904_b = gridcraft_core::date::serial_from_ymd(d1904, 2026, 11, 25).unwrap();
+    for (fmt, sys, v1, v2, sel, label, total) in [
+        ("dd/mm/yyyy", d1900, apr3, mar4, "03/04/2026", "03/04/2026", 100.0),
+        ("yyyy", d1900, 46350.0, 2026.0, "2026", "2026", 100.0),
+        ("dd/mm/yyyy hh:mm", d1900, apr3 + 0.5 + 30.0 / 86_400.0, mar4 + 0.5, "03/04/2026 12:00", "03/04/2026 12:00", 100.0),
+        ("dddd, mmmm d, yyyy", d1900, 46350.0, 46351.0, "Tuesday, November 24, 2026", "Tuesday, November 24, 2026", 100.0),
+        ("m/d/yyyy", d1904, d1904_a, d1904_b, "2026-11-24", "11/24/2026", 100.0),
+    ] {
+        let mut s = pivot_with_filter(json!([["Date", "Region", "Amount"], [v1, "East", 100], [v2, "West", 999]]), fmt, "A2:A3", "Date", sys);
+        s.execute("pivot.filter", json!({"field": "Date", "selected": [sel]})).unwrap();
+        assert_filter_and_round_trip(&s, label, total);
+        if fmt == "yyyy" {
+            // A stale year caption must not turn into serial 2026 after the 2026 row is replaced.
+            s.execute("cell.set", json!({"cell": "A2", "input": "46000"})).unwrap();
+            s.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
+            assert_eq!(text(&s, "F1"), "2026");
+            assert!(find_row(&s, "West").is_none());
+        }
+    }
+
+    // Blank General-formatted first cell + sub-second datetime format.
+    let t_half = 46350.5 + 0.5 / 86400.0;
+    let mut sb = pivot_with_filter(
+        json!([["Date", "Region", "Amount"], [null, "Blank", 5], [46350.5, "Whole", 100], [t_half, "Half", 250]]),
+        "hh:mm:ss.000",
+        "A3:A4",
+        "Date",
+        d1900,
+    );
+    sb.execute("pivot.filter", json!({"field": "Date", "selected": ["2026-11-24 12:00:00.500"]})).unwrap();
+    assert_eq!(text(&sb, "F1"), "12:00:00.500");
+    let gt = find_row(&sb, "Grand Total").unwrap();
+    assert_eq!(val(&sb, &CellRef::new(gt, 5).a1()), Value::Number(250.0));
+
+    // Non-date formatted numeric filters keep their selection through `save_bytes` round-trip.
+    for (fmt, price, other, sel, expected) in [
+        ("$#,##0.00", json!(12), json!(25), "12", vec!["12"]),
+        ("0", json!(1), json!(1.2), "1", vec!["1", "1.2"]),
+        ("$#,##0.00", json!(12), json!("12"), "12", vec!["12"]),
+        ("#,##0,", json!(1000), json!(1), "1", vec!["1000"]),
+    ] {
+        let mut sc = pivot_with_filter(
+            json!([["Price", "Region", "Amount"], [price, "East", 100], [other, "West", 200], [50, "North", 400]]),
+            fmt,
+            "A2:A4",
+            "Price",
+            d1900,
+        );
+        sc.execute("pivot.filter", json!({"field": "Price", "selected": [sel]})).unwrap();
+        let bytes = crate::io::save_bytes(&sc.doc().unwrap().wb, "num.xlsx").unwrap();
+        let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+        assert_eq!(reopened.sheet(0).unwrap().pivots[0].filters[0].selected, Some(expected.into_iter().map(String::from).collect()));
+    }
+}

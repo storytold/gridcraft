@@ -1031,3 +1031,142 @@ fn count_without_the_gridcraft_extension_reads_as_count() {
     assert_eq!(func(&marked("")), PivotFunc::Sum);
     assert_eq!(func(&marked(" subtotal=\"max\"")), PivotFunc::Max);
 }
+
+fn zip_part(bytes: &[u8], name: &str) -> String {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out = String::new();
+    z.by_name(name).unwrap().read_to_string(&mut out).unwrap();
+    out
+}
+
+fn filter_pivot(source: &str, col: &str, selected: &[&str]) -> PivotTable {
+    PivotTable {
+        id: 1,
+        name: "P".into(),
+        source: source.into(),
+        anchor: at("D3"),
+        values: vec![PivotValue { source_col: "Amt".into(), func: PivotFunc::Sum, name: "Sum of Amt".into(), ..PivotValue::default() }],
+        filters: vec![PivotFilter { source_col: col.into(), selected: Some(selected.iter().map(|s| (*s).into()).collect()) }],
+        ..PivotTable::default()
+    }
+}
+
+#[test]
+fn date_page_filter_reads_as_date_and_round_trips_through_xlsx() {
+    // #4754: Excel writes date shared items as `<d v="..."/>`; read them as ISO strings and write `<d>` back.
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:C5" sheet="Data"/></cacheSource><cacheFields count="3"><cacheField name="Date" numFmtId="14"><sharedItems containsSemiMixedTypes="0" containsNonDate="0" containsDate="1" containsString="0" count="3"><d v="2026-11-24T00:00:00"/><d v="2026-11-25T00:00:00"/><d v="2026-11-26T00:00:00"/></sharedItems></cacheField><cacheField name="Region"><sharedItems count="2"><s v="East"/><s v="West"/></sharedItems></cacheField><cacheField name="Amount"><sharedItems containsSemiMixedTypes="0" containsString="0" containsNumber="1"/></cacheField></cacheFields></pivotCacheDefinition>"#;
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="E3:F6"/><pivotFields count="3"><pivotField axis="axisPage"><items count="4"><item x="0"/><item x="1"/><item x="2"/><item t="default"/></items></pivotField><pivotField axis="axisRow"><items count="3"><item x="0"/><item x="1"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields count="1"><field x="1"/></rowFields><pageFields count="1"><pageField fld="0" item="0" hier="-1"/></pageFields><dataFields count="1"><dataField name="Sum of Amount" fld="2"/></dataFields></pivotTableDefinition>"#;
+    let (mut wb, _) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().pivots[0].filters, vec![PivotFilter { source_col: "Date".into(), selected: Some(vec!["2026-11-24".into()]) }]);
+
+    let date_style = wb.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("yyyy-mm-dd"));
+    let sh = wb.sheet_mut(0).unwrap();
+    for (c, h) in ["Date", "Region", "Amount"].into_iter().enumerate() {
+        sh.set_value(CellRef::new(0, c as u32), Value::text(h));
+    }
+    for (row, serial, reg, amt) in [(1, 46350.0, "East", 100.0), (2, 46351.0, "West", 200.0), (3, 46352.0, "East", 50.0), (4, 46350.0, "East", 25.0)]
+    {
+        sh.cells.set(CellRef::new(row, 0), Cell { value: Value::Number(serial), formula: None, style: date_style, py: None });
+        sh.set_value(CellRef::new(row, 1), Value::text(reg));
+        sh.set_value(CellRef::new(row, 2), Value::Number(amt));
+    }
+
+    let saved = write_xlsx(&wb).unwrap();
+    assert!(zip_part(&saved, "xl/pivotTables/pivotTable1.xml").contains(r#"<pageField fld="0" item="0""#));
+    assert!(zip_part(&saved, "xl/pivotCache/pivotCacheDefinition1.xml").contains(r#"<d v="2026-11-24T00:00:00"/>"#));
+    assert_eq!(read_xlsx(&saved).unwrap().0.sheet(0).unwrap().pivots[0].filters[0].selected, Some(vec!["2026-11-24".into()]));
+
+    // Multi-item date filter (2 of 3 dates selected) round-trips cleanly.
+    wb.sheet_mut(0).unwrap().pivots[0].filters[0].selected = Some(vec!["2026-11-24".into(), "2026-11-26".into()]);
+    let saved_multi = write_xlsx(&wb).unwrap();
+    let pt_multi = zip_part(&saved_multi, "xl/pivotTables/pivotTable1.xml");
+    assert!(pt_multi.contains(r#"multipleItemSelectionAllowed="1""#) && pt_multi.contains(r#"<item x="0"/><item x="1" h="1"/><item x="2"/>"#));
+    assert_eq!(
+        read_xlsx(&saved_multi).unwrap().0.sheet(0).unwrap().pivots[0].filters[0].selected,
+        Some(vec!["2026-11-24".into(), "2026-11-26".into()])
+    );
+}
+
+#[test]
+fn date_page_filter_edge_cases_in_xlsx_import_and_export() {
+    // 1. Reordered <pivotField><items>, sub-seconds, and 1900 time-only `<d>` items.
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:C4" sheet="Data"/></cacheSource><cacheFields count="3"><cacheField name="Date"><sharedItems containsDate="1" count="5"><d v="2026-11-24T00:00:00"/><d v="2026-11-25T00:00:00"/><d v="2026-11-24T12:00:00.500"/><d v="06:00:00"/><d v="2026-11-24T12:00:02.0000001"/></sharedItems></cacheField><cacheField name="Region"><sharedItems count="1"><s v="East"/></sharedItems></cacheField><cacheField name="Amount"><sharedItems containsNumber="1"/></cacheField></cacheFields></pivotCacheDefinition>"#;
+    let read_sel = |item_idx: u32| {
+        let table = format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="E3:F6"/><pivotFields count="3"><pivotField axis="axisPage"><items count="6"><item x="1"/><item x="0"/><item x="2"/><item x="3"/><item x="4"/><item t="default"/></items></pivotField><pivotField axis="axisRow"><items count="2"><item x="0"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields count="1"><field x="1"/></rowFields><pageFields count="1"><pageField fld="0" item="{item_idx}" hier="-1"/></pageFields><dataFields count="1"><dataField name="Sum of Amount" fld="2"/></dataFields></pivotTableDefinition>"#
+        );
+        read_xlsx(&with_pivot(&table, Some(cache))).unwrap().0.sheet(0).unwrap().pivots[0].filters[0].selected.clone()
+    };
+    assert_eq!(read_sel(0), Some(vec!["2026-11-25".into()]));
+    assert_eq!(read_sel(2), Some(vec!["2026-11-24 12:00:00.500".into()]));
+    assert_eq!(read_sel(3), Some(vec!["06:00:00".into()]));
+    assert_eq!(read_sel(4), Some(vec!["2026-11-24 12:00:02.0000001".into()]));
+
+    // 2. General/mixed column: literal text "2026-11-24" and "Z" do not match numeric 46350 or 0.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.name = "Data".into();
+    for (r, k, v) in [
+        (0, Value::text("Key"), Value::text("Amt")),
+        (1, Value::Number(46350.0), Value::Number(10.0)),
+        (2, Value::text("2026-11-24"), Value::Number(20.0)),
+        (3, Value::Number(0.0), Value::Number(30.0)),
+        (4, Value::text("Z"), Value::Number(40.0)),
+    ] {
+        sh.set_value(CellRef::new(r, 0), k);
+        sh.set_value(CellRef::new(r, 1), v);
+    }
+    for (sel, expected_item) in [("2026-11-24", r#"item="1""#), ("Z", r#"item="3""#)] {
+        wb.sheet_mut(0).unwrap().pivots = vec![filter_pivot("Data!$A$1:$B$5", "Key", &[sel])];
+        let pt_xml = zip_part(&write_xlsx(&wb).unwrap(), "xl/pivotTables/pivotTable1.xml");
+        assert!(pt_xml.contains(&format!(r#"<pageField fld="0" {expected_item}"#)), "{sel}: {pt_xml}");
+    }
+
+    // 3. Same-day midnight+noon, exact/fractional serials, conditional format, and sub-ms General ISO.
+    let mut wb_dt = Workbook::new();
+    let ymd = wb_dt.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("yyyy-mm-dd"));
+    let minute = wb_dt.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("yyyy-mm-dd hh:mm"));
+    let conditional = wb_dt.styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new("[<1]hh:mm;0"));
+    let sh = wb_dt.sheet_mut(0).unwrap();
+    sh.name = "Data".into();
+    sh.set_value(at("A1"), Value::text("Date"));
+    sh.set_value(at("B1"), Value::text("Amt"));
+    for (r, n, v) in [(1, 46350.0, 10.0), (2, 46350.5, 20.0), (3, 46351.5, 30.0)] {
+        sh.cells.set(CellRef::new(r, 0), Cell { value: Value::Number(n), formula: None, style: ymd, py: None });
+        sh.set_value(CellRef::new(r, 1), Value::Number(v));
+    }
+    sh.pivots = vec![filter_pivot("Data!$A$1:$B$4", "Date", &["2026-11-24"])];
+    let pt_multi = zip_part(&write_xlsx(&wb_dt).unwrap(), "xl/pivotTables/pivotTable1.xml");
+    assert!(pt_multi.contains(r#"multipleItemSelectionAllowed="1""#) && pt_multi.contains(r#"<item x="0"/><item x="1"/><item x="2" h="1"/>"#));
+    assert!(!pt_multi.contains(r#"<pageField fld="0" item="#));
+
+    wb_dt.sheet_mut(0).unwrap().pivots[0].filters[0].selected = Some(vec!["2026-11-25".into()]);
+    assert!(zip_part(&write_xlsx(&wb_dt).unwrap(), "xl/pivotTables/pivotTable1.xml").contains(r#"<pageField fld="0" item="2""#));
+
+    let fractional = 46350.0 + 1.0 / 3.0;
+    for (vals, style, sel, part, needle) in [
+        ([46350.5, 46350.5001, 46351.5], minute, "46350.5".into(), "xl/pivotTables/pivotTable1.xml", r#"<pageField fld="0" item="0""#),
+        (
+            [fractional, 46350.5001, 46351.5],
+            minute,
+            gridcraft_core::number_to_text(fractional),
+            "xl/pivotTables/pivotTable1.xml",
+            r#"<pageField fld="0" item="0""#,
+        ),
+        ([46350.5, 46350.5001, 46351.5], conditional, "46350.5".into(), "xl/pivotCache/pivotCacheDefinition1.xml", r#"<n v="46350.5""#),
+        (
+            [46350.5 + 0.5004 / 86_400.0, 46351.0, 46352.0],
+            StyleId::DEFAULT,
+            "2026-11-24 12:00:00.5004".into(),
+            "xl/pivotTables/pivotTable1.xml",
+            r#"<pageField fld="0" item="0""#,
+        ),
+    ] {
+        let sh = wb_dt.sheet_mut(0).unwrap();
+        for (i, v) in vals.into_iter().enumerate() {
+            sh.cells.set(CellRef::new(i as u32 + 1, 0), Cell { value: Value::Number(v), formula: None, style, py: None });
+        }
+        sh.pivots[0].filters[0].selected = Some(vec![sel]);
+        assert!(zip_part(&write_xlsx(&wb_dt).unwrap(), part).contains(needle));
+    }
+}

@@ -251,6 +251,72 @@ pub fn time_fraction(h: f64, m: f64, s: f64) -> f64 {
     (h * 3600.0 + m * 60.0 + s) / 86400.0
 }
 
+/// Parses a strict ISO 8601 date, datetime, or time (`YYYY-MM-DD`, `YYYY-MM-DD[T ]HH:MM[:SS[.fff]][Z]`,
+/// or `HH:MM:SS[.fff]`) into `(serial, date_only)`.
+pub fn parse_strict_iso_datetime(s: &str, sys: DateSystem) -> Option<(f64, bool)> {
+    let parse_u32 = |part: &str, min_len: usize, max_len: usize| -> Option<u32> {
+        if !(min_len..=max_len).contains(&part.len()) || !part.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        part.parse().ok()
+    };
+
+    let mut t = s.trim();
+    if let Some(stripped) = t.strip_suffix(['Z', 'z']) {
+        if !stripped.as_bytes().last().is_some_and(u8::is_ascii_digit) {
+            return None;
+        }
+        t = stripped;
+    }
+    let (date_str, time_str) = if t.len() > 10 && matches!(t.as_bytes().get(10), Some(b'T' | b' ')) && t.as_bytes().get(4) == Some(&b'-') {
+        (Some(&t[..10]), Some(&t[11..]))
+    } else if t.contains(':') && !t.contains('-') {
+        (None, Some(t))
+    } else if t.contains('-') && !t.contains(':') {
+        (Some(t), None)
+    } else {
+        return None;
+    };
+
+    let mut serial = 0.0;
+    if let Some(d_str) = date_str {
+        let mut p = d_str.split('-');
+        let (y, m, d) = (parse_u32(p.next()?, 4, 4)?, parse_u32(p.next()?, 1, 2)?, parse_u32(p.next()?, 1, 2)?);
+        let min_year = if sys == DateSystem::D1900 { 1900 } else { 1904 };
+        if p.next().is_some() || y < min_year || !(1..=12).contains(&m) || d < 1 || d > days_in_month_in(sys, y as i32, m) {
+            return None;
+        }
+        serial = serial_from_ymd(sys, y as i64, m as i64, d as i64)?;
+    }
+
+    if let Some(tm_str) = time_str {
+        let mut p = tm_str.split(':');
+        let (h, m, s_s) = (parse_u32(p.next()?, 1, 2)?, parse_u32(p.next()?, 1, 2)?, p.next());
+        if p.next().is_some() || h >= 24 || m >= 60 || (date_str.is_none() && s_s.is_none()) {
+            return None;
+        }
+        let sec = match s_s {
+            None => 0.0,
+            Some(sec_str) => {
+                let (w, frac) = sec_str.split_once('.').map_or((sec_str, None), |(w, f)| (w, Some(f)));
+                let whole = parse_u32(w, 1, 2)?;
+                if whole >= 60 {
+                    return None;
+                }
+                let frac_v = match frac {
+                    Some(f) if !f.is_empty() && f.bytes().all(|b| b.is_ascii_digit()) => format!("0.{f}").parse::<f64>().ok()?,
+                    Some(_) => return None,
+                    None => 0.0,
+                };
+                whole as f64 + frac_v
+            }
+        };
+        serial += time_fraction(h as f64, m as f64, sec);
+    }
+
+    Some((serial, time_str.is_none()))
+}
+
 pub const MONTHS: [&str; 12] =
     ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 pub const WEEKDAYS: [&str; 7] = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -448,5 +514,20 @@ mod tests {
         assert_eq!(serial_from_iso_ymd(s, 1904, 3, 1), Some(60.0));
         assert_eq!(serial_from_iso_ymd(s, 1899, 12, 30), Some(0.0));
         assert_eq!(serial_from_iso_ymd(s, 1903, 12, 31), None);
+    }
+
+    #[test]
+    fn strict_iso_datetime_accepts_iso_and_rejects_ambiguous() {
+        assert_eq!(parse_strict_iso_datetime("2026-11-24", DateSystem::D1900), Some((46350.0, true)));
+        assert_eq!(parse_strict_iso_datetime("2026-11-24T12:00:00Z", DateSystem::D1900), Some((46350.5, false)));
+        let (sub, date_only) = parse_strict_iso_datetime("2026-11-24 12:00:00.500", DateSystem::D1900).unwrap_or((0.0, true));
+        assert!(!date_only);
+        assert!((sub - (46350.5 + 0.5 / 86400.0)).abs() < 1e-12);
+        assert_eq!(parse_strict_iso_datetime("06:00:00", DateSystem::D1900), Some((0.25, false)));
+        assert_eq!(parse_strict_iso_datetime("1904-01-02", DateSystem::D1904), Some((1.0, true)));
+
+        for bad in ["", "   ", "Z", "ZZ", "11-12-26", "10-12-15-99", "2026-02-30", "12:34", "2026-13-01", "0026-11-24"] {
+            assert_eq!(parse_strict_iso_datetime(bad, DateSystem::D1900), None, "should reject {bad:?}");
+        }
     }
 }

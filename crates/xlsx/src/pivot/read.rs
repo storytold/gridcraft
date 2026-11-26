@@ -1,7 +1,7 @@
 use super::{
     CUSTOM_SUBTOTALS, CellRef, Ctx, DateSystem, EXT_GC_DATA_FIELD, EXT_X14_FIELD, EXT_X14_TABLE, EXT_XPDL_TABLE, El, HashMap, IoError, MAX_FIELDS,
     PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotScopeItem, PivotShowAs, PivotSort, PivotTable, PivotValue,
-    RangeRef, VALUES_FIELD, abs_range, func_caption, func_from, number_to_text, quote_sheet, serial_from_iso_ymd,
+    RangeRef, VALUES_FIELD, abs_range, datetime_from_serial, func_caption, func_from, number_to_text, quote_sheet, serial_from_iso_ymd,
 };
 
 /// A cache field as read.
@@ -9,8 +9,10 @@ use super::{
 struct FieldIn {
     name: String,
     database: bool,
-    /// Shared item captions.
+    /// Shared item captions (unformatted serial text for `<d>`, matching `FieldItems::apply`).
     items: Vec<String>,
+    /// Shared item captions for filters/collapsed items (formatted ISO strings for `<d>`).
+    filter_items: Vec<String>,
     /// (base field, grouping, group item captions); grouping `None` = unsupported grouping.
     group: Option<(Option<usize>, Option<PivotDateGroup>, Vec<String>)>,
     /// A calculated field's formula.
@@ -22,6 +24,13 @@ impl FieldIn {
         match &self.group {
             Some((_, _, items)) if !items.is_empty() => items,
             _ => &self.items,
+        }
+    }
+
+    fn filter_labels(&self) -> &[String] {
+        match &self.group {
+            Some((_, _, items)) if !items.is_empty() => items,
+            _ => &self.filter_items,
         }
     }
 }
@@ -117,7 +126,44 @@ impl CachesIn {
 /// Most data connections read from `xl/connections.xml`.
 const MAX_CONNECTIONS: usize = 100_000;
 
-fn item_label_el(e: &El, sys: DateSystem) -> String {
+/// Extracts non-zero fractional second digits from an ISO `<d v="..."/>` string, preserving
+/// sub-millisecond precision (e.g. `.5004`) when present.
+fn raw_iso_frac_secs(v: &str) -> Option<&str> {
+    let time_part = v.trim_end_matches(['Z', 'z']).split('+').next()?;
+    let time_part = time_part.split_once('T').map(|(_, t)| t).unwrap_or(time_part);
+    let (_, frac) = time_part.split_once('.')?;
+    let trimmed = frac.trim_end_matches('0');
+    (!trimmed.is_empty() && trimmed.bytes().all(|b| b.is_ascii_digit())).then_some(trimmed)
+}
+
+fn format_date_item(v: &str, serial: f64, sys: DateSystem) -> Option<String> {
+    let raw_frac = raw_iso_frac_secs(v);
+    if let Some(frac) = raw_frac
+        && frac.len() > 3
+    {
+        // Preserve sub-millisecond fractional digits without rounding to 1ms.
+        let d_day = datetime_from_serial(sys, serial.floor())?;
+        let timestamp = v.trim().rsplit(['T', ' ']).next()?;
+        let (whole, _) = timestamp.split_once('.')?;
+        let mut parts = whole.split(':').map(str::parse::<u32>);
+        let (h, m, s) = (parts.next()?.ok()?, parts.next()?.ok()?, parts.next()?.ok()?);
+        let time = format!("{h:02}:{m:02}:{s:02}.{frac}");
+        return Some(if d_day.day == 0 { time } else { format!("{:04}-{:02}-{:02} {time}", d_day.year, d_day.month, d_day.day) });
+    }
+    let dt = datetime_from_serial(sys, serial)?;
+    let time = if dt.milli == 0 {
+        format!("{:02}:{:02}:{:02}", dt.hour, dt.minute, dt.second)
+    } else {
+        format!("{:02}:{:02}:{:02}.{:03}", dt.hour, dt.minute, dt.second, dt.milli)
+    };
+    if dt.day == 0 {
+        return Some(time);
+    }
+    let date = format!("{:04}-{:02}-{:02}", dt.year, dt.month, dt.day);
+    Some(if (dt.hour, dt.minute, dt.second, dt.milli) == (0, 0, 0, 0) { date } else { format!("{date} {time}") })
+}
+
+fn item_label_el(e: &El, sys: DateSystem, format_dates: bool) -> String {
     let v = e.attr("v").unwrap_or("");
     match e.name.as_str() {
         "m" => "(blank)".into(),
@@ -125,7 +171,7 @@ fn item_label_el(e: &El, sys: DateSystem) -> String {
         "b" => if matches!(v.trim(), "1" | "true") { "TRUE" } else { "FALSE" }.into(),
         // Cache dates count real days from the epoch, as Excel writes them (see `iso`).
         "d" => crate::sheet_read::parse_iso_datetime_with(v, |y, m, d| serial_from_iso_ymd(sys, y, m, d))
-            .map(number_to_text)
+            .and_then(|n| if format_dates { format_date_item(v, n, sys) } else { Some(number_to_text(n)) })
             .unwrap_or_else(|| v.to_string()),
         _ => v.to_string(),
     }
@@ -201,7 +247,8 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str, connections: &Hash
     let mut truncated = false;
     if let Some(cf) = x.child("cacheFields") {
         for f in capped(cf.kids("cacheField"), &mut truncated) {
-            let items = f.child("sharedItems").map(|si| si.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
+            let items = f.child("sharedItems").map(|si| si.children.iter().map(|e| item_label_el(e, sys, false)).collect()).unwrap_or_default();
+            let filter_items = f.child("sharedItems").map(|si| si.children.iter().map(|e| item_label_el(e, sys, true)).collect()).unwrap_or_default();
             let group = f.child("fieldGroup").map(|g| {
                 let base = g.attr_u32("base").map(|b| b as usize);
                 let by = match g.child("rangePr").map(|r| r.attr("groupBy").unwrap_or("range")) {
@@ -211,13 +258,14 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str, connections: &Hash
                     Some("days") => Some(PivotDateGroup::Days),
                     _ => None,
                 };
-                let gi = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys)).collect()).unwrap_or_default();
+                let gi = g.child("groupItems").map(|gi| gi.children.iter().map(|e| item_label_el(e, sys, false)).collect()).unwrap_or_default();
                 (base, by, gi)
             });
             fields.push(FieldIn {
                 name: f.attr("name").unwrap_or("").to_string(),
                 database: f.flag("databaseField", true),
                 items,
+                filter_items,
                 group,
                 formula: f.attr("formula").map(str::to_string),
             });
@@ -471,8 +519,10 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                         .and_then(|id| crate::tables::builtin_format(id).map(str::to_string).or_else(|| cx.num_fmts.get(&id).cloned()));
                 }
                 let items = items_of(e);
+                let filter_labels: &[String] = cache.fields.get(i).map(|f| f.filter_labels()).unwrap_or(&[]);
                 let lab = |it: &El| it.attr_u32("x").and_then(|k| labels.get(k as usize)).cloned();
-                f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| lab(it)).collect();
+                let flab = |it: &El| it.attr_u32("x").and_then(|k| filter_labels.get(k as usize)).cloned();
+                f.collapsed_items = items.iter().filter(|it| !it.flag("sd", true)).filter_map(|it| flab(it)).collect();
                 f.item_captions = items.iter().filter_map(|it| Some((lab(it)?, it.attr("n").filter(|n| !n.is_empty())?.to_string()))).collect();
                 // Not auto-sorted: the `<items>` list fixes the order, even when it happens to be
                 // cache order (new items follow it). The engine shows date groups in date order,
@@ -483,7 +533,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
                     f.item_order = items.iter().filter_map(|it| lab(it)).collect();
                 }
                 if items.iter().any(|it| it.flag("h", false)) && axis_filtered.insert(name.to_lowercase()) {
-                    let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| lab(it)).collect();
+                    let shown: Vec<String> = items.iter().filter(|it| !it.flag("h", false)).filter_map(|it| flab(it)).collect();
                     filters.push(PivotFilter { source_col: name.clone(), selected: Some(shown) });
                 }
             }
@@ -497,9 +547,19 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
     for p in &pages {
         let Some(i) = p.attr_i64("fld").filter(|i| *i >= 0).map(|i| i as usize) else { continue };
         let Some((name, _)) = field_ref(cx, cache, i) else { continue };
-        let labels: &[String] = cache.fields.get(i).map(|f| f.labels()).unwrap_or(&[]);
+        let labels: &[String] = cache.fields.get(i).map(|f| f.filter_labels()).unwrap_or(&[]);
         let selected = if let Some(k) = p.attr_u32("item") {
-            labels.get(k as usize).map(|l| vec![l.clone()])
+            let all_items: Vec<&El> = pf(i).and_then(|e| e.child("items")).map(|it| it.kids("item").collect()).unwrap_or_default();
+            let label = if all_items.is_empty() {
+                labels.get(k as usize)
+            } else {
+                all_items
+                    .get(k as usize)
+                    .filter(|it| it.attr("t").is_none_or(|t| t == "data"))
+                    .and_then(|it| it.attr_u32("x"))
+                    .and_then(|x| labels.get(x as usize))
+            };
+            label.map(|l| vec![l.clone()])
         } else {
             pf(i).and_then(|e| {
                 let items = items_of(e);
