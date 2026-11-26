@@ -24,10 +24,10 @@ fn write(latex: &str, size_pt: f32, ink: Option<[u8; 3]>, merge: bool) -> Result
         let nodes = crate::parse(latex)?;
         let sz = if size_pt.is_finite() { (size_pt * 100.0).round().clamp(100.0, 400_000.0) as u32 } else { 1100 };
         let fill = ink.map(fill_of).unwrap_or_default();
-        let mut w = Writer { merge, last: None, out: String::from("<m:oMath>"), sz, fill };
+        let mut w = Writer { merge, last: None, marks: Vec::new(), out: String::from("<m:oMath>"), sz, fill };
         w.seq(&nodes, &Style::default(), 0)?;
         w.out.push_str("</m:oMath>");
-        Ok(w.out)
+        Ok(w.with_space_marks())
     })
 }
 
@@ -53,22 +53,36 @@ struct LastRun {
     text_at: usize,
     /// The end of the output when it was written.
     end: usize,
-    /// Its text, unescaped.
-    text: String,
-    /// Whether its `<m:t>` carries `xml:space="preserve"`.
-    marked: bool,
+    /// Whether its text starts, and whether it ends, in whitespace.
+    starts_in_space: bool,
+    ends_in_space: bool,
 }
 
 const SPACE_MARK: &str = " xml:space=\"preserve\"";
 
-fn needs_space_mark(text: &str) -> bool {
-    text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace)
+/// The `<m:t` of a run, which the mark goes right after.
+const TEXT_OPEN: &str = "<m:t";
+
+// What `esc` was given for run text, so that a test can tell linear work from quadratic.
+#[cfg(test)]
+thread_local! {
+    static ESCAPED_RUN_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn esc_run_text(text: &str) -> String {
+    #[cfg(test)]
+    ESCAPED_RUN_BYTES.with(|n| n.set(n.get() + text.len()));
+    esc(text)
 }
 
 struct Writer {
     /// Join runs with the same properties (off only in tests that compare with the unjoined form).
     merge: bool,
     last: Option<LastRun>,
+    /// Where in `out` the `xml:space` mark goes, for the runs that need one, in order. Runs are
+    /// written without it and it is put in once at the end, so that a run which grows does not
+    /// have its text moved or escaped again each time it starts or stops needing the mark.
+    marks: Vec<usize>,
     out: String,
     sz: u32,
     /// The DrawingML fill of every run (`<a:solidFill>…</a:solidFill>`), or empty.
@@ -192,18 +206,18 @@ impl Writer {
             && last.end == self.out.len()
             && self.out.get(last.start..last.text_at) == Some(head.as_str())
         {
-            last.text.push_str(text);
-            let was_marked = last.marked;
-            last.marked = needs_space_mark(&last.text);
-            if last.marked == was_marked {
-                self.out.truncate(last.end - "</m:t></m:r>".len());
-                self.out.push_str(&esc(text));
-            } else {
-                self.out.truncate(last.text_at);
-                self.out.push_str(&format!("<m:t{}>{}", if last.marked { SPACE_MARK } else { "" }, esc(&last.text)));
-            }
+            self.out.truncate(last.end - "</m:t></m:r>".len());
+            self.out.push_str(&esc_run_text(text));
             self.out.push_str("</m:t></m:r>");
             last.end = self.out.len();
+            let was_marked = last.starts_in_space || last.ends_in_space;
+            last.ends_in_space = text.ends_with(char::is_whitespace);
+            let marked = last.starts_in_space || last.ends_in_space;
+            if marked && !was_marked {
+                self.marks.push(last.text_at + TEXT_OPEN.len());
+            } else if !marked && was_marked {
+                self.marks.pop();
+            }
             return;
         }
         let start = self.out.len();
@@ -211,9 +225,26 @@ impl Writer {
         let text_at = self.out.len();
         // Word trims a run's text unless it is marked, so a run that is or ends in whitespace
         // (the space after `\text{if }`) says so.
-        let marked = needs_space_mark(text);
-        self.out.push_str(&format!("<m:t{}>{}</m:t></m:r>", if marked { SPACE_MARK } else { "" }, esc(text)));
-        self.last = Some(LastRun { start, text_at, end: self.out.len(), text: text.to_string(), marked });
+        let starts_in_space = text.starts_with(char::is_whitespace);
+        let ends_in_space = text.ends_with(char::is_whitespace);
+        if starts_in_space || ends_in_space {
+            self.marks.push(text_at + TEXT_OPEN.len());
+        }
+        self.out.push_str(&format!("{TEXT_OPEN}>{}</m:t></m:r>", esc_run_text(text)));
+        self.last = Some(LastRun { start, text_at, end: self.out.len(), starts_in_space, ends_in_space });
+    }
+
+    /// The output with the `xml:space` mark in the runs that need it.
+    fn with_space_marks(self) -> String {
+        let mut marked = String::with_capacity(self.out.len() + self.marks.len() * SPACE_MARK.len());
+        let mut from = 0;
+        for at in self.marks {
+            marked.push_str(&self.out[from..at]);
+            marked.push_str(SPACE_MARK);
+            from = at;
+        }
+        marked.push_str(&self.out[from..]);
+        marked
     }
 
     /// `<tag>…</tag>` around the nodes.
@@ -727,6 +758,10 @@ mod tests {
         assert!(to_omml("\\displaystyle x", 11.0, None).is_ok());
     }
 
+    fn needs_space_mark(text: &str) -> bool {
+        text.starts_with(char::is_whitespace) || text.ends_with(char::is_whitespace)
+    }
+
     /// The runs of OMML as (properties, text), with neighbours of the same properties joined.
     fn joined_runs(omml: &str) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = Vec::new();
@@ -790,6 +825,24 @@ mod tests {
         // Another property, or any other element between two runs, keeps them apart.
         assert_eq!(bare("a\\mathbf{b}c").matches("<m:r>").count(), 3);
         assert_eq!(bare("a^b c").matches("<m:r>").count(), 3);
+    }
+
+    #[test]
+    fn a_run_that_starts_and_stops_needing_the_mark_is_escaped_once() {
+        // Each space is a fragment of its own, so the run needs the `xml:space` mark after every
+        // other fragment. The text must still be escaped once, not again at each change.
+        let words = 900;
+        let text_len = "a <".len() * words;
+        ESCAPED_RUN_BYTES.with(|n| n.set(0));
+        let o = bare(&format!("\\text{{{}}}", "a < ".repeat(words)));
+        let escaped = ESCAPED_RUN_BYTES.with(|n| n.get());
+        assert_eq!(o.matches("<m:r>").count(), 1, "{o}");
+        assert!(o.contains("<m:t xml:space=\"preserve\">a &lt; a &lt; "), "ends in a space, so marked");
+        assert!(escaped <= 2 * text_len, "{escaped} bytes escaped for {text_len} bytes of text");
+
+        let o = bare(&format!("\\text{{{}a}}", "a < ".repeat(words)));
+        assert!(o.contains("<m:t>a &lt; a &lt; "), "ends in text, so not marked");
+        assert!(!o.contains("xml:space"));
     }
 
     #[test]
