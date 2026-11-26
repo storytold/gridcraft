@@ -31,7 +31,7 @@ pub(super) fn center_across_end(start: u32, limit: u32, continues: impl Fn(u32) 
 pub(super) fn look(wb: &Workbook, si: usize, sh: &Sheet, c: CellRef, cf: &mut CfCache) -> (Look, Option<CfLook>) {
     let mut style = wb.styles.get(sh.style_id(c)).clone();
     if let Some(t) = sh.table_at(c) {
-        style = gridcraft_engine::tables::table_cell_style(wb, si, t, c);
+        style = gridcraft_engine::tables::table_cell_shown_style(wb, si, t, cf.table_edges(sh, t), c);
     }
     let cfl = cf.look(wb, si, c);
     if let Some(l) = &cfl
@@ -228,6 +228,25 @@ pub(super) fn merged_edges(wb: &Workbook, si: usize, sh: &Sheet, geo: &Geo, area
         out.push((right, [pos2(rect.right(), y0), pos2(rect.right(), y1)]));
     }
     out
+}
+
+/// One cell's text as a layout job, wrapped at `wrap` (`f32::INFINITY`: one line). `slant` draws it
+/// oblique, for an italic cell whose font has no italic face (see [`crate::fonts::is_slanted`]).
+pub(super) fn cell_job(text: String, font: FontId, color: Color32, wrap: f32, slant: bool) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple(text, font, color, wrap);
+    for section in &mut job.sections {
+        section.format.italics = slant;
+    }
+    job
+}
+
+/// Paints one cell's text; `bold_dx` > 0 paints it again that far right, to thicken a bold cell
+/// whose font has no bold face (see [`crate::fonts::is_emboldened`]).
+pub(super) fn paint_cell_galley(p: &Painter, pos: Pos2, galley: std::sync::Arc<egui::Galley>, color: Color32, bold_dx: f32) {
+    if bold_dx > 0.0 {
+        p.galley(pos + egui::vec2(bold_dx, 0.0), galley.clone(), color);
+    }
+    p.galley(pos, galley, color);
 }
 
 /// The smaller font that makes `text` fit in `room` points of width (Shrink to fit), or `None`

@@ -2,6 +2,7 @@
 
 > **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-13 · **Change:** minor (§5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry; earlier: §17: equations; earlier: §13: Solver Sensitivity report; earlier: §4: chart resizing is no longer a gap; earlier: §13: Analysis ToolPak has all 19 tools; earlier: §4: chart data tables implemented with XLSX round-trip and print/PDF; earlier: §13: Solver Options; earlier: §13: Solver Load/Save Model and Reset All) · **Target:** Microsoft Excel (Microsoft 365)
 
+
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
 PRs first (50 open on 2026-10-10; several already address entries here), and update the entry
@@ -22,6 +23,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Evidence:** round-trip tests cover our own files only (`crates/xlsx/src/tests/`); PivotTable
   round-trip noted as "unverified in real Excel" since 10-07; #64 (dynamic-array flag) shows the
   class of bug.
+- **Check:** `packaging/windows/excel-open-check/check.ps1` saves workbooks with `gridcraft-cli` and opens each result in real Excel through COM with `CorruptLoad` = normal load, so a repair is a failure. The 0.12.1 run (18 public synthetic fixtures + 7 feature scenarios: charts, pivots with pivot chart and slicer, CF, validation, tables and names, shapes and pictures, sheets and protection) gave 24 of 25 saved files opening cleanly; the 25th (`gc_legacy_to_array`) is not a repair but Excel taking over 200 s on legacy formulas saved as whole-column array formulas (#410, open PRs #417, #1367, #1660). Still open: a run over a large real-world corpus.
 - **Impact:** the main format; a repair prompt or silent loss destroys trust.
 - **Estimate:** 15–25 h, plus owner time in Excel. [file-format-parity.md](file-format-parity.md)
 
@@ -35,9 +37,15 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
 - **Missing:** slicers and their caches, timelines, the data model, query tables attached to
-  tables, unmodelled `extLst` entries, chart details. Pass-through (#330) keeps custom XML,
-  external links, connections, sheet query tables, printer settings, form and ActiveX controls,
-  OLE objects and sheet backgrounds; never checked in Excel (repair prompts unknown).
+  tables, unmodelled `extLst` entries (among them x14 data bar settings beyond a solid fill,
+  icon sets, colour scales and the text rules containsText, notContainsText, beginsWith and
+  endsWith), chart details. Pass-through (#330) keeps custom XML, external links, connections,
+  sheet query tables, printer settings, form and ActiveX controls, OLE objects and sheet
+  backgrounds; x14-only colour-scale, data-bar and icon-set rules with cross-sheet `cfvo` are
+  still dropped on read with a warning, while the other Excel 2010 conditional format rules
+  (including cross-sheet cell-value and expression rules) are read and written. In tested
+  synthetic files, Excel for Mac 16.114 stored cross-sheet expression and `cfvo` rules in x14;
+  GridCraft-written main-section cfvo files opened without a repair prompt.
 - **Evidence:** `crates/xlsx/src/passthrough.rs` (what is kept, and why the rest isn't).
 - **Impact:** open-edit-save still simplifies workbooks with slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
@@ -197,6 +205,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-11-01 | minor | §4: chart data tables implemented for column, bar, line, area and compatible combo charts, with legend keys and border settings, live source values, XLSX round-trip and print/PDF; other chart gaps remain. |
 | 2026-10-31 | minor | §13: Solver Options (Max Evaluations, Integer Optimality and the Evolutionary options), saved with the model |
 | 2026-10-31 | minor | §13: Solver Load/Save Model (`data.solverSaveModel`, `data.solverLoadModel`) and Reset All (`data.solverReset`), with buttons in the Solver Parameters dialog |
+| 2026-10-26 | minor | §1: `packaging/windows/excel-open-check` opens saved workbooks in real Excel and records pass or the exact failure; first run: 24 of 25 open cleanly |
 | 2026-10-26 | minor | §5: Arabic PDF output preserves cell direction, joined glyphs and RTL sheet geometry. Other script and UI gaps remain. |
 | 2026-10-26 | minor | Arabic shared bidi display/editing and persisted cell reading direction; other script and PDF work remain separate |
 | 2026-10-26 | minor | §5: Arabic text renders in cells and the interface: a system Arabic face (Tahoma, Arial or Segoe UI on Windows, Geeza Pro on macOS, Noto Sans or Naskh Arabic on Linux) joins the script fallbacks, fontconfig's Arabic choice, when it has Arabic letters, leads the Arabic fallbacks and draws Arabic wherever the UI or cell font has none, such as the default cell fonts (part of #229; a UI font with Arabic of its own, such as DejaVu Sans in the Flatpak, still draws interface Arabic, left for a follow-up), and craft-fonts' Noto Sans Arabic is a required face allowed on the web. Workbook fonts without Arabic keep every script fallback. Shaping and bidirectional layout remain separate work |
@@ -205,8 +214,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
+| 2026-10-17 | minor | Conditional formatting: the 2-/3-colour scale branch of the New Formatting Rule dialog edits per-stop type/value/colour and updates rules in place (part of #1165) |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
+| 2026-10-13 | minor | §3: Excel 2010 conditional formats (`x14:conditionalFormattings`, cross-sheet rules) read, evaluated and written back in the extension |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |
 | 2026-10-12 | minor | §9: next/previous sheet commands retain the current visible sheet and selection when there is no visible destination |
 | 2026-10-12 | minor | §8, §15: GETPIVOTDATA added (9 functions missing) |

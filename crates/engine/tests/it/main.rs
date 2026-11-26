@@ -1,6 +1,7 @@
 //! The crate's integration tests, one module per file, built as one test binary.
 
 mod autofit_filter_buttons;
+mod cascading_filter_values;
 mod cf_formula_validate;
 mod chart_area_stacked100;
 mod chart_workbook_names;
@@ -32,6 +33,7 @@ mod sparse_clear_invalidation;
 mod stored_list_shape;
 mod structural_edit_rewrite;
 mod table_resize_overlap;
+mod table_style_looks;
 mod table_total_row_last_row;
 mod trace_error;
 mod workbook_author;

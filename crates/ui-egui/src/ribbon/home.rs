@@ -576,7 +576,8 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
-    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
+    // The trailing grow atom left-aligns the existing label inside the button.
+    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))).right_text(()));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
     let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();
@@ -702,23 +703,24 @@ fn number_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
 }
 
 fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
-    ui.menu_button(tr(ui, "Highlight Cells Rules"), |ui| {
+    let lang = app.ui.language;
+    ui.menu_button(lang.tr("Highlight Cells Rules"), |ui| {
         for (label, op) in [("Greater Than…", "greater"), ("Less Than…", "less"), ("Between…", "between"), ("Equal To…", "equal")] {
             if ui.button(label).clicked() {
                 app.open_dialog("cfQuick", json!({"type": "cellIs", "operator": op, "title": label}));
             }
         }
-        if ui.button(tr(ui, "Text that Contains…")).clicked() {
+        if ui.button(lang.tr("Text that Contains…")).clicked() {
             app.open_dialog("cfQuick", json!({"type": "containsText", "title": "Text that Contains"}));
         }
-        if ui.button(tr(ui, "A Date Occurring…")).clicked() {
+        if ui.button(lang.tr("A Date Occurring…")).clicked() {
             app.open_dialog("cfQuick", json!({"type": "timePeriod", "title": "A Date Occurring"}));
         }
-        if ui.button(tr(ui, "Duplicate Values…")).clicked() {
+        if ui.button(lang.tr("Duplicate Values…")).clicked() {
             act(app, "home.conditionalFormat", json!({"rule": {"type": "duplicate"}}));
         }
     });
-    ui.menu_button(tr(ui, "Top/Bottom Rules"), |ui| {
+    ui.menu_button(lang.tr("Top/Bottom Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -732,7 +734,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    ui.menu_button(tr(ui, "Data Bars"), |ui| {
+    ui.menu_button(lang.tr("Data Bars"), |ui| {
         for (label, c) in
             [("Blue", "#638EC6"), ("Green", "#63BE7B"), ("Red", "#F8696B"), ("Orange", "#FFB628"), ("Light Blue", "#008AEF"), ("Purple", "#D6007B")]
         {
@@ -741,7 +743,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             }
         }
     });
-    ui.menu_button(tr(ui, "Color Scales"), |ui| {
+    ui.menu_button(lang.tr("Color Scales"), |ui| {
         for (label, cols) in [
             ("Green - Yellow - Red", vec!["#63BE7B", "#FFEB84", "#F8696B"]),
             ("Red - Yellow - Green", vec!["#F8696B", "#FFEB84", "#63BE7B"]),
@@ -754,8 +756,12 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
                 act(app, "home.conditionalFormat", json!({"rule": {"type": "colorScale", "colors": cols}}));
             }
         }
+        ui.separator();
+        if ui.button(lang.tr("More Rules…")).clicked() {
+            app.open_dialog("newFormattingRule", json!({"style": "3color"}));
+        }
     });
-    ui.menu_button(tr(ui, "Icon Sets"), |ui| {
+    ui.menu_button(lang.tr("Icon Sets"), |ui| {
         for (label, set) in [
             ("3 Arrows", "3Arrows"),
             ("3 Traffic Lights", "3TrafficLights1"),
@@ -770,10 +776,10 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     ui.separator();
-    if ui.button(tr(ui, "New Rule…")).clicked() {
-        app.open_dialog("cfQuick", json!({"type": "expression", "title": "New Formatting Rule"}));
+    if ui.button(lang.tr("New Rule…")).clicked() {
+        app.open_dialog("newFormattingRule", json!({}));
     }
-    ui.menu_button(tr(ui, "Clear Rules"), |ui| {
+    ui.menu_button(lang.tr("Clear Rules"), |ui| {
         menu_items(
             app,
             ui,
@@ -783,7 +789,7 @@ fn cf_menu(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
-    if ui.button(tr(ui, "Manage Rules…")).clicked() {
+    if ui.button(lang.tr("Manage Rules…")).clicked() {
         app.open_dialog("manageRules", json!({}));
     }
 }
@@ -813,5 +819,48 @@ mod accounting_symbol_tests {
             let symbol = tag.trim_start_matches("[$").split('-').next().unwrap_or_default();
             assert_eq!(out.fill.map(|(c, at)| (c, out.text[..at].trim_start())), Some((' ', symbol)), "{label}");
         }
+    }
+}
+
+#[cfg(test)]
+mod cf_menu_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn new_rule_opens_the_rule_type_list_with_the_formula_entry() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let app = SheetApp::new(session, Default::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(
+            |ui, app: &mut SheetApp| {
+                cf_menu(app, ui);
+                crate::dialogs::show(app, ui.ctx());
+            },
+            app,
+        );
+        h.run_steps(2);
+        h.get_by_label("New Rule…").click();
+        h.run_steps(2);
+        let d = h.state().dialog.as_ref().expect("New Rule… opens a dialog");
+        assert_eq!(d.name(), "newFormattingRule");
+        assert_eq!(d.values.get("ruleType").and_then(serde_json::Value::as_str), Some("allCells"));
+        // Formula rules stay reachable: New Rule… shows Excel's rule-type list, formula entry included.
+        h.get_by_label("Use a formula to determine which cells to format");
+    }
+
+    #[test]
+    fn more_rules_follows_the_interface_language() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        let mut app = SheetApp::new(session, Default::default());
+        app.run("app.language.set", serde_json::json!({"language": "es"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 800.0)).build_ui_state(|ui, app: &mut SheetApp| cf_menu(app, ui), app);
+        h.run_steps(2);
+        h.get_by_label(crate::i18n::Language::Es.tr("Color Scales")).click();
+        h.run_steps(2);
+        let more = crate::i18n::Language::Es.tr("More Rules…");
+        assert_ne!(more, "More Rules…");
+        assert!(h.query_all_by_label(more).next().is_some(), "More Rules… stays English");
     }
 }

@@ -30,25 +30,29 @@ gridcraft-math = { path = "crates/math" }
 # ui-egui, craft-print in the app, craft-web-api and craft-web-host in the web app) comes from one
 # craft-libs revision.
 # craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "=0.1.0", features = ["egui"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "=0.1.0", features = ["ui"] }
 # PDF RunLength encoding; this revision also fixes the vendored JBIG2 dependency for Git consumers.
-craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "ff142b3ad58aa7306676749428f4f2f9b277b5dd", version = "0.1.0", default-features = false }
-craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "f7e0d7fd5577e102b4634bcbe062e649eb68165f", version = "0.1.0" }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0", default-features = false }
+craft-stream-codecs = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 # Compound files ([MS-CFB]) and password-encrypted OOXML packages ([MS-OFFCRYPTO]).
-craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
-craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+craft-cfb = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-offcrypto = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-ods = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 # OPC zip packages (parts, relationships, the zip writer) under `crates/xlsx/src/package.rs`.
-craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+craft-opc = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 # Delimited text (CSV, TSV) and SYLK; `crates/xlsx/src/csv.rs` and `crates/engine/src/io/sylk.rs`
 # turn them into workbooks.
-craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+craft-csv = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-math = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 # The native JSON workbook (`.json`, `.scjson`): read, written, and kept newer macros written back.
-craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "9a6d894200221fcfedc274870c30394d404f859d", version = "0.1.0" }
+craft-gridcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
 # Excel 97-2003 (.xls, BIFF8) workbooks; `crates/xlsx/src/xls.rs` maps them onto the model.
-# SpreadsheetML string encoding/decoding; workbook model mapping stays in gridcraft-xlsx.
-craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
-craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
-craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", version = "0.1.0" }
+# SpreadsheetML worksheet/drawing/string/package XML; workbook model mapping stays in gridcraft-xlsx.
+craft-xlsx = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-xml = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-xls = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-drawingml = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "0.1.0" }
+craft-mcp-server = { git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", version = "=0.1.0" }
 
 # foundation
 thiserror = "2"
@@ -61,7 +65,7 @@ web-time = "1.1.0"
 rayon = "1"
 regex = { version = "1", default-features = false, features = ["std", "unicode", "perf"] }
 quick-xml = "0.41"
-zip = { version = "3", default-features = false, features = ["deflate"] }
+zip = { version = "9.8.2", default-features = false, features = ["deflate"] }
 sha2 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
@@ -88,7 +92,15 @@ skrifa = { version = "0.44", default-features = false, features = ["std"] }
 epaint_default_fonts = "0.37"
 # One native window per workbook: the window list, Window menu titles and the immediate-viewport
 # driver. Same craft-libs revision as craft-update above.
-craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "bb57d422d0bc842cbde430955825553ab7b976f4", default-features = false, features = ["egui"] }
+craft-window = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", default-features = false, features = ["ui"] }
+# The UI runtime GridCraft's egui UI is hosted by (`crates/ui-egui/src/framework.rs`): who the app is
+# to the framework's dialogs, the runtime's key bindings, the theme mode, window placement and the
+# printer controls. Same craft-libs revision as above.
+craft-behavior = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-host = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-keymap = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-theme = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21" }
+craft-print = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "8fa4db64a9bb943520259ea95331a303ba788f21", features = ["ui"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -116,18 +128,18 @@ debug = 0
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
 [patch.crates-io]
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "b9770908e0f304896f9658d239a7b29cf8af1564" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

@@ -558,20 +558,13 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
+/// One intentional difference: a number shown as General is not narrowed to the cell width and
+/// never gets an exponent (`gridcraft_numfmt::format_value_full`). Below 1E+15 it is written as
+/// `&` converts it (15 significant digits); from 1E+15 as the shortest digits that read back as
+/// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
+/// that `&` writes in scientific notation as their 15 digits in full.
 fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| {
-        // General's grid-width formatting rounds large identifiers to scientific notation.
-        // Delimited files have no column width, so preserve the whole numeric value instead.
-        if wb.styles.get(sh.style_id(c)).num_fmt.as_str().eq_ignore_ascii_case("General")
-            && let gridcraft_core::Value::Number(number) = sh.value(c)
-            && number.is_finite()
-        {
-            number.to_string()
-        } else {
-            crate::display::value_text(wb, sh, c)
-        }
-    })
-    .map_err(|e| EngineError::Other(e.to_string()))
+    gridcraft_xlsx::write_csv(sh, delimiter, |c| crate::display::value_text(wb, sh, c)).map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
@@ -1062,6 +1055,12 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
+    // A brand-new file gets the restrictive default: no group/other write, whatever the umask.
+    #[cfg(unix)]
+    if prior.is_none() {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o644);
+    }
     let mut f = opts.open(&tmp).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
@@ -1144,43 +1143,14 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other(format!("{path}: no file system in the browser")))
 }
 
-const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
 pub fn base64_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b = [chunk.first().copied().unwrap_or(0), chunk.get(1).copied().unwrap_or(0), chunk.get(2).copied().unwrap_or(0)];
-        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
-        for i in 0..4 {
-            if i <= chunk.len() {
-                out.push(B64[((n >> (18 - 6 * i)) & 63) as usize] as char);
-            } else {
-                out.push('=');
-            }
-        }
-    }
-    out
+    gridcraft_model::b64::encode(data)
 }
 
+/// Base64, or a `data:` URL's base64 payload.
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.split_once(',').filter(|(h, _)| h.starts_with("data:")).map(|(_, b)| b).unwrap_or(s);
-    let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    let mut buf = 0u32;
-    let mut bits = 0;
-    for c in s.bytes() {
-        if c == b'=' || c.is_ascii_whitespace() {
-            continue;
-        }
-        let v = B64.iter().position(|&x| x == c)? as u32;
-        buf = (buf << 6) | v;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((buf >> bits) as u8);
-            buf &= (1 << bits) - 1;
-        }
-    }
-    Some(out)
+    gridcraft_model::b64::decode(s)
 }
 
 /// Pixel size of a PNG or JPEG from its header.
