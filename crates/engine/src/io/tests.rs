@@ -608,6 +608,50 @@ fn csv_writes_displayed_text() {
 }
 
 #[test]
+fn displayed_exports_respect_show_zeros_and_raw_csv_keeps_values() {
+    use gridcraft_core::Value;
+    use gridcraft_model::{Cell, Formula};
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::Number(0.0));
+    sh.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(0.0), ..Cell::formula(Formula::new("1-1")) });
+    sh.set_value(CellRef::new(0, 2), Value::text("0"));
+    sh.set_value(CellRef::new(0, 3), Value::Number(5.0));
+    sh.set_value(CellRef::new(0, 4), Value::text("sentinel"));
+    sh.show_zeros = false;
+    let displayed = String::from_utf8(save_bytes(&wb, "hidden.csv").unwrap()).unwrap();
+    assert_eq!(displayed, ",,0,5,sentinel\r\n");
+    for path in ["hidden.tsv", "hidden.txt", "hidden.tab"] {
+        let displayed = String::from_utf8(save_bytes(&wb, path).unwrap()).unwrap();
+        assert_eq!(displayed, "\t\t0\t5\tsentinel\r\n", "{path}");
+    }
+    let raw = String::from_utf8(csv_values_bytes(&wb).unwrap()).unwrap();
+    assert_eq!(raw, "0,0,0,5,sentinel\r\n");
+    let html = String::from_utf8(save_bytes(&wb, "hidden.html").unwrap()).unwrap();
+    assert_eq!(html.matches(">0</td>").count(), 1, "only the literal text zero remains: {html}");
+    assert!(html.contains(">5</td>") && html.contains(">sentinel</td>"), "{html}");
+    wb.sheet_mut(0).unwrap().show_zeros = true;
+    let shown = String::from_utf8(save_bytes(&wb, "shown.csv").unwrap()).unwrap();
+    assert_eq!(shown, raw);
+}
+
+#[test]
+fn hidden_zeros_keep_visible_formulas_in_html() {
+    use gridcraft_core::Value;
+    use gridcraft_model::{Cell, Formula};
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::Number(0.0));
+    sh.set_cell(CellRef::new(0, 1), Cell { value: Value::Number(0.0), ..Cell::formula(Formula::new("1-1")) });
+    sh.set_value(CellRef::new(0, 2), Value::text("0"));
+    sh.show_zeros = false;
+    sh.show_formulas = true;
+    let html = String::from_utf8(save_bytes(&wb, "formulas.html").unwrap()).unwrap();
+    assert!(html.contains(">=1-1</td>"), "a visible formula is not a numeric zero constant: {html}");
+    assert_eq!(html.matches(">0</td>").count(), 1, "only the literal text zero remains: {html}");
+}
+
+#[test]
 fn delimited_exports_preserve_general_precision_and_explicit_number_formats() {
     use gridcraft_core::Value;
     use gridcraft_model::{Cell, NumFmt, StyleId};

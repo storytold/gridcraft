@@ -451,6 +451,22 @@ mod tests {
     }
 
     #[test]
+    fn show_zeros_does_not_rename_a_numeric_zero_header() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[0, "label"], [1, 2]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:B2", "header": true})).unwrap();
+        s.execute("cell.set", json!({"cell": "D1", "input": "=SUM(Table1[0])"})).unwrap();
+        s.execute("view.showZeros", json!({"on": false})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": 0})).unwrap();
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(0).unwrap();
+        assert_eq!(sh.tables[0].columns[0].name, "0");
+        assert_eq!(sh.value(gridcraft_core::CellRef::new(0, 0)), Value::from("0"));
+        assert_eq!(s.execute("cell.get", json!({"cell": "D1"})).unwrap()["formula"], "=SUM(Table1[0])");
+    }
+
+    #[test]
     fn go_to_a_table_selects_its_data() {
         let mut s = Session::new();
         s.new_workbook();

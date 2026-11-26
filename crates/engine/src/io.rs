@@ -564,7 +564,11 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// the same value (every integer below 1e16 exactly, so long identifiers survive); small numbers
 /// that `&` writes in scientific notation as their 15 digits in full.
 fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
-    gridcraft_xlsx::write_csv(sh, delimiter, |c| crate::display::value_text(wb, sh, c)).map_err(|e| EngineError::Other(e.to_string()))
+    gridcraft_xlsx::write_csv(sh, delimiter, |c| {
+        let value = sh.value(c);
+        if !sh.show_zeros && value.as_f64() == Some(0.0) { String::new() } else { crate::display::value_text(wb, sh, c) }
+    })
+    .map_err(|e| EngineError::Other(e.to_string()))
 }
 
 /// The active sheet as CSV of raw cell values, for automation: numbers at full precision, dates and
@@ -892,7 +896,13 @@ pub fn to_html(wb: &Workbook, sheet: usize) -> Result<String> {
                 if merge.is_some_and(|m| m.start != c) || (fixed && sh.is_col_hidden(col)) {
                     continue;
                 }
-                let text = crate::display::cell_text(wb, sh, c);
+                let shows_formula =
+                    sh.show_formulas && sh.cell(c).and_then(|cell| cell.formula.as_ref()).is_some() && !crate::display::formula_hidden(wb, sh, c);
+                let text = if !sh.show_zeros && !shows_formula && sh.value(c).as_f64() == Some(0.0) {
+                    String::new()
+                } else {
+                    crate::display::cell_text(wb, sh, c)
+                };
                 let dir = CellDir::of(sh, c, &text);
                 let css = html_cell_css(wb, sh, c, dir);
                 let span = merge
