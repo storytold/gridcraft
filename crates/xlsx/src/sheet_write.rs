@@ -369,8 +369,11 @@ fn write_sheet_extensions(s: &mut String, sheet: &Sheet, x14_cf: &str) {
         s.push_str("</x14:sparklineGroups></ext>");
     }
     if has_exts {
-        let kept_exts = crate::extlist::sheet_exts(sheet, s.get(exts_start..).unwrap_or(""));
-        s.push_str(&kept_exts);
+        // Only a sheet with kept extensions scans what was just written for their URIs.
+        if has_kept_exts {
+            let kept_exts = crate::extlist::sheet_exts(sheet, s.get(exts_start..).unwrap_or(""));
+            s.push_str(&kept_exts);
+        }
         s.push_str("</extLst>");
     }
 }
