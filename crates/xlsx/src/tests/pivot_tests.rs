@@ -52,7 +52,7 @@ fn workbook() -> Workbook {
         let r = r as u32 + 1;
         data.cells.set(CellRef::new(r, 0), Cell::value(Value::text(*a)));
         data.cells.set(CellRef::new(r, 1), Cell::value(Value::text(*b)));
-        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style });
+        data.cells.set(CellRef::new(r, 2), Cell { value: Value::number(*d), formula: None, style: date_style, py: None });
         data.cells.set(CellRef::new(r, 3), Cell::value(Value::number(*u)));
         data.cells.set(CellRef::new(r, 4), Cell::value(Value::number(*s)));
         data.cells.set(CellRef::new(r, 5), Cell::value(Value::text(*ch)));
@@ -116,6 +116,7 @@ fn workbook() -> Workbook {
         show_headers: false,
         last_range: Some(rr("A2:H12")),
         calculated_fields: vec![],
+        data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
     };
@@ -176,6 +177,7 @@ fn workbook() -> Workbook {
         show_headers: true,
         last_range: Some(rr("K2:Z30")),
         calculated_fields: vec![],
+        data_index: Default::default(),
         values_on_rows: false,
         values_position: None,
     };
@@ -208,7 +210,7 @@ fn unzip(bytes: &[u8]) -> HashMap<String, Vec<u8>> {
         let mut f = z.by_index(i).unwrap();
         let mut b = Vec::new();
         f.read_to_end(&mut b).unwrap();
-        m.insert(f.name().to_string(), b);
+        m.insert(f.name().unwrap().to_string(), b);
     }
     m
 }
@@ -236,104 +238,119 @@ fn pivots_round_trip() {
 
 #[test]
 fn pivot_package_structure() {
-    let bytes = write_xlsx(&workbook()).unwrap();
-    let parts = unzip(&bytes);
+    let parts = unzip(&write_xlsx(&workbook()).unwrap());
+    assert_pivot_content_types(&parts);
+    assert_relationship_targets_exist(&parts);
+    let cache_ids = assert_workbook_cache_relationships(&parts);
+    assert_pivot_tables_reference_caches(&parts, &cache_ids);
+    assert_sheet_pivot_relationships(&parts);
+}
+
+fn assert_pivot_content_types(parts: &HashMap<String, Vec<u8>>) {
     let ct = xml::parse(parts.get("[Content_Types].xml").unwrap()).unwrap();
     let overrides: HashMap<String, String> = ct
         .kids("Override")
         .map(|o| (o.attr("PartName").unwrap().trim_start_matches('/').to_string(), o.attr("ContentType").unwrap().to_string()))
         .collect();
     let defaults: HashSet<String> = ct.kids("Default").map(|d| d.attr("Extension").unwrap().to_string()).collect();
-    // Every override names an existing part; every part has a content type.
-    for p in overrides.keys() {
-        assert!(parts.contains_key(p), "override for missing part {p}");
+    for part in overrides.keys() {
+        assert!(parts.contains_key(part), "override for missing part {part}");
     }
-    for p in parts.keys() {
-        if p == "[Content_Types].xml" {
-            continue;
-        }
-        let ext = p.rsplit('.').next().unwrap();
-        assert!(overrides.contains_key(p) || defaults.contains(ext), "no content type for {p}");
+    for part in parts.keys().filter(|p| p.as_str() != "[Content_Types].xml") {
+        let ext = part.rsplit('.').next().unwrap();
+        assert!(overrides.contains_key(part) || defaults.contains(ext), "no content type for {part}");
     }
-    let count = |ct: &str| overrides.values().filter(|v| v.as_str() == ct).count();
+    let count = |content_type: &str| overrides.values().filter(|value| value.as_str() == content_type).count();
     assert_eq!(count(crate::pivot::CT_PIVOT_TABLE), 3);
     assert_eq!(count(crate::pivot::CT_PIVOT_CACHE_DEF), 3);
     assert_eq!(count(crate::pivot::CT_PIVOT_CACHE_REC), 3);
-    // Every relationship target exists.
-    let mut kinds: Vec<String> = vec![];
-    for (name, data) in &parts {
-        if !name.ends_with(".rels") {
-            continue;
-        }
+}
+
+fn assert_relationship_targets_exist(parts: &HashMap<String, Vec<u8>>) {
+    let mut kinds: Vec<String> = Vec::new();
+    for (name, data) in parts.iter().filter(|(name, _)| name.ends_with(".rels")) {
         let dir = name.trim_end_matches(".rels").rsplit_once("/_rels/").map(|(d, _)| d).unwrap_or("");
-        let rels = xml::parse(data).unwrap();
-        for r in rels.kids("Relationship") {
-            if r.attr("TargetMode") == Some("External") {
+        for relation in xml::parse(data).unwrap().kids("Relationship") {
+            if relation.attr("TargetMode") == Some("External") {
                 continue;
             }
-            let target = crate::package::resolve(dir, r.attr("Target").unwrap());
+            let target = crate::package::resolve(dir, relation.attr("Target").unwrap());
             assert!(parts.contains_key(&target), "{name} points at missing {target}");
-            kinds.push(r.attr("Type").unwrap().rsplit('/').next().unwrap().to_string());
+            kinds.push(relation.attr("Type").unwrap().rsplit('/').next().unwrap().to_string());
         }
     }
-    for k in ["pivotTable", "pivotCacheDefinition", "pivotCacheRecords"] {
-        assert!(kinds.iter().any(|x| x == k), "no {k} relationship");
+    for kind in ["pivotTable", "pivotCacheDefinition", "pivotCacheRecords"] {
+        assert!(kinds.iter().any(|found| found == kind), "no {kind} relationship");
     }
-    // The workbook lists the caches by id with relationships of the right type.
-    let wbx = xml::parse(parts.get("xl/workbook.xml").unwrap()).unwrap();
-    let wb_rels = xml::parse(parts.get("xl/_rels/workbook.xml.rels").unwrap()).unwrap();
-    let caches: Vec<&xml::El> = wbx.child("pivotCaches").unwrap().kids("pivotCache").collect();
+}
+
+fn assert_workbook_cache_relationships(parts: &HashMap<String, Vec<u8>>) -> HashSet<String> {
+    let workbook = xml::parse(parts.get("xl/workbook.xml").unwrap()).unwrap();
+    let relationships = xml::parse(parts.get("xl/_rels/workbook.xml.rels").unwrap()).unwrap();
+    let caches: Vec<&xml::El> = workbook.child("pivotCaches").unwrap().kids("pivotCache").collect();
     assert_eq!(caches.len(), 3);
     let mut ids = HashSet::new();
-    for c in &caches {
-        assert!(ids.insert(c.attr("cacheId").unwrap().to_string()));
-        let rid = c.attr("id").unwrap();
-        let rel = wb_rels.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
-        assert!(rel.attr("Type").unwrap().ends_with("/pivotCacheDefinition"));
+    for cache in &caches {
+        assert!(ids.insert(cache.attr("cacheId").unwrap().to_string()));
+        let rid = cache.attr("id").unwrap();
+        let relation = relationships.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
+        assert!(relation.attr("Type").unwrap().ends_with("/pivotCacheDefinition"));
     }
-    // Each table's cacheId is one of the workbook's caches and its field counts agree.
-    for t in 1..=3 {
-        let pt = xml::parse(parts.get(&format!("xl/pivotTables/pivotTable{t}.xml")).unwrap()).unwrap();
-        assert!(ids.contains(pt.attr("cacheId").unwrap()));
-        let trels = xml::parse(parts.get(&format!("xl/pivotTables/_rels/pivotTable{t}.xml.rels")).unwrap()).unwrap();
-        let target = crate::package::resolve("xl/pivotTables", trels.kids("Relationship").next().unwrap().attr("Target").unwrap());
-        let cache = xml::parse(parts.get(&target).unwrap()).unwrap();
-        let nf = cache.child("cacheFields").unwrap().kids("cacheField").count();
-        assert_eq!(pt.child("pivotFields").unwrap().kids("pivotField").count(), nf);
-        assert_eq!(cache.child("cacheFields").unwrap().attr_u32("count"), Some(nf as u32));
-        // Item indices stay inside the shared/group items.
-        for (i, pf) in pt.child("pivotFields").unwrap().kids("pivotField").enumerate() {
-            let cf = cache.child("cacheFields").unwrap().kids("cacheField").nth(i).unwrap();
-            let n = cf
-                .path(&["fieldGroup", "groupItems"])
-                .map(|g| g.children.len())
-                .unwrap_or_else(|| cf.child("sharedItems").map(|s| s.children.len()).unwrap_or(0));
-            if let Some(items) = pf.child("items") {
-                assert_eq!(items.attr_u32("count"), Some(items.children.len() as u32));
-                for it in items.kids("item") {
-                    if let Some(x) = it.attr_u32("x") {
-                        assert!((x as usize) < n, "item x={x} out of {n} in table {t} field {i}");
-                    }
+    ids
+}
+
+fn assert_pivot_tables_reference_caches(parts: &HashMap<String, Vec<u8>>, ids: &HashSet<String>) {
+    for table_number in 1..=3 {
+        let table = xml::parse(parts.get(&format!("xl/pivotTables/pivotTable{table_number}.xml")).unwrap()).unwrap();
+        assert!(ids.contains(table.attr("cacheId").unwrap()));
+        let table_rels = xml::parse(parts.get(&format!("xl/pivotTables/_rels/pivotTable{table_number}.xml.rels")).unwrap()).unwrap();
+        let cache_path = crate::package::resolve("xl/pivotTables", table_rels.kids("Relationship").next().unwrap().attr("Target").unwrap());
+        let cache = xml::parse(parts.get(&cache_path).unwrap()).unwrap();
+        assert_pivot_table_fields_match_cache(&table, &cache);
+        assert_pivot_cache_records_match_fields(parts, &cache, &cache_path);
+    }
+}
+
+fn assert_pivot_table_fields_match_cache(table: &xml::El, cache: &xml::El) {
+    let cache_fields = cache.child("cacheFields").unwrap();
+    let field_count = cache_fields.kids("cacheField").count();
+    assert_eq!(table.child("pivotFields").unwrap().kids("pivotField").count(), field_count);
+    assert_eq!(cache_fields.attr_u32("count"), Some(field_count as u32));
+    for (field_index, pivot_field) in table.child("pivotFields").unwrap().kids("pivotField").enumerate() {
+        let cache_field = cache_fields.kids("cacheField").nth(field_index).unwrap();
+        let item_count = cache_field
+            .path(&["fieldGroup", "groupItems"])
+            .map(|items| items.children.len())
+            .unwrap_or_else(|| cache_field.child("sharedItems").map(|items| items.children.len()).unwrap_or(0));
+        if let Some(items) = pivot_field.child("items") {
+            assert_eq!(items.attr_u32("count"), Some(items.children.len() as u32));
+            for item in items.kids("item") {
+                if let Some(item_index) = item.attr_u32("x") {
+                    assert!((item_index as usize) < item_count, "item x={item_index} out of {item_count} in field {field_index}");
                 }
             }
         }
-        // Records match the database fields.
-        if let Some(rid) = cache.attr("id") {
-            let crels_name = target.replace("pivotCache/", "pivotCache/_rels/") + ".rels";
-            let crels = xml::parse(parts.get(&crels_name).unwrap()).unwrap();
-            let rel = crels.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
-            let rec = xml::parse(parts.get(&crate::package::resolve("xl/pivotCache", rel.attr("Target").unwrap())).unwrap()).unwrap();
-            let db = cache.child("cacheFields").unwrap().kids("cacheField").filter(|f| f.attr("databaseField") != Some("0")).count();
-            assert_eq!(rec.attr_u32("count"), cache.attr_u32("recordCount"));
-            assert_eq!(rec.kids("r").count(), 8);
-            for r in rec.kids("r") {
-                assert_eq!(r.children.len(), db);
-            }
-        }
     }
-    // Sheet 2 (Report) relates to all three tables.
-    let srels = xml::parse(parts.get("xl/worksheets/_rels/sheet2.xml.rels").unwrap()).unwrap();
-    assert_eq!(srels.kids("Relationship").filter(|r| r.attr("Type").unwrap().ends_with("/pivotTable")).count(), 3);
+}
+
+fn assert_pivot_cache_records_match_fields(parts: &HashMap<String, Vec<u8>>, cache: &xml::El, cache_path: &str) {
+    let Some(rid) = cache.attr("id") else { return };
+    let rels_path = cache_path.replace("pivotCache/", "pivotCache/_rels/") + ".rels";
+    let cache_rels = xml::parse(parts.get(&rels_path).unwrap()).unwrap();
+    let relation = cache_rels.kids("Relationship").find(|r| r.attr("Id") == Some(rid)).unwrap();
+    let records_path = crate::package::resolve("xl/pivotCache", relation.attr("Target").unwrap());
+    let records = xml::parse(parts.get(&records_path).unwrap()).unwrap();
+    let database_fields = cache.child("cacheFields").unwrap().kids("cacheField").filter(|f| f.attr("databaseField") != Some("0")).count();
+    assert_eq!(records.attr_u32("count"), cache.attr_u32("recordCount"));
+    assert_eq!(records.kids("r").count(), 8);
+    for record in records.kids("r") {
+        assert_eq!(record.children.len(), database_fields);
+    }
+}
+
+fn assert_sheet_pivot_relationships(parts: &HashMap<String, Vec<u8>>) {
+    let sheet_rels = xml::parse(parts.get("xl/worksheets/_rels/sheet2.xml.rels").unwrap()).unwrap();
+    assert_eq!(sheet_rels.kids("Relationship").filter(|r| r.attr("Type").unwrap().ends_with("/pivotTable")).count(), 3);
 }
 
 #[test]
@@ -528,6 +545,68 @@ fn hostile_pivot_parts_warn_not_panic() {
     assert!(report.warnings.iter().any(|w| w.contains("index")), "{:?}", report.warnings);
 }
 
+/// #2159: a field repeated on the axes or as a page field is used once (each use walks the
+/// field's items and copied its labels), and the lists are capped.
+#[test]
+fn repeated_pivot_fields_are_used_once() {
+    let items: String = (0..2_000).map(|_| r#"<item x="0" sd="0"/>"#).collect();
+    let rows = r#"<field x="0"/>"#.repeat(20_000);
+    let pages = r#"<pageField fld="0"/>"#.repeat(20_000);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField axis="axisRow"><items>{items}</items></pivotField></pivotFields><rowFields>{rows}<field x="-2"/></rowFields><colFields>{rows}</colFields><pageFields>{pages}</pageFields></pivotTableDefinition>"#
+    );
+    let (wb, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!(pt.rows.len(), 1, "{:?}", report.warnings);
+    assert!(pt.columns.is_empty());
+    assert_eq!(pt.rows[0].collapsed_items.len(), 2_000);
+    assert_eq!(pt.filters.iter().filter(|f| f.source_col == "K").count(), 1);
+    // One page field: the table's range starts two rows above its location.
+    assert_eq!(pt.last_range, Some(rr("D3:F9")));
+}
+
+/// #2159: a field list cut at the 16,384-entry cap is reported, so an incomplete PivotTable can be
+/// told apart from a complete one.
+#[test]
+fn capped_pivot_field_lists_warn() {
+    let fields = r#"<pivotField/>"#.repeat(16_385);
+    let table = format!(
+        r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="16385">{fields}</pivotFields></pivotTableDefinition>"#
+    );
+    let (_, report) = read_xlsx(&with_pivot(&table, Some(GOOD_CACHE))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("field lists past 16384 entries")), "{:?}", report.warnings);
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("field lists past")), "{:?}", report.warnings);
+}
+
+/// #2159: a cache cut at 16,384 fields is reported too, as the table field lists are.
+#[test]
+fn capped_cache_fields_warn() {
+    let fields = r#"<cacheField name="F"><sharedItems/></cacheField>"#.repeat(16_385);
+    let cache = format!(
+        r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="16385">{fields}</cacheFields></pivotCacheDefinition>"#
+    );
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="1"><pivotField/></pivotFields></pivotTableDefinition>"#;
+    let (_, report) = read_xlsx(&with_pivot(table, Some(&cache))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("cache fields past 16384")), "{:?}", report.warnings);
+    let (_, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
+    assert!(!report.warnings.iter().any(|w| w.contains("cache fields past")), "{:?}", report.warnings);
+}
+
+/// #2159: axis filters and calculated fields are deduplicated through a set of lower-cased names;
+/// the first of names equal but for case still wins, as with the scan it replaced.
+#[test]
+fn axis_filters_and_calculated_fields_dedupe_ignoring_case() {
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="4"><cacheField name="K"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="k"><sharedItems><s v="a"/><s v="b"/></sharedItems></cacheField><cacheField name="Price" formula="1" databaseField="0"/><cacheField name="PRICE" formula="2" databaseField="0"/></cacheFields></pivotCacheDefinition>"#;
+    let table = r#"<pivotTableDefinition name="P" cacheId="1"><location ref="D5:F9"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item x="1" h="1"/></items></pivotField><pivotField axis="axisCol"><items><item x="0" h="1"/><item x="1"/></items></pivotField></pivotFields><rowFields><field x="0"/></rowFields><colFields><field x="1"/></colFields></pivotTableDefinition>"#;
+    let (wb, report) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!((pt.rows.len(), pt.columns.len()), (1, 1), "{:?}", report.warnings);
+    assert_eq!(pt.filters, vec![PivotFilter { source_col: "K".into(), selected: Some(vec!["a".into()]) }]);
+    assert_eq!(pt.calculated_fields, vec![PivotCalcField { name: "Price".into(), formula: "=1".into() }]);
+}
+
 #[test]
 fn cache_found_by_workbook_cache_id() {
     let rels_extra = r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition" Target="pivotCache/pivotCacheDefinition1.xml"/>"#;
@@ -696,6 +775,51 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
 
+const SIMPLE_TABLE: &str = r#"<pivotTableDefinition name="Sales"><location ref="C1:D4"/><pivotFields><pivotField axis="axisRow"><items><item x="0"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Total" fld="1"/></dataFields></pivotTableDefinition>"#;
+const CACHE_PART: &str = "xl/pivotCache/pivotCacheDefinition1.xml";
+
+/// Rewrites the uncompressed size a zip's central directory declares for `name`.
+fn declare_size(mut zip: Vec<u8>, name: &str, size: u32) -> Vec<u8> {
+    let at = (0..zip.len().saturating_sub(46))
+        .find(|&i| {
+            zip[i..i + 4] == [0x50, 0x4b, 0x01, 0x02] && {
+                let len = u16::from_le_bytes([zip[i + 28], zip[i + 29]]) as usize;
+                zip.get(i + 46..i + 46 + len) == Some(name.as_bytes())
+            }
+        })
+        .unwrap();
+    zip[at + 24..at + 28].copy_from_slice(&size.to_le_bytes());
+    zip
+}
+
+#[test]
+fn unreadable_pivot_cache_warns() {
+    // Control: a readable cache gives a PivotTable and no cache warning.
+    let (wb, report) = read_xlsx(&with_pivot(SIMPLE_TABLE, Some(GOOD_CACHE))).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().pivots.len(), 1, "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w.contains("PivotTable's cache")), "{:?}", report.warnings);
+    // Malformed and missing caches: the workbook opens and the lost PivotTable is reported.
+    let lost = format!("a PivotTable's cache {CACHE_PART} is missing or could not be read; kept as plain cells");
+    for cache in [Some("garbage <<<"), None] {
+        let (wb, report) = read_xlsx(&with_pivot(SIMPLE_TABLE, cache)).unwrap();
+        assert!(wb.sheet(0).unwrap().pivots.is_empty());
+        assert!(report.warnings.contains(&lost), "{cache:?}: {:?}", report.warnings);
+    }
+}
+
+#[test]
+fn oversized_pivot_cache_warns() {
+    // The cache declares more than the per-part limit, so it is refused before it inflates.
+    let declared = u32::try_from(crate::package::MAX_PART + 1).unwrap();
+    let bytes = declare_size(with_pivot(SIMPLE_TABLE, Some(GOOD_CACHE)), CACHE_PART, declared);
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().name, "Data");
+    assert!(wb.sheet(0).unwrap().pivots.is_empty());
+    let limit = crate::package::MAX_PART;
+    let lost = format!("a PivotTable's cache is too large to read ({CACHE_PART} expands to more than {limit} bytes); kept as plain cells");
+    assert!(report.warnings.contains(&lost), "{:?}", report.warnings);
+}
+
 /// A one-sheet-of-data workbook with a pivot on "Report": `columns` are the source columns
 /// (header, values), `pt` the pivot built on `Data!A1:<last>`.
 fn small_pivot(columns: &[(&str, Vec<Value>)], pt: impl FnOnce(&mut PivotTable)) -> HashMap<String, String> {
@@ -744,4 +868,78 @@ fn two_value_fields_without_columns_hide_the_values_row() {
     let t = &one["xl/pivotTables/pivotTable1.xml"];
     assert!(t.contains("firstHeaderRow=\"1\""), "{t}");
     assert!(!t.contains("hideValuesRow"), "{t}");
+}
+
+/// The "Trend" pivot of [`workbook`] with `values` as its value fields, written; returns the file
+/// and its PivotTable and cache parts.
+fn trend_with(values: impl FnOnce(&PivotValue) -> Vec<PivotValue>) -> (Vec<u8>, String, String) {
+    let mut wb = workbook();
+    let pivot = wb.sheet_mut(1).unwrap().pivots.iter_mut().find(|p| p.name == "Trend").unwrap();
+    pivot.values = values(&pivot.values[0]);
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let (path, table) = parts
+        .iter()
+        .filter(|(path, _)| path.starts_with("xl/pivotTables/pivotTable"))
+        .map(|(path, xml)| (path.clone(), String::from_utf8_lossy(xml).into_owned()))
+        .find(|(_, xml)| xml.contains("name=\"Trend\""))
+        .unwrap();
+    let n = path.trim_start_matches("xl/pivotTables/pivotTable").trim_end_matches(".xml");
+    let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
+    let rels = String::from_utf8_lossy(&parts[&format!("xl/pivotTables/_rels/pivotTable{n}.xml.rels")]).into_owned();
+    assert!(rels.contains(&format!("../pivotCache/pivotCacheDefinition{n}.xml")), "{rels}");
+    let cache = String::from_utf8_lossy(&parts[&cache_part]).into_owned();
+    (bytes, table, cache)
+}
+
+fn trend_values(bytes: &[u8]) -> Vec<PivotValue> {
+    let (back, report) = read_xlsx(bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    back.sheet(1).unwrap().pivots.iter().find(|p| p.name == "Trend").unwrap().values.clone()
+}
+
+const GC_DISTINCT: &str = "<ext uri=\"{80B1AD42-0C9F-45FF-B109-D57FB0F4F0B4}\" xmlns:gc=\"https://github.com/storytold/gridcraft/ns/pivot/2026\"><gc:summary func=\"distinctCount\"/></ext>";
+
+#[test]
+fn distinct_count_round_trips_through_a_gridcraft_extension() {
+    // The file format's subtotal list has no distinct count: the field is written as Count, which
+    // other readers use, with a GridCraft marker that brings Distinct Count back on open.
+    let (bytes, table, cache) =
+        trend_with(|v| vec![PivotValue { func: PivotFunc::DistinctCount, name: "Distinct Count of Sales".into(), ..v.clone() }]);
+    assert!(table.contains("<dataField name=\"Distinct Count of Sales\" fld=\"4\" subtotal=\"count\""), "{table}");
+    assert!(table.contains(&format!("<extLst>{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    // A refresh on open would recompute it as Count in Excel, over the values on the sheet.
+    assert!(!cache.contains("refreshOnLoad"), "{cache}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].name.as_str()), (PivotFunc::DistinctCount, "Distinct Count of Sales"));
+}
+
+#[test]
+fn rank_and_distinct_count_write_one_extension_each() {
+    let (bytes, table, _) = trend_with(|v| {
+        vec![PivotValue { func: PivotFunc::DistinctCount, show_as: PivotShowAs::Rank, name: "Rank of Distinct Sales".into(), ..v.clone() }]
+    });
+    let rank = "<ext uri=\"{E15A36E0-9728-4e99-A89B-3F7291B0FE68}\" xmlns:x14=\"http://schemas.microsoft.com/office/spreadsheetml/2009/9/main\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext>";
+    assert!(table.contains(&format!("<extLst>{rank}{GC_DISTINCT}</extLst></dataField>")), "{table}");
+    let values = trend_values(&bytes);
+    assert_eq!((values[0].func, values[0].show_as), (PivotFunc::DistinctCount, PivotShowAs::Rank));
+}
+
+#[test]
+fn count_without_the_gridcraft_extension_reads_as_count() {
+    // Plain `subtotal="count"`, as Excel writes it, stays Count; so does a stale marker on a field
+    // whose function was changed to something else.
+    let (bytes, table, cache) = trend_with(|v| vec![PivotValue { func: PivotFunc::Count, name: "Count of Sales".into(), ..v.clone() }]);
+    assert!(!table.contains("extLst"), "{table}");
+    assert!(cache.contains("refreshOnLoad=\"1\""), "{cache}");
+    assert_eq!(trend_values(&bytes)[0].func, PivotFunc::Count);
+    let marked = |subtotal: &str| {
+        format!(
+            r#"<pivotTableDefinition name="P" cacheId="1"><location ref="C1:D4"/><pivotFields><pivotField/><pivotField dataField="1"/></pivotFields><dataFields><dataField name="V" fld="1"{subtotal}><extLst>{GC_DISTINCT}</extLst></dataField></dataFields></pivotTableDefinition>"#
+        )
+    };
+    let func = |table: &str| read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap().0.sheet(0).unwrap().pivots[0].values[0].func;
+    assert_eq!(func(&marked(" subtotal=\"count\"")), PivotFunc::DistinctCount);
+    assert_eq!(func(&marked("")), PivotFunc::Sum);
+    assert_eq!(func(&marked(" subtotal=\"max\"")), PivotFunc::Max);
 }

@@ -7,10 +7,16 @@
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, Cell, Chart, ChartKind, LegendPos, NumFmt, PivotCalcField, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
+    PivotSort, PivotTable, PivotValue, Sheet, StyleId, Workbook,
+};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, Ctx, EngineError, Result, Session, anchor_mode_param, bad, bool_param, cell_param, cmd, edit, f64_param, has_doc, ok, str_param,
+    u32_param,
+};
 use crate::pivot as pv;
 use crate::selection::current_region;
 
@@ -80,7 +86,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Field",
             [],
             None,
-            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|stdDev|stdDevP|var|varP, name?, position?: index, replace?}",
+            "{pivot?, field, area: rows|columns|values|filters, func?: sum|count|average|max|min|product|countNumbers|distinctCount|stdDev|stdDevP|var|varP, name?, position?: index, replace?}",
             has_doc,
             add_field
         ),

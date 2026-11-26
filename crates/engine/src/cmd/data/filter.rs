@@ -1,5 +1,8 @@
 use super::sort::sort_key;
-use super::*;
+use super::{
+    AutoFilter, CellRef, EngineError, FilterCriterion, Json, Ordering, RangeRef, Result, Session, Sheet, Value, Workbook, bad, bool_param, col_param,
+    current_region, data_target, edit, json,
+};
 
 // ---------------------------------------------------------------- filter
 
@@ -163,12 +166,13 @@ fn filter_blank(v: &Value) -> bool {
 /// A table's own filter is left to the table, and a row typed after a blank row does not count.
 /// A formula counts before it is calculated: this runs inside the edit, ahead of the recalc.
 pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
-    if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
-        return;
-    }
+    // The AutoFilter checks come first: they are cheap, and most sheets have none.
     let Some(af) = sh.autofilter.as_ref() else { return };
     let r = af.range;
     if r.end.row.checked_add(1) != Some(at.row) || at.col < r.start.col || at.col > r.end.col || sh.tables.iter().any(|t| t.range == r) {
+        return;
+    }
+    if !sh.cells.get(at).is_some_and(|c| !filter_blank(&c.value) || c.formula.is_some()) {
         return;
     }
     let grown = RangeRef::new(r.start, CellRef::new(at.row, r.end.col));
@@ -181,7 +185,8 @@ pub(crate) fn grow_autofilter(sh: &mut Sheet, at: CellRef) {
 pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
     let Some(sh) = wb.sheet(sheet) else { return };
     let Some(af) = sh.autofilter.clone() else { return };
-    let r = af.range;
+    // An imported range can name rows past the grid; none of those exist to hide.
+    let r = RangeRef::new(af.range.start, CellRef::new(af.range.end.row.min(gridcraft_core::MAX_ROWS - 1), af.range.end.col));
     let mut hide = Vec::new();
     // Precompute per-criterion top10 threshold and average once, not per row.
     let mut col_stats: std::collections::HashMap<usize, (Option<f64>, f64)> = std::collections::HashMap::new();
@@ -267,6 +272,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
 
 pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         if let Some(a) = sh.autofilter.as_mut() {
@@ -280,6 +286,7 @@ pub(super) fn clear_filter(s: &mut Session, _: &Json) -> Result<Json> {
 
 pub(super) fn reapply(s: &mut Session, _: &Json) -> Result<Json> {
     let sheet = s.doc()?.wb.active_sheet();
+    crate::cmd::refuse_unless_allowed(s, sheet, "Filtering", |p| p.autofilter)?;
     edit(s, |cx| {
         apply_filter(&mut cx.wb, sheet);
         cx.structural = true;
@@ -312,5 +319,9 @@ pub fn filter_values(wb: &Workbook, sheet: usize, col: u32) -> Vec<(String, bool
         let key = if blank { sort_key(&Value::Empty) } else { sort_key(&v) };
         seen.entry((key, t)).or_insert(on);
     }
-    seen.into_iter().map(|((_, t), on)| (t, on)).collect()
+    let mut values: Vec<_> = seen.into_iter().collect();
+    values.sort_by(|((a, ta), _), ((b, tb), _)| {
+        a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then_with(|| gridcraft_core::compare_text(&a.2, &b.2)).then_with(|| ta.cmp(tb))
+    });
+    values.into_iter().map(|((_, t), on)| (t, on)).collect()
 }

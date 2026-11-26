@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, Chart, Color, EngineError, Json, LegendPos, RangeRef, Result, Session, Trendline, TrendlineKind, bad, bool_param, cell_param_on, edit,
+    f64_param, json, split_sheet, str_param, u32_param,
+};
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
@@ -40,6 +43,7 @@ pub(super) fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
             "dataLabels" => c.data_labels = on,
+            "dataTable" => crate::cmd::insert::update_data_table(c, p, Some(on))?,
             "gridlines" => c.gridlines = on,
             "axisTitles" => {
                 c.x_title = on.then(|| c.x_title.clone().unwrap_or_else(|| "Axis Title".into()));
@@ -65,8 +69,11 @@ pub(super) fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                     return Ok(());
                 }
                 let t = trendline_param(p)?;
+                // Every series' kind in one pass: a combo series' kind looks back for its group's
+                // first series, so asking per series is quadratic in a chart with many.
+                let kinds = c.series_kinds();
                 let eligible: Vec<usize> =
-                    targets.into_iter().filter(|i| gridcraft_chart::supports_trendline(gridcraft_chart::series_plot_kind(c, *i))).collect();
+                    targets.into_iter().filter(|i| kinds.get(*i).is_some_and(|k| gridcraft_chart::supports_trendline(*k))).collect();
                 if eligible.is_empty() {
                     return Err(bad("chart.addElement", "trendlines need a 2-D column, bar, line, area, scatter or bubble series"));
                 }
@@ -227,6 +234,38 @@ pub(super) fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
         }
         Ok(())
     })
+}
+
+/// Points the chart's series at another block of cells on their sheet, keeping each series'
+/// formatting, as dragging a corner of the selected chart's values outline does (#4389).
+pub(super) fn set_values_range(s: &mut Session, p: &Json) -> Result<Json> {
+    use crate::chart_data::{ValuesError, chart_data, with_values};
+    let text = str_param(p, "range").ok_or_else(|| bad("chart.setValuesRange", "missing `range`"))?;
+    let (si, ci) = find_chart(s, p)?;
+    let d = s.doc()?;
+    let chart = d.wb.sheet(si).and_then(|sh| sh.charts.get(ci)).ok_or_else(|| bad("chart", "no such chart"))?;
+    let Some(data) = chart_data(&d.wb, si, chart) else {
+        return Err(bad("chart.setValuesRange", "the chart's series are not one block of cells"));
+    };
+    let (sheet_name, body) = split_sheet(text.trim().trim_start_matches('='));
+    if let Some(n) = sheet_name
+        && d.wb.sheet_index(&n) != Some(data.sheet)
+    {
+        return Err(bad("chart.setValuesRange", "the range must be on the sheet the chart's data is on"));
+    }
+    let to = RangeRef::parse(body).ok_or_else(|| bad("chart.setValuesRange", "not a range"))?;
+    let new = with_values(&d.wb, si, chart, to).map_err(|e| match e {
+        ValuesError::NotABlock => bad("chart.setValuesRange", "the chart's series are not one block of cells"),
+        ValuesError::TooLarge => bad("chart.setValuesRange", "range too large for a chart"),
+    })?;
+    let values = format!("{}!{}", gridcraft_formula::quote_sheet(d.wb.sheet(data.sheet).map_or("", |sh| sh.name.as_str())), to.a1());
+    with_chart(s, p, move |c| {
+        c.series = new.series;
+        c.source = new.source;
+        c.by_rows = new.by_rows;
+        Ok(())
+    })
+    .map(|r| json!({"chart": r["chart"], "values": values}))
 }
 
 pub(super) fn move_chart(s: &mut Session, p: &Json) -> Result<Json> {

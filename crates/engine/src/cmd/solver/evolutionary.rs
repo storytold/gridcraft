@@ -2,7 +2,7 @@ use super::lp::{Outcome, Row, Sense};
 use super::model::{EvoOptions, Goal};
 use super::nlp::{project, shape, violation};
 use super::problem::Evaluator;
-use super::*;
+use super::{MAX_POPULATION, MIN_POPULATION, PRECISION};
 
 // ---------------------------------------------------------------- evolutionary
 

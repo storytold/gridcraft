@@ -1,6 +1,9 @@
-use super::fields::{add_to_area, in_axes};
+use super::fields::{AreaPlacement, add_to_area, in_axes};
 use super::params::{func_name, func_param, group_name, group_param, layout_name, show_as_name, sort_name};
-use super::*;
+use super::{
+    Arc, Cell, CellRef, Ctx, EngineError, Json, NumFmt, PivotDateGroup, PivotTable, RangeRef, Result, Session, Sheet, StyleId, Workbook, bad,
+    bool_param, cell_param, current_region, edit, find_pivot, json, other, pv, str_param, with,
+};
 
 // ---------------------------------------------------------------- insert
 
@@ -64,9 +67,6 @@ fn field_list(v: Option<&Json>) -> Vec<Json> {
 }
 
 pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
-    if s.doc()?.wb.protected_structure && matches!(str_param(p, "destination"), None | Some("new")) {
-        return Err(other("The workbook is protected and cannot be changed."));
-    }
     let source = source_param(s, p)?;
     let active = s.doc()?.wb.active_sheet();
     // Validate the source now (header names, size).
@@ -95,6 +95,10 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
         let at = RangeRef::parse(body).map(|r| r.start).ok_or_else(|| bad("insert.pivotTable", format!("not a cell: `{dest}`")))?;
         Some((si, at))
     };
+    // Decided on the resolved destination: `New`, ` new ` and an empty one all make a sheet.
+    if target.is_none() && s.doc()?.wb.protected_structure {
+        return Err(other("The workbook is protected and cannot be changed."));
+    }
     let replace = bool_param(p, "replace").unwrap_or(false);
     let rows = field_list(p.get("rows"));
     let columns = field_list(p.get("columns"));
@@ -115,7 +119,9 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
         let add = |pt: &mut PivotTable, list: &[Json], area: &str| -> Result<()> {
             for f in list {
                 match f {
-                    Json::String(n) => add_to_area("insert.pivotTable", pt, &src, n, area, None, None, None)?,
+                    Json::String(n) => {
+                        add_to_area(pt, &src, AreaPlacement { cmd: "insert.pivotTable", field: n, area, func: None, name: None, position: None })?
+                    }
                     Json::Object(_) => {
                         let n = str_param(f, "field").ok_or_else(|| bad("insert.pivotTable", "a field object needs `field`"))?;
                         let func = match str_param(f, "func") {
@@ -124,7 +130,11 @@ pub(super) fn insert_pivot(s: &mut Session, p: &Json) -> Result<Json> {
                             }
                             None => None,
                         };
-                        add_to_area("insert.pivotTable", pt, &src, n, area, func, str_param(f, "name"), None)?;
+                        add_to_area(
+                            pt,
+                            &src,
+                            AreaPlacement { cmd: "insert.pivotTable", field: n, area, func, name: str_param(f, "name"), position: None },
+                        )?;
                         let by = group_param(str_param(f, "group"));
                         if let Some(by) = by.filter(|b| *b != PivotDateGroup::None)
                             && matches!(area, "rows" | "columns")
@@ -246,7 +256,10 @@ pub(super) fn show_details(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         for (c, h) in src.headers.iter().enumerate() {
-            sh.set_cell(CellRef::new(0, c as u32), Cell { value: gridcraft_core::Value::text(h.as_str()), formula: None, style: StyleId::default() });
+            sh.set_cell(
+                CellRef::new(0, c as u32),
+                Cell { value: gridcraft_core::Value::text(h.as_str()), formula: None, style: StyleId::default(), py: None },
+            );
         }
         for (r, i) in records.iter().enumerate() {
             let Some(rec) = src.rows.get(*i) else { continue };
@@ -255,7 +268,7 @@ pub(super) fn show_details(s: &mut Session, p: &Json) -> Result<Json> {
                 if v.is_empty() && style == StyleId::default() {
                     continue;
                 }
-                sh.set_cell(CellRef::new(r as u32 + 1, c as u32), Cell { value: v.clone(), formula: None, style });
+                sh.set_cell(CellRef::new(r as u32 + 1, c as u32), Cell { value: v.clone(), formula: None, style, py: None });
             }
         }
         let name = sh.name.clone();
