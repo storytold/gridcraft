@@ -8208,12 +8208,14 @@ fn tables_never_hold_merged_cells() {
     assert_eq!(merges(&s).len(), 3);
     s.execute("edit.redo", json!({})).unwrap();
 
-    // Resizing a table over merged cells unmerges them too.
+    // Resizing a table over merged cells is refused, as in Excel; the merge stays.
     let mut s = base();
     s.execute("insert.table", json!({"range": "A1:B4", "name": "T"})).unwrap();
     s.execute("home.mergeCells", json!({"range": "C2:D2"})).unwrap();
+    let e = s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap_err().to_string();
+    assert!(e.contains("can't overlap merged cells"), "{e}");
+    s.execute("home.unmergeCells", json!({"range": "C2:D2"})).unwrap();
     s.execute("table.resize", json!({"table": "T", "range": "A1:C4"})).unwrap();
-    assert!(merges(&s).is_empty());
 
     // Merged cells pasted into a table arrive unmerged; elsewhere they stay merged.
     s.execute("home.mergeCells", json!({"range": "E2:F3"})).unwrap();

@@ -93,8 +93,6 @@ pub(super) fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
         let t = sheet.tables.get_mut(ti).ok_or_else(|| bad("table", "gone"))?;
         t.columns = cols;
         t.range = r;
-        // A table can't hold merged cells: those it now covers are unmerged, as by Insert Table.
-        sheet.merges.retain(|m| !m.intersects(&r));
         cx.structural = true;
         Ok(Json::Null)
     })
