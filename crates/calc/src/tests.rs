@@ -3187,6 +3187,20 @@ fn spill_feedback_loop_converges_consistently() {
 }
 
 #[test]
+fn active_owner_suppressed_reader_recalculates_after_owner_completes() {
+    let mut t = T::new();
+    t.set("A1", "=SEQUENCE(3)");
+    t.set("B1", "=SUM(A2:A3)");
+    assert_eq!(t.get("B1"), Value::Number(5.0));
+
+    t.set("A1", "=IF(B1>=0,SEQUENCE(3),1)");
+    let mut fresh = t.wb.clone();
+    Calc::new().recalc_all(&mut fresh);
+    assert_eq!(t.get("B1"), Value::Number(5.0));
+    assert_eq!(t.get("B1"), fresh.sheet(0).unwrap().value(c("B1")));
+}
+
+#[test]
 fn active_ancestor_stale_spill_is_hidden_during_on_demand_read() {
     let mut t = T::new();
     t.set("A1", "=SEQUENCE(3)");
