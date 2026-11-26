@@ -433,6 +433,32 @@ fn remove_duplicates_without_a_valid_column_is_refused() {
     assert_eq!(sh.value(CellRef::new(2, 0)), Value::text("c"));
 }
 
+/// #3734: a kept row that moves up takes its formulas' relative references with it, as in
+/// Excel: `=B4*2` on the row moved to row 3 reads `=B3*2`, so it still doubles its own amount.
+#[test]
+fn remove_duplicates_moves_relative_references_with_their_rows() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([
+        ["Key", "Amount", "Double", "Fixed"],
+        ["a", 10, "=B2*2", "=$B$2"],
+        ["a", 99, "=B3*2", "=$B$2"],
+        ["b", 20, "=B4*2", "=$B$2"],
+        ["c", 30, "=B5*2", "=$B$2"]
+    ]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("data.removeDuplicates", json!({"range": "A1:D5", "columns": ["A"], "header": true})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let formula = |r: u32, c: u32| sh.cell(CellRef::new(r, c)).and_then(|cell| cell.formula.as_ref()).map(|f| f.text.clone());
+    for (row, text, value) in [(1, "B2*2", 20.0), (2, "B3*2", 40.0), (3, "B4*2", 60.0)] {
+        assert_eq!(formula(row, 2).as_deref(), Some(text), "row {}", row + 1);
+        assert_eq!(sh.value(CellRef::new(row, 2)), Value::Number(value), "row {}", row + 1);
+        // An absolute reference stays where it points.
+        assert_eq!(formula(row, 3).as_deref(), Some("$B$2"), "row {}", row + 1);
+    }
+    assert_eq!(sh.value(CellRef::new(4, 2)), Value::Empty, "the freed last row is cleared");
+}
+
 #[test]
 fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     // In a file an inline list is a string literal (`"a,b"`); unquoted it reads as a formula.
