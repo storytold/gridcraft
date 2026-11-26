@@ -221,7 +221,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     // menu, so it doesn't count as a click elsewhere.
     let opened_now = app.grid.context_menu_frame == ui.ctx().cumulative_frame_nr();
     if close
-        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        || crate::framework::escape_pressed(ui.ctx())
         || (!opened_now
             && ui.input(|i| i.pointer.any_pressed())
             && !resp.response.contains_pointer()
@@ -449,7 +449,7 @@ pub(super) fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
         });
     });
     if close
-        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+        || crate::framework::escape_pressed(ui.ctx())
         || (ui.input(|i| i.pointer.any_pressed())
             && !resp.response.contains_pointer()
             && !resp.response.hovered()

@@ -493,7 +493,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
     ui.horizontal(|ui| {
         ref_edit(app, ui, d, "newLhs", RefLabel::Named("Constraint Cell Reference"), 130.0);
         let op = text(d, "newOp");
-        craft_ui::ComboBox::from_id_salt("solverOp")
+        egui::ComboBox::from_id_salt("solverOp")
             .selected_text(op.clone())
             .width(60.0)
             .show_ui(ui, |ui| {
@@ -539,7 +539,7 @@ pub(super) fn solver(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, conf
             "evolutionary" => "Evolutionary",
             _ => "GRG Nonlinear",
         };
-        craft_ui::ComboBox::from_id_salt("solverMethod")
+        egui::ComboBox::from_id_salt("solverMethod")
             .selected_text(label(&method))
             .show_ui(ui, |ui| {
                 for m in ["grg", "simplex", "evolutionary"] {
