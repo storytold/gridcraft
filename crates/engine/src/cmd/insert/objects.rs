@@ -210,38 +210,101 @@ pub(super) fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+/// The outermost group an object command acts on, and the object it names: a grouped chart,
+/// picture or shape, or a group (`kind: "group"`). As in Excel, where clicking a member selects
+/// its group, moving or deleting a member moves or deletes the whole group.
+fn group_target(sh: &gridcraft_model::Sheet, kind: &str, id: u32) -> Option<(u32, gridcraft_model::DrawingRef)> {
+    use gridcraft_model::DrawingRef;
+    let r = match kind {
+        "chart" => DrawingRef::Chart(id),
+        "image" => DrawingRef::Image(id),
+        "shape" => DrawingRef::Shape(id),
+        "group" => {
+            sh.drawing_group(id)?;
+            DrawingRef::Group(id)
+        }
+        _ => return None,
+    };
+    let outer = sh.outer_group(r).or(if kind == "group" { Some(id) } else { None })?;
+    Some((outer, r))
+}
+
 /// The floating object a `{kind, id}` command names on the active sheet. Unknown kinds and
 /// objects are errors, so a stale id never succeeds silently.
-fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, ObjRef)> {
+fn object_param(s: &Session, p: &Json, cmd: &str) -> Result<(usize, Option<ObjRef>, String, u32)> {
     let id = u32_param(p, "id").ok_or_else(|| bad(cmd, "missing `id`"))?;
-    let kind =
-        str_param(p, "kind").and_then(ObjKind::parse).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer, equation or control"))?;
+    let kind_str = str_param(p, "kind").unwrap_or("").to_string();
     let d = s.doc()?;
     let sheet = d.wb.active_sheet();
+    if kind_str == "group" {
+        if !d.wb.sheet(sheet).is_some_and(|sh| sh.drawing_group(id).is_some()) {
+            return Err(bad(cmd, "no such object"));
+        }
+        return Ok((sheet, None, kind_str, id));
+    }
+    let kind = ObjKind::parse(&kind_str).ok_or_else(|| bad(cmd, "kind must be chart, image, shape, slicer, equation, control or group"))?;
     let o = ObjRef::new(kind, id);
     if !d.wb.sheet(sheet).is_some_and(|sh| sh.has_object(o)) {
         return Err(bad(cmd, "no such object"));
     }
     // A locked form control on a protected sheet stays as it is.
     crate::cmd::controls::check_objects_unlocked(s, sheet, kind, &[id])?;
-    Ok((sheet, o))
+    Ok((sheet, Some(o), kind_str, id))
 }
 
+/// Deletes an object. A grouped chart, picture or shape deletes its whole group, as in Excel,
+/// unless `member` asks for that object (or nested group) alone, as the eraser does for a
+/// grouped ink stroke: the rest of its group stays grouped.
 pub(super) fn delete_object(s: &mut Session, p: &Json) -> Result<Json> {
-    let (sheet, o) = object_param(s, p, "object.delete")?;
+    let (sheet, o, kind, id) = object_param(s, p, "object.delete")?;
+    let member = bool_param(p, "member").unwrap_or(false);
     edit(s, |cx| {
-        cx.sheet_mut(sheet)?.remove_object(o);
-        Ok(json!({"deleted": o}))
+        let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, r)) = group_target(sh, &kind, id) {
+            if !member {
+                sh.delete_group(gid);
+                return Ok(o.map_or(Json::Null, |o| json!({"deleted": o})));
+            }
+            sh.remove_from_group(r);
+            if let gridcraft_model::DrawingRef::Group(g) = r {
+                sh.delete_group(g);
+                return Ok(Json::Null);
+            }
+        }
+        if let Some(o) = o {
+            sh.remove_object(o);
+            return Ok(json!({"deleted": o}));
+        }
+        Ok(Json::Null)
     })
 }
 
+/// Applies `object.move`'s `at`/`dx`/`dy`/`width`/`height` to an anchor.
+fn move_anchor(a: &mut Anchor, p: &Json, at: Option<CellRef>) {
+    if let Some(at) = at {
+        a.cell = at;
+    }
+    if let Some(v) = f64_param(p, "dx") {
+        a.dx = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
+    }
+    if let Some(v) = f64_param(p, "dy") {
+        a.dy = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
+    }
+    if let Some(v) = f64_param(p, "width") {
+        a.width = v.clamp(1.0, size_cap(a.width)) as f32;
+    }
+    if let Some(v) = f64_param(p, "height") {
+        a.height = v.clamp(0.0, size_cap(a.height)) as f32;
+    }
+}
+
 pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
-    let (sheet, o) = object_param(s, p, "object.move")?;
+    let (sheet, o, kind, id) = object_param(s, p, "object.move")?;
     let at = cell_param(s, p, "at")?;
     let rotation = f64_param(p, "rotation").filter(|v| v.is_finite());
     if rotation.is_some() {
-        let ink = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.shapes.iter().any(|x| x.id == o.id && x.kind == ShapeKind::Ink));
-        if o.kind != ObjKind::Shape || ink {
+        let ink = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.shapes.iter().any(|x| o.is_some_and(|o| x.id == o.id) && x.kind == ShapeKind::Ink));
+        if o.is_none_or(|o| o.kind != ObjKind::Shape) || ink {
             return Err(bad("object.move", "only shapes other than ink rotate"));
         }
         if s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.is_protected()) {
@@ -249,24 +312,27 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
         }
     }
     edit(s, |cx| {
-        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
-        if let Some(at) = at {
-            a.cell = at;
+        let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, r)) = group_target(sh, &kind, id) {
+            if rotation.is_some() {
+                return Err(bad("object.move", "grouped objects do not support rotation"));
+            }
+            let a = match r {
+                gridcraft_model::DrawingRef::Group(g) => sh.group_anchor(g),
+                _ => o.and_then(|o| sh.object_anchor(o)),
+            };
+            let Some(mut a) = a else { return Err(bad("object.move", "no such object")) };
+            let from = sh.anchor_rect(&a);
+            move_anchor(&mut a, p, at);
+            let to = sh.anchor_rect(&a);
+            sh.transform_group(gid, from, to);
+            return Ok(Json::Null);
         }
-        if let Some(v) = f64_param(p, "dx") {
-            a.dx = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
-        }
-        if let Some(v) = f64_param(p, "dy") {
-            a.dy = v.clamp(-MAX_OBJECT_OFFSET, MAX_OBJECT_OFFSET) as f32;
-        }
-        if let Some(v) = f64_param(p, "width") {
-            a.width = v.clamp(1.0, size_cap(a.width)) as f32;
-        }
-        if let Some(v) = f64_param(p, "height") {
-            a.height = v.clamp(0.0, size_cap(a.height)) as f32;
-        }
+        let Some(o) = o else { return Err(bad("object.move", "no such object")) };
+        let Some(a) = sh.object_anchor_mut(o) else { return Err(bad("object.move", "no such object")) };
+        move_anchor(a, p, at);
         if let Some(r) = rotation
-            && let Some(shape) = cx.sheet_mut(sheet)?.shapes.iter_mut().find(|x| x.id == o.id)
+            && let Some(shape) = sh.shapes.iter_mut().find(|x| x.id == o.id)
         {
             shape.rotation = r.rem_euclid(360.0) as f32;
         }
@@ -276,12 +342,18 @@ pub(super) fn move_object(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Sets an object's anchor mode (Excel's "Move and size with cells" / "Move but don't size with
 /// cells" / "Don't move or size with cells"), so it follows — or ignores — its rows and columns
-/// when the sheet is sorted or edited structurally.
+/// when the sheet is sorted or edited structurally. A grouped object's group takes the mode.
 pub(super) fn set_anchor_mode(s: &mut Session, p: &Json) -> Result<Json> {
-    let (sheet, o) = object_param(s, p, "object.setAnchorMode")?;
+    let (sheet, o, kind, id) = object_param(s, p, "object.setAnchorMode")?;
     let mode = anchor_mode_param(p).ok_or_else(|| bad("object.setAnchorMode", "mode must be moveAndSize, moveOnly or absolute"))?;
     edit(s, |cx| {
-        let Some(a) = cx.sheet_mut(sheet)?.object_anchor_mut(o) else { return Err(bad("object.setAnchorMode", "no such object")) };
+        let sh = cx.sheet_mut(sheet)?;
+        if let Some((gid, _)) = group_target(sh, &kind, id) {
+            sh.set_group_anchor_mode(gid, mode);
+            return Ok(json!({"mode": anchor_mode_name(mode)}));
+        }
+        let Some(o) = o else { return Err(bad("object.setAnchorMode", "no such object")) };
+        let Some(a) = sh.object_anchor_mut(o) else { return Err(bad("object.setAnchorMode", "no such object")) };
         a.mode = mode;
         Ok(json!({"mode": anchor_mode_name(mode)}))
     })

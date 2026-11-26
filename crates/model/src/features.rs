@@ -1173,6 +1173,7 @@ pub enum ObjKind {
     Shape,
     Slicer,
     Equation,
+    Group,
     Control,
 }
 
@@ -1187,13 +1188,14 @@ impl ObjKind {
             ObjKind::Shape => "shape",
             ObjKind::Slicer => "slicer",
             ObjKind::Equation => "equation",
+            ObjKind::Group => "group",
             ObjKind::Control => "control",
         }
     }
 
     /// The kind named `s` (any letter case).
     pub fn parse(s: &str) -> Option<ObjKind> {
-        ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s))
+        if s.eq_ignore_ascii_case("group") { Some(ObjKind::Group) } else { ObjKind::ALL.into_iter().find(|k| k.name().eq_ignore_ascii_case(s)) }
     }
 }
 
