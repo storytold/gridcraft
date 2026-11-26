@@ -1136,6 +1136,91 @@ fn a_linked_paste_carries_the_files_trust_whatever_it_pastes() {
     assert_eq!(trust(&s), Trust::FromFile);
 }
 
+/// A failed undoable command rolls back its unclosed group before comparing regional snapshots.
+#[test]
+fn failed_command_with_open_group_keeps_region_and_saved_state() {
+    crate::cmd::register_undoable_test_command("test.regionGroupThenFail", |s, _| {
+        let _group = s.group_begin("Temporary regional edits")?;
+        s.execute("cell.set", json!({"cell":"B1","input":5}))?;
+        s.execute("app.region", json!({"region":"it-IT"}))?;
+        Err(EngineError::Other("synthetic failed step".into()))
+    });
+    let mut s = s();
+    set(&mut s, "A1", "=DATEVALUE(\"02/01/2026\")");
+    let d = s.doc_mut().unwrap();
+    d.saved = d.wb.clone();
+    d.undo.clear();
+    assert!(s.execute("test.regionGroupThenFail", json!({})).is_err());
+    assert_eq!(s.region().tag, "it-IT");
+    assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+    assert_eq!(v(&s, "A1"), crate::core::Value::Number(46024.0));
+    assert_eq!(v(&s, "B1"), crate::core::Value::Empty);
+    assert!(!s.doc().unwrap().is_dirty());
+    assert!(s.doc().unwrap().undo.is_empty());
+    assert!(s.groups.is_empty());
+    assert!(s.region_frames.is_empty());
+}
+
+/// Panic recovery restores the current regional identity and drops all temporary command frames.
+#[test]
+fn panicking_region_command_preserves_clean_state_and_releases_frames() {
+    crate::cmd::register_undoable_test_command("test.regionThenPanic", |s, _| {
+        s.execute("app.region", json!({"region":"it-IT"}))?;
+        panic!("synthetic panic after a regional option change");
+    });
+    let mut s = s();
+    set(&mut s, "A1", "=DATEVALUE(\"02/01/2026\")");
+    let d = s.doc_mut().unwrap();
+    d.saved = d.wb.clone();
+    d.undo.clear();
+    assert!(s.execute("test.regionThenPanic", json!({})).is_err());
+    assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+    assert_eq!(v(&s, "A1"), crate::core::Value::Number(46024.0));
+    assert!(!s.doc().unwrap().is_dirty());
+    assert!(s.doc().unwrap().undo.is_empty());
+    assert!(s.region_frames.is_empty());
+    s.execute("cell.set", json!({"cell":"B1","input":5})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!s.doc().unwrap().is_dirty());
+}
+
+/// After content edits, panic recovery keeps the effective Region and original content/history.
+#[test]
+fn panicking_edit_then_region_keeps_current_region_and_history() {
+    crate::cmd::register_undoable_test_command("test.editRegionThenPanic", |s, _| {
+        s.execute("cell.set", json!({"cell":"B1","input":5}))?;
+        s.execute("app.region", json!({"region":"it-IT"}))?;
+        panic!("synthetic panic after an edit and a regional option change");
+    });
+    for dirty in [false, true] {
+        let mut s = s();
+        set(&mut s, "A1", "=DATEVALUE(\"02/01/2026\")");
+        let d = s.doc_mut().unwrap();
+        d.saved = d.wb.clone();
+        d.undo.clear();
+        if dirty {
+            set(&mut s, "D1", "preserved edit");
+        }
+        set(&mut s, "E1", "redo content");
+        s.execute("edit.undo", json!({})).unwrap();
+        let history = (s.doc().unwrap().undo.len(), s.doc().unwrap().redo.len());
+        assert!(s.execute("test.editRegionThenPanic", json!({})).is_err());
+        assert_eq!(s.region().tag, "it-IT");
+        assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+        assert_eq!(v(&s, "A1"), crate::core::Value::Number(46024.0));
+        assert_eq!(v(&s, "B1"), crate::core::Value::Empty);
+        assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+        assert_eq!((s.doc().unwrap().undo.len(), s.doc().unwrap().redo.len()), history);
+        assert!(s.region_frames.is_empty());
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(v(&s, "E1").display(), "redo content");
+        assert_eq!(s.doc().unwrap().wb.region.tag, "it-IT");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+        assert_eq!(v(&s, "D1").display(), if dirty { "preserved edit" } else { "" });
+    }
+}
+
 #[test]
 fn a_sheet_keeps_its_identity_until_it_is_copied_or_read_from_a_file() {
     let mut s = s();
@@ -1160,4 +1245,44 @@ fn a_sheet_keeps_its_identity_until_it_is_copied_or_read_from_a_file() {
     let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
     let (read, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
     assert!(read.sheets.iter().all(|sh| !all.contains(&sh.uid.get())));
+}
+
+/// Idle rollback does no graph work; restoration rebuilds once unless Region recalculation did it.
+#[test]
+fn rollback_rebuilds_only_for_a_restored_snapshot_without_region_recalculation() {
+    for changed in [false, true] {
+        for region_changed in [false, true] {
+            let mut s = s();
+            set(&mut s, "A1", "2");
+            set(&mut s, "B1", "=A1*3");
+            set(&mut s, "Z1", "redo");
+            s.execute("edit.undo", json!({})).unwrap();
+            let original = s.doc().unwrap().wb.clone();
+            let saved = s.doc().unwrap().saved.clone();
+            let dirty = s.doc().unwrap().is_dirty();
+            let undo = s.doc().unwrap().undo.len();
+            let redo = s.doc().unwrap().redo.len();
+            let token = s.group_begin("Fictional rollback").unwrap();
+            if changed {
+                set(&mut s, "B1", "=A1*7");
+            }
+            if region_changed {
+                s.execute("app.region", json!({"region":"it-IT"})).unwrap();
+            }
+            crate::GROUP_ROLLBACK_REBUILDS.with(|count| count.set(0));
+            s.group_rollback(token).unwrap();
+            assert_eq!(crate::GROUP_ROLLBACK_REBUILDS.with(|count| count.get()), usize::from(changed && !region_changed));
+            assert_eq!(v(&s, "B1").display(), "6");
+            assert_eq!(s.doc().unwrap().undo.len(), undo);
+            assert_eq!(s.doc().unwrap().redo.len(), redo);
+            assert_eq!(s.doc().unwrap().is_dirty(), dirty);
+            assert!(std::sync::Arc::ptr_eq(&saved, &s.doc().unwrap().saved));
+            if !region_changed {
+                assert!(std::sync::Arc::ptr_eq(&original, &s.doc().unwrap().wb));
+            }
+            assert_eq!(s.execute("app.region", json!({})).unwrap()["region"], if region_changed { "it-IT" } else { "en-US" });
+            set(&mut s, "A1", "4");
+            assert_eq!(v(&s, "B1").display(), "12", "restored dependency graph follows the original formula");
+        }
+    }
 }
