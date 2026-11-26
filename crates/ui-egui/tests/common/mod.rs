@@ -14,10 +14,12 @@ use gridcraft_ui_egui::{Services, SheetApp};
 
 pub type Harness = egui_kittest::Harness<'static, SheetApp>;
 
-/// A kittest builder with the deterministic font set and GridCraft's visuals installed.
+/// A kittest builder with the UI runtime, the deterministic font set and GridCraft's visuals
+/// installed.
 pub fn builder<State>() -> HarnessBuilder<State> {
     egui_kittest::Harness::builder().with_context_setup(|ctx| {
-        ctx.set_fonts(gridcraft_ui_egui::theme::pinned_font_definitions());
+        gridcraft_ui_egui::framework::install_headless(ctx);
+        craft_ui::fonts::load(ctx, gridcraft_ui_egui::theme::pinned_font_definitions());
         gridcraft_ui_egui::theme::apply(ctx, false);
     })
 }
@@ -33,7 +35,7 @@ pub fn prepare(mut app: SheetApp) -> SheetApp {
     app
 }
 
-/// Drive `app`'s `logic` then `ui` each frame in a harness built with `builder`.
+/// Drive `app`'s `logic`, its close path, then `ui` each frame in a harness built with `builder`.
 ///
 /// Tests that need a non-standard size, step timing, OS or pixel ratio configure the builder
 /// here so those details stay explicit; the shared font and lifecycle setup lives in `builder`
@@ -43,6 +45,7 @@ pub fn harness_with(builder: HarnessBuilder<SheetApp>, app: SheetApp, steps: usi
         |ui, app: &mut SheetApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
+            app.close_path(&ctx);
             app.ui(ui);
         },
         app,

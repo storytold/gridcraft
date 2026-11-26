@@ -93,7 +93,7 @@ impl SheetApp {
 /// Resolve outside clicks before the ribbon/tabs can save or switch the workbook.
 pub(crate) fn before_ui(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(ed) = &app.text_box_editor else { return };
-    if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+    if crate::framework::consume_escape(ctx) {
         app.cancel_text_box_edit();
         ctx.memory_mut(|m| m.surrender_focus(editor_id()));
         return;

@@ -111,19 +111,10 @@ assertions each, but there is no conformance suite against Excel-computed result
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
 (#137, and past 16,384 cells #1010, fixed 10-14 for bounded references), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
 10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
-YIELD) are the highest-risk for last-digit differences. XIRR follows Excel's own solver,
-reconstructed from observation: a sign-only search that brackets the root from the guess
-(doubling, halving towards 0, or stepping halfway to -100%) and bisects until half the bracket is
-under 1e-8 x (|rate| + 0.5) and XNPV is under 2e-8 x the first value, so its answer is the same
-midpoint as Excel's, about 1e-8 from the exact root, bit for bit in 888 of 910 synthetic cases
-with an answer (97.7% agreement on 1,283 cases including `#NUM!`). A 0 or blank first flow
-gives the tiny value Excel gives (the guess halved until the step is under the tolerance: about
-2.98e-9 for the default guess, `#NUM!` for a negative guess). Known differences: flows with
-several sign changes where Excel returns about 3e-9 (a halving that reached 0), or `#NUM!` for
-two roots close to the guess. IRR uses Newton on the discount factor 1/(1+rate), at most 100 steps,
-stopping at a step under 1e-8; Excel's last digits differ by about 1e-12 (its exact iteration is
-not reconstructed) and a few far-from-guess cases differ in `#NUM!` (93.5% agreement on 708
-cases, from 88%).
+XIRR, YIELD) are the highest-risk for last-digit differences. RATE follows Excel's own iteration, reconstructed from observation (secant from the guess and the guess ± 0.001, at most 200 steps,
+stop within 1e-7 by step and value, a looser 1e-4 check after 200 steps), so it returns the same
+iterate as Excel where convergence is slow (about -100% for `RATE(n,0,-pv,0)`) and `#NUM!` where
+Excel's solver gives up (very large rates); roots at 0% differ only by rounding noise (under 1e-7). XIRR follows Excel's own solver, reconstructed from observation: a sign-only search that brackets the root from the guess (doubling, halving towards 0, or stepping halfway to -100%) and bisects until half the bracket is under 1e-8 x (|rate| + 0.5) and XNPV is under 2e-8 x the first value, so its answer is the same midpoint as Excel's, about 1e-8 from the exact root, bit for bit in 888 of 910 synthetic cases with an answer (97.7% agreement on 1,283 cases including `#NUM!`). A 0 or blank first flow gives the tiny value Excel gives (the guess halved until the step is under the tolerance: about 2.98e-9 for the default guess, `#NUM!` for a negative guess). Known differences: flows with several sign changes where Excel returns about 3e-9 (a halving that reached 0), or `#NUM!` for two roots close to the guess. IRR uses Newton on the discount factor 1/(1+rate), at most 100 steps, stopping at a step under 1e-8; Excel's last digits differ by about 1e-12 (its exact iteration is not reconstructed) and a few far-from-guess cases differ in `#NUM!` (93.5% agreement on 708 cases, from 88%).
 
 TEXT() and cell display share `crates/numfmt`; checked against Excel-cached results in
 number- and text-format test workbooks (352 TEXT cells), all match:
@@ -187,12 +178,14 @@ Positive fractional inputs still truncate, and signed zero remains valid. Covere
 | 2026-10-15 | minor | Iterative calculation: Maximum Iterations and Maximum Change are set in File › Options › Formulas (dropped "no Options dialog yet") |
 | 2026-10-15 | minor | MEDIAN and AGGREGATE median use an overflow-safe midpoint (#1579); regressions cover finite extremes, tiny values and dependent recalculation |
 | 2026-10-15 | minor | ADDRESS quotes a sheet name the way Excel does: names that read as an A1 cell (`A1`) or an R1C1 reference (`R1C1`, `RC`) and names starting with `.` get quotes; `TRUE` / `FALSE` stay bare (#1458) |
+| 2026-10-14 | minor | SORT, SORTBY and Data > Sort (including the AutoFilter and table sorts) order numbers exactly, as Excel 365 does: 0.3 sorts before `=0.1+0.2` (0.30000000000000004) ascending and after it descending, in either input order. UNIQUE, RANK / RANK.EQ / RANK.AVG, LARGE, SMALL and MODE were already exact, also as observed; `=` and COUNTIF keep comparing at 15 significant digits |
 | 2026-10-14 | minor | MATCH, XMATCH, VLOOKUP, HLOOKUP, XLOOKUP and LOOKUP compare numbers exactly in every match and search mode, as Excel 365 does: `MATCH(0.1+0.2,{0.3},0)` is `#N/A` and 0.3 sorts below 0.30000000000000004 in approximate and binary search. `=`, SWITCH and the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS…) keep comparing at 15 significant digits, also as observed |
 | 2026-10-14 | minor | Analysis ToolPak value arguments (EOMONTH, WORKDAY, YEARFRAC, COUPDAYS, DISC, BIN2DEC, IM* and the rest, observed in Excel 365) give `#VALUE!` for a multi-cell reference instead of lifting it |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-14 | minor | Set precision as displayed: results, spills and typed or reformatted numbers are stored as their format shows them when the option is on (#1343) |
 | 2026-10-14 | minor | Number-to-text (`&`, CONCAT, TEXTJOIN, VALUETOTEXT, the IM functions' complex text, and also formula printing, pivot and chart labels) rounds to 15 significant digits before choosing decimal or scientific, so `=(1E15-0.5)&""` is `1E+15`, not `1000000000000000`; and below 1 it switches to scientific when the decimal would be longer than 21 characters (sign not counted), as Excel caches IMCSCH/IMEXP/IMTAN results: `1.28233995888454E-06`, so `9.99999999999999E-09` (was `0.00000001`), but `0.0000692361330972509`. Only 15-digit positive mantissas are Excel-verified; the limit for shorter mantissas and for negatives is inferred |
 | 2026-10-14 | minor | Bounded references up to 1,048,576 cells (`D3:AZ400`) keep their full shape instead of stopping at the used range, so `SUMPRODUCT(D3:AZ400*B3:B400,(A3:A400=x)*(D1:AZ1=y))` broadcasts like Excel and `ROWS`, `COUNTBLANK` and `--(r="")` count the blanks; references that run to the edge of the sheet (`A:A`) still stop at the used range (#1010) |
+| 2026-10-14 | minor | RATE follows Excel's iteration (secant, 200 steps, 1e-7 by step and value): `RATE(5,0,-100,0)` is -0.999999409145182 like Excel instead of `#NUM!`, `RATE(4,0,-0.0001,100)` is `#NUM!` like Excel instead of 30.62 |
 | 2026-10-13 | minor | Legacy formulas from files (no dynamic-array metadata) evaluate with implicit intersection: cells differing from Excel's cached values 68,964 → 49,866 across 4,224 test-corpus workbooks (none gets more) |
 | 2026-10-13 | minor | Clear reports changed stored cells sparsely, including those beyond the first million coordinates; dependent formulas and removed spills update, while clearing empty merges still unblocks spills (#1032) |
 | 2026-10-12 | minor | GETPIVOTDATA added: 514 / 523 by name, 505 working |

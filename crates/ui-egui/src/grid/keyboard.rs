@@ -1,4 +1,5 @@
 use super::geo::Geo;
+use super::interact::object_key;
 use super::menus::is_checkbox;
 use super::{CellRef, Drag, Sheet, SheetApp, json};
 
@@ -81,8 +82,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
-                if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
-                    shortcut_ran = true;
+                let nudged = object_key(app, sh, key, m);
+                if nudged || crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
+                    shortcut_ran |= !nudged;
                     continue;
                 }
                 let cmd = m.command;
@@ -147,10 +149,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                         }
                     }
                     Key::Escape if app.selected_object.is_some() => app.selected_object = None,
-                    Key::Escape => {
-                        app.session.clipboard = None;
-                        app.session.format_painter = None;
-                    }
+                    Key::Escape => cancel_pending(app),
                     Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
                     Key::F8 if m.alt => {
                         app.open_dialog("macros", json!({}));
@@ -273,5 +272,14 @@ fn form_control_event(app: &mut SheetApp, sh: &Sheet, ev: &egui::Event) -> bool 
             false
         }
         _ => false,
+    }
+}
+
+/// Esc with nothing else to dismiss drops the pending copy and the Format Painter. An open Quick
+/// Analysis popup owns the key: it closes and the pending copy stays.
+fn cancel_pending(app: &mut SheetApp) {
+    if app.grid.quick_analysis.open.take().is_none() {
+        app.session.clipboard = None;
+        app.session.format_painter = None;
     }
 }

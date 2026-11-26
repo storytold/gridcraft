@@ -400,7 +400,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             open_url(&u);
         }
     }
-    if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
+    if crate::framework::escape_pressed(ctx) || !win_open {
         // In Solver Options, Escape (or closing the window) cancels the options only.
         if in_solver_options(&d) {
             cancel_solver_options(&mut d);
@@ -655,7 +655,7 @@ pub(super) fn form_fields(app: &SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
                         if d.name == "dataValidation" {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| lang.tr(text)).unwrap_or("");
-                            craft_ui::ComboBox::from_id_salt(("dataValidation", key))
+                            egui::ComboBox::from_id_salt(("dataValidation", key))
                                 .selected_text(selected)
                                 .width(300.0)
                                 .show_ui(ui, |ui| {
