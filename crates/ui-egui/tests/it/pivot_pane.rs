@@ -18,6 +18,7 @@ fn render_pivot_field_buttons(dark: bool) -> Vec<Shape> {
     let mut app = crate::common::app(session);
     app.ui.dark = dark;
     let ctx = egui::Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     let mut output = egui::FullOutput::default();
     for _ in 0..6 {
         output = ctx.run_ui(RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0))), ..Default::default() }, |ui| {
@@ -76,14 +77,17 @@ fn the_field_list_scrollbar_sits_at_the_pane_edge() {
     session.execute("range.setValues", json!({"range": "A1", "values": [names.clone(), (1..=14).collect::<Vec<i32>>()]})).unwrap();
     session.execute("insert.pivotTable", json!({"source": "Sheet1!A1:N2", "destination": "Sheet1!A5", "rows": ["F1"], "values": ["F2"]})).unwrap();
     session.execute("selection.set", json!({"cell": "A5"})).unwrap();
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        SheetApp::new(session, Default::default()),
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(vec2(1200.0, 800.0))
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            SheetApp::new(session, Default::default()),
+        );
     h.run_steps(4);
     let first = h.get_by_label("F1").rect();
     // A floating scrollbar is drawn while the pointer is over its area.
