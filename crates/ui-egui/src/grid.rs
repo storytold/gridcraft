@@ -26,7 +26,7 @@ mod active_row;
 pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
-mod editor;
+pub(crate) mod editor;
 mod geo;
 mod interact;
 mod keyboard;
@@ -151,6 +151,20 @@ pub enum Drag {
         /// step of an earlier drag.
         stepped: bool,
     },
+    /// Turning a shape about the centre of `rect` (its screen rect as the drag began).
+    Rotate {
+        obj: gridcraft_engine::model::ObjRef,
+        rect: Rect,
+        stepped: bool,
+    },
+    /// Dragging a corner of the selected chart's values outline (#4389): `to` is the previewed
+    /// block, which the release gives the chart.
+    ChartData {
+        chart: u32,
+        orig: RangeRef,
+        corner: crate::objects::Handle,
+        to: Option<RangeRef>,
+    },
 }
 
 /// The fill a left-drag of the handle just made, which the Auto Fill Options button can redo
@@ -237,6 +251,16 @@ impl Trace {
     }
 }
 
+/// The entries of an open list-validation dropdown, read within the list search budget
+/// ([`gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET`]).
+pub struct ListPickerItems {
+    /// The workbook version they were read from: any edit makes a new one.
+    pub(crate) wb: std::sync::Arc<Workbook>,
+    pub(crate) sheet: usize,
+    pub(crate) cell: CellRef,
+    pub source: gridcraft_engine::cmd::data::ListSource,
+}
+
 #[derive(Default)]
 pub struct GridState {
     /// The active sheet's line positions and outlines, kept with a weak reference to the sheet
@@ -290,6 +314,9 @@ pub struct GridState {
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
+    /// The open dropdown's entries, read once for the workbook, sheet and cell they came from, so
+    /// an open list doesn't read its source again every frame.
+    pub list_picker_items: Option<ListPickerItems>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
@@ -305,6 +332,8 @@ pub struct GridState {
     /// of it offers Show Details, and running it says why.
     pub show_details_cells: Option<DetailsCache>,
     pub header_menu: Option<(Pos2, bool)>,
+    /// Quick Analysis button and popup (Ctrl+Q).
+    pub quick_analysis: crate::quick_analysis::State,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
     /// Header or footer being edited in place (Page Layout view).
