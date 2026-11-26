@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-13 · **Change:** minor (one workbook-wide reference rewrite; earlier: shared CJK fallback baselines; earlier: Python mode in the formula bar; earlier: Python cells as data; earlier: equations: the `math` crate and the layout cache; earlier: recently used functions kept in the preferences; Function Library module; accent icons; earlier: the hidden names that hold macros) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -203,6 +203,36 @@ at its sheet again, so it is drawn, pointed from and committed there, and its po
 message, when its sheet is gone, or when it holds Python code (in Python mode, or begun on a Python
 cell) that sheet protection now hides, as the Python editor window closes then.
 
+## Reference rewriting
+
+`Workbook::rewrite_references` is the one walker over the places a workbook holds a reference:
+cell formulas (keeping their legacy-array range and spill kind), defined names, conditional
+formats, data validation, chart series and source blocks, sparklines, PivotTable sources and form
+controls' linked cells. It hands the rewrite a `RefHost` (the holding sheet or a name's scope, and
+the sheet name unqualified references are on). A formula whose tree the rewrite leaves alone keeps
+its stored text. Not visited: table calculated-column and totals formulas, a PivotChart's link to its PivotTable (a sheet rename moves it itself) and a slicer's table. The engine's
+reference-moving edits go through it: renaming and deleting
+sheets, renaming defined names and tables, inserting and deleting rows, columns and cells, and
+cut-and-paste (`engine::cmd::edit::rewrite_all_formulas`, plus Python `xl()` literals); a legacy
+array's own range is moved by the caller. Internal hyperlinks keep the place they name as typed,
+as Excel's do. A sheet nothing changes on stays shared with undo snapshots.
+
+Conditional-format and validation formulas are written for the top-left cell of all the rule's
+ranges. When an edit moves that cell (cuts a range short, or removes the range holding it), the
+rule's top-left-relative formulas (`CfRule::relative_formulas_mut`, `Validation::formulas_mut`)
+are first re-hosted at the cell that takes its place (`rehost_rule`, given the ranges as they were
+before the edit), then moved once by the walker, so deleting a rule's first row leaves its formulas reading
+the same cells. A range moved whole or left in place keeps its formulas, and colour-scale, data-bar
+and icon-set thresholds are read as written. A rule keeps one formula for all its cells, so when an
+edit shifts some of a rule's cells and not others (lines inserted or deleted inside its range, Move
+Columns across it), a relative reference read at cells on the far side of the shift lands where the
+top-left cell's reference puts it, not on the data that cell read before; rules whose cells read
+themselves, and absolute references, are unaffected. A cut, and Move Columns, take the rules on their
+cells with them (`move_cut_rules`, on the engine's `Rule` trait, `remove_rule_cells` and
+`moved_rule_parts`), so their ranges and formulas move together, once; a cut to another sheet qualifies their references with the source sheet. A cut is
+pasted as it is: Paste Special refuses to transpose it, tile it over a larger selection or skip its
+blanks, as Excel offers none of those for a cut.
+
 ## Equations
 
 An equation is a shape (`ShapeKind::Equation`) whose `text` is its LaTeX source; it selects,
@@ -242,6 +272,7 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-13 | minor | Reference rewriting: `Workbook::rewrite_references` as the one walker for every reference-moving edit; rule formulas re-hosted by how their ranges moved and moved with a cut |
 | 2026-11-02 | minor | Python mode in the formula bar: Python mode on the shared editor, `code_field` and its stop keys; drafts follow their sheet by `model::SheetUid` |
 | 2026-11-02 | minor | Python cells as data: `model::PyCode`, the file forms, calc laying out kept results, the limits on open, and what copying, filling and sorting do to `xl()` references; edits that would push code past the limit are refused |
 | 2026-11-01 | trivial | Equations: the layout cache answers for a source over the cap by its length alone, without hashing it |

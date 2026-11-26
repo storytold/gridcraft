@@ -129,7 +129,7 @@ impl Unpacked {
             let mut f = z.by_index(i).unwrap();
             let mut v = vec![];
             f.read_to_end(&mut v).unwrap();
-            parts.insert(f.name().to_string(), v);
+            parts.insert(f.name().unwrap().to_string(), v);
         }
         Unpacked { parts }
     }
@@ -707,7 +707,7 @@ fn chart_sheet_entries_sharing_a_graph_are_checked_once() {
         let mut f = z.by_index(i).unwrap();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
-        parts.push((f.name().to_string(), data));
+        parts.push((f.name().unwrap().to_string(), data));
     }
     let extra: String = (0..3_000).map(|i| format!(r#"<sheet name="Copy{i}" sheetId="{}" r:id="rId2"/>"#, 100 + i)).collect();
     for (name, data) in &mut parts {
@@ -907,7 +907,9 @@ fn file_version_and_calc_features_survive_a_save() {
         assert_eq!(root.children.first().map(|e| e.name.as_str()), Some("fileVersion"), "{text}");
         assert_eq!(root.children.last().map(|e| e.name.as_str()), Some("extLst"), "{text}");
         assert!(text.contains(r#"<fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="11008"/>"#), "{text}");
-        assert!(text.contains(&format!("<extLst>{calc_features}</extLst>")), "{text}");
+        // The x15 workbook properties are kept too, in source order (see tests::extlist).
+        let x15 = r#"<ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:workbookPr chartTrackingRefBase="1"/></ext>"#;
+        assert!(text.contains(&format!("<extLst>{x15}{calc_features}</extLst>")), "{text}");
     }
 
     // A workbook that had neither gets a <fileVersion> naming GridCraft (#1699), kept on the next

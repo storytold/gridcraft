@@ -37,6 +37,10 @@ pub struct Ctx<'a> {
     pub cf_ext_ids: Vec<(String, usize)>,
     /// PivotTable slicer pieces collected from sheets, joined once sheets are read.
     pub slicers: crate::slicer::SlicersIn,
+    /// Kept extensions of the current sheet's `<extLst>` (URI, rebuilt XML), until attached.
+    pub sheet_exts: Vec<(String, String)>,
+    /// URIs of the current sheet's extensions that were dropped.
+    pub sheet_exts_dropped: Vec<String>,
     /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
     /// formulas, evaluated with implicit intersection), collected per sheet.
     pub legacy_formulas: Vec<gridcraft_core::CellRef>,
@@ -322,6 +326,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         cell_pictures: vec![],
         cf_ext_ids: vec![],
         slicers: Default::default(),
+        sheet_exts: vec![],
+        sheet_exts_dropped: vec![],
         legacy_formulas: vec![],
         shared_formula_bytes: 0,
         known_function,
@@ -424,6 +430,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        sheet.preserved = crate::extlist::keep_sheet(&mut cx, &name, sheet.preserved.take(), kept.keeps());
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,

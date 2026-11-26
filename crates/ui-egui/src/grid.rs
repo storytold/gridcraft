@@ -25,12 +25,14 @@ type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 /// Cached slicer tiles by (sheet, slicer id), with the workbook version they were computed from.
 type SlicerTilesCache = (Option<Weak<Workbook>>, HashMap<(usize, u32), Vec<SlicerTile>>);
+/// Cached fill-menu trend entries (label, mode), keyed by (doc uid, revision, sheet, source, dragged range).
+pub type FillTrendsCache = ((u64, u64, usize, RangeRef, RangeRef), Vec<(&'static str, &'static str)>);
 
 mod active_row;
 pub use active_row::active_row_band;
 mod cell_paint;
 mod cursor;
-mod editor;
+pub(crate) mod editor;
 mod geo;
 mod interact;
 mod keyboard;
@@ -71,6 +73,39 @@ pub const WHEEL_ZOOM_LADDER: [u16; 22] = [10, 12, 15, 18, 21, 25, 30, 35, 42, 50
 
 /// Seconds without Ctrl+wheel input after which part of a notch turned so far is forgotten.
 const WHEEL_ZOOM_IDLE: f64 = 0.75;
+
+/// Ends a wheel "touch" that still carries Ctrl/Cmd when a wheel event without it comes in, so
+/// the wheel scrolls again once Ctrl is released (#2213).
+///
+/// On Wayland winit starts a touch for a high-resolution wheel and never ends it; while in a
+/// touch egui keeps every modifier it has seen, so one Ctrl+wheel turn made each later turn zoom.
+/// `ctrl_wheel` remembers between frames whether the current touch has seen Ctrl/Cmd.
+pub(crate) fn end_stuck_ctrl_wheel(events: &mut Vec<egui::Event>, ctrl_wheel: &mut bool) {
+    let mut out = Vec::with_capacity(events.len());
+    for e in events.drain(..) {
+        if let egui::Event::MouseWheel { unit, source, phase, modifiers, .. } = &e {
+            let ctrl = modifiers.ctrl || modifiers.command;
+            match phase {
+                egui::TouchPhase::Start => *ctrl_wheel = ctrl,
+                egui::TouchPhase::Move if ctrl => *ctrl_wheel = true,
+                egui::TouchPhase::Move if *ctrl_wheel => {
+                    out.push(egui::Event::MouseWheel {
+                        unit: *unit,
+                        source: *source,
+                        delta: egui::Vec2::ZERO,
+                        phase: egui::TouchPhase::End,
+                        modifiers: *modifiers,
+                    });
+                    *ctrl_wheel = false;
+                }
+                egui::TouchPhase::Move => {}
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => *ctrl_wheel = false,
+            }
+        }
+        out.push(e);
+    }
+    *events = out;
+}
 
 /// The zoom one Ctrl+wheel notch goes to from `zoom`: the next step on [`WHEEL_ZOOM_LADDER`] in
 /// that direction, skipping a step less than 5% away (121% out goes to 100%, not 120%), but never
@@ -255,6 +290,16 @@ impl Trace {
     }
 }
 
+/// The entries of an open list-validation dropdown, read within the list search budget
+/// ([`gridcraft_engine::cmd::data::LIST_SOURCE_BUDGET`]).
+pub struct ListPickerItems {
+    /// The workbook version they were read from: any edit makes a new one.
+    pub(crate) wb: std::sync::Arc<Workbook>,
+    pub(crate) sheet: usize,
+    pub(crate) cell: CellRef,
+    pub source: gridcraft_engine::cmd::data::ListSource,
+}
+
 #[derive(Default)]
 pub struct GridState {
     /// The active sheet's line positions and outlines, kept with a weak reference to the sheet
@@ -291,6 +336,9 @@ pub struct GridState {
     pub context_menu_frame: u64,
     /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
     pub fill_menu: Option<(RangeRef, RangeRef, Pos2)>,
+    /// The trends the fill menu lists, cached per (doc uid, revision, sheet, source, dragged range):
+    /// finding them reads every source cell.
+    pub fill_menu_trends: Option<FillTrendsCache>,
     /// After a left-drag of the fill handle: the Auto Fill Options button beside the filled cells.
     pub fill_tag: Option<FillTag>,
     /// The right-clicked chart, picture, shape or slicer: where to open its menu, its kind and id.
@@ -308,6 +356,9 @@ pub struct GridState {
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
+    /// The open dropdown's entries, read once for the workbook, sheet and cell they came from, so
+    /// an open list doesn't read its source again every frame.
+    pub list_picker_items: Option<ListPickerItems>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
@@ -326,6 +377,8 @@ pub struct GridState {
     /// of it offers Show Details, and running it says why.
     pub show_details_cells: Option<DetailsCache>,
     pub header_menu: Option<(Pos2, bool)>,
+    /// Quick Analysis button and popup (Ctrl+Q).
+    pub quick_analysis: crate::quick_analysis::State,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
     /// Header or footer being edited in place (Page Layout view).

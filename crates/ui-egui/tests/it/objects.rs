@@ -53,6 +53,7 @@ fn fixture() -> (Harness, Objects) {
         slicer: ObjRef::new(ObjKind::Slicer, slicer),
     };
     let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
         .with_size(vec2(1400.0, 900.0))
         .with_step_dt(1.0 / 60.0)
         .with_os(egui::os::OperatingSystem::Mac)

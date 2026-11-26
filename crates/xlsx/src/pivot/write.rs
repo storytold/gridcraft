@@ -1,10 +1,10 @@
 use std::fmt::Write as _;
 
 use super::{
-    CT_PIVOT_CACHE_DEF, CT_PIVOT_CACHE_REC, CT_PIVOT_TABLE, CellRef, DateSystem, EXT_X14_CACHE_ID, EXT_X14_DATA_FIELD, EXT_X14_PIVOT_TABLE, HashMap,
-    Key, MAX_ITEMS, MAX_RECORD_CELLS, MAX_SOURCE_CELLS, MONTHS, NS_MAIN, NS_REL, NS_X14, Out, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
-    PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, Rels, Value, Workbook, XML_DECL, datetime_from_serial, esc_attr,
-    func_caption, func_name, group_by_name, group_caption, iso, key, label, mdy, same,
+    CT_PIVOT_CACHE_DEF, CT_PIVOT_CACHE_REC, CT_PIVOT_TABLE, CellRef, DateSystem, EXT_GC_DATA_FIELD, EXT_X14_CACHE_ID, EXT_X14_DATA_FIELD,
+    EXT_X14_PIVOT_TABLE, HashMap, Key, MAX_ITEMS, MAX_RECORD_CELLS, MAX_SOURCE_CELLS, MONTHS, NS_GC, NS_MAIN, NS_REL, NS_X14, Out, PivotDateGroup,
+    PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs, PivotSort, PivotTable, PivotValue, RangeRef, Rels, Value, Workbook, XML_DECL,
+    datetime_from_serial, esc_attr, func_caption, func_name, group_by_name, group_caption, iso, key, label, mdy, same,
 };
 
 #[derive(Default)]
@@ -213,7 +213,10 @@ impl PivotWriter {
         } else {
             None
         };
-        out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system).into_bytes());
+        // A refresh on open would recompute a Distinct Count field as Count (the file format has no
+        // distinct count), so a cache any of its PivotTables shows one in opens with the sheet's values.
+        let refresh_on_load = !members.iter().any(|(_, pt)| pt.values.iter().any(|v| v.func == PivotFunc::DistinctCount));
+        out.part(&cache_part, Some(CT_PIVOT_CACHE_DEF), cache_xml(&cache, rec_rid.as_deref(), wb.date_system, refresh_on_load).into_bytes());
         self.caches.push((n, format!("pivotCache/pivotCacheDefinition{n}.xml")));
         let b = self.built.len();
         self.built.push(cache);
@@ -558,7 +561,7 @@ fn item_xml(v: &Value, sys: DateSystem, date: bool) -> String {
     }
 }
 
-fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
+fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem, refresh_on_load: bool) -> String {
     let mut s = format!("{XML_DECL}<pivotCacheDefinition xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\"");
     match (records_rid, &c.records) {
         (Some(rid), Some((count, _))) => {
@@ -566,7 +569,10 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
         }
         _ => s.push_str(" saveData=\"0\""),
     }
-    s.push_str(" refreshOnLoad=\"1\" refreshedBy=\"GridCraft\" createdVersion=\"6\" refreshedVersion=\"6\" minRefreshableVersion=\"3\">");
+    if refresh_on_load {
+        s.push_str(" refreshOnLoad=\"1\"");
+    }
+    s.push_str(" refreshedBy=\"GridCraft\" createdVersion=\"6\" refreshedVersion=\"6\" minRefreshableVersion=\"3\">");
     let _ = write!(s, "<cacheSource type=\"worksheet\">{}</cacheSource>", c.source_xml);
     let _ = write!(s, "<cacheFields count=\"{}\">", c.fields.len());
     for f in &c.fields {
@@ -996,13 +1002,17 @@ fn write_data_fields(
         if let Some(id) = v.number_format.as_deref().and_then(fmt_id) {
             let _ = write!(s, " numFmtId=\"{id}\"");
         }
+        let mut ext = String::new();
         if v.show_as == PivotShowAs::Rank {
-            let _ = write!(
-                s,
-                "><extLst><ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext></extLst></dataField>"
-            );
-        } else {
+            let _ = write!(ext, "<ext uri=\"{EXT_X14_DATA_FIELD}\" xmlns:x14=\"{NS_X14}\"><x14:dataField pivotShowAs=\"rankDescending\"/></ext>");
+        }
+        if v.func == PivotFunc::DistinctCount {
+            let _ = write!(ext, "<ext uri=\"{EXT_GC_DATA_FIELD}\" xmlns:gc=\"{NS_GC}\"><gc:summary func=\"distinctCount\"/></ext>");
+        }
+        if ext.is_empty() {
             s.push_str("/>");
+        } else {
+            let _ = write!(s, "><extLst>{ext}</extLst></dataField>");
         }
     }
     s.push_str("</dataFields>");

@@ -1011,6 +1011,7 @@ pub fn parse_sqref(s: Option<&str>) -> Vec<RangeRef> {
 /// Worksheet extensions: x14 data validations and sparklines.
 fn read_ext(cx: &mut Ctx<'_>, e: &El, sheet: &mut Sheet, cf_kept_cells: &mut u64) {
     for ext in e.kids("ext") {
+        crate::extlist::read_sheet_ext(cx, ext);
         for c in &ext.children {
             match c.name.as_str() {
                 "dataValidations" => {
@@ -1108,6 +1109,8 @@ mod tests {
             num_fmts: Default::default(),
             cell_pictures: vec![],
             cf_ext_ids: vec![],
+            sheet_exts: vec![],
+            sheet_exts_dropped: vec![],
             known_function: None,
             python: Default::default(),
             cells: 0,
