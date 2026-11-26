@@ -426,8 +426,27 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         Some("l") => LegendPos::Left,
         Some(_) => LegendPos::Right,
     };
+    // The value axis that `value_axis_hidden` reads: the primary pair's (a combo chart may list its
+    // secondary axis first), in a scatter chart the vertical one; else the first such in the file.
+    let scatter = matches!(primary_kind, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+    let value_axis = |a: &&El| !scatter || matches!(a.child_val("axPos"), Some("l" | "r"));
+    let val_axes = || plot.into_iter().flat_map(|p| p.kids("valAx")).filter(value_axis);
+    let hidden_axis = val_axes().find(|a| primary(a)).or_else(|| val_axes().next());
     let hole_size =
         if plot.is_some_and(|p| p.child("doughnutChart").is_some()) { (dc.hole_size * 100.0).round().clamp(10.0, 90.0) as u8 } else { 75 };
+    let bars = plot.and_then(|p| p.child("barChart").or_else(|| p.child("bar3DChart")));
+    // Strict files write these as percentages (`219%`).
+    let percent = |v: &str| v.trim().trim_end_matches('%').trim().parse::<f64>().ok();
+    let gap_width = bars.and_then(|g| g.child_val("gapWidth")).and_then(percent).map(|v| v.clamp(0.0, 500.0) as u16);
+    // Stacked series share a slot, so the 100 written for them means nothing to keep when every bar
+    // group is stacked; a combo with a clustered bar group draws with it. Any other value is the
+    // file's own.
+    let stacked = plot.is_some_and(|p| {
+        bars.is_some()
+            && p.kids("barChart").chain(p.kids("bar3DChart")).all(|g| matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")))
+    });
+    let overlap =
+        bars.and_then(|g| g.child_val("overlap")).and_then(percent).map(|v| v.clamp(-100.0, 100.0) as i16).filter(|v| !(stacked && *v == 100));
     let mut ch = Chart {
         id: 0,
         kind: first_kind,
@@ -446,6 +465,17 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         style: dc.style,
         hole_size,
         first_slice_angle: dc.first_slice_angle,
+        gap_width,
+        overlap,
+        value_axis_hidden: hidden_axis.is_some_and(|a| a.child("delete").is_some_and(|c| c.flag("val", true))),
+        // From whichever bar group has them: a combo chart's first group may be a clustered one.
+        series_lines: plot.into_iter().flat_map(|p| p.kids("barChart").chain(p.kids("bar3DChart"))).find_map(|g| g.child("serLines")).map(|lines| {
+            let ln = lines.path(&["spPr", "ln"]);
+            gridcraft_model::ChartSeriesLines {
+                color: ln.and_then(|l| l.child("solidFill")).and_then(dml_color),
+                width: ln.and_then(|l| l.attr_f64("w")).map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w > 0.0),
+            }
+        }),
         x_title: axis_titles.0,
         y_title: axis_titles.1,
         source: None,
@@ -887,6 +917,16 @@ fn dlbls(show: bool) -> String {
     )
 }
 
+fn series_lines_xml(ch: &Chart, wb: &Workbook) -> String {
+    let Some(lines) = &ch.series_lines else { return String::new() };
+    let width = lines.width.map_or(String::new(), |w| format!(" w=\"{}\"", (f64::from(w) * EMU_PER_PT).round().clamp(0.0, 20_116_800.0) as u64));
+    let fill = lines.color.as_ref().and_then(|c| srgb(c, &wb.theme)).map_or(String::new(), |c| format!("<a:solidFill>{c}</a:solidFill>"));
+    if width.is_empty() && fill.is_empty() {
+        return "<c:serLines/>".into();
+    }
+    format!("<c:serLines><c:spPr><a:ln{width}>{fill}</a:ln></c:spPr></c:serLines>")
+}
+
 /// Group `g` of `series`, each drawn as its kind in `kinds` (by series index).
 fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart, axes: (u32, u32), wb: &Workbook, si: usize) -> String {
     let sers: String =
@@ -895,9 +935,15 @@ fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart,
     let ax = format!("<c:axId val=\"{}\"/><c:axId val=\"{}\"/>", axes.0, axes.1);
     match g {
         G::Bar { bar, grouping } => {
-            let overlap = if grouping == "clustered" { String::new() } else { "<c:overlap val=\"100\"/>".into() };
+            let overlap = match ch.overlap {
+                Some(o) => format!("<c:overlap val=\"{o}\"/>"),
+                None if grouping == "clustered" => String::new(),
+                None => "<c:overlap val=\"100\"/>".into(),
+            };
+            let gap = ch.gap_width.unwrap_or(150);
+            let lines = series_lines_xml(ch, wb);
             format!(
-                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"150\"/>{overlap}{ax}</c:barChart>",
+                "<c:barChart><c:barDir val=\"{}\"/><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:gapWidth val=\"{gap}\"/>{overlap}{lines}{ax}</c:barChart>",
                 if bar { "bar" } else { "col" }
             )
         }
@@ -1101,7 +1147,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
             id: 2,
             cross: 1,
             pos: val_pos,
-            delete: false,
+            delete: ch.value_axis_hidden,
             grid: ch.gridlines,
             title: ch.y_title.as_deref(),
             crosses_max: false,
