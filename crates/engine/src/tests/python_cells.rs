@@ -547,6 +547,18 @@ fn xl_references_follow_name_and_table_renames() {
 }
 
 #[test]
+fn a_python_cell_is_not_a_trend_source() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A2", "input": "2"})).unwrap();
+    plant(&mut s, 0, "A1", "1");
+    let offered = |s: &Session, growth: bool| {
+        let r = |a: &str| gridcraft_core::RangeRef::parse(a).unwrap();
+        crate::fill::trend_applies(&s.doc().unwrap().wb, 0, r("A1:A2"), r("A1:A5"), growth)
+    };
+    assert!(!offered(&s, false) && !offered(&s, true));
+}
+
+#[test]
 fn inserting_a_link_without_text_preserves_an_empty_python_cell() {
     let mut s = s();
     plant_empty(&mut s, "A1");

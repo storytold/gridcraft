@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Tendință liniară",
+        "Growth Trend" => "Tendință de creștere",
         "Diagram" => "Schemă",
         "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
