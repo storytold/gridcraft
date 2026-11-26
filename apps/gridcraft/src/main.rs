@@ -659,14 +659,31 @@ mod launch_separator_tests {
     use super::*;
     use crate::build_flavor::BuildFlavor;
 
+    /// The profile root a Launcher run is started with: absolute for the platform the test runs on.
+    /// `launch_profile::parse` refuses a root that is relative there, and a POSIX path has no drive
+    /// or UNC prefix, so it is not absolute on Windows - where CI runs these tests too.
+    fn launcher_root() -> &'static str {
+        if cfg!(windows) { r"C:\NightlyData\profiles\gridcraft" } else { "/nightly-data/profiles/gridcraft" }
+    }
+
     /// The argv the Launcher starts a nightly with, extended by `tail`, as the start then reads it.
     fn launcher_argv(tail: &[&str]) -> Vec<String> {
-        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", "/nightly-data/profiles/gridcraft", "--"]
+        let mut argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", launcher_root(), "--"]
             .iter()
             .map(std::ffi::OsString::from)
             .collect();
         argv.extend(tail.iter().map(std::ffi::OsString::from));
         launch_profile::parse(argv).unwrap().args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn the_other_platforms_root_spelling_is_refused_as_relative() {
+        let foreign = if cfg!(windows) { "/nightly-data/profiles/gridcraft" } else { r"C:\NightlyData\profiles\gridcraft" };
+        let argv: Vec<std::ffi::OsString> = ["--launch-profile", "nightly-v1", "--profile-root", foreign, "--"]
+            .iter()
+            .map(std::ffi::OsString::from)
+            .collect();
+        assert!(launch_profile::parse(argv).is_err(), "a root that is not absolute on this platform must be refused");
     }
 
     #[test]
