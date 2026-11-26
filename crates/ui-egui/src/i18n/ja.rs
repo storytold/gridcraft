@@ -373,6 +373,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Recent", "最近使ったアイテム"),
     ("No recent workbooks yet.", "最近使ったブックはまだありません。"),
     ("More workbooks", "その他のブック"),
+    ("More entries not shown", "表示されていない項目があります"),
     ("Modified", "更新日時"),
     ("Not available", "利用できません"),
     ("Just now", "たった今"),
@@ -702,6 +703,13 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Description (optional):", "説明 (省略可能):"),
     ("Fits inside the selected cell and moves with its content.", "選択したセル内に収まり、内容と一緒に移動します。"),
     ("Choose a PNG or JPEG no larger than 16 MB.", "16 MB 以下の PNG または JPEG を選択してください。"),
+    (
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count.",
+        "このブックには、値フィールドが「重複を除いた個数」のピボットテーブルがあります。.xlsx ファイルでは通常の個数と GridCraft だけが読み取るマーカーとして保存されるため、Excel で更新すると通常の個数に戻ります。",
+    ),
+    ("Distinct Count", "重複を除いた個数"),
+    ("Summarize by Distinct Count", "重複を除いた個数で集計"),
+    ("A calculated field can't use Distinct Count.", "集計フィールドでは「重複を除いた個数」を使用できません。"),
     ("About", "バージョン情報"),
     ("Contributors", "貢献者"),
     ("Models", "モデル"),
@@ -1288,6 +1296,15 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
         "Drag to fill cells. Drag from inside a cell to select a range.",
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
     ),
+    ("Copy Cells", "セルのコピー"),
+    ("Fill Series", "連続データを入力"),
+    ("Fill Formatting Only", "書式のみを入力"),
+    ("Fill Without Formatting", "書式なしで入力"),
+    ("Fill Days", "日単位で入力"),
+    ("Fill Weekdays", "平日単位で入力"),
+    ("Fill Months", "月単位で入力"),
+    ("Fill Years", "年単位で入力"),
+    ("Auto Fill Options", "オートフィル オプション"),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can
