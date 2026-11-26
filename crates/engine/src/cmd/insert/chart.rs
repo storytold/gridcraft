@@ -46,6 +46,8 @@ pub fn chart_kind(t: &str, sub: &str) -> ChartKind {
         ("bar", _) => ChartKind::BarClustered,
         ("line", "markers") => ChartKind::LineMarkers,
         ("line", "stacked") => ChartKind::LineStacked,
+        ("line", "stacked100") => ChartKind::LineStacked100,
+        ("line", "stacked100Markers") => ChartKind::LineStacked100Markers,
         ("line", _) => ChartKind::Line,
         ("pie", _) => ChartKind::Pie,
         ("doughnut", _) => ChartKind::Doughnut,
@@ -106,6 +108,8 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                number_format: None,
+                innermost_categories: false,
             });
         }
     } else {
@@ -122,6 +126,8 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                number_format: None,
+                innermost_categories: false,
             });
         }
     }
@@ -330,7 +336,15 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
-            c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            let kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            // A new type (other than a combo) applies to every series, as choosing it did before
+            // series kept their own: their markers or lines from a file go with the old type.
+            if kind != c.kind && kind != ChartKind::Combo {
+                for series in &mut c.series {
+                    series.kind = None;
+                }
+            }
+            c.kind = kind;
             if !c.supports_data_table() {
                 c.data_table = None;
             }

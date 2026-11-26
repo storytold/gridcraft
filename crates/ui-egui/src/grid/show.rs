@@ -1,6 +1,6 @@
 use super::Trace;
 use super::cursor::update_cursor;
-use super::editor::{in_cell_editor, list_picker, validation_arrow};
+use super::editor::{in_cell_editor, list_picker, list_search, validation_arrow};
 use super::geo::Geo;
 use super::interact::{interact, paint_freeze_handles};
 use super::menus::{context_menu, error_check_tag, fill_menu, fill_options_tag, filter_menu, header_menu, object_menu};
@@ -53,7 +53,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     } else {
         Rect::from_min_max(available.min, pos2(available.right() - bar, available.bottom()))
     };
-    let resp = ui.allocate_rect(rect, Sense::click_and_drag());
+    let resp = ui.allocate_rect(rect, crate::dialogs::grid_sense(app));
     app.grid.rect = Some(rect);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
@@ -360,6 +360,7 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
 }
 
 fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+    let window = app.session.active_window();
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
@@ -374,11 +375,21 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         crate::paper_view::interact(app, ui, resp, geo, sh, wb);
         interact(app, ui, resp, geo, sh, wb);
     }
+    // A form button can switch windows and swap GridState; the old popup and geometry belong to the outgoing window.
+    if app.session.active_window() != window {
+        return;
+    }
+    if previous_popups.0 != app.grid.filter_menu && previous_popups.0.is_some() {
+        app.grid.filter_checks = None;
+        app.grid.filter_search.clear();
+        app.grid.filter_buttons.clear();
+    }
     update_cursor(app, ui, resp, geo, sh);
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, geo, sh, wb);
     }
+    list_search(app, ui, geo, sh);
     filter_menu(app, ui, geo, previous_popups.0 == app.grid.filter_menu);
     list_picker(app, ui, geo, previous_popups.1 == app.grid.list_picker);
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
@@ -387,6 +398,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     fill_options_tag(app, ui, geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, geo, sh);
+    crate::quick_analysis::show(app, ui, geo, sh);
 }
 
 fn update_zoom_glide(app: &mut SheetApp, ui: &egui::Ui, place: (u64, usize), zoom: u16, now: f64) {
@@ -769,7 +781,7 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
         );
     }
     // Hyperlink tooltip.
-    if let Some(h) = hover.and_then(|c| sh.hyperlinks.get(&c))
+    if let Some(h) = hover.and_then(|c| gridcraft_engine::links::cell_link(wb, si, c))
         && app.editor.is_none()
     {
         let tip = h.tooltip.clone().unwrap_or_else(|| format!("{}\nClick once to follow. Click and hold to select this cell.", h.target));

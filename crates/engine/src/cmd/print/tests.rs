@@ -89,6 +89,34 @@ fn pdf_export_keeps_safe_links_on_their_printed_pages() {
 }
 
 #[test]
+fn pdf_export_rotates_a_shape_outline_and_its_text() {
+    let make_page = |rotation| {
+        let mut s = s();
+        let id = s
+            .execute(
+                "insert.shape",
+                json!({"kind": "rectangle", "at": "A1", "width": 120, "height": 60, "text": "TURNED", "fill": "#FF0000", "line": "#0000FF"}),
+            )
+            .unwrap()["shape"]
+            .as_u64()
+            .unwrap();
+        if rotation != 0 {
+            s.execute("object.move", json!({"kind": "shape", "id": id, "at": "A1", "rotation": rotation})).unwrap();
+        }
+        pdf_pages(&mut s).remove(0)
+    };
+    let upright = make_page(0);
+    let turned = make_page(90);
+    let red_path = |page: &str| {
+        let start = page.find("1 0 0 rg").expect("red rectangle fill");
+        let tail = &page[start..];
+        let end = tail.find(" B").expect("filled and stroked rectangle path") + 2;
+        tail[..end].to_string()
+    };
+    assert_ne!(red_path(&upright), red_path(&turned), "the rectangle's printed outline is rotated");
+    assert!(turned.contains("0 -1 1 0") && turned.contains("(TURNED) Tj"), "shape text uses the rotation matrix: {turned}");
+}
+#[test]
 fn arabic_with_characters_its_font_lacks_still_exports() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 😀"})).unwrap();
@@ -220,7 +248,7 @@ fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
         color: Color::rgb(255, 0, 0),
         markers: false,
     });
-    let options = PrintOptions { range: RangeRef::parse("A1:B2"), ..PrintOptions::default() };
+    let options = PrintOptions { ranges: RangeRef::parse("A1:B2").into_iter().collect(), ..PrintOptions::default() };
     let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
     wb.sheet_mut(0).unwrap().right_to_left = true;
     let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
@@ -751,6 +779,98 @@ fn charts_and_images_are_drawn() {
     }
 }
 
+/// Bytes of pixel data the pages of a PDF hold: 3 per RGB pixel plus 1 per soft-mask pixel, for
+/// every image each page references. The writer shares identical images across pages, but each
+/// page kept its own copy while the document was built, so a shared image counts once per page.
+fn image_bytes(pdf: &[u8]) -> u64 {
+    let text = String::from_utf8_lossy(pdf);
+    let num_after = |s: &str, key: &str| -> u64 {
+        let at = s.find(key).unwrap() + key.len();
+        s[at..].split_whitespace().next().unwrap().parse().unwrap()
+    };
+    // Object id → (pixel bytes, soft mask id).
+    let mut images = std::collections::HashMap::new();
+    let mut pages = vec![];
+    for obj in text.split("endobj").filter(|o| o.contains(" 0 obj")) {
+        let head = &obj[..obj.find(" 0 obj").unwrap()];
+        let id: u64 = head.split_whitespace().last().unwrap().parse().unwrap();
+        let dict = &obj[..obj.find(">>").unwrap_or(obj.len())];
+        if dict.contains("/Subtype /Image") {
+            let bytes = num_after(dict, "/Width ") * num_after(dict, "/Height ") * if dict.contains("/DeviceRGB") { 3 } else { 1 };
+            let smask = dict.contains("/SMask ").then(|| num_after(dict, "/SMask "));
+            images.insert(id, (bytes, smask));
+        } else if obj.contains("/Type /Page /Parent") {
+            pages.push(obj);
+        }
+    }
+    let with_mask = |id: u64| -> u64 {
+        let (bytes, smask) = images[&id];
+        bytes + smask.map_or(0, |m| images[&m].0)
+    };
+    pages
+        .iter()
+        .filter_map(|page| page.find("/XObject << ").map(|at| &page[at + "/XObject << ".len()..]))
+        .map(|refs| {
+            let refs = &refs[..refs.find(">>").unwrap()];
+            let tokens: Vec<&str> = refs.split_whitespace().collect();
+            tokens.chunks(4).map(|c| with_mask(c[1].parse().unwrap())).sum::<u64>()
+        })
+        .sum()
+}
+
+/// A picture anchored across many pages keeps no more copies in the PDF than the image budget
+/// allows, and the export still succeeds.
+#[test]
+fn picture_copies_across_pages_stay_within_the_image_budget() {
+    // Each page a picture overlaps kept its own decoded copy in the PDF with no document-wide
+    // bound: a 3 KB workbook with one tall picture reached 2 GiB before running out of pages.
+    let mut s = s();
+    let mut png = Vec::new();
+    let img = image::RgbaImage::from_pixel(64, 64, image::Rgba([10, 120, 200, 255]));
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "Title"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"titleRows": "1:1"})).unwrap();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    let sh = wb.sheet_mut(0).unwrap();
+    // A floating picture over some 20 pages, and a cell picture in the title row on every page.
+    sh.images.push(Image {
+        id,
+        anchor: Anchor { cell: CellRef::new(1, 1), dx: 0.0, dy: 0.0, width: 200.0, height: 19_990.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
+        data: std::sync::Arc::new(png.clone()),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    // `set_picture` gives C1 the cell value `draw_block` needs to reach the picture at all.
+    sh.set_picture(CellRef::new(0, 2), std::sync::Arc::new(CellPicture { data: png, mime: "image/png".into(), alt: String::new() }));
+    let d = s.doc().unwrap();
+    let lays = layouts(&d.wb, &PrintOptions::from_params(&json!({}), "file.exportPdf").unwrap());
+
+    let RenderedPdf { bytes: full, pages, .. } = render_pdf(&d.wb, &lays, "t", "").unwrap();
+    assert!(pages >= 15, "{pages} pages");
+    // Within the default budget every page draws (and holds while the PDF is built) its own copy.
+    // Identical copies are written to the file once, so the draws are what to count.
+    let draws = |pdf: &[u8]| String::from_utf8_lossy(pdf).matches(" Do Q").count();
+    let full_draws = draws(&full);
+    // The cell picture, on its own: the same render without it draws one picture fewer per page.
+    let mut floating_only = (*d.wb).clone();
+    floating_only.sheet_mut(0).unwrap().cell_pictures.clear();
+    let floating_draws = draws(&render_pdf(&floating_only, &lays, "t", "").unwrap().bytes);
+    assert!(floating_draws >= pages - 1, "{floating_draws} floating picture draws on {pages} pages");
+    assert_eq!(full_draws - floating_draws, pages, "the title-row cell picture draws once on each of {pages} pages");
+
+    // 64×64 RGB is 12,288 bytes: a 64 KiB budget holds a handful of page copies, not one per page.
+    let budget = 64 * 1024;
+    let RenderedPdf { bytes: capped, pages: capped_pages, .. } = render_pdf_with_image_budget(&d.wb, &lays, "t", "", budget).unwrap();
+    assert_eq!(capped_pages, pages, "pages past the budget still print, without the pictures");
+    let capped_draws = draws(&capped);
+    assert!((1..full_draws / 2).contains(&capped_draws), "{capped_draws} of {full_draws} picture draws kept with a {budget}-byte budget");
+    let kept = image_bytes(&capped);
+    assert!((1..=budget).contains(&kept), "{kept} bytes of images kept with a {budget}-byte budget");
+    assert!(contains(&capped, "%%EOF"));
+}
+
 #[test]
 fn page_setup_edits_settings() {
     let mut s = s();
@@ -852,6 +972,48 @@ fn page_setup_paper_sizes_reach_the_pdf_page() {
     assert!(close(&pv["pageList"][0]["width"], 612.0) && close(&pv["pageList"][0]["height"], 792.0));
     // Page Setup refuses an unknown name.
     assert!(s.execute("pageLayout.pageSetup", json!({"paper": "Napkin"})).is_err());
+}
+
+/// An empty paper name means no paper is stated; it prints on Letter.
+#[test]
+fn an_unstated_paper_prints_on_letter() {
+    let mut wb = gridcraft_model::Workbook::new();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.paper = String::new();
+    let layouts = super::layout::layouts(&wb, &super::layout::PrintOptions::default());
+    let l = &layouts[0];
+    assert_eq!((l.page_w, l.page_h), (612.0, 792.0));
+    assert_eq!(paper_size(""), (612.0, 792.0));
+}
+
+/// Both commands that set the paper store a known one under its table name, so every file
+/// format finds it.
+#[test]
+fn paper_size_commands_store_the_table_name() {
+    let mut s = s();
+    s.execute("pageLayout.size", json!({"paper": "b5-jis"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "B5");
+    s.execute("pageLayout.pageSetup", json!({"paper": "11x17"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "Tabloid");
+    // Statement and the envelopes XLSX names are accepted by both commands (Page Setup refused
+    // them before), stored under their table name and printed on their own size.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"]]})).unwrap();
+    let close = |v: &Json, want: f64| (v.as_f64().unwrap() - want).abs() < 0.01;
+    for (cmd, given, stored, w, h) in [
+        ("pageLayout.pageSetup", "statement", "Statement", 396.0, 612.0),
+        ("pageLayout.pageSetup", "envelope #10", "Envelope #10", 297.0, 684.0),
+        ("pageLayout.pageSetup", "Envelope-DL", "Envelope DL", 311.81, 623.62),
+        ("pageLayout.size", "Statement", "Statement", 396.0, 612.0),
+        ("pageLayout.size", "envelope dl", "Envelope DL", 311.81, 623.62),
+    ] {
+        s.execute(cmd, json!({"paper": given})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, stored, "{cmd} {given}");
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        let page = &pv["pageList"][0];
+        assert!(close(&page["width"], w) && close(&page["height"], h), "{cmd} {given}: {page}");
+    }
+    // A new workbook still prints on Letter.
+    assert_eq!(gridcraft_model::Workbook::new().sheets[0].print.paper, "Letter");
 }
 
 #[test]
@@ -1259,7 +1421,11 @@ fn excluded_active_sheet_is_not_the_empty_fallback_but_prints_an_explicit_range(
     let all = super::layout::PrintOptions { all_sheets: true, ..Default::default() };
     assert_eq!(sheets_of(&all), vec![1]);
     // An explicit range for the (excluded) active sheet prints it.
-    let ranged = super::layout::PrintOptions { all_sheets: true, range: gridcraft_core::RangeRef::parse("A1:B2"), ..Default::default() };
+    let ranged = super::layout::PrintOptions {
+        all_sheets: true,
+        ranges: gridcraft_core::RangeRef::parse("A1:B2").into_iter().collect(),
+        ..Default::default()
+    };
     let lays = super::layout::layouts(&wb, &ranged);
     assert_eq!(lays.iter().map(|l| (l.sheet, l.area)).collect::<Vec<_>>(), vec![(0, gridcraft_core::RangeRef::parse("A1:B2").unwrap())]);
 }
@@ -1278,7 +1444,11 @@ fn every_sheet_excluded_prints_them_all_also_with_a_range() {
     }
     let sheets_of = |opts: &super::layout::PrintOptions| super::layout::layouts(&wb, opts).iter().map(|l| l.sheet).collect::<Vec<_>>();
     assert_eq!(sheets_of(&super::layout::PrintOptions { all_sheets: true, ..Default::default() }), vec![0, 1]);
-    let ranged = super::layout::PrintOptions { all_sheets: true, range: gridcraft_core::RangeRef::parse("A1:B2"), ..Default::default() };
+    let ranged = super::layout::PrintOptions {
+        all_sheets: true,
+        ranges: gridcraft_core::RangeRef::parse("A1:B2").into_iter().collect(),
+        ..Default::default()
+    };
     assert_eq!(sheets_of(&ranged), vec![0, 1]);
 }
 
@@ -1289,7 +1459,8 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     // A smoothed line is its points, not one unit.
     assert_eq!(chart_cost(&[line(4000), Prim::Circle { cx: 0.0, cy: 0.0, r: 1.0, fill: None, stroke: None }]), 4002);
     // Room for exactly two copies of a 1,000-point chart.
-    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 2002, ..Default::default() };
+    let mut pics = PicCache::default();
+    pics.chart_prims = MAX_CHART_PRIMS - 2002;
     let mut renders = 0;
     for expect in [true, true, false, false] {
         let got = pics.chart((0, 0), || {
@@ -1301,7 +1472,8 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert_eq!(renders, 1, "a rejected chart is not rendered again");
     assert!(pics.charts.is_empty(), "and its primitives are not kept");
     // A chart too big for what is left is dropped without being cached at all.
-    let mut pics = PicCache { chart_prims: MAX_CHART_PRIMS - 10, ..Default::default() };
+    let mut pics = PicCache::default();
+    pics.chart_prims = MAX_CHART_PRIMS - 10;
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
@@ -1341,4 +1513,72 @@ fn saving_reports_an_excluded_mark_the_format_drops() {
     assert!(s.execute("file.saveAs", json!({"path": at("kept.json")})).unwrap().get("warnings").is_none());
     assert!(excluded(&at("kept.json")), "GridCraft's own format keeps it");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn preview_ranges(s: &mut Session, p: Json) -> Vec<String> {
+    let r = s.execute("file.printPreview", p).unwrap();
+    r["pageList"].as_array().unwrap().iter().map(|pg| pg["range"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_range_prints_instead_of_the_print_area_and_each_area_gets_its_own_pages() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H20", "input": "y"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"printArea": "F10:H20"})).unwrap();
+    assert_eq!(preview_ranges(&mut s, json!({})), ["F10:H20"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2"})), ["A1:B2"]);
+    // Several areas, like a multi-area selection: one run of pages each, in the order given.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "D4:E5,A1:B2"})), ["D4:E5", "A1:B2"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2, D4:E5"})), ["A1:B2", "D4:E5"]);
+    let (_, pages) = pdf_of(&mut s, json!({"range": "A1:B2,D4:E5"}));
+    assert_eq!(pages, 2);
+    for bad in ["A1:B2,", "A1:B2,nope", ","] {
+        assert!(s.execute("file.printPreview", json!({"range": bad})).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_sheet_qualifier_on_a_later_area_does_not_swallow_the_earlier_ones() {
+    let mut s = s();
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    // A comma inside a quoted sheet name is not an area separator.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,'a,b'!D4:E5"})), ["A1:B2", "D4:E5"]);
+}
+
+/// XLSX id 34 is ISO B5 (176 × 250 mm), not the Letter fallback of the old name.
+#[test]
+fn imported_xlsx_b5_envelope_uses_iso_b5_print_dimensions() {
+    use std::io::{Cursor, Read, Write};
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    wb.sheet_mut(0).unwrap().print.paper = "Legal".into();
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..input.len() {
+        let mut part = input.by_index(i).unwrap();
+        let mut data = Vec::new();
+        part.read_to_end(&mut data).unwrap();
+        let name = part.name().unwrap().to_string();
+        if name == "xl/worksheets/sheet1.xml" {
+            let xml = String::from_utf8(data).unwrap();
+            assert!(xml.contains(r#"paperSize="5""#));
+            // Set the input id independently of the shared paper-name mapping under test.
+            data = xml.replace(r#"paperSize="5""#, r#"paperSize="34""#).into_bytes();
+        }
+        output.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        output.write_all(&data).unwrap();
+    }
+    let bytes = output.finish().unwrap().into_inner();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "iso-b5.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let preview = s.execute("file.printPreview", json!({})).unwrap();
+    let page = &preview["pageList"][0];
+    assert!((page["width"].as_f64().unwrap() - 498.90).abs() < 0.01, "{page}");
+    assert!((page["height"].as_f64().unwrap() - 708.66).abs() < 0.01, "{page}");
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "/MediaBox [0 0 498.9 708.66]"));
 }

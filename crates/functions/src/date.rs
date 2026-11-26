@@ -496,7 +496,16 @@ fn yearfrac(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
     let sys = c.date_system();
     let s = day_arg(a, 0, sys)?;
     let e = day_arg(a, 1, sys)?;
-    let basis = if has(a, 2) { to_int(num(a, 2)?)? } else { 0 };
+    let basis = if has(a, 2) {
+        let raw = num(a, 2)?;
+        // Excel rejects any negative basis before truncation: -0.9 would truncate to 0 and slip through.
+        if raw < 0.0 {
+            return Err(CellError::Num);
+        }
+        to_int(raw)?
+    } else {
+        0
+    };
     num_val(yearfrac_core(sys, s, e, basis)?)
 }
 
@@ -848,6 +857,19 @@ mod tests {
         close(ev("YEARFRAC", vec![n(d(2021.0, 1.0, 30.0)), n(d(2021.0, 3.0, 31.0)), n(0.0)]), 1.0 / 6.0);
         close(ev("YEARFRAC", vec![n(d(2020.0, 2.0, 29.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 1.0);
         close(ev("YEARFRAC", vec![n(d(2021.0, 2.0, 28.0)), n(d(2021.0, 2.0, 28.0)), n(0.0)]), 0.0);
+    }
+
+    #[test]
+    fn yearfrac_rejects_negative_fractional_basis() {
+        // Excel rejects any negative basis: -0.9 must not truncate to 0.
+        let (s, e) = (n(d(2024.0, 1.0, 15.0)), n(d(2025.0, 6.0, 30.0)));
+        is_err(ev("YEARFRAC", vec![s.clone(), e.clone(), n(-0.9)]), CellError::Num);
+        // A positive fraction still truncates to basis 0.
+        let whole = match ev("YEARFRAC", vec![s.clone(), e.clone(), n(0.0)]) {
+            Value::Number(x) => x,
+            v => panic!("YEARFRAC basis 0 gave {v:?}"),
+        };
+        close_tol(ev("YEARFRAC", vec![s, e, n(0.9)]), whole, 1e-12);
     }
 
     #[test]

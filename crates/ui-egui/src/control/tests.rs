@@ -284,6 +284,7 @@ fn one_admitted_capture_issues_one_callback_and_replies_once() {
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(900.0, 700.0))
         .with_context_setup(|ctx| {
+            crate::framework::install_headless(ctx);
             ctx.set_fonts(crate::theme::pinned_font_definitions());
             crate::theme::apply(ctx, false);
         })

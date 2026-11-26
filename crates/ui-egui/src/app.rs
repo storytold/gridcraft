@@ -44,6 +44,7 @@ impl SheetApp {
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
+            ctrl_wheel: false,
             synthetic_pending: false,
             synthetic_injected_at_pass: None,
             control_rx: None,
@@ -91,6 +92,8 @@ impl SheetApp {
             arrange_windows: None,
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: Default::default(),
+            framework_dialogs: Default::default(),
+            framework_host: crate::framework::host(),
         }
     }
 
@@ -105,7 +108,7 @@ impl SheetApp {
 
     /// Sets up fonts and visuals for a specific persisted interface language.
     pub fn setup_context_for_language(ctx: &egui::Context, dark: bool, language: i18n::Language) {
-        ctx.set_fonts(theme::font_definitions_for_language(language));
+        craft_ui::fonts::load(ctx, theme::font_definitions_for_language(language));
         theme::apply(ctx, dark);
     }
 
@@ -126,7 +129,6 @@ impl SheetApp {
             self.desktop_dark = Some(answer);
         }
         self.sync_theme_preference(ctx);
-        self.sync_input_options(ctx);
         // The geometry captures are bound to. Native frames recorded it from their fresh
         // `RawInput` in `raw_input_hook` (including hidden logic-only ticks); the epoch is
         // monotonic, so a resize back to the original values is still a new epoch and old pixels
@@ -142,7 +144,6 @@ impl SheetApp {
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
-        self.guard_window_close(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
@@ -167,6 +168,7 @@ impl SheetApp {
         }
         let Some(d) = self.session.active() else { return };
         let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+        let title = crate::channel::window_title(&title);
         if self.grid.last_title.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.grid.last_title = Some(title);
@@ -215,8 +217,6 @@ impl SheetApp {
         }
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
-        #[cfg(not(target_arch = "wasm32"))]
-        updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);
         // A host can turn the File tab off while Backstage is already open: close it.
         if !self.chrome.file_tab {
@@ -259,6 +259,12 @@ impl SheetApp {
         widgets::toast(self, &ctx);
         // Last, so its resize cursors win over the widgets under the window edges.
         ribbon::window_frame(self, &ctx);
+        // The update flow and the framework dialogs run once per frame, in the root window.
+        if ctx.viewport_id() == egui::ViewportId::ROOT {
+            #[cfg(not(target_arch = "wasm32"))]
+            updates_ui::show(self, &ctx);
+            self.run_framework_dialogs(ui);
+        }
         self.flush_viewport_commands(&ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.
         if ctx.viewport_id() == egui::ViewportId::ROOT {
@@ -366,6 +372,41 @@ mod lifecycle_tests {
         assert_eq!(app.synthetic.len(), 2, "press and release stay distinct batches");
     }
 
+    #[cfg(all(unix, not(target_vendor = "apple")))]
+    #[test]
+    /// A synthetic Ctrl+wheel touch followed by a plain wheel move gets a zero-delta End inserted before the move.
+    fn synthetic_wheel_events_end_a_stuck_ctrl_touch() {
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let wheel = |modifiers| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            delta: vec2(0.0, 3.0),
+            phase: TouchPhase::Move,
+            modifiers,
+        };
+        app.synthetic.push_back(vec![wheel(Modifiers::CTRL)]);
+        app.synthetic.push_back(vec![wheel(Modifiers::NONE)]);
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        assert_eq!(raw.events, vec![wheel(Modifiers::CTRL)]);
+        // A UI pass applied the first batch.
+        app.synthetic.pop_front();
+        app.synthetic_pending = false;
+        app.synthetic_injected_at_pass = None;
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        let end = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            delta: egui::Vec2::ZERO,
+            phase: TouchPhase::End,
+            modifiers: Modifiers::NONE,
+        };
+        assert_eq!(raw.events, vec![end, wheel(Modifiers::NONE)]);
+    }
+
     /// Returns raw input with a screen rect at the given size.
     fn raw_with_size(size: egui::Vec2) -> egui::RawInput {
         egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() }
@@ -375,6 +416,7 @@ mod lifecycle_tests {
     /// A font-gated early-returning pass does not lose the queued step; the hook offers it again and a later real pass applies it.
     fn a_font_gated_pass_offers_the_synthetic_step_again() {
         let ctx = egui::Context::default();
+        crate::framework::install_headless(&ctx);
         ctx.set_fonts(theme::font_definitions());
         let mut app = app();
         app.fonts_ready = true;
@@ -527,7 +569,7 @@ mod lifecycle_tests {
     fn a_logic_only_tick_polls_printing_feedback() {
         let ctx = egui::Context::default();
         let mut app = app();
-        app.printing.printers.push(crate::printing::Printer { name: "Queue".into(), label: String::new(), default: true });
+        app.printing.printers.push(crate::printing::Printer::new("Queue").is_default(true));
         app.run("ui.printSettings", serde_json::json!({"printer": "Queue"})).unwrap();
         app.services.print_native = Some(Box::new(|_, _| {
             let (sender, receiver) = std::sync::mpsc::channel();
