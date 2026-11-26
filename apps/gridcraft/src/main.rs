@@ -9,15 +9,25 @@
 #![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod app_dirs;
 #[cfg(target_os = "macos")]
 mod apple_events;
+// The build channel's own parser and icon-path tests (build.rs compiles the same file by path).
+#[cfg(test)]
+mod build_channel;
+mod build_flavor;
 mod control_server;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
+mod launch_profile;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod nightly_session;
+mod opener;
 mod print;
+mod process_identity;
+mod profile_root;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -28,45 +38,63 @@ use gridcraft_ui_egui::{Services, SheetApp};
 use serde_json::json;
 
 /// The app, its native window per workbook window, and (macOS) the menu bar and Finder events.
-struct App(SheetApp, DocWindows, #[cfg(target_os = "macos")] Option<native_menu::NativeMenu>, #[cfg(target_os = "macos")] fmv_macos_events::Inbox);
+/// The session record and its notice flag are only meaningful in the nightly channel.
+struct App {
+    app: SheetApp,
+    windows: DocWindows,
+    #[cfg(target_os = "macos")]
+    menu: Option<native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")]
+    apple_events: fmv_macos_events::Inbox,
+    /// The Nightly session record, shared with the exit hook and the return path.
+    nightly: nightly_session::Shared,
+    /// Whether this window already told the user the previous session did not finish.
+    nightly_notice_shown: bool,
+}
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
         {
-            if self.2.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
-                self.2 = Some(native_menu::NativeMenu::install(ctx));
+            if self.menu.is_none() && std::env::var_os("GRIDCRAFT_NO_NATIVE_MENU").is_none() {
+                self.menu = Some(native_menu::NativeMenu::install(ctx));
             }
-            if let Some(m) = &mut self.2 {
-                m.poll(&mut self.0, ctx, self.1.focused_viewport());
+            if let Some(m) = &mut self.menu {
+                m.poll(&mut self.app, ctx, self.windows.focused_viewport());
             }
-            apple_events::poll(&self.3, &mut self.0, ctx);
+            apple_events::poll(&self.apple_events, &mut self.app, ctx);
         }
-        self.0.logic(ctx);
-        self.1.logic(&mut self.0, ctx);
-        if ctx.input(|input| input.viewport().close_requested()) && self.0.printing.busy() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        }
+        self.app.logic(ctx);
+        self.windows.logic(&mut self.app, ctx);
+        self.app.close_path(ctx);
     }
     /// Forwards raw input to the shared app, then opens every non-empty dropped file path as a workbook.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
-        self.0.raw_input_hook(ctx, raw);
+        self.app.raw_input_hook(ctx, raw);
+        self.app.before_input(ctx);
         // Files dropped on the window open as workbooks.
         for f in std::mem::take(&mut raw.dropped_files) {
             if let Some(p) = f.path().to_str().map(str::to_string).filter(|p| !p.is_empty()) {
-                self.0.open_path(&p);
+                self.app.open_path(&p);
             }
         }
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.1.show(&mut self.0, ui);
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        gridcraft_ui_egui::framework::before_ui(ui.ctx(), &*frame);
+        self.windows.show(&mut self.app, ui);
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
-        save_prefs(&self.0);
+        save_prefs(&self.app);
         // A ready update installs once the process has exited. The macOS exit below skips
-        // dropping the app, so the helper is started here.
-        self.0.start_pending_update();
+        // dropping the app, so the helper is started here. A nightly has no updater at all.
+        if gridcraft_ui_egui::channel::stable_services_allowed() {
+            self.app.start_pending_update();
+        }
+        // The Nightly session record is finished here: every way of quitting reaches `on_exit`,
+        // and on macOS AppKit's terminate ends the process right after it, so nothing after
+        // `eframe::run_native` can run there. `finish_once` makes the later call a no-op.
+        nightly_session::finish_once(&self.nightly, self.nightly_notice_shown);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
         // AppKit's Touch Bar support observes that view (KVO), so in the next display cycle
@@ -80,17 +108,10 @@ impl eframe::App for App {
     }
 }
 
+/// The settings folder: the validated nightly profile, else the platform's own folder
+/// (`app_dirs`). Every writer of user state goes through it.
 fn config_dir() -> Option<std::path::PathBuf> {
-    if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/GridCraft"))
-    } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("GridCraft"))
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
-            .map(|c| c.join("gridcraft"))
-    }
+    app_dirs::config_dir()
 }
 
 /// Runs without preferences (`GRIDCRAFT_NO_PREFS`, agents' test runs) neither read nor write
@@ -101,7 +122,7 @@ fn prefs_enabled() -> bool {
 
 /// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
 fn log_dir() -> Option<std::path::PathBuf> {
-    Some(config_dir()?.join("logs"))
+    app_dirs::log_dir()
 }
 
 fn load_prefs(app: &mut SheetApp) {
@@ -218,16 +239,16 @@ fn open_with_system(target: &str) {
         log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
         return;
     };
-    let target = target.as_str();
-    let cmd = if cfg!(target_os = "macos") {
-        "open"
-    } else if cfg!(windows) {
-        "explorer"
-    } else {
-        "xdg-open"
+    // By absolute path where the platform has one (#2176): a bare `explorer` would be looked up
+    // in the application's directory first.
+    let env = |key: &str| std::env::var(key).ok();
+    let (system_root, windir) = (env("SystemRoot"), env("windir"));
+    let Some((program, arg)) = opener::opener_command(opener::Os::current(), &target, system_root.as_deref(), windir.as_deref()) else {
+        log::warn!("refused to open {target:?}: it could be read as an option");
+        return;
     };
-    if let Err(e) = std::process::Command::new(cmd).arg(target).spawn() {
-        log::warn!("{cmd} {target}: {e}");
+    if let Err(e) = std::process::Command::new(&program).arg(&arg).spawn() {
+        log::warn!("{} {arg}: {e}", program.display());
     }
 }
 
@@ -240,12 +261,154 @@ fn icon() -> Option<egui::IconData> {
     Some(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }
 
+fn initialize_nightly_process_identity() -> Result<(), process_identity::IdentityError> {
+    process_identity::initialize(
+        build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1,
+        gridcraft_ui_egui::channel::id_for(gridcraft_ui_egui::channel::Channel::NightlyV1),
+    )
+}
+
+/// Whether a refusal may also open a native message box. Standard error always carries the reason;
+/// this only adds a box where one renders without the app's event loop. Never on macOS: rfd's alert
+/// there needs the AppKit run loop this start has not reached, so a refused nightly launch hung in
+/// an invisible modal instead of exiting (GridCraft Mac smoke, 2026-11-26).
+fn refusal_dialog(flavor: build_flavor::BuildFlavor, desktop_session: bool, macos: bool) -> bool {
+    build_flavor::needs_native_error(flavor, desktop_session) && !macos
+}
+
+/// Tell a desktop user why a nightly launch was refused, in a native box where one renders without the
+/// app's event loop (Windows, X11/Wayland), and on standard error always. A headless form (`--version`
+/// on a runner) never gets here: the version query is answered before this and before any profile work.
+fn report_launch_profile_error(error: &str) {
+    eprintln!("GridCraft launch profile: {error}");
+    let desktop_session = cfg!(windows)
+        || cfg!(target_os = "macos")
+        || (cfg!(target_os = "linux") && ["DISPLAY", "WAYLAND_DISPLAY"].into_iter().any(|key| std::env::var_os(key).is_some_and(|v| !v.is_empty())));
+    if refusal_dialog(build_flavor::COMPILED, desktop_session, cfg!(target_os = "macos")) {
+        if let Err(error) = initialize_nightly_process_identity() {
+            eprintln!("GridCraft launch profile: {error}");
+            return;
+        }
+        #[cfg(any(windows, target_os = "linux", target_os = "macos"))]
+        let _ = rfd::MessageDialog::new()
+            .set_title("GridCraft Nightly")
+            .set_description(error)
+            .set_level(rfd::MessageLevel::Error)
+            .set_buttons(rfd::MessageButtons::Ok)
+            .show();
+    }
+}
+
+/// Select the immutable launch channel and profile before any startup service or side effect.
+/// `None` means the answer was printed (`--version`) and the process is done.
+fn prepare_launch() -> Option<Vec<std::ffi::OsString>> {
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    let nightly_build = build_flavor::COMPILED == build_flavor::BuildFlavor::NightlyV1;
+    // Plain `--version`, or the Launcher's `--launch-profile nightly-v1 --profile-root <dir>
+    // --version`: answered before root validation, process identity, IPC or any window (a dialog
+    // here would hang a headless runner and fail a Linux build).
+    if nightly_build && (build_flavor::version_query(&argv) || launch_profile::version_query(&argv)) {
+        use std::io::Write as _;
+        let version = build_flavor::version(build_flavor::COMPILED, env!("GRIDCRAFT_BUILT_VERSION"));
+        let _ = writeln!(std::io::stdout(), "{} {version}", gridcraft_ui_egui::channel::name_for(gridcraft_ui_egui::channel::Channel::Stable));
+        return None;
+    }
+    let early = launch_profile::parse(argv)
+        .and_then(|launch| {
+            build_flavor::require_profile(build_flavor::COMPILED, &launch.profile)?;
+            initialize_nightly_process_identity().map_err(|error| error.to_string())?;
+            Ok(launch)
+        })
+        .and_then(|launch| {
+            launch_profile::prepare(launch, |root| {
+                launch_profile::validate_root(root, |key| std::env::var_os(key), std::env::current_exe().ok().as_deref())
+            })
+        })
+        .unwrap_or_else(|error| {
+            report_launch_profile_error(&error);
+            std::process::exit(2)
+        });
+    let channel =
+        if early.profile.is_nightly() { gridcraft_ui_egui::channel::Channel::NightlyV1 } else { gridcraft_ui_egui::channel::Channel::Stable };
+    if let Err(error) =
+        launch_profile::install(early.profile).and_then(|()| gridcraft_ui_egui::channel::select(channel, env!("GRIDCRAFT_BUILT_VERSION")))
+    {
+        report_launch_profile_error(&error);
+        std::process::exit(2);
+    }
+    Some(early.args)
+}
+
+/// The app's own command line, once the launch profile's tokens are gone: `--control`,
+/// `--control-token`, `--sample` and the files to open. `--` ends the options, and everything after
+/// it is a file, even a name that reads like one — that is how the Launcher hands a nightly its
+/// documents (`launch_profile::parse` puts the separator first), so the separator itself is never
+/// opened as a file.
+#[derive(Debug, Default, PartialEq)]
+struct DesktopArgs {
+    control_port: Option<u16>,
+    control_token: Option<String>,
+    sample: Option<String>,
+    files: Vec<String>,
+}
+
+fn desktop_args(args: &[String], control_port: Option<u16>, control_token: Option<String>) -> DesktopArgs {
+    let mut parsed = DesktopArgs { control_port, control_token, ..DesktopArgs::default() };
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--" => {
+                parsed.files.extend(args[i + 1..].iter().cloned());
+                break;
+            }
+            "--control" => {
+                i += 1;
+                parsed.control_port = args.get(i).and_then(|p| p.parse().ok());
+            }
+            "--control-token" => {
+                i += 1;
+                parsed.control_token = args.get(i).cloned();
+            }
+            "--sample" => {
+                i += 1;
+                parsed.sample = Some(args.get(i).cloned().unwrap_or_else(|| "sales".into()));
+            }
+            a if a.starts_with("-psn_") => {}
+            a => parsed.files.push(a.to_string()),
+        }
+        i += 1;
+    }
+    parsed
+}
+
+/// A nightly owns no control channel, and only options count: everything after `--` is a file, so a
+/// document named `--control` is opened rather than read as a flag.
+fn nightly_control_refused(nightly: bool, args: &[String]) -> bool {
+    let options_end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    nightly && args[..options_end].iter().any(|a| a == "--control" || a == "--control-token")
+}
+
 fn main() -> eframe::Result<()> {
-    // A confined launcher run (`gridcraft_sandbox::launch_command`) comes before everything else:
-    // it opens no window, writes no log, and becomes the program it confines.
+    // A confined launcher run (`gridcraft_sandbox::launch_command`, which a Python cell starts from
+    // this same executable) comes before everything else: it opens no window, writes no log, and
+    // becomes the program it confines. It must stay ahead of the launch profile, or a nightly build
+    // would refuse its own sandbox helper.
     let raw: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
         std::process::exit(code);
+    }
+    // Then the Launcher protocol and the version query (see `prepare_launch`).
+    let Some(arguments) = prepare_launch() else { return Ok(()) };
+    // A nightly profile owns its control tokens as well, so even a nightly build that is asked
+    // for a control server can never write the stable app's token file.
+    if let Some(root) = launch_profile::current().root() {
+        match profile_root::control_directory(root).and_then(gridcraft_mcp::control_auth::set_token_root) {
+            Ok(()) => {}
+            Err(error) => {
+                report_launch_profile_error(&error);
+                std::process::exit(2);
+            }
+        }
     }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -267,43 +430,34 @@ fn main() -> eframe::Result<()> {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft: {report}\n"));
         }
     }));
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args: Vec<String> = arguments.iter().map(|a| a.to_string_lossy().into_owned()).collect();
+    let nightly = gridcraft_ui_egui::channel::current() == gridcraft_ui_egui::channel::Channel::NightlyV1;
     // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
-    if let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    // A nightly has no updater, so it never runs this and never inherits a stable swap.
+    if !nightly
+        && let Some(done) = craft_update::self_update::finish(&gridcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>())
+    {
         if let Err(e) = done {
             eprintln!("GridCraft update helper failed: {e}");
             std::process::exit(1);
         }
         return Ok(());
     }
-    if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("GridCraft {}", env!("CARGO_PKG_VERSION"));
+    // Before `--` only: everything after it is a file, even one named `--version`.
+    if arguments.iter().take_while(|a| *a != "--").any(|a| a == "--version" || a == "-V") {
+        println!("GridCraft {}", gridcraft_ui_egui::channel::version());
         return Ok(());
     }
-    let mut control_port: Option<u16> = std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
-    let mut control_token: Option<String> = std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok();
-    let mut sample: Option<String> = None;
-    let mut files: Vec<String> = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--control" => {
-                i += 1;
-                control_port = args.get(i).and_then(|p| p.parse().ok());
-            }
-            "--control-token" => {
-                i += 1;
-                control_token = args.get(i).cloned();
-            }
-            "--sample" => {
-                i += 1;
-                sample = Some(args.get(i).cloned().unwrap_or_else(|| "sales".into()));
-            }
-            a if a.starts_with("-psn_") => {}
-            a => files.push(a.to_string()),
-        }
-        i += 1;
+    // The control channel is a stable-only service: a nightly window owns no port, writes no
+    // token and never inherits the stable app's `GRIDCRAFT_CONTROL_PORT`/`GRIDCRAFT_CONTROL_TOKEN`.
+    if nightly_control_refused(nightly, &args) {
+        eprintln!("GridCraft Nightly: the control channel is not part of the nightly channel");
+        std::process::exit(2);
     }
+    let control_port: Option<u16> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok())).flatten();
+    let control_token: Option<String> = (!nightly).then(|| std::env::var("GRIDCRAFT_CONTROL_TOKEN").ok()).flatten();
+    let parsed = desktop_args(&args, control_port, control_token);
+    let (control_port, control_token, sample, files) = (parsed.control_port, parsed.control_token, parsed.sample, parsed.files);
     // The log file lives in the settings folder, next to the preferences; opened after the
     // arguments, so `--version` leaves no file behind. Records logged until now are written to it
     // first. Runs without preferences (agents' test runs) log to standard error only, so they
@@ -311,7 +465,9 @@ fn main() -> eframe::Result<()> {
     if let Some(logger) = logger {
         match log_dir().filter(|_| prefs_enabled()) {
             Some(dir) => match logger.attach_dir(&dir) {
-                Ok(path) => log::info!("GridCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
+                Ok(path) => {
+                    log::info!("{} {}, log file {}", gridcraft_ui_egui::channel::name(), gridcraft_ui_egui::channel::version(), path.display())
+                }
                 // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
                 Err(e) => log::warn!("no log file: {e}"),
             },
@@ -326,14 +482,41 @@ fn main() -> eframe::Result<()> {
     }
     let mut app = SheetApp::new(session, services());
     app.watch_desktop_theme();
-    app.start_update_check();
-    let control_port = control_port;
+    // The updater is a stable-only service: a nightly is installed, replaced and updated by the
+    // Launcher, so it never checks for one, never prompts and never writes craft-update's state.
+    if !nightly {
+        app.start_update_check();
+    }
     load_prefs(&mut app);
     // Stamp the startup workbook's author from the persisted user name.
     if app.session.documents().is_empty() {
         app.session.new_workbook();
     }
     app.after_engine(); // Show warnings from the sample.
+    // Nightly session health: the record is written before the window exists and finished by
+    // `on_exit`. A record left by an interrupted run is reported once, then cleared on the next
+    // clean quit.
+    let session_watch = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let mut nightly_notice_shown = false;
+    match nightly_session::Session::begin_with_health(launch_profile::current().root(), env!("GRIDCRAFT_BUILT_VERSION")) {
+        Ok((watch, unavailable)) => {
+            if let Some(watch) = &watch
+                && watch.previous_unclean()
+            {
+                app.notice = Some(gridcraft_ui_egui::Notice {
+                    text: "The last GridCraft Nightly session did not finish cleanly. Your saved workbooks are as you left them; only unsaved changes are affected.".into(),
+                    kind: gridcraft_ui_egui::NoticeKind::Warning,
+                    action: None,
+                });
+                nightly_notice_shown = true;
+            }
+            if unavailable {
+                log::warn!("this window shares a GridCraft Nightly profile another window owns; its exit is not recorded");
+            }
+            *session_watch.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = watch;
+        }
+        Err(error) => log::warn!("Nightly session state was not written: {error}"),
+    }
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.
@@ -343,11 +526,16 @@ fn main() -> eframe::Result<()> {
     // Linux/BSD: Excel's layout — no window-manager title bar above ours; our title bar carries the
     // window controls. `GRIDCRAFT_SYSTEM_TITLEBAR=1` keeps the system frame.
     app.window_controls = cfg!(not(any(target_os = "macos", target_os = "windows"))) && std::env::var_os("GRIDCRAFT_SYSTEM_TITLEBAR").is_none();
+    // The window carries its channel's name and OS app id: a nightly window is never mistaken for
+    // the stable one by a dock, a window manager rule or the taskbar (Windows AUMID above). A
+    // Flatpak package carries its own id instead, which is what its .desktop file and portal name.
+    let window_app_id =
+        std::env::var("FLATPAK_ID").ok().filter(|id| !id.is_empty()).unwrap_or_else(|| gridcraft_ui_egui::channel::app_id().to_string());
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("GridCraft")
+        .with_title(gridcraft_ui_egui::channel::default_title())
         .with_inner_size([1440.0, 900.0])
         .with_min_inner_size([640.0, 420.0])
-        .with_app_id("ai.storyteller.gridcraft")
+        .with_app_id(window_app_id)
         .with_drag_and_drop(true)
         .with_decorations(!app.window_controls);
     if cfg!(target_os = "macos") {
@@ -358,21 +546,11 @@ fn main() -> eframe::Result<()> {
     }
     let window_builder = viewport.clone();
     let options = eframe::NativeOptions { viewport, ..Default::default() };
-    #[cfg(unix)]
+    #[cfg(target_os = "macos")]
     let mut options = options;
     // Intel Macs: Metal's compiler aborts on wgpu's indirect-validation shaders (see graphics.rs).
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; GRIDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    #[cfg(all(unix, not(target_os = "macos")))]
-    if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) && std::env::var_os("GRIDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
-    }
     // Before eframe creates the wgpu instance: Windows starts on DirectX 12, or OpenGL when
     // DirectX 12 has no GPU driver, and never touches Vulkan unless asked (see graphics.rs).
     #[cfg(target_os = "windows")]
@@ -396,12 +574,13 @@ fn main() -> eframe::Result<()> {
     let pending = std::cell::Cell::new(Some(app));
     let run = |options: eframe::NativeOptions| {
         eframe::run_native(
-            "GridCraft",
+            gridcraft_ui_egui::channel::name(),
             options,
             Box::new(|cc| {
                 let Some(mut app) = pending.take() else {
                     return Err("the app was already created".into());
                 };
+                gridcraft_ui_egui::framework::install(&cc.egui_ctx)?;
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
@@ -410,14 +589,16 @@ fn main() -> eframe::Result<()> {
                     }
                 }
                 let windows = DocWindows::new(&mut app, window_builder.clone(), DocWindows::platform_quits_with_last_window());
-                Ok(Box::new(App(
+                Ok(Box::new(App {
                     app,
                     windows,
                     #[cfg(target_os = "macos")]
-                    None,
+                    menu: None,
                     #[cfg(target_os = "macos")]
-                    apple_events.connect(&cc.egui_ctx),
-                )))
+                    apple_events: apple_events.connect(&cc.egui_ctx),
+                    nightly: session_watch.clone(),
+                    nightly_notice_shown,
+                }))
             }),
         )
     };
@@ -425,7 +606,7 @@ fn main() -> eframe::Result<()> {
     // A graphics error before the app existed: start once more with the other backend (eframe
     // reuses its event loop for the second run). Errors after that, or from winit, are returned.
     #[cfg(target_os = "windows")]
-    if let Err(eframe::Error::Wgpu(e)) = &result
+    let result = if let Err(eframe::Error::Wgpu(e)) = &result
         && let Some(app) = pending.take()
         && let Some(backends) = graphics::fallback_backends(backend_override, first_backends)
     {
@@ -433,8 +614,14 @@ fn main() -> eframe::Result<()> {
         pending.set(Some(app));
         let mut options = retry_options;
         graphics::configure_backends(&mut options, backends);
-        return run(options);
-    }
+        run(options)
+    } else {
+        result
+    };
+    // A start that failed before the app existed never reached `on_exit`, and on the platforms
+    // where the event loop returns this is also the end of a clean exit. `finish_once` makes the
+    // second of the two calls a no-op, so a successor's record is never touched.
+    nightly_session::finish_once(&session_watch, nightly_notice_shown);
     result
 }
 
@@ -464,5 +651,77 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+#[cfg(test)]
+mod launch_separator_tests {
+    use super::*;
+    use crate::build_flavor::BuildFlavor;
+
+    /// The profile root a Launcher run is started with: absolute for the platform the test runs on.
+    /// `launch_profile::parse` refuses a root that is relative there, and a POSIX path has no drive
+    /// or UNC prefix, so it is not absolute on Windows - where CI runs these tests too.
+    fn launcher_root() -> &'static str {
+        if cfg!(windows) { r"C:\NightlyData\profiles\gridcraft" } else { "/nightly-data/profiles/gridcraft" }
+    }
+
+    /// The argv the Launcher starts a nightly with, extended by `tail`, as the start then reads it.
+    fn launcher_argv(tail: &[&str]) -> Vec<String> {
+        let mut argv: Vec<std::ffi::OsString> =
+            ["--launch-profile", "nightly-v1", "--profile-root", launcher_root(), "--"].iter().map(std::ffi::OsString::from).collect();
+        argv.extend(tail.iter().map(std::ffi::OsString::from));
+        launch_profile::parse(argv).unwrap().args.iter().map(|a| a.to_string_lossy().into_owned()).collect()
+    }
+
+    #[test]
+    fn the_other_platforms_root_spelling_is_refused_as_relative() {
+        let foreign = if cfg!(windows) { "/nightly-data/profiles/gridcraft" } else { r"C:\NightlyData\profiles\gridcraft" };
+        let argv: Vec<std::ffi::OsString> =
+            ["--launch-profile", "nightly-v1", "--profile-root", foreign, "--"].iter().map(std::ffi::OsString::from).collect();
+        assert!(launch_profile::parse(argv).is_err(), "a root that is not absolute on this platform must be refused");
+    }
+
+    #[test]
+    fn the_launchers_separator_is_never_a_file() {
+        let parsed = desktop_args(&launcher_argv(&[]), None, None);
+        assert_eq!(parsed, DesktopArgs::default(), "the separator must not reach the file list");
+    }
+
+    #[test]
+    fn files_after_the_separator_are_opened_in_order() {
+        assert_eq!(desktop_args(&launcher_argv(&["a.file"]), None, None).files, ["a.file"]);
+        let parsed = desktop_args(&launcher_argv(&["a.file", "--version", "--sample"]), None, None);
+        assert_eq!(parsed.files, ["a.file", "--version", "--sample"], "after -- every word is a file");
+        assert_eq!((parsed.sample, parsed.control_port), (None, None));
+    }
+
+    #[test]
+    fn a_control_flag_after_the_separator_is_a_file_not_a_refusal() {
+        let argv = launcher_argv(&["--control"]);
+        assert!(!nightly_control_refused(true, &argv), "a document named --control must open, not refuse");
+        let parsed = desktop_args(&argv, None, None);
+        assert_eq!((parsed.control_port, parsed.files), (None, vec!["--control".to_string()]));
+    }
+
+    #[test]
+    fn a_control_flag_before_the_separator_still_names_the_port() {
+        let with_file = vec!["--control".to_string(), "7979".to_string(), "--".to_string(), "a.file".to_string()];
+        assert!(nightly_control_refused(true, &with_file));
+        let parsed = desktop_args(&with_file, None, None);
+        assert_eq!((parsed.control_port, parsed.files), (Some(7979), vec!["a.file".to_string()]));
+        let plain = vec!["--control".to_string(), "7979".to_string()];
+        assert!(nightly_control_refused(true, &plain));
+        let parsed = desktop_args(&plain, None, None);
+        assert_eq!((parsed.control_port, parsed.files), (Some(7979), Vec::<String>::new()));
+        assert!(!nightly_control_refused(false, &plain), "the stable app keeps its control channel");
+    }
+
+    #[test]
+    fn a_refusal_never_blocks_on_a_modal_before_the_event_loop_on_macos() {
+        assert!(refusal_dialog(BuildFlavor::NightlyV1, true, false), "a desktop refusal still shows the box where one renders");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, true, true), "macOS has no run loop yet: the modal would hang");
+        assert!(!refusal_dialog(BuildFlavor::NightlyV1, false, false), "a headless session has no box");
+        assert!(!refusal_dialog(BuildFlavor::Stable, true, false), "only a nightly refusal explains itself in a box");
     }
 }

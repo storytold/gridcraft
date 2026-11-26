@@ -49,6 +49,7 @@ fn primary_text_bounds(galley: &egui::Galley) -> (f32, f32) {
 #[test]
 fn cjk_and_latin_share_a_baseline_in_cells_and_window_titles() {
     let ctx = Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     ctx.set_pixels_per_point(2.0);
     activate(&ctx, theme::font_definitions_for_language(Language::Zh));
     for role in [theme::CELL, theme::CELL_BOLD, theme::CELL_ITALIC, theme::CELL_BOLD_ITALIC, theme::UI_BOLD] {
@@ -72,6 +73,7 @@ fn mixed_script_wrapping_keeps_fixed_row_clips_alignment_and_editor_height() {
     const TEXT: &str = "中文ABC2026\n文字xyz123";
     for zoom in [80, 100, 280] {
         let ctx = Context::default();
+        gridcraft_ui_egui::framework::install_headless(&ctx);
         ctx.set_pixels_per_point(2.0);
         let mut session = Session::new();
         session.new_workbook();
@@ -139,6 +141,7 @@ fn same_row_cells_keep_their_baseline_with_baseline_aligned_fallbacks() {
         for valign in ["Top", "Bottom", "Center"] {
             let mixed = if wraps[1] && valign == "Top" { "Hello\n中文" } else { "Hello 中文" };
             let ctx = Context::default();
+            gridcraft_ui_egui::framework::install_headless(&ctx);
             ctx.set_pixels_per_point(2.0);
             activate(&ctx, theme::font_definitions_for_language(Language::Zh));
             let mut session = Session::new();
