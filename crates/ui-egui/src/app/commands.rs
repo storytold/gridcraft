@@ -165,7 +165,9 @@ impl SheetApp {
             && let Some(sh) = d.wb.active()
         {
             m.insert("sheet".into(), json!(sh.name));
-            m.insert("range".into(), json!(d.selection.current().a1()));
+            // The area a command takes from the selection (`target_range`): its first.
+            let area = d.selection.ranges.first().copied().unwrap_or_else(|| d.selection.current());
+            m.insert("range".into(), json!(area.a1()));
         }
         bound
     }

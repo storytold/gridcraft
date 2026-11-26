@@ -266,4 +266,14 @@ mod tests {
         assert!(matches!(err, EngineError::Confirm(_)), "{err}");
         assert_eq!(text(&s, "B1"), SENTENCE);
     }
+
+    #[test]
+    fn a_selection_of_several_areas_is_refused() {
+        let mut s = session();
+        s.execute("cell.set", json!({"cell": "A1", "input": SENTENCE})).unwrap();
+        s.execute("selection.set", json!({"range": "A1,D1"})).unwrap();
+        let err = s.execute("edit.fillJustify", json!({})).unwrap_err().to_string();
+        assert!(err.contains("one range"), "{err}");
+        assert_eq!(text(&s, "A1"), SENTENCE);
+    }
 }
