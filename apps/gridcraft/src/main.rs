@@ -381,6 +381,13 @@ fn desktop_args(args: &[String], control_port: Option<u16>, control_token: Optio
     parsed
 }
 
+/// A nightly owns no control channel, and only options count: everything after `--` is a file, so a
+/// document named `--control` is opened rather than read as a flag.
+fn nightly_control_refused(nightly: bool, args: &[String]) -> bool {
+    let options_end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    nightly && args[..options_end].iter().any(|a| a == "--control" || a == "--control-token")
+}
+
 fn main() -> eframe::Result<()> {
     // A confined launcher run (`gridcraft_sandbox::launch_command`, which a Python cell starts from
     // this same executable) comes before everything else: it opens no window, writes no log, and
@@ -443,7 +450,7 @@ fn main() -> eframe::Result<()> {
     }
     // The control channel is a stable-only service: a nightly window owns no port, writes no
     // token and never inherits the stable app's `GRIDCRAFT_CONTROL_PORT`/`GRIDCRAFT_CONTROL_TOKEN`.
-    if nightly && args.iter().any(|a| a == "--control" || a == "--control-token") {
+    if nightly_control_refused(nightly, &args) {
         eprintln!("GridCraft Nightly: the control channel is not part of the nightly channel");
         std::process::exit(2);
     }
@@ -674,6 +681,27 @@ mod launch_separator_tests {
         let parsed = desktop_args(&launcher_argv(&["a.file", "--version", "--sample"]), None, None);
         assert_eq!(parsed.files, ["a.file", "--version", "--sample"], "after -- every word is a file");
         assert_eq!((parsed.sample, parsed.control_port), (None, None));
+    }
+
+    #[test]
+    fn a_control_flag_after_the_separator_is_a_file_not_a_refusal() {
+        let argv = launcher_argv(&["--control"]);
+        assert!(!nightly_control_refused(true, &argv), "a document named --control must open, not refuse");
+        let parsed = desktop_args(&argv, None, None);
+        assert_eq!((parsed.control_port, parsed.files), (None, vec!["--control".to_string()]));
+    }
+
+    #[test]
+    fn a_control_flag_before_the_separator_still_names_the_port() {
+        let with_file = vec!["--control".to_string(), "7979".to_string(), "--".to_string(), "a.file".to_string()];
+        assert!(nightly_control_refused(true, &with_file));
+        let parsed = desktop_args(&with_file, None, None);
+        assert_eq!((parsed.control_port, parsed.files), (Some(7979), vec!["a.file".to_string()]));
+        let plain = vec!["--control".to_string(), "7979".to_string()];
+        assert!(nightly_control_refused(true, &plain));
+        let parsed = desktop_args(&plain, None, None);
+        assert_eq!((parsed.control_port, parsed.files), (Some(7979), Vec::<String>::new()));
+        assert!(!nightly_control_refused(false, &plain), "the stable app keeps its control channel");
     }
 
     #[test]
