@@ -25,7 +25,12 @@ mod font_setup;
 
 pub use font_fallback::symbol_face_installed;
 #[cfg(test)]
-use font_fallback::{cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, symbols_more, thai};
+use font_fallback::{
+    PREFERRED_ARABIC, arabic, cjk_han_japanese, cjk_han_simplified, cjk_hangul, fallback_faces, hebrew, lao, load_faces, preferred_file,
+    symbols_more, thai,
+};
+#[cfg(all(test, unix, not(target_os = "macos")))]
+use font_fallback::{covers_arabic, fontconfig_arabic, parse_fc_match};
 use font_setup::pick;
 pub use font_setup::{
     CELL, CELL_BOLD, CELL_BOLD_ITALIC, CELL_ITALIC, CraftFont, HanOrder, MATH, MATH_BOLD, MATH_ITALIC, MONO, SERIF, UI, UI_BOLD, available_text,
@@ -33,7 +38,7 @@ pub use font_setup::{
     font_definitions, font_definitions_for_language, font_definitions_with, pinned_font_definitions, symbol_fallback, ui_bold, ui_font,
 };
 #[cfg(test)]
-use font_setup::{candidates, craft_font_faces, try_load};
+use font_setup::{candidates, craft_font_faces, font_definitions_impl, try_load};
 #[cfg(test)]
 pub(crate) use font_setup::{drop_unparseable_fonts, font_parses};
 
@@ -295,6 +300,12 @@ impl Tokens {
         if ctx.global_style().visuals.dark_mode { Tokens::dark() } else { Tokens::light() }
     }
 
+    /// The ring around a focused control on a popup or menu surface. The sheet's own focus colour
+    /// is too dim on the dark popup (2.5:1), so this follows the theme's accent instead.
+    pub fn popup_focus_ring(&self) -> Color32 {
+        self.accent
+    }
+
     /// One colour of the category palette.
     pub fn cat(&self, c: Cat) -> Color32 {
         self.cat.get(c as usize).copied().unwrap_or(self.text)
@@ -435,6 +446,9 @@ mod contrast_tests {
         add("slider fill on sheet", t.sheet_fill, t.grid_bg, GLYPH);
         add("slider fill on track", t.sheet_fill, t.sheet_track, GLYPH);
         add("control focus ring on sheet", t.sheet_focus, t.grid_bg, GLYPH);
+        for (name, bg) in [("menu", t.menu_bg), ("hover", t.hover), ("pressed", t.pressed)] {
+            add(&format!("popup control focus ring on {name}"), t.popup_focus_ring(), bg, GLYPH);
+        }
         add("recording dot on ribbon", t.recording, t.ribbon, GLYPH);
         add("recording dot on status bar", t.recording, t.status_bar, GLYPH);
         for (name, c) in [
