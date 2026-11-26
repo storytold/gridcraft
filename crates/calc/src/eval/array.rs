@@ -190,15 +190,12 @@ fn concat_arrays(x: &Value, y: &Value, sys: gridcraft_core::DateSystem, budget: 
 }
 
 fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSystem) -> Value {
-    if let Value::Error(e) = a {
-        return Value::Error(*e);
-    }
-    if let Value::Error(e) = b {
-        return Value::Error(*e);
-    }
-    let num = |f: fn(f64, f64) -> Value| match (a.to_number_in(sys), b.to_number_in(sys)) {
-        (Ok(x), Ok(y)) => f(x, y),
-        (Err(e), _) | (_, Err(e)) => Value::Error(e),
+    let num = |f: fn(f64, f64) -> Value| match a.to_number_in(sys) {
+        Err(e) => Value::Error(e),
+        Ok(x) => match b.to_number_in(sys) {
+            Err(e) => Value::Error(e),
+            Ok(y) => f(x, y),
+        },
     };
     use std::cmp::Ordering::*;
     match op {
@@ -215,16 +212,34 @@ fn binary_scalar(op: BinOp, a: &Value, b: &Value, sys: gridcraft_core::DateSyste
                 Value::number(x.powf(y))
             }
         }),
-        BinOp::Concat => match (a.to_text(), b.to_text()) {
-            (Ok(x), Ok(y)) => Value::text(gridcraft_core::cap_text(x + &y)),
-            (Err(e), _) | (_, Err(e)) => Value::Error(e),
+        BinOp::Concat => match a.to_text() {
+            Err(e) => Value::Error(e),
+            Ok(x) => match b.to_text() {
+                Err(e) => Value::Error(e),
+                Ok(y) => Value::text(gridcraft_core::cap_text(x + &y)),
+            },
         },
-        BinOp::Eq => Value::Bool(compare(a, b) == Equal),
-        BinOp::Ne => Value::Bool(compare(a, b) != Equal),
-        BinOp::Lt => Value::Bool(compare(a, b) == Less),
-        BinOp::Gt => Value::Bool(compare(a, b) == Greater),
-        BinOp::Le => Value::Bool(compare(a, b) != Greater),
-        BinOp::Ge => Value::Bool(compare(a, b) != Less),
+        BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+            if let Value::Error(e) = a {
+                return Value::Error(*e);
+            }
+            if let Value::Error(e) = b {
+                return Value::Error(*e);
+            }
+            let ord = compare(a, b);
+            let matched = match op {
+                BinOp::Eq => ord == Equal,
+                BinOp::Ne => ord != Equal,
+                BinOp::Lt => ord == Less,
+                BinOp::Gt => ord == Greater,
+                BinOp::Le => ord != Greater,
+                BinOp::Ge => ord != Less,
+                BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Pow | BinOp::Concat | BinOp::Range | BinOp::Union | BinOp::Intersect => {
+                    false
+                }
+            };
+            Value::Bool(matched)
+        }
         BinOp::Range | BinOp::Union | BinOp::Intersect => Value::Error(CellError::Value),
     }
 }

@@ -3297,3 +3297,378 @@ fn computed_criterion_that_reenters_itself_is_not_met() {
     t.set("B60", "=DCOUNT($F$2:$G$7,\"age\",N46:N47)");
     assert_eq!(t.num("B60"), 0.0);
 }
+
+#[test]
+fn getpivotdata_matches_blank_items_and_numeric_tolerance_and_captions() {
+    use gridcraft_model::{PivotDataCell, PivotField, PivotFunc, PivotItemRef, PivotTable, PivotValue};
+    let mut t = T::new();
+    // Synthetic rendered PivotTable at A3:C6 with an empty intersection cell (B5) and a (blank) row item (A6).
+    t.set("A3", "Row Labels");
+    t.set("B3", "1");
+    t.set("C3", "Grand Total");
+    t.set("A4", "Alpha");
+    t.set("B4", "42");
+    t.set("C4", "42");
+    t.set("A5", "Beta");
+    t.set("C5", "10");
+    t.set("A6", "(blank)");
+    t.set("B6", "7");
+    t.set("C6", "7");
+    let pt = PivotTable {
+        id: 1,
+        name: "Pivot1".into(),
+        anchor: CellRef::parse("A3").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A3:C6"),
+        rows: vec![PivotField { source_col: "Group".into(), caption: Some("DisplayGroup".into()), ..Default::default() }],
+        columns: vec![PivotField { source_col: "Bin".into(), ..Default::default() }],
+        values: vec![PivotValue { source_col: "Amt".into(), func: PivotFunc::Sum, name: "Sum of Amt".into(), ..Default::default() }],
+        ..Default::default()
+    };
+    let it = |f: &str, l: &str, v: Value| PivotItemRef { field: f.into(), label: l.into(), value: v };
+    pt.data_index.set_cells(vec![
+        PivotDataCell {
+            data_field: "Sum of Amt".into(),
+            source_col: "Amt".into(),
+            items: vec![it("Group", "Alpha", Value::text("Alpha")), it("Bin", "1", Value::Number(1.0 + 1e-13))],
+            row: 1,
+            col: 1,
+        },
+        PivotDataCell {
+            data_field: "Sum of Amt".into(),
+            source_col: "Amt".into(),
+            items: vec![it("Group", "Beta", Value::text("Beta")), it("Bin", "1", Value::Number(1.0))],
+            row: 2,
+            col: 1,
+        },
+        PivotDataCell {
+            data_field: "Sum of Amt".into(),
+            source_col: "Amt".into(),
+            items: vec![it("Group", "(blank)", Value::Empty), it("Bin", "1", Value::Number(1.0))],
+            row: 3,
+            col: 1,
+        },
+        PivotDataCell {
+            data_field: "Sum of Amt".into(),
+            source_col: "Amt".into(),
+            items: vec![it("Group", "Zero", Value::text("Zero")), it("Bin", "0", Value::Number(0.0))],
+            row: 1,
+            col: 2,
+        },
+    ]);
+    t.wb.sheet_mut(0).unwrap().pivots.push(pt);
+
+    // Omitted item arg `,,` and `""` both match the `(blank)` item.
+    t.set("E1", r#"=GETPIVOTDATA("Sum of Amt",$A$3,"Group",,"Bin",1)"#);
+    t.set("E2", r#"=GETPIVOTDATA("Sum of Amt",$A$3,"Group","","Bin",1)"#);
+    // 1e-12 relative numeric tolerance matches `1` against `1 + 1e-13`, and field caption matches `Group`.
+    t.set("E3", r#"=GETPIVOTDATA("Amt",$A$3,"DisplayGroup","Alpha","Bin",1)"#);
+    // Empty intersection cell in the report returns Empty (coercing to 0 in `<>0`), not `#REF!`.
+    t.set("E4", r#"=IF(GETPIVOTDATA("Amt",$A$3,"Group","Beta","Bin",1)<>0,1,0)"#);
+    // Pure relative tolerance (no 1.0 absolute floor): `0` matches `0`, NOT `1e-13`.
+    t.set("E5", r#"=GETPIVOTDATA("Amt",$A$3,"Group","Zero","Bin",0)"#);
+    t.set("E6", r#"=GETPIVOTDATA("Amt",$A$3,"Group","Zero","Bin",1E-13)"#);
+    assert_eq!((t.num("E1"), t.num("E2"), t.num("E3"), t.num("E4"), t.num("E5")), (7.0, 7.0, 42.0, 0.0, 42.0));
+    assert_eq!(t.get("E6"), Value::Error(CellError::Ref));
+}
+
+#[test]
+fn getpivotdata_prefers_exact_numeric_over_tolerance_and_label_hit() {
+    use gridcraft_model::{PivotDataCell, PivotField, PivotFunc, PivotItemRef, PivotTable, PivotValue};
+    let mut t = T::new();
+    t.set("A3", "Row Labels");
+    t.set("B3", "1");
+    t.set("A4", "Near-near");
+    t.set("B4", "10");
+    t.set("A5", "Near-exact");
+    t.set("B5", "20");
+    t.set("A6", "Label-0.6");
+    t.set("B6", "5");
+    t.set("A7", "Label-tol");
+    t.set("B7", "30");
+    t.set("A8", "LabelOnly");
+    t.set("B8", "50");
+    let pt = PivotTable {
+        id: 1,
+        name: "Pivot1".into(),
+        anchor: CellRef::parse("A3").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A3:B8"),
+        rows: vec![PivotField { source_col: "Group".into(), ..Default::default() }],
+        columns: vec![PivotField { source_col: "Bin".into(), ..Default::default() }],
+        values: vec![PivotValue { source_col: "Amt".into(), func: PivotFunc::Sum, name: "Sum of Amt".into(), ..Default::default() }],
+        ..Default::default()
+    };
+    let it = |f: &str, l: &str, v: Value| PivotItemRef { field: f.into(), label: l.into(), value: v };
+    let cell = |group: &str, val: f64, row: u32| PivotDataCell {
+        data_field: "Sum of Amt".into(),
+        source_col: "Amt".into(),
+        items: vec![it("Group", group, Value::text(group)), it("Bin", "1", Value::Number(val))],
+        row,
+        col: 1,
+    };
+    pt.data_index.set_cells(vec![
+        // `0.9999999999995` precedes `1.0` and both display as `"1"`.
+        cell("Near", 0.999_999_999_999_5, 1),
+        cell("Near", 1.0, 2),
+        // `0.6` (label hit `"1"`) precedes `1.0 + 1e-13` (tolerance hit).
+        cell("Label", 0.6, 3),
+        cell("Label", 1.0 + 1e-13, 4),
+        // Only a formatted-label hit exists.
+        cell("LabelOnly", 0.6, 5),
+    ]);
+    t.wb.sheet_mut(0).unwrap().pivots.push(pt);
+
+    // Exact `1` must hit `1.0` (20), not the preceding near-equal `0.9999999999995` (10).
+    t.set("E1", r#"=GETPIVOTDATA("Amt",$A$3,"Group","Near","Bin",1)"#);
+    // Exact `0.9999999999995` still hits its own item (10).
+    t.set("E2", r#"=GETPIVOTDATA("Amt",$A$3,"Group","Near","Bin",0.9999999999995)"#);
+    // No exact item: `1 + 6e-13` is within 1e-12 of `1.0` (not `0.9999999999995`) -> 20.
+    t.set("E3", r#"=GETPIVOTDATA("Amt",$A$3,"Group","Near","Bin",1+6E-13)"#);
+    // No exact item: `1 + 1e-13` matches via tolerance, preferring the nearest item (`1.0`, 20)
+    // over the earlier but farther tolerant item (`0.9999999999995`, 10).
+    t.set("E4", r#"=GETPIVOTDATA("Amt",$A$3,"Group","Near","Bin",1+1E-13)"#);
+    // No exact item: tolerance match (`1 + 1e-13`, 30) beats formatted-label hash hit (`0.6`, 5).
+    t.set("E5", r#"=GETPIVOTDATA("Amt",$A$3,"Group","Label","Bin",1)"#);
+    // Neither exact nor tolerant: falls back to formatted-label hit (`0.6`, 50).
+    t.set("E6", r#"=GETPIVOTDATA("Amt",$A$3,"Group","LabelOnly","Bin",1)"#);
+    assert_eq!((t.num("E1"), t.num("E2"), t.num("E3"), t.num("E4"), t.num("E5"), t.num("E6")), (20.0, 10.0, 20.0, 20.0, 30.0, 50.0));
+}
+
+#[test]
+fn getpivotdata_keeps_blank_queries_separate_from_literal_blank_item() {
+    use gridcraft_model::{PivotDataCell, PivotField, PivotFunc, PivotItemRef, PivotTable, PivotValue};
+    let make = |items: Vec<(Value, &str)>| {
+        let mut t = T::new();
+        t.set("A3", "Row Labels");
+        t.set("B3", "Sum of Amt");
+        let mut cells = Vec::new();
+        for (idx, (val, total)) in items.iter().enumerate() {
+            let r = idx as u32 + 1;
+            t.set(&format!("A{}", 3 + r), "(blank)");
+            t.set(&format!("B{}", 3 + r), total);
+            cells.push(PivotDataCell {
+                data_field: "Sum of Amt".into(),
+                source_col: "Amt".into(),
+                items: vec![PivotItemRef { field: "Group".into(), label: "(blank)".into(), value: val.clone() }],
+                row: r,
+                col: 1,
+            });
+        }
+        let pt = PivotTable {
+            id: 1,
+            name: "Pivot1".into(),
+            anchor: CellRef::parse("A3").unwrap(),
+            last_range: gridcraft_core::RangeRef::parse(&format!("A3:B{}", 3 + items.len())),
+            rows: vec![PivotField { source_col: "Group".into(), ..Default::default() }],
+            values: vec![PivotValue { source_col: "Amt".into(), func: PivotFunc::Sum, name: "Sum of Amt".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        pt.data_index.set_cells(cells);
+        t.wb.sheet_mut(0).unwrap().pivots.push(pt);
+        t.set("E1", r#"=GETPIVOTDATA("Amt",$A$3,"Group","")"#);
+        t.set("E2", r#"=GETPIVOTDATA("Amt",$A$3,"Group",)"#);
+        t.set("E3", r#"=GETPIVOTDATA("Amt",$A$3,"Group",Z1)"#);
+        t.set("E4", r#"=GETPIVOTDATA("Amt",$A$3,"Group","(blank)")"#);
+        t
+    };
+
+    // Literal `"(blank)"` precedes genuinely empty item: blank queries hit empty (7), literal hits literal (100).
+    let lit_first = make(vec![(Value::text("(blank)"), "100"), (Value::Empty, "7")]);
+    assert_eq!((lit_first.num("E1"), lit_first.num("E2"), lit_first.num("E3"), lit_first.num("E4")), (7.0, 7.0, 7.0, 100.0));
+
+    // Genuinely empty item precedes literal `"(blank)"`: still kept separate.
+    let empty_first = make(vec![(Value::Empty, "7"), (Value::text("(blank)"), "100")]);
+    assert_eq!((empty_first.num("E1"), empty_first.num("E2"), empty_first.num("E3"), empty_first.num("E4")), (7.0, 7.0, 7.0, 100.0));
+
+    // Only literal `"(blank)"` exists: blank queries must NOT match it (`#REF!`), literal matches (100).
+    let lit_only = make(vec![(Value::text("(blank)"), "100")]);
+    assert_eq!(lit_only.get("E1"), Value::Error(CellError::Ref));
+    assert_eq!(lit_only.get("E2"), Value::Error(CellError::Ref));
+    assert_eq!(lit_only.get("E3"), Value::Error(CellError::Ref));
+    assert_eq!(lit_only.num("E4"), 100.0);
+
+    // Only genuinely empty item exists: blank queries match it, and literal `"(blank)"` falls back to it.
+    let empty_only = make(vec![(Value::Empty, "7")]);
+    assert_eq!((empty_only.num("E1"), empty_only.num("E2"), empty_only.num("E3"), empty_only.num("E4")), (7.0, 7.0, 7.0, 7.0));
+}
+
+#[test]
+fn getpivotdata_per_pair_scoring_mixed_pairs_and_blank_plus_bin() {
+    use gridcraft_model::{PivotDataCell, PivotField, PivotFunc, PivotItemRef, PivotTable, PivotValue};
+    let it = |f: &str, l: &str, v: Value| PivotItemRef { field: f.into(), label: l.into(), value: v };
+
+    // 1. Mixed numeric pairs: fields `A` and `B` both formatted `"0"`.
+    //    Row 1: `(A=0.6, B=0.6) -> 5` (2 fallbacks); Row 2: `(A=1.0, B=0.6) -> 20` (1 exact + 1 fallback).
+    //    Query `(A=1, B=1)` must pick Row 2 (`20`), not Row 1 (`5`).
+    let mut t = T::new();
+    t.set("A3", "A");
+    t.set("B3", "1");
+    t.set("A4", "1");
+    t.set("B4", "5");
+    t.set("A5", "1");
+    t.set("B5", "20");
+    let pt = PivotTable {
+        id: 1,
+        name: "Pivot1".into(),
+        anchor: CellRef::parse("A3").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A3:B5"),
+        rows: vec![PivotField { source_col: "A".into(), ..Default::default() }],
+        columns: vec![PivotField { source_col: "B".into(), ..Default::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..Default::default() }],
+        ..Default::default()
+    };
+    pt.data_index.set_cells(vec![
+        PivotDataCell {
+            data_field: "Sum of Sales".into(),
+            source_col: "Sales".into(),
+            items: vec![it("A", "1", Value::Number(0.6)), it("B", "1", Value::Number(0.6))],
+            row: 1,
+            col: 1,
+        },
+        PivotDataCell {
+            data_field: "Sum of Sales".into(),
+            source_col: "Sales".into(),
+            items: vec![it("A", "1", Value::Number(1.0)), it("B", "1", Value::Number(0.6))],
+            row: 2,
+            col: 1,
+        },
+    ]);
+    t.wb.sheet_mut(0).unwrap().pivots.push(pt);
+    t.set("E1", r#"=GETPIVOTDATA("Sales",$A$3,"A",1,"B",1)"#);
+    assert_eq!(t.num("E1"), 20.0);
+
+    // 2. Empty-first Group + literal `"(blank)"` item + Bin label fallback (`0.6` formatted `"1"`):
+    //    querying `Group="(blank)"` + `Bin=1` must hit the literal `"(blank)"` cell (1 exact + 1 fallback),
+    //    not the preceding Empty cell (2 fallbacks), while blank `Group=""` + `Bin=1` hits the Empty cell.
+    let mut t2 = T::new();
+    t2.set("A3", "Group");
+    t2.set("B3", "1");
+    t2.set("A4", "(blank)");
+    t2.set("B4", "7");
+    t2.set("A5", "(blank)");
+    t2.set("B5", "100");
+    let pt2 = PivotTable {
+        id: 1,
+        name: "Pivot1".into(),
+        anchor: CellRef::parse("A3").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A3:B5"),
+        rows: vec![PivotField { source_col: "Group".into(), ..Default::default() }],
+        columns: vec![PivotField { source_col: "Bin".into(), ..Default::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..Default::default() }],
+        ..Default::default()
+    };
+    pt2.data_index.set_cells(vec![
+        PivotDataCell {
+            data_field: "Sum of Sales".into(),
+            source_col: "Sales".into(),
+            items: vec![it("Group", "(blank)", Value::Empty), it("Bin", "1", Value::Number(0.6))],
+            row: 1,
+            col: 1,
+        },
+        PivotDataCell {
+            data_field: "Sum of Sales".into(),
+            source_col: "Sales".into(),
+            items: vec![it("Group", "(blank)", Value::text("(blank)")), it("Bin", "1", Value::Number(0.6))],
+            row: 2,
+            col: 1,
+        },
+    ]);
+    t2.wb.sheet_mut(0).unwrap().pivots.push(pt2);
+    t2.set("E1", r#"=GETPIVOTDATA("Sales",$A$3,"Group","(blank)","Bin",1)"#);
+    t2.set("E2", r#"=GETPIVOTDATA("Sales",$A$3,"Group","","Bin",1)"#);
+    t2.set("E3", r#"=GETPIVOTDATA("Sales",$A$3,"Group",,"Bin",1)"#);
+    assert_eq!((t2.num("E1"), t2.num("E2"), t2.num("E3")), (100.0, 7.0, 7.0));
+}
+
+#[test]
+fn getpivotdata_rejects_duplicate_canonical_and_caption_alias() {
+    use gridcraft_model::{PivotDataCell, PivotField, PivotFunc, PivotItemRef, PivotTable, PivotValue};
+    let mut t = T::new();
+    t.set("A3", "Area");
+    t.set("B3", "Widget");
+    t.set("A4", "East");
+    t.set("B4", "42");
+    let pt = PivotTable {
+        id: 1,
+        name: "Pivot1".into(),
+        anchor: CellRef::parse("A3").unwrap(),
+        last_range: gridcraft_core::RangeRef::parse("A3:B4"),
+        rows: vec![PivotField { source_col: "Region".into(), caption: Some("Area".into()), ..Default::default() }],
+        columns: vec![PivotField { source_col: "Product".into(), ..Default::default() }],
+        values: vec![PivotValue { source_col: "Sales".into(), func: PivotFunc::Sum, name: "Sum of Sales".into(), ..Default::default() }],
+        ..Default::default()
+    };
+    let it = |f: &str, l: &str, v: Value| PivotItemRef { field: f.into(), label: l.into(), value: v };
+    pt.data_index.set_cells(vec![PivotDataCell {
+        data_field: "Sum of Sales".into(),
+        source_col: "Sales".into(),
+        items: vec![it("Region", "East", Value::text("East")), it("Product", "Widget", Value::text("Widget"))],
+        row: 1,
+        col: 1,
+    }]);
+    t.wb.sheet_mut(0).unwrap().pivots.push(pt);
+    // Valid single-reference queries by canonical name or custom caption still work.
+    t.set("E1", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East","Product","Widget")"#);
+    t.set("E2", r#"=GETPIVOTDATA("Sales",$A$3,"Area","East","Product","Widget")"#);
+    // Naming the same field via canonical name AND custom caption must return #REF! (not match Region twice).
+    t.set("E3", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East","Area","East")"#);
+    t.set("E4", r#"=GETPIVOTDATA("Sales",$A$3,"Area","East","Region","East")"#);
+    assert_eq!((t.num("E1"), t.num("E2")), (42.0, 42.0));
+    assert_eq!(t.get("E3"), Value::Error(CellError::Ref));
+    assert_eq!(t.get("E4"), Value::Error(CellError::Ref));
+}
+
+#[test]
+fn criteria_range_error_propagates_through_ifs_functions() {
+    let mut t = T::new();
+    for (r, (k, v)) in [("a", "10"), ("a", "20"), ("b", "30")].iter().enumerate() {
+        t.set(&format!("A{}", r + 1), k);
+        t.set(&format!("B{}", r + 1), v);
+    }
+    t.set("D1", "missing");
+    t.set("E1", r#"=AVERAGEIFS(B1:B3,A1:A3,"a",OFFSET(B1:B3,0,MATCH(D1,A1:A3,0)),">0")"#);
+    t.set("E2", r#"=SUMIFS(B1:B3,A1:A3,"a",OFFSET(B1:B3,0,MATCH(D1,A1:A3,0)),">0")"#);
+    t.set("E3", r#"=COUNTIFS(A1:A3,"a",OFFSET(B1:B3,0,MATCH(D1,A1:A3,0)),">0")"#);
+    t.set("E4", r#"=MAXIFS(B1:B3,OFFSET(B1:B3,0,MATCH(D1,A1:A3,0)),">0")"#);
+    t.set("E5", r#"=MINIFS(B1:B3,OFFSET(B1:B3,0,MATCH(D1,A1:A3,0)),">0")"#);
+    for cell in ["E1", "E2", "E3", "E4", "E5"] {
+        assert_eq!(t.get(cell), Value::Error(CellError::NA), "{cell} should propagate #N/A");
+    }
+}
+
+#[test]
+fn array_if_dereferences_selected_blank_cells_to_zero() {
+    let mut t = T::new();
+    // A1:A4 are flags (1, 1, 1, 0); B1:B4 are (10, 20, <blank>, 99).
+    t.set("A1", "1");
+    t.set("A2", "1");
+    t.set("A3", "1");
+    t.set("A4", "0");
+    t.set("B1", "10");
+    t.set("B2", "20");
+    t.set("B4", "99");
+    // Array-mode IF selects {10, 20, 0, FALSE}: COUNT sees 3 numbers (including 0 from blank B3),
+    // AVERAGE is (10 + 20 + 0) / 3 = 10, and STDEV.P is sqrt(((0)^2 + 10^2 + (-10)^2) / 3) = sqrt(200/3).
+    t.set("D1", "=COUNT(IF(A1:A4=1,B1:B4))");
+    t.set("D2", "=AVERAGE(IF(A1:A4=1,B1:B4))");
+    t.set("D3", "=STDEV.P(IF(A1:A4=1,B1:B4))");
+    assert_eq!(t.num("D1"), 3.0);
+    assert_eq!(t.num("D2"), 10.0);
+    assert!((t.num("D3") - (200.0_f64 / 3.0).sqrt()).abs() < 1e-12);
+}
+
+#[test]
+fn binary_arithmetic_coerces_left_operand_before_right_error() {
+    let mut t = T::new();
+    t.set("A1", "no");
+    t.set("B1", "=NA()");
+    t.set("C1", "=A1-#REF!");
+    t.set("C2", "=A1-B1");
+    t.set("C3", "=A1+1/0");
+    t.set("C4", "=(1/0)-#REF!");
+    t.set("C5", "=1-#REF!");
+    assert_eq!(t.get("C1"), Value::Error(CellError::Value));
+    assert_eq!(t.get("C2"), Value::Error(CellError::Value));
+    assert_eq!(t.get("C3"), Value::Error(CellError::Value));
+    assert_eq!(t.get("C4"), Value::Error(CellError::Div0));
+    assert_eq!(t.get("C5"), Value::Error(CellError::Ref));
+}

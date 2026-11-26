@@ -1119,6 +1119,7 @@ mod tests {
             sheet_exts: vec![],
             sheet_exts_dropped: vec![],
             known_function: None,
+            format_value: None,
             python: Default::default(),
             chart_parts: vec![],
             cells: 0,
@@ -1126,6 +1127,9 @@ mod tests {
             legacy_formulas: vec![],
             pivot_charts: vec![],
             chart_budget: crate::chart::ChartReadBudget::new(),
+            pivot_index_retained_bytes: 0,
+            pivot_index_iterations: 0,
+            pivot_index_workbook_work_bytes: 0,
         }
     }
 

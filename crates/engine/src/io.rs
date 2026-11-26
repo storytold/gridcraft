@@ -276,6 +276,13 @@ fn sane_python_output(v: &gridcraft_core::Value) -> bool {
     }
 }
 
+/// Resolves the number format used for OOXML PivotTable item labels when reading `.xlsx` files.
+/// Uses [`crate::display::parsed`] so overlong format codes fall back to `"General"` in O(1)
+/// without copying or caching them.
+pub(crate) fn pivot_item_number_format(code: &str) -> gridcraft_numfmt::NumberFormat {
+    crate::display::parsed(code)
+}
+
 /// Parses bytes that aren't encrypted, as they are.
 fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, Vec<String>)> {
     let kind = FileKind::from_path(name);
@@ -307,13 +314,17 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
     // Text named `.xlsx` is read as text.
     if sniffed == gridcraft_xlsx::Format::Xlsx || (kind == Some(FileKind::Xlsx) && sniffed != gridcraft_xlsx::Format::Csv) {
         // Google Sheets' export wrapper is read as the formula inside when GridCraft calculates it (#2871).
-        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, (XLSX_FUNCTIONS, &gridcraft_calc::is_known_function as &dyn Fn(&str) -> bool))
-            .map_err(|e| {
-                EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
-                    (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
-                    _ => format!("We can't open '{name}': {e}"),
-                })
-            })?;
+        let opts = gridcraft_xlsx::ReadOptions {
+            functions: XLSX_FUNCTIONS,
+            known_function: Some(&gridcraft_calc::is_known_function),
+            format_value: Some(|v, code, sys| gridcraft_numfmt::format_value(v, &pivot_item_number_format(code), sys).text),
+        };
+        let (wb, report) = gridcraft_xlsx::read_xlsx_with(bytes, opts).map_err(|e| {
+            EngineError::Other(match (&e, gridcraft_xlsx::oversized_part(bytes)) {
+                (gridcraft_xlsx::IoError::TooLarge(_), Some((part, size))) => part_too_large_message(name, &part, size),
+                _ => format!("We can't open '{name}': {e}"),
+            })
+        })?;
         return Ok((wb, report.warnings));
     }
     if let Some(read) = read_html_table(name, kind, bytes, csv_as_text) {

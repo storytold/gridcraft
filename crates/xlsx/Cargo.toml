@@ -36,3 +36,4 @@ sha2 = { workspace = true }
 [dev-dependencies]
 # Every registered function name, for the formula file-spelling test.
 gridcraft-functions = { workspace = true }
+gridcraft-numfmt = { workspace = true }

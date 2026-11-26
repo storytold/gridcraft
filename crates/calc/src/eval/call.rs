@@ -157,9 +157,10 @@ impl<'h> Evaluator<'h> {
         if let Value::Array(array) = &condition {
             let when_true = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
             let when_false = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
+            let deref_empty = |v: &Value| if matches!(v, Value::Empty) { Value::Number(0.0) } else { v.clone() };
             return Ev::V(zip3(array, &when_true, &when_false, |condition, when_true, when_false| match condition.to_bool() {
-                Ok(true) => when_true.clone(),
-                Ok(false) => when_false.clone(),
+                Ok(true) => deref_empty(when_true),
+                Ok(false) => deref_empty(when_false),
                 Err(error) => Value::Error(error),
             }));
         }
@@ -341,6 +342,11 @@ impl<'h> Evaluator<'h> {
             {
                 criteria = Some(*area);
             }
+            // Range parameters of the *IF(S) family propagate evaluated error values directly
+            // (e.g. OFFSET/MATCH returning #N/A) instead of converting them to #VALUE! on shape mismatch.
+            if takes_reference(spec.name, i) && matches!(ev, Ev::V(Value::Error(_))) {
+                return ev;
+            }
             if resizes_sum_range(name, args.len()) {
                 if i == 0 {
                     criteria_shape = ev_shape(&ev);
@@ -479,5 +485,16 @@ impl<'h> Evaluator<'h> {
         }
         let u = n.to_ascii_uppercase();
         gridcraft_functions::lookup(&u).map(|_| u)
+    }
+}
+
+/// Whether argument `i` of `name` is a range parameter that takes only a reference.
+fn takes_reference(name: &str, i: usize) -> bool {
+    match name {
+        "SUMIF" | "AVERAGEIF" => i == 0 || i == 2,
+        "COUNTIF" | "COUNTBLANK" => i == 0,
+        "COUNTIFS" => i.is_multiple_of(2),
+        "SUMIFS" | "AVERAGEIFS" | "MAXIFS" | "MINIFS" => i == 0 || i % 2 == 1,
+        _ => false,
     }
 }

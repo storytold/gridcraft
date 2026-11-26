@@ -53,6 +53,8 @@ pub struct Ctx<'a> {
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
     /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
+    /// Caller-supplied Excel number-format renderer (see [`crate::ReadOptions::format_value`]).
+    pub format_value: Option<fn(&gridcraft_core::Value, &str, DateSystem) -> String>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
     /// The current sheet's charts read from chart parts: (model chart id, chart part name). Their
@@ -60,6 +62,15 @@ pub struct Ctx<'a> {
     pub chart_parts: Vec<(u32, String)>,
     /// Cell elements read so far, across every sheet (capped by `sheet_read::MAX_CELLS`).
     pub cells: u64,
+    /// Retained bytes kept across all PivotTables' OOXML `data_index` builds (capped by
+    /// `pivot::read::MAX_RETAINED_INDEX_BYTES`; rolled back on failed tables).
+    pub(crate) pivot_index_retained_bytes: usize,
+    /// Cumulative decoded axis `<i>` entries and row × col cell-loop iterations across all
+    /// PivotTables' OOXML `data_index` builds (capped by `pivot::read::MAX_WORKBOOK_INDEX_ITERATIONS`).
+    pub(crate) pivot_index_iterations: usize,
+    /// Cumulative transient work bytes charged across all PivotTables' OOXML `data_index` builds
+    /// (capped by `pivot::read::MAX_WORKBOOK_WORK_BYTES`; never rolled back on failed tables).
+    pub(crate) pivot_index_workbook_work_bytes: usize,
 }
 
 /// The most worksheets read from one workbook (as the XLS reader allows).
@@ -323,6 +334,7 @@ fn selected_workbook_view(workbook: &El) -> Option<&El> {
 pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(Workbook, ReadReport), IoError> {
     let functions = opts.functions;
     let known_function = opts.known_function;
+    let format_value = opts.format_value;
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
@@ -346,9 +358,13 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         legacy_formulas: vec![],
         shared_formula_bytes: 0,
         known_function,
+        format_value,
         python: Default::default(),
         chart_parts: vec![],
         cells: 0,
+        pivot_index_retained_bytes: 0,
+        pivot_index_iterations: 0,
+        pivot_index_workbook_work_bytes: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());

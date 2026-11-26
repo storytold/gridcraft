@@ -120,23 +120,27 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
 pub struct ReadOptions<'a> {
     pub functions: FunctionInfo,
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
+    /// Formats a value under an Excel number-format code and date system. Format crates do not
+    /// depend on `gridcraft-numfmt`, so callers (such as `engine::io::read_plain`) supply this
+    /// callback; direct `read_xlsx` callers without `format_value` receive raw item labels.
+    pub format_value: Option<fn(&gridcraft_core::Value, &str, DateSystem) -> String>,
 }
 
 impl<'a> From<FunctionInfo> for ReadOptions<'a> {
     fn from(functions: FunctionInfo) -> Self {
-        Self { functions, known_function: None }
+        Self { functions, known_function: None, format_value: None }
     }
 }
 
 impl<'a> From<(FunctionInfo, &'a dyn Fn(&str) -> bool)> for ReadOptions<'a> {
     fn from((functions, known): (FunctionInfo, &'a dyn Fn(&str) -> bool)) -> Self {
-        Self { functions, known_function: Some(known) }
+        Self { functions, known_function: Some(known), format_value: None }
     }
 }
 
 impl<'a, F: Fn(&str) -> bool> From<&'a F> for ReadOptions<'a> {
     fn from(known: &'a F) -> Self {
-        Self { functions: FunctionInfo::default(), known_function: Some(known) }
+        Self { functions: FunctionInfo::default(), known_function: Some(known), format_value: None }
     }
 }
 
