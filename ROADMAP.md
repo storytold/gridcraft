@@ -171,6 +171,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-24 | PivotTables: right-clicking a value, subtotal or grand total cell offers Show Details in the cell menu, which lists the cell's source records on a new sheet as double-clicking does |
 | 2026-10-24 | Sheet tabs: dragging the handle between the tabs and the horizontal scrollbar gives the tabs more or less of the bar, as in Excel; each open workbook keeps its own share |
 | 2026-10-24 | Charts: 100% Stacked Area (`insert.chart` `{type: "area", subtype: "stacked100"}`), drawn as each value's share of its category's total; XLSX `percentStacked` area charts open as 100% stacked instead of stacked |
+| 2026-10-24 | XLSX charts keep what GridCraft doesn't model on save: an embedded chart that was not edited (moving or resizing aside) is written back from its original chart part, with its style, colour and user-shape parts, while every sheet its formulas name still exists; an edited chart is written from the model as before (#1668) |
 | 2026-10-24 | XLSX: a password to modify (`fileSharing`) is kept on save, and opening such a file asks for the password or opens it read-only (never checked against Excel) (#921) |
 | 2026-10-23 | File › Print › Settings offers Print Selection next to Print Active Sheets and Print Entire Workbook; several selected areas print one after the other, as in Excel |
 | 2026-10-23 | Accounting negatives in text: `$(1,234)`, `$ (5)` and `(5)%` read as negative numbers when typed, coerced by arithmetic or passed to VALUE, like Excel 365; `(-5)`, `((5))`, `$5%` and dates or times in parentheses stay text |
@@ -321,6 +322,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-24 | minor | Macro interface on the Automate tab; progress log row |
 | 2026-10-24 | minor | Macro engine and `macro.*` commands; catalog 275 / 291 → 276 / 292 (View › Macros › Record Macro); progress log row |
+| 2026-10-24 | trivial | Progress log: unedited embedded charts keep their XML on save (#1668) |
 | 2026-10-24 | minor | Progress log: password to modify (#921) |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
