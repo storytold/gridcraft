@@ -156,6 +156,10 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
                 if fill_color != Color::Auto { fill_color } else { font_color }
             } else if has_font_color {
                 font_color
+            } else if fill_color == Color::Theme(1, 0) {
+                // Text 1 is Excel's automatic text. The explicit-font path normalizes it to Auto,
+                // so a fill-sourced Text 1 must normalize too or the criterion changes on save.
+                Color::Auto
             } else {
                 fill_color
             };

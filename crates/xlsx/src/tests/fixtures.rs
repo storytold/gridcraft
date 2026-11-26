@@ -1091,6 +1091,27 @@ fn font_color_filter_keeps_an_explicit_text_1_font_as_auto() {
 }
 
 #[test]
+fn fill_sourced_text_1_font_filter_stays_auto_across_saves() {
+    let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor theme="1"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0" cellColor="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FontColor(Color::Auto))], "Text 1 is automatic on the first read");
+
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was re-read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FontColor(Color::Auto))], "and stays automatic after a save");
+
+    let bytes = crate::write_xlsx(&wb).unwrap();
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was re-read again");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FontColor(Color::Auto))], "a second save is stable");
+}
+
+#[test]
 fn font_color_filter_keeps_a_dxf_that_states_the_colour_in_its_font() {
     let dxf = r#"<dxf><font><color rgb="FF0000FF"/></font></dxf>"#;
     let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
