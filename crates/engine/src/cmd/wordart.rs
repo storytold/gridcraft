@@ -186,6 +186,7 @@ fn insert_word_art(s: &mut Session, p: &Json) -> Result<Json> {
     let id = d.wb.next_object_id();
     let at = cell_param(s, p, "at")?.unwrap_or(d.selection.active);
     let mut shape = Shape {
+        hyperlink: None,
         id,
         kind: ShapeKind::WordArt,
         anchor: Anchor { cell: at, dx: 0.0, dy: 0.0, width: 0.0, height: 0.0, mode: anchor_mode_param(p).unwrap_or_default() },

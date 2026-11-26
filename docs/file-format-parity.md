@@ -18,6 +18,18 @@ Arabic PDF output uses harfrust shaping, Unicode bidi and licensed Noto Arabic g
 
 Cell text now uses shared Unicode bidi layout while retaining logical source indexes for editing, copy and XLSX. Format Cells exposes Context, Left to right and Right to left reading direction, independent of sheet geometry. OOXML Context uses the first non-whitespace character. Optional direction preserves absent versus explicit Context in differential styles. The renderer is pinned to a reviewed egui 0.36.2 backport with real-font, editing, accessibility and WASM checks. Physical screen-reader behavior remains unverified.
 
+## Drawing click links
+
+Whole-object picture and shape click hyperlinks (`cNvPr/a:hlinkClick`) retain their drawing relationship targets, target modes,
+tooltips and actions on save (#3665), including equation and ink shapes. Synthetic packages
+cover repeated saves, malformed link references and older JSON objects. Internal worksheet
+part destinations map from source parts to logical sheet names and back to the current output
+parts, retaining fragments across relocated drawings, sheet rename and reordering. Other
+internal package-part links are skipped with a warning rather than emitted as dangling targets.
+External workbook locations such as `#'Data'!B2` retain their original text. This is metadata
+preservation; drawing-link activation in the UI and native Excel interaction are separate.
+Hyperlinks on individual text runs (`a:rPr/a:hlinkClick`) remain outside this object metadata.
+
 ## Workbook window settings
 
 GridCraft keeps one modelled workbook window. On XLSX import it selects the first visible
@@ -168,6 +180,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | 2026-11-12 | minor | .xls import reads the file with craft-xls (storytold/craft-libs), the reader that moved there from this repository; GridCraft keeps the mapping onto its model. The workbook now opens on the sheet it was saved on (WINDOW1 `itabCur`), falling back to the first visible sheet as before (from #3551), and cells saved as RString records (text with formatting runs) are read as text instead of skipped |
 | 2026-11-10 | minor | `.xls` import: every formula except a Ctrl+Shift+Enter array is read as a legacy one with Excel's implicit `@` (a title row `=Other!A1:G1` shows its first cell instead of `#SPILL!`), one-cell Ctrl+Shift+Enter arrays stay arrays, and `@` of a 2-D range meets the formula's row and column (#410, PR #1367) |
 | 2026-11-09 | minor | Arabic PDF export no longer fails on a character the Arabic face lacks (it falls back like other text) or when no Arabic font is available (Arabic is set in the CID font, which has no Arabic glyphs, and a message says so) |
+| 2026-11-09 | minor | Preserve DrawingML picture/shape click-link metadata and relationship references (#3665). |
 | 2026-11-03 | trivial | The PDF row lists Arabic's shaped, embedded Noto glyphs beside the non-embedded standard faces, Symbol and the Adobe-GB1 CID font; Symbol text keeps its own encoding and is never shaped as Arabic |
 | 2026-11-02 | minor | XLSX: buttons, scroll bars and spin buttons read and written (control properties parts, `<controls>`, VML `x:ClientData`); other form controls stay with pass-through; a button's command, fixed input or output cell travels in a hidden defined name and comes back only while the file still assigns the button's macro (or none, for a command) |
 | 2026-11-03 | minor | SYLK (`.slk`) import: values, R1C1 formulas as A1 (shared formulas too) with cached results, number formats and column widths; import only (#1481) |

@@ -34,6 +34,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Estimate:** 25–40 h. [target-app-parity.md](target-app-parity.md#performance), [hardware-parity.md](hardware-parity.md)
 
 ### 3. Some unmodelled XLSX content is dropped on save (FF)
+- **Added:** whole-object picture and shape click links (`cNvPr/a:hlinkClick`) keep targets, target modes, tooltips and actions
+  through XLSX saves (#3665). This preserves metadata; drawing-link activation in the UI
+  and native Excel interaction remain unverified. Individual text-run links remain unmodelled.
 - **Missing:** slicers and their caches, timelines, the data model, query tables attached to
   tables, unmodelled `extLst` entries (among them x14 data bar settings beyond a solid fill,
   icon sets, colour scales and the text rules containsText, notContainsText, beginsWith and
@@ -196,6 +199,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | minor | Record picture/shape click-link preservation and its UI/native validation limits (#3665). |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |

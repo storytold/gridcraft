@@ -10,7 +10,9 @@ use std::fmt::Write as _;
 
 use craft_xlsx::{Anchor as CraftAnchor, Drawing as CraftDrawing, Item as CraftItem, Marker as CraftMarker, Placement as CraftPlacement};
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS};
-use gridcraft_model::{Anchor, AnchorMode, Color, Image, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme};
+use gridcraft_model::{
+    Anchor, AnchorMode, Color, DrawingHyperlink, Image, Shape, ShapeFormat, ShapeKind, ShapeTextAlign, ShapeTextAnchor, Sheet, Theme,
+};
 
 use crate::IoError;
 use crate::read::Ctx;
@@ -202,7 +204,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                     };
                     let alt = obj.path(&["nvPicPr", "cNvPr"]).and_then(|c| c.attr("descr")).unwrap_or("").to_string();
                     let id = cx.next_object_id();
-                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt });
+                    let hyperlink = read_click(cx, obj, &rels);
+                    sheet.images.push(Image { id, anchor, data: data.into(), mime: mime_for(&target).to_string(), alt, hyperlink });
                 }
                 "graphicFrame" => {
                     let Some(gd) = obj.path(&["graphic", "graphicData"]) else { continue };
@@ -235,7 +238,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                 "sp" | "cxnSp" => {
                     if let Some(s) = read_shape(obj, anchor) {
                         let id = cx.next_object_id();
-                        sheet.shapes.push(Shape { id, ..s });
+                        let hyperlink = read_click(cx, obj, &rels);
+                        sheet.shapes.push(Shape { id, hyperlink, ..s });
                     }
                 }
                 "grpSp" => cx.warn(format!("grouped shapes are not supported and were skipped ({part}, object {n})")),
@@ -244,6 +248,30 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Read a valid click relationship, resolving supported package destinations to worksheet identities.
+fn read_click(cx: &mut Ctx<'_>, obj: &El, rels: &[crate::package::Rel]) -> Option<DrawingHyperlink> {
+    let props = obj.child("nvPicPr").or_else(|| obj.child("nvSpPr")).or_else(|| obj.child("nvCxnSpPr"))?.child("cNvPr")?;
+    let click = props.child("hlinkClick")?;
+    let id = click.attr("id")?;
+    let rel = rels.iter().find(|r| r.id == id && r.kind == "hyperlink" && !r.raw_target.is_empty())?;
+    let internal_sheet = if rel.external || rel.raw_target.starts_with('#') {
+        None
+    } else if let Some(name) = cx.drawing_link_sheets.get(&crate::package::normalize(&rel.target)) {
+        Some(name.clone())
+    } else {
+        // Rewritten package parts cannot safely retain arbitrary relative destinations.
+        cx.warn("a drawing click link to an unsupported package part was skipped");
+        return None;
+    };
+    Some(DrawingHyperlink {
+        target: rel.raw_target.clone(),
+        external: rel.external,
+        tooltip: click.attr("tooltip").map(str::to_string),
+        action: click.attr("action").map(str::to_string),
+        internal_sheet,
+    })
 }
 
 fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
@@ -299,6 +327,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         return Some(Shape {
             id: 0,
             kind: ShapeKind::Equation,
+            hyperlink: None,
             anchor,
             fill: Color::Auto,
             line: ink,
@@ -319,7 +348,7 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
         .and_then(|r| r.parse::<f64>().ok())
         .filter(|r| r.is_finite())
         .map_or(0.0, |r| ((r / 60000.0).rem_euclid(360.0)) as f32);
-    Some(Shape { id: 0, kind, anchor, fill, line, text, format, rotation, math: Default::default() })
+    Some(Shape { id: 0, kind, anchor, fill, line, text, format, rotation, hyperlink: None, math: Default::default() })
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
@@ -452,7 +481,7 @@ const PLAIN_TEXT_PT: f32 = 11.0;
 
 /// An equation shape (inside the anchor): Office Math with a plain-text fallback when the source
 /// is in the subset OMML covers, else the plain-text box alone. Both carry the source.
-fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
+fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme, click: &str) {
     // The font size the equation is drawn at (it scales with its frame), in points.
     let size_pt = sh
         .math
@@ -478,7 +507,7 @@ fn write_equation(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
     let marker = |tx: &str| crate::xml::parse(tx.as_bytes()).map(|e| crate::omml::body_marker(&e)).unwrap_or_else(|_| "0".repeat(16));
     let sp = |tx: &str, marker: &str| {
         format!(
-            "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Equation {}\" descr=\"{}\"/><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr>{tx}</xdr:sp>",
+            "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Equation {}\" descr=\"{}\">{click}</xdr:cNvPr><xdr:cNvSpPr txBox=\"1\"/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></xdr:spPr>{tx}</xdr:sp>",
             id - 1,
             esc_attr(&format!("{LATEX_DESCR}{marker}:{}", sh.text)),
             xfrm(&sh.anchor, "a:xfrm")
@@ -624,9 +653,22 @@ pub fn srgb(c: &Color, theme: &Theme) -> Option<String> {
 
 /// One drawing object to write.
 pub enum Obj<'a> {
-    Image(&'a Image, String),
+    Image(&'a Image, String, Option<String>),
     Chart(&'a gridcraft_model::Chart, String),
-    Shape(&'a Shape),
+    Shape(&'a Shape, Option<String>),
+}
+
+/// Emit a click element only when a retained link has an assigned relationship ID.
+fn click_xml(link: Option<&DrawingHyperlink>, id: Option<&str>) -> String {
+    let (Some(link), Some(id)) = (link, id) else { return String::new() };
+    let mut s = format!("<a:hlinkClick r:id=\"{}\"", esc_attr(id));
+    for (key, value) in [("tooltip", &link.tooltip), ("action", &link.action)] {
+        if let Some(value) = value {
+            let _ = write!(s, " {key}=\"{}\"", esc_attr(value));
+        }
+    }
+    s.push_str("/>");
+    s
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -635,9 +677,16 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
     for (i, o) in objs.iter().enumerate() {
         let id = i + 2;
         match o {
-            Obj::Image(img, rid) => {
+            Obj::Image(img, rid, link_id) => {
                 let placement = to_placement(sheet, &img.anchor);
                 let mut anchor = CraftAnchor::picture(placement, id as u32, &format!("Picture {}", id - 1), &img.alt, rid);
+                let click = click_xml(img.hyperlink.as_ref(), link_id.as_deref());
+                if !click.is_empty()
+                    && let Some(click) = parse_craft_fragment(&click)
+                    && let Some(props) = anchor.object.child_mut("xdr:nvPicPr").and_then(|p| p.child_mut("xdr:cNvPr"))
+                {
+                    props.children.push(craft_xml::Node::El(click));
+                }
                 if let Some(ext) = anchor.object.child_mut("xdr:spPr").and_then(|sp| sp.child_mut("a:xfrm")).and_then(|x| x.child_mut("a:ext")) {
                     let e = |v: f32| ((v.max(0.0) as f64) * EMU_PER_PX).round() as i64;
                     ext.set_attr("cx", e(img.anchor.width));
@@ -668,21 +717,23 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 }
                 items.push(CraftItem::Anchor(anchor));
             }
-            Obj::Shape(sh) if sh.kind == ShapeKind::Equation => {
+            Obj::Shape(sh, link_id) if sh.kind == ShapeKind::Equation => {
                 let placement = to_placement(sheet, &sh.anchor);
                 let mut xml = String::new();
-                write_equation(&mut xml, sh, id, theme);
+                let click = click_xml(sh.hyperlink.as_ref(), link_id.as_deref());
+                write_equation(&mut xml, sh, id, theme, &click);
                 if let Some(object) = parse_craft_fragment(&xml) {
                     items.push(CraftItem::Anchor(CraftAnchor { placement, object, client_data: None }));
                 }
             }
-            Obj::Shape(sh) => {
+            Obj::Shape(sh, link_id) => {
                 let placement = to_placement(sheet, &sh.anchor);
-                let xml = if let Some(xml) = ink::write(sh, theme, id) {
+                let click = click_xml(sh.hyperlink.as_ref(), link_id.as_deref());
+                let xml = if let Some(xml) = ink::write(sh, theme, id, &click) {
                     xml
                 } else {
                     let mut s = String::new();
-                    write_plain_shape(&mut s, sh, id, theme);
+                    write_plain_shape(&mut s, sh, id, theme, &click);
                     s
                 };
                 if let Some(object) = parse_craft_fragment(&xml) {
@@ -695,7 +746,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
     String::from_utf8_lossy(&dr.to_xml()).into_owned()
 }
 
-fn write_plain_shape(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
+fn write_plain_shape(s: &mut String, sh: &Shape, id: usize, theme: &Theme, click: &str) {
     let (prst, tx) = match sh.kind {
         ShapeKind::Rectangle => ("rect", false),
         ShapeKind::RoundedRectangle => ("roundRect", false),
@@ -708,7 +759,7 @@ fn write_plain_shape(s: &mut String, sh: &Shape, id: usize, theme: &Theme) {
     };
     let _ = write!(
         s,
-        "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Shape {}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
+        "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Shape {}\">{click}</xdr:cNvPr><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
         id - 1,
         if tx { " txBox=\"1\"" } else { "" },
         xfrm_rot(&sh.anchor, "a:xfrm", sh.rotation)

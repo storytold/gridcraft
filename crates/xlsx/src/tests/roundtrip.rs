@@ -17,6 +17,7 @@ fn rr(a: &str) -> RangeRef {
     RangeRef::parse(a).unwrap()
 }
 
+/// Build an original workbook containing representative data, styles, objects and worksheet metadata.
 fn sample() -> Workbook {
     let mut wb = Workbook::new();
     wb.date_system = DateSystem::D1904;
@@ -354,6 +355,7 @@ fn sample() -> Workbook {
     });
     let png = b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec();
     s.images.push(Image {
+        hyperlink: None,
         id: 10,
         // A non-default anchor mode, to prove it survives an xlsx round-trip.
         anchor: Anchor { cell: at("C10"), dx: 5.0, dy: 4.0, width: 120.0, height: 80.0, mode: AnchorMode::MoveOnly },
@@ -362,6 +364,7 @@ fn sample() -> Workbook {
         alt: "Logo \"x\"".into(),
     });
     s.shapes.push(Shape {
+        hyperlink: None,
         math: Default::default(),
         id: 11,
         kind: ShapeKind::Ellipse,
@@ -373,6 +376,7 @@ fn sample() -> Workbook {
         rotation: 30.0,
     });
     s.shapes.push(Shape {
+        hyperlink: None,
         math: Default::default(),
         id: 12,
         kind: ShapeKind::Arrow,
@@ -384,6 +388,7 @@ fn sample() -> Workbook {
         rotation: 0.0,
     });
     s.shapes.push(Shape {
+        hyperlink: None,
         math: Default::default(),
         id: 13,
         kind: ShapeKind::TextBox,
@@ -2321,6 +2326,7 @@ fn issue_778_xlsx_xml_import_save_reopen_roundtrip() {
         format: Default::default(),
         rotation: 0.0,
         math: Default::default(),
+        hyperlink: None,
     });
     s.charts.push(Chart {
         id: 2,

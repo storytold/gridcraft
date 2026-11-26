@@ -1,3 +1,5 @@
+use gridcraft_model::{DrawingHyperlink, Workbook};
+
 use super::{Arc, Ctx, EngineError, Json, Result, Session, Sheet, Visibility, bad, bool_param, edit, json, ok, str_param, target_sheet};
 
 pub(super) fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
@@ -36,6 +38,30 @@ fn edit_doc<R>(d: &mut crate::DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -
     crate::cmd::commit(d, f)
 }
 
+/// Keep drawing click links tied to their destination worksheet through a rename or deletion.
+fn retarget_drawing_links(wb: &mut Workbook, old: &str, new: Option<&str>) {
+    let points_to_old = |link: &Option<DrawingHyperlink>| {
+        link.as_ref().and_then(|link| link.internal_sheet.as_deref()).is_some_and(|sheet| sheet.eq_ignore_ascii_case(old))
+    };
+    for sheet in &mut wb.sheets {
+        // Leave sheets without affected links shared with undo snapshots.
+        if !sheet.images.iter().map(|i| &i.hyperlink).chain(sheet.shapes.iter().map(|s| &s.hyperlink)).any(points_to_old) {
+            continue;
+        }
+        let sheet = Arc::make_mut(sheet);
+        for link in sheet.images.iter_mut().map(|i| &mut i.hyperlink).chain(sheet.shapes.iter_mut().map(|s| &mut s.hyperlink)) {
+            if points_to_old(link) {
+                if let (Some(link), Some(new)) = (link.as_mut(), new) {
+                    link.internal_sheet = Some(new.to_owned());
+                } else {
+                    // A new sheet with the deleted name must not inherit the old click link.
+                    *link = None;
+                }
+            }
+        }
+    }
+}
+
 pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     let d = s.doc()?;
@@ -54,6 +80,7 @@ pub(super) fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         // Every reference into the deleted sheet becomes #REF!.
         cx.wb.rewrite_references(&|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order));
         crate::cmd::edit::rewrite_python_refs(&mut cx.wb, &|_, e| gridcraft_formula::adjust::delete_sheet(e, &name, &order))?;
+        retarget_drawing_links(&mut cx.wb, &name, None);
         for n in cx.wb.names.iter_mut() {
             if let Some(sc) = n.scope.as_mut()
                 && *sc > i
@@ -86,6 +113,7 @@ pub(super) fn rename_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         cx.sheet_mut(i)?.name = name.clone();
         // Every reference the workbook holds follows the sheet.
         cx.wb.rewrite_references(&|_, e| gridcraft_formula::adjust::rename_sheet(e, &old, &name));
+        retarget_drawing_links(&mut cx.wb, &old, Some(&name));
         // A PivotChart follows its PivotTable's sheet. Only a sheet holding such a chart is
         // copied, so the others stay shared with undo snapshots.
         let on_old = |link: Option<&str>| link.and_then(crate::pivot::parse_chart_link).is_some_and(|(sheet, _)| sheet.eq_ignore_ascii_case(&old));

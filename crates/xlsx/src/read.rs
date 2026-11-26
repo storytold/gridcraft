@@ -15,6 +15,8 @@ use crate::{IoError, ReadReport};
 
 /// State shared while reading one package.
 pub struct Ctx<'a> {
+    /// Source worksheet part to model name for internal drawing click links.
+    pub drawing_link_sheets: HashMap<String, String>,
     pub pkg: Package<'a>,
     pub report: ReadReport,
     pub sst: Vec<Arc<str>>,
@@ -300,11 +302,25 @@ fn selected_workbook_view(workbook: &El) -> Option<&El> {
     views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
 }
 
+/// Map drawing destinations before reading any sheet, using the reader's name allocation.
+fn drawing_link_sheets(sheet_els: &[&El], rel_by_id: &HashMap<&str, &Rel>) -> HashMap<String, String> {
+    let mut names = SheetNames::default();
+    let mut sheets = HashMap::new();
+    for (i, sheet) in sheet_els.iter().enumerate() {
+        if let Some(rel) = sheet.attr("id").and_then(|id| rel_by_id.get(id)).filter(|r| r.kind == "worksheet") {
+            let name = names.unique(sheet.attr("name").unwrap_or(""), i);
+            sheets.entry(crate::package::normalize(&rel.target)).or_insert(name);
+        }
+    }
+    sheets
+}
+
 pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(Workbook, ReadReport), IoError> {
     let functions = opts.functions;
     let known_function = opts.known_function;
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
+        drawing_link_sheets: HashMap::new(),
         pkg,
         report: ReadReport::default(),
         sst: vec![],
@@ -384,6 +400,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         // The first of duplicate ids wins, as a linear search would find it.
         rel_by_id.entry(r.id.as_str()).or_insert(r);
     }
+    cx.drawing_link_sheets = drawing_link_sheets(&sheet_els, &rel_by_id);
     let mut names = SheetNames::default();
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();

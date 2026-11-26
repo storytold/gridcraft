@@ -1090,6 +1090,7 @@ mod tests {
 
     fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
         Ctx {
+            drawing_link_sheets: Default::default(),
             pkg,
             report: Default::default(),
             sst: vec![],
