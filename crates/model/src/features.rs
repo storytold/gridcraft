@@ -11,7 +11,7 @@ mod print;
 
 pub use pivot::{
     PIVOT_INDEXER, PivotCalcField, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotIndexer, PivotItemRef, PivotLayout,
-    PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, pivot_key,
+    PivotLookup, PivotScopeItem, PivotShowAs, PivotSort, PivotTable, PivotValue, pivot_key,
 };
 pub use print::{EditRange, HfPage, LineInfo, Orientation, PageOrder, PrintSettings, SheetProtection, password_hash};
 
@@ -501,6 +501,8 @@ pub enum ChartKind {
     Line,
     LineMarkers,
     LineStacked,
+    LineStacked100,
+    LineStacked100Markers,
     Pie,
     Doughnut,
     Area,
@@ -683,10 +685,17 @@ pub struct Chart {
 }
 
 /// Whether a series of kind `b` can be drawn in a chart of kind `a` without making it a combo:
-/// the same kind, or a line with or without markers, or a scatter with or without lines.
+/// the same kind, or a line or 100% stacked line with or without markers, or a scatter with or
+/// without lines.
 pub fn same_family(a: ChartKind, b: ChartKind) -> bool {
     use ChartKind::*;
-    a == b || matches!((a, b), (Line | LineMarkers, Line | LineMarkers) | (Scatter | ScatterLines, Scatter | ScatterLines))
+    a == b
+        || matches!(
+            (a, b),
+            (Line | LineMarkers, Line | LineMarkers)
+                | (LineStacked100 | LineStacked100Markers, LineStacked100 | LineStacked100Markers)
+                | (Scatter | ScatterLines, Scatter | ScatterLines)
+        )
 }
 
 /// The kind a combo chart's series `i` with its own kind `own` is drawn as.
@@ -730,20 +739,34 @@ fn grouped(k: ChartKind) -> Option<Grouped> {
     use ChartKind::*;
     match k {
         ColumnClustered | ColumnStacked | ColumnStacked100 => Some(Grouped::Column),
-        Line | LineMarkers | LineStacked => Some(Grouped::Line),
+        Line | LineMarkers | LineStacked | LineStacked100 | LineStacked100Markers => Some(Grouped::Line),
         Area | AreaStacked | AreaStacked100 => Some(Grouped::Area),
         _ => None,
     }
 }
 
 /// Kind `k` drawn in the grouping of `first`, the first series of its type on its axes: columns
-/// and areas take its kind; a line is stacked when it is, and unstacked (keeping its own
-/// markers) when it isn't.
+/// and areas take its kind; a line is stacked when it is, stacked to 100% (keeping its own
+/// markers) when it is, and unstacked (keeping its own markers) when it isn't.
 fn regroup(k: ChartKind, first: ChartKind) -> ChartKind {
+    use ChartKind::*;
+    let marked = matches!(k, LineMarkers | LineStacked100Markers);
     match (grouped(k), first) {
-        (Some(Grouped::Line), ChartKind::LineStacked) => ChartKind::LineStacked,
-        (Some(Grouped::Line), _) if k == ChartKind::LineStacked => ChartKind::Line,
-        (Some(Grouped::Line), _) => k,
+        (Some(Grouped::Line), LineStacked) => LineStacked,
+        (Some(Grouped::Line), LineStacked100 | LineStacked100Markers) => {
+            if marked {
+                LineStacked100Markers
+            } else {
+                LineStacked100
+            }
+        }
+        (Some(Grouped::Line), _) => {
+            if marked {
+                LineMarkers
+            } else {
+                Line
+            }
+        }
         _ => first,
     }
 }
@@ -845,6 +868,8 @@ impl Chart {
                     | ChartKind::Line
                     | ChartKind::LineMarkers
                     | ChartKind::LineStacked
+                    | ChartKind::LineStacked100
+                    | ChartKind::LineStacked100Markers
                     | ChartKind::Area
                     | ChartKind::AreaStacked
                     | ChartKind::AreaStacked100
@@ -1401,6 +1426,10 @@ mod series_kind_tests {
         assert_eq!(drawn(&chart(Line, &[None, Some(LineMarkers), Some(Area)])), vec![Line, LineMarkers, Line]);
         assert_eq!(drawn(&chart(ScatterLines, &[Some(Scatter), Some(Line)])), vec![Scatter, ScatterLines]);
         assert_eq!(drawn(&chart(ColumnClustered, &[Some(Line)])), vec![ColumnClustered]);
+        assert_eq!(
+            drawn(&chart(LineStacked100Markers, &[Some(LineStacked100), None, Some(LineMarkers)])),
+            vec![LineStacked100, LineStacked100Markers, LineStacked100Markers]
+        );
     }
 
     #[test]
@@ -1415,6 +1444,15 @@ mod series_kind_tests {
         // An unstacked line keeps its own markers; a stacked one after it is unstacked.
         let c = chart(Combo, &[Some(Line), Some(LineMarkers), Some(LineStacked)]);
         assert_eq!(drawn(&c), vec![Line, LineMarkers, Line]);
+        // Lines after a 100% stacked one are stacked to 100%, each keeping its own markers; a
+        // 100% stacked line after a stacked one is stacked, and after an unstacked one unstacked.
+        let c = chart(Combo, &[Some(LineStacked100), Some(LineMarkers), Some(LineStacked), Some(LineStacked100Markers)]);
+        assert_eq!(drawn(&c), vec![LineStacked100, LineStacked100Markers, LineStacked100, LineStacked100Markers]);
+        assert_eq!(c.series_kinds(), drawn(&c));
+        let c = chart(Combo, &[Some(LineStacked), Some(LineStacked100Markers)]);
+        assert_eq!(drawn(&c), vec![LineStacked, LineStacked]);
+        let c = chart(Combo, &[Some(LineMarkers), Some(LineStacked100), Some(LineStacked100Markers)]);
+        assert_eq!(drawn(&c), vec![LineMarkers, Line, LineMarkers]);
         // Each pair of axes has its own first.
         let mut c = chart(Combo, &[Some(ColumnClustered), Some(ColumnStacked)]);
         c.series[1].secondary = true;
