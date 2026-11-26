@@ -18,16 +18,16 @@ impl SheetApp {
         // font gate returns before input handling, but `begin_pass` has already taken the events.
         // `cumulative_pass_nr` only advances when a pass ends, so a newer value with the batch
         // still pending means exactly that, and the step is offered again for the next real pass.
-        if self.synthetic_pending {
-            let consumed_by_an_unapplied_pass = self.synthetic_injected_at_pass.is_some_and(|pass| ctx.cumulative_pass_nr() > pass);
-            if !consumed_by_an_unapplied_pass {
-                return;
-            }
-        }
-        if let Some(batch) = self.synthetic.front() {
+        let offer_batch = !self.synthetic_pending || self.synthetic_injected_at_pass.is_some_and(|pass| ctx.cumulative_pass_nr() > pass);
+        if offer_batch && let Some(batch) = self.synthetic.front() {
             raw.events.extend(batch.iter().cloned());
             self.synthetic_pending = true;
             self.synthetic_injected_at_pass = Some(ctx.cumulative_pass_nr());
+        }
+        // Wayland never ends a wheel touch, so egui would keep an earlier Ctrl+wheel's Ctrl (#2213).
+        // After the synthetic batch is added, so agent-sent wheel events are tracked too.
+        if cfg!(all(unix, not(target_vendor = "apple"))) {
+            crate::grid::end_stuck_ctrl_wheel(&mut raw.events, &mut self.ctrl_wheel);
         }
     }
 }
