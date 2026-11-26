@@ -1049,6 +1049,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Select All Sheets" => "Выделить все листы",
         "All sheets" => "Все листы",
         "New sheet (⇧F11)" => "Новый лист (⇧F11)",
+        "May use files through: {commands}" => "Может использовать файлы через: {commands}",
         "Text Box" => "Надпись",
         "Macros" => "Макросы",
         "Record Macro" => "Запись макроса",
