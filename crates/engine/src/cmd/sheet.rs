@@ -358,7 +358,27 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
         check_lines_protection(s, p, axis, at, count, false)?;
     }
     let sheet = target_sheet(s, p)?;
+    // Lines that take a PivotTable's whole report take the PivotTable with it, rather than leave
+    // one with no report behind. Lines through part of a report move its cells (see
+    // `shift_sheet_features`).
+    let pivots: Vec<usize> = match s.doc()?.wb.sheet(sheet) {
+        Some(sh) if !sh.pivots.is_empty() => {
+            let lines: Vec<RangeRef> = areas
+                .iter()
+                .map(|&(at, count)| {
+                    let end = at.saturating_add(count.saturating_sub(1));
+                    if axis == Axis::Rows { RangeRef::rows(at, end) } else { RangeRef::cols(at, end) }
+                })
+                .collect();
+            sh.pivots.iter().enumerate().filter(|(_, pt)| crate::pivot::covered_by(crate::pivot::report_area(pt), &lines)).map(|(i, _)| i).collect()
+        }
+        _ => Vec::new(),
+    };
     let out = edit(s, |cx| {
+        // Last first, so the earlier indices stay valid.
+        for &pi in pivots.iter().rev() {
+            crate::cmd::pivot::delete_pivot(cx, sheet, pi)?;
+        }
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         cx.protection_checked = true;
         {
@@ -519,6 +539,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        check_pivot_shift(sh, &e)?;
         // Refuse to push data off the sheet: cells in the last `width`/`height` positions would be dropped.
         let doomed = if shift == "right" {
             RangeRef::new(CellRef::new(r.start.row, r.start.col.max(MAX_COLS.saturating_sub(r.width()))), CellRef::new(r.end.row, MAX_COLS - 1))
@@ -559,6 +580,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        check_pivot_shift(sh, &e)?;
     }
     let left = shift == "left";
     let out = edit(s, |cx| {
@@ -610,6 +632,11 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
         if inside {
             return Err(EngineError::Other("The cut rows or columns can't be inserted inside themselves.".into()));
         }
+    }
+    // Inserting cut cells pastes their values and deletes where they were: a PivotTable doesn't
+    // move with them, so its report would turn into plain values and the PivotTable be deleted.
+    if cut && d.wb.sheet(clip.sheet).is_some_and(|sh| sh.pivots.iter().any(|pt| crate::pivot::report_area(pt).intersects(&sel))) {
+        return Err(EngineError::Other("Cut rows or columns that hold a PivotTable report can't be inserted elsewhere.".into()));
     }
     let revision = d.revision;
     let before = (d.wb.clone(), d.selection.clone());
@@ -911,6 +938,25 @@ fn shift_table_columns(t: &mut gridcraft_model::Table, at: u32, count: u32, inse
             t.columns.drain(a..b);
         }
     }
+}
+
+/// Insert/Delete Cells never moves a PivotTable report's cells: the PivotTable keeps where its
+/// report is, so a shift would leave cells it owns somewhere else. Whole rows and columns move a
+/// report with its cells.
+fn check_pivot_shift(sh: &Sheet, e: &Edit) -> Result<()> {
+    let (axis, r) = match *e {
+        Edit::InsertCells { axis, range } | Edit::DeleteCells { axis, range } => (axis, range),
+        _ => return Ok(()),
+    };
+    // The cells that move or go: from the range on, within its columns (rows).
+    let moved = match axis {
+        Axis::Rows => RangeRef::new(r.start, CellRef::new(MAX_ROWS - 1, r.end.col)),
+        Axis::Cols => RangeRef::new(r.start, CellRef::new(r.end.row, MAX_COLS - 1)),
+    };
+    if sh.pivots.iter().any(|pt| crate::pivot::report_area(pt).intersects(&moved)) {
+        return Err(EngineError::Other("Cells can't be shifted through a PivotTable report. Insert or delete whole rows or columns instead.".into()));
+    }
+    Ok(())
 }
 
 /// Like Excel, Insert/Delete Cells never shifts part of a table: cells shifted up or down must
