@@ -88,6 +88,8 @@ impl SheetApp {
             arrange_windows: None,
             #[cfg(not(target_arch = "wasm32"))]
             updates_rt: Default::default(),
+            framework_dialogs: Default::default(),
+            framework_host: crate::framework::host(),
         }
     }
 
@@ -123,7 +125,6 @@ impl SheetApp {
             self.desktop_dark = Some(answer);
         }
         self.sync_theme_preference(ctx);
-        self.sync_input_options(ctx);
         // The geometry captures are bound to. Native frames recorded it from their fresh
         // `RawInput` in `raw_input_hook` (including hidden logic-only ticks); the epoch is
         // monotonic, so a resize back to the original values is still a new epoch and old pixels
@@ -139,7 +140,6 @@ impl SheetApp {
         // Printing feedback is polled once per frame, here, so hidden windows and logic-only
         // frames still see worker completion. `ui` and the desktop app no longer poll it.
         self.poll_printing(ctx);
-        self.guard_window_close(ctx);
         #[cfg(not(target_arch = "wasm32"))]
         updates_ui::tick(self, ctx);
         // Files read asynchronously (web file picker, dropped files).
@@ -164,6 +164,7 @@ impl SheetApp {
         }
         let Some(d) = self.session.active() else { return };
         let title = format!("{}{}", d.display_title(), if d.is_dirty() { " — Edited" } else { "" });
+        let title = crate::channel::window_title(&title);
         if self.grid.last_title.as_deref() != Some(title.as_str()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.grid.last_title = Some(title);
@@ -212,8 +213,6 @@ impl SheetApp {
         }
         // The language the widgets translate with this frame (see `i18n::current`).
         i18n::set_current(&ctx, self.ui.language);
-        #[cfg(not(target_arch = "wasm32"))]
-        updates_ui::show(self, &ctx);
         let t = theme::Tokens::get(&ctx);
         // A host can turn the File tab off while Backstage is already open: close it.
         if !self.chrome.file_tab {
@@ -256,6 +255,12 @@ impl SheetApp {
         widgets::toast(self, &ctx);
         // Last, so its resize cursors win over the widgets under the window edges.
         ribbon::window_frame(self, &ctx);
+        // The update flow and the framework dialogs run once per frame, in the root window.
+        if ctx.viewport_id() == egui::ViewportId::ROOT {
+            #[cfg(not(target_arch = "wasm32"))]
+            updates_ui::show(self, &ctx);
+            self.run_framework_dialogs(ui);
+        }
         self.flush_viewport_commands(&ctx);
         // Requests are admitted in `logic`, for the root viewport, so only its pass issues them.
         if ctx.viewport_id() == egui::ViewportId::ROOT {
@@ -372,6 +377,7 @@ mod lifecycle_tests {
     /// A font-gated early-returning pass does not lose the queued step; the hook offers it again and a later real pass applies it.
     fn a_font_gated_pass_offers_the_synthetic_step_again() {
         let ctx = egui::Context::default();
+        crate::framework::install_headless(&ctx);
         ctx.set_fonts(theme::font_definitions());
         let mut app = app();
         app.fonts_ready = true;
@@ -524,7 +530,7 @@ mod lifecycle_tests {
     fn a_logic_only_tick_polls_printing_feedback() {
         let ctx = egui::Context::default();
         let mut app = app();
-        app.printing.printers.push(crate::printing::Printer { name: "Queue".into(), label: String::new(), default: true });
+        app.printing.printers.push(crate::printing::Printer::new("Queue").is_default(true));
         app.run("ui.printSettings", serde_json::json!({"printer": "Queue"})).unwrap();
         app.services.print_native = Some(Box::new(|_, _| {
             let (sender, receiver) = std::sync::mpsc::channel();

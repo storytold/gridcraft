@@ -41,7 +41,7 @@ pub use font_setup::{
 /// Installs the active font set and invalidates text layouts measured against the previous set.
 pub fn install_fonts(ctx: &egui::Context, fonts: FontDefinitions) {
     crate::thai_layout::install_frame_budget_finalizer(ctx);
-    ctx.set_fonts(fonts);
+    craft_ui::fonts::load(ctx, fonts);
     crate::thai_layout::bump_font_generation(ctx);
 }
 
