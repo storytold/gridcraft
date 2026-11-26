@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 
 use gridcraft_core::parse::parse_number_text;
-use gridcraft_core::{CellError, Value, compare_numbers, compare_text};
+use gridcraft_core::{CellError, Value, compare_numbers, compare_text, text_eq};
 
 /// Longest text criterion COUNTIF and its relatives accept, in UTF-16 code units as Excel
 /// counts them (😀 is two units); a longer one is `#VALUE!`.
@@ -24,8 +24,10 @@ enum Operand {
     Number(f64),
     Bool(bool),
     Error(CellError),
-    /// Text (lower-cased chars kept for wildcard matching).
+    /// Plain text without wildcards.
     Text(String),
+    /// Wildcard pattern (`*`, `?`, `~` escapes), pre-tokenized for `=` and `<>`.
+    Wildcard(Vec<Tok>),
     /// A criterion cut to its first 255 UTF-16 units in the middle of a surrogate pair: the
     /// complete characters before the cut, followed (in Excel) by a lone high surrogate.
     ///
@@ -117,6 +119,8 @@ impl Criterion {
             Operand::Bool(false)
         } else if let Some(e) = CellError::parse(rest) {
             Operand::Error(e)
+        } else if matches!(op, Op::Eq | Op::Ne) && has_wildcards(rest) {
+            Operand::Wildcard(tokenize(rest))
         } else {
             Operand::Text(rest.to_string())
         };
@@ -150,15 +154,11 @@ impl Criterion {
         }
     }
 
+    /// Matches `v` against a literal text operand without wildcards.
     fn matches_text(&self, v: &Value, pat: &str) -> bool {
         match self.op {
             Op::Eq | Op::Ne => {
-                // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
-                let cell_text = match v {
-                    Value::Text(t) => Some(t.to_string()),
-                    _ => None,
-                };
-                let m = cell_text.is_some_and(|t| wildcard_match(pat, &t));
+                let m = matches!(v, Value::Text(t) if text_eq(t, pat));
                 if self.op == Op::Eq { m } else { !m }
             }
             _ => match v {
@@ -168,6 +168,15 @@ impl Criterion {
         }
     }
 
+    /// Matches `v` against a pre-tokenized wildcard pattern (`*`, `?`, `~` escapes).
+    fn matches_wildcard(&self, v: &Value, p: &[Tok]) -> bool {
+        // Blank cells hold no text: `"*"` skips them and `"<>*"` counts them.
+        let m = match v {
+            Value::Text(t) => wildcard_match_tokens(p, t),
+            _ => false,
+        };
+        if self.op == Op::Eq { m } else { !m }
+    }
     fn matches_cut_text(&self, v: &Value, kept: &str) -> bool {
         match self.op {
             Op::Eq => false,
@@ -178,27 +187,40 @@ impl Criterion {
     }
 
     /// Whether a cell value satisfies the criterion.
+    /// If this criterion is an exact literal text match (`=pat`), returns `Some(pat)`.
+    pub(crate) fn exact_text(&self) -> Option<&str> {
+        if !self.bare_empty
+            && self.op == Op::Eq
+            && let Operand::Text(pat) = &self.operand
+        {
+            Some(pat.as_str())
+        } else {
+            None
+        }
+    }
+
     pub(crate) fn matches(&self, v: &Value) -> bool {
         let v = match v {
-            Value::Array(a) => a.data.first().cloned().unwrap_or(Value::Empty),
-            other => other.clone(),
+            Value::Array(a) => a.data.first().unwrap_or(&Value::Empty),
+            other => other,
         };
         if self.bare_empty {
-            return matches!(&v, Value::Empty) || matches!(&v, Value::Text(t) if t.is_empty());
+            return matches!(v, Value::Empty) || matches!(v, Value::Text(t) if t.is_empty());
         }
         match &self.operand {
-            Operand::Blank => self.matches_blank(&v),
-            Operand::Number(n) => self.matches_number(&v, *n),
-            Operand::Bool(b) => match &v {
+            Operand::Blank => self.matches_blank(v),
+            Operand::Number(n) => self.matches_number(v, *n),
+            Operand::Bool(b) => match v {
                 Value::Bool(x) => cmp_op(self.op, x.cmp(b)),
                 _ => self.op == Op::Ne,
             },
-            Operand::Error(e) => match &v {
+            Operand::Error(e) => match v {
                 Value::Error(x) => cmp_op(self.op, x.code().cmp(&e.code())),
                 _ => self.op == Op::Ne,
             },
-            Operand::Text(pat) => self.matches_text(&v, pat),
-            Operand::CutText(kept) => self.matches_cut_text(&v, kept),
+            Operand::Text(pat) => self.matches_text(v, pat),
+            Operand::Wildcard(p) => self.matches_wildcard(v, p),
+            Operand::CutText(kept) => self.matches_cut_text(v, kept),
         }
     }
 }
@@ -269,15 +291,20 @@ fn lower_chars(s: &str) -> Vec<char> {
 
 /// Whether the pattern contains an unescaped wildcard.
 pub(crate) fn has_wildcards(pattern: &str) -> bool {
-    tokenize(pattern).iter().any(|t| !matches!(t, Tok::Char(_))) || pattern.contains('~')
+    pattern.bytes().any(|b| matches!(b, b'*' | b'?' | b'~'))
+}
+
+/// Case-insensitive whole-text match against pre-tokenized wildcard tokens `p`.
+fn wildcard_match_tokens(p: &[Tok], text: &str) -> bool {
+    let t = lower_chars(text);
+    let mut budget = MAX_STEPS;
+    match_from(p, &t, true, &mut budget).is_some()
 }
 
 /// Case-insensitive whole-text match with `*`, `?` and `~` escapes.
 pub(crate) fn wildcard_match(pattern: &str, text: &str) -> bool {
     let p = tokenize(pattern);
-    let t = lower_chars(text);
-    let mut budget = MAX_STEPS;
-    match_from(&p, &t, true, &mut budget).is_some()
+    wildcard_match_tokens(&p, text)
 }
 
 /// Steps one `match_from` call may take. An honest match against Excel's 32,767-character
@@ -369,7 +396,7 @@ pub(crate) fn lookup_equal(needle: &Value, hay: &Value, wild: bool) -> bool {
             if wild {
                 wildcard_match(p, t)
             } else {
-                compare_text(p, t) == Ordering::Equal
+                text_eq(p, t)
             }
         }
         (Value::Number(a), Value::Number(b)) => a == b,
