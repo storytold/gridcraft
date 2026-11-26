@@ -101,6 +101,7 @@ fn sales(s: &mut Session) -> bool {
             && let Some(c) = sh.charts.last_mut()
         {
             c.series = vec![gridcraft_model::Series {
+                line_width: None,
                 name: Some("Sales!$G$4".into()),
                 categories: Some("Sales!$B$5:$B$10".into()),
                 values: "Sales!$G$5:$G$10".into(),

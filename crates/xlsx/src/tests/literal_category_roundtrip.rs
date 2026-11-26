@@ -21,6 +21,7 @@ fn literal_category_with_separators_survives_save() {
     let series: Vec<Series> = cats
         .iter()
         .map(|(c, _)| Series {
+            line_width: None,
             name: Some("North, South".into()),
             categories: Some((*c).into()),
             values: "{1,2,3}".into(),

@@ -106,6 +106,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                line_width: None,
             });
         }
     } else {
@@ -122,6 +123,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                line_width: None,
             });
         }
     }
