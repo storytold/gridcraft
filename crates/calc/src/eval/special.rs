@@ -136,6 +136,25 @@ impl Precedents<'_> {
                 (_, Some(Expr::Number(_) | Expr::Text(_) | Expr::Bool(_) | Expr::Error(_) | Expr::Array(_) | Expr::Missing)) => {}
                 _ => self.dynamic = true,
             },
+            // GETPIVOTDATA reads the report cells, so it depends on the whole report its reference
+            // points into (pivot commands recalculate everything). Any other reference is dynamic.
+            Expr::Call(n, args) if n == "GETPIVOTDATA" => match args.get(1) {
+                Some(Expr::Ref(r)) => {
+                    let si = match &r.sheet {
+                        SheetSel::Current => Some(self.sheet),
+                        SheetSel::Named(name) => self.wb.sheet_index(name),
+                        SheetSel::Span(..) => None,
+                    };
+                    let report = si
+                        .and_then(|i| self.wb.sheet(i))
+                        .and_then(|sh| sh.pivots.iter().find_map(|p| p.last_range.filter(|lr| lr.intersects(&r.range()))));
+                    match report {
+                        Some(lr) => self.push(r, lr, boxes),
+                        None => self.dynamic = true,
+                    }
+                }
+                _ => self.dynamic = true,
+            },
             Expr::Call(n, _)
                 if matches!(n.as_str(), "INDIRECT" | "OFFSET" | "NOW" | "TODAY" | "RAND" | "RANDBETWEEN" | "RANDARRAY" | "CELL" | "INFO") =>
             {
@@ -176,7 +195,7 @@ impl Precedents<'_> {
     }
 }
 
-fn is_special(n: &str) -> bool {
+pub(super) fn is_special(n: &str) -> bool {
     matches!(
         n,
         "IF" | "IFS"
@@ -199,6 +218,7 @@ fn is_special(n: &str) -> bool {
             | "INDEX"
             | "CELL"
             | "TRIMRANGE"
+            | "GETPIVOTDATA"
             | "SUBTOTAL"
             | "AGGREGATE"
             | "TEXT"
@@ -237,6 +257,7 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
     "INDEX",
     "CELL",
     "TRIMRANGE",
+    "GETPIVOTDATA",
     "SUBTOTAL",
     "AGGREGATE",
     "TEXT",

@@ -23,17 +23,21 @@ mod sort;
 mod tools;
 mod validation;
 
-pub use filter::filter_values;
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
+pub use filter::{filter_selection, filter_values};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
+pub use sort::sort_context;
 use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub use validation::{check_validation, list_items};
-use validation::{circle_invalid, validate_cmd, validation};
-pub(super) use validation::{move_rule_formula, remove_validation_cells};
+pub use validation::{
+    LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,
+    search_term,
+};
+use validation::{circle_invalid, validate_cmd, validation, validation_list_cmd};
+pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -98,6 +102,15 @@ pub fn specs() -> Vec<CommandSpec> {
             validation
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
+        cmd!(
+            query "data.validationList",
+            "Validation List Items",
+            [],
+            None,
+            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and the accents of Latin letters; at most 10,000 entries, read from at most 200,000 cells of the source; `truncated`: more may exist)",
+            has_doc,
+            validation_list_cmd
+        ),
         cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → {invalid: [cell], truncated: bool (true when the 100,000-cell scan allowance ended before every range was checked)}", has_doc, circle_invalid),
         CommandSpec {
             shortcut_mac: Some("Cmd+Shift+K"),
@@ -212,7 +225,7 @@ fn data_target(s: &Session, p: &Json, cmd: &str) -> Result<(usize, RangeRef)> {
 /// Excel's header guess: the first row is text over a column of numbers, or is bold.
 fn guess_header(wb: &Workbook, sh: &Sheet, r: RangeRef) -> bool {
     if let Some(t) = sh.table_at(r.start) {
-        return t.header_row;
+        return t.header_row && r.start.row == t.range.start.row;
     }
     if r.height() < 2 {
         return false;

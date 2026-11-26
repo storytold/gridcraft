@@ -22,6 +22,7 @@ thiserror = { workspace = true }
 log = { workspace = true }
 gridcraft-xlsx = { workspace = true }
 craft-csv = { workspace = true }
+craft-gridcraft-format = { workspace = true }
 gridcraft-chart = { workspace = true }
 gridcraft-pdf = { workspace = true }
 gridcraft-math = { workspace = true }
@@ -30,4 +31,5 @@ unicode-segmentation = "=1.13.3"
 
 [dev-dependencies]
 gridcraft-xlsx = { workspace = true, features = ["test-support"] }
+gridcraft-model = { workspace = true, features = ["test-support"] }
 zip = { workspace = true }
