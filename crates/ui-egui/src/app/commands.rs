@@ -1,5 +1,5 @@
 use super::{
-    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, Notice, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
     formula_locale, i18n, json, now_ms, printing,
 };
 
@@ -25,6 +25,9 @@ impl SheetApp {
         }
         if matches!(id, "file.save" | "file.saveAs" | "file.saveBytes") {
             self.store_view_state();
+        }
+        if let Some(refused) = dialogs::refuse_sheet_change(self, id) {
+            return Err(refused);
         }
         if matches!(
             id,
@@ -96,6 +99,21 @@ impl SheetApp {
         {
             self.deliver_pdf(r);
         }
+        // The scan stopped at its cell allowance: say that some cells were not checked.
+        if id == "data.circleInvalid"
+            && let Ok(r) = &r
+            && r.get("truncated").and_then(Json::as_bool) == Some(true)
+        {
+            let scan = "The scan stopped after 100,000 cell visits; some validated cells were not checked for invalid data.";
+            // An open-time warning that is still shown keeps its text and action; the scan note joins it.
+            match self.notice.as_mut() {
+                Some(n) => {
+                    n.text = format!("{} {scan}", n.text);
+                    n.kind = NoticeKind::Warning;
+                }
+                None => self.notice = Some(Notice { text: scan.into(), kind: NoticeKind::Warning, action: None }),
+            }
+        }
         r
     }
 
@@ -135,7 +153,7 @@ impl SheetApp {
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.
-    pub(super) fn alert(&mut self, e: String) {
+    pub(crate) fn alert(&mut self, e: String) {
         // Shown in the window the user ends up in, also after a command that switched windows.
         self.follow_active_window();
         if e.contains("is not available right now") {
@@ -148,6 +166,26 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            "ui.window.minimize" => {
+                self.viewport_commands.push(egui::ViewportCommand::Minimized(true));
+                Ok(Json::Null)
+            }
+            "ui.window.maximize" => {
+                let on = p.get("on").and_then(Json::as_bool).unwrap_or(true);
+                self.viewport_commands.push(egui::ViewportCommand::Maximized(on));
+                Ok(Json::Null)
+            }
+            "ui.window.close" => {
+                self.viewport_commands.push(egui::ViewportCommand::Close);
+                Ok(Json::Null)
+            }
+            "ui.window.beginResize" => {
+                let Some(direction) = p.get("direction").and_then(Json::as_str).and_then(crate::parse_resize_direction) else {
+                    return Some(Err("direction must be north, south, east, west, northeast, northwest, southeast, or southwest".into()));
+                };
+                self.viewport_commands.push(egui::ViewportCommand::BeginResize(direction));
+                Ok(Json::Null)
+            }
             "app.checkForUpdates" | "help.checkForUpdates" => {
                 self.check_for_updates();
                 Ok(Json::Null)
@@ -240,6 +278,7 @@ impl SheetApp {
                 self.ui.language = i18n::Language::Ja;
                 Ok(json!({"language": i18n::Language::Ja}))
             }
+            "ui.quickAnalysis" => crate::quick_analysis::toggle(self, p.get("open").and_then(Json::as_bool)),
             "ui.backstage" => {
                 // `{"page": "info"}` opens File › Info; `{"page": "close"}` returns to the sheet.
                 match p.get("page").and_then(Json::as_str).map(str::trim) {
@@ -302,6 +341,7 @@ impl SheetApp {
         // The requests belong to the window the command left active.
         self.follow_active_window();
         self.prune_selected_object();
+        self.prune_views();
         for req in self.session.take_ui_requests() {
             match req {
                 UiRequest::Dialog(name, params) => self.open_dialog(&name, params),
@@ -327,7 +367,7 @@ impl SheetApp {
     }
 
     /// Whether the active sheet of the active document is protected (drives the Protect/Unprotect
-    /// Sheet labels and actions). While a dialog's reference boxes have picked, it is the dialog's
+    /// Sheet labels and actions). While a dialog with reference boxes is open, it is the dialog's
     /// own sheet: Protect Sheet ends the pick and acts on that sheet, so the label says so too.
     pub fn active_sheet_protected(&self) -> bool {
         if let Some(protected) = self.dialog.as_ref().and_then(|d| d.home_sheet_protected(self)) {

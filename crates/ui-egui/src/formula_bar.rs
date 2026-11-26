@@ -116,6 +116,10 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                     app.cancel_edit();
                 }
                 if crate::widgets::icon_button(ui, Icon::Check, c, "Enter", vec2(22.0, 24.0)).clicked() && editing {
+                    // The Enter button is Enter: it takes the searched list's highlighted entry.
+                    if let Some(ed) = app.editor.as_mut() {
+                        ed.list_accept = true;
+                    }
                     app.commit_edit(0, 0, false, false);
                 }
                 let fx = crate::widgets::icon_button(ui, Icon::Fx, t.text, "Insert Function", vec2(26.0, 24.0));
@@ -148,7 +152,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
                         let job = code_editor::layout_job(&text, Lang::Python, &code_editor::font(), color, &t.syntax, inner.width());
                         child.fonts_mut(|f| f.layout_job(job))
                     } else {
-                        child.painter().layout(text, font.clone(), color, inner.width())
+                        let order = app.session.active().and_then(|doc| cell_reading_order(app, doc.wb.active_sheet(), doc.selection.active));
+                        let direction = crate::text_direction::cell_direction(order, &text);
+                        child.painter().layout_job(egui::text::LayoutJob {
+                            direction,
+                            ..egui::text::LayoutJob::simple(text, font.clone(), color, inner.width())
+                        })
                     };
                     let lines = galley.rows.len();
                     // Each cell's view starts at its top: the offset is kept per cell, not per bar.
@@ -241,6 +250,25 @@ pub(crate) fn active_spill_anchor(app: &SheetApp) -> Option<gridcraft_engine::co
     sh.spill_anchor(at)
 }
 
+fn cell_reading_order(app: &SheetApp, sheet_index: usize, cell: gridcraft_engine::core::CellRef) -> Option<gridcraft_engine::model::ReadingOrder> {
+    let doc = app.session.active()?;
+    let sheet = doc.wb.sheet(sheet_index)?;
+    let cell = sheet.merge_at(cell).map_or(cell, |range| range.start);
+    let base = doc.wb.styles.get(sheet.style_id(cell)).align.reading_order;
+    let a_rule_sets_reading_order = sheet
+        .cond_formats
+        .iter()
+        .any(|cf| cf.ranges.iter().any(|r| r.contains(cell)) && cf.rule.style().is_some_and(|style| style.align.reading_order.is_some()));
+    if !a_rule_sets_reading_order {
+        return base;
+    }
+    gridcraft_engine::cf::CfCache::default()
+        .look(&doc.wb, sheet_index, cell)
+        .and_then(|look| look.style)
+        .and_then(|style| style.align.reading_order)
+        .or(base)
+}
+
 /// The active cell's Python cell (itself, or the anchor whose result spills over it): its sheet,
 /// cell and code.
 pub(crate) fn active_python(app: &SheetApp) -> Option<(usize, gridcraft_engine::core::CellRef, std::sync::Arc<gridcraft_engine::model::PyCode>)> {
@@ -256,7 +284,8 @@ fn active_input(app: &SheetApp) -> String {
     let Some(sh) = d.wb.active() else { return String::new() };
     let a = sh.merge_at(d.selection.active).map(|m| m.start).unwrap_or(d.selection.active);
     if let Some(picture) = sh.cell_pictures.get(&a) {
-        return if picture.alt.is_empty() { "Picture in cell".into() } else { format!("Picture: {}", picture.alt) };
+        let lang = app.ui.language;
+        return if picture.alt.is_empty() { lang.tr("Picture in cell").into() } else { lang.tr_fill("Picture: {alt}", &[("alt", &picture.alt)]) };
     }
     // Python code is shown as it is: it isn't a formula to translate or a value to format. Like
     // a formula, it stays out of view in a Hidden cell on a protected sheet.
@@ -474,9 +503,14 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let on_sheet = id == egui::Id::unique("gridcraft.cell_editor");
     let cell_text_color = if on_sheet { t.cell_text } else { t.text };
     let font2 = font.clone();
+    let reading_order = cell_reading_order(app, ed.sheet, ed.cell);
     let mut layouter = move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
         let s = buf.as_str();
-        let mut job = egui::text::LayoutJob::default();
+        let mut job = egui::text::LayoutJob {
+            direction: crate::text_direction::cell_direction(reading_order, s),
+            keep_trailing_whitespace: true,
+            ..Default::default()
+        };
         let mut pos = 0usize;
         let mut spans: Vec<(usize, usize, usize)> = refs.iter().filter(|r| r.1 <= s.len()).map(|r| (r.0, r.1, r.4)).collect();
         spans.sort();
@@ -560,8 +594,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     }
     if resp.changed() {
         ed.completion = None;
+        ed.update_list();
         // Python code is never completed from the column's text values.
         if app.ui.autocomplete
+            && ed.list.is_none()
             && !ed.is_formula()
             && !ed.python
             && !entry_shrank(chars_before, &ed.text)
@@ -685,10 +721,17 @@ fn editor_confirm_keys(ui: &mut egui::Ui, ed: &mut crate::editor::EditState) -> 
     if cmd_enter {
         action = Some((0, 0, false, true));
     }
+    // Enter, Tab and Ctrl+Enter accept the searched list's highlighted entry.
+    if action.is_some() {
+        ed.list_accept = true;
+    }
     if ctrl_shift_enter {
         action = Some((0, 0, true, false));
     }
     let cancel = if !esc {
+        false
+    } else if ed.list_open() {
+        ed.close_list();
         false
     } else if !ed.autocomplete.is_empty() {
         ed.autocomplete.clear();
@@ -725,6 +768,15 @@ fn editor_arrow_keys(
         arrow.is_some_and(|(k, _)| k == Key::ArrowRight),
     );
     let (shift, jump) = arrow.map_or((false, false), |(_, m)| (m.shift, m.command));
+    if (up || down) && !shift && ed.list_open() {
+        // The searched validation list takes Up/Down, even in Enter mode.
+        ui.input_mut(|i| {
+            i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
+            i.consume_key(egui::Modifiers::NONE, Key::ArrowDown);
+        });
+        ed.list_step(down);
+        return (action, false);
+    }
     if (up || down) && !ed.autocomplete.is_empty() {
         ui.input_mut(|i| {
             i.consume_key(egui::Modifiers::NONE, Key::ArrowUp);
@@ -911,6 +963,31 @@ mod spill_tests {
         let mut s = Session::new();
         s.new_workbook();
         SheetApp::new(s, Default::default())
+    }
+
+    #[test]
+    fn a_picture_in_a_cell_is_named_in_the_interface_language() {
+        use crate::i18n::Language;
+        use gridcraft_engine::core::CellRef;
+        use gridcraft_engine::model::CellPicture;
+        let mut app = app();
+        let put = |app: &mut SheetApp, cell: &str, alt: &str| {
+            let at = CellRef::parse(cell).unwrap();
+            let picture = std::sync::Arc::new(CellPicture { data: vec![], mime: "image/png".into(), alt: alt.into() });
+            std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().wb).sheet_mut(0).unwrap().set_picture(at, picture);
+        };
+        put(&mut app, "A1", "");
+        put(&mut app, "A2", "Logo {alt}");
+        select(&mut app, "A1");
+        assert_eq!(active_input(&app), "Picture in cell");
+        select(&mut app, "A2");
+        assert_eq!(active_input(&app), "Picture: Logo {alt}");
+        app.ui.language = Language::It;
+        select(&mut app, "A1");
+        assert_eq!(active_input(&app), Language::It.tr("Picture in cell"));
+        assert_ne!(active_input(&app), "Picture in cell");
+        select(&mut app, "A2");
+        assert_eq!(active_input(&app), Language::It.tr("Picture: {alt}").replace("{alt}", "Logo {alt}"));
     }
 
     fn set(app: &mut SheetApp, cell: &str, input: &str) {
