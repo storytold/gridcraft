@@ -59,14 +59,15 @@ pub(super) fn ddb(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let mut rate = factor / life;
+    // Book value at the start of the period. A period up to 1 starts at the cost, not above it.
     let old;
     if rate >= 1.0 {
         rate = 1.0;
-        old = if period == 1.0 { cost } else { 0.0 };
+        old = if period <= 1.0 { cost } else { 0.0 };
     } else {
-        old = cost * (1.0 - rate).powf(period - 1.0);
+        old = cost * (1.0 - rate).powf((period - 1.0).max(0.0));
     }
-    let new = cost * (1.0 - rate).powf(period);
+    let new = old * (1.0 - rate);
     let dep = if new < salvage { old - salvage } else { old - new };
     num_val(dep.max(0.0))
 }
