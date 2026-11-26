@@ -21,6 +21,8 @@ pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
 type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
+/// Cached fill-menu trend entries (label, mode), keyed by (doc uid, revision, sheet, source, dragged range).
+pub type FillTrendsCache = ((u64, u64, usize, RangeRef, RangeRef), Vec<(&'static str, &'static str)>);
 
 mod active_row;
 pub use active_row::active_row_band;
@@ -67,6 +69,39 @@ pub const WHEEL_ZOOM_LADDER: [u16; 22] = [10, 12, 15, 18, 21, 25, 30, 35, 42, 50
 
 /// Seconds without Ctrl+wheel input after which part of a notch turned so far is forgotten.
 const WHEEL_ZOOM_IDLE: f64 = 0.75;
+
+/// Ends a wheel "touch" that still carries Ctrl/Cmd when a wheel event without it comes in, so
+/// the wheel scrolls again once Ctrl is released (#2213).
+///
+/// On Wayland winit starts a touch for a high-resolution wheel and never ends it; while in a
+/// touch egui keeps every modifier it has seen, so one Ctrl+wheel turn made each later turn zoom.
+/// `ctrl_wheel` remembers between frames whether the current touch has seen Ctrl/Cmd.
+pub(crate) fn end_stuck_ctrl_wheel(events: &mut Vec<egui::Event>, ctrl_wheel: &mut bool) {
+    let mut out = Vec::with_capacity(events.len());
+    for e in events.drain(..) {
+        if let egui::Event::MouseWheel { unit, source, phase, modifiers, .. } = &e {
+            let ctrl = modifiers.ctrl || modifiers.command;
+            match phase {
+                egui::TouchPhase::Start => *ctrl_wheel = ctrl,
+                egui::TouchPhase::Move if ctrl => *ctrl_wheel = true,
+                egui::TouchPhase::Move if *ctrl_wheel => {
+                    out.push(egui::Event::MouseWheel {
+                        unit: *unit,
+                        source: *source,
+                        delta: egui::Vec2::ZERO,
+                        phase: egui::TouchPhase::End,
+                        modifiers: *modifiers,
+                    });
+                    *ctrl_wheel = false;
+                }
+                egui::TouchPhase::Move => {}
+                egui::TouchPhase::End | egui::TouchPhase::Cancel => *ctrl_wheel = false,
+            }
+        }
+        out.push(e);
+    }
+    *events = out;
+}
 
 /// The zoom one Ctrl+wheel notch goes to from `zoom`: the next step on [`WHEEL_ZOOM_LADDER`] in
 /// that direction, skipping a step less than 5% away (121% out goes to 100%, not 120%), but never
@@ -297,6 +332,9 @@ pub struct GridState {
     pub context_menu_frame: u64,
     /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
     pub fill_menu: Option<(RangeRef, RangeRef, Pos2)>,
+    /// The trends the fill menu lists, cached per (doc uid, revision, sheet, source, dragged range):
+    /// finding them reads every source cell.
+    pub fill_menu_trends: Option<FillTrendsCache>,
     /// After a left-drag of the fill handle: the Auto Fill Options button beside the filled cells.
     pub fill_tag: Option<FillTag>,
     /// The right-clicked chart, picture, shape or slicer: where to open its menu, its kind and id.

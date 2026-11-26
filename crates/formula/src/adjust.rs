@@ -1,7 +1,7 @@
 //! Reference adjustment: copying formulas, inserting/deleting rows and columns, moving cells,
 //! renaming and deleting sheets.
 
-use gridcraft_core::{CellError, MAX_COLS, MAX_ROWS, RangeRef};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 
 use crate::ast::{Anchor, Expr, RefKind, Reference, SheetSel, clamp_anchor};
 
@@ -34,6 +34,68 @@ pub fn shift_relative_wrapping(e: Expr, dr: i64, dc: i64) -> Expr {
         }
         other => other,
     })
+}
+
+/// Paste Special ▸ Transpose: the cell holding the formula moves from `src` to `dest`, so every
+/// reference turns a quarter turn with it — its row offset becomes its column offset and the other
+/// way round, `(r, c)` → `dest + (c − src.col, r − src.row)`.
+///
+/// As Excel writes it out: a reference that pins a row or a column with `$` is left exactly as it
+/// stands, a whole-row or whole-column reference comes back as a cell range whose open side runs
+/// from the transposed far edge of the sheet, and a result that falls off the grid becomes `#REF!`.
+pub fn transpose_relative(e: Expr, src: CellRef, dest: CellRef) -> Expr {
+    e.map(&mut |x| match x {
+        Expr::Ref(r) if !has_absolute(&r) => match transpose_ref(&r, src, dest) {
+            Some(r) => Expr::Ref(r),
+            None => Expr::Error(CellError::Ref),
+        },
+        other => other,
+    })
+}
+
+/// Whether any end of the reference pins a row or a column with `$`.
+fn has_absolute(r: &Reference) -> bool {
+    let abs = |a: &Anchor| a.row_abs || a.col_abs;
+    match &r.kind {
+        RefKind::Cell(a) => abs(a),
+        RefKind::Range(a, b) => abs(a) || abs(b),
+        RefKind::Rows(_, a0, _, a1) | RefKind::Cols(_, a0, _, a1) => *a0 || *a1,
+    }
+}
+
+/// Where an end lands after the turn: its column drives the new row, its row the new column.
+fn transpose_anchor(a: &Anchor, src: CellRef, dest: CellRef) -> Option<(u32, u32)> {
+    clamp_anchor(dest.row as i64 + a.col as i64 - src.col as i64, dest.col as i64 + a.row as i64 - src.row as i64)
+}
+
+/// Turns one reference with `src` → `dest`: `None` when an end falls outside the sheet, which
+/// the caller turns into `#REF!`.
+fn transpose_ref(r: &Reference, src: CellRef, dest: CellRef) -> Option<Reference> {
+    let kind = match &r.kind {
+        RefKind::Cell(a) => {
+            let (row, col) = transpose_anchor(a, src, dest)?;
+            RefKind::Cell(Anchor { row, col, ..*a })
+        }
+        RefKind::Range(a, b) => {
+            let (row, col) = transpose_anchor(a, src, dest)?;
+            let (row2, col2) = transpose_anchor(b, src, dest)?;
+            RefKind::Range(Anchor { row, col, ..*a }, Anchor { row: row2, col: col2, ..*b })
+        }
+        // A whole row turns into a cell range: its rows become columns, while its open columns
+        // become rows pinned with `$` — from the transposed first column down to the last row.
+        RefKind::Rows(r0, _, r1, _) => {
+            let (row, col) = clamp_anchor(dest.row as i64 - src.col as i64, dest.col as i64 + *r0 as i64 - src.row as i64)?;
+            let (row2, col2) = clamp_anchor(MAX_ROWS as i64 - 1, dest.col as i64 + *r1 as i64 - src.row as i64)?;
+            RefKind::Range(Anchor { row, col, row_abs: true, col_abs: false }, Anchor { row: row2, col: col2, row_abs: true, col_abs: false })
+        }
+        // A whole column likewise: its columns become rows, its open rows become columns up to XFD.
+        RefKind::Cols(c0, _, c1, _) => {
+            let (row, col) = clamp_anchor(dest.row as i64 + *c0 as i64 - src.col as i64, dest.col as i64 - src.row as i64)?;
+            let (row2, col2) = clamp_anchor(dest.row as i64 + *c1 as i64 - src.col as i64, MAX_COLS as i64 - 1)?;
+            RefKind::Range(Anchor { row, col, row_abs: false, col_abs: true }, Anchor { row: row2, col: col2, row_abs: false, col_abs: true })
+        }
+    };
+    Some(Reference { sheet: r.sheet.clone(), kind })
 }
 
 /// Whether the formula has a relative (no `$`) row or column anywhere.
