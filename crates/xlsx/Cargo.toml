@@ -29,6 +29,7 @@ craft-xls = { workspace = true }
 craft-xml = { workspace = true }
 craft-xlsx = { workspace = true }
 thiserror = { workspace = true }
+caseless = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
 sha2 = { workspace = true }

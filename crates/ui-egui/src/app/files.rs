@@ -41,10 +41,8 @@ impl SheetApp {
             self.notice = None;
             return;
         }
-        let vba: Vec<&str> = msgs.iter().copied().filter(|m| m.to_lowercase().contains("macro") || m.contains("VBA")).collect();
-        if !vba.is_empty() {
-            // The reader says "dropped" when the VBA project was missing or unreadable; never promise to keep it then.
-            let dropped = vba.iter().any(|m| m.contains("dropped"));
+        let dropped = msgs.iter().any(|m| m.starts_with("macros (VBA project) ") && m.contains("were dropped"));
+        if dropped || msgs.contains(&gridcraft_engine::io::VBA_PRESERVED_NOTICE) {
             let text = if dropped {
                 "This workbook's VBA macros could not be loaded and were dropped, so they will not be in the saved file. Keep the original file."
             } else {

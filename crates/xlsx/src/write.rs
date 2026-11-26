@@ -320,6 +320,10 @@ pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&s
     let file_version = crate::passthrough::workbook_elements(wb, "fileVersion");
     w.push_str(if file_version.is_empty() { "<fileVersion appName=\"gridcraft\"/>" } else { &file_version });
     w.push_str("<workbookPr");
+    // XLSX and JSON import already report invalid workbook code names.
+    if let Some(name) = wb.code_name.as_deref().filter(|name| crate::sheet_write::valid_code_name(name)) {
+        let _ = write!(w, " codeName=\"{}\"", esc_attr(name));
+    }
     match wb.show_objects {
         ShowObjects::All => {}
         ShowObjects::Placeholders => w.push_str(" showObjects=\"placeholders\""),

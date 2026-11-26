@@ -1554,13 +1554,35 @@ fn dropped_macro_warning_never_promises_to_keep_macros() {
 }
 
 #[test]
+fn vba_code_name_warning_does_not_imply_macro_loss() {
+    let mut h = harness(blank());
+    let mut wb = gridcraft_engine::model::Workbook::new();
+    wb.code_name = Some("ThisWorkbook".into());
+    wb.sheet_mut(0).unwrap().code_name = Some("thisworkbook".into());
+    let bytes = gridcraft_engine::io::save_bytes(&wb, "book.json").unwrap();
+    let r = h
+        .state_mut()
+        .session
+        .run("file.open", json!({"name": "book.json", "base64": gridcraft_engine::io::base64_encode(&bytes)}))
+        .unwrap();
+    h.state_mut().after_open(None, &r);
+    h.run_steps(2);
+    let notice = h.state_mut().run("ui.notice", json!({})).unwrap();
+    assert_eq!(notice["text"], r["warnings"][0]);
+    assert_eq!(notice["kind"], "info");
+    assert!(notice["action"].is_null());
+}
+
+#[test]
 fn plain_open_warning_becomes_an_info_notice() {
     let mut h = harness(blank());
-    h.state_mut().show_open_warnings(&json!({"warnings": ["links to external workbooks are not supported"]}));
-    let n = h.state().notice.clone().unwrap();
-    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Info);
-    assert!(n.action.is_none());
-    assert!(n.text.contains("external"));
+    for warning in ["links to external workbooks are not supported", r#"sheet "macros": an optional part was dropped"#] {
+        h.state_mut().show_open_warnings(&json!({"warnings": [warning]}));
+        let n = h.state().notice.as_ref().unwrap();
+        assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Info);
+        assert!(n.action.is_none());
+        assert_eq!(n.text, warning);
+    }
     // No warnings → no notice, no panic.
     h.state_mut().show_open_warnings(&json!({"warnings": []}));
     assert!(h.state().notice.is_none());

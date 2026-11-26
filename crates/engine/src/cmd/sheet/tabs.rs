@@ -158,6 +158,7 @@ pub(super) fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
             sh.tables.clear(); // table names must be unique
             sh.preserved = None; // kept file content (form controls, OLE objects…) stays with the original
+            sh.code_name = None; // the VBA document module stays with the original
             // Object ids are unique across the workbook (selection and the `{kind, id}` commands
             // rely on it), so the copied objects get fresh ones (free ones, even when a file used
             // the largest id).

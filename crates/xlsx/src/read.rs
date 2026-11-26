@@ -269,6 +269,7 @@ fn read_workbook_properties(cx: &mut Ctx<'_>, wb: &mut Workbook, xml: &El) {
             Some("placeholders") => ShowObjects::Placeholders,
             _ => ShowObjects::All,
         };
+        wb.code_name = p.attr("codeName").map(str::to_string);
     }
     wb.date_system = cx.date_system;
     if let Some(c) = xml.child("calcPr") {
@@ -430,6 +431,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         file_to_model.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
+    cx.report.repair_code_names(&mut wb);
     if wb.sheets.is_empty() {
         cx.warn("the workbook has no worksheets; added an empty sheet");
         wb.sheets.push(Arc::new(Sheet::new("Sheet1")));
@@ -521,7 +523,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         match cx.pkg.read(&r.target) {
             Ok(Some(data)) => {
                 wb.vba_project = Some(data.into());
-                cx.warn("macros (VBA project) were kept but not executed");
+                cx.warn(crate::VBA_PRESERVED_NOTICE);
             }
             Ok(None) => cx.warn("macros (VBA project) reference a missing part and were dropped"),
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
