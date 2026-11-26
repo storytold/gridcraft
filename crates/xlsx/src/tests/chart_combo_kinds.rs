@@ -338,6 +338,8 @@ fn a_chart_without_series_survives_a_round_trip() {
         Line,
         LineMarkers,
         LineStacked,
+        LineStacked100,
+        LineStacked100Markers,
         Pie,
         Doughnut,
         Area,
