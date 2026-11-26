@@ -1,0 +1,25 @@
+name: environment secret probe (throwaway)
+on:
+  workflow_dispatch:
+  push:
+    branches: [diag/**]
+permissions:
+  contents: read
+jobs:
+  plain:
+    name: no environment
+    runs-on: ubuntu-24.04
+    steps:
+      - run: |
+          echo "no-env LINUX_SIGNING_KEY present: ${{ secrets.LINUX_SIGNING_KEY != '' }}"
+  with_env:
+    name: environment release
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - run: |
+          echo "with-env LINUX_SIGNING_KEY present: ${{ secrets.LINUX_SIGNING_KEY != '' }}"
+          echo "with-env APPLE_ID present: ${{ secrets.APPLE_ID != '' }}"
+          python3 -c "import os;v=os.environ.get('K','');print('with-env env-var length:', len(v))"
+        env:
+          K: ${{ secrets.LINUX_SIGNING_KEY }}
