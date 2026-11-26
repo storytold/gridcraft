@@ -46,6 +46,7 @@ fn literal_category_with_separators_survives_save() {
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        border: Default::default(),
         x_title: None,
         y_title: None,
         source: None,

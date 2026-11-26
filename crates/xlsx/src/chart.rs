@@ -9,9 +9,11 @@ use craft_drawingml::color::SchemeSlot;
 use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartBorder, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook,
+};
 
-use crate::drawing::{dml_color, srgb};
+use crate::drawing::{dml_color, dml_color_tinted, dml_color_xml, srgb};
 use crate::xml::{El, esc, num};
 
 // ---------------------------------------------------------------- reading
@@ -446,6 +448,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         style: dc.style,
         hole_size,
         first_slice_angle: dc.first_slice_angle,
+        border: read_border(root.and_then(|r| r.child("spPr"))),
         x_title: axis_titles.0,
         y_title: axis_titles.1,
         source: None,
@@ -461,6 +464,48 @@ pub fn read_chart(root: &El) -> Option<Chart> {
     let craft = to_craft_el(root);
     let dc = craft_drawingml::chart::read::chart_from(&craft)?;
     Some(from_dml_chart(dc, Some(root)))
+}
+
+/// The chart area's border from the chart space's `c:spPr`: no `a:ln` (or one filled otherwise
+/// than plainly) leaves Excel's automatic border; `a:noFill` none; a solid or unfilled `a:ln`
+/// a line of its colour (or the automatic one) and width.
+pub(crate) fn read_border(sp: Option<&El>) -> ChartBorder {
+    let Some(ln) = sp.and_then(|p| p.child("ln")) else { return ChartBorder::Auto };
+    if ln.child("noFill").is_some() {
+        return ChartBorder::None;
+    }
+    if ln.child("gradFill").is_some() || ln.child("pattFill").is_some() {
+        return ChartBorder::Auto;
+    }
+    let width = ln.attr_f64("w").map(|w| (w / EMU_PER_PT) as f32).filter(|w| w.is_finite() && *w >= 0.0);
+    let color = ln.child("solidFill").and_then(dml_color_tinted);
+    if color.is_none() && width.is_none() { ChartBorder::Auto } else { ChartBorder::Line { color, width } }
+}
+
+/// The chart space's `c:spPr` for its border; empty for the automatic one.
+fn border_xml(b: &ChartBorder, wb: &Workbook) -> String {
+    border_ln(b, wb).map(|ln| format!("<c:spPr>{ln}</c:spPr>")).unwrap_or_default()
+}
+
+/// The border's `a:ln`; `None` for the automatic one, which writes none.
+pub(crate) fn border_ln(b: &ChartBorder, wb: &Workbook) -> Option<String> {
+    match b {
+        ChartBorder::Auto => None,
+        ChartBorder::None => Some("<a:ln><a:noFill/></a:ln>".into()),
+        ChartBorder::Line { color, width } => {
+            let mut x = String::from("<a:ln");
+            if let Some(w) = width.filter(|w| w.is_finite()) {
+                // ST_LineWidth: 0..=20116800 EMU.
+                let _ = write!(x, " w=\"{}\"", (f64::from(w) * EMU_PER_PT).round().clamp(0.0, 20_116_800.0) as i64);
+            }
+            x.push('>');
+            if let Some(c) = color.as_ref().and_then(|c| dml_color_xml(c, &wb.theme)) {
+                let _ = write!(x, "<a:solidFill>{c}</a:solidFill>");
+            }
+            x.push_str("</a:ln>");
+            Some(x)
+        }
+    }
 }
 
 // ---------------------------------------------------------------- writing
@@ -1139,6 +1184,8 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     if let Some(p) = pos {
         let _ = write!(s, "<c:legend><c:legendPos val=\"{p}\"/><c:overlay val=\"0\"/></c:legend>");
     }
-    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart></c:chartSpace>");
+    s.push_str("<c:plotVisOnly val=\"1\"/><c:dispBlanksAs val=\"gap\"/></c:chart>");
+    s.push_str(&border_xml(&ch.border, wb));
+    s.push_str("</c:chartSpace>");
     s
 }

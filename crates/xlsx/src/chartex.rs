@@ -162,6 +162,7 @@ pub(crate) fn from_dml_chartex(dc: craft_drawingml::chart::Chart, root: Option<&
         style: 2,
         hole_size: 75,
         first_slice_angle: 0,
+        border: crate::chart::read_border(root.and_then(|r| r.child("spPr"))),
         x_title: dc.axis_titles.0.or_else(|| axis_title(false)),
         y_title: dc.axis_titles.1.or_else(|| axis_title(true)),
         source: None,
@@ -405,11 +406,10 @@ pub fn write_chartex(wb: &Workbook, si: usize, ch: &Chart, names: &mut Vec<Strin
     if let Some(p) = pos {
         let _ = write!(s, "<cx:legend pos=\"{p}\" align=\"ctr\" overlay=\"0\"/>");
     }
-    // A white chart area with a light border, like other charts.
-    let _ = write!(
-        s,
-        "</cx:chart><cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill><a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln></cx:spPr></cx:chartSpace>"
-    );
+    // A white chart area; its border as the chart sets it, or the light one GridCraft has
+    // always written when it sets none.
+    let ln = crate::chart::border_ln(&ch.border, wb).unwrap_or_else(|| format!("<a:ln w=\"9525\"><a:solidFill>{GREY}</a:solidFill></a:ln>"));
+    let _ = write!(s, "</cx:chart><cx:spPr><a:solidFill><a:schemeClr val=\"bg1\"/></a:solidFill>{ln}</cx:spPr></cx:chartSpace>");
     s
 }
 

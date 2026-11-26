@@ -69,6 +69,7 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         hole_size: 75,
         first_slice_angle: 0,
+        border: Default::default(),
         style: 1,
         x_title: None,
         y_title: None,
