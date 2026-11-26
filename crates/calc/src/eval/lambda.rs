@@ -1,6 +1,6 @@
 use super::MAX_LAMBDA_CALLS;
 use super::array::{broadcast_len, single};
-use super::{Array, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, Value, err};
+use super::{Area, Array, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, Value, err};
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
@@ -141,7 +141,12 @@ impl<'h> Evaluator<'h> {
                 if args.len() != 2 {
                     return err(CellError::Value);
                 }
-                let arr = as_array(self.value(&args[0]));
+                let source = self.eval(&args[0]);
+                let source_area = match &source {
+                    Ev::R(areas) if areas.len() == 1 => areas.first().copied(),
+                    _ => None,
+                };
+                let arr = as_array(self.deref(source));
                 let Some(l) = self.lambda_arg(args.get(1), 1) else { return err(CellError::Value) };
                 let Some(p) = l.params.first().cloned() else { return err(CellError::Value) };
                 if l.params.len() != 1 {
@@ -157,7 +162,39 @@ impl<'h> Evaluator<'h> {
                         (0..arr.rows).map(|r| arr.get(r, i).cloned().unwrap_or_default()).collect()
                     };
                     let a = if by_row { Array::row(slice) } else { Array::column(slice) };
-                    let r = self.call_lambda_values(&l, vec![(p.clone(), Ev::V(a.into()))]);
+                    let arg = if let Some(area) = source_area {
+                        let offset = match u32::try_from(i) {
+                            Ok(offset) => offset,
+                            Err(_) => return err(CellError::Num),
+                        };
+                        let dimension = if by_row { arr.cols } else { arr.rows };
+                        let Some(span) = dimension.checked_sub(1).and_then(|span| u32::try_from(span).ok()) else {
+                            return err(CellError::Num);
+                        };
+                        let Some((start, end)) = (if by_row {
+                            area.range.start.row.checked_add(offset).and_then(|row| {
+                                area.range.start.col.checked_add(span).map(|end_col| {
+                                    let start = gridcraft_core::CellRef::new(row, area.range.start.col);
+                                    let end = gridcraft_core::CellRef::new(row, end_col);
+                                    (start, end)
+                                })
+                            })
+                        } else {
+                            area.range.start.col.checked_add(offset).and_then(|col| {
+                                area.range.start.row.checked_add(span).map(|end_row| {
+                                    let start = gridcraft_core::CellRef::new(area.range.start.row, col);
+                                    let end = gridcraft_core::CellRef::new(end_row, col);
+                                    (start, end)
+                                })
+                            })
+                        }) else {
+                            return err(CellError::Num);
+                        };
+                        Ev::R(vec![Area { sheet: area.sheet, range: gridcraft_core::RangeRef { start, end } }])
+                    } else {
+                        Ev::V(a.into())
+                    };
+                    let r = self.call_lambda_values(&l, vec![(p.clone(), arg)]);
                     let Some(one) = single(self.deref(r)) else { return err(CellError::Calc) };
                     out.push(one);
                 }
