@@ -170,12 +170,17 @@ fn is_rel(n: &ParseNode) -> bool {
 
 impl Writer {
     fn run(&mut self, text: &str, st: &Style) {
-        if text.is_empty() {
-            return;
-        }
+        self.write_run(text, st, false);
+    }
+
+    /// The opening of a run: `<m:r>` with its properties. `literal` adds `m:lit`.
+    fn run_head(&self, st: &Style, literal: bool) -> String {
         let mut head = String::from("<m:r>");
-        if st.scr.is_some() || st.sty.is_some() || st.normal {
+        if st.scr.is_some() || st.sty.is_some() || st.normal || literal {
             head.push_str("<m:rPr>");
+            if literal {
+                head.push_str("<m:lit/>");
+            }
             if st.normal {
                 head.push_str("<m:nor/>");
             }
@@ -196,6 +201,25 @@ impl Writer {
             None => &self.fill,
         };
         head.push_str(&format!("<a:rPr lang=\"en-US\" sz=\"{}\">{}<a:latin typeface=\"Cambria Math\"/></a:rPr>", self.sz, fill));
+        head
+    }
+
+    /// Whether the run written last is the last thing in the output and has these properties.
+    fn follows_run_with(&self, head: &str) -> bool {
+        self.last.as_ref().is_some_and(|last| last.end == self.out.len() && self.out.get(last.start..last.text_at) == Some(head))
+    }
+
+    /// Writes a run. A function name (`separate` is set) that directly follows a run with the same
+    /// properties is marked literal: the shared reader joins neighbours of equal properties, so
+    /// `\sin\cos` would otherwise come back as the one name `sincos`.
+    fn write_run(&mut self, text: &str, st: &Style, separate: bool) {
+        if text.is_empty() {
+            return;
+        }
+        let mut head = self.run_head(st, false);
+        if separate && self.follows_run_with(&head) {
+            head = self.run_head(st, true);
+        }
         // Characters in a row with the same properties are one run, as Word writes them. The
         // previous run is still the last thing in the output only if nothing was written since.
         // Upright runs stay apart: a function name (`\sin`) is one run of its own, and the xlsx
@@ -474,7 +498,7 @@ impl Writer {
             }
             ParseNode::Op { name: Some(name), symbol: false, .. } => {
                 let t = name.trim_start_matches('\\');
-                self.run(t, &Style { sty: Some("p"), ..st.clone() });
+                self.write_run(t, &Style { sty: Some("p"), ..st.clone() }, true);
             }
             ParseNode::Op { name: Some(name), .. } => {
                 let t = symbol(name, Mode::Math).ok_or_else(|| unsupported(name))?;

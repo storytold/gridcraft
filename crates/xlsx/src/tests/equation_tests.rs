@@ -531,8 +531,8 @@ fn an_equation_whose_office_math_was_rewritten_reads_its_first_run_as_the_frames
     let mut parts = unzip(&write_xlsx(&wb).unwrap());
     let name = parts.keys().find(|k| k.starts_with("xl/drawings/drawing")).unwrap().clone();
     let mut d = drawing(&parts);
-    assert!(d.contains("<m:t>b</m:t>"), "the second operand is its own run: {d}");
-    d = d.replacen("<m:t>b</m:t>", "<m:t>c</m:t>", 1);
+    assert!(d.contains("<m:t>a+b</m:t>"), "runs of the same properties are one run: {d}");
+    d = d.replacen("<m:t>a+b</m:t>", "<m:t>a+c</m:t>", 1);
     let at = d.find("<a:rPr lang=\"en-US\"").unwrap();
     let close = d[at..].find('>').unwrap() + at + 1;
     let green = "<a:solidFill><a:srgbClr val=\"008000\"/></a:solidFill>";
@@ -595,7 +595,10 @@ fn a_workbook_saved_before_the_paragraph_carried_the_ink_keeps_its_explicit_fram
     let open_end = d[at..].find('>').unwrap() + at + 1;
     let close = d[open_end..].find("</a:endParaRPr>").unwrap() + open_end;
     assert!(d[open_end..close].contains("1F4E79"), "the paragraph end carries the ink: {d}");
-    let legacy = format!("{}{}", &d[..open_end], &d[close..]);
+    // The earlier writer ignored the colour commands, so its runs all carry the ink.
+    let legacy = format!("{}{}", &d[..open_end], &d[close..])
+        .replace("<a:srgbClr val=\"008000\"/>", "<a:srgbClr val=\"1F4E79\"/>")
+        .replace("<a:srgbClr val=\"000000\"/>", "<a:srgbClr val=\"1F4E79\"/>");
     assert!(legacy.matches("1F4E79").count() > 1, "every run still carries the ink");
     parts.insert(name, legacy.into_bytes());
     let s = shapes(&read_xlsx(&rezip(&parts)).unwrap().0);
