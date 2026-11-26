@@ -16,14 +16,17 @@ fn harness(tab: &str) -> Harness {
     session.new_workbook();
     let mut app = SheetApp::new(session, Default::default());
     app.ui.ribbon_tab = tab.into();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(egui::vec2(1280.0, 800.0))
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(4);
     h
 }
@@ -115,14 +118,17 @@ fn the_macros_dialog_lists_scripts_and_the_vba_project_beside_macros() {
     s.execute("macro.save", json!({"name": "Mark", "steps": []})).unwrap();
     let mut app = SheetApp::new(s, Default::default());
     app.ui.ribbon_tab = "Automate".into();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(egui::vec2(1280.0, 800.0))
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(3);
     h.state_mut().open_dialog("macros", json!({}));
     h.run_steps(2);
@@ -260,14 +266,17 @@ fn the_macros_dialog_offers_trust_for_scripts_that_came_with_a_file() {
     s.active_mut().unwrap().scripts_trusted = false;
     let mut app = SheetApp::new(s, Default::default());
     app.ui.ribbon_tab = "Automate".into();
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
-        |ui, app: &mut SheetApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
+    let mut h = egui_kittest::Harness::builder()
+        .with_context_setup(gridcraft_ui_egui::framework::install_headless)
+        .with_size(egui::vec2(1280.0, 800.0))
+        .build_ui_state(
+            |ui, app: &mut SheetApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
     h.run_steps(3);
     h.state_mut().open_dialog("macros", json!({}));
     h.run_steps(2);
@@ -291,14 +300,15 @@ fn the_macros_and_record_macro_dialogs_fit_a_narrow_window() {
         s.new_workbook();
         s.execute("macro.save", json!({"name": "Tidy", "steps": []})).unwrap();
         let app = SheetApp::new(s, Default::default());
-        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
-            |ui, app: &mut SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            app,
-        );
+        let mut h =
+            egui_kittest::Harness::builder().with_context_setup(gridcraft_ui_egui::framework::install_headless).with_size(size).build_ui_state(
+                |ui, app: &mut SheetApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
         h.run_steps(3);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
         for (dialog, labels) in [("macros", &["Run", "Delete", "Options…", "Cancel"][..]), ("recordMacro", &["OK", "Cancel"][..])] {

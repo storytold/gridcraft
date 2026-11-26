@@ -1,11 +1,11 @@
 # Windows, Linux and macOS release-ref nightly: supervised manual go-live
 
 **Enabled for supervised manual runs, not yet qualified.** The producer (`nightly.yml`, main) and the
-signer (`nightly-sign.yml`, release) keep only their exact context guards and run when one of the reviewed
+signer (`nightly-sign.yml`, on the dedicated `nightly-signer` branch) keep only their exact context guards and run when one of the reviewed
 manual actors dispatches them. There is no schedule yet. The installed policy
 [`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is the v3 policy
-adapted from `storytold/photocraft#16594`. Once `nightly.yml` lands on `main`, populate
-`producer_workflow_id` before promoting the policy to `release`, read with:
+adapted from `storytold/photocraft#16594`. `producer_workflow_id` is the registered
+`nightly.yml` workflow id, read with:
 
 ```bash
 gh api repos/storytold/gridcraft/actions/workflows/nightly.yml --jq .id
@@ -14,16 +14,29 @@ gh api repos/storytold/gridcraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `605d58766e8f536564da8fc81d3676ac86816dea`, the craft-common-actions
-main commit that merged [#339](https://github.com/storytold/craft-common-actions/pull/339) (bounded
-lineage compares and an issue reread at the end of candidate admission) on top of
-[#342](https://github.com/storytold/craft-common-actions/pull/342) (policy v3, the `platforms` input
-and the Linux and macOS legs). Both callers name it in `uses` and `tooling-revision`. A pin is reviewed
-source availability, not provider, queue, native signing or crypto qualification.
+Shared tooling is pinned to `8389cad8b849ea6bdb5e15fbce16772c3457565a`, the craft-common-actions
+main commit that merged the signer Windows fix (#375), following the shared work already
+reviewed here. Both callers name it in `uses` and `tooling-revision`. A pin is reviewed source
+availability, not provider, queue, native signing or crypto qualification.
+**Signer branch.** The signer runs on `refs/heads/nightly-signer`, not on the stable `release`
+branch, so nightly signer files never need a stable release sync. The policy's `release_branch`
+names it, the signer's guard requires it and its caller passes `app-name`. The branch only
+fast-forwards to reviewed main commits, through the nightly-signer settings script's `advance` (no
+queued signer run, a trust-closure scan, then the full diff of `.github/` and `packaging/`), and the
+existing `release` environment must admit `nightly-signer` alongside `release` before the first
+dispatch (a repository settings change, not a workflow one). Its trust closure is all of `.github/`
+and `packaging/`, including `packaging/env.sh`, which `import-cert.sh` sources with the Apple keys.
+On that branch only the pinned `nightly-sign.yml` caller may reach an environment: no app workflow
+binds one, nothing else calls `nightly-release.yml`, and the only caller of the shared stable
+`release.yml` is `release.yml`, whose callee must carry the stable-only environment guard. The
+contract tests check the in-repo part on every main PR; the settings scan also resolves the callee.
+Stable releases still come only from `refs/heads/release`. History does not carry over a switch
+between `release` and `nightly-signer`, so the switch happens before the first publication.
+
 Existing stable workflows are unchanged.
 
 **First runs.** The first runs are manual dispatches in this order: `nightly.yml` on main (only a
-listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `release` with that
+listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `nightly-signer` with that
 producer run ID and attempt, by a listed manual actor.
 
 **Manual actors.** `bflatastic`, `dylanmtaylor`, `echelon`, `FredApps` and `skylartaylor`, in the
@@ -44,13 +57,13 @@ so there is no separate Linux or macOS caller job and the signer caller has no p
 ## Installed policy values and their sources
 
 Read on 2026-11-24; re-read anything that may have moved (and populate `producer_workflow_id` and
-any Sonar debt snapshot) before the policy is promoted to `release`.
+any Sonar debt snapshot) before `nightly-signer` is advanced to it.
 
 | Field | Value | Source |
 |---|---|---|
 | `repository_id` | `1408285582` | `gh api repos/storytold/gridcraft --jq .id` |
-| `producer_workflow_id` | `null` (pending `main` registration) | Read with `gh api repos/storytold/gridcraft/actions/workflows/nightly.yml --jq .id` after `nightly.yml` lands on `main` |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `605d5876…` (craft-common-actions #339) | The callers' pin |
+| `producer_workflow_id` | `429713469` | `gh api repos/storytold/gridcraft/actions/workflows/nightly.yml` (path `.github/workflows/nightly.yml`, state `active`) |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `8389cad8…` (the signer Windows fix (#375)) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push; equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist |
 | `platforms` | three rows | Suite stable identities (Windows Authenticode publisher subject, Linux OpenPGP release key fingerprint, macOS Apple Developer ID team `DJ6XS33FX8`) |
@@ -63,8 +76,8 @@ any Sonar debt snapshot) before the policy is promoted to `release`.
 - `.github/workflows/nightly.yml`: default-main registration of the unsigned producer, named
   `GridCraft unsigned nightly`, enabled for manual dispatch by `manual-actors`; no signing secrets
   may be passed or inherited.
-- `.github/workflows/nightly-sign.yml`: top-level release registration, enabled for manual dispatch,
-  and identical on main and release after reviewed promotion. It rejects wrong repository/event/actual branch,
+- `.github/workflows/nightly-sign.yml`: top-level signer registration, enabled for manual dispatch
+  on `nightly-signer`, which carries a reviewed main commit. It rejects wrong repository/event/actual branch,
   including same-name tags. Its constant whole-run concurrency (`gridcraft-nightly-release`) is distinct
   from stable, cancellation is off and `queue: max` must be hosted-qualified. The caller itself passes no
   credentials; only the shared callee's sign jobs bind the `release` environment.
@@ -82,6 +95,9 @@ any Sonar debt snapshot) before the policy is promoted to `release`.
 - Manual actors are exactly the reviewed release managers in both `nightly.yml` and `.github/nightly-signing-policy.json`, with `automatic_signer_actors` empty.
 - Root serialization in `nightly-sign.yml` remains literal (`group: gridcraft-nightly-release`, `cancel-in-progress: false`); it carries no `queue:` key while actionlint 1.7.12 rejects that key, and the value is re-added when the hosted queue is qualified.
 - Installed policy v3 fields, bounds, platforms, candidate workflows, and Sonar identity match `sonar-project.properties` and the callers.
+- The `nightly-signer` trust-closure scan: no app workflow binds `environment:`, only
+  `nightly-sign.yml` calls `nightly-release.yml` at a 40-hex SHA, and the only caller of the
+  shared stable `release.yml` is `release.yml`.
 
 ## GridCraft's nightly-v1 flavor (the same branch)
 
@@ -105,21 +121,24 @@ traversing root, a root that resolves through a link into a fenced folder, an in
 `${XDG_DATA_HOME:-$HOME/.local/share}/gridcraft-nightly/profile`, a sibling of stable's
 `<xdg>/gridcraft`, never an ancestor.
 
-**Every Linux format ships a launcher, and each passes an already-supplied profile through.**
+**Every Linux format ships a launcher.** The flat nightly tar's `gridcraft` is craft-common-actions'
+shared launcher template (`scripts/nightly-launcher.sh.in` from #363, rendered for this app), so it always
+supplies its own profile; the packaged formats pass an already-supplied profile through.
 
 | Format | Launcher | GUI | Data root |
 |---|---|---|---|
 | deb/rpm | `/usr/bin/gridcraft-nightly` | `/usr/lib/gridcraft-nightly/gridcraft` | `<xdg>/gridcraft-nightly/profile` |
 | AppImage | `AppRun` (a script) and `usr/bin/gridcraft-nightly` | `usr/bin/gridcraft` | same |
-| flat nightly tar | `gridcraft` | `gridcraft-bin` | same |
-| plain tree tarball | `bin/gridcraft-nightly` | `bin/gridcraft` | same |
-| Arch handoff | `bin/gridcraft-nightly` | `.gridcraft-nightly/gridcraft` | same |
+| flat nightly tar | `gridcraft` (the shared template) | `gridcraft-bin` | `<xdg>/ai.storyteller.gridcraft.nightly` |
+| plain tree tarball | `bin/gridcraft-nightly` | `bin/gridcraft` | `<xdg>/gridcraft-nightly/profile` |
+| Arch handoff | `bin/gridcraft-nightly` | `.gridcraft-nightly/gridcraft` | `<xdg>/gridcraft-nightly/profile` |
 | Flatpak bundle | `/app/bin/gridcraft-nightly` | `/app/bin/gridcraft` | the sandbox's own `~/.local/share` |
 
 The flat nightly tar uses the kit's standard layout: `<app>` is the launcher people run and
 `<app>-bin` is the GUI ELF it starts, so the shared Unix verifier can keep requiring `gridcraft`
-as the entrypoint. No launcher falls back to a relative or world-writable path for the GUI, and a
-candidate that is the launcher itself is never started.
+as the entrypoint. That launcher is the shared template: it resolves its own directory once and execs
+`gridcraft-bin` with `--launch-profile nightly-v1 --profile-root <xdg>/ai.storyteller.gridcraft.nightly --`
+and the user's arguments, asking a bare `--version`/`-V` in the Launcher's own form.
 
 **macOS and Windows.** `GridCraft Nightly.app` (`CFBundleIdentifier
 ai.storyteller.gridcraft.nightly`, associations removed) is built and verified unsigned on main and

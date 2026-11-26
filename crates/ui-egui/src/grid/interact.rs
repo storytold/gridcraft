@@ -648,19 +648,22 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
     if primary_clicked || resp.drag_started() {
         resp.request_focus();
     }
+    crate::framework::host_canvas(&ctx, resp.id);
     keyboard(app, &ctx, resp, geo, sh);
 }
 
-/// Whether Esc was pressed this frame, with any modifiers; every Esc press is then spent, so the
-/// grid's own Esc doesn't also drop a pending copy or Format Painter.
+/// Whether Esc was pressed this frame, with any modifiers, in egui's input or as the window's
+/// cancel; every Esc press is then spent, so the grid's own Esc doesn't also drop a pending copy or
+/// Format Painter.
 fn spend_escape(ctx: &egui::Context) -> bool {
-    ctx.input_mut(|i| {
+    let in_egui = ctx.input_mut(|i| {
         let pressed = i.key_pressed(egui::Key::Escape);
         if pressed {
             i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
         }
         pressed
-    })
+    });
+    in_egui || crate::framework::take_window_cancel(ctx)
 }
 
 fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
@@ -810,7 +813,7 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::Fill { target: Some(t), menu: true } => {
                 if let Some(p) = pos
                     && t != sel.current()
-                    && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    && !crate::framework::consume_escape(&ctx)
                 {
                     app.grid.fill_menu = Some((sel.current(), t, geo.mirror_pos(p)));
                 }
