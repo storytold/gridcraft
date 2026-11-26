@@ -1115,6 +1115,7 @@ mod tests {
             sheet_exts_dropped: vec![],
             known_function: None,
             python: Default::default(),
+            chart_parts: vec![],
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],

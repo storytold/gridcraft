@@ -70,7 +70,8 @@ impl SheetLayout {
 #[derive(Clone, Debug, Default)]
 pub struct PrintOptions {
     pub all_sheets: bool,
-    pub range: Option<RangeRef>,
+    /// Areas of the active sheet to print instead of its print area, in order (Print Selection).
+    pub ranges: Vec<RangeRef>,
     pub fit_to_page: Option<bool>,
 }
 
@@ -81,12 +82,33 @@ impl PrintOptions {
             Some("all") | Some("workbook") => true,
             Some(other) => return Err(bad(cmd, format!("`sheets` must be active or all, not `{other}`"))),
         };
-        let range = match str_param(p, "range").map(str::trim).filter(|r| !r.is_empty()) {
-            Some(r) => Some(RangeRef::parse(split_sheet(r).1).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?),
-            None => None,
-        };
-        Ok(PrintOptions { all_sheets, range, fit_to_page: bool_param(p, "fitToPage") })
+        let mut ranges = Vec::new();
+        if let Some(r) = str_param(p, "range").map(str::trim).filter(|r| !r.is_empty()) {
+            for part in split_areas(r) {
+                ranges.push(RangeRef::parse(split_sheet(part.trim()).1.trim()).ok_or_else(|| bad(cmd, format!("not a range: `{r}`")))?);
+            }
+        }
+        Ok(PrintOptions { all_sheets, ranges, fit_to_page: bool_param(p, "fitToPage") })
     }
+}
+
+/// Splits a multi-area reference at the commas outside quoted sheet names, so each area keeps
+/// its own optional `Sheet!` prefix.
+fn split_areas(r: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    for (i, c) in r.char_indices() {
+        match c {
+            '\'' => quoted = !quoted,
+            ',' if !quoted => {
+                parts.push(&r[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&r[start..]);
+    parts
 }
 
 /// The range a sheet prints: its print area, else the used range grown to cover drawing
@@ -321,14 +343,20 @@ pub fn layouts(wb: &Workbook, opts: &PrintOptions) -> Vec<SheetLayout> {
         if pages >= MAX_PAGES {
             break;
         }
-        let ovr = if si == wb.active_sheet() { opts.range } else { None };
-        if opts.all_sheets && ovr.is_none() && wb.sheet(si).is_some_and(|s| print_range(s).is_none()) {
+        let areas: Vec<Option<RangeRef>> =
+            if si == wb.active_sheet() && !opts.ranges.is_empty() { opts.ranges.iter().copied().map(Some).collect() } else { vec![None] };
+        if opts.all_sheets && areas == [None] && wb.sheet(si).is_some_and(|s| print_range(s).is_none()) {
             continue;
         }
-        if let Some(mut l) = layout_sheet(wb, si, opts, ovr) {
-            l.pages.truncate(MAX_PAGES - pages);
-            pages += l.pages.len();
-            out.push(l);
+        for ovr in areas {
+            if pages >= MAX_PAGES {
+                break;
+            }
+            if let Some(mut l) = layout_sheet(wb, si, opts, ovr) {
+                l.pages.truncate(MAX_PAGES - pages);
+                pages += l.pages.len();
+                out.push(l);
+            }
         }
     }
     if out.is_empty() && opts.all_sheets {
