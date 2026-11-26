@@ -137,12 +137,21 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other(m));
     }
     let active_sheet = s.doc()?.wb.active_sheet();
+    let unlocked_ranges = s.doc()?.unlocked_ranges.clone();
     edit(s, |cx| {
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection, when the selection holds
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
             let selected = cx.sel.current();
             let range = if sheet == active_sheet && selected.contains(at) { selected } else { RangeRef::cell(at) };
+            if let Some(sh) = cx.wb.sheet(sheet)
+                && sh.is_protected()
+                && let Some(m) = range
+                    .iter()
+                    .find_map(|c| (cx.wb.styles.get(sh.style_id(c)).protection.locked).then(|| locked_cell_error(sh, c, &unlocked_ranges)).flatten())
+            {
+                return Err(EngineError::Other(m));
+            }
             // A table header can't hold an array's value, and a table resizes under it.
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
