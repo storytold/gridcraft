@@ -685,7 +685,9 @@ pub(crate) fn rewrite_all_formulas_many(wb: &mut gridcraft_model::Workbook, targ
     wb.rewrite_references(&|host, expr| adjust_all(host.name, expr));
     // Rows and columns inserted or deleted on the target sheet move its legacy array ranges too
     // (a cut moves its arrays itself).
-    let moves_arrays = |e: &&Edit| matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. });
+    let moves_arrays = |e: &&Edit| {
+        matches!(e, Edit::Insert { .. } | Edit::Delete { .. } | Edit::Reorder { .. } | Edit::InsertCells { .. } | Edit::DeleteCells { .. })
+    };
     if edits.iter().any(|e| moves_arrays(&e))
         && let Some(si) = wb.sheet_index(target)
         && let Some(sheet) = wb.sheet_mut(si)
