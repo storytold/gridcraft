@@ -248,7 +248,7 @@ fn rtl_sheet_sparkline_reflects_with_cell_geometry() {
         color: Color::rgb(255, 0, 0),
         markers: false,
     });
-    let options = PrintOptions { range: RangeRef::parse("A1:B2"), ..PrintOptions::default() };
+    let options = PrintOptions { ranges: RangeRef::parse("A1:B2").into_iter().collect(), ..PrintOptions::default() };
     let ltr = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
     wb.sheet_mut(0).unwrap().right_to_left = true;
     let rtl = render_pdf(&wb, &layouts(&wb, &options), "", "").unwrap().bytes;
@@ -974,6 +974,48 @@ fn page_setup_paper_sizes_reach_the_pdf_page() {
     assert!(s.execute("pageLayout.pageSetup", json!({"paper": "Napkin"})).is_err());
 }
 
+/// An empty paper name means no paper is stated; it prints on Letter.
+#[test]
+fn an_unstated_paper_prints_on_letter() {
+    let mut wb = gridcraft_model::Workbook::new();
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    std::sync::Arc::make_mut(&mut wb.sheets[0]).print.paper = String::new();
+    let layouts = super::layout::layouts(&wb, &super::layout::PrintOptions::default());
+    let l = &layouts[0];
+    assert_eq!((l.page_w, l.page_h), (612.0, 792.0));
+    assert_eq!(paper_size(""), (612.0, 792.0));
+}
+
+/// Both commands that set the paper store a known one under its table name, so every file
+/// format finds it.
+#[test]
+fn paper_size_commands_store_the_table_name() {
+    let mut s = s();
+    s.execute("pageLayout.size", json!({"paper": "b5-jis"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "B5");
+    s.execute("pageLayout.pageSetup", json!({"paper": "11x17"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, "Tabloid");
+    // Statement and the envelopes XLSX names are accepted by both commands (Page Setup refused
+    // them before), stored under their table name and printed on their own size.
+    s.execute("range.setValues", json!({"range": "A1", "values": [["x"]]})).unwrap();
+    let close = |v: &Json, want: f64| (v.as_f64().unwrap() - want).abs() < 0.01;
+    for (cmd, given, stored, w, h) in [
+        ("pageLayout.pageSetup", "statement", "Statement", 396.0, 612.0),
+        ("pageLayout.pageSetup", "envelope #10", "Envelope #10", 297.0, 684.0),
+        ("pageLayout.pageSetup", "Envelope-DL", "Envelope DL", 311.81, 623.62),
+        ("pageLayout.size", "Statement", "Statement", 396.0, 612.0),
+        ("pageLayout.size", "envelope dl", "Envelope DL", 311.81, 623.62),
+    ] {
+        s.execute(cmd, json!({"paper": given})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.sheets[0].print.paper, stored, "{cmd} {given}");
+        let pv = s.execute("file.printPreview", json!({})).unwrap();
+        let page = &pv["pageList"][0];
+        assert!(close(&page["width"], w) && close(&page["height"], h), "{cmd} {given}: {page}");
+    }
+    // A new workbook still prints on Letter.
+    assert_eq!(gridcraft_model::Workbook::new().sheets[0].print.paper, "Letter");
+}
+
 #[test]
 fn hostile_settings_never_panic_and_cap_pages() {
     let mut s = s();
@@ -1343,4 +1385,72 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     pics.chart_prims = MAX_CHART_PRIMS - 10;
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
+}
+
+fn preview_ranges(s: &mut Session, p: Json) -> Vec<String> {
+    let r = s.execute("file.printPreview", p).unwrap();
+    r["pageList"].as_array().unwrap().iter().map(|pg| pg["range"].as_str().unwrap().to_string()).collect()
+}
+
+#[test]
+fn a_range_prints_instead_of_the_print_area_and_each_area_gets_its_own_pages() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "H20", "input": "y"})).unwrap();
+    s.execute("pageLayout.pageSetup", json!({"printArea": "F10:H20"})).unwrap();
+    assert_eq!(preview_ranges(&mut s, json!({})), ["F10:H20"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2"})), ["A1:B2"]);
+    // Several areas, like a multi-area selection: one run of pages each, in the order given.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "D4:E5,A1:B2"})), ["D4:E5", "A1:B2"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2, D4:E5"})), ["A1:B2", "D4:E5"]);
+    let (_, pages) = pdf_of(&mut s, json!({"range": "A1:B2,D4:E5"}));
+    assert_eq!(pages, 2);
+    for bad in ["A1:B2,", "A1:B2,nope", ","] {
+        assert!(s.execute("file.printPreview", json!({"range": bad})).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn a_sheet_qualifier_on_a_later_area_does_not_swallow_the_earlier_ones() {
+    let mut s = s();
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    assert_eq!(preview_ranges(&mut s, json!({"range": "Sheet1!A1:B2,Sheet1!D4:E5"})), ["A1:B2", "D4:E5"]);
+    // A comma inside a quoted sheet name is not an area separator.
+    assert_eq!(preview_ranges(&mut s, json!({"range": "A1:B2,'a,b'!D4:E5"})), ["A1:B2", "D4:E5"]);
+}
+
+/// XLSX id 34 is ISO B5 (176 × 250 mm), not the Letter fallback of the old name.
+#[test]
+fn imported_xlsx_b5_envelope_uses_iso_b5_print_dimensions() {
+    use std::io::{Cursor, Read, Write};
+    let mut wb = gridcraft_model::Workbook::new();
+    wb.sheet_mut(0).unwrap().set_value(CellRef::new(0, 0), gridcraft_core::Value::Text("x".into()));
+    wb.sheet_mut(0).unwrap().print.paper = "Legal".into();
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let mut input = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut output = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..input.len() {
+        let mut part = input.by_index(i).unwrap();
+        let mut data = Vec::new();
+        part.read_to_end(&mut data).unwrap();
+        let name = part.name().unwrap().to_string();
+        if name == "xl/worksheets/sheet1.xml" {
+            let xml = String::from_utf8(data).unwrap();
+            assert!(xml.contains(r#"paperSize="5""#));
+            // Set the input id independently of the shared paper-name mapping under test.
+            data = xml.replace(r#"paperSize="5""#, r#"paperSize="34""#).into_bytes();
+        }
+        output.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        output.write_all(&data).unwrap();
+    }
+    let bytes = output.finish().unwrap().into_inner();
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "iso-b5.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    let preview = s.execute("file.printPreview", json!({})).unwrap();
+    let page = &preview["pageList"][0];
+    assert!((page["width"].as_f64().unwrap() - 498.90).abs() < 0.01, "{page}");
+    assert!((page["height"].as_f64().unwrap() - 708.66).abs() < 0.01, "{page}");
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "/MediaBox [0 0 498.9 708.66]"));
 }

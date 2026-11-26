@@ -419,6 +419,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "Lưu sổ làm việc với tên khác hoặc vào thư mục khác.",
         "Print Active Sheets" => "In các trang tính đang chọn",
         "Print Entire Workbook" => "In toàn bộ sổ làm việc",
+        "Print Selection" => "In vùng chọn",
         "Fit Sheet on One Page" => "Vừa trang tính trên một trang in",
         "Page Setup…" => "Thiết lập trang…",
         "Page {page} of {pages}" => "Trang {page} trên {pages}",
