@@ -4,6 +4,8 @@
 /// Returns the Portuguese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Diagram" => "Diagrama",
+        "Decorative Text" => "Texto decorativo",
         "Paste" => "Colar",
         "Paste Values" => "Colar Valores",
         "Paste Formulas" => "Colar Fórmulas",
@@ -59,6 +61,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format\nPane" => "Painel de\nFormatação",
         "Format" => "Formatar",
         "Insert" => "Inserir",
+        "Header Menu|Insert" => "Inserir",
         "Insert Cells…" => "Inserir Células…",
         "Delete" => "Excluir",
         "Delete Cells…" => "Excluir Células…",
@@ -112,6 +115,19 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Sparklines" => "Minigráficos",
         "Checkbox" => "Caixa de Seleção",
         "Insert checkboxes in the selected cells" => "Inserir caixas de seleção nas células selecionadas",
+        "Button" => "Botão",
+        "Slider" => "Controle Deslizante",
+        "Spin Button" => "Botão de Rotação",
+        "Draw a button that runs a macro or a command" => "Desenhar um botão que executa uma macro ou um comando",
+        "Draw a slider that sets a whole number in a linked cell" => {
+            "Desenhar um controle deslizante que define um número inteiro em uma célula vinculada"
+        }
+        "Draw a spin button that steps a whole number in a linked cell" => {
+            "Desenhar um botão de rotação que altera um número inteiro em uma célula vinculada"
+        }
+        "Edit Text" => "Editar Texto",
+        "Assign Action…" => "Atribuir Ação…",
+        "Format Control…" => "Formatar Controle…",
         "Header & Footer" => "Cabeçalho e Rodapé",
         "Draw with ink" => "Desenhar com Tinta",
         "Eraser" => "Borracha",
@@ -245,6 +261,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Legend: Bottom" => "Legenda: Abaixo",
         "Legend: Top" => "Legenda: Acima",
         "Legend: Right" => "Legenda: À Direita",
+        "First slice angle" => "Ângulo da primeira fatia",
+        "Doughnut hole size" => "Tamanho do orifício da rosca",
         "Gridlines: None" => "Linhas de Grade: Nenhuma",
         "Gridlines: Show" => "Linhas de Grade: Exibir",
         "Chart\nTitle" => "Título\ndo Gráfico",
@@ -349,6 +367,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save" => "Salvar",
         "Save As" => "Salvar como",
         "Export" => "Exportar",
+        "Minimize" => "Minimizar",
+        "Maximize" => "Maximizar",
+        "Restore Down" => "Restaurar",
         "Close" => "Fechar",
         "Options" => "Opções",
         "Account" => "Conta",
@@ -360,6 +381,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recentes",
         "No recent workbooks yet." => "Ainda não há pastas de trabalho recentes.",
         "More workbooks" => "Mais pastas de trabalho",
+        "More entries not shown" => "Mais itens não exibidos",
         "Modified" => "Modificado",
         "Not available" => "Indisponível",
         "Just now" => "Agora mesmo",
@@ -690,6 +712,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description (optional):" => "Descrição (opcional):",
         "Fits inside the selected cell and moves with its content." => "Ajusta-se dentro da célula selecionada e move-se com o conteúdo dela.",
         "Choose a PNG or JPEG no larger than 16 MB." => "Escolha um PNG ou JPEG de no máximo 16 MB.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Esta pasta de trabalho tem uma tabela dinâmica com um campo de valor «Contagem distinta». No arquivo .xlsx ela é salva como uma Contagem comum, com um marcador que só o GridCraft lê; Atualizar no Excel a transforma em contagem comum."
+        }
         "About" => "Sobre",
         "Contributors" => "Colaboradores",
         "Models" => "Modelos",
@@ -774,7 +799,21 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Cell Color" => "Cor da Célula",
         "A to Z" => "De A a Z",
         "Z to A" => "De Z a A",
-        "+ Add Level" => "+ Adicionar Nível",
+        "Add Level" => "Adicionar Nível",
+        "Delete Level" => "Excluir Nível",
+        "Copy Level" => "Copiar Nível",
+        "Move Up" => "Mover para Cima",
+        "Move Down" => "Mover para Baixo",
+        "Order" => "Ordem",
+        "Sort On" => "Classificar em",
+        "Sort|Column" => "Coluna",
+        "Column {letters}" => "Coluna {letters}",
+        "Smallest to Largest" => "Do Menor para o Maior",
+        "Largest to Smallest" => "Do Maior para o Menor",
+        "Close the Sort dialog before switching or changing worksheets." => {
+            "Feche a caixa de diálogo Classificar antes de alternar ou alterar planilhas."
+        }
+        "Return to the original worksheet to sort, or cancel." => "Volte para a planilha original para classificar ou cancele.",
         "New…" => "Novo…",
         "Edit…" => "Editar…",
         "Name" => "Nome",
@@ -1006,6 +1045,120 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Mostrar",
         "Collapse dialog" => "Recolher caixa de diálogo",
         "Expand dialog" => "Expandir caixa de diálogo",
+        "Distinct Count" => "Contagem distinta",
+        "Summarize by Distinct Count" => "Resumir por contagem distinta",
+        "A calculated field can't use Distinct Count." => "Um campo calculado não pode usar «Contagem distinta».",
+        "Numerical Count" => "Contagem Numérica",
+        "Minimum" => "Mínimo",
+        "Maximum" => "Máximo",
+        "Circular References: {cell}" => "Referências Circulares: {cell}",
+        "Width: {chars} ({pixels} pixels)" => "Largura: {chars} ({pixels} pixels)",
+        "Height: {points} ({pixels} pixels)" => "Altura: {points} ({pixels} pixels)",
+        "Picture in cell" => "Imagem na célula",
+        "Picture: {alt}" => "Imagem: {alt}",
+        "Format Control: {name}" => "Formatar Controle: {name}",
+        "Error at character {position}: {message}" => "Erro no caractere {position}: {message}",
+        "Macro definitions are not supported in equations." => "Definições de macro não são compatíveis com equações.",
+        "A % can't be combined with a link in an equation." => "Um % não pode ser combinado com um link em uma equação.",
+        "Equations can nest at most 32 levels deep." => "As equações podem ter no máximo 32 níveis de aninhamento.",
+        "An equation can be at most 4096 bytes long." => "Uma equação pode ter no máximo 4096 bytes.",
+        "An equation can have at most 2500 matrix cells (rows times the widest row)." => {
+            "Uma equação pode ter no máximo 2500 células de matriz (linhas vezes a linha mais larga)."
+        }
+        "This equation is too large to draw." => "Esta equação é grande demais para ser desenhada.",
+        "This equation could not be laid out." => "Não foi possível diagramar esta equação.",
+        "Saved macro “{name}” ({steps} step)" => "Macro “{name}” salva ({steps} etapa)",
+        "Saved macro “{name}” ({steps} steps)" => "Macro “{name}” salva ({steps} etapas)",
+        "without {key}: another macro took it while recording" => "sem {key}: outra macro o usou durante a gravação",
+        "Recording stopped" => "Gravação interrompida",
+        "Macro “{name}” stopped: {message}" => "Macro “{name}” interrompida: {message}",
+        "Ran macro “{name}” ({steps} step)" => "Macro “{name}” executada ({steps} etapa)",
+        "Ran macro “{name}” ({steps} steps)" => "Macro “{name}” executada ({steps} etapas)",
+        "Double superscript" => "Sobrescrito duplo",
+        "Double subscript" => "Subscrito duplo",
+        "Extra }" => "} a mais",
+        "Unexpected end of input in a macro argument" => "Fim inesperado da entrada em um argumento de macro",
+        "Expected \\right after \\left" => "\\right esperado após \\left",
+        "\\middle must be within \\left and \\right" => "\\middle deve estar entre \\left e \\right",
+        "Invalid environment name" => "Nome de ambiente inválido",
+        "Expected \\end after environment body" => "\\end esperado após o corpo do ambiente",
+        "Expected URL" => "URL esperada",
+        "\\tag requires an argument" => "\\tag requer um argumento",
+        "only one infix operator per group" => "Apenas um operador infixo por grupo",
+        "Expected color token" => "Cor esperada",
+        "Expected size for \\raisebox" => "Tamanho esperado para \\raisebox",
+        "Expected size for \\rule width" => "Tamanho esperado para a largura de \\rule",
+        "Expected size for \\rule height" => "Tamanho esperado para a altura de \\rule",
+        "Cannot use both \\tag and \\nonumber in the same row" => "Não é possível usar \\tag e \\nonumber na mesma linha",
+        "Multiple \\tag in a row" => "Vários \\tag em uma linha",
+        "\\tag must appear at the end of the row after the equation body" => "\\tag deve aparecer no fim da linha, após o corpo da equação",
+        "Multiple \\nonumber in a row" => "Vários \\nonumber em uma linha",
+        "\\nonumber must appear at the end of the row" => "\\nonumber deve aparecer no fim da linha",
+        "Too many tab characters: &" => "Caracteres de tabulação demais: &",
+        "Invalid column alignment for array" => "Alinhamento de coluna inválido para array",
+        "Expected column alignment character" => "Caractere de alinhamento de coluna esperado",
+        "Expected l or c or r" => "l, c ou r esperado",
+        "Expected ]" => "] esperado",
+        "Unexpected end of CD row after @" => "Fim inesperado da linha CD após @",
+        "Invalid column alignment for subarray" => "Alinhamento de coluna inválido para subarray",
+        "{subarray} can contain only one column" => "{subarray} pode conter apenas uma coluna",
+        "prooftree has a \\LeftLabel or \\RightLabel without a following inference command" => {
+            "prooftree tem um \\LeftLabel ou \\RightLabel sem um comando de inferência a seguir"
+        }
+        "Recursion limit exceeded" => "Limite de recursão excedido",
+        "Too many expansions: infinite loop or need to increase maxExpand setting" => {
+            "Expansões de macro demais: laço infinito ou configuração maxExpand baixa demais"
+        }
+        "Expected raw style for \\htmlStyle" => "Estilo bruto esperado para \\htmlStyle",
+        "\\verb assertion failed" => "Falha na verificação de \\verb",
+        "Undefined control sequence: {name}" => "Sequência de controle não definida: {name}",
+        "Expected '{expected}', got '{got}'" => "'{expected}' esperado, '{got}' encontrado",
+        "Expected group after '{symbol}'" => "Grupo esperado após '{symbol}'",
+        "Expected delimiter as argument to '{function}'" => "Delimitador esperado como argumento de '{function}'",
+        "Expected group as argument to '{function}'" => "Grupo esperado como argumento de '{function}'",
+        "Got function '{function}' with no arguments as superscript" => "Função '{function}' sem argumentos usada como sobrescrito",
+        "Got function '{function}' with no arguments as subscript" => "Função '{function}' sem argumentos usada como subscrito",
+        "Got function '{function}' with no arguments as argument to '{parent}'" => {
+            "Função '{function}' sem argumentos usada como argumento de '{parent}'"
+        }
+        "Got function '{function}' with no arguments as \\tag" => "Função '{function}' sem argumentos usada como \\tag",
+        "Can't use function '{function}' in text mode" => "A função '{function}' não pode ser usada no modo de texto",
+        "Can't use function '{function}' in math mode" => "A função '{function}' não pode ser usada no modo matemático",
+        "Invalid color: '{color}'" => "Cor inválida: '{color}'",
+        "Invalid size: '{size}'" => "Tamanho inválido: '{size}'",
+        "Invalid unit: '{unit}'" => "Unidade inválida: '{unit}'",
+        "Invalid delimiter '{delimiter}' after '{function}'" => "Delimitador '{delimiter}' inválido após '{function}'",
+        "Invalid delimiter type '{type}' after '{function}'" => "Tipo de delimitador '{type}' inválido após '{function}'",
+        "Invalid delimiter type '{type}'" => "Tipo de delimitador '{type}' inválido",
+        "No such environment: {name}" => "Ambiente desconhecido: {name}",
+        "Expected argument to \\begin{{name}}" => "Argumento esperado para \\begin{{name}}",
+        "Mismatch: \\begin{{begin}} matched by \\end{{end}}" => "Não correspondem: \\begin{{begin}} fechado por \\end{{end}}",
+        "{command} valid only within array environment" => "{command} só é válido dentro de um ambiente array",
+        "Mismatched {command}" => "{command} sem correspondência",
+        "Expected & or \\\\ or \\cr or \\end, got '{got}'" => "&, \\\\, \\cr ou \\end esperado, '{got}' encontrado",
+        "Unknown column alignment: {alignment}" => "Alinhamento de coluna desconhecido: {alignment}",
+        "Too many math in a row: expected {expected}, but got {got}" => "Fórmulas demais em uma linha: {expected} esperadas, {got} encontradas",
+        "Unknown CD directive: @{directive}" => "Diretiva CD desconhecida: @{directive}",
+        "Expected argument for {command}" => "Argumento esperado para {command}",
+        "{command} needs {count} premise(s), but only {available} available" => {
+            "{command} precisa de {count} premissa(s), mas só há {available} disponível(is)"
+        }
+        "{command} valid only as a supported bussproofs command within prooftree" => {
+            "{command} só é válido como comando bussproofs compatível dentro de prooftree"
+        }
+        "prooftree ended with {count} proof stack item(s), expected 1" => "prooftree terminou com {count} item(ns) na pilha de prova; esperado 1",
+        "\\@char has non-numeric argument {argument}" => "\\@char tem um argumento não numérico {argument}",
+        "\\@char with invalid code point {code}" => "\\@char com ponto de código inválido {code}",
+        "Invalid environment name character: {character}" => "Caractere inválido no nome do ambiente: {character}",
+        "Copy Cells" => "Copiar Células",
+        "Fill Series" => "Preencher Série",
+        "Fill Formatting Only" => "Preencher Somente Formatos",
+        "Fill Without Formatting" => "Preencher Sem Formatação",
+        "Fill Days" => "Preencher Dias",
+        "Fill Weekdays" => "Preencher Dias Úteis",
+        "Fill Months" => "Preencher Meses",
+        "Fill Years" => "Preencher Anos",
+        "Auto Fill Options" => "Opções de Autopreenchimento",
         _ => return None,
     })
 }

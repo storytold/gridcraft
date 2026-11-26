@@ -1,7 +1,9 @@
 use super::controls::{act, anchor_keytip, control_keytip, invoke, popup_command, sep};
-use super::{Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, vec2};
+use super::{
+    Icon, Sense, SheetApp, Stroke, StrokeKind, Tokens, Ui, big_button, big_split_button, icons, json, small_button, small_toggle_button, vec2,
+};
 
-/// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, checkbox, links, comments, text box, header/footer and symbols.
+/// Draws the Insert tab: PivotTable, Table, Pictures, Shapes, Icons, charts, slicer, sparklines, form controls (button, slider, spin button), checkbox, links, comments, text box, header/footer and symbols.
 pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     let __k = big_button(ui, Icon::PivotTable, "PivotTable", "PivotTable", false);
     control_keytip(app, ui, &__k, "insert.pivotTable");
@@ -165,6 +167,26 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
         }
     });
     sep(ui);
+    // Form controls: draw a button, slider or spin button on the sheet (a click places it at its
+    // default size). Their key tips run the command at the active cell.
+    use gridcraft_engine::model::ControlKind;
+    let placing = app.grid.placing;
+    ui.vertical(|ui| {
+        for (icon, kind, label, tip, id) in [
+            (Icon::Button, ControlKind::Button, "Button", "Draw a button that runs a macro or a command", "insert.button"),
+            (Icon::Slider, ControlKind::Slider, "Slider", "Draw a slider that sets a whole number in a linked cell", "insert.slider"),
+            (Icon::Spin, ControlKind::Spin, "Spin Button", "Draw a spin button that steps a whole number in a linked cell", "insert.spinButton"),
+        ] {
+            let on = placing == Some(kind);
+            let r = small_toggle_button(ui, icon, label, tip, on);
+            control_keytip(app, ui, &r, id);
+            if r.clicked() {
+                app.grid.placing = if placing == Some(kind) { None } else { Some(kind) };
+                app.selected_object = None;
+            }
+        }
+    });
+    sep(ui);
     // Cell Controls.
     if big_button(ui, Icon::Checkbox, "Checkbox", "Insert checkboxes in the selected cells", false).clicked() {
         act(app, "insert.checkbox", json!({}));
@@ -186,6 +208,12 @@ pub(super) fn insert(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         act(app, "insert.textBox", json!({}));
     }
+    // Two lines like its neighbours, so the Insert tab stays as wide as before; the translated label is split, the catalog key is one line.
+    let label = app.ui.language.tr("Decorative Text").replacen(' ', "\n", 1);
+    let wa = big_button(ui, Icon::WordArt, &label, "Decorative Text", true);
+    anchor_keytip(app, ui, &wa, &["insert.wordArt"]);
+    // Menu invocation shows the style gallery; the command itself never opens a dialog.
+    egui::Popup::menu(&wa).show(|ui| crate::wordart::gallery(app, ui));
     let __k = big_button(ui, Icon::PageLayout, "Header &\nFooter", "Header & Footer", false);
     control_keytip(app, ui, &__k, "dialog:headerFooter");
     if __k.clicked() {

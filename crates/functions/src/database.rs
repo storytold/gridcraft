@@ -70,39 +70,59 @@ fn cell_criterion(v: &Value) -> Option<Criterion> {
 /// when the label is unknown, criterion).
 type CriteriaRow = (usize, Vec<(usize, Option<usize>, Criterion)>);
 
+/// Most condition tests one selection may make (records times conditions): every record can be
+/// tested against every criteria row when none matches, so a modest database and criteria table
+/// multiply into billions of tests. Past it the function is `#NUM!`, as lifted lookups are; 5e8
+/// is a few seconds of matching.
+const SELECTION_WORK_BUDGET: usize = 500_000_000;
+
 /// Rows (1-based within the database, excluding the header) of matching records.
-fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
+fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>> {
+    // The database column under each criteria label, found once per label rather than per cell.
+    let columns: Vec<Option<usize>> = (0..crit.cols)
+        .map(|c| match crit.get(0, c) {
+            Some(Value::Text(t)) => find_column(db, t),
+            Some(Value::Number(n)) => find_column(db, &gridcraft_core::number_to_text(*n)),
+            _ => None,
+        })
+        .collect();
     // Per criteria row: its index and a list of (criteria column, database column or None when
     // the label is unknown, criterion).
     let mut rows: Vec<CriteriaRow> = Vec::new();
+    let mut tests = 0usize;
     for r in 1..crit.rows {
         let mut conds = Vec::new();
         for c in 0..crit.cols {
             let Some(cell) = crit.get(r, c) else { continue };
             let Some(cr) = cell_criterion(cell) else { continue };
-            let col = match crit.get(0, c) {
-                Some(Value::Text(t)) => find_column(db, t),
-                Some(Value::Number(n)) => find_column(db, &gridcraft_core::number_to_text(*n)),
-                _ => None,
-            };
-            conds.push((c, col, cr));
+            conds.push((c, columns.get(c).copied().flatten(), cr));
         }
+        tests = tests.saturating_add(conds.len().max(1));
         rows.push((r, conds));
     }
-    let all_match = rows.is_empty();
-    (1..db.rows)
+    // An empty criteria row matches every record without testing a condition, so nothing is charged.
+    let all_match = rows.is_empty() || rows.iter().any(|(_, conds)| conds.is_empty());
+    // Computed criteria (a formula evaluated per record) count like any other test.
+    if !all_match && db.rows.saturating_sub(1).saturating_mul(tests) > SELECTION_WORK_BUDGET {
+        return Err(CellError::Num);
+    }
+    Ok((1..db.rows)
         .filter(|&rec| {
             all_match
-                || rows.iter().any(|(r, conds)| {
-                    conds.iter().all(|(c, col, cr)| match col {
-                        Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
-                        // Under a label that names no field, only a formula (a computed
-                        // criterion) can hold.
-                        None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),
-                    })
-                })
+                // Out of work: a computed criterion would fail at once, so records are left out
+                // without scanning the criteria rows; the per-row check still stops mid-scan.
+                || (!ctx.exhausted()
+                    && rows.iter().any(|(r, conds)| {
+                        !ctx.exhausted()
+                            && conds.iter().all(|(c, col, cr)| !ctx.exhausted() && match col {
+                                Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
+                                // Under a label that names no field, only a formula (a computed
+                                // criterion) can hold.
+                                None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),
+                            })
+                    }))
         })
-        .collect()
+        .collect())
 }
 
 struct Selection<'a> {
@@ -123,7 +143,7 @@ fn select<'a>(a: &'a [Arg], ctx: &mut dyn Ctx) -> R<Selection<'a>> {
     let db = as_array(dbv);
     let crit = as_array(critv);
     let field = field_index(&db, a)?;
-    let records = matching_records(&db, &crit, ctx);
+    let records = matching_records(&db, &crit, ctx)?;
     Ok(Selection { db, field, records })
 }
 
@@ -350,6 +370,63 @@ mod tests {
         close(d("DCOUNT", empty()), 3.0);
         is_err(d("DSUM", t("Nope")), CellError::Value);
         is_err(d("DSUM", n(9.0)), CellError::Value);
+    }
+
+    /// Computed criteria are no longer asked for once the host is out of work.
+    #[test]
+    fn matching_stops_asking_computed_criteria_when_exhausted() {
+        struct Spent {
+            asked: usize,
+        }
+        impl crate::Ctx for Spent {
+            fn date_system(&self) -> gridcraft_core::DateSystem {
+                gridcraft_core::DateSystem::D1900
+            }
+            fn now_serial(&self) -> f64 {
+                0.0
+            }
+            fn random(&mut self) -> f64 {
+                0.0
+            }
+            fn computed_criterion(&mut self, _: usize, _: usize, _: &gridcraft_core::Array, _: usize) -> Option<bool> {
+                self.asked += 1;
+                Some(true)
+            }
+            fn exhausted(&self) -> bool {
+                self.asked > 0
+            }
+        }
+        let criteria = arr(vec![vec![tv("Formula")], vec![nv(1.0)]]);
+        let mut ctx = Spent { asked: 0 };
+        let spec = crate::lookup("DCOUNT").unwrap();
+        crate::call(spec, &[rf(db()), t("Age"), rf(criteria)], &mut ctx);
+        assert_eq!(ctx.asked, 1);
+        // Within one criteria row, the conditions after the one that spent the work are skipped too.
+        let criteria = arr(vec![vec![tv("Formula"), tv("Other")], vec![nv(1.0), nv(1.0)]]);
+        let mut ctx = Spent { asked: 0 };
+        crate::call(spec, &[rf(db()), t("Age"), rf(criteria)], &mut ctx);
+        assert_eq!(ctx.asked, 1);
+    }
+
+    /// Security: records times criteria conditions past the selection budget is `#NUM!` before
+    /// any record is tested; a nonmatching criteria table used to test every record against
+    /// every criteria row.
+    #[test]
+    fn selection_work_is_bounded() {
+        use gridcraft_core::Array;
+        let column = |label: &str, len: usize, v: Value| {
+            let mut data = vec![tv(label)];
+            data.extend(std::iter::repeat_n(v, len));
+            Value::from(Array::column(data))
+        };
+        let db = column("Tree", 100_000, tv("Apple"));
+        let wide = column("Tree", 5_001, tv("=Plum"));
+        is_err(ev("DCOUNTA", vec![rf(db.clone()), t("Tree"), rf(wide)]), CellError::Num);
+        let narrow = column("Tree", 2, tv("=Apple"));
+        close(ev("DCOUNTA", vec![rf(db.clone()), t("Tree"), rf(narrow)]), 100_000.0);
+        // Empty criteria rows test no condition: the first one matches every record, so they cost nothing.
+        let empty_rows = column("Tree", 5_001, Value::Empty);
+        close(ev("DCOUNTA", vec![rf(db), t("Tree"), rf(empty_rows)]), 100_000.0);
     }
 
     #[test]
