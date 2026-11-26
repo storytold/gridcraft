@@ -1,0 +1,36 @@
+name: windows stat settling probe (throwaway)
+on:
+  workflow_dispatch:
+  push:
+    branches: [diag/**]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Does a freshly written file settle?
+        shell: cmd
+        run: |
+          python -I -B -c "import sys,os,time,json; fields=('st_dev','st_ino','st_size','st_mtime_ns','st_ctime_ns'); p=os.path.abspath('probe-producer.json'); open(p,'w').write(json.dumps({'a':1})); s=open(p,'wb'); s.write(json.dumps({'a':1}).encode()); s.close(); t0=time.time(); rows=[]
+          [rows.append((round((time.time()-t0)*1000), {k:(getattr(os.lstat(p),k),getattr(os.fstat(os.open(p,os.O_RDONLY)),k)) for k in fields}) ) for _i in range(0)];
+          out=[]
+          for i in range(40):
+              h=os.open(p,os.O_RDONLY); f=os.fstat(h); os.close(h); e=os.lstat(p)
+              diff={k:(getattr(e,k),getattr(f,k)) for k in fields if getattr(e,k)!=getattr(f,k)}
+              out.append({'ms':round((time.time()-t0)*1000),'diff':diff})
+              time.sleep(0.05)
+          print(json.dumps([o for o in out if o['diff']][:10])); print('samples that differed:', sum(1 for o in out if o['diff']), 'of', len(out)); print('first agreeing sample (ms):', next((o['ms'] for o in out if not o['diff']), None))"
+      - name: Same, for a file copied out of an extracted artifact
+        shell: cmd
+        run: |
+          python -I -B -c "import shutil,os,time,json;fields=('st_ctime_ns','st_mtime_ns','st_size');shutil.copyfile('probe-producer.json','probe-copied.json');t0=time.time();out=[]
+          for i in range(40):
+              h=os.open('probe-copied.json',os.O_RDONLY);f=os.fstat(h);os.close(h);e=os.lstat('probe-copied.json')
+              d={k:(getattr(e,k),getattr(f,k)) for k in fields if getattr(e,k)!=getattr(f,k)}
+              out.append({'ms':round((time.time()-t0)*1000),'diff':d});time.sleep(0.05)
+          print('samples that differed:',sum(1 for o in out if o['diff']),'of',len(out),'first agreeing (ms):',next((o['ms'] for o in out if not o['diff']),None));print('first differing samples:',[o for o in out if o['diff']][:3])"
