@@ -4,6 +4,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Xu hướng tuyến tính",
+        "Growth Trend" => "Xu hướng tăng trưởng",
         "Diagram" => "Sơ đồ",
         "Decorative Text" => "Chữ trang trí",
         "Paste" => "Dán",
@@ -376,6 +378,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Gần đây",
         "No recent workbooks yet." => "Chưa có sổ làm việc gần đây.",
         "More workbooks" => "Sổ làm việc khác",
+        "More entries not shown" => "Còn mục khác chưa được hiển thị",
         "Modified" => "Đã sửa đổi",
         "Not available" => "Không khả dụng",
         "Just now" => "Vừa xong",
@@ -483,6 +486,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Convert text that looks like a date or time to a date" => "Chuyển đổi văn bản trông giống ngày hoặc giờ thành ngày",
         "Off: 2.6.70, 3/4/2026 and 10:30 stay text, as written. Not an Excel option; it also covers Excel's \"Convert continuous letters and numbers to a date\" (12JAN2026 is always text in GridCraft)." => {
             "Tắt: 2.6.70, 3/4/2026 và 10:30 vẫn là văn bản, đúng như đã viết. Đây không phải là tùy chọn của Excel; tùy chọn này cũng bao gồm tùy chọn “Chuyển đổi chữ cái và số liên tiếp thành ngày” của Excel (12JAN2026 luôn là văn bản trong GridCraft)."
+        }
+        "Distinct Count" => "Đếm riêng biệt",
+        "Summarize by Distinct Count" => "Tóm tắt theo Đếm riêng biệt",
+        "A calculated field can't use Distinct Count." => "Trường tính toán không thể dùng Đếm riêng biệt.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Sổ làm việc này có PivotTable với trường giá trị “Đếm riêng biệt”. Trong tệp .xlsx, trường này được lưu dưới dạng Đếm thông thường cùng một dấu hiệu mà chỉ GridCraft đọc, nên Làm mới trong Excel sẽ biến nó thành đếm thông thường."
         }
         "My list has headers" => "Dữ liệu của tôi có tiêu đề",
         "Sort by" => "Sắp xếp theo",
@@ -610,6 +619,49 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char có đối số không phải số {argument}",
         "\\@char with invalid code point {code}" => "\\@char có điểm mã không hợp lệ {code}",
         "Invalid environment name character: {character}" => "Ký tự không hợp lệ trong tên môi trường: {character}",
+        "Copy Cells" => "Sao chép ô",
+        "Fill Series" => "Điền chuỗi",
+        "Fill Formatting Only" => "Chỉ điền định dạng",
+        "Fill Without Formatting" => "Điền không kèm định dạng",
+        "Fill Days" => "Điền theo ngày",
+        "Fill Weekdays" => "Điền theo ngày làm việc",
+        "Fill Months" => "Điền theo tháng",
+        "Fill Years" => "Điền theo năm",
+        "Auto Fill Options" => "Tùy chọn tự động điền",
+        "Series…" => "Chuỗi…",
+        "Down" => "Xuống",
+        "Up" => "Lên",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Quy tắc định dạng mới",
+        "Edit Formatting Rule" => "Chỉnh sửa quy tắc định dạng",
+        "Select a Rule Type" => "Chọn loại quy tắc",
+        "Edit the Rule Description" => "Sửa mô tả quy tắc",
+        "Format all cells based on their values" => "Định dạng tất cả ô dựa trên giá trị của chúng",
+        "Format only cells that contain" => "Chỉ định dạng các ô chứa",
+        "Format only top or bottom ranked values" => "Chỉ định dạng các giá trị có thứ hạng cao nhất hoặc thấp nhất",
+        "Format only values that are above or below average" => "Chỉ định dạng các giá trị trên hoặc dưới mức trung bình",
+        "Format only unique or duplicate values" => "Chỉ định dạng các giá trị duy nhất hoặc trùng lặp",
+        "Use a formula to determine which cells to format" => "Dùng công thức để xác định ô nào cần định dạng",
+        "This rule type isn't available yet." => "Loại quy tắc này chưa khả dụng.",
+        "Format Style:" => "Kiểu định dạng:",
+        "2-Color Scale" => "Thang 2 màu",
+        "3-Color Scale" => "Thang 3 màu",
+        "Midpoint" => "Điểm giữa",
+        "Lowest value" => "Giá trị thấp nhất",
+        "Highest value" => "Giá trị cao nhất",
+        "Percent" => "Phần trăm",
+        "Percentile" => "Bách phân vị",
+        "Formula" => "Công thức",
+        "Format values where this formula is true:" => "Định dạng các giá trị mà công thức này đúng:",
+        "with" => "với",
+        "More Rules…" => "Thêm quy tắc…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Tô đỏ nhạt với chữ đỏ đậm",
+        "Yellow Fill with Dark Yellow Text" => "Tô vàng với chữ vàng đậm",
+        "Green Fill with Dark Green Text" => "Tô xanh lá nhạt với chữ xanh lá đậm",
+        "Light Red Fill" => "Tô đỏ nhạt",
+        "Red Text" => "Chữ đỏ",
+        "Red Border" => "Viền đỏ",
         _ => return None,
     })
 }

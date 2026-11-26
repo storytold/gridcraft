@@ -8,14 +8,12 @@ use super::{
 /// Typing `=PY(` doesn't make a Python cell; this says what does.
 pub(crate) const PY_FORMULA: &str = "Python cells are made with the python.set command (the code as `code`), not by typing =PY(…).";
 
-/// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
-/// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+/// Whether typing `input` into a cell is meant as a formula: `=…`, or `+…`/`-…` when the entry
+/// isn't a number on its own, as Excel takes `+5+4` and `+SUM(1)` (see
+/// [`gridcraft_core::parse::starts_formula`]). A `+…`/`-…` entry that doesn't parse as a formula
+/// still enters as text (`--`), see [`input_to_cell`].
 pub(crate) fn is_formula_input(input: &str) -> bool {
-    input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+    gridcraft_core::parse::starts_formula(input)
 }
 
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
@@ -42,7 +40,15 @@ pub(crate) fn input_to_cell(
     if is_formula && gridcraft_model::python::is_py_formula(input) {
         return Err(EngineError::Other(PY_FORMULA.into()));
     }
-    if is_formula {
+    // As in Excel, a `+` or `-` entry is a formula when it reads as one (`+5+4` enters `=+5+4`)
+    // and text when it doesn't (`--`, `+49 170 1234567`); only `=` entries are refused.
+    if is_formula
+        && !input.starts_with('=')
+        && let Ok(cell) = input_to_cell(&format!("={input}"), sheet, at, wb, conv)
+    {
+        return Ok(cell);
+    }
+    if input.starts_with('=') {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
@@ -152,24 +158,66 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
             let selected = cx.sel.current();
             let range = if sheet == active_sheet && selected.contains(at) { selected } else { RangeRef::cell(at) };
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb, &conv)?.unwrap_or_default();
+            // Excel forms no array from a constant: every cell of the selection takes the value.
+            if cell.formula.is_none() && !range.is_single() {
+                if range.count() > crate::fill::MAX_FILL_CELLS {
+                    return Err(EngineError::Other("That selection is too large to fill.".into()));
+                }
+                let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
+                for c in range.iter() {
+                    let style = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
+                    let filled = match by_style.get(&style) {
+                        Some(filled) => filled.clone(),
+                        None => {
+                            let filled = input_to_cell(&input, sheet, c, &mut cx.wb, &conv)?;
+                            by_style.insert(style, filled.clone());
+                            filled
+                        }
+                    };
+                    let sh = cx.sheet_mut(sheet)?;
+                    match filled {
+                        Some(f) => {
+                            sh.set_cell(c, f);
+                            crate::cmd::data::grow_autofilter(sh, c);
+                        }
+                        None => {
+                            sh.remove_cell(c);
+                        }
+                    }
+                    cx.touch(sheet, c);
+                }
+                return Ok(Json::Null);
+            }
             // A table header can't hold an array's value, and a table resizes under it.
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb, &conv)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
             let sh = cx.sheet_mut(sheet)?;
-            // The array takes the whole range: other cells in it lose their contents.
-            for c in range.iter().skip(1).take(1_000_000) {
-                if let Some(old) = sh.cells.get(c).filter(|x| x.has_content()) {
-                    let style = old.style;
-                    sh.set_cell(c, Cell { style, ..Cell::default() });
-                }
+            // The array takes the whole range: other cells in it lose their contents. Walk the
+            // cells the sheet holds rather than every address, so a whole-column array clears
+            // all of its area, and mark each cleared cell so formulas reading it recalculate.
+            let cleared: Vec<(CellRef, StyleId)> =
+                sh.cells.iter_range(range).filter(|(c, x)| *c != range.start && x.has_content()).map(|(c, x)| (c, x.style)).collect();
+            for &(c, style) in &cleared {
+                sh.set_cell(c, Cell { style, ..Cell::default() });
             }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
+            // The array's results land in every cell of the range, stored or not, so readers of
+            // an empty result cell need the touch too. A huge range marks only the cells it held.
+            if range.count() <= 1_000_000 {
+                for c in range.iter() {
+                    cx.touch(sheet, c);
+                }
+            } else {
+                for (c, _) in cleared {
+                    cx.touch(sheet, c);
+                }
+            }
             return Ok(Json::Null);
         }
         let cell = input_to_cell(&input, sheet, at, &mut cx.wb, &conv)?;
