@@ -4,7 +4,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod b64;
+pub mod b64;
 pub mod cell;
 mod cellmap;
 pub mod features;
@@ -26,12 +26,12 @@ pub use python::{PyCode, PyOutput};
 pub use sheet::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT, LineIndex, Sheet, SheetUid, SheetViewMode, Visibility, points_to_chars};
 pub use store::CellStore;
 pub use style::{
-    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, Style, StyleId, StyleTable, Theme, Underline,
-    VAlign, VertAlign,
+    Alignment, BorderLine, BorderStyle, Borders, Color, Fill, Font, HAlign, NumFmt, PatternType, ReadingOrder, Style, StyleId, StyleTable, Theme,
+    Underline, VAlign, VertAlign,
 };
 pub use workbook::{
     CalcMode, CalcSettings, DefinedName, DocProps, EQUATION_BUDGET_MESSAGE, MAX_EQUATION_LAYOUT_BYTES, PhoneticProps, PhoneticRun, PhoneticString,
-    ShowObjects, Workbook, WorkbookView,
+    RefHost, ShowObjects, Workbook, WorkbookView,
 };
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font

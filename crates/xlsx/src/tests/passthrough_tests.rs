@@ -129,7 +129,7 @@ impl Unpacked {
             let mut f = z.by_index(i).unwrap();
             let mut v = vec![];
             f.read_to_end(&mut v).unwrap();
-            parts.insert(f.name().to_string(), v);
+            parts.insert(f.name().unwrap().to_string(), v);
         }
         Unpacked { parts }
     }
@@ -696,6 +696,32 @@ fn chartsheet_package() -> Vec<u8> {
     ])
 }
 
+/// Thousands of chart-sheet entries naming one chart sheet's relationship: its graph is walked
+/// and its charts parsed once when saving, not once per entry.
+#[test]
+fn chart_sheet_entries_sharing_a_graph_are_checked_once() {
+    let bytes = chartsheet_package();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut parts: Vec<(String, Vec<u8>)> = Vec::new();
+    for i in 0..z.len() {
+        let mut f = z.by_index(i).unwrap();
+        let mut data = Vec::new();
+        f.read_to_end(&mut data).unwrap();
+        parts.push((f.name().unwrap().to_string(), data));
+    }
+    let extra: String = (0..3_000).map(|i| format!(r#"<sheet name="Copy{i}" sheetId="{}" r:id="rId2"/>"#, 100 + i)).collect();
+    for (name, data) in &mut parts {
+        if name == "xl/workbook.xml" {
+            *data = String::from_utf8(data.clone()).unwrap().replace("</sheets>", &format!("{extra}</sheets>")).into_bytes();
+        }
+    }
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (wb, _) = read_xlsx(&make_zip(&refs)).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert!(written_sheets(&u).iter().any(|(n, _)| n == "Chart1"));
+}
+
 /// The sheets of a written workbook: (name, state) in file order.
 fn written_sheets(u: &Unpacked) -> Vec<(String, String)> {
     let wb = xml::parse(u.parts.get("xl/workbook.xml").unwrap()).unwrap();
@@ -828,7 +854,9 @@ fn file_version_and_calc_features_survive_a_save() {
         assert_eq!(root.children.first().map(|e| e.name.as_str()), Some("fileVersion"), "{text}");
         assert_eq!(root.children.last().map(|e| e.name.as_str()), Some("extLst"), "{text}");
         assert!(text.contains(r#"<fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="11008"/>"#), "{text}");
-        assert!(text.contains(&format!("<extLst>{calc_features}</extLst>")), "{text}");
+        // The x15 workbook properties are kept too, in source order (see tests::extlist).
+        let x15 = r#"<ext uri="{140A7094-0E35-4892-8432-C4D2E57EDEB5}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:workbookPr chartTrackingRefBase="1"/></ext>"#;
+        assert!(text.contains(&format!("<extLst>{x15}{calc_features}</extLst>")), "{text}");
     }
 
     // A workbook that had neither gets a <fileVersion> naming GridCraft (#1699), kept on the next

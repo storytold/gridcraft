@@ -213,17 +213,7 @@ pub fn json_bytes(wb: &Workbook) -> crate::Result<Vec<u8>> {
     for m in &wb.macros {
         check(m).map_err(crate::EngineError::Other)?;
     }
-    let bytes = if wb.macros_unread.is_empty() {
-        serde_json::to_vec_pretty(wb)
-    } else {
-        serde_json::to_value(wb).and_then(|mut v| {
-            if let Some(list) = v.as_object_mut().map(|o| o.entry("macros").or_insert_with(|| Json::Array(vec![]))).and_then(Json::as_array_mut) {
-                list.extend(wb.macros_unread.iter().cloned());
-            }
-            serde_json::to_vec_pretty(&v)
-        })
-    };
-    bytes.map_err(|e| crate::EngineError::Other(e.to_string()))
+    craft_gridcraft_format::write_with_kept(wb, "macros", &wb.macros_unread).map_err(|e| crate::EngineError::Other(e.to_string()))
 }
 
 /// Whether `v` is a macro in a newer format than this build reads.

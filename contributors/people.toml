@@ -26,6 +26,11 @@ sync_github_name = false
 [people.edurbs]
 sync_github_name = true
 
+[people.Cheejyg]
+real_name = "Glenn Chee"
+display_name = "Cheejyg"
+sync_github_name = false
+
 [people.arcanii]
 real_name = "Bryan Mark"
 display_name = "Arcanii"
@@ -110,6 +115,12 @@ sync_github_name = true
 
 [people.maxm11]
 sync_github_name = true
+
+[people.RockerHX]
+sync_github_name = true
+
+[people.gmrmad1]
+real_name = "Madhav Agarwal"
 
 [people.alosslessdev]
 real_name = "Francisco Herrera"

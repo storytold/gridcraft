@@ -7,6 +7,20 @@ use crate::{Prim, Rgba};
 /// Largest image we allocate (pixels).
 const MAX_PIXELS: u64 = 64 * 1024 * 1024;
 const SUB: usize = 4;
+/// Scan-conversion work one [`rasterize`] call may do: edge tests (an active edge at one
+/// sub-sample) plus covered pixels blended. Edges are only tested on the rows they cross, but a
+/// caller can still pass enough geometry to keep the rasteriser busy for minutes on a small
+/// image; once the allowance is spent the remaining fills are skipped. 2^28 is about a second,
+/// far beyond any chart.
+const MAX_SCAN_WORK: u64 = 1 << 28;
+/// Most points one filled path may have: more is skipped before any edge is built. Chart
+/// renderers cap and decimate their paths far below this; it only bounds direct callers.
+const MAX_FILL_POINTS: usize = 1 << 22;
+
+/// Most points one stroked polyline may have: more is skipped before any segment path is built
+/// (each segment becomes its own quad). Charts hold at most 100,000 points per series and draw far
+/// fewer; it only bounds direct callers.
+const MAX_STROKE_POINTS: usize = 1 << 17;
 
 type Path = Vec<Vec<[f32; 2]>>;
 
@@ -15,6 +29,8 @@ struct Canvas {
     h: usize,
     buf: Vec<u8>,
     acc: Vec<f32>,
+    /// Scan-conversion work left (see [`MAX_SCAN_WORK`]).
+    work: u64,
 }
 
 impl Canvas {
@@ -41,7 +57,12 @@ impl Canvas {
 
     /// Fills a multi-contour path with the even-odd rule.
     fn fill(&mut self, path: &Path, color: Rgba) {
-        let mut edges: Vec<[f32; 4]> = Vec::new();
+        // Out of work, or more geometry than the allowance could ever scan: no edge list is built.
+        if self.work == 0 || path.iter().map(Vec::len).fold(0usize, usize::saturating_add) > MAX_FILL_POINTS {
+            return;
+        }
+        // Each edge as [top y, bottom y, x0, y0, x1, y1].
+        let mut edges: Vec<[f32; 6]> = Vec::new();
         let (mut minx, mut miny, mut maxx, mut maxy) = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
         for c in path {
             if c.len() < 3 || !c.iter().all(|p| p[0].is_finite() && p[1].is_finite()) {
@@ -54,7 +75,7 @@ impl Canvas {
                 miny = miny.min(p[1]);
                 maxy = maxy.max(p[1]);
                 if p[1] != q[1] {
-                    edges.push([p[0], p[1], q[0], q[1]]);
+                    edges.push([p[1].min(q[1]), p[1].max(q[1]), p[0], p[1], q[0], q[1]]);
                 }
             }
         }
@@ -72,8 +93,28 @@ impl Canvas {
         if self.acc.len() < bw + 1 {
             self.acc.resize(bw + 1, 0.0);
         }
+        // Active-edge list: edges join when the scan reaches their top and leave past their
+        // bottom, so each row tests only the edges crossing it instead of every edge.
+        edges.sort_by(|a, b| a[0].total_cmp(&b[0]));
+        let mut pending = edges.iter().peekable();
+        let mut active: Vec<[f32; 6]> = Vec::new();
         let mut xs: Vec<f32> = Vec::new();
         for py in y0..y1 {
+            while let Some(e) = pending.next_if(|e| e[0] < py as f32 + 1.0) {
+                active.push(*e);
+            }
+            active.retain(|e| e[1] > py as f32);
+            if active.is_empty() {
+                continue;
+            }
+            // The row's edge tests and its `bw` accumulator clears and blends, charged before any of
+            // them, so rows with no coverage still count.
+            let cost = (active.len() * SUB) as u64 + bw as u64;
+            if cost > self.work {
+                self.work = 0;
+                return;
+            }
+            self.work -= cost;
             for v in self.acc.iter_mut().take(bw) {
                 *v = 0.0;
             }
@@ -81,10 +122,9 @@ impl Canvas {
             for s in 0..SUB {
                 let sy = py as f32 + (s as f32 + 0.5) / SUB as f32;
                 xs.clear();
-                for e in &edges {
-                    let (ya, yb) = if e[1] < e[3] { (e[1], e[3]) } else { (e[3], e[1]) };
-                    if sy >= ya && sy < yb {
-                        xs.push(e[0] + (sy - e[1]) * (e[2] - e[0]) / (e[3] - e[1]));
+                for e in &active {
+                    if sy >= e[0] && sy < e[1] {
+                        xs.push(e[2] + (sy - e[3]) * (e[4] - e[2]) / (e[5] - e[3]));
                     }
                 }
                 xs.sort_by(f32::total_cmp);
@@ -154,6 +194,9 @@ fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Vec<[f32; 2]> {
 
 /// Thick polyline → one quad per segment (each a separate path so overlaps don't cancel).
 fn stroke_paths(pts: &[[f32; 2]], width: f32, dash: bool, closed: bool) -> Vec<Path> {
+    if pts.len() > MAX_STROKE_POINTS {
+        return Vec::new();
+    }
     let width = width.clamp(1.0, 50.0);
     let mut segs: Vec<([f32; 2], [f32; 2])> = pts.windows(2).map(|w| (w[0], w[1])).collect();
     if closed && let (Some(a), Some(b)) = (pts.last(), pts.first()) {
@@ -212,7 +255,7 @@ pub fn rasterize(prims: &[Prim], w: u32, h: u32, background: Rgba) -> Vec<u8> {
     for _ in 0..w * h {
         buf.extend_from_slice(&background);
     }
-    let mut cv = Canvas { w, h, buf, acc: Vec::new() };
+    let mut cv = Canvas { w, h, buf, acc: Vec::new(), work: MAX_SCAN_WORK };
     for p in prims {
         match p {
             Prim::Rect { x, y, w, h, fill, stroke, radius } => {
@@ -273,6 +316,40 @@ pub fn rasterize(prims: &[Prim], w: u32, h: u32, background: Rgba) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Security: each row tests only the edges crossing it. A polygon of 100,000 tiny edges over
+    /// 4,000 rows tested every edge at every sub-sample of every row (1.6 billion tests).
+    #[test]
+    fn many_short_edges_scan_only_their_rows() {
+        let mut pts: Vec<[f32; 2]> = (0..100_000).map(|i| [if i % 2 == 0 { 0.0 } else { 0.5 }, i as f32 * 0.04]).collect();
+        pts.push([2.0, 4_000.0]);
+        pts.push([2.0, 0.0]);
+        let img = rasterize(&[Prim::Polygon { pts, fill: [255, 0, 0, 255], stroke: None }], 2, 4_000, [0, 0, 0, 0]);
+        // The right-hand pixel of every row is inside the polygon.
+        assert_eq!(img.get(4..8), Some(&[255, 0, 0, 255][..]));
+        assert_eq!(img.get(4 * (2 * 3_999 + 1)..4 * (2 * 3_999 + 2)), Some(&[255, 0, 0, 255][..]));
+    }
+
+    /// Security: scan conversion stops once the call's work allowance is spent.
+    #[test]
+    fn fills_stop_when_the_work_allowance_is_spent() {
+        let square = vec![vec![[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [0.0, 4.0]]];
+        let mut cv = Canvas { w: 4, h: 4, buf: vec![0; 64], acc: Vec::new(), work: 2 * SUB as u64 * 4 + 16 };
+        cv.fill(&square, [255; 4]);
+        assert!(cv.buf.iter().all(|&b| b == 255));
+        cv.buf = vec![0; 64];
+        cv.fill(&square, [255; 4]);
+        assert!(cv.buf.iter().all(|&b| b == 0));
+    }
+
+    /// Security: a polyline over the point cap builds no segment paths at all, solid or dashed.
+    #[test]
+    fn oversized_polylines_build_no_segment_paths() {
+        let line = |n: usize| -> Vec<[f32; 2]> { (0..n).map(|i| [i as f32, (i % 2) as f32]).collect() };
+        assert!(stroke_paths(&line(MAX_STROKE_POINTS + 1), 1.0, false, false).is_empty());
+        assert!(stroke_paths(&line(MAX_STROKE_POINTS + 1), 1.0, true, false).is_empty());
+        assert_eq!(stroke_paths(&line(MAX_STROKE_POINTS), 1.0, false, false).len(), MAX_STROKE_POINTS - 1);
+    }
 
     #[test]
     fn dashed_geometry_stays_within_the_dash_budget() {

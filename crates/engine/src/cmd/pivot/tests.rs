@@ -209,6 +209,41 @@ fn show_values_as() {
     assert_eq!(text(&s, "B3"), "Biggest sale");
 }
 
+/// Running Total over nested rows adds up each child's value across the top-level items, in the
+/// order they appear: the same value as summing the plain values of the earlier items' rows.
+#[test]
+fn running_total_over_nested_rows_adds_up_across_the_top_level_items() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "values": ["Sales"]})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    let rows: Vec<u32> = (r.start.row + 1..r.end.row).collect();
+    let read = |s: &Session| -> Vec<(String, f64)> {
+        rows.iter().map(|row| (text(s, &CellRef::new(*row, 0).a1()), val(s, &CellRef::new(*row, 1).a1()).as_f64().unwrap_or(0.0))).collect()
+    };
+    let before = read(&s);
+    s.execute("pivot.valueSettings", json!({"index": 0, "showAs": "runningTotal"})).unwrap();
+    let after = read(&s);
+    // Region rows carry the report's top-level items (not indented); the others are products.
+    let indent = |s: &Session, row: u32| {
+        let d = s.doc().unwrap();
+        let sh = d.wb.active().unwrap();
+        d.wb.styles.get(sh.style_id(CellRef::new(row, 0))).align.indent
+    };
+    let (mut regions, mut products) = (0.0, std::collections::HashMap::<String, f64>::new());
+    for (i, row) in rows.iter().enumerate() {
+        let name = &before[i].0;
+        let total = if indent(&s, *row) == 0 {
+            regions += before[i].1;
+            regions
+        } else {
+            let t = products.entry(name.clone()).or_insert(0.0);
+            *t += before[i].1;
+            *t
+        };
+        assert!((after[i].1 - total).abs() < 1e-9, "row {name}: {} vs {total}", after[i].1);
+    }
+}
+
 #[test]
 fn compact_vs_tabular_shapes() {
     let mut s = sales();
@@ -537,6 +572,25 @@ fn pivot_chart_errors() {
 }
 
 #[test]
+fn a_calculated_field_cannot_use_distinct_count() {
+    // It is computed from the report's totals, so there are no per-record values to count.
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.calculatedField", json!({"name": "Price", "formula": "Sales / Units"})).unwrap();
+    assert_eq!(text(&s, "C3"), "Sum of Price");
+    let before = s.doc().unwrap().wb.clone();
+    let set = s.execute("pivot.valueSettings", json!({"field": "Price", "func": "distinctCount"}));
+    assert!(set.unwrap_err().to_string().contains("Distinct Count"));
+    assert_eq!(s.doc().unwrap().wb, before, "a rejected change leaves the workbook as it was");
+    s.execute("pivot.removeField", json!({"field": "Price", "area": "values"})).unwrap();
+    let add = s.execute("pivot.addField", json!({"field": "Price", "area": "values", "func": "distinctCount"}));
+    assert!(add.unwrap_err().to_string().contains("Distinct Count"));
+    // A source field still takes it, and a calculated field keeps its other functions.
+    s.execute("pivot.addField", json!({"field": "Product", "area": "values", "func": "distinctCount"})).unwrap();
+    s.execute("pivot.addField", json!({"field": "Price", "area": "values", "func": "sum"})).unwrap();
+}
+
+#[test]
 fn calculated_field_on_sums() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
@@ -591,6 +645,312 @@ fn calculated_field_errors() {
     s.ui_requests.clear();
     s.execute("pivot.calculatedField", json!({})).unwrap();
     assert!(matches!(s.ui_requests.last(), Some(crate::UiRequest::Dialog(n, _)) if n == "pivotCalculatedField"));
+}
+
+#[test]
+fn getpivotdata_reads_the_report() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    assert_eq!(pt(&s).last_range.unwrap().a1(), "A3:E8");
+    let gp = |s: &mut Session, cell: &str, f: &str| {
+        s.execute("cell.set", json!({"cell": cell, "input": f})).unwrap();
+        val(s, cell)
+    };
+    // Item cell, row subtotal by any cell of the report, grand total; names and items ignore case.
+    assert_eq!(gp(&mut s, "G1", r#"=GETPIVOTDATA("Sales",$A$3,"Region","East","Product","Apples")"#), Value::Number(160.0));
+    assert_eq!(gp(&mut s, "G2", r#"=GETPIVOTDATA("sales",C6,"region","east")"#), Value::Number(415.0));
+    assert_eq!(gp(&mut s, "G3", r#"=GETPIVOTDATA("Sum of Sales",A3)"#), Value::Number(TOTAL));
+    assert_eq!(gp(&mut s, "G4", r#"=GETPIVOTDATA("Sales",A3,"Product","Pears")"#), Value::Number(270.0));
+    // Not in the report: unknown item, value field, field, unpaired field, not a pivot cell.
+    for (cell, f) in [
+        ("H1", r#"=GETPIVOTDATA("Sales",A3,"Region","South")"#),
+        ("H2", r#"=GETPIVOTDATA("Units",A3)"#),
+        ("H3", r#"=GETPIVOTDATA("Sales",A3,"Date","East")"#),
+        ("H4", r#"=GETPIVOTDATA("Sales",A3,"Region")"#),
+        ("H5", r#"=GETPIVOTDATA("Sales",Z99)"#),
+        ("H6", r#"=GETPIVOTDATA("Sales",A3,"Region","East","Region","East")"#),
+    ] {
+        assert_eq!(gp(&mut s, cell, f), Value::Error(CellError::Ref), "{f}");
+    }
+    assert_eq!(gp(&mut s, "H7", r#"=GETPIVOTDATA("Sales",A3,"Region",NA())"#), Value::Error(CellError::NA));
+    // A refresh after a source edit updates the result.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "1100"})).unwrap();
+    s.execute("data.refreshAll", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(val(&s, "G1"), Value::Number(1160.0));
+    // Opening a saved workbook starts without an index (files don't carry it); the first
+    // GETPIVOTDATA builds it.
+    let wb = (*s.doc().unwrap().wb).clone();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(d.wb.sheet_index("Sheet2").unwrap()).unwrap();
+    assert!(sh.pivots.first().unwrap().data_index.cells().is_some());
+    assert_eq!(sh.value(CellRef::parse("G1").unwrap()), Value::Number(1160.0));
+    assert_eq!(sh.value(CellRef::parse("G3").unwrap()), Value::Number(TOTAL + 1000.0));
+}
+
+#[test]
+fn getpivotdata_reads_the_displayed_report() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    // The source changes after the last refresh, then the workbook is saved and reopened:
+    // the report still shows the old numbers, and the formula agrees with the cell.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "1100"})).unwrap();
+    let wb = (*s.doc().unwrap().wb).clone();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    let r = pt(&s).last_range.unwrap();
+    let at = r.start.a1();
+    s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","East")"#)})).unwrap();
+    let d = s.doc().unwrap();
+    let sh = d.wb.sheet(d.wb.sheet_index("Sheet2").unwrap()).unwrap();
+    let east = (r.start.row..=r.end.row).find(|row| sh.value(CellRef::new(*row, r.start.col)) == Value::Text("East".into())).unwrap();
+    let shown = sh.value(CellRef::new(east, r.start.col + 1));
+    assert_eq!(shown, Value::Number(415.0));
+    assert_eq!(val(&s, "K1"), shown);
+}
+
+/// `=GETPIVOTDATA("Sales", <report>, "Region", <region>)` evaluated in K1 of the active sheet.
+fn region_sales(s: &mut Session, region: &str) -> Value {
+    let at = pt(s).last_range.unwrap().start.a1();
+    s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","{region}")"#)})).unwrap();
+    val(s, "K1")
+}
+
+fn reopen(s: &mut Session) {
+    let wb = (*s.doc().unwrap().wb).clone();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+}
+
+#[test]
+fn getpivotdata_retries_after_a_lazy_build_fails() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    // A pivot read from a file carries no index, so the first lookup builds one.
+    reopen(&mut s);
+    assert!(pt(&s).data_index.cells().is_none());
+    // The source changes, so the stored report is stale and the build finds nothing to trust.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+    assert!(pt(&s).data_index.cells().is_none(), "the failed build caches nothing");
+    // The lookup is shared, so caching a failure as an empty index would leave every state that
+    // shares it #REF! for good. Restoring the source lets the lookup build the index.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "East"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+    assert!(pt(&s).data_index.cells().is_some(), "the lookup rebuilt after the failure");
+}
+
+#[test]
+fn getpivotdata_saves_no_index_when_the_lazy_build_fails() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    // A pivot read from a file carries no index; a source change makes the stored report stale,
+    // so the lazy build fails and the lookup is #REF!.
+    reopen(&mut s);
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+    // Saving the pivot must save no index at all, not an empty one: restoring an empty index
+    // would count as an index and lock the reopened pivot against the lazy rebuild.
+    let json = serde_json::to_string(&pt(&s)).unwrap();
+    let back: gridcraft_model::PivotTable = serde_json::from_str(&json).unwrap();
+    assert!(json.contains(r#""data_index":null"#), "a failed build saves no index, not an empty one: {json}");
+    assert!(back.data_index.cells().is_none());
+    // Reopened with the source restored, the lookup builds the index.
+    reopen(&mut s);
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "East"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+}
+
+#[test]
+fn getpivotdata_keeps_the_refreshed_report_when_an_item_is_inserted() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+    // A new first item in the source shifts every item of a fresh report down one row.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    // Before the refresh the report still shows the old items, and the lookup reads that report.
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+    assert_eq!(region_sales(&mut s, "Alpha"), Value::Error(CellError::Ref));
+    // Saved and reopened unrefreshed: the stored report no longer matches the source, so there
+    // is no index to trust (never the shifted cell of a different item).
+    reopen(&mut s);
+    assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+    assert_eq!(region_sales(&mut s, "Alpha"), Value::Error(CellError::Ref));
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("data.refreshAll", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "Alpha"), Value::Number(100.0));
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+    assert_eq!(region_sales(&mut s, "East"), Value::Number(315.0));
+}
+
+#[test]
+fn getpivotdata_keeps_the_refreshed_report_when_an_item_is_removed() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    assert_eq!(region_sales(&mut s, "North"), Value::Number(135.0));
+    // Every North row becomes East: North leaves the report and West moves up.
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    for a in ["A5", "A8", "A11"] {
+        s.execute("cell.set", json!({"cell": a, "input": "East"})).unwrap();
+    }
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "North"), Value::Number(135.0));
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+    reopen(&mut s);
+    assert_eq!(region_sales(&mut s, "North"), Value::Error(CellError::Ref));
+    assert_eq!(region_sales(&mut s, "West"), Value::Error(CellError::Ref));
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("data.refreshAll", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(region_sales(&mut s, "North"), Value::Error(CellError::Ref));
+    assert_eq!(region_sales(&mut s, "West"), Value::Number(285.0));
+    assert_eq!(region_sales(&mut s, "East"), Value::Number(550.0));
+}
+
+#[test]
+fn getpivotdata_index_is_saved_with_an_unrefreshed_pivot() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "Alpha"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    // The pivot as saved by the native format: the index of the stored report comes back with
+    // it even though the source has since changed.
+    let back: gridcraft_model::PivotTable = serde_json::from_str(&serde_json::to_string(&pt(&s)).unwrap()).unwrap();
+    let cells = back.data_index.cells().expect("index saved");
+    assert_eq!(cells, pt(&s).data_index.cells().unwrap());
+    let west = back.data_index.find("Sales", &[("Region", "West", false)]).unwrap();
+    assert_eq!((west.row, west.col), (3, 1));
+}
+
+#[test]
+fn getpivotdata_calculated_field() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+    s.execute("pivot.calculatedField", json!({"name": "Double", "formula": "=Sales*2"})).unwrap();
+    let at = pt(&s).last_range.unwrap().start.a1();
+    s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Double",{at},"Region","East")"#)})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(830.0));
+}
+
+#[test]
+fn getpivotdata_report_filter() {
+    let mut s = sales();
+    s.execute("insert.pivotTable", json!({"rows": ["Product"], "values": ["Sales"], "filters": ["Region"]})).unwrap();
+    let at = pt(&s).last_range.unwrap().start.a1();
+    let f = |region: &str| format!(r#"=GETPIVOTDATA("Sales",{at},"Region","{region}","Product","Apples")"#);
+    // With every item shown, naming the filter field is #REF!.
+    s.execute("cell.set", json!({"cell": "H1", "input": f("East")})).unwrap();
+    assert_eq!(val(&s, "H1"), Value::Error(CellError::Ref));
+    // Filtered to East: East matches, West doesn't.
+    s.execute("pivot.filter", json!({"field": "Region", "selected": ["East"]})).unwrap();
+    assert_eq!(val(&s, "H1"), Value::Number(160.0));
+    s.execute("cell.set", json!({"cell": "H2", "input": f("West")})).unwrap();
+    assert_eq!(val(&s, "H2"), Value::Error(CellError::Ref));
+}
+
+/// A workbook whose Sheet1 holds `rows` under a two-column header, with a PivotTable of the first
+/// column (rows) and the second (sum) on a new sheet; the report sheet is active.
+fn two_column_pivot(header: [&str; 2], rows: Json, key_format: Option<&str>) -> Session {
+    let mut s = Session::new();
+    s.new_workbook();
+    let n = rows.as_array().map_or(0, Vec::len);
+    let mut all = vec![json!(header)];
+    all.extend(rows.as_array().cloned().unwrap_or_default());
+    s.execute("range.setValues", json!({"range": "A1", "values": all})).unwrap();
+    if let Some(code) = key_format {
+        s.execute("home.numberFormat", json!({"range": format!("A2:A{}", n + 1), "code": code})).unwrap();
+    }
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": [header[0]], "values": [header[1]]})).unwrap();
+    s
+}
+
+/// The value the report shows for the row item `label` (one value field: the report's last column).
+fn shown(s: &Session, label: &str) -> Value {
+    let r = pt(s).last_range.unwrap();
+    let row = find_row(s, label).unwrap_or_else(|| panic!("{label} is not in the report"));
+    val(s, &CellRef::new(row, r.end.col).a1())
+}
+
+/// Inserting or deleting rows or columns inside a report keeps GETPIVOTDATA on the requested
+/// item's cell (the stored offsets move with the cells), and undo restores the old positions.
+#[test]
+fn getpivotdata_follows_rows_and_columns_edited_inside_the_report() {
+    let mut s = two_column_pivot(["Region", "Sales"], json!([["East", 10], ["North", 30], ["West", 20]]), None);
+    assert_eq!(pt(&s).last_range.unwrap().start.a1(), "A3");
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","West")"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","North")"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    // Row 4 splits the header from the items; column B splits the labels from the values (and
+    // moves the formulas from K to L).
+    for (cmd, lines, west, north) in
+        [("home.insertRows", json!({"rows": "4:4"}), "K1", "K2"), ("home.insertColumns", json!({"cols": "B:B"}), "L1", "L2")]
+    {
+        s.execute(cmd, lines).unwrap();
+        assert_eq!(shown(&s, "West"), Value::Number(20.0), "{cmd}");
+        assert_eq!(val(&s, west), shown(&s, "West"), "{cmd}");
+        assert_eq!(val(&s, north), shown(&s, "North"), "{cmd}");
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(pt(&s).last_range.unwrap().start.a1(), "A3");
+    s.execute("cell.set", json!({"cell": "K3", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","West")"#})).unwrap();
+    assert_eq!(val(&s, "K3"), Value::Number(20.0), "undo restores the report and its offsets");
+    // Deleting North's row moves West up; North itself is gone from the report.
+    let north = find_row(&s, "North").unwrap() + 1;
+    s.execute("home.deleteRows", json!({"rows": format!("{north}:{north}")})).unwrap();
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","West")"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Region","North")"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    assert_eq!(val(&s, "K1"), shown(&s, "West"));
+    assert_eq!(val(&s, "K2"), Value::Error(CellError::Ref), "a deleted value cell is not read from its old place");
+    // Lines inserted at the report's first line move the whole report, and lines right after it
+    // leave it alone; either way the offsets stay what they were.
+    for rows in ["3:3", "9:9"] {
+        s.execute("home.insertRows", json!({"rows": rows})).unwrap();
+        let at = pt(&s).last_range.unwrap().start.a1();
+        s.execute("cell.set", json!({"cell": "K1", "input": format!(r#"=GETPIVOTDATA("Sales",{at},"Region","West")"#)})).unwrap();
+        assert_eq!(val(&s, "K1"), Value::Number(20.0), "insert {rows}");
+        assert_eq!(val(&s, "K1"), shown(&s, "West"), "insert {rows}");
+    }
+}
+
+/// Numeric items whose formatted labels collide are told apart by value: an exact numeric item
+/// wins over another item that only displays the same label.
+#[test]
+fn getpivotdata_matches_numeric_items_by_value_before_label() {
+    let mut s = two_column_pivot(["Key", "Sales"], json!([[0.6, 10], [1, 20]]), Some("0"));
+    let p = pt(&s);
+    let labels: Vec<&str> = p.data_index.cells().unwrap().iter().flat_map(|c| c.items.iter().map(|i| i.label.as_str())).collect();
+    assert_eq!(labels, ["1", "1"], "both items display as 1");
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Key",1)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Key",0.6)"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    assert_eq!(val(&s, "K2"), Value::Number(10.0));
+    // Dates: two times on one day show the same date label; each serial finds its own item.
+    let mut s = two_column_pivot(["Day", "Sales"], json!([[45000, 10], [45000.25, 20]]), Some("m/d/yyyy"));
+    s.execute("cell.set", json!({"cell": "K1", "input": r#"=GETPIVOTDATA("Sales",A3,"Day",45000.25)"#})).unwrap();
+    s.execute("cell.set", json!({"cell": "K2", "input": r#"=GETPIVOTDATA("Sales",A3,"Day",45000)"#})).unwrap();
+    assert_eq!(val(&s, "K1"), Value::Number(20.0));
+    assert_eq!(val(&s, "K2"), Value::Number(10.0));
 }
 
 #[test]
@@ -1027,6 +1387,34 @@ fn detail_cells_are_the_cells_show_details_takes() {
     assert!(crate::pivot::detail_cells(&d.wb, pt, d.wb.active_sheet()).unwrap_err().contains("out of date"));
 }
 
+/// Measurement, not a check: `perf stat -e instructions:u` of this test with `PIVOT_BENCH_EDITS=0`
+/// and `=20` (and `PIVOT_BENCH_REOPEN=0/1`) gives the cost of edits on the report's sheet and of
+/// opening a saved workbook, with the setup subtracted. `PIVOT_BENCH_ROWS` is the source size.
+#[test]
+#[ignore = "measurement only"]
+fn bench_edit_on_sheet_with_large_report() {
+    let env = |k: &str, d: usize| std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d);
+    let (n, edits) = (env("PIVOT_BENCH_ROWS", 100_000), env("PIVOT_BENCH_EDITS", 0));
+    let mut s = Session::new();
+    s.new_workbook();
+    let mut rows = vec![json!(["Id", "Product", "Sales"])];
+    rows.extend((0..n).map(|i| {
+        let (id, product) = (format!("id{i:07}"), ["Apples", "Pears", "Plums"][i % 3]);
+        json!([id, product, i])
+    }));
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("insert.pivotTable", json!({"rows": ["Id"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+    for i in 0..edits {
+        s.execute("cell.set", json!({"cell": "K1", "input": i.to_string()})).unwrap();
+    }
+    if env("PIVOT_BENCH_REOPEN", 0) == 1 {
+        let wb = (*s.doc().unwrap().wb).clone();
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+        s.add_document(crate::DocState::new(back, None, "Reopened".into(), crate::Trust::FromFile));
+    }
+}
+
 #[test]
 fn rank_ties_are_dense_and_count_numbers_is_captioned_count_of() {
     // #1448 items 10 and 12: Excel ranks 5, 4, 3, 3, 4 as 1, 2, 3, 3, 2 (GridCraft gave 1, 2, 4,
@@ -1058,4 +1446,140 @@ fn legacy_count_numbers_caption_follows_the_function() {
         s.execute("pivot.valueSettings", json!({"index": 0, "func": "sum"})).unwrap();
         assert_eq!(text(&s, "E3"), after, "{legacy}");
     }
+}
+
+#[test]
+fn distinct_count_counts_each_different_value_once_per_cell_and_in_the_totals() {
+    // #3336: Alice, Bob, Alice, Charlie is 3 distinct customers, where Count says 4. Case does not
+    // make a name different, and an empty cell is not a value.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([
+        ["Region", "Customer"],
+        ["East", "Alice"],
+        ["East", "Bob"],
+        ["East", "alice"],
+        ["East", null],
+        ["West", "Alice"],
+        ["West", "Charlie"]
+    ]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let make = json!({"source": "Sheet1!$A$1:$B$7", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Customer"]});
+    s.execute("insert.pivotTable", make).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "count"})).unwrap();
+    let counts: Vec<Value> = ["E4", "E5", "E6"].iter().map(|a| val(&s, a)).collect();
+    assert_eq!(counts, [3.0, 2.0, 5.0].map(Value::Number), "Count counts every non-empty cell");
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    assert_eq!(text(&s, "E3"), "Distinct Count of Customer");
+    let distinct: Vec<Value> = ["E4", "E5", "E6"].iter().map(|a| val(&s, a)).collect();
+    assert_eq!(distinct, [2.0, 2.0, 3.0].map(Value::Number), "East has Alice and Bob, West Alice and Charlie, 3 in all");
+}
+
+#[test]
+fn distinct_count_survives_an_xlsx_round_trip_and_a_refresh() {
+    // #3385: saving wrote Distinct Count as Count, so Alice, Bob, Alice became 3 after reopening
+    // and refreshing. The sheet keeps the computed distinct counts for other readers too.
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Region", "Customer"], ["East", "Alice"], ["East", "Bob"], ["East", "alice"], ["West", "Alice"], ["West", "Charlie"]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let make = json!({"source": "Sheet1!$A$1:$B$6", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Customer"]});
+    s.execute("insert.pivotTable", make).unwrap();
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    let cells = ["E4", "E5", "E6"];
+    let expected = [2.0, 2.0, 3.0].map(Value::Number);
+    assert_eq!(cells.map(|a| val(&s, a)), expected);
+    let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+
+    // The written sheet holds the distinct counts, and the cache doesn't ask for a refresh on open.
+    let (written, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let sheet = written.sheet(0).unwrap();
+    assert_eq!(cells.map(|a| sheet.value(CellRef::parse(a).unwrap())), expected);
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut cache = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("xl/pivotCache/pivotCacheDefinition1.xml").unwrap(), &mut cache).unwrap();
+    assert!(!cache.contains("refreshOnLoad"), "{cache}");
+
+    let mut back = Session::new();
+    back.execute("file.open", json!({"name": "book.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(pt(&back).values[0].func, gridcraft_model::PivotFunc::DistinctCount);
+    back.execute("pivot.refresh", json!({"pivot": "PivotTable1"})).unwrap();
+    assert_eq!(text(&back, "E3"), "Distinct Count of Customer");
+    assert_eq!(cells.map(|a| val(&back, a)), expected, "a refresh after reopening still counts distinct customers");
+}
+
+#[test]
+fn saving_a_distinct_count_pivot_as_xlsx_says_only_gridcraft_reads_it() {
+    // #3385: the file stores a plain Count; Excel's Refresh turns it into a count, so the user is told.
+    let notices =
+        |s: &mut Session| s.take_ui_requests().iter().filter(|r| matches!(r, crate::UiRequest::Message(m) if m.contains("Distinct Count"))).count();
+    let dir = std::env::temp_dir().join(format!("gridcraft-distinct-notice-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new();
+    s.new_workbook();
+    let rows = json!([["Region", "Customer"], ["East", "Alice"], ["East", "Bob"], ["West", "Alice"]]);
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let make = json!({"source": "Sheet1!$A$1:$B$4", "destination": "Sheet1!D3", "rows": ["Region"], "values": ["Customer"]});
+    s.execute("insert.pivotTable", make).unwrap();
+    s.take_ui_requests();
+
+    s.execute("file.saveAs", json!({"path": dir.join("plain.xlsx")})).unwrap();
+    assert_eq!(notices(&mut s), 0, "a plain Count is saved as it is");
+
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
+    s.execute("file.saveAs", json!({"path": dir.join("book.csv")})).unwrap();
+    assert_eq!(notices(&mut s), 0, "only an .xlsx file stores the marker");
+    s.execute("file.saveAs", json!({"path": dir.join("book.xlsx")})).unwrap();
+    assert_eq!(notices(&mut s), 1);
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 0, "saving the same file again does not repeat it");
+    // The path is known now, but a Distinct Count added later was never disclosed.
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$4", "destination": "Sheet1!H3", "rows": ["Region"], "values": ["Customer"]}))
+        .unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 0, "a plain Count adds nothing to disclose");
+    s.execute("pivot.valueSettings", json!({"index": 0, "func": "distinctCount"})).unwrap();
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 1, "a new Distinct Count field is disclosed on an ordinary Save to the same path");
+    s.execute("file.save", json!({})).unwrap();
+    assert_eq!(notices(&mut s), 0, "and only once");
+    s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    assert_eq!(notices(&mut s), 1, "a download is an export too");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A defined name with a table's name doesn't stop a PivotTable's table source following a rename
+/// of the table: a bare source binds to the table first.
+#[test]
+fn a_table_rename_moves_a_pivot_source_a_defined_name_shadows() {
+    let mut s = sales();
+    s.execute("insert.table", json!({"range": "A1:E13"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    s.execute("table.summarizePivot", json!({"rows": ["Product"], "values": ["Units"]})).unwrap();
+    assert_eq!(pt(&s).source, "Table1");
+    s.execute("formulas.defineName", json!({"name": "Table1", "refersTo": "=Sheet1!$A$1:$B$3"})).unwrap();
+    s.execute("table.rename", json!({"table": "Table1", "name": "Data"})).unwrap();
+    assert_eq!(pt(&s).source, "Data");
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
+}
+
+/// A PivotTable source that is a table's name reads the table before a defined name of that name,
+/// so renaming the defined name leaves it on the table; a source that is the defined name's own
+/// follows the rename.
+#[test]
+fn renaming_a_defined_name_leaves_a_table_source_on_its_table() {
+    let mut s = sales();
+    s.execute("insert.table", json!({"range": "A1:E13", "name": "Data"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Data", "refersTo": "=Sheet1!$A$1:$E$3"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2"})).unwrap();
+    s.execute("table.summarizePivot", json!({"rows": ["Product"], "values": ["Units"]})).unwrap();
+    assert_eq!(pt(&s).source, "Data");
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Data", "refersTo": "=Sheet1!$A$1:$E$3"})).unwrap();
+    assert_eq!(pt(&s).source, "Data");
+    s.execute("pivot.refresh", json!({})).unwrap();
+    let gt = find_row(&s, "Grand Total").unwrap();
+    assert_eq!(val(&s, &CellRef::new(gt, 1).a1()), Value::Number(72.0));
 }

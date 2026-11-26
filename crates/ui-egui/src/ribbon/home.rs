@@ -575,7 +575,8 @@ pub(super) fn home(app: &mut SheetApp, ui: &mut Ui) {
 
 fn font_combo(app: &mut SheetApp, ui: &mut Ui, st: &Style) {
     let name = st.font.name.clone();
-    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))));
+    // The trailing grow atom left-aligns the existing label inside the button.
+    let resp = ui.add_sized([150.0, 24.0], egui::Button::new(egui::RichText::new(&name).font(theme::ui_font(12.5))).right_text(()));
     control_keytip(app, ui, &resp, "home.fontName");
     let forced = invoke(app, "home.fontName");
     let items: Vec<(&str, String)> = FONTS.iter().map(|f| (*f, f.to_string())).collect();

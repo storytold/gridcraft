@@ -7,34 +7,51 @@ use egui::{Color32, Sense, Stroke, StrokeKind, vec2};
 use gridcraft_engine::core::{CellRef, RangeRef};
 use gridcraft_engine::model::{CfRule, CfValueKind, Color as CellColor, Theme};
 
+/// The list scrolls inside the dialog: a sheet read from a file can carry thousands of rules, and
+/// a list laid out in full made the window as tall as all of them (issue #3321).
+const LIST_HEIGHT: f32 = 360.0;
+
 pub(super) fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
     let lang = app.ui.language;
-    let list = app.session.run("home.manageRules", json!({})).unwrap_or(Json::Null);
-    let rules = list["rules"].as_array().cloned().unwrap_or_default();
-    if rules.is_empty() {
+    // Read the rules in place: running `home.manageRules` for them each frame copied and
+    // serialised every rule and journaled a step 60 times a second.
+    let count = app.session.active().and_then(|d| d.wb.active()).map_or(0, |sh| sh.cond_formats.len());
+    if count == 0 {
         ui.label("There are no conditional formatting rules on this sheet.");
+        return;
     }
-    for (i, r) in rules.iter().enumerate() {
-        ui.horizontal(|ui| {
-            let kind = r["rule"].as_object().and_then(|o| o.keys().next().cloned()).unwrap_or_default();
-            ui.label(format!(
-                "{}. {kind}  applies to {}",
-                i + 1,
-                r["ranges"].as_array().map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(",")).unwrap_or_default()
-            ));
-            if kind.contains("ColorScale") && ui.small_button(lang.tr("Edit")).clicked() {
-                app.open_dialog("newFormattingRule", json!({"edit": i, "rule": r["rule"].clone()}));
-            }
-            if ui.small_button("▲").clicked() {
-                app.run_or_alert("home.manageRules", json!({"moveUp": i}));
-            }
-            if ui.small_button("▼").clicked() {
-                app.run_or_alert("home.manageRules", json!({"moveDown": i}));
-            }
-            if ui.small_button("Delete").clicked() {
-                app.run_or_alert("home.manageRules", json!({"delete": i}));
-            }
-        });
+    let mut action: Option<Json> = None;
+    let mut edit: Option<(usize, Json)> = None;
+    let row_height = ui.spacing().interact_size.y;
+    egui::ScrollArea::both().max_height(LIST_HEIGHT).auto_shrink([false, true]).show_rows(ui, row_height, count, |ui, rows| {
+        let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return };
+        for i in rows {
+            let Some(cf) = sh.cond_formats.get(i) else { break };
+            let rule = serde_json::to_value(&cf.rule).unwrap_or(Json::Null);
+            let kind = rule.as_object().and_then(|o| o.keys().next().cloned()).unwrap_or_default();
+            let ranges = cf.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
+            ui.horizontal(|ui| {
+                ui.label(format!("{}. {kind}  applies to {ranges}", i + 1));
+                if kind.contains("ColorScale") && ui.small_button(lang.tr("Edit")).clicked() {
+                    edit = Some((i, rule.clone()));
+                }
+                if ui.small_button("▲").clicked() {
+                    action = Some(json!({"moveUp": i}));
+                }
+                if ui.small_button("▼").clicked() {
+                    action = Some(json!({"moveDown": i}));
+                }
+                if ui.small_button("Delete").clicked() {
+                    action = Some(json!({"delete": i}));
+                }
+            });
+        }
+    });
+    if let Some((i, rule)) = edit {
+        app.open_dialog("newFormattingRule", json!({"edit": i, "rule": rule}));
+    }
+    if let Some(params) = action {
+        app.run_or_alert("home.manageRules", params);
     }
 }
 
@@ -268,7 +285,7 @@ fn scale_preview(ui: &mut egui::Ui, stops: &[Json]) {
 
 fn stop_combo(ui: &mut egui::Ui, id: (&'static str, usize), current: &mut String, options: &[(&str, &str)], lang: crate::i18n::Language) {
     let shown = options.iter().find(|(v, _)| *v == current).map(|(_, l)| lang.tr(l)).unwrap_or(current.as_str());
-    craft_ui::ComboBox::from_id_salt(id).selected_text(shown).width(120.0).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(id).selected_text(shown).width(120.0).show_ui(ui, |ui| {
         for (v, l) in options {
             if ui.selectable_label(current == v, lang.tr(l)).clicked() {
                 *current = (*v).to_string();
@@ -282,7 +299,7 @@ fn colour_scale_editor(ui: &mut egui::Ui, d: &mut Dialog, lang: crate::i18n::Lan
     ui.horizontal(|ui| {
         ui.label(lang.tr("Format Style:"));
         let mut style = d.values.get("style").and_then(Json::as_str).unwrap_or("3color").to_string();
-        craft_ui::ComboBox::from_id_salt("newFormattingRule.style")
+        egui::ComboBox::from_id_salt("newFormattingRule.style")
             .selected_text(lang.tr(if style == "2color" { "2-Color Scale" } else { "3-Color Scale" }))
             .width(150.0)
             .show_ui(ui, |ui| {
@@ -373,7 +390,7 @@ fn preset_combo(ui: &mut egui::Ui, d: &mut Dialog, lang: crate::i18n::Language) 
     ];
     let mut preset = d.values.get("preset").and_then(Json::as_str).unwrap_or("lightRedFillDarkRedText").to_string();
     let shown = PRESETS.iter().find(|(v, _)| *v == preset).map(|(_, l)| lang.tr(l)).unwrap_or(preset.as_str());
-    craft_ui::ComboBox::from_id_salt("newFormattingRule.preset").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt("newFormattingRule.preset").selected_text(shown).width(260.0).show_ui(ui, |ui| {
         for (v, l) in PRESETS {
             if ui.selectable_label(preset == *v, lang.tr(l)).clicked() {
                 preset = (*v).to_string();

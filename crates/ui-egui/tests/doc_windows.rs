@@ -42,6 +42,7 @@ impl Desk {
     fn new(quit_with_last_window: bool) -> Desk {
         INFOS.with(|i| i.borrow_mut().clear());
         let ctx = Context::default();
+        gridcraft_ui_egui::framework::install_headless(&ctx);
         ctx.set_embed_viewports(false);
         Context::set_immediate_viewport_renderer(|ctx, viewport| {
             let id = viewport.ids.this;
@@ -77,6 +78,7 @@ impl Desk {
             }
             app.logic(&ctx);
             windows.logic(app, &ctx);
+            app.close_path(&ctx);
             windows.show(app, ui);
         });
         record(out);
@@ -458,8 +460,8 @@ fn arrange_all_lays_out_the_native_windows_active_first() {
     // Without parameters, as a script calls it: tiled.
     let r = desk.app.run("view.arrangeAll", json!({})).unwrap();
     assert_eq!(r["arrange"], "tiled");
-    let tiled = gridcraft_ui_egui::doc_windows::arrange_rects("tiled", 3, craft_window::Rect::new(0.0, 0.0, 1000.0, 800.0));
-    let r = |x, y, w, h| craft_window::Rect::new(x, y, w, h);
+    let r = |x, y, w, h| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
+    let tiled = gridcraft_ui_egui::doc_windows::arrange_rects("tiled", 3, r(0.0, 0.0, 1000.0, 800.0));
     assert_eq!(tiled, [r(0.0, 0.0, 500.0, 400.0), r(500.0, 0.0, 500.0, 400.0), r(0.0, 400.0, 1000.0, 400.0)]);
 }
 
