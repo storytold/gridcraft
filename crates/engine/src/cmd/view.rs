@@ -9,6 +9,7 @@ use super::{
     target_range, target_sheet, u32_param,
 };
 
+/// Register view, application-region and page-layout commands with their undo and query behavior.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -68,6 +69,15 @@ pub fn specs() -> Vec<CommandSpec> {
             s.prefs.formula_bar = bool_param(p, "on").unwrap_or(!s.prefs.formula_bar);
             Ok(json!({"on": s.prefs.formula_bar}))
         }),
+        cmd!(
+            noundo "app.region",
+            "Region",
+            [],
+            None,
+            "{region?: \"en-US\"|\"en-GB\"|\"en-IN\"|\"es-ES\"|\"de-DE\"|\"fr-FR\"|\"it-IT\"|\"pt-BR\"|\"pt-PT\"|\"ru-RU\"|\"cs-CZ\"|\"ja-JP\"|\"ko-KR\"|\"zh-CN\"|\"zh-TW\"} — sets the region used by DATEVALUE and TIMEVALUE; recalculates open workbooks without changing their dirty state. Refresh PivotTables separately. Input commands and display stay en-US; independent of interface language and not stored in XLSX. Without `region` reports the current one → {region, name, decimal, group, dateOrder, shortDate, longDate, available: [tags]}",
+            always,
+            region
+        ),
         cmd!(
             query "view.statusBar",
             "Customize Status Bar",
@@ -162,6 +172,30 @@ pub fn specs() -> Vec<CommandSpec> {
             theme
         ),
     ]
+}
+
+/// Sets or reports the formula date-text region; never opens a dialog.
+fn region(s: &mut Session, p: &Json) -> Result<Json> {
+    let r = match str_param(p, "region") {
+        Some(tag) => s.set_region(tag)?,
+        None if p.get("region").is_some_and(|v| !v.is_null()) => return Err(bad("app.region", "`region` must be a tag such as \"pt-BR\"")),
+        None => s.region(),
+    };
+    let order = match r.date_order {
+        gridcraft_core::region::DateOrder::Mdy => "MDY",
+        gridcraft_core::region::DateOrder::Dmy => "DMY",
+        gridcraft_core::region::DateOrder::Ymd => "YMD",
+    };
+    Ok(json!({
+        "region": r.tag,
+        "name": r.name,
+        "decimal": r.decimal.to_string(),
+        "group": r.group.to_string(),
+        "dateOrder": order,
+        "shortDate": r.short_date,
+        "longDate": r.long_date,
+        "available": gridcraft_core::region::all().iter().map(|r| r.tag).collect::<Vec<_>>(),
+    }))
 }
 
 fn freeze_panes(s: &mut Session, p: &Json) -> Result<Json> {
