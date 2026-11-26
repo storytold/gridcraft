@@ -2,7 +2,7 @@
 
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
-> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (XLSX keeps PivotTables on a data connection, the Data Model or another workbook on save; earlier: a selected chart outlines its names, categories and values in Excel's colours, and dragging the values outline's corner changes the chart's data, #4389, #4390; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (IRR's Newton solver checks its scaled residual before accepting a small step; earlier: XLSX keeps PivotTables on a data connection, the Data Model or another workbook on save; earlier: a selected chart outlines its names, categories and values in Excel's colours, and dragging the values outline's corner changes the chart's data, #4389, #4390; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
 > **Last reviewed:** 2026-11-01 · **Last updated:** 2026-11-05 · **Change:** minor (CJK fallback text shares the Latin baseline; earlier: form controls: buttons, sliders and spin buttons; earlier: RefEdit reference boxes in dialogs: Goal Seek, Solver and Data Analysis take ranges by selection on the grid; earlier: Python mode in the formula bar; earlier: Python cells stored and kept in files; earlier: equations: Insert › Equation, editor, gridcraft-math; earlier: What-if and analysis: Solver Sensitivity report for Simplex LP and GRG Nonlinear; earlier: floating objects: one selection, eight resize handles, keyboard delete; earlier: Chart data tables: live source values beneath column, bar, line, area and compatible combo charts; legend keys and borders; XLSX round-trip and print/PDF; earlier: Formulas › Function Library as labelled buttons with category menus; Recently Used and Insert Function categories; XLSX workbook-view selection, bounded tab ratios and sheet-edit regressions; readiness estimates unchanged; earlier: CSV and text open detects each column's date order, so day-first dates are not silently swapped; earlier: searchable data validation dropdown) · **Target:** Microsoft Excel (Microsoft 365)
 
 
@@ -188,6 +188,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | The web app keeps its preferences between visits (#1562): theme (dark mode), interface size, language, editing options and the rest of what the desktop app saves in `ui.json` and `prefs.json` are kept in the browser's `localStorage`, written as soon as they change |
 | 2026-10-16 | Memory: the interface and script fallback fonts are read once per run and shared with egui instead of copied into it: an empty workbook settles at 158 MB instead of 258 MB on macOS |
 | 2026-10-15 | Function help in Brazilian Portuguese: every description and argument name (479 and 283) |
+| 2026-10-15 | XIRR matches Excel's solver bit for bit on ordinary flows (its bisection answer, about 1e-8 from the exact root, instead of the exact root), with known differences in some `#NUM!` cases; IRR uses Newton on the discount factor like Excel (`#NUM!` where Excel gives up) |
 | 2026-10-15 | File › Options › Formulas: Maximum Iterations and Maximum Change fields for iterative calculation, disabled while it is off, with Excel's limits (1 to 32767, 0 or more) |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
@@ -291,6 +292,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | minor | Progress log: chart data outline in three colours, dragged from its corners (#4389, #4390) |
+| 2026-11-03 | minor | IRR's Newton solver checks its scaled polynomial residual before accepting a small step; the roadmap qualifies XIRR's known `#NUM!` differences |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
@@ -331,6 +333,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |
 | 2026-10-16 | minor | Progress log: interface fonts held once instead of twice |
+| 2026-10-15 | trivial | Progress log: XIRR and IRR follow Excel's solvers |
 | 2026-10-15 | trivial | Progress log: XLSX PivotTables on a data connection or the Data Model kept on save |
 | 2026-10-15 | minor | Progress log: F8 and Shift+F8 selection modes |
 | 2026-10-14 | minor | Progress log: sorts order numbers exactly |
