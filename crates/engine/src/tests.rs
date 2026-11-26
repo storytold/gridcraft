@@ -344,6 +344,84 @@ fn enter_values_and_formulas() {
 }
 
 #[test]
+fn a_leading_plus_or_minus_starts_a_formula() {
+    // #2023: like Excel (and Lotus 1-2-3 before it), typing `+5+4` enters the formula `=+5+4`.
+    let mut s = s();
+    let input = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).map(|c| c.input_text());
+    for (cell, typed, value) in [
+        ("A1", "+5+4", 9.0),
+        ("A2", "-5+4", -1.0),
+        ("A3", "--5", 5.0),
+        ("A4", "-3/4", -0.75),
+        ("A5", "+A1*2", 18.0),
+        ("A6", "-(A1)", -9.0),
+        ("A7", "+1/30", 1.0 / 30.0),
+        ("A8", "-1/30", -1.0 / 30.0),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(input(&s, cell), Some(format!("={typed}")), "{typed}");
+        assert_eq!(v(&s, cell), Value::Number(value), "{typed}");
+    }
+    // A signed number is a number, a lone sign is text, and an apostrophe keeps the text.
+    for (typed, value) in [
+        ("+5", Value::Number(5.0)),
+        ("-5", Value::Number(-5.0)),
+        ("-12%", Value::Number(-0.12)),
+        ("-$5", Value::Number(-5.0)),
+        ("-", Value::text("-")),
+        ("+", Value::text("+")),
+        ("'+5+4", Value::text("+5+4")),
+    ] {
+        s.execute("cell.set", json!({"cell": "B1", "input": typed})).unwrap();
+        assert_eq!(v(&s, "B1"), value, "{typed}");
+        assert!(!input(&s, "B1").is_some_and(|t| t.starts_with('=')), "{typed}");
+    }
+    // Text that would read as a formula is edited with its apostrophe, so confirming the editor
+    // unchanged keeps it text; text that wouldn't is edited as it is.
+    for (typed, shown) in [
+        ("'+5+4", "'+5+4"),
+        ("'-5+4", "'-5+4"),
+        ("'+1-555-1234", "'+1-555-1234"),
+        ("'-abc", "'-abc"),
+        ("--", "--"),
+        ("+49 170 1234567", "+49 170 1234567"),
+        ("+1:30", "+1:30"),
+    ] {
+        s.execute("cell.set", json!({"cell": "B2", "input": typed})).unwrap();
+        let before = v(&s, "B2");
+        let edit = {
+            let d = s.doc().unwrap();
+            crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("B2").unwrap())
+        };
+        assert_eq!(edit, shown, "{typed}");
+        s.execute("cell.set", json!({"cell": "B2", "input": edit})).unwrap();
+        assert_eq!(v(&s, "B2"), before, "{typed} stays text after an unchanged edit");
+    }
+    // As observed in Excel for the web, an entry that doesn't read as a formula stays text, and
+    // one that does but names nothing known is #NAME?. Only `=` entries are refused.
+    for typed in ["--", "-----", "+5+", "+49 170 1234567", "+1:30"] {
+        s.execute("cell.set", json!({"cell": "C1", "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(v(&s, "C1"), Value::text(typed), "{typed}");
+        assert_eq!(input(&s, "C1").as_deref(), Some(typed), "{typed}");
+    }
+    s.execute("cell.set", json!({"cell": "C2", "input": "- item"})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Error(gridcraft_core::CellError::Name));
+    // Excel for the web keeps `+1:30` as text (above) but reads `-1:30` as a formula (rows 1 to 30).
+    s.execute("cell.set", json!({"cell": "C40", "input": "-1:30"})).unwrap();
+    assert_eq!(input(&s, "C40").as_deref(), Some("=-1:30"));
+    let e = s.execute("cell.set", json!({"cell": "C1", "input": "=--"})).unwrap_err().to_string();
+    assert!(e.contains("problem with this formula"), "{e}");
+    assert_eq!(v(&s, "C1"), Value::text("+1:30"), "a refused entry keeps the cell");
+    // Pasted or split by Text to Columns, the same rule applies.
+    s.execute("edit.paste", json!({"at": "D1", "text": "--\t-5+4\n"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::text("--"));
+    assert_eq!(v(&s, "E1"), Value::Number(-1.0));
+    s.execute("cell.set", json!({"cell": "F1", "input": "a,--,b"})).unwrap();
+    s.execute("data.textToColumns", json!({"range": "F1", "delimiters": [","]})).unwrap();
+    assert_eq!([v(&s, "F1"), v(&s, "G1"), v(&s, "H1")], [Value::text("a"), Value::text("--"), Value::text("b")]);
+}
+
+#[test]
 fn formulas_with_the_wrong_argument_count_are_refused_on_entry() {
     // #363: =DATEDIF(start, end) was stored and showed #VALUE!. Like Excel, entry refuses it and
     // the message gives the signature, so the missing unit argument is visible.
@@ -5381,6 +5459,140 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+fn quick_analysis_block(s: &mut Session) {
+    for (a, t) in [("A1", "Item"), ("B1", "Q1"), ("C1", "Q2"), ("A2", "x"), ("A3", "y"), ("A4", "z")] {
+        s.execute("cell.set", json!({"cell": a, "input": t})).unwrap();
+    }
+    for (r, (q1, q2)) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)].into_iter().enumerate() {
+        s.execute("cell.set", json!({"cell": format!("B{}", r + 2), "input": q1.to_string()})).unwrap();
+        s.execute("cell.set", json!({"cell": format!("C{}", r + 2), "input": q2.to_string()})).unwrap();
+    }
+}
+
+#[test]
+fn analysis_add_total_writes_formulas_in_one_undo_step() {
+    // Issue #791 (Quick Analysis › Totals).
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    let before = s.doc().unwrap().undo.len();
+    // The header row and the text-only column are skipped; the selection is the default range.
+    s.execute("selection.set", json!({"range": "A1:C4"})).unwrap();
+    let r = s.execute("analysis.addTotal", json!({"function": "sum"})).unwrap();
+    assert_eq!(r["output"], "B5:C5");
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+    assert_eq!(v(&s, "C5"), Value::Number(60.0));
+    assert_eq!(v(&s, "A5"), Value::Empty, "text columns get no total");
+    s.execute("analysis.addTotal", json!({"range": "B1:C4", "function": "average", "direction": "rows"})).unwrap();
+    assert_eq!(v(&s, "D2"), Value::Number(5.5));
+    s.execute("analysis.addTotal", json!({"range": "B1:C4", "function": "runningTotal", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "D4"), Value::Number(6.0), "running total down column B");
+    assert_eq!(v(&s, "E4"), Value::Number(60.0));
+    s.execute("analysis.addTotal", json!({"range": "B1:B4", "function": "percentTotal", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(0.5), "overwrite replaces the C column cell next to B");
+    assert_eq!(s.doc().unwrap().undo.len(), before + 4, "one undo step per call");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(30.0));
+    // A second sum into the occupied row is refused rather than overwriting.
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:C4"})).is_err());
+}
+
+#[test]
+fn analysis_add_total_refuses_bad_and_huge_input() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    // Empty params on a single cell, unknown function, no numbers, whole columns, no room.
+    assert!(s.execute("analysis.addTotal", json!({})).is_err());
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:C4", "function": "median"})).is_err());
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:A4"})).is_err());
+    let before = s.doc().unwrap().undo.len();
+    let r = s.execute("analysis.addTotal", json!({"range": "B:C"})).unwrap();
+    assert_eq!(r["output"], "B5:C5", "whole columns are clipped to the used range");
+    assert_eq!(s.doc().unwrap().undo.len(), before + 1);
+    s.execute("cell.set", json!({"cell": "B1048575", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1048576", "input": "2"})).unwrap();
+    assert!(s.execute("analysis.addTotal", json!({"range": "B1048575:C1048576"})).is_err(), "no row below the last one");
+    assert!(s.execute("analysis.addTotal", json!({"range": "B1:C1048576", "function": "runningTotal"})).is_err(), "per-cell block over the cap");
+}
+
+#[test]
+fn analysis_results_stay_outside_a_selection_that_extends_past_the_data() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    // Data ends in row 4; the selection runs to row 10, so the sum goes in row 11.
+    let r = s.execute("analysis.addTotal", json!({"range": "A1:C10"})).unwrap();
+    assert_eq!(r["output"], "B11:C11");
+    assert_eq!(v(&s, "B11"), Value::Number(6.0));
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // Per-row blocks and sparklines move out by the selection's size too.
+    let r = s.execute("analysis.addTotal", json!({"range": "B1:C10", "function": "runningTotal", "direction": "rows"})).unwrap();
+    assert_eq!(r["output"], "B12:C14", "per-row block lands below the selection, not inside it");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:F4"})).unwrap();
+    assert_eq!(r["output"], "G2:G4");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:C8", "direction": "columns"})).unwrap();
+    assert_eq!(r["output"], "B9:C9");
+}
+
+#[test]
+fn analysis_overwrite_keeps_the_target_cell_style() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("cell.set", json!({"cell": "B5", "input": "1"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B5"})).unwrap();
+    s.execute("home.bold", json!({})).unwrap();
+    s.execute("analysis.addTotal", json!({"range": "A1:C4", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("B5").unwrap())).font.bold, "bold survives the overwrite");
+}
+
+#[test]
+fn analysis_commands_refuse_a_multi_area_selection_without_a_range() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("selection.set", json!({"range": "A1:C4,E1:F4"})).unwrap();
+    for c in ["analysis.addTotal", "analysis.addSparklines"] {
+        let e = s.execute(c, json!({})).unwrap_err().to_string();
+        assert!(e.contains("single contiguous range"), "{c}: {e}");
+    }
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // An explicit range still works.
+    s.execute("analysis.addTotal", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+}
+
+#[test]
+fn analysis_add_sparklines_one_per_row_in_one_undo_step() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    let before = s.doc().unwrap().undo.len();
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:C4", "type": "column"})).unwrap();
+    assert_eq!(r["output"], "D2:D4", "header row and label column are skipped");
+    let sparks = s.doc().unwrap().wb.active().unwrap().sparklines.clone();
+    assert_eq!(sparks.len(), 3);
+    assert!(sparks.iter().any(|x| x.cell == CellRef::parse("D3").unwrap() && x.source == "B3:C3"));
+    assert_eq!(s.doc().unwrap().undo.len(), before + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().sparklines.is_empty());
+    assert!(s.execute("analysis.addSparklines", json!({"range": "A1:A4"})).is_err());
+}
+
+#[test]
+fn analysis_add_sparklines_refuses_a_protected_sheet() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("analysis.addSparklines", json!({"range": "A1:C4"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let (undo, sparks) = (s.doc().unwrap().undo.len(), s.doc().unwrap().wb.active().unwrap().sparklines.clone());
+    for p in [json!({"range": "A1:C4", "overwrite": true}), json!({"range": "A1:B3", "direction": "columns"})] {
+        assert!(s.execute("analysis.addSparklines", p).is_err());
+    }
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "a refused command leaves no undo step");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().sparklines, sparks);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("analysis.addSparklines", json!({"range": "A1:C4", "overwrite": true})).unwrap();
+}
+
 #[test]
 fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     let mut s = s();
@@ -7656,4 +7868,178 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+/// #1348: the selection a workbook opens with, and the one a sheet gets on its first visit, take
+/// a merged active cell whole, as a click on it does: a merge at A1 and one elsewhere. A
+/// selection the sheet remembers comes back as it was, even inside a merged cell.
+#[test]
+fn opening_and_switching_sheets_select_a_merged_active_cell_whole() {
+    let mut wb = gridcraft_model::Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("Timesheet"));
+    sh.merges.push(gridcraft_core::RangeRef::parse("A1:AG1").unwrap());
+    sh.merges.push(gridcraft_core::RangeRef::parse("C5:E6").unwrap());
+    sh.view_active = CellRef::parse("C5").unwrap();
+    let mut second = gridcraft_model::Sheet::new("Sheet2");
+    second.merges.push(gridcraft_core::RangeRef::parse("A1:C2").unwrap());
+    wb.sheets.push(std::sync::Arc::new(second));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet3")));
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let sel = |s: &Session| {
+        let sel = &s.doc().unwrap().selection;
+        (sel.a1(), sel.active.a1())
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "timesheet.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(sel(&s), pair("C5:E6", "C5"), "on open, a merge away from A1");
+
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(sel(&s), pair("A1:C2", "A1"), "first visit of a sheet, a merge at A1");
+    s.execute("sheet.activate", json!({"sheet": "Sheet3"})).unwrap();
+    assert_eq!(sel(&s), pair("A1", "A1"), "an unmerged A1 stays a single cell");
+
+    // A remembered selection is not expanded again: set one inside Sheet2's merge directly.
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.doc_mut().unwrap().selection = crate::Selection::at(CellRef::parse("B2").unwrap());
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(sel(&s), pair("C5:E6", "C5"), "Sheet1's remembered selection");
+    s.execute("selection.set", json!({"cell": "B3"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(sel(&s), pair("B2", "B2"), "a remembered selection comes back as it was");
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(sel(&s), pair("B3", "B3"), "a remembered selection comes back as it was");
+}
+
+/// Paste Link would write links to the cells a cut empties, losing them: a cut can't be pasted
+/// as links, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_as_links() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "link": true, "at": "E1"})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
+}
+
+/// A cut pasted into a row the filter hides would skip every cell it writes, so the cells would
+/// leave the sheet with the cut: it is refused and nothing changes. A visible row takes it.
+#[test]
+fn a_cut_is_not_pasted_into_filtered_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=5 {
+        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [[1, 2]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.cut", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A3:B3"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!((v(&s, "E1"), v(&s, "F1")), (Value::Number(1.0), Value::Number(2.0)));
+    assert_eq!(v(&s, "A3"), Value::from("v3"));
+    s.execute("selection.set", json!({"range": "A4:B4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B4"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
+}
+
+/// A taller cut, or one pasted at an explicit cell, goes straight down: refused when a row the
+/// filter hides is among the rows it would land on, and nothing changes. A visible place takes it.
+#[test]
+fn an_anchored_cut_is_not_pasted_over_filtered_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=5 {
+        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "A10", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A10:B11"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "A2"})).is_err());
+    assert_eq!((v(&s, "A10"), v(&s, "B11")), (Value::Number(1.0), Value::Number(4.0)));
+    assert_eq!((v(&s, "A2"), v(&s, "A3")), (Value::from("v2"), Value::from("v3")));
+    s.execute("edit.paste", json!({"at": "A4"})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B5"), v(&s, "A10")), (Value::Number(1.0), Value::Number(4.0), Value::Empty));
+}
+
+/// Skip Blanks would empty a cut's blank cells along with their note and format, then skip them:
+/// a cut takes no Paste Special option, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_skipping_blanks() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+    s.execute("review.newNote", json!({"cell": "B1", "text": "note", "author": "Example"})).unwrap();
+    s.execute("home.bold", json!({"range": "B1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "E1"})).is_err());
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let b1 = CellRef::parse("B1").unwrap();
+    assert!(sh.comments.contains_key(&b1));
+    assert!(d.wb.styles.get(sh.style_id(b1)).font.bold);
+    assert_eq!((v(&s, "A1"), v(&s, "E1")), (Value::Number(1.0), Value::Empty));
+}
+
+/// Transposing a cut would move references to it as if it were not transposed: refused, and a
+/// formula reading the cut cells still reads them.
+#[test]
+fn a_cut_is_not_pasted_transposed() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "H1", "input": "=B1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E5"})).is_err());
+    assert_eq!(formula_at(&s, "H1").as_deref(), Some("B1"));
+    assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "E5"), v(&s, "E6")), (Value::Number(1.0), Value::Number(2.0), Value::Empty, Value::Empty));
+}
+
+/// A cut lands in one place: onto a larger or differently shaped selection it is refused, as in
+/// Excel, rather than tiled.
+#[test]
+fn a_cut_is_not_pasted_over_a_larger_area() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "E1:E3"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "E1"), v(&s, "E2"), v(&s, "E3")), (Value::Number(5.0), Value::Empty, Value::Empty, Value::Empty));
+}
+
+/// A paste operation or a partial paste (values only) of a cut would empty the cut cells and
+/// combine or keep only part of them: refused, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_with_an_operation_or_in_part() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [[2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "operation": "add", "at": "E1"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "values", "at": "E1"})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "E1")), (Value::Number(5.0), Value::Number(2.0)));
+}
+
+/// A refused paste leaves the cut pending: a plain Paste onto one cell, or onto an area of the cut's
+/// size, still moves it.
+#[test]
+fn a_refused_cut_paste_leaves_the_cut_to_paste_plainly() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E5"})).is_err());
+    s.execute("selection.set", json!({"range": "E1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "E1"), v(&s, "F1")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
+    assert!(s.clipboard.is_none());
+    s.execute("edit.cut", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:D3"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "E1"), v(&s, "C3"), v(&s, "D3")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
 }

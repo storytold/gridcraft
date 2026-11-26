@@ -8,14 +8,12 @@ use super::{
 /// Typing `=PY(` doesn't make a Python cell; this says what does.
 pub(crate) const PY_FORMULA: &str = "Python cells are made with the python.set command (the code as `code`), not by typing =PY(…).";
 
-/// Whether typing `input` into a cell enters a formula: `=…`, or `+…`/`-…` followed by a name or
-/// a parenthesis (not a number), as Excel takes `+SUM(1)`.
+/// Whether typing `input` into a cell is meant as a formula: `=…`, or `+…`/`-…` when the entry
+/// isn't a number on its own, as Excel takes `+5+4` and `+SUM(1)` (see
+/// [`gridcraft_core::parse::starts_formula`]). A `+…`/`-…` entry that doesn't parse as a formula
+/// still enters as text (`--`), see [`input_to_cell`].
 pub(crate) fn is_formula_input(input: &str) -> bool {
-    input.starts_with('=')
-        || (input.len() > 1
-            && (input.starts_with('+') || input.starts_with('-'))
-            && gridcraft_core::parse::parse_number_text(input).is_none()
-            && input.chars().nth(1).is_some_and(|c| c.is_ascii_alphabetic() || c == '('))
+    gridcraft_core::parse::starts_formula(input)
 }
 
 /// What typing `input` into a cell produces (constant or formula, plus an automatic number
@@ -35,7 +33,15 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
     if is_formula && gridcraft_model::python::is_py_formula(input) {
         return Err(EngineError::Other(PY_FORMULA.into()));
     }
-    if is_formula {
+    // As in Excel, a `+` or `-` entry is a formula when it reads as one (`+5+4` enters `=+5+4`)
+    // and text when it doesn't (`--`, `+49 170 1234567`); only `=` entries are refused.
+    if is_formula
+        && !input.starts_with('=')
+        && let Ok(cell) = input_to_cell(&format!("={input}"), sheet, at, wb)
+    {
+        return Ok(cell);
+    }
+    if input.starts_with('=') {
         let body = input.strip_prefix('=').unwrap_or(input);
         let expr = wb.name_call_case(parse_typed_formula(body)?);
         check_arg_counts(&expr)?;
