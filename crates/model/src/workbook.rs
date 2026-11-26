@@ -152,6 +152,12 @@ pub struct DocProps {
     pub company: String,
     pub keywords: String,
     pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub last_modified_by: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub created: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub modified: String,
 }
 
 /// One phonetic (furigana) run of a string item (`<rPh>`): the reading `text` and the range of the
