@@ -509,6 +509,21 @@ mod tests {
         }
     }
 
+    /// The right-drag fill menu's Linear Trend and Growth Trend have a row in every catalog, with
+    /// no English fallback.
+    #[test]
+    fn trend_fill_labels_are_translated_in_every_catalog() {
+        for key in ["Linear Trend", "Growth Trend"] {
+            assert_eq!(Language::En.tr(key), key);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('\n'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_ne!(shown, key, "{code}: the row for {key:?} is still English");
+            }
+        }
+    }
+
     /// The note under a validation list that was cut short is a sentence, not a feature name: a
     /// catalog without it shows the English sentence in the middle of a translated interface.
     #[test]
