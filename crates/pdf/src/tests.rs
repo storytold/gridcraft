@@ -1312,6 +1312,37 @@ fn latin_extended_letters_use_the_latin_font() {
 }
 
 #[test]
+fn latin_extended_resources_give_every_glyph_a_width() {
+    // Ccircumflex and other Extended-A names aren't in every standard font's metrics: the resource
+    // states each width, so no glyph gets a zero advance and overlaps the next letter.
+    for face in Font::ALL {
+        if face == Font::Symbol {
+            continue;
+        }
+        let mut doc = PdfDoc::new();
+        let p = doc.add_page(612.0, 792.0);
+        p.text(10.0, 20.0, 10.0, face, [0, 0, 0], "Ĉu ő");
+        let pdf = doc.finish().unwrap();
+        check_xref(&pdf).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+        let name = face.base_name();
+        let dict = text
+            .split("<< /Type /Font /Subtype /Type1 /BaseFont /")
+            .find(|d| d.starts_with(&format!("{name} /Encoding << /Type /Encoding /Differences")))
+            .unwrap();
+        assert!(dict.contains("/FirstChar 128 /LastChar 255 /Widths ["), "{name}: {dict}");
+        let widths = dict.split("/Widths [").nth(1).and_then(|w| w.split(']').next()).unwrap();
+        let widths: Vec<u16> = widths.split_whitespace().map(|w| w.parse().unwrap()).collect();
+        assert_eq!(widths.len(), 128, "{name}");
+        assert!(widths.iter().all(|&w| w > 0), "{name}: {widths:?}");
+        // Ĉ (U+0108) is set at its base letter's width.
+        assert_eq!(widths[8], face.char_width('C'), "{name}");
+        let desc = dict.split("/FontDescriptor ").nth(1).and_then(|d| d.split(' ').next()).unwrap();
+        assert!(text.contains(&format!("{desc} 0 obj\n<< /Type /FontDescriptor /FontName /{name} ")), "{name}: descriptor {desc}");
+    }
+}
+
+#[test]
 fn latin_extended_letters_use_each_faces_own_resource() {
     // Every face routed to a `/Differences` resource has the Latin glyphs; the symbolic standard
     // fonts (Symbol, ZapfDingbats) lack them and are never routed there.

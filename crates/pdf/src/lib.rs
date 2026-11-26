@@ -326,6 +326,67 @@ pub fn win_ansi(c: char) -> u8 {
     }
 }
 
+/// Objects a font resource takes: the CID font also has its descendant font and font descriptor,
+/// a Latin Extended-A face its font descriptor.
+fn font_objects(slot: usize) -> u32 {
+    if slot == CID_FONT {
+        3
+    } else if slot >= EXT_FONT {
+        2
+    } else {
+        1
+    }
+}
+
+/// Writes the Latin Extended-A resource of `face` as object `id`, with its font descriptor as
+/// `id + 1`.
+fn write_ext_font(out: &mut craft_pdf::classic::Writer, id: u32, face: Font) -> Result<(), Error> {
+    let names: Vec<&str> = metrics::LATIN_EXT_A.iter().map(|(name, _)| *name).collect();
+    // Not every glyph name here is in the standard fonts' metrics (Ccircumflex
+    // isn't), so the resource states each width: without one a reader can give
+    // the glyph no advance and set the next letter on top of it. The PDF reference
+    // asks for /FirstChar, /LastChar, /Widths and /FontDescriptor together.
+    let widths: Vec<String> = (0x100u32..0x180).map(|u| char::from_u32(u).map_or(0, |c| face.char_width(c)).to_string()).collect();
+    let last = 127 + widths.len();
+    let desc_id = id + 1;
+    out.object(
+        id,
+        &format!(
+            "<< /Type /Font /Subtype /Type1 /BaseFont /{} /Encoding << /Type /Encoding /Differences [128 /{}] >> /FirstChar 128 /LastChar {last} /Widths [{}] /FontDescriptor {desc_id} 0 R >>",
+            face.base_name(),
+            names.join(" /"),
+            widths.join(" ")
+        ),
+    )?;
+    out.object(desc_id, &font_descriptor(face))?;
+    Ok(())
+}
+
+/// The font descriptor of a standard face (values from its Adobe AFM), for a resource that states
+/// its own widths.
+fn font_descriptor(face: Font) -> String {
+    // (flags, bbox, italic angle, ascent, descent, cap height, StemV)
+    let (flags, bbox, italic, ascent, descent, cap, stem) = match face {
+        Font::Helvetica => (32, "-166 -225 1000 931", 0.0, 718, -207, 718, 88),
+        Font::HelveticaOblique => (96, "-170 -225 1116 931", -12.0, 718, -207, 718, 88),
+        Font::HelveticaBold => (32, "-170 -228 1003 962", 0.0, 718, -207, 718, 140),
+        Font::HelveticaBoldOblique => (96, "-174 -228 1114 962", -12.0, 718, -207, 718, 140),
+        Font::TimesRoman => (34, "-168 -218 1000 898", 0.0, 683, -217, 662, 84),
+        Font::TimesBold => (34, "-168 -218 1000 935", 0.0, 683, -217, 676, 139),
+        Font::TimesItalic => (98, "-169 -217 1010 883", -15.5, 683, -217, 653, 76),
+        Font::TimesBoldItalic => (98, "-200 -218 996 921", -15.0, 683, -217, 669, 121),
+        Font::Courier => (35, "-23 -250 715 805", 0.0, 629, -157, 562, 51),
+        Font::CourierBold => (35, "-113 -250 749 801", 0.0, 629, -157, 562, 106),
+        Font::CourierOblique => (99, "-27 -250 849 805", -12.0, 629, -157, 562, 51),
+        Font::CourierBoldOblique => (99, "-57 -250 869 801", -12.0, 629, -157, 562, 106),
+        Font::Symbol => (4, "-180 -293 1090 1010", 0.0, 1010, -293, 1010, 85),
+    };
+    format!(
+        "<< /Type /FontDescriptor /FontName /{} /Flags {flags} /FontBBox [{bbox}] /ItalicAngle {italic} /Ascent {ascent} /Descent {descent} /CapHeight {cap} /StemV {stem} >>",
+        face.base_name()
+    )
+}
+
 /// Index of the CID font in a page's font flags (after the [`Font::ALL`] faces).
 const CID_FONT: usize = Font::ALL.len();
 /// Index of the first Latin Extended-A face (one per [`Font::ALL`] face, after the CID font).
@@ -1133,8 +1194,9 @@ impl PdfDoc {
         for (i, u) in used.iter().enumerate() {
             if *u {
                 font_ids[i] = next;
-                // The CID font also needs its descendant font and font descriptor.
-                next += if i == CID_FONT { 3 } else { 1 };
+                // The CID font also needs its descendant font and font descriptor; a Latin
+                // Extended-A face its font descriptor.
+                next += font_objects(i);
             }
         }
         // Page contents are moved out so each one is freed as soon as it is in the output.
@@ -1170,15 +1232,7 @@ impl PdfDoc {
                     continue;
                 }
                 if let Some(face) = i.checked_sub(EXT_FONT).and_then(|f| Font::ALL.get(f)) {
-                    let names: Vec<&str> = metrics::LATIN_EXT_A.iter().map(|(name, _)| *name).collect();
-                    out.object(
-                        *id,
-                        &format!(
-                            "<< /Type /Font /Subtype /Type1 /BaseFont /{} /Encoding << /Type /Encoding /Differences [128 /{}] >> >>",
-                            face.base_name(),
-                            names.join(" /")
-                        ),
-                    )?;
+                    write_ext_font(&mut out, *id, *face)?;
                     continue;
                 }
                 let name = Font::ALL.get(i).copied().unwrap_or_default().base_name();
