@@ -418,9 +418,10 @@ fn alt_equals_autosum_does_not_also_type_the_equals_sign() {
     for (selected, cell, formula) in [("A4", "A4", "=SUM(A1:A3)"), ("C3", "C3", "=SUM(A3:B3)"), ("A1:B3", "B4", "=SUM(B1:B3)")] {
         let mut h = harness(book(selected));
         alt_equals(&mut h);
-        assert_eq!(input(&h, cell), formula, "Alt+= on {selected}");
-        assert!(h.state().editor.is_none(), "Alt+= on {selected} started an edit");
-        // Enter moves on: there is no stray `=` edit to commit.
+        // One cell: the formula waits in the editor for Enter, as in Excel (#1834); a block gets
+        // its totals at once. Either way without a stray `=`.
+        let editing = h.state().editor.as_ref().map(|e| e.text.clone());
+        assert_eq!(editing.as_deref(), (!selected.contains(':')).then_some(formula), "Alt+= on {selected}");
         key(&mut h, Key::Enter, Modifiers::NONE);
         assert!(h.state().message.is_none(), "Alt+= on {selected}: {:?}", h.state().message);
         assert_eq!(input(&h, cell), formula);
@@ -440,4 +441,41 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     h.run_steps(2);
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
+}
+
+/// Only plain Ctrl+Q toggles Quick Analysis; Ctrl+Shift+Q and Ctrl+Alt+Q (AltGr+Q) do not.
+#[test]
+fn only_plain_ctrl_q_toggles_quick_analysis() {
+    let mut h = harness(book("A1:B3"));
+    key(&mut h, Key::Q, CTRL_SHIFT);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Ctrl+Shift+Q");
+    key(&mut h, Key::Q, Modifiers { alt: true, ..CTRL });
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Ctrl+Alt+Q");
+    key(&mut h, Key::Q, CTRL);
+    assert!(h.state().grid.quick_analysis.open.is_some(), "Ctrl+Q");
+}
+
+/// Excel for Mac: Control+Q (ctrl without command) opens Quick Analysis, Command+Q is left to the
+/// native Quit item, and a single cell still opens nothing without an alert.
+#[test]
+fn mac_control_q_toggles_quick_analysis_and_command_q_does_not() {
+    const MAC_CONTROL: Modifiers = Modifiers { alt: false, ctrl: true, shift: false, mac_cmd: false, command: false };
+    const MAC_COMMAND: Modifiers = Modifiers { alt: false, ctrl: false, shift: false, mac_cmd: true, command: true };
+    assert_eq!(lookup(Key::Q, Some(Key::Q), MAC_CONTROL, true), Some(Shortcut::QuickAnalysis));
+    assert_eq!(lookup(Key::Q, Some(Key::Q), MAC_COMMAND, true), None);
+    assert_eq!(lookup(Key::Q, Some(Key::Q), MAC_CONTROL, false), None, "Windows Ctrl+Q goes through ribbon::shortcut");
+    let mac = |sel: &str| crate::common::os_harness(book(sel), egui::os::OperatingSystem::Mac);
+    let mut h = mac("A1:B3");
+    key(&mut h, Key::Q, MAC_COMMAND);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Command+Q is Quit");
+    key(&mut h, Key::Q, Modifiers { shift: true, ..MAC_CONTROL });
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Control+Shift+Q");
+    key(&mut h, Key::Q, MAC_CONTROL);
+    assert!(h.state().grid.quick_analysis.open.is_some(), "Control+Q opens");
+    key(&mut h, Key::Q, MAC_CONTROL);
+    assert!(h.state().grid.quick_analysis.open.is_none(), "Control+Q again closes");
+    let mut h = mac("B2");
+    key(&mut h, Key::Q, MAC_CONTROL);
+    assert!(h.state().grid.quick_analysis.open.is_none());
+    assert!(h.state().message.is_none() && h.state().toast.is_none(), "no alert for a single cell");
 }

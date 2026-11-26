@@ -1,28 +1,35 @@
+use craft_ui::shell::embed::CloseDecision;
+
 use super::{SaveAnswer, SheetApp, json};
 
 impl SheetApp {
-    /// Holds back a window close (the close button, Alt+F4, the OS quitting the app) while a
-    /// workbook has unsaved changes, and asks about them first.
-    pub(super) fn guard_window_close(&mut self, ctx: &egui::Context) {
-        if self.native_windows || self.allow_close || !ctx.input(|i| i.viewport().close_requested()) {
-            return;
+    /// The root window was asked to close (the close button, Alt+F4, the OS quitting the app): whether it closes
+    /// now. A running print job holds it. With a native window per workbook the close is that window's
+    /// ([`crate::doc_windows`]) unless the app is quitting. Otherwise unsaved changes hold it while they are asked
+    /// about.
+    pub fn close_decision(&mut self, ctx: &egui::Context) -> CloseDecision {
+        if self.printing.busy() {
+            return CloseDecision::Hold;
+        }
+        if self.allow_close {
+            return CloseDecision::Close;
+        }
+        if self.native_windows {
+            return CloseDecision::Hold;
         }
         // A cell still being edited is part of the workbook, as for File › Close.
         if !self.commit_edit(0, 0, false, false) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            return;
+            return CloseDecision::Hold;
         }
         // The macro step editor asks about its own unsaved steps and debug run first; once it has
         // closed, the window close goes on.
         if self.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             crate::macro_editor::request_close(self, true);
-            return;
+            return CloseDecision::Hold;
         }
         if !self.session.documents().iter().any(|d| d.is_dirty()) {
-            return;
+            return CloseDecision::Close;
         }
-        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         match self.dialog.as_mut() {
             // Already asking about a workbook (File › Close): answering it now goes on to quit.
             Some(d) if d.name() == "saveChanges" => {
@@ -30,6 +37,7 @@ impl SheetApp {
             }
             _ => self.continue_quit(ctx),
         }
+        CloseDecision::Hold
     }
 
     /// Asks about the next unsaved workbook before quitting, in its window, or closes the app
