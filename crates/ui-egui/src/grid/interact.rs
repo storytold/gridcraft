@@ -117,7 +117,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         && !resp.drag_started()
         && let Some(p) = pos
         && object_under(app, geo, sh, p).is_some_and(|(o, _, handle)| o.kind == ObjKind::Slicer && handle.is_none())
-        && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
+        && let Some((id, act)) = crate::chartview::slicer_click(app, geo, sh, wb, wb.active_sheet(), p)
     {
         app.selected_object = Some(ObjRef::new(ObjKind::Slicer, id));
         match act {

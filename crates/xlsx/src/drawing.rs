@@ -226,6 +226,8 @@ pub fn read_drawing(cx: &mut Ctx<'_>, part: &str, sheet: &mut Sheet) -> Result<(
                         } else {
                             cx.warn(format!("chart {target} is missing from the package and was skipped ({part}, object {n})"));
                         }
+                    } else if crate::slicer::read_frame(cx, &sheet.name, gd, anchor) {
+                        // A slicer: joined with its slicer part and cache once the sheets are read.
                     } else if uri.contains("chartex") || uri.contains("chartEx") {
                         cx.warn(format!("a histogram, waterfall, treemap… chart without its chart part was skipped ({part}, object {n})"));
                     } else {
@@ -627,6 +629,8 @@ pub enum Obj<'a> {
     Image(&'a Image, String),
     Chart(&'a gridcraft_model::Chart, String),
     Shape(&'a Shape),
+    /// A PivotTable slicer and its (unique) name.
+    Slicer(&'a gridcraft_model::Slicer, String),
 }
 
 /// The drawing part for a sheet's objects (relationship ids already assigned).
@@ -667,6 +671,13 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     ext.set_attr("cy", e(ch.anchor.height));
                 }
                 items.push(CraftItem::Anchor(anchor));
+            }
+            Obj::Slicer(sl, name) => {
+                let placement = to_placement(sheet, &sl.anchor);
+                let xml = crate::slicer::frame_xml(id, name, &xfrm(&sl.anchor, "xdr:xfrm"), &xfrm(&sl.anchor, "a:xfrm"));
+                if let Some(object) = parse_craft_fragment(&xml) {
+                    items.push(CraftItem::Anchor(CraftAnchor { placement, object, client_data: None }));
+                }
             }
             Obj::Shape(sh) if sh.kind == ShapeKind::Equation => {
                 let placement = to_placement(sheet, &sh.anchor);

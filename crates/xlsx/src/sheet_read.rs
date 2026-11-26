@@ -363,7 +363,11 @@ fn apply_craft_sheet_part(
             }
             "protectedRanges" => read_protected_ranges(&from_craft_el(child), sheet),
             "autoFilter" => sheet.autofilter = read_autofilter(cx, &from_craft_el(child)),
-            "extLst" => read_ext(cx, &from_craft_el(child), sheet, &mut cf_kept_cells),
+            "extLst" => {
+                let e = from_craft_el(child);
+                read_ext(cx, &e, sheet, &mut cf_kept_cells);
+                crate::slicer::read_sheet_ext(cx, &e, rels, name);
+            }
             _ => {}
         }
     }
@@ -1112,6 +1116,7 @@ mod tests {
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],
+            slicers: Default::default(),
         }
     }
 
