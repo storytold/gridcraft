@@ -219,7 +219,9 @@ pub struct Workbook {
     pub props: DocProps,
     /// Workbook structure protection.
     pub protected_structure: bool,
-    /// Password of the structure protection (XLSX `workbookProtection`), never the password.
+    /// Hash of the structure protection's password, never the password. XLSX
+    /// `workbookProtection` writes its Excel form ([`crate::PasswordHash::excel`]); a digest
+    /// alone has none and is not written there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure_password: Option<crate::PasswordHash>,
     /// Custom fill lists (Options › Custom Lists) beyond the built-in ones.
@@ -343,7 +345,209 @@ impl std::fmt::Debug for ActiveSheet {
     }
 }
 
+/// Where a reference is held, for [`Workbook::rewrite_references`].
+#[derive(Clone, Copy, Debug)]
+pub struct RefHost<'a> {
+    /// The sheet holding it, or a defined name's scope (`None`: the workbook).
+    pub sheet: Option<usize>,
+    /// The name unqualified references in it are on: its sheet's (a sheet-level defined name's
+    /// scope sheet, where they are read), or [`NAME_HOST`] for a workbook-level defined name
+    /// (read on whichever sheet uses it).
+    pub name: &'a str,
+}
+
+/// [`RefHost::name`] for a workbook-level defined name: `[` and `]` can't be in a sheet's name, so
+/// no sheet's references are taken for a name's.
+pub const NAME_HOST: &str = "[]";
+
+/// Formula text with `f` applied to its references; text that isn't a formula, or that `f`
+/// doesn't change, stays as it is (a leading `=` is kept). Whether it changed.
+fn rewrite_with<E>(t: &mut String, f: &dyn Fn(Expr) -> Expr, parse: fn(&str) -> Result<Expr, E>) -> bool {
+    let body = t.trim_start_matches('=');
+    let Ok(e) = parse(body) else { return false };
+    let before = gridcraft_formula::print(&e);
+    let after = gridcraft_formula::print(&f(e));
+    if after == before {
+        return false;
+    }
+    *t = if t.starts_with('=') { format!("={after}") } else { after };
+    true
+}
+
+fn rewrite_text(t: &mut String, f: &dyn Fn(Expr) -> Expr) -> bool {
+    rewrite_with(t, f, gridcraft_formula::parse)
+}
+
 impl Workbook {
+    /// Rewrites every reference the workbook holds with `f`, given where each is held, in one
+    /// place: cell formulas (keeping their array and spill kind), defined names, conditional
+    /// formats and data validation (written for their range's top-left cell, so they move as
+    /// a cell formula there does), chart series (a chart's source block
+    /// the edit breaks is dropped; one already broken is kept), sparklines, PivotTable sources
+    /// (not one that is a table's name alone, which reads the table first) and form controls'
+    /// linked cells. The engine's reference-moving edits (renaming sheets and names, deleting sheets,
+    /// renaming tables, inserting and deleting lines and cells, cut-moves) go through it. Not
+    /// visited: table calculated-column and totals formulas, a PivotChart's link to its
+    /// PivotTable, a slicer's table, and Python cells' `xl()` references (the engine rewrites
+    /// the last itself, and a PivotChart's link on a sheet rename). A legacy array's own range is the
+    /// caller's to move. Internal
+    /// hyperlinks keep the place they name as typed, as Excel's do. A sheet nothing changes on
+    /// stays shared.
+    pub fn rewrite_references(&mut self, f: &dyn Fn(RefHost<'_>, Expr) -> Expr) {
+        let sheet_names: Vec<String> = self.sheets.iter().map(|s| s.name.clone()).collect();
+        for n in &mut self.names {
+            let name = n.scope.and_then(|i| sheet_names.get(i)).map_or(NAME_HOST, String::as_str);
+            let host = RefHost { sheet: n.scope, name };
+            rewrite_with(&mut n.formula, &|e| f(host, e), gridcraft_formula::parse_name);
+        }
+        // A series name is read by the chart as a reference when it starts with `=`, names a
+        // sheet (`!`) or is a defined name its sheet sees; anything else (a word, a table's
+        // name, `Q1`) is a label and is left as written.
+        let names: Vec<(String, Option<usize>)> = self.names.iter().map(|n| (n.name.to_lowercase(), n.scope)).collect();
+        // A PivotTable source that is a table's name alone reads the table before any defined
+        // name of that name (`pivot::resolve_source`), so a name's edit doesn't reach it.
+        let tables: Vec<String> = self.sheets.iter().flat_map(|s| s.tables.iter().map(|t| t.name.to_lowercase())).collect();
+        let table_source = |t: &str| tables.contains(&t.trim().trim_start_matches('=').trim().to_lowercase());
+        let label = |t: &str, si: usize| {
+            let t = t.trim();
+            let defined = || names.iter().any(|(n, scope)| scope.is_none_or(|s| s == si) && *n == t.to_lowercase());
+            !t.starts_with('=') && !t.contains('!') && !defined()
+        };
+        for (si, shared) in self.sheets.iter_mut().enumerate() {
+            // Worked out on the shared sheet; a list is copied only when something in it
+            // changes, and a sheet nothing changes on stays shared with undo snapshots.
+            let sh: &Sheet = shared;
+            let host = RefHost { sheet: Some(si), name: &sh.name };
+            let f = |e: Expr| f(host, e);
+            let changes = |t: &str| rewrite_with(&mut t.to_string(), &f, gridcraft_formula::parse);
+            let cells: Vec<(gridcraft_core::CellRef, Formula)> = sh
+                .cells
+                .iter()
+                .filter_map(|(c, cell)| {
+                    // Trees are compared, not printed text: a formula the edit leaves alone keeps
+                    // its stored text, even text that isn't canonical, and isn't printed.
+                    let old = cell.formula.as_ref()?;
+                    let new = old.with_expr(|e| Some(f(e.clone())).filter(|n| n != e))??;
+                    Some((c, Formula { array: old.array, dynamic: old.dynamic, ..Formula::from_expr(new) }))
+                })
+                .collect();
+            let cond_formats = sh.cond_formats.iter().any(|cf| cf.rule.formulas().into_iter().any(|t| changes(t))).then(|| {
+                let mut v = sh.cond_formats.clone();
+                v.iter_mut().flat_map(|cf| cf.rule.formulas_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
+            let validations = sh.validations.iter().any(|dv| dv.formulas().into_iter().any(|t| changes(t))).then(|| {
+                let mut v = sh.validations.clone();
+                v.iter_mut().flat_map(|dv| dv.formulas_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
+            // A chart's source block that no longer exists is dropped.
+            // (Read from the tree: a sheet may be named `#REF!`.)
+            let dead = |src: Option<&str>| {
+                src.and_then(|s| gridcraft_formula::parse(s.trim_start_matches('=')).ok()).is_some_and(|e| {
+                    let mut hit = false;
+                    e.walk(&mut |x| hit |= matches!(x, Expr::Error(gridcraft_core::CellError::Ref)));
+                    hit
+                })
+            };
+            let charts = sh
+                .charts
+                .iter()
+                .any(|ch| {
+                    ch.source.as_deref().is_some_and(changes)
+                        || ch.series.iter().any(|se| {
+                            changes(&se.values)
+                                || [&se.categories, &se.bubble_sizes].into_iter().flatten().any(|t| changes(t))
+                                || se.name.as_deref().is_some_and(|t| !label(t, si) && changes(t))
+                        })
+                })
+                .then(|| {
+                    let mut v = sh.charts.clone();
+                    for ch in &mut v {
+                        for se in &mut ch.series {
+                            rewrite_text(&mut se.values, &f);
+                            for t in [&mut se.categories, &mut se.bubble_sizes].into_iter().flatten() {
+                                rewrite_text(t, &f);
+                            }
+                            if let Some(t) = se.name.as_mut().filter(|t| !label(t, si)) {
+                                rewrite_text(t, &f);
+                            }
+                        }
+                        // A source this edit breaks is dropped; one already broken before it
+                        // (from a file, or an earlier edit) is kept as it was.
+                        let was_dead = dead(ch.source.as_deref());
+                        if let Some(src) = &mut ch.source {
+                            rewrite_text(src, &f);
+                        }
+                        if !was_dead && dead(ch.source.as_deref()) {
+                            ch.source = None;
+                        }
+                    }
+                    v
+                });
+            let sparklines = sh.sparklines.iter().any(|sp| changes(&sp.source)).then(|| {
+                let mut v = sh.sparklines.clone();
+                v.iter_mut().for_each(|sp| {
+                    rewrite_text(&mut sp.source, &f);
+                });
+                v
+            });
+            let pivots = sh.pivots.iter().any(|pt| !table_source(&pt.source) && changes(&pt.source)).then(|| {
+                let mut v = sh.pivots.clone();
+                v.iter_mut().filter(|pt| !table_source(&pt.source)).for_each(|pt| {
+                    rewrite_text(&mut pt.source, &f);
+                });
+                v
+            });
+            // A form control's linked cell.
+            let controls = sh.controls.iter().any(|c| c.link.as_deref().is_some_and(changes)).then(|| {
+                let mut v = sh.controls.clone();
+                v.iter_mut().flat_map(|c| c.link.as_mut()).for_each(|t| {
+                    rewrite_text(t, &f);
+                });
+                v
+            });
+            if cells.is_empty()
+                && cond_formats.is_none()
+                && validations.is_none()
+                && charts.is_none()
+                && sparklines.is_none()
+                && pivots.is_none()
+                && controls.is_none()
+            {
+                continue;
+            }
+            let sh = Arc::make_mut(shared);
+            for (c, formula) in cells {
+                if let Some(cell) = sh.cells.get_mut(c) {
+                    cell.formula = Some(Arc::new(formula));
+                }
+            }
+            if let Some(v) = cond_formats {
+                sh.cond_formats = v;
+            }
+            if let Some(v) = validations {
+                sh.validations = v;
+            }
+            if let Some(v) = charts {
+                sh.charts = v;
+            }
+            if let Some(v) = sparklines {
+                sh.sparklines = v;
+            }
+            if let Some(v) = pivots {
+                sh.pivots = v;
+            }
+            if let Some(v) = controls {
+                sh.controls = v;
+            }
+        }
+    }
+
     /// A new workbook with one sheet, "Sheet1".
     pub fn new() -> Workbook {
         Workbook {
@@ -597,6 +801,36 @@ mod tests {
         let mut value: serde_json::Value = serde_json::from_str(&json)?;
         value.as_object_mut().ok_or("none")?.remove("phonetics");
         assert!(serde_json::from_value::<Workbook>(value)?.phonetics.is_empty());
+        Ok(())
+    }
+
+    /// A rewrite copies only the sheets it changes: the others stay shared (with undo snapshots).
+    #[test]
+    fn rewrite_references_leaves_untouched_sheets_shared() -> Result<(), Box<dyn std::error::Error>> {
+        let mut wb = Workbook::new();
+        let mut other = Sheet::new("Other");
+        other.set_cell(gridcraft_core::CellRef::new(0, 0), crate::Cell::formula(Formula::new("Sheet1!A1+1")));
+        wb.sheets.push(Arc::new(other));
+        let mut third = Sheet::new("Third");
+        third.set_cell(gridcraft_core::CellRef::new(0, 0), crate::Cell::formula(Formula::new("A1+1")));
+        // A rule that doesn't name the sheet leaves its sheet shared; one that does is rewritten.
+        third.validations.push(crate::Validation { f1: "=A1>0".into(), ..Default::default() });
+        wb.sheets.push(Arc::new(third));
+        let mut fourth = Sheet::new("Fourth");
+        fourth.validations.push(crate::Validation { f1: "=Sheet1!A1>0".into(), ..Default::default() });
+        wb.sheets.push(Arc::new(fourth));
+        let snapshot = wb.clone();
+        wb.rewrite_references(&|_, e| gridcraft_formula::adjust::rename_sheet(e, "Sheet1", "Data"));
+        let shared = |i: usize| -> Result<bool, Box<dyn std::error::Error>> {
+            Ok(Arc::ptr_eq(wb.sheets.get(i).ok_or("sheet")?, snapshot.sheets.get(i).ok_or("sheet")?))
+        };
+        assert!(shared(0)?, "nothing on Sheet1 names it");
+        assert!(!shared(1)?, "Other's formula names Sheet1");
+        assert!(shared(2)?, "Third's formula and rule are unqualified");
+        assert!(!shared(3)?, "Fourth's rule names Sheet1");
+        assert_eq!(wb.sheets.get(3).and_then(|s| s.validations.first()).map(|v| v.f1.as_str()), Some("=Data!A1>0"));
+        let f = wb.sheets.get(1).and_then(|s| s.cell(gridcraft_core::CellRef::new(0, 0))).and_then(|c| c.formula.clone()).ok_or("formula")?;
+        assert_eq!(f.text, "Data!A1+1");
         Ok(())
     }
 
