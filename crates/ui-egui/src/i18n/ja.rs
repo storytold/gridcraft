@@ -305,6 +305,8 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Point", "ポイント"),
     ("Calculate", "計算"),
     ("Select destination and press Enter or choose Paste", "貼り付け先を選び、Enter キーを押すか [貼り付け] を選びます"),
+    ("Extend Selection", "選択範囲の拡張"),
+    ("Add or Remove Selection", "選択範囲の追加または削除"),
     ("General", "標準"),
     ("Number", "数値"),
     ("Currency", "通貨"),
@@ -1149,6 +1151,8 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
 /// Portuguese catalog has no entry for them either). Kept apart so the two catalogs above keep the
 /// same key set; it never overlaps them.
 pub(super) const EXTRA: &[(&str, &str)] = &[
+    ("Linear Trend", "線形近似"),
+    ("Growth Trend", "乗算近似"),
     ("Cut (⌘X)", "切り取り (⌘X)"),
     ("Copy (⌘C)", "コピー (⌘C)"),
     ("Bold (⌘B)", "太字 (⌘B)"),

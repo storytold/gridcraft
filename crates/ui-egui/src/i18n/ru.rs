@@ -3,6 +3,8 @@
 /// Returns the Russian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Линейное приближение",
+        "Growth Trend" => "Экспоненциальное приближение",
         "Diagram" => "Схема",
         "Decorative Text" => "Декоративный текст",
         "Paste" => "Вставить",
@@ -299,6 +301,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Point" => "Указание",
         "Calculate" => "Вычисление",
         "Select destination and press Enter or choose Paste" => "Выберите место вставки и нажмите Enter или выберите «Вставить»",
+        "Extend Selection" => "Расширить выделение",
+        "Add or Remove Selection" => "Добавить или удалить выделение",
         "General" => "Общий",
         "Number" => "Числовой",
         "Currency" => "Денежный",
