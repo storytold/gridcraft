@@ -7870,6 +7870,49 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
 
+/// #1348: the selection a workbook opens with, and the one a sheet gets on its first visit, take
+/// a merged active cell whole, as a click on it does: a merge at A1 and one elsewhere. A
+/// selection the sheet remembers comes back as it was, even inside a merged cell.
+#[test]
+fn opening_and_switching_sheets_select_a_merged_active_cell_whole() {
+    let mut wb = gridcraft_model::Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("Timesheet"));
+    sh.merges.push(gridcraft_core::RangeRef::parse("A1:AG1").unwrap());
+    sh.merges.push(gridcraft_core::RangeRef::parse("C5:E6").unwrap());
+    sh.view_active = CellRef::parse("C5").unwrap();
+    let mut second = gridcraft_model::Sheet::new("Sheet2");
+    second.merges.push(gridcraft_core::RangeRef::parse("A1:C2").unwrap());
+    wb.sheets.push(std::sync::Arc::new(second));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet3")));
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let sel = |s: &Session| {
+        let sel = &s.doc().unwrap().selection;
+        (sel.a1(), sel.active.a1())
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "timesheet.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(sel(&s), pair("C5:E6", "C5"), "on open, a merge away from A1");
+
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(sel(&s), pair("A1:C2", "A1"), "first visit of a sheet, a merge at A1");
+    s.execute("sheet.activate", json!({"sheet": "Sheet3"})).unwrap();
+    assert_eq!(sel(&s), pair("A1", "A1"), "an unmerged A1 stays a single cell");
+
+    // A remembered selection is not expanded again: set one inside Sheet2's merge directly.
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.doc_mut().unwrap().selection = crate::Selection::at(CellRef::parse("B2").unwrap());
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(sel(&s), pair("C5:E6", "C5"), "Sheet1's remembered selection");
+    s.execute("selection.set", json!({"cell": "B3"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(sel(&s), pair("B2", "B2"), "a remembered selection comes back as it was");
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(sel(&s), pair("B3", "B3"), "a remembered selection comes back as it was");
+}
+
 /// Paste Link would write links to the cells a cut empties, losing them: a cut can't be pasted
 /// as links, and nothing changes.
 #[test]
