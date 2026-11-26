@@ -5,6 +5,8 @@
 /// Returns the Italian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Tendenza lineare",
+        "Growth Trend" => "Tendenza esponenziale",
         "Diagram" => "Diagramma",
         "Decorative Text" => "Testo decorativo",
         "Paste" => "Incolla",
@@ -374,6 +376,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recenti",
         "No recent workbooks yet." => "Nessuna cartella di lavoro recente.",
         "More workbooks" => "Altre cartelle di lavoro",
+        "More entries not shown" => "Altri elementi non visualizzati",
         "Modified" => "Modificato",
         "Not available" => "Non disponibile",
         "Just now" => "Adesso",
@@ -686,6 +689,9 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Description (optional):" => "Descrizione (facoltativa):",
         "Fits inside the selected cell and moves with its content." => "Si adatta alla cella selezionata e si sposta insieme al suo contenuto.",
         "Choose a PNG or JPEG no larger than 16 MB." => "Scegli un file PNG o JPEG di dimensioni non superiori a 16 MB.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Questa cartella di lavoro contiene una tabella pivot con un campo valore «Conteggio distinto». Nel file .xlsx è salvato come Conteggio normale con un indicatore che legge solo GridCraft; Aggiorna in Excel lo trasforma in un conteggio normale."
+        }
         "About" => "Informazioni",
         "Contributors" => "Collaboratori",
         "Models" => "Modelli",
@@ -1009,6 +1015,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Move to Values" => "Sposta in Valori",
         "Summarize by Sum" => "Riepiloga per somma",
         "Summarize by Count" => "Riepiloga per conteggio",
+        "Summarize by Distinct Count" => "Riepiloga per conteggio distinto",
         "Summarize by Average" => "Riepiloga per media",
         "Summarize by Max" => "Riepiloga per massimo",
         "Summarize by Min" => "Riepiloga per minimo",
@@ -1066,6 +1073,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Disattivato: 720.0 viene mostrato e salvato come 720.0, e 3.10 come 3.10 (la cella riceve il formato numero 0.0 o 0.00). Resta un numero. Non è un'opzione di Excel."
         }
+        "Distinct Count" => "Conteggio distinto",
+        "A calculated field can't use Distinct Count." => "Un campo calcolato non può usare «Conteggio distinto».",
         "Numerical Count" => "Conteggio numeri",
         "Minimum" => "Minimo",
         "Maximum" => "Massimo",
@@ -1170,6 +1179,37 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char ha un argomento non numerico {argument}",
         "\\@char with invalid code point {code}" => "\\@char con punto di codice non valido {code}",
         "Invalid environment name character: {character}" => "Carattere non valido nel nome dell'ambiente: {character}",
+        "Copy Cells" => "Copia celle",
+        "Fill Series" => "Riempi serie",
+        "Fill Formatting Only" => "Riempi solo formattazione",
+        "Fill Without Formatting" => "Riempi senza formattazione",
+        "Fill Days" => "Riempi giorni",
+        "Fill Weekdays" => "Riempi giorni feriali",
+        "Fill Months" => "Riempi mesi",
+        "Fill Years" => "Riempi anni",
+        "Auto Fill Options" => "Opzioni di riempimento automatico",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Nuova regola di formattazione",
+        "Edit Formatting Rule" => "Modifica regola di formattazione",
+        "Select a Rule Type" => "Seleziona un tipo di regola",
+        "Edit the Rule Description" => "Modifica la descrizione della regola",
+        "Format all cells based on their values" => "Formatta tutte le celle in base ai loro valori",
+        "Format only cells that contain" => "Formatta solo le celle che contengono",
+        "Format only top or bottom ranked values" => "Formatta solo i valori con classificazione superiore o inferiore",
+        "Format only values that are above or below average" => "Formatta solo i valori superiori o inferiori alla media",
+        "Format only unique or duplicate values" => "Formatta solo valori univoci o duplicati",
+        "Use a formula to determine which cells to format" => "Usa una formula per determinare quali celle formattare",
+        "This rule type isn't available yet." => "Questo tipo di regola non è ancora disponibile.",
+        "Format Style:" => "Stile formato:",
+        "2-Color Scale" => "Scala a 2 colori",
+        "3-Color Scale" => "Scala a 3 colori",
+        "Midpoint" => "Punto medio",
+        "Lowest value" => "Valore minimo",
+        "Highest value" => "Valore massimo",
+        "Percent" => "Percentuale",
+        "Percentile" => "Percentile",
+        "Formula" => "Formula",
+        "More Rules…" => "Altre regole…",
         _ => return None,
     })
 }

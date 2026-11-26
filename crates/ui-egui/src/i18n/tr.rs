@@ -4,6 +4,8 @@
 /// Returns the Turkish translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Doğrusal Eğilim",
+        "Growth Trend" => "Büyüme Eğilimi",
         "Diagram" => "Diyagram",
         "Decorative Text" => "Dekoratif Metin",
         "Paste" => "Yapıştır",
@@ -286,6 +288,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Son Kullanılanlar",
         "No recent workbooks yet." => "Henüz son kullanılan çalışma kitabı yok.",
         "More workbooks" => "Diğer çalışma kitapları",
+        "More entries not shown" => "Diğer öğeler gösterilmiyor",
         "Modified" => "Değiştirilme Tarihi",
         "Not available" => "Kullanılamıyor",
         "Just now" => "Az önce",
@@ -484,6 +487,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Kapalı: 720.0, 720.0 olarak; 3.10 da 3.10 olarak gösterilir ve kaydedilir (hücre 0.0 veya 0.00 sayı biçimini alır). Sayı olarak kalır. Bir Excel seçeneği değildir."
         }
+        "Distinct Count" => "Benzersiz Sayı",
+        "Summarize by Distinct Count" => "Benzersiz Sayıya göre özetle",
+        "A calculated field can't use Distinct Count." => "Hesaplanmış alan Benzersiz Sayı kullanamaz.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Bu çalışma kitabında değer alanı “Benzersiz Sayı” olan bir PivotTable var. .xlsx dosyasında düz bir Sayı olarak ve yalnızca GridCraft'in okuduğu bir işaretle saklanır; bu yüzden Excel'de Yenile onu düz bir sayıya dönüştürür."
+        }
         "My list has headers" => "Verilerimde üst bilgi var",
         "Sort by" => "Sıralama ölçütü",
         "Then by" => "Sonra",
@@ -614,6 +623,49 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char sayısal olmayan bir bağımsız değişkene sahip: {argument}",
         "\\@char with invalid code point {code}" => "\\@char geçersiz bir kod noktası içeriyor: {code}",
         "Invalid environment name character: {character}" => "Ortam adında geçersiz karakter: {character}",
+        "Copy Cells" => "Hücreleri Kopyala",
+        "Fill Series" => "Seriyi Doldur",
+        "Fill Formatting Only" => "Yalnızca Biçimleri Doldur",
+        "Fill Without Formatting" => "Biçimlendirmeden Doldur",
+        "Fill Days" => "Günleri Doldur",
+        "Fill Weekdays" => "İş Günlerini Doldur",
+        "Fill Months" => "Ayları Doldur",
+        "Fill Years" => "Yılları Doldur",
+        "Auto Fill Options" => "Otomatik Doldurma Seçenekleri",
+        "Series…" => "Seri…",
+        "Down" => "Aşağı",
+        "Up" => "Yukarı",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Yeni Biçimlendirme Kuralı",
+        "Edit Formatting Rule" => "Biçimlendirme Kuralını Düzenle",
+        "Select a Rule Type" => "Kural Türü Seçin",
+        "Edit the Rule Description" => "Kural Açıklamasını Düzenle",
+        "Format all cells based on their values" => "Tüm hücreleri değerlerine göre biçimlendir",
+        "Format only cells that contain" => "Yalnızca şunu içeren hücreleri biçimlendir",
+        "Format only top or bottom ranked values" => "Yalnızca en yüksek veya en düşük sıralamadaki değerleri biçimlendir",
+        "Format only values that are above or below average" => "Yalnızca ortalamanın üstündeki veya altındaki değerleri biçimlendir",
+        "Format only unique or duplicate values" => "Yalnızca benzersiz veya yinelenen değerleri biçimlendir",
+        "Use a formula to determine which cells to format" => "Hangi hücrelerin biçimlendirileceğini belirlemek için formül kullan",
+        "This rule type isn't available yet." => "Bu kural türü henüz kullanılamıyor.",
+        "Format Style:" => "Biçim Stili:",
+        "2-Color Scale" => "2 Renkli Ölçek",
+        "3-Color Scale" => "3 Renkli Ölçek",
+        "Midpoint" => "Orta nokta",
+        "Lowest value" => "En düşük değer",
+        "Highest value" => "En yüksek değer",
+        "Percent" => "Yüzde",
+        "Percentile" => "Yüzdebirlik",
+        "Formula" => "Formül",
+        "Format values where this formula is true:" => "Bu formülün doğru olduğu değerleri biçimlendir:",
+        "with" => "ile",
+        "More Rules…" => "Diğer Kurallar…",
+        // Conditional formatting: the formatting presets the rule editor offers.
+        "Light Red Fill with Dark Red Text" => "Açık Kırmızı Dolgu ve Koyu Kırmızı Metin",
+        "Yellow Fill with Dark Yellow Text" => "Sarı Dolgu ve Koyu Sarı Metin",
+        "Green Fill with Dark Green Text" => "Yeşil Dolgu ve Koyu Yeşil Metin",
+        "Light Red Fill" => "Açık Kırmızı Dolgu",
+        "Red Text" => "Kırmızı Metin",
+        "Red Border" => "Kırmızı Kenarlık",
         _ => return None,
     })
 }

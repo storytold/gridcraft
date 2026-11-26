@@ -17,7 +17,7 @@ fn package_starts_with_content_types_rels_and_workbook_before_any_large_part() {
     let bytes = write_xlsx(&wb).unwrap();
 
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
-    let names: Vec<String> = (0..zip.len()).filter_map(|i| zip.by_index(i).ok().map(|f| f.name().to_string())).collect();
+    let names: Vec<String> = (0..zip.len()).filter_map(|i| zip.by_index(i).ok().map(|f| f.name().unwrap().to_string())).collect();
     assert_eq!(names.first().map(String::as_str), Some("[Content_Types].xml"), "{names:?}");
     assert_eq!(names.get(1).map(String::as_str), Some("_rels/.rels"), "{names:?}");
     assert_eq!(names.get(2).map(String::as_str), Some("xl/_rels/workbook.xml.rels"), "{names:?}");

@@ -8,6 +8,8 @@
 /// Returns the Romanian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Tendință liniară",
+        "Growth Trend" => "Tendință de creștere",
         "Diagram" => "Schemă",
         "Decorative Text" => "Text decorativ",
         "Paste" => "Lipire",
@@ -373,6 +375,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Recente",
         "No recent workbooks yet." => "Încă niciun registru recent.",
         "More workbooks" => "Mai multe registre",
+        "More entries not shown" => "Alte elemente nu sunt afișate",
         "Modified" => "Modificat",
         "Not available" => "Indisponibil",
         "Just now" => "Chiar acum",
@@ -1013,6 +1016,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show as Running Total" => "Afișare ca total cumulat",
         "Summarize by Average" => "Rezumare după medie",
         "Summarize by Count" => "Rezumare după numărare",
+        "Summarize by Distinct Count" => "Rezumare după numărare distinctă",
         "Summarize by Max" => "Rezumare după maxim",
         "Summarize by Min" => "Rezumare după minim",
         "Summarize by Sum" => "Rezumare după sumă",
@@ -1115,6 +1119,11 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Remove trailing zeros after the decimal separator" => "Eliminarea zerourilor de la final după separatorul zecimal",
         "Off: 720.0 shows and saves as 720.0, and 3.10 as 3.10 (the cell gets a 0.0 or 0.00 number format). It stays a number. Not an Excel option." => {
             "Dezactivat: 720.0 se afișează și se salvează ca 720.0, iar 3.10 ca 3.10 (celula primește formatul de număr 0.0 sau 0.00). Rămâne număr. Nu este o opțiune Excel."
+        }
+        "Distinct Count" => "Numărare distinctă",
+        "A calculated field can't use Distinct Count." => "Un câmp calculat nu poate folosi numărarea distinctă.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Acest registru de lucru conține un tabel pivot cu un câmp de valori „Numărare distinctă”. În fișierul .xlsx este salvat ca o Numărare simplă, împreună cu un marcaj pe care îl citește doar GridCraft, așa că Reîmprospătare în Excel îl transformă într-o numărare simplă."
         }
         "Numerical Count" => "Numărare numerică",
         "Minimum" => "Minim",
@@ -1220,6 +1229,37 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char are un argument nenumeric {argument}",
         "\\@char with invalid code point {code}" => "\\@char cu punct de cod nevalid {code}",
         "Invalid environment name character: {character}" => "Caracter nevalid în numele mediului: {character}",
+        "Copy Cells" => "Copiere celule",
+        "Fill Series" => "Umplere serie",
+        "Fill Formatting Only" => "Umplere doar formate",
+        "Fill Without Formatting" => "Umplere fără formatare",
+        "Fill Days" => "Umplere zile",
+        "Fill Weekdays" => "Umplere zile lucrătoare",
+        "Fill Months" => "Umplere luni",
+        "Fill Years" => "Umplere ani",
+        "Auto Fill Options" => "Opțiuni de umplere automată",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Regulă de formatare nouă",
+        "Edit Formatting Rule" => "Editați regula de formatare",
+        "Select a Rule Type" => "Selectați un tip de regulă",
+        "Edit the Rule Description" => "Editați descrierea regulii",
+        "Format all cells based on their values" => "Formatați toate celulele în funcție de valorile lor",
+        "Format only cells that contain" => "Formatați numai celulele care conțin",
+        "Format only top or bottom ranked values" => "Formatați numai valorile clasate primele sau ultimele",
+        "Format only values that are above or below average" => "Formatați numai valorile peste sau sub medie",
+        "Format only unique or duplicate values" => "Formatați numai valorile unice sau duplicate",
+        "Use a formula to determine which cells to format" => "Utilizați o formulă pentru a stabili ce celule să fie formatate",
+        "This rule type isn't available yet." => "Acest tip de regulă nu este încă disponibil.",
+        "Format Style:" => "Stil de formatare:",
+        "2-Color Scale" => "Scară cu 2 culori",
+        "3-Color Scale" => "Scară cu 3 culori",
+        "Midpoint" => "Punct de mijloc",
+        "Lowest value" => "Valoarea cea mai mică",
+        "Highest value" => "Valoarea cea mai mare",
+        "Percent" => "Procent",
+        "Percentile" => "Percentilă",
+        "Formula" => "Formulă",
+        "More Rules…" => "Mai multe reguli…",
         _ => return None,
     })
 }
