@@ -420,6 +420,7 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Save the workbook under another name or in another folder.", "ブックを別の名前または別のフォルダーに保存します。"),
     ("Print Active Sheets", "作業中のシートを印刷"),
     ("Print Entire Workbook", "ブック全体を印刷"),
+    ("Print Selection", "選択した部分を印刷"),
     ("Fit Sheet on One Page", "シートを 1 ページに印刷"),
     ("Page Setup…", "ページ設定…"),
     ("Page {page} of {pages}", "{page} / {pages} ページ"),

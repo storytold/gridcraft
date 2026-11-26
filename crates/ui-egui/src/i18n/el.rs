@@ -315,6 +315,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook under another name or in another folder." => "Αποθηκεύστε το βιβλίο εργασίας με άλλο όνομα ή σε άλλον φάκελο.",
         "Print Active Sheets" => "Εκτύπωση ενεργών φύλλων",
         "Print Entire Workbook" => "Εκτύπωση ολόκληρου βιβλίου εργασίας",
+        "Print Selection" => "Εκτύπωση επιλογής",
         "Fit Sheet on One Page" => "Προσαρμογή φύλλου σε μία σελίδα",
         "Page Setup…" => "Διαμόρφωση σελίδας…",
         "Page {page} of {pages}" => "Σελίδα {page} από {pages}",
