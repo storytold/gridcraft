@@ -344,6 +344,84 @@ fn enter_values_and_formulas() {
 }
 
 #[test]
+fn a_leading_plus_or_minus_starts_a_formula() {
+    // #2023: like Excel (and Lotus 1-2-3 before it), typing `+5+4` enters the formula `=+5+4`.
+    let mut s = s();
+    let input = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).map(|c| c.input_text());
+    for (cell, typed, value) in [
+        ("A1", "+5+4", 9.0),
+        ("A2", "-5+4", -1.0),
+        ("A3", "--5", 5.0),
+        ("A4", "-3/4", -0.75),
+        ("A5", "+A1*2", 18.0),
+        ("A6", "-(A1)", -9.0),
+        ("A7", "+1/30", 1.0 / 30.0),
+        ("A8", "-1/30", -1.0 / 30.0),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(input(&s, cell), Some(format!("={typed}")), "{typed}");
+        assert_eq!(v(&s, cell), Value::Number(value), "{typed}");
+    }
+    // A signed number is a number, a lone sign is text, and an apostrophe keeps the text.
+    for (typed, value) in [
+        ("+5", Value::Number(5.0)),
+        ("-5", Value::Number(-5.0)),
+        ("-12%", Value::Number(-0.12)),
+        ("-$5", Value::Number(-5.0)),
+        ("-", Value::text("-")),
+        ("+", Value::text("+")),
+        ("'+5+4", Value::text("+5+4")),
+    ] {
+        s.execute("cell.set", json!({"cell": "B1", "input": typed})).unwrap();
+        assert_eq!(v(&s, "B1"), value, "{typed}");
+        assert!(!input(&s, "B1").is_some_and(|t| t.starts_with('=')), "{typed}");
+    }
+    // Text that would read as a formula is edited with its apostrophe, so confirming the editor
+    // unchanged keeps it text; text that wouldn't is edited as it is.
+    for (typed, shown) in [
+        ("'+5+4", "'+5+4"),
+        ("'-5+4", "'-5+4"),
+        ("'+1-555-1234", "'+1-555-1234"),
+        ("'-abc", "'-abc"),
+        ("--", "--"),
+        ("+49 170 1234567", "+49 170 1234567"),
+        ("+1:30", "+1:30"),
+    ] {
+        s.execute("cell.set", json!({"cell": "B2", "input": typed})).unwrap();
+        let before = v(&s, "B2");
+        let edit = {
+            let d = s.doc().unwrap();
+            crate::display::edit_text(&d.wb, d.wb.active().unwrap(), CellRef::parse("B2").unwrap())
+        };
+        assert_eq!(edit, shown, "{typed}");
+        s.execute("cell.set", json!({"cell": "B2", "input": edit})).unwrap();
+        assert_eq!(v(&s, "B2"), before, "{typed} stays text after an unchanged edit");
+    }
+    // As observed in Excel for the web, an entry that doesn't read as a formula stays text, and
+    // one that does but names nothing known is #NAME?. Only `=` entries are refused.
+    for typed in ["--", "-----", "+5+", "+49 170 1234567", "+1:30"] {
+        s.execute("cell.set", json!({"cell": "C1", "input": typed})).unwrap_or_else(|e| panic!("{typed}: {e}"));
+        assert_eq!(v(&s, "C1"), Value::text(typed), "{typed}");
+        assert_eq!(input(&s, "C1").as_deref(), Some(typed), "{typed}");
+    }
+    s.execute("cell.set", json!({"cell": "C2", "input": "- item"})).unwrap();
+    assert_eq!(v(&s, "C2"), Value::Error(gridcraft_core::CellError::Name));
+    // Excel for the web keeps `+1:30` as text (above) but reads `-1:30` as a formula (rows 1 to 30).
+    s.execute("cell.set", json!({"cell": "C40", "input": "-1:30"})).unwrap();
+    assert_eq!(input(&s, "C40").as_deref(), Some("=-1:30"));
+    let e = s.execute("cell.set", json!({"cell": "C1", "input": "=--"})).unwrap_err().to_string();
+    assert!(e.contains("problem with this formula"), "{e}");
+    assert_eq!(v(&s, "C1"), Value::text("+1:30"), "a refused entry keeps the cell");
+    // Pasted or split by Text to Columns, the same rule applies.
+    s.execute("edit.paste", json!({"at": "D1", "text": "--\t-5+4\n"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::text("--"));
+    assert_eq!(v(&s, "E1"), Value::Number(-1.0));
+    s.execute("cell.set", json!({"cell": "F1", "input": "a,--,b"})).unwrap();
+    s.execute("data.textToColumns", json!({"range": "F1", "delimiters": [","]})).unwrap();
+    assert_eq!([v(&s, "F1"), v(&s, "G1"), v(&s, "H1")], [Value::text("a"), Value::text("--"), Value::text("b")]);
+}
+
+#[test]
 fn formulas_with_the_wrong_argument_count_are_refused_on_entry() {
     // #363: =DATEDIF(start, end) was stored and showed #VALUE!. Like Excel, entry refuses it and
     // the message gives the signature, so the missing unit argument is visible.
@@ -7790,6 +7868,49 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+/// #1348: the selection a workbook opens with, and the one a sheet gets on its first visit, take
+/// a merged active cell whole, as a click on it does: a merge at A1 and one elsewhere. A
+/// selection the sheet remembers comes back as it was, even inside a merged cell.
+#[test]
+fn opening_and_switching_sheets_select_a_merged_active_cell_whole() {
+    let mut wb = gridcraft_model::Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.set_value(CellRef::new(0, 0), Value::text("Timesheet"));
+    sh.merges.push(gridcraft_core::RangeRef::parse("A1:AG1").unwrap());
+    sh.merges.push(gridcraft_core::RangeRef::parse("C5:E6").unwrap());
+    sh.view_active = CellRef::parse("C5").unwrap();
+    let mut second = gridcraft_model::Sheet::new("Sheet2");
+    second.merges.push(gridcraft_core::RangeRef::parse("A1:C2").unwrap());
+    wb.sheets.push(std::sync::Arc::new(second));
+    wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Sheet3")));
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let sel = |s: &Session| {
+        let sel = &s.doc().unwrap().selection;
+        (sel.a1(), sel.active.a1())
+    };
+    let pair = |a: &str, b: &str| (a.to_string(), b.to_string());
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"name": "timesheet.xlsx", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    assert_eq!(sel(&s), pair("C5:E6", "C5"), "on open, a merge away from A1");
+
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(sel(&s), pair("A1:C2", "A1"), "first visit of a sheet, a merge at A1");
+    s.execute("sheet.activate", json!({"sheet": "Sheet3"})).unwrap();
+    assert_eq!(sel(&s), pair("A1", "A1"), "an unmerged A1 stays a single cell");
+
+    // A remembered selection is not expanded again: set one inside Sheet2's merge directly.
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    s.doc_mut().unwrap().selection = crate::Selection::at(CellRef::parse("B2").unwrap());
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(sel(&s), pair("C5:E6", "C5"), "Sheet1's remembered selection");
+    s.execute("selection.set", json!({"cell": "B3"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(sel(&s), pair("B2", "B2"), "a remembered selection comes back as it was");
+    s.execute("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+    assert_eq!(sel(&s), pair("B3", "B3"), "a remembered selection comes back as it was");
 }
 
 /// Paste Link would write links to the cells a cut empties, losing them: a cut can't be pasted
