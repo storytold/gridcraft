@@ -326,14 +326,15 @@ mod tests {
     // --- frames ---
 
     fn harness(s: Session) -> Harness {
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
-            |ui, app: &mut SheetApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            SheetApp::new(s, Default::default()),
-        );
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).with_context_setup(crate::framework::install_headless).build_ui_state(
+                |ui, app: &mut SheetApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                SheetApp::new(s, Default::default()),
+            );
         h.run_steps(8);
         h
     }

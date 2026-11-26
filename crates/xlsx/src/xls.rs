@@ -445,6 +445,7 @@ fn style_of(f: &x::CellFormat) -> Style {
             indent: a.indent,
             rotation: a.rotation,
             reading_order: None,
+            padding: [None; 4],
         },
         borders: Borders {
             left: line(b.left),
