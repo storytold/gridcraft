@@ -531,7 +531,7 @@ fn edit_parts(bytes: &[u8], mut edit: impl FnMut(&str, String) -> String) -> Vec
     let mut out = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for i in 0..zip.len() {
         let mut part = zip.by_index(i).unwrap();
-        let name = part.name().to_string();
+        let name = part.name().unwrap().to_string();
         let mut data = Vec::new();
         part.read_to_end(&mut data).unwrap();
         let data = match String::from_utf8(data) {

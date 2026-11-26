@@ -4,6 +4,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Xu hướng tuyến tính",
+        "Growth Trend" => "Xu hướng tăng trưởng",
         "Diagram" => "Sơ đồ",
         "Decorative Text" => "Chữ trang trí",
         "Paste" => "Dán",
@@ -376,6 +378,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Gần đây",
         "No recent workbooks yet." => "Chưa có sổ làm việc gần đây.",
         "More workbooks" => "Sổ làm việc khác",
+        "More entries not shown" => "Còn mục khác chưa được hiển thị",
         "Modified" => "Đã sửa đổi",
         "Not available" => "Không khả dụng",
         "Just now" => "Vừa xong",
@@ -451,6 +454,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Hiện",
         "Collapse dialog" => "Thu gọn hộp thoại",
         "Expand dialog" => "Mở rộng hộp thoại",
+        "Distinct Count" => "Đếm riêng biệt",
+        "Summarize by Distinct Count" => "Tóm tắt theo Đếm riêng biệt",
+        "A calculated field can't use Distinct Count." => "Trường tính toán không thể dùng Đếm riêng biệt.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Sổ làm việc này có PivotTable với trường giá trị “Đếm riêng biệt”. Trong tệp .xlsx, trường này được lưu dưới dạng Đếm thông thường cùng một dấu hiệu mà chỉ GridCraft đọc, nên Làm mới trong Excel sẽ biến nó thành đếm thông thường."
+        }
         "My list has headers" => "Dữ liệu của tôi có tiêu đề",
         "Sort by" => "Sắp xếp theo",
         "Then by" => "Sau đó theo",
@@ -577,6 +586,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char có đối số không phải số {argument}",
         "\\@char with invalid code point {code}" => "\\@char có điểm mã không hợp lệ {code}",
         "Invalid environment name character: {character}" => "Ký tự không hợp lệ trong tên môi trường: {character}",
+        "Copy Cells" => "Sao chép ô",
+        "Fill Series" => "Điền chuỗi",
+        "Fill Formatting Only" => "Chỉ điền định dạng",
+        "Fill Without Formatting" => "Điền không kèm định dạng",
+        "Fill Days" => "Điền theo ngày",
+        "Fill Weekdays" => "Điền theo ngày làm việc",
+        "Fill Months" => "Điền theo tháng",
+        "Fill Years" => "Điền theo năm",
+        "Auto Fill Options" => "Tùy chọn tự động điền",
+        "Series…" => "Chuỗi…",
+        "Down" => "Xuống",
+        "Up" => "Lên",
         _ => return None,
     })
 }

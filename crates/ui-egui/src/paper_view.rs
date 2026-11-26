@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Key, Painter, Pos2, Rect, Stroke, StrokeKind, TextEdit, pos2, vec2};
+use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use gridcraft_engine::cf::CfCache;
 use gridcraft_engine::cmd::print::{self, HfContext};
 use gridcraft_engine::model::{HfPage, Sheet, SheetViewMode, Workbook};
@@ -468,7 +468,7 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
 /// Edits a header/footer section across left/center/right, cancels on Esc, switches sections and preserves focus/caret while the page scrolls.
 fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let Some(mut e) = app.grid.hf_edit.take() else { return };
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+    if crate::framework::consume_escape(ui.ctx()) {
         app.grid.hf_edit = Some(e);
         cancel(app);
         return;
@@ -823,7 +823,7 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
         ui.ctx().set_cursor_icon(if edge.horizontal() { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
     };
     if let Some(d) = app.grid.ruler_drag.clone() {
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+        if crate::framework::consume_escape(ui.ctx()) {
             app.grid.ruler_drag = None;
             return;
         }

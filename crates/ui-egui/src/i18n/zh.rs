@@ -3,6 +3,8 @@
 /// Returns the Chinese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "线性趋势",
+        "Growth Trend" => "等比趋势",
         "Diagram" => "图示",
         "Decorative Text" => "装饰文字",
         "Paste" => "粘贴",
@@ -384,6 +386,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "最近",
         "No recent workbooks yet." => "还没有最近使用的工作簿。",
         "More workbooks" => "更多工作簿",
+        "More entries not shown" => "还有更多项未显示",
         "Modified" => "修改时间",
         "Not available" => "不可用",
         "Just now" => "刚刚",
@@ -482,6 +485,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "显示",
         "Collapse dialog" => "折叠对话框",
         "Expand dialog" => "展开对话框",
+        "Distinct Count" => "非重复计数",
+        "Summarize by Distinct Count" => "按非重复计数汇总",
+        "A calculated field can't use Distinct Count." => "计算字段不能使用非重复计数。",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "此工作簿中有一个值字段为“非重复计数”的数据透视表。在 .xlsx 文件中，它被保存为普通计数，并附带只有 GridCraft 能读取的标记，因此在 Excel 中刷新会将其变为普通计数。"
+        }
         "My list has headers" => "数据包含标题",
         "Sort by" => "主要关键字",
         "Then by" => "次要关键字",
@@ -600,6 +609,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char 的参数 {argument} 不是数字",
         "\\@char with invalid code point {code}" => "\\@char 的码位 {code} 无效",
         "Invalid environment name character: {character}" => "环境名称中有无效字符: {character}",
+        "Copy Cells" => "复制单元格",
+        "Fill Series" => "填充序列",
+        "Fill Formatting Only" => "仅填充格式",
+        "Fill Without Formatting" => "不带格式填充",
+        "Fill Days" => "以天数填充",
+        "Fill Weekdays" => "以工作日填充",
+        "Fill Months" => "以月填充",
+        "Fill Years" => "以年填充",
+        "Auto Fill Options" => "自动填充选项",
+        "Series…" => "序列…",
+        "Down" => "向下",
+        "Up" => "向上",
         _ => return None,
     })
 }
