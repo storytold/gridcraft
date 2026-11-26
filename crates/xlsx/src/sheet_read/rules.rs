@@ -139,11 +139,17 @@ fn cf_rule(cx: &Ctx<'_>, r: &El, ty: &str, formulas: Vec<String>, style: Box<Sty
         }
         "iconSet" => {
             let is = r.child("iconSet")?;
+            // `gte="0"` on a cfvo: its icon starts above the value (`>`) rather than at it.
+            let mut greater: Vec<bool> = is.kids("cfvo").map(|c| !c.flag("gte", true)).collect();
+            if !greater.contains(&true) {
+                greater.clear();
+            }
             CfRule::IconSet {
                 set: is.attr("iconSet").unwrap_or("3TrafficLights1").to_string(),
                 thresholds: cfvos(is),
                 reverse: is.flag("reverse", false),
                 show_value: is.flag("showValue", true),
+                greater,
             }
         }
         _ => return None,
