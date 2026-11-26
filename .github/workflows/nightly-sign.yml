@@ -34,12 +34,28 @@ jobs:
       checks: read
       attestations: write
       id-token: write
-    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@8389cad8b849ea6bdb5e15fbce16772c3457565a
+    uses: storytold/craft-common-actions/.github/workflows/nightly-release.yml@3dee18226ed28134896f69fb8b280fff9247ec7f
     with:
-      tooling-revision: 8389cad8b849ea6bdb5e15fbce16772c3457565a
+      tooling-revision: 3dee18226ed28134896f69fb8b280fff9247ec7f
       app-name: gridcraft
       producer_run_id: ${{ inputs.producer_run_id }}
       producer_run_attempt: ${{ inputs.producer_run_attempt }}
-    # No secrets: inherit or raw platform values in this caller. Only the isolated native
-    # callee job may bind the release environment and export its keys; that environment must
-    # admit nightly-signer alongside release before the first dispatch.
+    # Forward exactly the secrets the signer's sign steps read, named explicitly (never `inherit`),
+    # as the stable Release caller does. The callee must declare them; it does since the shared
+    # change that added them, and `uses:` is pinned to that revision.
+    secrets:
+      APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+      APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+      WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      AZURE_SIGNING_ENDPOINT: ${{ secrets.AZURE_SIGNING_ENDPOINT }}
+      AZURE_SIGNING_ACCOUNT: ${{ secrets.AZURE_SIGNING_ACCOUNT }}
+      AZURE_CERT_PROFILE: ${{ secrets.AZURE_CERT_PROFILE }}
+      LINUX_SIGNING_KEY: ${{ secrets.LINUX_SIGNING_KEY }}

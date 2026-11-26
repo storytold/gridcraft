@@ -46,9 +46,9 @@ fn is_string_literal(v: &str) -> bool {
 /// written as `format_range` takes it (`"#RRGGBB"`, `{theme, tint}`, `"auto"`) and `fill` may be a
 /// colour alone (a solid fill) or `"none"` (no fill). An unknown key is an error rather than
 /// dropped: dropped, it left a rule with an empty format that matches and shows nothing.
-fn cf_style_json(st: &Json) -> Result<Json> {
+fn cf_style_json(st: &Json, cmd: &str) -> Result<Json> {
     const KEYS: [&str; 6] = ["font", "fill", "borders", "align", "num_fmt", "protection"];
-    let err = |m: String| bad("home.conditionalFormat", m);
+    let err = |m: String| bad(cmd, m);
     let Some(obj) = st.as_object() else { return Err(err("`style` must be an object, e.g. {\"fill\": \"#FFC7CE\"}".into())) };
     let mut st = obj.clone();
     if let Some(k) = st.keys().find(|k| !KEYS.contains(&k.as_str())) {
@@ -103,36 +103,40 @@ fn cf_style_json(st: &Json) -> Result<Json> {
 fn check_cf_formula(cmd: &str, what: &str, formula: &str) -> Result<()> {
     // Strip exactly one leading '=', the way the XLSX writer does: a value like '===A1'
     // only parses after several strips and would still be saved unparseable. (#1999 review)
-    if gridcraft_formula::parse(formula.strip_prefix('=').unwrap_or(formula)).is_err() {
+    let parsed = formula.strip_prefix('=').unwrap_or(formula);
+    // A rule with no formula never applies; the dialog also keeps OK disabled for it.
+    if parsed.trim().is_empty() {
+        return Err(bad(cmd, format!("the {what} formula is empty")));
+    }
+    if gridcraft_formula::parse(parsed).is_err() {
         return Err(bad(cmd, format!("invalid {what} formula `{formula}` — it does not parse; Excel would reject the saved file")));
     }
     Ok(())
 }
 
-fn check_cf_value(what: &str, v: &gridcraft_model::features::CfValueKind) -> Result<()> {
+fn check_cf_value(cmd: &str, what: &str, v: &gridcraft_model::features::CfValueKind) -> Result<()> {
     if let gridcraft_model::features::CfValueKind::Formula(f) = v {
-        check_cf_formula("home.conditionalFormat", what, f)?;
+        check_cf_formula(cmd, what, f)?;
     }
     Ok(())
 }
 
-fn check_cf_rule(rule: &CfRule) -> Result<()> {
-    const CMD: &str = "home.conditionalFormat";
+fn check_cf_rule(cmd: &str, rule: &CfRule) -> Result<()> {
     match rule {
         CfRule::CellIs { a, b, .. } => {
-            check_cf_formula(CMD, "comparison value", a)?;
+            check_cf_formula(cmd, "comparison value", a)?;
             if let Some(b) = b {
-                check_cf_formula(CMD, "second comparison value", b)?;
+                check_cf_formula(cmd, "second comparison value", b)?;
             }
         }
-        CfRule::Expression { formula, .. } => check_cf_formula(CMD, "rule", formula)?,
+        CfRule::Expression { formula, .. } => check_cf_formula(cmd, "rule", formula)?,
         CfRule::DataBar { min, max, .. } => {
-            check_cf_value("data bar minimum", min)?;
-            check_cf_value("data bar maximum", max)?;
+            check_cf_value(cmd, "data bar minimum", min)?;
+            check_cf_value(cmd, "data bar maximum", max)?;
         }
         CfRule::ColorScale { stops } => {
             for (kind, _) in stops {
-                check_cf_value("color scale threshold", kind)?;
+                check_cf_value(cmd, "color scale threshold", kind)?;
             }
         }
         _ => {}
@@ -140,41 +144,53 @@ fn check_cf_rule(rule: &CfRule) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
-    let ranges = target_ranges(s, p)?;
-    let sheet = target_sheet(s, p)?;
-    let Some(rule) = p.get("rule") else {
-        s.ui_requests.push(crate::UiRequest::Dialog("newFormattingRule".into(), json!({})));
-        return ok();
-    };
+fn cf_style(rule: &Json, cmd: &str) -> Result<Style> {
     let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
-    let style = Box::new(match rule.get("style") {
+    match rule.get("style") {
         Some(st) if !st.is_null() => {
-            let st = cf_style_json(st)?;
+            let st = cf_style_json(st, cmd)?;
             let base = serde_json::to_value(Style::default()).map_err(|e| EngineError::Other(e.to_string()))?;
-            serde_json::from_value(crate::cmd::format::merge_json(base, &st)).map_err(|e| bad("home.conditionalFormat", e.to_string()))?
+            Ok(serde_json::from_value(crate::cmd::format::merge_json(base, &st)).map_err(|e| bad(cmd, e.to_string()))?)
         }
-        _ => preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText")),
-    });
-    let kind = g("type").unwrap_or_else(|| "cellIs".into());
-    let value_kind = |v: Option<&Json>, default: CfValueKind| -> CfValueKind {
-        match v {
-            Some(Json::Object(o)) => {
-                let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
-                let val = o.get("value").and_then(Json::as_f64).unwrap_or(0.0);
-                match t {
-                    "min" => CfValueKind::Min,
-                    "max" => CfValueKind::Max,
-                    "percent" => CfValueKind::Percent(val),
-                    "percentile" => CfValueKind::Percentile(val),
-                    "formula" => CfValueKind::Formula(o.get("value").and_then(Json::as_str).unwrap_or("").into()),
-                    _ => CfValueKind::Number(val),
-                }
-            }
-            _ => default,
+        _ => Ok(preset_style(g("preset").as_deref().unwrap_or("lightRedFillDarkRedText"))),
+    }
+}
+
+fn cf_value_kind(v: Option<&Json>, default: CfValueKind, cmd: &str) -> Result<CfValueKind> {
+    let Some(Json::Object(o)) = v else { return Ok(default) };
+    let t = o.get("type").and_then(Json::as_str).unwrap_or("num");
+    // A value that is given must be a number: a string used to be read as 0 without a word.
+    // Only an omitted `value` defaults to zero.
+    let number = || -> Result<f64> {
+        match o.get("value") {
+            None => Ok(0.0),
+            Some(v) => v.as_f64().ok_or_else(|| bad(cmd, format!("the `{t}` stop's `value` must be a number, not {v}"))),
         }
     };
-    let rule = match kind.as_str() {
+    Ok(match t {
+        "min" => CfValueKind::Min,
+        "max" => CfValueKind::Max,
+        // The dialog clamps these to 0-100; engine callers get the same range.
+        "percent" => CfValueKind::Percent(number()?.clamp(0.0, 100.0)),
+        "percentile" => CfValueKind::Percentile(number()?.clamp(0.0, 100.0)),
+        "formula" => {
+            let f = o.get("value").and_then(Json::as_str).unwrap_or("");
+            if f.trim().is_empty() {
+                return Err(bad(cmd, "a formula stop needs a formula"));
+            }
+            // Stored exactly: the evaluator takes the formula as written.
+            CfValueKind::Formula(f.into())
+        }
+        "num" => CfValueKind::Number(number()?),
+        other => return Err(bad(cmd, format!("unknown stop type `{other}`"))),
+    })
+}
+
+fn cf_rule(rule: &Json, cmd: &str) -> Result<CfRule> {
+    let g = |k: &str| rule.get(k).and_then(Json::as_str).map(str::to_string);
+    let style = Box::new(cf_style(rule, cmd)?);
+    let kind = g("type").unwrap_or_else(|| "cellIs".into());
+    match kind.as_str() {
         "cellIs" => {
             // Excel's file and VBA names (`lessThan`, …) are accepted too.
             let op = match g("operator").as_deref().unwrap_or("greater") {
@@ -186,7 +202,7 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                 "greaterOrEqual" | "greaterThanOrEqual" => CfOperator::GreaterOrEqual,
                 "lessOrEqual" | "lessThanOrEqual" => CfOperator::LessOrEqual,
                 "greater" | "greaterThan" => CfOperator::Greater,
-                other => return Err(bad("home.conditionalFormat", format!("unknown operator `{other}`"))),
+                other => return Err(bad(cmd, format!("unknown operator `{other}`"))),
             };
             let a = rule.get("value").map(crate::cmd::edit::json_to_input).unwrap_or_default();
             let b = rule.get("value2").map(crate::cmd::edit::json_to_input);
@@ -201,59 +217,85 @@ pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
                     format!("\"{}\"", v.replace('"', "\"\""))
                 }
             };
-            CfRule::CellIs { op, a: quote(a), b: b.map(quote), style }
+            Ok(CfRule::CellIs { op, a: quote(a), b: b.map(quote), style })
         }
-        "expression" => CfRule::Expression { formula: g("formula").unwrap_or_default().trim_start_matches('=').to_string(), style },
-        "containsText" => CfRule::ContainsText { text: g("text").unwrap_or_default(), style },
-        "notContainsText" => CfRule::NotContainsText { text: g("text").unwrap_or_default(), style },
-        "beginsWith" => CfRule::BeginsWith { text: g("text").unwrap_or_default(), style },
-        "endsWith" => CfRule::EndsWith { text: g("text").unwrap_or_default(), style },
-        "blanks" => CfRule::Blanks { style },
-        "noBlanks" => CfRule::NoBlanks { style },
-        "errors" => CfRule::Errors { style },
-        "noErrors" => CfRule::NoErrors { style },
-        "duplicate" => CfRule::Duplicate { style },
-        "unique" => CfRule::Unique { style },
-        "top10" => CfRule::Top10 {
+        "expression" => Ok(CfRule::Expression { formula: g("formula").unwrap_or_default().trim_start_matches('=').to_string(), style }),
+        "containsText" => Ok(CfRule::ContainsText { text: g("text").unwrap_or_default(), style }),
+        "notContainsText" => Ok(CfRule::NotContainsText { text: g("text").unwrap_or_default(), style }),
+        "beginsWith" => Ok(CfRule::BeginsWith { text: g("text").unwrap_or_default(), style }),
+        "endsWith" => Ok(CfRule::EndsWith { text: g("text").unwrap_or_default(), style }),
+        "blanks" => Ok(CfRule::Blanks { style }),
+        "noBlanks" => Ok(CfRule::NoBlanks { style }),
+        "errors" => Ok(CfRule::Errors { style }),
+        "noErrors" => Ok(CfRule::NoErrors { style }),
+        "duplicate" => Ok(CfRule::Duplicate { style }),
+        "unique" => Ok(CfRule::Unique { style }),
+        "top10" => Ok(CfRule::Top10 {
             bottom: rule.get("bottom").and_then(Json::as_bool).unwrap_or(false),
             percent: rule.get("percent").and_then(Json::as_bool).unwrap_or(false),
             rank: rule.get("rank").and_then(Json::as_u64).unwrap_or(10) as u32,
             style,
-        },
-        "aboveAverage" => CfRule::AboveAverage { below: rule.get("below").and_then(Json::as_bool).unwrap_or(false), equal: false, std_dev: 0, style },
-        "timePeriod" => CfRule::TimePeriod { period: g("period").unwrap_or_else(|| "today".into()), style },
-        "colorScale" => {
-            let cols: Vec<Color> = rule
-                .get("colors")
-                .and_then(Json::as_array)
-                .map(|a| a.iter().filter_map(|c| crate::cmd::format::color_param(Some(c))).collect())
-                .unwrap_or_else(|| vec![Color::rgb(0xF8, 0x69, 0x6B), Color::rgb(0xFF, 0xEB, 0x84), Color::rgb(0x63, 0xBE, 0x7B)]);
-            let stops = match cols.len() {
-                2 => vec![(CfValueKind::Min, cols[0]), (CfValueKind::Max, cols[1])],
-                _ => vec![
-                    (CfValueKind::Min, cols.first().copied().unwrap_or_default()),
-                    (CfValueKind::Percentile(50.0), cols.get(1).copied().unwrap_or_default()),
-                    (CfValueKind::Max, cols.get(2).copied().unwrap_or_default()),
-                ],
-            };
-            CfRule::ColorScale { stops }
+        }),
+        "aboveAverage" => {
+            Ok(CfRule::AboveAverage { below: rule.get("below").and_then(Json::as_bool).unwrap_or(false), equal: false, std_dev: 0, style })
         }
-        "dataBar" => CfRule::DataBar {
-            min: value_kind(rule.get("min"), CfValueKind::Min),
-            max: value_kind(rule.get("max"), CfValueKind::Max),
+        "timePeriod" => Ok(CfRule::TimePeriod { period: g("period").unwrap_or_else(|| "today".into()), style }),
+        "colorScale" => {
+            let stops = if let Some(stops) = rule.get("stops") {
+                // A present but misshapen `stops` is a mistake, not a request for `colors`.
+                let list = stops.as_array().ok_or_else(|| bad(cmd, "`stops` must be an array"))?;
+                let mut out = Vec::with_capacity(list.len().min(3));
+                for stop in list {
+                    let color = crate::cmd::format::color_param(stop.get("color")).ok_or_else(|| bad(cmd, "a colour-scale stop needs a colour"))?;
+                    out.push((cf_value_kind(Some(stop), CfValueKind::Min, cmd)?, color));
+                }
+                if !(2..=3).contains(&out.len()) {
+                    return Err(bad(cmd, "a colour scale needs two or three stops"));
+                }
+                out
+            } else {
+                let cols: Vec<Color> = rule
+                    .get("colors")
+                    .and_then(Json::as_array)
+                    .map(|a| a.iter().filter_map(|c| crate::cmd::format::color_param(Some(c))).collect())
+                    .unwrap_or_else(|| vec![Color::rgb(0xF8, 0x69, 0x6B), Color::rgb(0xFF, 0xEB, 0x84), Color::rgb(0x63, 0xBE, 0x7B)]);
+                match cols.len() {
+                    2 => vec![(CfValueKind::Min, cols[0]), (CfValueKind::Max, cols[1])],
+                    _ => vec![
+                        (CfValueKind::Min, cols.first().copied().unwrap_or_default()),
+                        (CfValueKind::Percentile(50.0), cols.get(1).copied().unwrap_or_default()),
+                        (CfValueKind::Max, cols.get(2).copied().unwrap_or_default()),
+                    ],
+                }
+            };
+            Ok(CfRule::ColorScale { stops })
+        }
+        "dataBar" => Ok(CfRule::DataBar {
+            min: cf_value_kind(rule.get("min"), CfValueKind::Min, cmd)?,
+            max: cf_value_kind(rule.get("max"), CfValueKind::Max, cmd)?,
             color: crate::cmd::format::color_param(rule.get("color")).unwrap_or(Color::rgb(0x63, 0x8E, 0xC6)),
             gradient: rule.get("gradient").and_then(Json::as_bool).unwrap_or(true),
             show_value: true,
-        },
-        "iconSet" => CfRule::IconSet {
+        }),
+        "iconSet" => Ok(CfRule::IconSet {
             set: g("set").unwrap_or_else(|| "3TrafficLights1".into()),
             thresholds: vec![],
             reverse: rule.get("reverse").and_then(Json::as_bool).unwrap_or(false),
             show_value: true,
-        },
-        other => return Err(bad("home.conditionalFormat", format!("unknown rule type `{other}`"))),
+        }),
+        other => Err(bad(cmd, format!("unknown rule type `{other}`"))),
+    }
+}
+
+pub(super) fn add_cf(s: &mut Session, p: &Json) -> Result<Json> {
+    let ranges = target_ranges(s, p)?;
+    let sheet = target_sheet(s, p)?;
+    let Some(rule) = p.get("rule") else {
+        s.ui_requests.push(crate::UiRequest::Dialog("newFormattingRule".into(), json!({})));
+        return ok();
     };
-    check_cf_rule(&rule)?;
+    let rule = cf_rule(rule, "home.conditionalFormat")?;
+    check_cf_rule("home.conditionalFormat", &rule)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         let priority = sh.cond_formats.iter().map(|c| c.priority).max().unwrap_or(0) + 1;
@@ -295,17 +337,33 @@ pub(super) fn clear_cf(s: &mut Session, p: &Json) -> Result<Json> {
 
 pub(super) fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
-    if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() {
+    if p.get("delete").is_none() && p.get("moveUp").is_none() && p.get("moveDown").is_none() && p.get("edit").is_none() {
         let list: Vec<Json> = s
             .doc()?
             .wb
             .sheet(sheet)
             .map(|sh| {
-                sh.cond_formats.iter().map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule})).collect()
+                sh.cond_formats
+                    .iter()
+                    .map(|c| json!({"ranges": c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), "rule": c.rule, "priority": c.priority}))
+                    .collect()
             })
             .unwrap_or_default();
         return Ok(json!({"rules": list}));
     }
+    let edited = match (p.get("edit"), p.get("rule")) {
+        (None, _) => None,
+        (Some(_), None) => return Err(bad("home.manageRules", "missing `rule` for an edit")),
+        (Some(e), Some(rule)) => {
+            let i = e.as_u64().ok_or_else(|| bad("home.manageRules", "`edit` must be a rule index"))?;
+            // A number too large for `usize` on this target names no rule: casting it would
+            // wrap to a real index and replace that rule instead of reporting out of range.
+            let i = usize::try_from(i).map_err(|_| bad("home.manageRules", format!("no conditional format at index {i}")))?;
+            let rule = cf_rule(rule, "home.manageRules")?;
+            check_cf_rule("home.manageRules", &rule)?;
+            Some((i, rule))
+        }
+    };
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
         // The count is taken again after each step: a delete shortens the list.
@@ -313,6 +371,10 @@ pub(super) fn manage_cf(s: &mut Session, p: &Json) -> Result<Json> {
             && i < sh.cond_formats.len()
         {
             sh.cond_formats.remove(i);
+        }
+        if let Some((i, rule)) = edited {
+            let cf = sh.cond_formats.get_mut(i).ok_or_else(|| bad("home.manageRules", format!("no conditional format at index {i}")))?;
+            cf.rule = rule;
         }
         if let Some(i) = u32_param(p, "moveUp").map(|v| v as usize)
             && i > 0
