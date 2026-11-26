@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Key, Painter, Pos2, Rect, Stroke, StrokeKind, TextEdit, pos2, vec2};
+use egui::{Align2, Color32, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, TextEdit, pos2, vec2};
 use gridcraft_engine::cf::CfCache;
 use gridcraft_engine::cmd::print::{self, HfContext};
 use gridcraft_engine::model::{HfPage, Sheet, SheetViewMode, Workbook};
@@ -162,10 +162,26 @@ pub(crate) fn paint_pages(input: PagePaintInput<'_>, cf: &mut CfCache) -> Vec<gr
         }
         painted += 1;
         let pc = p.with_clip_rect(clip);
-        grid::paint_quadrant(grid::QuadrantPaint { painter: &pc, geo, workbook: wb, sheet_index: si, sheet: sh, rows, cols, cf, tokens: t });
+        let active_row = app.ui.highlight_active_row.then_some(sel.active.row);
+        grid::paint_quadrant(grid::QuadrantPaint {
+            painter: &pc,
+            geo,
+            workbook: wb,
+            sheet_index: si,
+            sheet: sh,
+            rows,
+            cols,
+            cf,
+            tokens: t,
+            active_row,
+        });
         if !pg.is_data_page(i, j) {
             // "Click to add data" pages: faded until something is typed there.
             pc.rect_filled(clip, 0.0, t.grid_bg.gamma_multiply(0.75));
+            // The fade would all but hide the active row's band: it goes on again.
+            if let Some(band) = active_row.and_then(|row| grid::active_row_band(geo, sh, row, rows, cols)) {
+                pc.rect_filled(band, 0.0, t.active_row);
+            }
             let size = (14.0 * geo.z / DISPLAY_SCALE).clamp(8.0, 22.0);
             pc.text(clip.center(), Align2::CENTER_CENTER, tr(app, "Click to add data"), theme::ui_font(size), Color32::from_gray(150));
         }
@@ -452,7 +468,7 @@ pub fn go_to(app: &mut SheetApp, footer: bool) {
 /// Edits a header/footer section across left/center/right, cancels on Esc, switches sections and preserves focus/caret while the page scrolls.
 fn editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid) {
     let Some(mut e) = app.grid.hf_edit.take() else { return };
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+    if crate::framework::consume_escape(ui.ctx()) {
         app.grid.hf_edit = Some(e);
         cancel(app);
         return;
@@ -807,7 +823,7 @@ fn ruler_margins(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, pg: &PageGrid
         ui.ctx().set_cursor_icon(if edge.horizontal() { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
     };
     if let Some(d) = app.grid.ruler_drag.clone() {
-        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+        if crate::framework::consume_escape(ui.ctx()) {
             app.grid.ruler_drag = None;
             return;
         }

