@@ -1,0 +1,88 @@
+name: windows validate reproduction with diagnostics (throwaway)
+# Throwaway: reproduces the signer's release/validate refusal on windows-latest with the diagnostics
+# build of craft-common-actions, so the refusal names the file and the fields that disagreed.
+# Not part of any release path; binds no environment and uses no secrets.
+on:
+  push:
+    branches:
+      - diag/**
+  workflow_dispatch:
+    inputs:
+      producer_run_id:
+        required: false
+        default: "45749038918"
+        type: string
+      producer_run_attempt:
+        required: false
+        default: "1"
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.ref }}
+          path: .release-source
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: storytold/craft-common-actions
+          ref: 644556debe518ff6963c8d08b92a69aa6cabb534
+          path: .nightly-tools
+          persist-credentials: false
+      - name: Download the same three artifacts the signer read
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for spec in windows-x86_64:15085631383 macos-aarch64:15085880628 linux-x86_64:15084264488; do
+            platform="${spec%%:*}"; id="${spec##*:}"
+            mkdir -p ".unsigned/$platform"
+            gh api "repos/storytold/gridcraft/actions/artifacts/$id/zip" > "/tmp/$platform.zip"
+            unzip -q "/tmp/$platform.zip" -d ".unsigned/$platform"
+            echo "$platform <- artifact $id: $(find ".unsigned/$platform" -type f | wc -l) files"
+          done
+      - name: Admission, exactly as the signer runs it
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER_RUN_ID: ${{ inputs.producer_run_id || 45749038918 }}
+          PRODUCER_RUN_ATTEMPT: ${{ inputs.producer_run_attempt || 1 }}
+        run: python -I -B .nightly-tools/scripts/nightly_release_entry.py admit --source .release-source --producer-run-id "$PRODUCER_RUN_ID" --producer-run-attempt "$PRODUCER_RUN_ATTEMPT" --output .admission
+      - name: Validate with the diagnostics build (the refusal should name the file)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          python -I -B .nightly-tools/scripts/nightly_release_entry.py validate --source .release-source --state .admission --directory .unsigned --output .validated 2>&1 | tee validate.out
+          echo "exit: ${PIPESTATUS[0]}"
+      - name: Dump the identity fields for every JSON the validate step can read
+        if: always()
+        shell: bash
+        run: |
+          python -I -B - <<'EOF'
+          import json, os, pathlib
+          fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+          for root in (".admission", ".unsigned", ".release-source/.github"):
+              for path in sorted(pathlib.Path(root).rglob("*.json")):
+                  try:
+                      with open(path, "rb") as stream:
+                          handle = os.fstat(stream.fileno())
+                      entry = os.lstat(path)
+                  except Exception as error:
+                      print(path, "could not read:", error); continue
+                  agree = all(getattr(entry, k) == getattr(handle, k) for k in fields)
+                  print(path, "agree:", agree, {k: getattr(entry, k) for k in fields})
+          EOF
+      - name: Volume
+        if: always()
+        shell: bash
+        run: |
+          fsutil fsinfo volumeinfo D: | head -6 || true
