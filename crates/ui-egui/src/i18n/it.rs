@@ -5,6 +5,8 @@
 /// Returns the Italian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Tendenza lineare",
+        "Growth Trend" => "Tendenza esponenziale",
         "Diagram" => "Diagramma",
         "Decorative Text" => "Testo decorativo",
         "Paste" => "Incolla",
@@ -808,6 +810,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Line" => "Linee",
         "Line with Markers" => "Linee con indicatori",
         "Stacked Line" => "Linee in pila",
+        "100% Stacked Line" => "Linee in pila 100%",
+        "100% Stacked Line with Markers" => "Linee in pila 100% con indicatori",
         "Pie" => "Torta",
         "Doughnut" => "Anello",
         "Area" => "Area",
@@ -1155,6 +1159,28 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Fill Months" => "Riempi mesi",
         "Fill Years" => "Riempi anni",
         "Auto Fill Options" => "Opzioni di riempimento automatico",
+        // Conditional formatting: colour scales.
+        "New Formatting Rule" => "Nuova regola di formattazione",
+        "Edit Formatting Rule" => "Modifica regola di formattazione",
+        "Select a Rule Type" => "Seleziona un tipo di regola",
+        "Edit the Rule Description" => "Modifica la descrizione della regola",
+        "Format all cells based on their values" => "Formatta tutte le celle in base ai loro valori",
+        "Format only cells that contain" => "Formatta solo le celle che contengono",
+        "Format only top or bottom ranked values" => "Formatta solo i valori con classificazione superiore o inferiore",
+        "Format only values that are above or below average" => "Formatta solo i valori superiori o inferiori alla media",
+        "Format only unique or duplicate values" => "Formatta solo valori univoci o duplicati",
+        "Use a formula to determine which cells to format" => "Usa una formula per determinare quali celle formattare",
+        "This rule type isn't available yet." => "Questo tipo di regola non è ancora disponibile.",
+        "Format Style:" => "Stile formato:",
+        "2-Color Scale" => "Scala a 2 colori",
+        "3-Color Scale" => "Scala a 3 colori",
+        "Midpoint" => "Punto medio",
+        "Lowest value" => "Valore minimo",
+        "Highest value" => "Valore massimo",
+        "Percent" => "Percentuale",
+        "Percentile" => "Percentile",
+        "Formula" => "Formula",
+        "More Rules…" => "Altre regole…",
         _ => return None,
     })
 }

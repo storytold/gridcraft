@@ -21,6 +21,8 @@ pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
 type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
+/// Cached fill-menu trend entries (label, mode), keyed by (doc uid, revision, sheet, source, dragged range).
+pub type FillTrendsCache = ((u64, u64, usize, RangeRef, RangeRef), Vec<(&'static str, &'static str)>);
 
 mod active_row;
 pub use active_row::active_row_band;
@@ -325,11 +327,18 @@ pub struct GridState {
     pub cells_rect: Option<Rect>,
     /// Column and row of the clicked header cell, and where to open the menu.
     pub filter_menu: Option<(u32, u32, Pos2)>,
+    /// Pending popup edits travel with this window and are dropped when its menu or window closes.
+    pub filter_checks: Option<Vec<(String, bool)>>,
+    pub filter_search: String,
+    pub filter_buttons: Vec<egui::Id>,
     pub context_menu: Option<Pos2>,
     /// The frame a right-click opened `context_menu` in: that click's own press doesn't close it.
     pub context_menu_frame: u64,
     /// After a right-drag of the fill handle: the source, the dragged range and where to open the menu.
     pub fill_menu: Option<(RangeRef, RangeRef, Pos2)>,
+    /// The trends the fill menu lists, cached per (doc uid, revision, sheet, source, dragged range):
+    /// finding them reads every source cell.
+    pub fill_menu_trends: Option<FillTrendsCache>,
     /// After a left-drag of the fill handle: the Auto Fill Options button beside the filled cells.
     pub fill_tag: Option<FillTag>,
     /// The right-clicked chart, picture, shape or slicer: where to open its menu, its kind and id.
@@ -396,8 +405,69 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// F8 Extend Selection or Shift+F8 Add or Remove Selection mode (see [`SelectionMode`]).
+    pub selection_mode: SelectionMode,
+    /// Add mode: the last area is the cell an arrow key moved to, not yet extended, so the next
+    /// arrow moves it again instead of keeping it.
+    pub add_pending: Option<RangeRef>,
+    /// Add mode header drag: the areas kept from before the drag, which the dragged range joins.
+    pub header_drag_base: Vec<String>,
     /// What the macro step editor shows on the grid (Check, debugging).
     pub macro_overlay: Option<crate::macro_editor::MacroOverlay>,
+}
+
+/// Excel's keyboard selection modes, shown in the status bar. In Extend mode (F8) arrow keys and
+/// clicks extend from the anchor as if Shift were held. In Add mode (Shift+F8) arrow keys move the
+/// active cell without dropping the selected areas, Shift+arrows grow a new area from there, and a
+/// click adds an area (or removes one already selected) as Ctrl+click does. Esc, the same key
+/// again, or editing a cell turns the mode off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionMode {
+    #[default]
+    Off,
+    Extend,
+    Add,
+}
+
+impl SelectionMode {
+    /// The id the `ui.selectionMode` command takes and returns.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Extend => "extend",
+            Self::Add => "add",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => Some(Self::Off),
+            "extend" => Some(Self::Extend),
+            "add" => Some(Self::Add),
+            _ => None,
+        }
+    }
+
+    /// The status bar text (an i18n catalog key), when the mode shows one.
+    pub fn status_text(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Extend => Some("Extend Selection"),
+            Self::Add => Some("Add or Remove Selection"),
+        }
+    }
+}
+
+impl GridState {
+    /// Turns `mode` on, or off when it is already on (F8 / Shift+F8); the other mode ends.
+    pub fn toggle_selection_mode(&mut self, mode: SelectionMode) {
+        self.set_selection_mode(if self.selection_mode == mode { SelectionMode::Off } else { mode });
+    }
+
+    pub fn set_selection_mode(&mut self, mode: SelectionMode) {
+        self.selection_mode = mode;
+        self.add_pending = None;
+    }
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
