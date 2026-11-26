@@ -32,11 +32,15 @@ pub fn specs() -> Vec<CommandSpec> {
             p,
             Axis::Cols
         )),
-        cmd!("home.deleteRows", "Delete Sheet Rows", ["Home", "Cells", "Delete"], Some("Cmd+-"), "{rows?}", has_doc, |s, p| delete_lines(
-            s,
-            p,
-            Axis::Rows
-        )),
+        cmd!(
+            "home.deleteRows",
+            "Delete Sheet Rows",
+            ["Home", "Cells", "Delete"],
+            Some("Cmd+-"),
+            "{rows?, includeFiltered?: bool}: the rows an applied filter hides stay; `includeFiltered` deletes them too",
+            has_doc,
+            |s, p| delete_lines(s, p, Axis::Rows)
+        ),
         cmd!("home.deleteColumns", "Delete Sheet Columns", ["Home", "Cells", "Delete"], None, "{cols?}", has_doc, |s, p| delete_lines(
             s,
             p,
@@ -322,6 +326,12 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
 /// The areas a line delete/insert targets as `(first line, count)`, merged and sorted from the
 /// last line to the first so deleting one never shifts the next. A comma-separated list
 /// (`"3:3,7:8"`) or a multi-area selection yields several; `count` forces the single-area form.
+///
+/// As in Excel, a row delete leaves the rows an applied filter hides, however the rows are named:
+/// each area is split around the rows `filtered_rows` returns, so the rows that are shown go, and
+/// rows hidden by hand outside a filter's rows. A row hidden by hand inside a filter's rows stays,
+/// as for the Clear commands: a row has one `hidden` flag. `includeFiltered` takes them all, for
+/// Insert Cut Cells closing the gap its moved rows left.
 fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
     let key = if axis == Axis::Rows { "rows" } else { "cols" };
     let spans: Vec<(u32, u32)> = if u32_param(p, "count").is_some() {
@@ -349,11 +359,37 @@ fn delete_areas(s: &Session, p: &Json, axis: Axis) -> Result<Vec<(u32, u32)>> {
             _ => merged.push((a, b)),
         }
     }
+    if axis == Axis::Rows
+        && !bool_param(p, "includeFiltered").unwrap_or(false)
+        && let Some(sh) = s.doc()?.wb.sheet(target_sheet(s, p)?)
+    {
+        merged = merged.into_iter().flat_map(|(a, b)| unfiltered_runs(sh, a, b)).collect();
+    }
     Ok(merged.into_iter().rev().map(|(a, b)| (a, b - a + 1)).collect())
+}
+
+/// The runs `(first, last)` of rows `first..=last` that no applied filter hides.
+fn unfiltered_runs(sh: &Sheet, first: u32, last: u32) -> Vec<(u32, u32)> {
+    let mut runs = Vec::new();
+    let mut start = first;
+    for row in super::edit::filtered_rows(sh, RangeRef::rows(first, last)) {
+        if row > start {
+            runs.push((start, row - 1));
+        }
+        start = row + 1;
+    }
+    if start <= last {
+        runs.push((start, last));
+    }
+    runs
 }
 
 fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
     let areas = delete_areas(s, p, axis)?;
+    // Every named row is hidden by a filter: nothing to delete, and no undo step.
+    if areas.is_empty() {
+        return Ok(Json::Null);
+    }
     for &(at, count) in &areas {
         check_lines_protection(s, p, axis, at, count, false)?;
     }
@@ -689,7 +725,8 @@ fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, a
     let (removed, before_dest) = if rows {
         s.execute(
             "home.deleteRows",
-            json!({"rows": format!("{}:{}", source_lines.start.row as u64 + 1, source_lines.end.row as u64 + 1), "sheet": clip.sheet}),
+            // Cut took every row, hidden ones too, so every one leaves the old place.
+            json!({"rows": format!("{}:{}", source_lines.start.row as u64 + 1, source_lines.end.row as u64 + 1), "sheet": clip.sheet, "includeFiltered": true}),
         )?;
         (source_lines.height(), clip.sheet == sheet && source_lines.start.row < inserted.start.row)
     } else {
