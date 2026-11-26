@@ -9,7 +9,10 @@ use craft_drawingml::color::SchemeSlot;
 use craft_drawingml::style::{ColorBase, ColorRef as DmlColor, Fill as DmlFill};
 use gridcraft_core::{RangeRef, Value, category_levels};
 use gridcraft_formula::{Expr, SheetSel};
-use gridcraft_model::{Chart, ChartDataTable, ChartKind, Color, DefinedName, LegendPos, LineDash, Series, Trendline, TrendlineKind, Workbook};
+use gridcraft_model::{
+    Chart, ChartDataTable, ChartKind, Color, DefinedName, LabelPosition, LegendPos, LineDash, Series, SeriesLabels, Trendline, TrendlineKind,
+    Workbook,
+};
 
 use crate::drawing::{dml_color, srgb};
 use crate::xml::{El, esc, num};
@@ -179,6 +182,57 @@ pub(crate) fn chart_ref_from_file(text: &str) -> String {
         i += c.len_utf8();
     }
     out
+}
+
+/// A `CT_Boolean` child (`val` defaults to true).
+fn bool_val(e: &El, tag: &str) -> bool {
+    e.child(tag).is_some_and(|c| c.flag("val", true))
+}
+
+/// A series' `c:dLbls`: deleted, or what its labels show, where and at what angle (`a:bodyPr rot`,
+/// in 60000ths of a degree clockwise).
+fn read_series_labels(d: &El) -> SeriesLabels {
+    if bool_val(d, "delete") {
+        return SeriesLabels::default();
+    }
+    let rot = d
+        .path(&["txPr", "bodyPr"])
+        .and_then(|b| b.attr_f64("rot"))
+        .filter(|r| r.is_finite())
+        .map_or(0.0, |r| (-r / 60000.0).clamp(-90.0, 90.0) as f32);
+    SeriesLabels {
+        value: bool_val(d, "showVal"),
+        series_name: bool_val(d, "showSerName"),
+        category_name: bool_val(d, "showCatName"),
+        position: d.child_val("dLblPos").and_then(LabelPosition::parse),
+        rotation: rot,
+    }
+}
+
+/// A series' own `c:dLbls`.
+fn series_labels_xml(l: &SeriesLabels) -> String {
+    if !l.shows_anything() {
+        return "<c:dLbls><c:delete val=\"1\"/></c:dLbls>".into();
+    }
+    let mut x = String::from("<c:dLbls>");
+    if l.rotation != 0.0 && l.rotation.is_finite() {
+        let rot = (-f64::from(l.rotation.clamp(-90.0, 90.0)) * 60000.0).round() as i64;
+        let _ = write!(
+            x,
+            "<c:txPr><a:bodyPr rot=\"{rot}\" vert=\"horz\"/><a:lstStyle/><a:p><a:pPr><a:defRPr/></a:pPr><a:endParaRPr lang=\"en-US\"/></a:p></c:txPr>"
+        );
+    }
+    if let Some(p) = l.position {
+        let _ = write!(x, "<c:dLblPos val=\"{}\"/>", p.as_str());
+    }
+    let _ = write!(
+        x,
+        "<c:showLegendKey val=\"0\"/><c:showVal val=\"{}\"/><c:showCatName val=\"{}\"/><c:showSerName val=\"{}\"/><c:showPercent val=\"0\"/><c:showBubbleSize val=\"0\"/></c:dLbls>",
+        u8::from(l.value),
+        u8::from(l.category_name),
+        u8::from(l.series_name)
+    );
+    x
 }
 
 const DASHES: [(LineDash, &str); 11] = [
@@ -358,7 +412,6 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
             g.kids("ser").map(move |s| (s, sec, k.map_or(first_kind, |k| series_kind_in(g, k, s))))
         })
         .collect();
-    let series_labels = dc.series.iter().any(|s| s.data_labels == Some(true));
     let series = dc
         .series
         .into_iter()
@@ -408,6 +461,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
                 quartiles: Default::default(),
                 smooth: sel.map_or(s.smooth, |e| e.child("smooth").is_some_and(|c| c.flag("val", true))),
                 trendlines: s.trendlines.iter().map(|t| map_trendline(t, trendline_els.next())).collect(),
+                labels: sel.and_then(|e| e.child("dLbls")).map(read_series_labels),
             };
             (series, drawn, sel)
         })
@@ -435,7 +489,8 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
         title: dc.title,
         series,
         legend,
-        data_labels: dc.data_labels || series_labels,
+        // The chart's own labels are the groups'; a series' dLbls (kept on the series) overrides them.
+        data_labels: dc.data_labels,
         data_table: dc.data_table.map(|t| ChartDataTable {
             show_keys: t.show_keys,
             horizontal_border: t.horizontal_border,
@@ -788,6 +843,10 @@ fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: u
         G::Line { markers: false, .. } | G::Scatter { lines: true } | G::Stock => x.push_str("<c:marker><c:symbol val=\"none\"/></c:marker>"),
         G::Bubble => x.push_str("<c:invertIfNegative val=\"0\"/>"),
         _ => {}
+    }
+    // A series' own labels come after its markers and before its trendlines.
+    if let Some(l) = &s.labels {
+        x.push_str(&series_labels_xml(l));
     }
     // Trendlines sit between dLbls and the data in CT_LineSer, CT_BarSer, CT_AreaSer,
     // CT_ScatterSer and CT_BubbleSer; pie and radar series have none.
