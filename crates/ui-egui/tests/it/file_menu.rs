@@ -114,7 +114,8 @@ fn escape_leaves_file_fields_before_closing_the_view() {
         let copies = h.state().printing.settings.copies;
 
         h.key_press(egui::Key::Escape);
-        h.run_steps(3);
+        // With GridCraft's frame input, as the shells give it: Escape leaves the framework's fields too.
+        crate::support::frames(&mut h, 3);
         assert_eq!(page(&h), Some(page_id), "Esc in {label} keeps File open");
         assert!(!h.ctx.text_edit_focused(), "Esc leaves {label}");
         assert_eq!(h.state().session.active().unwrap().revision, revision, "Esc does not commit {label}");
@@ -125,7 +126,8 @@ fn escape_leaves_file_fields_before_closing_the_view() {
         }
 
         h.key_press(egui::Key::Escape);
-        h.run_steps(3);
+        // With GridCraft's frame input, as the shells give it: Escape leaves the framework's fields too.
+        crate::support::frames(&mut h, 3);
         assert_eq!(page(&h), None, "the next Esc returns to the sheet");
     }
 }

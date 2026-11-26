@@ -50,3 +50,16 @@ ID and `packaging/linux/ai.storyteller.gridcraft.desktop`.
 
 Edit `gridcraft.svg`, then run `packaging/icons.sh`. It needs `resvg`, and `iconutil` for the
 `.icns` (macOS only). It packs the `.ico` with `cargo xtask ico`.
+
+## Nightly channel
+
+The nightly (`nightly-v1`) derivatives keep the artwork, geometry and the Mac padding unchanged and
+change only the field colour: `#1f9d55` in the stable icon, `#14532d` in
+`gridcraft-nightly.svg`. There is no letter, badge or crescent; the app and the Launcher name the
+channel in text (`GridCraft Nightly`, the `ai.storyteller.gridcraft.nightly-v1` window id).
+
+`gridcraft-nightly.svg` is the vector master. `packaging/nightly-icons.py` renders every frame from
+it at its own size (never an upscale) and packs the nine-frame ICO and the eleven-slot ICNS; it
+uses `resvg` when present, else a headless Chrome. Each output's SHA-256, the palette and the
+method are recorded in [`nightly-provenance.json`](nightly-provenance.json), and
+`python3 packaging/nightly-icons.py --check` verifies the committed files still match it.

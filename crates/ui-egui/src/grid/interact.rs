@@ -4,11 +4,11 @@ use super::editor::validation_arrow;
 use super::geo::Geo;
 use super::keyboard::keyboard;
 use super::menus::set_fill_tag;
-use super::selection::select_ranges;
+use super::selection::{add_mode_base, select_ranges};
 use super::tables::{is_filter_button, table_headings};
 use super::{
-    CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, Sheet, SheetApp, Stroke, Tokens, Workbook,
-    json, pos2, vec2,
+    CellRef, Color32, CursorIcon, Drag, EditState, MAX_COLS, MAX_ROWS, Painter, Pos2, RangeRef, Rect, SelectionMode, Sheet, SheetApp, Stroke, Tokens,
+    Workbook, json, pos2, vec2,
 };
 
 // ------------------------------------------------------------------ interaction
@@ -23,6 +23,7 @@ struct InteractionInput<'a> {
     press_origin: Option<Pos2>,
     any_pointer_down: bool,
     modifiers: egui::Modifiers,
+    selection_modifiers: egui::Modifiers,
     position: Option<Pos2>,
     primary_clicked: bool,
     in_cells: bool,
@@ -58,6 +59,12 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     let primary_clicked = resp.clicked_by(egui::PointerButton::Primary);
     let pointer = ctx.input(|i| i.pointer.clone());
     let mods = ctx.input(|i| i.modifiers);
+    let mut selection_modifiers = mods;
+    match app.grid.selection_mode {
+        SelectionMode::Extend => selection_modifiers.shift = true,
+        SelectionMode::Add => selection_modifiers.command = true,
+        SelectionMode::Off => {}
+    }
     // Hit-testing works in logical coordinates (see `Geo::rtl`).
     let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
     let in_cells = pos.is_some_and(|p| geo.in_cells(p));
@@ -91,6 +98,7 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
         press_origin: pointer.press_origin(),
         any_pointer_down: pointer.any_down(),
         modifiers: mods,
+        selection_modifiers,
         position: pos,
         primary_clicked,
         in_cells,
@@ -136,6 +144,13 @@ pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Respo
     if primary_drag || primary_clicked {
         // A drag is recognised only after the pointer has moved, so grab the object where the press began.
         let at = if primary_drag { pointer.press_origin().map(|p| geo.mirror_pos(p)).or(pos) } else { pos };
+        if primary_drag
+            && let Some(p) = at
+            && let Some((obj, rect)) = crate::chartview::selected_rotate(app, geo, sh, p)
+        {
+            app.grid.drag = Drag::Rotate { obj, rect, stepped: false };
+            return;
+        }
         // The selected object's handles reach a little outside it, so they win over hit-testing.
         // Only they resize: a press anywhere on another object selects and moves it, as the
         // hover cursor shows.
@@ -334,7 +349,7 @@ fn handle_header_autofit(app: &mut SheetApp, input: &InteractionInput<'_>) -> bo
 
 fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: Pos2) {
     let (geo, sh, wb, sel) = (input.geo, input.sheet, input.workbook, &input.selection);
-    let mods = input.modifiers;
+    let mods = input.selection_modifiers;
     let resp = input.response;
     let in_col_header = input.in_column_header;
     if in_col_header {
@@ -365,6 +380,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
             return;
         }
         let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
+        app.grid.header_drag_base = add_mode_base(app);
         note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
         app.grid.drag = Drag::Cols(if mods.shift { sel.anchor.col } else { c });
@@ -373,7 +389,7 @@ fn handle_column_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, 
 
 fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: Pos2) {
     let (geo, sh, wb, sel) = (input.geo, input.sheet, input.workbook, &input.selection);
-    let mods = input.modifiers;
+    let mods = input.selection_modifiers;
     let in_row_header = input.in_row_header;
     if in_row_header {
         if let Some((r, y)) = row_edge(geo, sh, p.y) {
@@ -387,6 +403,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
             return;
         }
         let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
+        app.grid.header_drag_base = add_mode_base(app);
         note_selecting_press(app);
         select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
         app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
@@ -396,6 +413,7 @@ fn handle_row_header_press(app: &mut SheetApp, input: &InteractionInput<'_>, p: 
 fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
     let (geo, sh, wb, resp) = (input.geo, input.sheet, input.workbook, input.response);
     let (pos, mods, sel) = (input.position, input.modifiers, &input.selection);
+    let sel_mods = input.selection_modifiers;
     let (primary_clicked, in_cells, in_col_header, in_row_header, in_corner) =
         (input.primary_clicked, input.in_cells, input.in_column_header, input.in_row_header, input.in_corner);
     let (freeze_cols, freeze_rows) = (input.freeze_columns, input.freeze_rows);
@@ -513,13 +531,27 @@ fn handle_press(app: &mut SheetApp, input: &InteractionInput<'_>) {
         return;
     }
     app.grid.last_click = Some((c, now));
-    if mods.shift {
+    if sel_mods.shift {
+        note_selecting_press(app);
+        app.grid.header_drag_base = add_mode_base(app);
+        let mut ranges = app.grid.header_drag_base.clone();
+        if let Some(pending) = app.grid.add_pending.take()
+            && ranges.last().is_some_and(|r| r == &pending.a1())
+        {
+            ranges.pop();
+        }
+        ranges.push(RangeRef::new(sel.anchor, c).a1());
+        let _ = app.run("selection.set", json!({"range": ranges.join(","), "active": sel.active.a1()}));
+        if let Some(d) = app.session.active_mut() {
+            d.selection.anchor = sel.anchor;
+        }
+    } else if mods.shift {
         note_selecting_press(app);
         let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
         if let Some(d) = app.session.active_mut() {
             d.selection.anchor = sel.anchor;
         }
-    } else if mods.command {
+    } else if mods.command || sel_mods.command {
         // Ctrl+click (without Alt) on a hyperlink's text follows it instead of adding the cell to the selection.
         if let Some(h) = sh.hyperlinks.get(&c).cloned()
             && acts
@@ -641,19 +673,22 @@ fn handle_context_menu_and_keyboard(app: &mut SheetApp, input: &InteractionInput
     if primary_clicked || resp.drag_started() {
         resp.request_focus();
     }
+    crate::framework::host_canvas(&ctx, resp.id);
     keyboard(app, &ctx, resp, geo, sh);
 }
 
-/// Whether Esc was pressed this frame, with any modifiers; every Esc press is then spent, so the
-/// grid's own Esc doesn't also drop a pending copy or Format Painter.
+/// Whether Esc was pressed this frame, with any modifiers, in egui's input or as the window's
+/// cancel; every Esc press is then spent, so the grid's own Esc doesn't also drop a pending copy or
+/// Format Painter.
 fn spend_escape(ctx: &egui::Context) -> bool {
-    ctx.input_mut(|i| {
+    let in_egui = ctx.input_mut(|i| {
         let pressed = i.key_pressed(egui::Key::Escape);
         if pressed {
             i.events.retain(|e| !matches!(e, egui::Event::Key { key: egui::Key::Escape, pressed: true, .. }));
         }
         pressed
-    })
+    });
+    in_egui || crate::framework::take_window_cancel(ctx)
 }
 
 fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
@@ -709,14 +744,16 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
             }
             Drag::Rows(anchor) => {
                 let r = geo.row_at(sh, p.y);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::rows(anchor.min(r), anchor.max(r)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::rows(anchor.min(r), anchor.max(r)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(0.0, auto.y));
             }
             Drag::Cols(anchor) => {
                 let c = geo.col_at(sh, p.x);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::cols(anchor.min(c), anchor.max(c)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             drag @ (Drag::PointRows(_) | Drag::PointCols(_)) => {
@@ -764,6 +801,7 @@ fn handle_dragging(app: &mut SheetApp, input: &InteractionInput<'_>) {
                 scroll_by(app, auto);
             }
             Drag::Object { .. } => drag_object(app, geo, sh, p),
+            Drag::Rotate { obj, rect, .. } => rotate_object(app, obj, rect, p, input.modifiers.shift),
             Drag::ChartData { .. } => {
                 drag_chart_data(app, geo, sh, p);
                 scroll_by(app, auto);
@@ -802,7 +840,7 @@ fn handle_release(app: &mut SheetApp, input: &InteractionInput<'_>) {
             Drag::Fill { target: Some(t), menu: true } => {
                 if let Some(p) = pos
                     && t != sel.current()
-                    && !ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+                    && !crate::framework::consume_escape(&ctx)
                 {
                     app.grid.fill_menu = Some((sel.current(), t, geo.mirror_pos(p)));
                 }
@@ -1202,6 +1240,52 @@ pub(super) fn hidden_row_edge(geo: &Geo, sh: &Sheet, y: f32) -> Option<u32> {
     row_edge(geo, sh, y).map(|(r, _)| r).filter(|&r| sh.row_height(r) <= 0.0)
 }
 
+/// Arrow-key nudge of a selected object, sheet points (Ctrl/Alt: fine).
+const NUDGE: f32 = 6.0;
+
+/// Arrow keys aimed at the selected object rather than the cells: they nudge it.
+pub(super) fn object_key(app: &mut SheetApp, sh: &Sheet, key: egui::Key, m: egui::Modifiers) -> bool {
+    use egui::Key;
+    let Some(o) = app.selected_object else { return false };
+    let step = if m.ctrl || m.alt { 1.0 } else { NUDGE };
+    // Arrows follow the screen: a right-to-left sheet is mirrored.
+    let sx = if sh.right_to_left { -step } else { step };
+    let d = match key {
+        Key::ArrowLeft => vec2(-sx, 0.0),
+        Key::ArrowRight => vec2(sx, 0.0),
+        Key::ArrowUp => vec2(0.0, -step),
+        Key::ArrowDown => vec2(0.0, step),
+        _ => return false,
+    };
+    // On Windows and Linux egui sets `command` with `ctrl`: only the Mac Command key opts out.
+    if m.shift || m.mac_cmd {
+        return false;
+    }
+    let Some(a) = sh.object_anchor(o) else { return false };
+    let x0 = (sh.col_left(a.cell.col) as f32 + a.dx + d.x).max(0.0);
+    let y0 = (sh.row_top(a.cell.row) as f32 + a.dy + d.y).max(0.0);
+    let nc = CellRef::new(sh.row_at(f64::from(y0)), sh.col_at(f64::from(x0)));
+    let params =
+        json!({"kind": o.kind.name(), "id": o.id, "at": nc.a1(), "dx": x0 - sh.col_left(nc.col) as f32, "dy": y0 - sh.row_top(nc.row) as f32});
+    app.run_or_alert("object.move", params);
+    true
+}
+
+/// Turns the dragged shape so its rotation handle points at `p`; the drag is one undo step.
+fn rotate_object(app: &mut SheetApp, obj: ObjRef, rect: Rect, p: Pos2, snap: bool) {
+    let deg = crate::frame::angle_to(rect, p, snap);
+    let revision = app.session.active().map(|d| d.revision);
+    let _ = app.session.run("object.move", json!({"kind": obj.kind.name(), "id": obj.id, "rotation": deg}));
+    let Drag::Rotate { stepped, .. } = app.grid.drag else { return };
+    if stepped {
+        coalesce_last_undo(app);
+    } else if app.session.active().map(|d| d.revision) != revision
+        && let Drag::Rotate { stepped, .. } = &mut app.grid.drag
+    {
+        *stepped = true;
+    }
+}
+
 /// Moves the dragged object, or resizes it from the grabbed handle, to follow the pointer at `p`
 /// (logical coordinates). The whole drag coalesces into one undo step of its own.
 fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
@@ -1210,7 +1294,16 @@ fn drag_object(app: &mut SheetApp, geo: &Geo, sh: &Sheet, p: Pos2) {
     let (cell, dx, dy, w, h) = orig;
     let x0 = sh.col_left(cell.col) as f32 + dx;
     let y0 = sh.row_top(cell.row) as f32 + dy;
+    let frame_deg = crate::chartview::frame_of(sh, obj).0;
     let [x0, y0, x1, y1] = match handle {
+        Some(hd) if frame_deg != 0.0 => {
+            let fh = crate::frame::Handle { x: hd.sides().0, y: hd.sides().1 };
+            let r0 = Rect::from_min_max(pos2(x0, y0), pos2(x0 + w, y0 + h));
+            let min = crate::objects::min_size(sh, obj);
+            let r = crate::frame::resized_turned_by_min(r0, frame_deg, fh, d, min, false);
+            let (nx, ny) = (r.min.x.max(0.0), r.min.y.max(0.0));
+            [nx, ny, r.max.x.max(nx + min.x), r.max.y.max(ny + min.y)]
+        }
         Some(hd) => crate::objects::resized([x0, y0, x0 + w, y0 + h], hd, d, crate::objects::min_size(sh, obj)),
         None => {
             let (x0, y0) = ((x0 + d.x).max(0.0), (y0 + d.y).max(0.0));

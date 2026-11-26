@@ -123,3 +123,9 @@ sync_github_name = true
 real_name = "Davit Matchakhelidze"
 display_name = "Davit Matchakhelidze"
 sync_github_name = false
+
+[people.gmrmad1]
+real_name = "Madhav Agarwal"
+
+[people.alosslessdev]
+real_name = "Francisco Herrera"

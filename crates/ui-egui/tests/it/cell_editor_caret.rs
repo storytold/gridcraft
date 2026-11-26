@@ -18,6 +18,7 @@ fn frame(ctx: &Context, app: &mut SheetApp) -> egui::FullOutput {
 /// The caret painted while editing A1 over `fill` (`None`: no fill), with the app in `dark` mode.
 fn caret(fill: Option<&str>, dark: bool) -> Color32 {
     let ctx = Context::default();
+    gridcraft_ui_egui::framework::install_headless(&ctx);
     theme::apply(&ctx, dark);
     let mut session = Session::new();
     session.new_workbook();

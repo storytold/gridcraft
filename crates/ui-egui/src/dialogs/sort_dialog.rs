@@ -337,7 +337,7 @@ fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, ch
                 .iter()
                 .find(|(l, _, _)| l.eq_ignore_ascii_case(&col))
                 .map_or_else(|| column_label(lang, &col.to_ascii_uppercase()), |(_, t, _)| t.clone());
-            let r = craft_ui::ComboBox::from_id_salt(("col", i)).selected_text(shown).width(w).show_ui(ui, |ui| {
+            let r = egui::ComboBox::from_id_salt(("col", i)).selected_text(shown).width(w).show_ui(ui, |ui| {
                 for (letters, label, _) in choices {
                     ui.selectable_value(&mut col, letters.clone(), label);
                 }
@@ -353,7 +353,7 @@ fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, ch
                 "fontColor" => "Font Color",
                 _ => "Cell Values",
             });
-            let r = craft_ui::ComboBox::from_id_salt(("by", i)).selected_text(by_label).width(w).show_ui(ui, |ui| {
+            let r = egui::ComboBox::from_id_salt(("by", i)).selected_text(by_label).width(w).show_ui(ui, |ui| {
                 ui.selectable_value(&mut by, "values".into(), lang.tr("Cell Values"));
                 ui.selectable_value(&mut by, "cellColor".into(), lang.tr("Cell Color"));
                 ui.selectable_value(&mut by, "fontColor".into(), lang.tr("Font Color"));
@@ -368,7 +368,7 @@ fn levels_table(ui: &mut egui::Ui, levels: &mut [Json], selected: &mut usize, ch
             let (asc_label, desc_label) = (lang.tr(asc_label), lang.tr(desc_label));
             let mut desc = lv["order"].as_str() == Some("desc");
             let order_label = if desc { desc_label } else { asc_label };
-            let r = craft_ui::ComboBox::from_id_salt(("order", i)).selected_text(order_label).width(w).show_ui(ui, |ui| {
+            let r = egui::ComboBox::from_id_salt(("order", i)).selected_text(order_label).width(w).show_ui(ui, |ui| {
                 ui.selectable_value(&mut desc, false, asc_label);
                 ui.selectable_value(&mut desc, true, desc_label);
             });

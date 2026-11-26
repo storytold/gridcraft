@@ -434,12 +434,16 @@ fn secondary_weights(s: &str) -> impl Iterator<Item = u16> + '_ {
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
+/// Numbers compare exactly, not at the 15 digits of [`compare`]. Observed in Excel 365: SORT,
+/// SORTBY, Data > Sort, the AutoFilter sort and table sort all put 0.3 before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
 pub fn sort_compare(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Empty, Value::Empty) => Ordering::Equal,
         (Value::Empty, _) => Ordering::Greater,
         (_, Value::Empty) => Ordering::Less,
         (Value::Error(_), Value::Error(_)) => Ordering::Equal,
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
         _ => compare(a, b),
     }
 }
@@ -495,6 +499,31 @@ pub fn sci_text(n: f64, sig: usize) -> String {
     let mant = trim_decimal(mant);
     let e: i32 = exp.parse().unwrap_or(0);
     format!("{}E{}{:02}", mant, if e < 0 { '-' } else { '+' }, e.abs())
+}
+
+/// Longest text a cell can hold, in UTF-16 code units.
+pub const MAX_TEXT_CHARS: usize = 32_767;
+
+/// `s` cut to [`MAX_TEXT_CHARS`] UTF-16 code units without splitting a Unicode scalar value.
+pub fn cap_text(mut s: String) -> String {
+    if s.len() > MAX_TEXT_CHARS {
+        let mut units = 0;
+        if let Some((i, _)) = s.char_indices().find(|(_, c)| {
+            units += c.len_utf16();
+            units > MAX_TEXT_CHARS
+        }) {
+            s.truncate(i);
+        }
+    }
+    s
+}
+
+/// `v` with text cut to [`MAX_TEXT_CHARS`] UTF-16 code units; other values pass through.
+pub fn cap_value(v: Value) -> Value {
+    match v {
+        Value::Text(t) if t.len() > MAX_TEXT_CHARS => Value::text(cap_text(t.to_string())),
+        v => v,
+    }
 }
 
 #[cfg(test)]
@@ -578,6 +607,16 @@ mod tests {
         assert_eq!(compare(&Value::from("z"), &Value::Bool(false)), Ordering::Less);
         assert_eq!(compare(&Value::Empty, &Value::Number(0.0)), Ordering::Equal);
         assert_eq!(sort_compare(&Value::Empty, &Value::Number(1.0)), Ordering::Greater);
+    }
+
+    #[test]
+    fn cap_text_uses_utf16_units_without_splitting_surrogate_pairs() {
+        let face = "😀";
+        assert_eq!(cap_text("x".repeat(MAX_TEXT_CHARS)), "x".repeat(MAX_TEXT_CHARS));
+        assert_eq!(cap_text("x".repeat(MAX_TEXT_CHARS + 1)), "x".repeat(MAX_TEXT_CHARS));
+        assert_eq!(cap_text(format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 2), face)), format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 2), face));
+        assert_eq!(cap_text(format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 1), face)), "x".repeat(MAX_TEXT_CHARS - 1));
+        assert_eq!(cap_text(face.repeat(16_384)), face.repeat(16_383));
     }
 
     #[test]
@@ -773,6 +812,19 @@ mod tests {
         assert_ne!(compare(&num(0.1 + 0.2), &num(0.3)), Ordering::Greater);
         assert_eq!(compare(&num(1.0), &num(1.00000000000001)), Ordering::Less);
         assert_eq!(compare(&num(1.0), &num(2.0)), Ordering::Less);
+    }
+
+    #[test]
+    fn sort_orders_numbers_exactly() {
+        let num = Value::Number;
+        let e = 0.1 + 0.2;
+        assert_eq!(sort_compare(&num(0.3), &num(e)), Ordering::Less);
+        assert_eq!(sort_compare(&num(e), &num(0.3)), Ordering::Greater);
+        assert_eq!(sort_compare(&num(100.0), &num(100.0 + 1e-14)), Ordering::Less);
+        assert_eq!(sort_compare(&num(0.0), &num(-0.0)), Ordering::Equal);
+        assert_eq!(sort_compare(&num(1.0), &Value::from("a")), Ordering::Less);
+        // `=` keeps its 15-digit comparison.
+        assert_eq!(compare(&num(0.3), &num(e)), Ordering::Equal);
     }
 
     #[test]

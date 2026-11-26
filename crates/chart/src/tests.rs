@@ -8,7 +8,7 @@ use crate::*;
 mod budget;
 mod data_table;
 
-const ALL_KINDS: [ChartKind; 26] = [
+const ALL_KINDS: [ChartKind; 28] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
     ChartKind::ColumnStacked100,
@@ -18,6 +18,8 @@ const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::Line,
     ChartKind::LineMarkers,
     ChartKind::LineStacked,
+    ChartKind::LineStacked100,
+    ChartKind::LineStacked100Markers,
     ChartKind::Pie,
     ChartKind::Doughnut,
     ChartKind::Area,
@@ -1421,21 +1423,22 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
 
 #[test]
 fn drawing_and_resolving_agree_on_the_combo_plot_kind() {
-    // Resolved series carry `effective_kind`; drawing re-derives the kind from it. Both paths
-    // must give the same kind for every chart kind, series kind (or none) and series index.
+    // Resolved series carry `Chart::series_kind`, the kind drawing uses: for every chart kind,
+    // series kind (or none) and series index it is never a combo, and outside a combo it is the
+    // chart's kind or one of its family.
+    let wb = Workbook::new();
     let series_kinds = std::iter::once(None).chain(ALL_KINDS.iter().map(|k| Some(*k)));
     for ck in ALL_KINDS {
         for sk in series_kinds.clone() {
             for i in 0..3 {
                 let mut c = chart(ck);
                 c.series = (0..3).map(|j| Series { kind: if j == i { sk } else { None }, ..Default::default() }).collect();
-                let from_chart = series_plot_kind(&c, i);
-                let resolved = crate::resolve::effective_kind(ck, sk, i);
-                assert_eq!(crate::resolve::plot_kind(ck, Some(resolved), i), from_chart, "{ck:?} {sk:?} {i}");
+                let resolved: Vec<ChartKind> = resolve(&wb, 0, &c).series.iter().map(|s| s.kind).collect();
+                assert_eq!(resolved, c.series_kinds(), "{ck:?} {sk:?} {i}");
                 if ck != ChartKind::Combo {
-                    assert_eq!(from_chart, ck);
+                    assert!(gridcraft_model::same_family(ck, resolved[i]), "{ck:?} {sk:?} {i}");
                 } else {
-                    assert_ne!(from_chart, ChartKind::Combo);
+                    assert_ne!(resolved[i], ChartKind::Combo);
                 }
             }
         }
@@ -1488,6 +1491,62 @@ fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     }
     // A category whose total is zero stays on the baseline.
     assert!(frac(top(south, 2)).abs() < 1e-3, "Q3: South reaches {}", frac(top(south, 2)));
+}
+
+#[test]
+fn hundred_percent_stacked_lines_end_each_category_at_its_total() {
+    let (north_color, south_color) = ([20, 96, 130, 255], [25, 107, 36, 255]);
+    for kind in [ChartKind::LineStacked100, ChartKind::LineStacked100Markers] {
+        let d = ChartData {
+            category_levels: vec![],
+            palette: vec![],
+            categories: ["Q1", "Q2", "Q3", "Q4"].iter().map(|s| s.to_string()).collect(),
+            series: vec![series("North", &[10.0, 30.0, 0.0, 5.0], north_color, kind), series("South", &[30.0, 10.0, 0.0, 15.0], south_color, kind)],
+        };
+        let mut c = chart(kind);
+        c.data_labels = false;
+        let p = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+        let t = texts(&p);
+        assert!(t.contains(&"100%") && t.contains(&"0%"), "{kind:?}: {t:?}");
+        assert!(!t.contains(&"40"), "{kind:?}: {t:?}");
+        // The value axis labels sit on their gridlines.
+        let label_y = |s: &str| {
+            p.iter()
+                .find_map(|p| match p {
+                    Prim::Text { text, y, .. } if text == s => Some(*y),
+                    _ => None,
+                })
+                .unwrap_or(f32::NAN)
+        };
+        let (y0, y100) = (label_y("0%"), label_y("100%"));
+        assert!(y0 > y100, "{kind:?}: {y0} {y100}");
+        let frac = |y: f32| (y0 - y) / (y0 - y100);
+        let line = |color: Rgba| {
+            p.iter()
+                .find_map(|p| match p {
+                    // The series line is 2.25 wide; its legend swatch is 2.0.
+                    Prim::Line { pts, color: c, width, .. } if *c == color && *width > 2.1 => {
+                        Some(pts.iter().map(|q| frac(q[1])).collect::<Vec<f32>>())
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+        let (north, south) = (line(north_color), line(south_color));
+        assert_eq!((north.len(), south.len()), (4, 4), "{kind:?}: {north:?} {south:?}");
+        // A category whose total is zero stays on the baseline.
+        for (j, (n, s)) in [(0.25, 1.0), (0.75, 1.0), (0.0, 0.0), (0.25, 1.0)].into_iter().enumerate() {
+            assert!((north[j] - n).abs() < 1e-3 && (south[j] - s).abs() < 1e-3, "{kind:?} Q{}: {} {}", j + 1, north[j], south[j]);
+        }
+        // Point markers have a white outline; the legend's marker swatches have none.
+        let circles = |outlined: bool| {
+            p.iter()
+                .filter(|p| matches!(p, Prim::Circle { fill: Some(f), stroke, .. } if (*f == north_color || *f == south_color) && stroke.is_some() == outlined))
+                .count()
+        };
+        let with_markers = kind == ChartKind::LineStacked100Markers;
+        assert_eq!((circles(true), circles(false)), if with_markers { (8, 2) } else { (0, 0) }, "{kind:?}");
+    }
 }
 
 #[test]
