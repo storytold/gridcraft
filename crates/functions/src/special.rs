@@ -88,11 +88,17 @@ pub(crate) fn reg_gamma_p(a: f64, x: f64) -> f64 {
     if x.is_infinite() {
         return 1.0;
     }
-    if x < a + 1.0 { gamma_series(a, x) } else { 1.0 - gamma_cf(a, x) }
+    if x < a + 1.0 { gamma_series(a, x, front_of(a, x)) } else { 1.0 - gamma_cf(a, x, front_of(a, x)) }
 }
 
 /// Regularised upper incomplete gamma Q(a, x) = 1 − P(a, x).
 pub(crate) fn reg_gamma_q(a: f64, x: f64) -> f64 {
+    let front = if a > 0.0 && x > 0.0 && x.is_finite() { (-x + a * x.ln() - ln_gamma(a)).exp() } else { 0.0 };
+    reg_gamma_q_front(a, x, front)
+}
+
+/// Q(a, x) given the prefactor `e^-x x^a / Γ(a)` (the Poisson mass at a - 1, times x).
+pub(crate) fn reg_gamma_q_front(a: f64, x: f64, front: f64) -> f64 {
     if a.is_nan() || a <= 0.0 || x.is_nan() || x < 0.0 || !a.is_finite() {
         return f64::NAN;
     }
@@ -102,10 +108,15 @@ pub(crate) fn reg_gamma_q(a: f64, x: f64) -> f64 {
     if x.is_infinite() {
         return 0.0;
     }
-    if x < a + 1.0 { 1.0 - gamma_series(a, x) } else { gamma_cf(a, x) }
+    if x < a + 1.0 { 1.0 - gamma_series(a, x, front) } else { gamma_cf(a, x, front) }
 }
 
-fn gamma_series(a: f64, x: f64) -> f64 {
+/// `e^-x x^a / Γ(a)`.
+fn front_of(a: f64, x: f64) -> f64 {
+    (-x + a * x.ln() - ln_gamma(a)).exp()
+}
+
+fn gamma_series(a: f64, x: f64, front: f64) -> f64 {
     let mut ap = a;
     let mut sum = 1.0 / a;
     let mut del = sum;
@@ -117,10 +128,10 @@ fn gamma_series(a: f64, x: f64) -> f64 {
             break;
         }
     }
-    sum * (-x + a * x.ln() - ln_gamma(a)).exp()
+    sum * front
 }
 
-fn gamma_cf(a: f64, x: f64) -> f64 {
+fn gamma_cf(a: f64, x: f64, front: f64) -> f64 {
     let tiny = 1e-300;
     let mut b = x + 1.0 - a;
     let mut c = 1.0 / tiny;
@@ -144,7 +155,7 @@ fn gamma_cf(a: f64, x: f64) -> f64 {
             break;
         }
     }
-    (-x + a * x.ln() - ln_gamma(a)).exp() * h
+    front * h
 }
 
 /// Error function.
@@ -187,6 +198,17 @@ pub(crate) fn erfc(x: f64) -> f64 {
 
 /// Regularised incomplete beta I_x(a, b).
 pub(crate) fn reg_inc_beta(x: f64, a: f64, b: f64) -> f64 {
+    if x > 0.0 && x < 1.0 && a > 0.0 && b > 0.0 {
+        let ln_bt = -ln_beta(a, b) + a * x.ln() + b * (1.0 - x).ln();
+        return reg_inc_beta_front(x, a, b, ln_bt.exp());
+    }
+    reg_inc_beta_front(x, a, b, 0.0)
+}
+
+/// I_x(a, b) given the prefactor `bt = x^a (1-x)^b / B(a, b)` (symmetric in the two sides). A
+/// caller that knows `bt` more accurately than the log-gamma route gives (the binomial mass, for
+/// instance) passes it here.
+pub(crate) fn reg_inc_beta_front(x: f64, a: f64, b: f64, bt: f64) -> f64 {
     if a.is_nan() || a <= 0.0 || b.is_nan() || b <= 0.0 || !(0.0..=1.0).contains(&x) {
         return f64::NAN;
     }
@@ -196,8 +218,6 @@ pub(crate) fn reg_inc_beta(x: f64, a: f64, b: f64) -> f64 {
     if x == 1.0 {
         return 1.0;
     }
-    let ln_bt = -ln_beta(a, b) + a * x.ln() + b * (1.0 - x).ln();
-    let bt = ln_bt.exp();
     if x < (a + 1.0) / (a + b + 2.0) { bt * beta_cf(a, b, x) / a } else { 1.0 - bt * beta_cf(b, a, 1.0 - x) / b }
 }
 

@@ -8,6 +8,11 @@ description = "GridCraft document model: workbooks, sheets, cells, styles, table
 [lints]
 workspace = true
 
+[features]
+# Counts work for other crates' growth tests (a dev-dependency feature; never enabled in a
+# shipped build).
+test-support = []
+
 [dependencies]
 gridcraft-core = { workspace = true }
 sha1 = { workspace = true }
