@@ -821,6 +821,42 @@ fn arrays_do_not_spill_in_tables() {
 }
 
 #[test]
+fn one_value_array_in_a_table_is_not_a_spill() {
+    // Excel shows a one-value dynamic-array result in a table column; two or more is #SPILL! (#2335).
+    let table = |range: &str| gridcraft_model::Table {
+        id: 1,
+        name: "Table1".into(),
+        range: gridcraft_core::RangeRef::parse(range).unwrap(),
+        header_row: true,
+        totals_row: false,
+        columns: vec![],
+        style: String::new(),
+        banded_rows: false,
+        banded_cols: false,
+        first_col: false,
+        last_col: false,
+        filter_button: false,
+        filter: vec![],
+        table_type: None,
+        connection_id: None,
+    };
+    let mut t = T::new();
+    t.wb.sheet_mut(0).unwrap().tables.push(table("B3:C6"));
+    t.set("A1", "7");
+    t.set("A2", "8");
+    t.set("C4", "=FILTER(A1:A2,A1:A2>7)");
+    t.set("C5", "=FILTER(A1:A2,A1:A2>0)");
+    t.set("H4", "=FILTER(A1:A2,A1:A2>7)");
+    t.set("D4", "=ROWS(C4#)");
+    assert_eq!((t.num("C4"), t.num("H4"), t.num("D4")), (8.0, 8.0, 1.0));
+    assert_eq!(t.get("C5"), Value::Error(CellError::Spill));
+    // Recalculating again keeps the one-value result.
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.num("C4"), 8.0);
+    assert_eq!(t.num("D4"), 1.0);
+}
+
+#[test]
 fn ifs_and_lazy() {
     let mut t = T::new();
     t.set("A1", "5");
@@ -2033,6 +2069,65 @@ fn offset_extreme_arguments_return_ref() {
     ] {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
+}
+
+/// Sorting and ranking compare numbers exactly while `=` and COUNTIF compare them at 15
+/// significant digits. Every expectation was observed in Excel 365 with these fixtures
+/// (`=0.1+0.2` is 0.30000000000000004): 0.3 sorts first whatever the input order.
+#[test]
+fn sorts_and_ranks_compare_numbers_exactly() {
+    let mut t = T::new();
+    for (at, input) in [
+        // The noisy value first, then the exact one first.
+        ("A1", "=0.1+0.2"),
+        ("B1", "e"),
+        ("A2", "0.3"),
+        ("B2", "t"),
+        ("D1", "0.3"),
+        ("E1", "t"),
+        ("D2", "=0.1+0.2"),
+        ("E2", "e"),
+        ("G1", "=100+1E-14"),
+        ("H1", "e"),
+        ("G2", "100"),
+        ("H2", "t"),
+    ] {
+        t.set(at, input);
+    }
+    let e = 0.1 + 0.2;
+    let n = Value::Number;
+    let s = |x: &str| Value::from(x);
+    let cases: Vec<(&str, Value)> = vec![
+        ("=A1=A2", Value::Bool(true)),
+        ("=COUNTIF(A1:A2,0.3)", n(2.0)),
+        ("=INDEX(SORT(A1:B2),1,2)", s("t")),
+        ("=INDEX(SORT(D1:E2),1,2)", s("t")),
+        ("=INDEX(SORT(A1:B2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORT(D1:E2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORT(G1:H2),1,2)", s("t")),
+        ("=INDEX(SORT(G1:H2,1,-1),1,2)", s("e")),
+        ("=INDEX(SORTBY(B1:B2,A1:A2),1,1)", s("t")),
+        ("=INDEX(SORTBY(E1:E2,D1:D2),1,1)", s("t")),
+        ("=INDEX(SORTBY(B1:B2,A1:A2,-1),1,1)", s("e")),
+        ("=INDEX(SORTBY(E1:E2,D1:D2,-1),1,1)", s("e")),
+        // Already exact: UNIQUE, RANK, LARGE/SMALL, MODE.
+        ("=ROWS(UNIQUE(A1:A2))", n(2.0)),
+        ("=RANK.EQ(0.3,A1:A2)", n(2.0)),
+        ("=RANK.EQ(0.3,A1:A2,1)", n(1.0)),
+        ("=RANK.AVG(0.3,A1:A2)", n(2.0)),
+        ("=RANK.EQ(0.3,A1)", Value::Error(CellError::NA)),
+        ("=LARGE(A1:A2,1)", n(e)),
+        ("=SMALL(A1:A2,1)", n(0.3)),
+        ("=MODE.SNGL(A1:A2,5)", Value::Error(CellError::NA)),
+    ];
+    let mut wrong = Vec::new();
+    for (formula, expected) in cases {
+        let got = crate::evaluate(&t.wb, 0, c("Z1"), formula);
+        if got != expected {
+            wrong.push(format!("{formula}: got {got:?}, Excel {expected:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
 /// `@` intersects a reference with the formula's row (a column range) or column (a row range);

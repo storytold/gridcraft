@@ -3,6 +3,8 @@
 /// Returns the Serbian translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Linear Trend" => "Linearni trend",
+        "Growth Trend" => "Eksponencijalni trend",
         "Diagram" => "Dijagram",
         "Decorative Text" => "Ukrasni tekst",
         "Paste" => "Nalepi",
