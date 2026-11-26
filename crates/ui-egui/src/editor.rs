@@ -67,6 +67,10 @@ pub struct EditState {
     /// Python mode: the text is a Python cell's code, edited in the formula bar's code editor and
     /// committed with Ctrl+Enter (Cmd+Enter on macOS) through `python.set`.
     pub python: bool,
+    /// The entry (as committed, in canonical syntax) and the selection (A1) for which "Yes" was
+    /// answered to a destination's Warning alert before a Ctrl+Enter fill. Only that entry, for
+    /// that selection, skips the question, once; a draft changed since is asked about again.
+    pub fill_warning_accepted: Option<(String, Option<String>)>,
 }
 
 /// Entries of a list validation, searched as the user types (Excel's searchable dropdown).
@@ -145,6 +149,7 @@ impl EditState {
             list: None,
             list_accept: false,
             python: false,
+            fill_warning_accepted: None,
         }
     }
 

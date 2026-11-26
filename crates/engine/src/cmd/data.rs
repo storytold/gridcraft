@@ -33,8 +33,8 @@ use sort::{quick_sort, sort};
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
 pub use validation::{
-    LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,
-    search_term,
+    FillAlert, FillValidation, LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, MAX_FILL_AREA, check_fill_validation, check_literal_fill_validation,
+    check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches, search_term,
 };
 use validation::{circle_invalid, validate_cmd, validation, validation_list_cmd};
 pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells};

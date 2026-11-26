@@ -325,7 +325,8 @@ pub(super) fn range_fill(s: &mut Session, p: &Json) -> Result<Json> {
         // the cell's style, so the input is parsed once per style.
         let mut by_style: std::collections::HashMap<StyleId, Option<Cell>> = std::collections::HashMap::new();
         for r in &ranges {
-            if r.count() > 2_000_000 {
+            // The fill's data-validation check (`check_fill_validation`) gives up at the same bound.
+            if r.count() > crate::cmd::data::MAX_FILL_AREA {
                 return Err(bad("range.fill", "range too large"));
             }
             let skip = cx.wb.sheet(sheet).map(|sh| super::filtered_rows(sh, *r)).unwrap_or_default();

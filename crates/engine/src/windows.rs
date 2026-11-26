@@ -115,6 +115,17 @@ impl Session {
         self.windows.iter().find(|w| w.id == id)
     }
 
+    /// The selection a window shows: while its view is the one living in its workbook (its
+    /// `view` is `None`) that is the workbook's selection; otherwise it is the selection its
+    /// stored view holds. `None` when no open window has this id.
+    pub fn window_selection(&self, id: u64) -> Option<Selection> {
+        let win = self.window(id)?;
+        match &win.view {
+            Some(view) => Some(view.selection.clone()),
+            None => self.docs.iter().find(|d| d.uid == win.doc_uid).map(|d| d.selection.clone()),
+        }
+    }
+
     /// A workbook's windows in opening order.
     fn windows_of(&self, doc: u64) -> impl Iterator<Item = &WindowState> {
         self.windows.iter().filter(move |w| w.doc_uid == doc)
