@@ -277,10 +277,26 @@ class TrustedSourcePreparation(unittest.TestCase):
                     # A job that calls a reusable workflow cannot declare an environment at all, so
                     # none may appear here.
                     self.assertNotRegex(executable, r"(?im)^\s*environment:")
-                    mapping = re.search(r"(?m)^    secrets:\n((?:      [A-Z][A-Z0-9_]*: .*(?:\n|$))+)", executable)
-                    self.assertIsNotNone(mapping, "nightly-sign.yml must forward its named secrets")
-                    keys = set(re.findall(r"(?m)^\s{6}([A-Z][A-Z0-9_]*):", mapping.group(1)))
-                    self.assertEqual(keys, SIGNER_SECRETS, "only the signer's named secrets may be forwarded")
+                    # Parse the whole mapping: blank lines are legal inside a YAML block, so the
+                    # block ends at the first non-blank line indented four spaces or less. Every
+                    # entry must map a name to exactly its own secret, and the set must be exact.
+                    lines = executable.splitlines()
+                    start = lines.index("    secrets:") if "    secrets:" in lines else -1
+                    self.assertGreaterEqual(start, 0, "nightly-sign.yml must forward its named secrets")
+                    entries = []
+                    for line in lines[start + 1:]:
+                        if not line.strip():
+                            continue
+                        if len(line) - len(line.lstrip()) <= 4:
+                            break
+                        entries.append(line.strip())
+                    pairs = {}
+                    for entry in entries:
+                        match = re.fullmatch(r"([A-Z][A-Z0-9_]*): \$\{\{ secrets\.([A-Za-z0-9_]+) \}\}", entry)
+                        self.assertIsNotNone(match, f"unexpected entry in the signer's secrets block: {entry}")
+                        self.assertEqual(match.group(1), match.group(2), f"secret forwarded under another name: {entry}")
+                        pairs[match.group(1)] = match.group(2)
+                    self.assertEqual(set(pairs), SIGNER_SECRETS, "only the signer's named secrets may be forwarded")
 
     def test_both_callers_use_one_shared_pin_in_uses_and_tooling_revision(self):
         pins = set()
