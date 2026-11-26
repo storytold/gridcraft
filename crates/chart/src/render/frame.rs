@@ -1,4 +1,6 @@
-use super::{AXIS, AXIS_TITLE_SIZE, Chart, ChartData, Ctx, DARK_TEXT, Fmt, GRID, HAlign, LABEL_SIZE, PI, Prim, Rgba, Scale, TEXT, VAlign, WHITE};
+use super::{
+    AXIS, AXIS_TITLE_SIZE, Chart, ChartData, Ctx, DARK_TEXT, Fmt, GRID, HAlign, LABEL_SIZE, Look, PI, Prim, Rgba, Scale, TEXT, VAlign, WHITE,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Bx {
@@ -100,20 +102,27 @@ impl ValAxis<'_> {
 
 /// Draws gridlines, axis labels and the category axis line; returns the plot rectangle.
 pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Option<&ValAxis>, horizontal: bool, grid: bool) -> Bx {
-    let ls = LABEL_SIZE;
+    // A row of axis labels takes at most 15% of the height, so a huge size from the file still
+    // leaves the plot room, outer category levels included. The default size is never reduced.
+    let fit = |l: Look| Look { size: l.size.min((area.h * 0.15 / 1.4).max(LABEL_SIZE)), ..l };
+    let (vl, cl) = (
+        fit(Look::of(ctx.text.value_axis, LABEL_SIZE).colored(ctx.colors.value_axis)),
+        fit(Look::of(ctx.text.category_axis, LABEL_SIZE).colored(ctx.colors.category_axis)),
+    );
+    let ls = vl.size.max(cl.size);
     let lh = ls * 1.4;
     let ylabels = y.labels();
     let stub = match &cat {
         CatAxis::Table(_, width) => *width,
         _ => 0.0,
     };
-    let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+    let maxw = |ctx: &Ctx, l: &[(f64, String)]| l.iter().map(|(_, t)| ctx.look_tw(t, vl)).fold(0.0f32, f32::max);
     if !horizontal {
         let left = (maxw(ctx, &ylabels) + 6.0).min(area.w * 0.4).max(stub);
         let y2labels = y2.map(ValAxis::labels);
         let right = match (&y2labels, &cat) {
             (Some(l), _) => (maxw(ctx, l) + 6.0).min(area.w * 0.3),
-            (None, CatAxis::Numeric(s, f)) => (ctx.tw(&f.format(s.max, Some(s.step)), ls) / 2.0).min(area.w * 0.2),
+            (None, CatAxis::Numeric(s, f)) => (ctx.look_tw(&f.format(s.max, Some(s.step)), cl) / 2.0).min(area.w * 0.2),
             _ => 4.0,
         };
         let levels = match &cat {
@@ -129,12 +138,12 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             if grid {
                 ctx.hline(plot.x, plot.right(), yy, GRID, 0.75);
             }
-            ctx.text(plot.x - 4.0, yy, t, ls, TEXT, (HAlign::Right, VAlign::Middle));
+            ctx.styled(plot.x - 4.0, yy, t, vl, TEXT, (HAlign::Right, VAlign::Middle));
         }
         if let (Some(a), Some(l)) = (y2, &y2labels) {
             for (v, t) in l {
                 let yy = plot.bottom() - a.scale.frac(*v) * plot.h;
-                ctx.text(plot.right() + 4.0, yy, t, ls, TEXT, (HAlign::Left, VAlign::Middle));
+                ctx.styled(plot.right() + 4.0, yy, t, vl, TEXT, (HAlign::Left, VAlign::Middle));
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
@@ -145,11 +154,11 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Labels(l, outer) => {
                 let n = l.len().max(1);
                 let cw = plot.w / n as f32;
-                let lw = l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+                let lw = l.iter().take(2000).map(|t| ctx.look_tw(t, cl)).fold(0.0f32, f32::max);
                 let k = (((lw + 6.0) / cw.max(1e-3)).ceil() as usize).clamp(1, n);
                 for (j, t) in l.iter().enumerate().step_by(k) {
-                    let t = ctx.fit(t, ls, cw * k as f32 - 2.0);
-                    ctx.text(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
+                    let t = ctx.look_fit(t, cl, cw * k as f32 - 2.0);
+                    ctx.styled(plot.x + (j as f32 + 0.5) * cw, plot.bottom() + 3.0, &t, cl, TEXT, (HAlign::Center, VAlign::Top));
                 }
                 // Outer levels, one row each below the labels: a group's name centred under its
                 // categories, and a separator at each group boundary down through the rows.
@@ -158,8 +167,8 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
                     for (first, end) in level_groups(level, n) {
                         let (x0, x1) = (plot.x + first as f32 * cw, plot.x + end as f32 * cw);
                         if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                            let t = ctx.fit(t, ls, x1 - x0 - 2.0);
-                            ctx.text((x0 + x1) / 2.0, top, &t, ls, TEXT, (HAlign::Center, VAlign::Top));
+                            let t = ctx.look_fit(t, cl, x1 - x0 - 2.0);
+                            ctx.styled((x0 + x1) / 2.0, top, &t, cl, TEXT, (HAlign::Center, VAlign::Top));
                         }
                         if first > 0 {
                             ctx.vline(x0, plot.bottom(), top + lh - 2.0, AXIS, 0.75);
@@ -171,12 +180,12 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Numeric(s, f) => {
                 let ticks = s.ticks();
                 let labels: Vec<String> = ticks.iter().map(|v| f.format(*v, Some(s.step))).collect();
-                let lw = labels.iter().map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max);
+                let lw = labels.iter().map(|t| ctx.look_tw(t, cl)).fold(0.0f32, f32::max);
                 let slot = plot.w / ticks.len().max(1) as f32;
                 let k = (((lw + 6.0) / slot.max(1e-3)).ceil() as usize).max(1);
                 for (v, t) in ticks.iter().zip(&labels).step_by(k) {
                     let xx = plot.x + s.frac(*v) * plot.w;
-                    ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, (HAlign::Center, VAlign::Top));
+                    ctx.styled(xx, plot.bottom() + 3.0, t, cl, TEXT, (HAlign::Center, VAlign::Top));
                 }
                 if s.min <= 0.0 && s.max >= 0.0 {
                     let xx = plot.x + s.frac(0.0) * plot.w;
@@ -191,12 +200,19 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             CatAxis::Table(l, _) => (l.to_vec(), &[]),
             CatAxis::Numeric(..) => (vec![], &[]),
         };
-        let lw = (labels.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
+        let lw = (labels.iter().take(2000).map(|t| ctx.look_tw(t, cl)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.35);
         // Outer levels stand in columns left of the labels, each as wide as its longest name.
-        let level_w: Vec<f32> =
-            outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.tw(t, ls)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
+        let mut level_w: Vec<f32> =
+            outer.iter().map(|l| (l.iter().take(2000).map(|t| ctx.look_tw(t, cl)).fold(0.0f32, f32::max) + 6.0).min(area.w * 0.15)).collect();
+        // The labels and their outer levels share at most 60% of the width, so the bars keep room
+        // even with three levels on a narrow chart; the levels narrow to fit.
+        let room = (area.w * 0.6 - lw).max(0.0);
+        let wanted: f32 = level_w.iter().sum();
+        if wanted > room {
+            level_w.iter_mut().for_each(|w| *w *= room / wanted);
+        }
         let levels_w: f32 = level_w.iter().sum();
-        let right = ylabels.last().map(|(_, t)| ctx.tw(t, ls) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
+        let right = ylabels.last().map(|(_, t)| ctx.look_tw(t, vl) / 2.0).unwrap_or(0.0).min(area.w * 0.2) + 2.0;
         let left = (lw + levels_w).max(stub);
         let plot = Bx { x: area.x + left, y: area.y + 2.0, w: area.w - left - right, h: area.h - lh - 6.0 };
         if !plot.ok() {
@@ -211,7 +227,7 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
                 ctx.vline(xx, plot.y, plot.bottom(), GRID, 0.75);
             }
             if i % k == 0 {
-                ctx.text(xx, plot.bottom() + 3.0, t, ls, TEXT, (HAlign::Center, VAlign::Top));
+                ctx.styled(xx, plot.bottom() + 3.0, t, vl, TEXT, (HAlign::Center, VAlign::Top));
             }
         }
         let zero = if y.scale.min <= 0.0 && y.scale.max >= 0.0 { 0.0 } else { y.scale.min };
@@ -221,8 +237,8 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
         let ch = plot.h / n as f32;
         let k = ((lh / ch.max(1e-3)).ceil() as usize).clamp(1, n);
         for (j, t) in labels.iter().enumerate().step_by(k) {
-            let t = ctx.fit(t, ls, lw - 6.0);
-            ctx.text(plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, ls, TEXT, (HAlign::Right, VAlign::Middle));
+            let t = ctx.look_fit(t, cl, lw - 6.0);
+            ctx.styled(plot.x - 4.0, plot.bottom() - (j as f32 + 0.5) * ch, &t, cl, TEXT, (HAlign::Right, VAlign::Middle));
         }
         // Outer levels: a group's name centred beside its categories, separators at the
         // boundaries running right to the axis.
@@ -232,8 +248,8 @@ pub(super) fn frame(ctx: &mut Ctx, area: Bx, cat: CatAxis, y: &ValAxis, y2: Opti
             for (first, end) in level_groups(level, n) {
                 let (y0, y1) = (plot.bottom() - end as f32 * ch, plot.bottom() - first as f32 * ch);
                 if let Some(t) = level.get(first).filter(|t| !t.is_empty()) {
-                    let t = ctx.fit(t, ls, w - 4.0);
-                    ctx.text((x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, ls, TEXT, (HAlign::Center, VAlign::Middle));
+                    let t = ctx.look_fit(t, cl, w - 4.0);
+                    ctx.styled((x0 + x1) / 2.0, (y0 + y1) / 2.0, &t, cl, TEXT, (HAlign::Center, VAlign::Middle));
                 }
                 if first > 0 {
                     ctx.hline(x0, plot.x, y1, AXIS, 0.75);

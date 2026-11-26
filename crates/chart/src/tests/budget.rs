@@ -13,6 +13,7 @@ use crate::*;
 
 fn data_of(series: usize, points: usize) -> ChartData {
     ChartData {
+        text_colors: Default::default(),
         palette: vec![],
         categories: (0..points).map(|i| i.to_string()).collect(),
         category_levels: vec![],
