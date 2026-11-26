@@ -19,6 +19,24 @@ use std::sync::OnceLock;
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FONT_FILE: u64 = 64 << 20;
 
+/// Reads a font file of at most [`MAX_FONT_FILE`] bytes, even when it grows after it was found.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_font(path: &std::path::Path) -> Option<Vec<u8>> {
+    use std::io::Read as _;
+    let file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_FONT_FILE {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(MAX_FONT_FILE + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() as u64 <= MAX_FONT_FILE).then_some(bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn read_font(_path: &std::path::Path) -> Option<Vec<u8>> {
+    None
+}
+
 /// A face keeps at most this many family names, so a hostile `name` table can't grow the catalog.
 #[cfg(not(target_arch = "wasm32"))]
 const MAX_FAMILY_NAMES: usize = 16;
@@ -78,7 +96,7 @@ pub fn system_font_dirs() -> Vec<PathBuf> {
 /// Weight implied by a style name (`"Bold"` → 700, `"Light"` → 300).
 #[cfg(not(target_arch = "wasm32"))]
 fn style_weight(style: &str) -> f32 {
-    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
+    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
     const TABLE: &[(&str, f32)] = &[
         ("hairline", 100.0),
         ("thin", 100.0),
@@ -107,7 +125,7 @@ impl Face {
 /// Whether a style name reads as italic or oblique.
 #[cfg(not(target_arch = "wasm32"))]
 fn style_italic(style: &str) -> bool {
-    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(|c| c.to_lowercase()).collect();
+    let s: String = style.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
     s.contains("italic") || s.contains("oblique")
 }
 
@@ -165,12 +183,14 @@ pub fn scan_dirs(dirs: &[PathBuf]) -> Vec<Face> {
                 stack.push(path);
                 continue;
             }
-            let is_font =
-                path.extension().and_then(|e| e.to_str()).is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"));
+            let is_font = path
+                .extension()
+                .and_then(std::ffi::OsStr::to_str)
+                .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"));
             if !is_font || std::fs::metadata(&path).map(|m| m.len() > MAX_FONT_FILE).unwrap_or(true) {
                 continue;
             }
-            let Ok(data) = std::fs::read(&path) else { continue };
+            let Some(data) = read_font(&path) else { continue };
             for (index, family, names, style) in file_faces(&data) {
                 out.push(Face { family, names, path: path.clone(), index, weight: style_weight(&style), italic: style_italic(&style) });
             }
@@ -333,7 +353,7 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
                 continue;
             }
             if !fonts.font_data.contains_key(&key) {
-                let Ok(bytes) = std::fs::read(&face.path) else { continue };
+                let Some(bytes) = read_font(&face.path) else { continue };
                 let mut fd = egui::FontData::from_owned(bytes);
                 fd.index = face.index;
                 fonts.font_data.insert(key.clone(), std::sync::Arc::new(fd));
@@ -351,11 +371,6 @@ pub fn bind_faces(fonts: &mut egui::FontDefinitions, family: &str, faces: &[Face
     bound
 }
 
-/// Bind every installed face of `family`, found by any of its names (see [`bind_faces`]).
-pub fn bind_family(fonts: &mut egui::FontDefinitions, family: &str) -> Vec<String> {
-    bind_faces(fonts, family, &faces_of(family))
-}
-
 /// The role families currently bound to font data. `cell_family` consults this, so it never names a
 /// family egui hasn't been given.
 static BOUND: OnceLock<std::sync::RwLock<HashSet<String>>> = OnceLock::new();
@@ -366,12 +381,12 @@ fn bound() -> &'static std::sync::RwLock<HashSet<String>> {
 
 /// Record the role families a freshly built [`egui::FontDefinitions`] bound.
 pub fn set_bound(keys: impl IntoIterator<Item = String>) {
-    *bound().write().unwrap_or_else(|e| e.into_inner()) = keys.into_iter().collect();
+    *bound().write().unwrap_or_else(std::sync::PoisonError::into_inner) = keys.into_iter().collect();
 }
 
 /// Is this exact role family bound to font data?
 pub fn is_bound(role: &str) -> bool {
-    bound().read().unwrap_or_else(|e| e.into_inner()).contains(role)
+    bound().read().unwrap_or_else(std::sync::PoisonError::into_inner).contains(role)
 }
 
 /// Serializes tests that mutate the process-wide bound-family registry.
@@ -470,6 +485,8 @@ mod tests {
         }
         // A family with no faces binds nothing and never touches the map.
         assert!(bind_faces(&mut fonts, "No Such Font", &[]).is_empty());
+        std::fs::File::create(&face.path).expect("sparse file").set_len(MAX_FONT_FILE + 1).expect("oversized file");
+        assert!(read_font(&face.path).is_none(), "an oversized font is not read");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

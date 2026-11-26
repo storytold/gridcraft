@@ -21,7 +21,10 @@ MAC="$TMP/mac.svg"
 sed 's/viewBox="0 0 512 512"/viewBox="-62.136 -62.136 636.272 636.272"/' "$SVG" >"$MAC"
 grep -q 'viewBox="-62.136' "$MAC" || { echo "error: expected viewBox=\"0 0 512 512\" in $SVG" >&2; exit 1; }
 
-render() { resvg -w "$2" -h "$2" "$1" "$3" </dev/null; }
+render() {
+  local svg="$1" size="$2" out="$3"
+  resvg -w "$size" -h "$size" "$svg" "$out" </dev/null
+}
 
 render "$SVG" 1024 "$DIR/gridcraft-1024.png"
 # Runtime window/Dock icon on macOS (for apps/gridcraft to embed); other platforms use hicolor 256.
@@ -55,4 +58,7 @@ if command -v iconutil >/dev/null; then
 else
   echo "warning: iconutil not found (macOS only); gridcraft.icns not regenerated" >&2
 fi
+# The nightly channel's set: same artwork, deeper field; every frame rendered at its own size.
+python3 "$ROOT/packaging/nightly-icons.py"
+
 echo "icons written to $DIR"

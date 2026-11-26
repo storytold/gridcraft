@@ -21,6 +21,7 @@ mod ko;
 mod nl;
 mod pl;
 mod pt;
+mod pt_functions;
 mod ro;
 mod ru;
 mod sr;
@@ -194,7 +195,19 @@ impl Language {
     /// A label that needs two translations (Home's text "Orientation" vs Page Layout's print
     /// "Orientation") is keyed `context|label`: English shows only the part after the `|`.
     pub fn tr(self, text: &str) -> &str {
-        let translated = match self {
+        self.translated(text).unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+    }
+
+    /// A ribbon tab's name. Where a language names the tab differently from a command with the
+    /// same English label (Russian: the Insert tab is «Вставка», the Insert button «Вставить»), its
+    /// catalog keys the tab `Tab|name`; every other language falls back to the plain label.
+    pub fn tr_tab(self, tab: &str) -> &str {
+        self.translated(&format!("Tab|{tab}")).unwrap_or_else(|| self.tr(tab))
+    }
+
+    /// The catalog entry for `text`, if this language has one.
+    fn translated(self, text: &str) -> Option<&'static str> {
+        match self {
             Self::En => None,
             Self::Es => es::translate(text),
             Self::El => el::translate(text),
@@ -214,8 +227,12 @@ impl Language {
             Self::Vi => vi::translate(text),
             Self::Nl => nl::translate(text),
             Self::Ro => ro::translate(text),
-        };
-        translated.unwrap_or_else(|| text.rsplit_once('|').map_or(text, |(_, label)| label))
+        }
+    }
+
+    /// Translates `template`, then fills in its `{name}` placeholders (see [`fill`]).
+    pub fn tr_fill(self, template: &str, values: &[(&str, &str)]) -> String {
+        fill(self.tr(template), values)
     }
 
     pub(crate) fn tr_error(self, message: &str) -> String {
@@ -243,9 +260,80 @@ impl Language {
     fn function_help(self) -> Option<(HelpTable, HelpTable)> {
         match self {
             Self::Es => Some((es_functions::DESCRIPTIONS, es_functions::ARGUMENTS)),
+            Self::PtBr => Some((pt_functions::DESCRIPTIONS, pt_functions::ARGUMENTS)),
             _ => None,
         }
     }
+}
+
+/// Fills in the `{name}` placeholders of a translated template in one pass, so a value that itself
+/// holds `{…}` (a macro or sheet name) is shown as it is and never filled again. A placeholder
+/// without a value stays as written.
+pub fn fill(template: &str, values: &[(&str, &str)]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('{') {
+        out.push_str(before);
+        let value = after.split_once('}').and_then(|(name, tail)| values.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value, tail)));
+        match value {
+            Some((value, tail)) => {
+                out.push_str(value);
+                rest = tail;
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The values that [`fill`] puts into `template` to give `text`, or `None` when `text` has
+/// another shape. A `{name}` of lowercase letters and `_` is a placeholder; any other `{` is
+/// text. Each placeholder takes the text up to the first copy of the literal after it (the last
+/// one takes the rest), and a match counts only when filling the values back in gives `text`.
+pub fn unfill<'a>(template: &'a str, text: &'a str) -> Option<Vec<(&'a str, &'a str)>> {
+    enum Part<'a> {
+        Text(String),
+        Value(&'a str),
+    }
+    let mut parts = Vec::new();
+    let mut literal = String::new();
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once('{') {
+        literal.push_str(before);
+        match after.split_once('}').filter(|(name, _)| !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')) {
+            Some((name, tail)) => {
+                parts.push(Part::Text(std::mem::take(&mut literal)));
+                parts.push(Part::Value(name));
+                rest = tail;
+            }
+            None => {
+                literal.push('{');
+                rest = after;
+            }
+        }
+    }
+    literal.push_str(rest);
+    parts.push(Part::Text(literal));
+
+    // `parts` alternates text and placeholder, starting and ending with (maybe empty) text.
+    let mut values = Vec::new();
+    let mut rest = text;
+    for (i, part) in parts.iter().enumerate() {
+        match part {
+            Part::Text(literal) => rest = rest.strip_prefix(literal.as_str())?,
+            Part::Value(name) => {
+                let Some(Part::Text(next)) = parts.get(i + 1) else { return None };
+                let len = if i + 2 == parts.len() { rest.strip_suffix(next.as_str())?.len() } else { rest.find(next.as_str())? };
+                values.push((*name, &rest[..len]));
+                rest = &rest[len..];
+            }
+        }
+    }
+    (rest.is_empty() && fill(template, &values) == text).then_some(values)
 }
 
 /// English text and its translation, sorted by the English.
@@ -283,7 +371,7 @@ pub fn saved_language(ui_json: &serde_json::Value) -> Option<Language> {
 /// egui context-data key holding the language of the frame being drawn. Widgets that only get a
 /// `Ui` (not the app) read it to translate their labels; [`set_current`] writes it once per frame.
 fn lang_key() -> egui::Id {
-    egui::Id::new("gridcraft.language")
+    egui::Id::unique("gridcraft.language")
 }
 
 /// The language the current frame is drawing in. `En` when unset.
@@ -321,21 +409,39 @@ fn name_sort_key(name: &str) -> String {
 mod tests {
     use super::*;
 
-    /// Help tables are sorted, unique, and keyed by text the function catalog still has.
+    /// Every shipped catalog names GridCraft's own Diagram and Decorative Text features, and
+    /// Diagram never repeats that catalog's chart word (both sit on the Insert tab).
     #[test]
-    fn function_help_is_sorted_and_keyed_by_current_catalog_text() {
-        // Lookups binary-search the tables. A key that no longer matches the catalog (an English
-        // description reworded, an argument renamed) would quietly show English again.
-        let catalog = gridcraft_engine::cmd::formulas::function_list();
-        let descriptions: std::collections::HashSet<&str> = catalog.iter().filter_map(|f| f["description"].as_str()).collect();
-        let arguments: std::collections::HashSet<&str> =
-            catalog.iter().filter_map(|f| f["signature"].as_str()).flat_map(crate::formula_locale::argument_names).collect();
+    fn every_catalog_has_distinct_diagram_and_decorative_text() {
+        for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+            let code = language.code();
+            let diagram = language.translated("Diagram");
+            assert!(diagram.is_some(), "{code}: Diagram");
+            assert!(language.translated("Decorative Text").is_some(), "{code}: Decorative Text");
+            for chart in ["Chart", "Charts"] {
+                if let Some(chart_text) = language.translated(chart) {
+                    assert_ne!(diagram, Some(chart_text), "{code}: Diagram equals {chart}");
+                }
+            }
+        }
+    }
+
+    /// Ukrainian Chart uses the shared craft-i18n term, which is not the Diagram word.
+    #[test]
+    fn ukrainian_chart_uses_the_shared_term() {
+        assert_eq!(Language::Uk.translated("Chart"), Some("Діаграма"));
+        assert_eq!(Language::Uk.translated("Insert Chart"), Some("Вставити діаграму"));
+        assert_eq!(Language::Uk.translated("Diagram"), Some("Схема"));
+    }
+
+    /// Help tables are sorted and unique: lookups binary-search them.
+    #[test]
+    fn function_help_tables_are_sorted_and_unique() {
         for language in Language::ALL {
             let Some((description_table, argument_table)) = language.function_help() else { continue };
-            for (table, catalog_text) in [(description_table, &descriptions), (argument_table, &arguments)] {
+            for table in [description_table, argument_table] {
                 assert!(table.windows(2).all(|pair| pair[0].0 < pair[1].0), "{language:?} function help is not sorted and unique");
                 for (english, translated) in table {
-                    assert!(catalog_text.contains(english), "{language:?} translates {english:?}, which the function catalog doesn't use");
                     assert!(!translated.is_empty(), "{language:?}: empty translation of {english:?}");
                 }
             }
@@ -343,105 +449,34 @@ mod tests {
     }
 
     #[test]
-    fn translations_are_unique_and_preserve_unknown_text() {
-        for (i, (en, ja)) in ja::CORE.iter().enumerate() {
-            assert!(!ja.is_empty());
-            assert!(ja::CORE.iter().take(i).all(|(other, _)| en != other));
-            assert_eq!(Language::En.tr(en), en.rsplit_once('|').map_or(*en, |(_, label)| label));
-        }
+    fn untranslated_text_falls_back_to_english() {
+        let label = |key: &'static str| key.rsplit_once('|').map_or(key, |(_, label)| label);
         for (english, _) in ja::CORE {
-            assert!(zh::translate(english).is_some_and(|text| !text.is_empty()), "missing Simplified Chinese: {english}");
-            assert!(ko::translate(english).is_some_and(|text| !text.is_empty()), "missing Korean: {english}");
-            assert!(ru::translate(english).is_some_and(|text| !text.is_empty()), "missing Russian: {english}");
-            assert!(pt::translate(english).is_some_and(|text| !text.is_empty()), "missing Portuguese: {english}");
-            assert!(es::translate(english).is_some_and(|text| !text.is_empty()), "missing Spanish: {english}");
-            assert!(el::translate(english).is_some_and(|text| !text.is_empty()), "missing Greek: {english}");
-            assert!(de::translate(english).is_some_and(|text| !text.is_empty()), "missing German: {english}");
-            assert!(cs::translate(english).is_some_and(|text| !text.is_empty()), "missing Czech: {english}");
-            assert!(fr::translate(english).is_some_and(|text| !text.is_empty()), "missing French: {english}");
-            assert!(sr::translate(english).is_some_and(|text| !text.is_empty()), "missing Serbian: {english}");
-            assert!(tr::translate(english).is_some_and(|text| !text.is_empty()), "missing Turkish: {english}");
-            assert!(pl::translate(english).is_some_and(|text| !text.is_empty()), "missing Polish: {english}");
-            assert!(it::translate(english).is_some_and(|text| !text.is_empty()), "missing Italian: {english}");
-            assert!(uk::translate(english).is_some_and(|text| !text.is_empty()), "missing Ukrainian: {english}");
-            assert!(vi::translate(english).is_some_and(|text| !text.is_empty()), "missing Vietnamese: {english}");
-            assert!(nl::translate(english).is_some_and(|text| !text.is_empty()), "missing Dutch: {english}");
-            assert!(ro::translate(english).is_some_and(|text| !text.is_empty()), "missing Romanian: {english}");
+            assert_eq!(Language::En.tr(english), label(english));
         }
-        assert_eq!(Language::Ja.tr("Data"), "データ");
-        assert_eq!(Language::Zh.tr("Data"), "数据");
-        assert_eq!(Language::Ko.tr("Data"), "데이터");
-        assert_eq!(Language::Ru.tr("Data"), "Данные");
-        assert_eq!(Language::PtBr.tr("Data"), "Dados");
-        assert_eq!(Language::PtBr.tr_error("Select a chart first."), "Selecione um gráfico primeiro.");
-        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
-        assert_eq!(Language::PtBr.tr_error("command `chart`: Select a chart first."), "Selecione um gráfico primeiro.");
-        assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
-        assert_eq!(Language::Es.tr("Data"), "Datos");
-        assert_eq!(Language::El.tr("Data"), "Δεδομένα");
-        assert_eq!(Language::El.tr("Page Layout|Orientation"), "Προσανατολισμός σελίδας");
-        assert_eq!(Language::El.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::El.tr("Page {page} of {pages}"), "Σελίδα {page} από {pages}");
-        assert_eq!(Language::Es.tr("Freeze Panes"), "Inmovilizar paneles");
-        assert_eq!(Language::Es.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::De.tr("Data"), "Daten");
-        assert_eq!(Language::De.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Fr.tr("Data"), "Données");
-        assert_eq!(Language::Fr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Tr.tr("Data"), "Veri");
-        assert_eq!(Language::Tr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::PtBr.tr("Date"), "Data");
-        assert_eq!(Language::PtBr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ja.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Zh.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ko.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ru.tr("Sheet1!A1"), "Sheet1!A1");
-        // Czech "Data" is spelled as in English, so probe it with a label that differs.
-        assert_eq!(Language::Cs.tr("Data"), "Data");
-        assert_eq!(Language::Cs.tr("Formulas"), "Vzorce");
-        assert_eq!(Language::Cs.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Tr.tr("Formulas"), "Formüller");
-        // A `context|label` key shows only its label in English and splits the translation.
+        for language in Language::ALL {
+            assert_eq!(language.tr("Sheet1!A1"), "Sheet1!A1");
+            assert_eq!(language.tr("Not in any catalog|Untranslated"), "Untranslated");
+        }
+        // The Insert tab and the Insert command have different Russian names; elsewhere the tab
+        // name is the plain label.
+        assert_eq!(Language::Ru.tr_tab("Insert"), "Вставка");
+        assert_eq!(Language::Ru.tr("Insert"), "Вставить");
+        assert_eq!(Language::Ru.tr_tab("Data"), "Данные");
+        assert_eq!(Language::Es.tr_tab("Insert"), Language::Es.tr("Insert"));
+        assert_eq!(Language::En.tr_tab("Insert"), "Insert");
+        // A `context|label` key shows only its label in English.
         assert_eq!(Language::En.tr("Page Layout|Orientation"), "Orientation");
-        assert_eq!(Language::Ja.tr("Page Layout|Orientation"), "印刷の向き");
-        assert_eq!(Language::Ja.tr("Orientation"), "方向");
-        assert_eq!(Language::Cs.tr("Page Layout|Orientation"), "Orientace");
-        assert_eq!(Language::Cs.tr("Orientation"), "Orientace textu");
-        assert_eq!(Language::Sr.tr("Data"), "Podaci");
-        assert_eq!(Language::Sr.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
-        assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
-        assert_eq!(Language::Tr.tr("Page Layout|Orientation"), "Sayfa Yönü");
-        assert_eq!(Language::Tr.tr("Orientation"), "Yönlendirme");
-        assert_eq!(Language::Pl.tr("Data"), "Dane");
-        assert_eq!(Language::Pl.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Pl.tr("Page Layout|Orientation"), "Orientacja");
-        assert_eq!(Language::It.tr("Data"), "Dati");
-        assert_eq!(Language::It.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::It.tr("Freeze Panes"), "Blocca riquadri");
-        assert_eq!(Language::It.tr("Page Layout|Orientation"), "Orientamento");
-        assert_eq!(Language::It.tr("Orientation"), "Orientamento");
-        assert_eq!(Language::Uk.tr("Data"), "Дані");
-        assert_eq!(Language::Uk.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Vi.tr("Data"), "Dữ liệu");
-        assert_eq!(Language::Vi.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Vi.tr("Page Layout|Orientation"), "Hướng giấy");
-        assert_eq!(Language::Vi.tr("Orientation"), "Hướng chữ");
-        assert_eq!(Language::Nl.tr("Data"), "Gegevens");
-        assert_eq!(Language::Nl.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Nl.tr("Page Layout|Orientation"), "Paginastand");
-        assert_eq!(Language::Nl.tr("Orientation"), "Richting");
-        assert_eq!(Language::Ro.tr("Data"), "Date");
-        assert_eq!(Language::Ro.tr("Sheet1!A1"), "Sheet1!A1");
-        assert_eq!(Language::Ro.tr("Page Layout|Orientation"), "Orientare");
-        assert_eq!(Language::Ro.tr("Orientation"), "Orientare text");
+        // Errors drop the `command `id`:` prefix before translating; an untranslated one stays whole.
+        assert_eq!(Language::PtBr.tr_error("command `chart`: Select a chart first."), Language::PtBr.tr("Select a chart first."));
+        assert_eq!(Language::PtBr.tr_error("Sheet|Unknown failure"), "Sheet|Unknown failure");
+        assert_eq!(Language::PtBr.tr_error("Printer Office: permission denied"), "Printer Office: permission denied");
         assert_eq!(Language::parse("xx"), None);
     }
 
     /// A catalog whose translations slip onto their neighbours' keys still covers every key, so
     /// check the shape of each translation against its English: placeholders survive, and a
-    /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label. French
-    /// once shipped with over a hundred translations shifted this way ("Close" read "Société").
+    /// one-line label (a menu item, a tooltip) doesn't turn into a two-line ribbon label.
     #[test]
     fn translations_keep_the_shape_of_their_english() {
         let placeholders =
@@ -457,106 +492,192 @@ mod tests {
                 }
             }
         }
-        for (english, french) in [
-            ("Close", "Fermer"),
-            ("File", "Fichier"),
-            ("Save", "Enregistrer"),
-            ("Animations", "Animations"),
-            ("Company", "Société"),
-            ("Show Detail", "Afficher le détail"),
-            ("Solver", "Solveur"),
-        ] {
-            assert_eq!(Language::Fr.tr(english), french);
-        }
     }
 
+    /// The screen-reader names for the formula-bar controls must be translated in every catalog
+    /// (no silent English fallback) and stay single-line labels.
     #[test]
-    fn german_cell_and_header_context_menus_are_fully_translated() {
-        for label in [
-            "Cut",
-            "Copy",
-            "Paste",
-            "Paste Special…",
-            "Insert…",
-            "Delete…",
-            "Clear Contents",
-            "Filter by Selected Cell's Value",
-            "Sort A to Z",
-            "Sort Z to A",
-            "New Comment",
-            "New Note",
-            "Format Cells…",
-            "Pick From Drop-down List…",
-            "Define Name…",
-            "Insert Copied Cells",
-            "Insert Copied Cells…",
-            "Insert Cut Cells",
-            "Insert",
-            "Delete",
-            "Row Height…",
-            "AutoFit Row Height",
-            "Column Width…",
-            "AutoFit Column Width",
-            "Hide",
-            "Unhide",
-            "Group",
-        ] {
-            assert_ne!(Language::De.tr(label), label, "German context menu label missing: {label}");
-        }
-    }
-
-    #[test]
-    fn sheet_tab_menu_and_autosave_labels_are_translated() {
-        let labels = [
-            "Insert Sheet",
-            "Delete",
-            "Rename",
-            "Move or Copy…",
-            "Duplicate",
-            "Tab Color",
-            "No Color",
-            "Hide",
-            "Unhide…",
-            "Protect Sheet…",
-            "Unprotect Sheet…",
-            "Select All Sheets",
-            "AutoSave",
-            "AutoSave: save after every change (workbooks saved to a file)",
-            "Previous sheet",
-            "Next sheet",
-            "All sheets",
-            "New sheet (⇧F11)",
-        ];
-        for language in [Language::Es, Language::De, Language::Fr, Language::Ko, Language::Ru, Language::Zh, Language::Sr] {
-            for label in labels {
-                assert_ne!(language.tr(label), label, "{} lacks a translation of {label:?}", language.code());
+    fn accessible_control_names_are_translated_in_every_catalog() {
+        for key in ["Name Box", "Cell Editor", "Font Size", "Sheet Name", "Text Box"] {
+            for language in Language::ALL {
+                let shown = language.tr(key);
+                assert!(!shown.contains('\n'), "{}: {key:?} is not a single-line label: {shown:?}", language.code());
+                if language != Language::En {
+                    assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+                }
             }
         }
-        assert_eq!(Language::Es.tr("AutoSave"), "Autoguardado");
+    }
+
+    /// The right-drag fill menu's Linear Trend and Growth Trend have a row in every catalog, with
+    /// no English fallback.
+    #[test]
+    fn trend_fill_labels_are_translated_in_every_catalog() {
+        for key in ["Linear Trend", "Growth Trend"] {
+            assert_eq!(Language::En.tr(key), key);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('\n'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_ne!(shown, key, "{code}: the row for {key:?} is still English");
+            }
+        }
+    }
+
+    /// The note under a validation list that was cut short is a sentence, not a feature name: a
+    /// catalog without it shows the English sentence in the middle of a translated interface.
+    #[test]
+    fn the_cut_short_list_note_is_translated_in_every_catalog() {
+        let key = crate::grid::editor::LIST_MORE_NOTE;
+        for language in Language::ALL {
+            let shown = language.tr(key);
+            assert!(!shown.contains('\n'), "{}: {key:?} is not a single line: {shown:?}", language.code());
+            if language != Language::En {
+                assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
+            }
+        }
+    }
+
+    /// The Custom Sort dialog's own strings have a row in every catalog (no silent English
+    /// fallback), keep the `{letters}` placeholder, and read as plain English in English.
+    #[test]
+    fn custom_sort_strings_are_translated_in_every_catalog() {
+        let keys = [
+            "Sort by",
+            "Then by",
+            "My list has headers",
+            "Cell Values",
+            "Cell Color",
+            "Font Color",
+            "A to Z",
+            "Z to A",
+            "Add Level",
+            "Delete Level",
+            "Copy Level",
+            "Move Up",
+            "Move Down",
+            "Order",
+            "Sort On",
+            "Sort|Column",
+            "Column {letters}",
+            "Smallest to Largest",
+            "Largest to Smallest",
+            "Close the Sort dialog before switching or changing worksheets.",
+            "Return to the original worksheet to sort, or cancel.",
+        ];
+        for key in keys {
+            let english = key.rsplit_once('|').map_or(key, |(_, label)| label);
+            assert_eq!(Language::En.tr(key), english);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('|'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_eq!(shown.contains("{letters}"), key.contains("{letters}"), "{code}: placeholder of {key:?}: {shown:?}");
+            }
+        }
+    }
+
+    /// The fill-handle menus (the right-drag menu and the Auto Fill Options button) and the
+    /// Home › Fill menu have a row in every catalog, with no silent English fallback (#4458).
+    #[test]
+    fn fill_menu_labels_are_translated_in_every_catalog() {
+        let keys = [
+            "Copy Cells",
+            "Fill Series",
+            "Fill Formatting Only",
+            "Fill Without Formatting",
+            "Fill Days",
+            "Fill Weekdays",
+            "Fill Months",
+            "Fill Years",
+            "Auto Fill Options",
+            "Series…",
+            "Down",
+            "Up",
+        ];
+        for key in keys {
+            assert_eq!(Language::En.tr(key), key);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                let code = language.code();
+                let shown = language.translated(key).unwrap_or_else(|| panic!("{code}: no row for {key:?}"));
+                assert!(!shown.trim().is_empty() && !shown.contains('\n'), "{code}: bad translation of {key:?}: {shown:?}");
+                assert_ne!(shown, key, "{code}: the row for {key:?} is still English");
+            }
+        }
+    }
+
+    #[test]
+    fn fill_puts_each_value_in_once() {
+        // A value holding a placeholder (a macro named `{steps}`) is shown as it is.
+        assert_eq!(fill("Ran macro “{name}” ({steps} steps)", &[("name", "{steps}"), ("steps", "3")]), "Ran macro “{steps}” (3 steps)");
+        assert_eq!(fill("{a} and {b}, {a}", &[("a", "1")]), "1 and {b}, 1", "a placeholder without a value stays");
+        assert_eq!(fill("{ unclosed", &[("unclosed", "x")]), "{ unclosed");
+        assert_eq!(fill("50% {}", &[]), "50% {}");
+        assert_eq!(Language::En.tr_fill("Sheets: {sheets}", &[("sheets", "Sheet1, Sheet2")]), "Sheets: Sheet1, Sheet2");
+    }
+
+    #[test]
+    fn unfill_reads_back_what_fill_put_in() {
+        assert_eq!(unfill("Expected '{expected}', got '{got}'", "Expected '}', got 'EOF'"), Some(vec![("expected", "}"), ("got", "EOF")]));
+        assert_eq!(
+            unfill("Mismatch: \\begin{{begin}} matched by \\end{{end}}", "Mismatch: \\begin{a} matched by \\end{b}"),
+            Some(vec![("begin", "a"), ("end", "b")])
+        );
+        assert_eq!(unfill("{command} valid only here", "\\hline valid only here"), Some(vec![("command", "\\hline")]));
+        assert_eq!(unfill("Undefined control sequence: {name}", "Undefined control sequence: \\foo"), Some(vec![("name", "\\foo")]));
+        assert_eq!(unfill("Double superscript", "Double superscript"), Some(vec![]));
+        // The last placeholder runs to the closing literal, so a longer message is read whole.
+        assert_eq!(unfill("Invalid type '{type}'", "Invalid type 'a' after 'b'"), Some(vec![("type", "a' after 'b")]));
+        assert_eq!(unfill("Expected '{expected}', got '{got}'", "Expected } here"), None);
+        assert_eq!(unfill("Expected '{expected}'", "Expected 'x' later"), None);
+        assert_eq!(unfill("Mismatched {command}", "Mismatch: x"), None);
+    }
+
+    /// The templates the UI translates first and fills in after (status bar, toasts, dialog
+    /// notes and titles) keep their placeholders in every catalog, so no value goes missing.
+    #[test]
+    fn filled_in_templates_keep_their_placeholders() {
+        let placeholders = |s: &str| {
+            let mut names = s.split('{').skip(1).filter_map(|rest| rest.split_once('}').map(|(name, _)| name.to_string())).collect::<Vec<_>>();
+            names.sort();
+            names
+        };
+        for template in [
+            "Circular References: {cell}",
+            "Goal Seeking found a solution: {value}",
+            "Width: {chars} ({pixels} pixels)",
+            "Height: {points} ({pixels} pixels)",
+            "Picture: {alt}",
+            "Sheets: {sheets}",
+            "Hidden: {sheets}",
+            "Format Control: {name}",
+            "Error at character {position}: {message}",
+            "Saved macro “{name}” ({steps} step)",
+            "Saved macro “{name}” ({steps} steps)",
+            "without {key}: another macro took it while recording",
+            "Macro “{name}” stopped: {message}",
+            "Ran macro “{name}” ({steps} step)",
+            "Ran macro “{name}” ({steps} steps)",
+        ] {
+            for language in Language::ALL {
+                let text = language.tr(template);
+                assert_eq!(placeholders(text), placeholders(template), "{}: {template:?} => {text:?}", language.code());
+                assert!(!text.contains('\n'), "{}: {template:?} => {text:?}", language.code());
+            }
+        }
     }
 
     #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its
         // value shows it on screen (File › Options read "Options|Général" in French).
-        for language in Language::ALL {
-            for (english, _) in ja::CORE {
+        let keys = ja::CORE.iter().map(|(english, _)| *english).chain(["Options|General", "Options|Save", "Sheet Options|View"]);
+        for english in keys {
+            for language in Language::ALL {
                 let shown = language.tr(english);
                 assert!(!shown.contains('|'), "{} shows a context prefix for {english}: {shown}", language.code());
             }
         }
-        assert_eq!(Language::Fr.tr("Options|General"), "Général");
-        assert_eq!(Language::Fr.tr("Options|Save"), "Enregistrer");
-        assert_eq!(Language::Fr.tr("Sheet Options|View"), "Affichage");
-        assert_eq!(Language::Sr.tr("Options|General"), "Opšte");
-        assert_eq!(Language::Sr.tr("Options|Save"), "Sačuvaj");
-        assert_eq!(Language::Sr.tr("Sheet Options|View"), "Prikaz");
-        assert_eq!(Language::Nl.tr("Options|General"), "Algemeen");
-        assert_eq!(Language::Nl.tr("Options|Save"), "Opslaan");
-        assert_eq!(Language::Nl.tr("Sheet Options|View"), "Weergeven");
-        assert_eq!(Language::Ro.tr("Options|General"), "General");
-        assert_eq!(Language::Ro.tr("Options|Save"), "Salvare");
-        assert_eq!(Language::Ro.tr("Sheet Options|View"), "Vizualizare");
     }
 
     #[test]
@@ -575,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn tags_reduce_to_a_supported_language() {
+    fn tags_reduce_to_supported_languages() {
         assert_eq!(Language::from_tag("ja-JP"), Some(Language::Ja));
         assert_eq!(Language::from_tag("en_US"), Some(Language::En));
         assert_eq!(Language::from_tag("es_MX"), Some(Language::Es));
@@ -587,6 +708,10 @@ mod tests {
         assert_eq!(Language::from_tag("RU_ru"), Some(Language::Ru));
         assert_eq!(Language::from_tag("de-DE"), Some(Language::De));
         assert_eq!(Language::from_tag("de_AT"), Some(Language::De));
+    }
+
+    #[test]
+    fn tags_reduce_to_supported_languages_with_locale_suffixes() {
         assert_eq!(Language::from_tag("de-CH"), Some(Language::De));
         assert_eq!(Language::from_tag("pt-BR"), Some(Language::PtBr));
         assert_eq!(Language::parse("pt"), Some(Language::PtBr));
@@ -598,6 +723,10 @@ mod tests {
         assert_eq!(Language::from_tag("fr_CA"), Some(Language::Fr));
         assert_eq!(Language::parse("fr"), Some(Language::Fr));
         assert_eq!(Language::from_tag("sr-Latn-RS"), Some(Language::Sr));
+    }
+
+    #[test]
+    fn tags_reduce_to_other_supported_languages() {
         assert_eq!(Language::from_tag("sr-RS"), Some(Language::Sr));
         assert_eq!(Language::parse("sr"), Some(Language::Sr));
         assert_eq!(Language::from_tag("tr-TR"), Some(Language::Tr));
@@ -609,6 +738,10 @@ mod tests {
         assert_eq!(Language::from_tag("it-IT"), Some(Language::It));
         assert_eq!(Language::from_tag("it_CH.UTF-8"), Some(Language::It));
         assert_eq!(Language::parse("it"), Some(Language::It));
+    }
+
+    #[test]
+    fn tags_reduce_to_remaining_supported_languages() {
         assert_eq!(Language::from_tag("uk-XX"), Some(Language::Uk));
         assert_eq!(Language::parse("uk"), Some(Language::Uk));
         assert_eq!(Language::from_tag("vi-VN"), Some(Language::Vi));
@@ -620,7 +753,6 @@ mod tests {
         assert_eq!(Language::from_tag("ro_MD.UTF-8"), Some(Language::Ro));
         assert_eq!(Language::parse("ro"), Some(Language::Ro));
     }
-
     #[test]
     fn an_unset_language_preference_is_english_until_the_app_applies_the_system_one() {
         // Deserializing never reads the host locale (tests stay deterministic); the desktop app

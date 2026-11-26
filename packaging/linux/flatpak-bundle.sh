@@ -17,13 +17,21 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
 HERE="$ROOT/packaging/linux"
 APP_ID=ai.storyteller.gridcraft
+FLATPAK_ID="$APP_ID"
+# The remote indexes both app IDs on the stable ref branch; IDs isolate installations.
+FLATPAK_BRANCH=stable
+if [[ "${GRIDCRAFT_BUILD_CHANNEL:-}" == nightly-v1 || "$VERSION" == *-nightly* ]]; then
+  FLATPAK_ID="$APP_ID.nightly"
+fi
 FLATHUB=https://dl.flathub.org/repo/flathub.flatpakrepo
 
 TEST=1
+OCI=0
 TARBALL=""
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-test) TEST=0; shift ;;
+    --oci) OCI=1; shift ;;
     -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
     -*) echo "unknown argument: $1" >&2; exit 2 ;;
     *) TARBALL="$1"; shift ;;
@@ -38,7 +46,7 @@ case "$ARCH" in
 esac
 BASENAME="gridcraft-$VERSION-linux-$ARCH"
 TARBALL="${TARBALL:-$DIST/$BASENAME.tar.gz}"
-[ -f "$TARBALL" ] || { echo "error: $TARBALL not found (run packaging/linux/package.sh --formats tar first)" >&2; exit 1; }
+[[ -f "$TARBALL" ]] || { echo "error: $TARBALL not found (run packaging/linux/package.sh --formats tar first)" >&2; exit 1; }
 for tool in flatpak flatpak-builder; do
   command -v "$tool" >/dev/null || { echo "error: $tool not found (apt install flatpak flatpak-builder librsvg2-common)" >&2; exit 1; }
 done
@@ -49,24 +57,80 @@ WORK="$CARGO_TARGET_DIR/flatpak-bundle"
 rm -rf "$WORK"
 mkdir -p "$WORK/stage"
 tar -xzf "$TARBALL" -C "$WORK/stage" --strip-components=1
-[ -x "$WORK/stage/bin/gridcraft" ] || { echo "error: $TARBALL has no bin/gridcraft" >&2; exit 1; }
-cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$APP_ID.yml"
+[[ -x "$WORK/stage/bin/gridcraft" ]] || { echo "error: $TARBALL has no bin/gridcraft" >&2; exit 1; }
+if [[ "$FLATPAK_ID" != "$APP_ID" ]]; then
+  # The sandbox's own Flatpak id names the window (main.rs) and its data folder is already private,
+  # but the GUI still needs its launch profile: this launcher passes it, and the desktop entry and
+  # the manifest's one command name the launcher instead of the binary.
+  cat >"$WORK/stage/bin/gridcraft-nightly" <<'LAUNCHER'
+#!/bin/sh
+# GridCraft Nightly inside its own Flatpak: the launch profile is this app's private data folder.
+set -eu
+if [ -z "${XDG_DATA_HOME:-}" ] && [ -z "${HOME:-}" ]; then
+  echo "gridcraft-nightly: XDG_DATA_HOME and HOME are both unset, so there is no Nightly data folder" >&2
+  exit 2
+fi
+case "${1-}" in
+  --launch-profile | --profile-root) exec /app/bin/gridcraft "$@" ;;
+esac
+if [ "$#" -eq 1 ] && { [ "${1-}" = "--version" ] || [ "${1-}" = "-V" ]; }; then
+  exec /app/bin/gridcraft "$@"
+fi
+exec /app/bin/gridcraft --launch-profile nightly-v1 --profile-root "${XDG_DATA_HOME:-$HOME/.local/share}/gridcraft-nightly/profile" -- "$@"
+LAUNCHER
+  chmod 755 "$WORK/stage/bin/gridcraft-nightly"
+  sed -e "s#^Exec=gridcraft\([[:space:]]\|$\)#Exec=gridcraft-nightly\1#" \
+      -e "s|^TryExec=gridcraft$|TryExec=gridcraft-nightly|" \
+      -e "s|^Icon=$APP_ID$|Icon=$FLATPAK_ID|" \
+      -e "s|^Name=GridCraft$|Name=GridCraft Nightly|" \
+      -e "s|^StartupWMClass=.*|StartupWMClass=$FLATPAK_ID|" \
+      -e '/^MimeType=/d' \
+      "$WORK/stage/share/applications/$APP_ID.desktop" >"$WORK/stage/share/applications/$FLATPAK_ID.desktop"
+  rm -f "$WORK/stage/share/applications/$APP_ID.desktop"
+  sed -e "s|<id>$APP_ID</id>|<id>$FLATPAK_ID</id>|g" \
+      -e "s|<name>GridCraft</name>|<name>GridCraft Nightly</name>|g" \
+      -e "s|<launchable type=\"desktop-id\">$APP_ID.desktop</launchable>|<launchable type=\"desktop-id\">$FLATPAK_ID.desktop</launchable>|g" \
+      -e "s|<icon type=\"stock\">$APP_ID</icon>|<icon type=\"stock\">$FLATPAK_ID</icon>|g" \
+      -e "s|<binary>gridcraft</binary>|<binary>gridcraft-nightly</binary>|g" \
+      -e '/<mediatype>/d' \
+      "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml" >"$WORK/stage/share/metainfo/$FLATPAK_ID.metainfo.xml"
+  rm -f "$WORK/stage/share/metainfo/$APP_ID.metainfo.xml"
+  mv "$WORK/stage/share/mime/packages/$APP_ID.xml" "$WORK/stage/share/mime/packages/$FLATPAK_ID.xml"
+  rm -rf "$WORK/stage/share/icons/hicolor"
+  NIGHTLY_ICON="$ROOT/assets/app-icon/gridcraft-nightly.png"
+  [[ -f "$NIGHTLY_ICON" ]] || NIGHTLY_ICON="$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png"
+  install -Dm644 "$NIGHTLY_ICON" \
+    "$WORK/stage/share/icons/hicolor/256x256/apps/$FLATPAK_ID.png"
+  # The manifest installs and runs the launcher; `command:` is what `flatpak run` starts.
+  sed -e "s|ai\.storyteller\.gridcraft|$FLATPAK_ID|g" \
+      -e "s|^command: gridcraft$|command: gridcraft-nightly|" \
+      -e "s|^      - install -Dm755 bin/gridcraft-cli /app/bin/gridcraft-cli$|&\n      - install -Dm755 bin/gridcraft-nightly /app/bin/gridcraft-nightly|" \
+      "$HERE/flatpak/$APP_ID.bundle.yml" >"$WORK/$FLATPAK_ID.yml"
+else
+  cp "$HERE/flatpak/$APP_ID.bundle.yml" "$WORK/$FLATPAK_ID.yml"
+fi
 
 flatpak remote-add --user --if-not-exists flathub "$FLATHUB"
 # --disable-rofiles-fuse: no FUSE in containers and CI runners.
 flatpak-builder --user --install-deps-from=flathub --disable-rofiles-fuse --force-clean \
-  --default-branch=stable --repo="$WORK/repo" --state-dir="$WORK/state" "$WORK/build" "$WORK/$APP_ID.yml"
+  --default-branch="$FLATPAK_BRANCH" --repo="$WORK/repo" --state-dir="$WORK/state" "$WORK/build" "$WORK/$FLATPAK_ID.yml"
 
 OUT="$DIST/$BASENAME.flatpak"
 # --runtime-repo lets `flatpak install` fetch the freedesktop runtime from Flathub if missing.
-flatpak build-bundle --runtime-repo="$FLATHUB" "$WORK/repo" "$OUT" "$APP_ID" stable
+flatpak build-bundle --runtime-repo="$FLATHUB" "$WORK/repo" "$OUT" "$FLATPAK_ID" "$FLATPAK_BRANCH"
 echo "wrote $OUT"
+if [[ "$OCI" = 1 ]]; then
+  OUT_OCI="$DIST/$BASENAME-oci"
+  rm -rf "$OUT_OCI"
+  flatpak build-bundle --oci "$WORK/repo" "$OUT_OCI" "$FLATPAK_ID" "$FLATPAK_BRANCH"
+  echo "wrote OCI layout to $OUT_OCI"
+fi
 
-if [ "$TEST" = 1 ]; then
+if [[ "$TEST" = 1 ]]; then
   flatpak install --user -y --noninteractive --reinstall "$OUT"
-  flatpak info --user "$APP_ID"
-  flatpak run --command=gridcraft-cli "$APP_ID" --version
-  flatpak run --command=sh "$APP_ID" -c 'ls /app/share/applications /app/share/metainfo /app/share/mime/packages /app/share/icons/hicolor/scalable/apps'
+  flatpak info --user "$FLATPAK_ID"
+  flatpak run --command=gridcraft-cli "$FLATPAK_ID" --version
+  flatpak run --command=sh "$FLATPAK_ID" -c 'ls /app/share/applications /app/share/metainfo /app/share/mime/packages /app/share/icons/hicolor/*/apps'
 fi
 echo "==> done"
 ls -lh "$OUT"
