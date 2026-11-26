@@ -22,17 +22,17 @@ fn chars(s: &str) -> Vec<char> {
 }
 
 fn check_len(s: String) -> R<Value> {
-    if s.len() > MAX_TEXT && s.chars().count() > MAX_TEXT {
+    if s.len() > MAX_TEXT && s.encode_utf16().count() > MAX_TEXT {
         return Err(CellError::Value);
     }
     text_val(s)
 }
 
 /// Pushes `piece` onto `out`, failing once the result exceeds the cell limit.
-fn push_capped(out: &mut String, piece: &str) -> R<()> {
+fn push_capped(out: &mut String, piece: &str, over: CellError) -> R<()> {
     // Checked before copying, so one oversized piece is refused without being appended.
     if out.len().saturating_add(piece.len()) > MAX_TEXT * 4 {
-        return Err(CellError::Value);
+        return Err(over);
     }
     out.push_str(piece);
     Ok(())
@@ -47,22 +47,35 @@ fn piece(v: &Value) -> R<std::borrow::Cow<'_, str>> {
     }
 }
 
+/// CONCATENATE cuts at the cell limit like `&`; CONCAT and TEXTJOIN give `#CALC!` past it.
 fn concatenate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
-        push_capped(&mut out, &piece(&scalar(x))?)?;
+        // Past the budget, later arguments are still converted so their errors propagate.
+        let v = scalar(x);
+        let piece = piece(&v)?;
+        if out.len() <= MAX_TEXT * 4 {
+            out.push_str(&piece);
+        }
     }
-    check_len(out)
+    text_val(gridcraft_core::cap_text(out))
+}
+
+fn check_calc(s: String) -> R<Value> {
+    if s.len() > MAX_TEXT && s.encode_utf16().count() > MAX_TEXT {
+        return Err(CellError::Calc);
+    }
+    text_val(s)
 }
 
 fn concat(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
         for v in as_array(&x.value).iter() {
-            push_capped(&mut out, &piece(v)?)?;
+            push_capped(&mut out, &piece(v)?, CellError::Calc)?;
         }
     }
-    check_len(out)
+    check_calc(out)
 }
 
 /// The error `v.to_text()` would give, found without building any text.
@@ -98,12 +111,12 @@ fn textjoin(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
             && !delims.data.is_empty()
             && let Some(d) = delims.data.get((joined - 1) % delims.data.len())
         {
-            push_capped(&mut out, &piece(d)?)?;
+            push_capped(&mut out, &piece(d)?, CellError::Calc)?;
         }
-        push_capped(&mut out, &s)?;
+        push_capped(&mut out, &s, CellError::Calc)?;
         joined += 1;
     }
-    check_len(out)
+    check_calc(out)
 }
 
 fn count_arg(a: &[Arg], i: usize, default: f64) -> R<usize> {
@@ -252,7 +265,7 @@ fn rept(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Value);
     }
     let n = n.trunc();
-    let total = s.chars().count() as f64 * n;
+    let total = s.encode_utf16().count() as f64 * n;
     if total > MAX_TEXT as f64 {
         return Err(CellError::Value);
     }
@@ -772,7 +785,7 @@ fn arraytotext(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
             } else if c > 0 {
                 out.push_str(if strict { "," } else { ", " });
             }
-            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict))?;
+            push_capped(&mut out, &value_text(arr.get(r, c).unwrap_or(&Value::Empty), strict), CellError::Value)?;
         }
     }
     if strict {
@@ -1207,20 +1220,37 @@ mod tests {
         is_text(ev("TEXTJOIN", vec![t("-"), b(false), av(arr(vec![vec![tv("a"), tv(""), tv("b")]]))]), "a--b");
         is_text(ev("TEXTJOIN", vec![av(row_t(&[",", ";"])), b(true), t("a"), t("b"), t("c")]), "a,b;c");
         is_err(ev("CONCAT", vec![t("a"), e(CellError::NA)]), CellError::NA);
+        // Past 32,767 characters: CONCAT and TEXTJOIN are #CALC!, CONCATENATE cuts like `&`
+        // (checked in Excel: LEN(...) is #CALC!, #CALC! and 32767).
+        let x = || t(&"x".repeat(20_000));
+        is_err(ev("CONCAT", vec![x(), x()]), CellError::Calc);
+        is_err(ev("TEXTJOIN", vec![t(","), b(false), x(), x()]), CellError::Calc);
+        assert_eq!(ev("CONCATENATE", vec![x(), x()]), Value::text("x".repeat(32_767)));
+        assert_eq!(ev("CONCAT", vec![x()]), Value::text("x".repeat(20_000)));
+        // An error after the cut still propagates.
+        let big = || t(&"x".repeat(32_767));
+        is_err(ev("CONCATENATE", vec![big(), big(), big(), big(), big(), e(CellError::NA)]), CellError::NA);
+        let emoji = "😀";
+        is_err(ev("CONCAT", vec![t(&emoji.repeat(16_384))]), CellError::Calc);
+        is_err(ev("TEXTJOIN", vec![t(""), b(false), t(&emoji.repeat(16_384))]), CellError::Calc);
+        assert_eq!(ev("CONCATENATE", vec![t(&emoji.repeat(16_384))]), Value::text(emoji.repeat(16_383)));
+        is_err(ev("REPT", vec![t(emoji), n(16_384.0)]), CellError::Value);
+        assert_eq!(ev("REPT", vec![t(emoji), n(16_383.0)]), Value::text(emoji.repeat(16_383)));
         // Lifting: CONCATENATE over an array.
         assert_eq!(rows_of(&ev("CONCATENATE", vec![av(row_t(&["a", "b"])), t("x")])), vec![vec![tv("ax"), tv("bx")]]);
     }
 
     /// Security: TEXTJOIN builds its result piece by piece and stops at the text cap, rather
     /// than first copying every input (100,000 references to one 32,767-character text were
-    /// 3 GB of copies). Errors among the inputs still win, in argument order.
+    /// 3 GB of copies), giving `#CALC!` there as past the cell limit. Errors among the inputs still
+    /// win, in argument order.
     #[test]
     fn textjoin_stops_at_the_text_cap() {
         use gridcraft_core::Array;
         let long = tv(&"x".repeat(32_767));
         let many = || av(Array::filled(100_000, 1, long.clone()).into());
-        is_err(ev("TEXTJOIN", vec![t(","), b(true), many()]), CellError::Value);
-        is_err(ev("TEXTJOIN", vec![av(Array::filled(1, 100_000, long.clone()).into()), b(false), t("a"), t("b")]), CellError::Value);
+        is_err(ev("TEXTJOIN", vec![t(","), b(true), many()]), CellError::Calc);
+        is_err(ev("TEXTJOIN", vec![av(Array::filled(1, 100_000, long.clone()).into()), b(false), t("a"), t("b")]), CellError::Calc);
         is_err(ev("TEXTJOIN", vec![t(","), b(true), many(), e(CellError::Div0)]), CellError::Div0);
         is_err(ev("TEXTJOIN", vec![av(arr(vec![vec![tv(","), Value::Error(CellError::NA)]])), b(true), t("a")]), CellError::NA);
         // Delimiters cycle and are converted only where used.
