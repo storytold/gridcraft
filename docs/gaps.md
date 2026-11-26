@@ -22,6 +22,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Evidence:** round-trip tests cover our own files only (`crates/xlsx/src/tests/`); PivotTable
   round-trip noted as "unverified in real Excel" since 10-07; #64 (dynamic-array flag) shows the
   class of bug.
+- **Native synthetic evidence:** the [column/font and fixed-picture matrix](column-metrics-probe.md)
+  opens in Excel Mac 16.114.4 without repair, but shows baseline picture geometry loss. This
+  narrow probe does not satisfy the broader corpus gate.
 - **Impact:** the main format; a repair prompt or silent loss destroys trust.
 - **Estimate:** 15–25 h, plus owner time in Excel. [file-format-parity.md](file-format-parity.md)
 
@@ -196,6 +199,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | §1: contributor-original column/font and fixed-picture matrix, with native Excel Mac 16.114.4 observations; corpus gate remains open |
 | 2026-11-02 | minor | §17: equations (Insert › Equation, LaTeX source, gallery, editor) |
 | 2026-11-02 | minor | §13: Solver Sensitivity report: shadow prices, reduced costs and allowable ranges for Simplex LP; Lagrange multipliers and reduced gradients for GRG Nonlinear |
 | 2026-11-02 | minor | §4: charts, like every floating object, move and resize from eight handles (#190), so resizing is no longer listed as missing; the evidence is one paragraph again, without the stale "PRs #158, #161 open" |
