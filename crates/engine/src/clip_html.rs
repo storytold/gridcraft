@@ -47,13 +47,19 @@ pub(crate) struct HtmlTable {
     pub merges: Vec<RangeRef>,
 }
 
+/// The first table's cells and the ranges its spans describe.
+pub(crate) fn table_with_merges(html: &str, max_rows: usize, max_cols: usize) -> HtmlTable {
+    parse_table(html, max_rows, max_cols, true)
+}
+
 /// The cells of the first table in `html` and the ranges its spans describe, read no further than
 /// `max_rows` rows of `max_cols` cells (the pasted text's shape, itself clamped to the sheet) and
 /// [`MAX_HTML_CELLS`] in all. A cell spanning columns is followed by empty cells, and a column
 /// covered by a `rowspan` from above holds an empty cell, so positions line up with the
-/// tab-separated text. Empty when there is no table.
-pub(crate) fn table_with_merges(html: &str, max_rows: usize, max_cols: usize) -> HtmlTable {
-    let mut grid = Grid::new(max_rows, max_cols);
+/// tab-separated text. Empty when there is no table. `record_merges` is false for paste, which
+/// reads only the cells.
+fn parse_table(html: &str, max_rows: usize, max_cols: usize, record_merges: bool) -> HtmlTable {
+    let mut grid = Grid::new(max_rows, max_cols, record_merges);
     if html.len() > MAX_HTML {
         return grid.into_table();
     }
@@ -126,9 +132,10 @@ pub(crate) fn table_with_merges(html: &str, max_rows: usize, max_cols: usize) ->
     grid.into_table()
 }
 
-/// Unchanged paste entry point: the first table's cells, row by row.
+/// Unchanged paste entry point: the first table's cells, row by row. Paste ignores merges, so the
+/// parse does not record them.
 pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<Vec<HtmlCell>> {
-    table_with_merges(html, max_rows, max_cols).rows
+    parse_table(html, max_rows, max_cols, false).rows
 }
 
 /// A `colspan`/`rowspan` attribute: at least 1, at most `max` (the sheet's extent), so a hostile
@@ -149,6 +156,8 @@ struct Grid {
     rows: Vec<Vec<HtmlCell>>,
     /// The ranges the spans describe, anchored at the cell that carried them.
     merges: Vec<RangeRef>,
+    /// False for paste, which never reads the merges.
+    record_merges: bool,
     max_rows: usize,
     max_cols: usize,
     /// Cells still allowed before the table is cut short.
@@ -160,11 +169,11 @@ struct Grid {
 }
 
 impl Grid {
-    fn new(max_rows: usize, max_cols: usize) -> Self {
+    fn new(max_rows: usize, max_cols: usize, record_merges: bool) -> Self {
         let max_rows = max_rows.min(MAX_ROW_SPAN);
         let max_cols = max_cols.min(MAX_SPAN);
         let budget = MAX_HTML_CELLS.min(max_rows.saturating_mul(max_cols));
-        Grid { rows: Vec::new(), merges: Vec::new(), max_rows, max_cols, budget, covered_until: Vec::new(), full: false }
+        Grid { rows: Vec::new(), merges: Vec::new(), record_merges, max_rows, max_cols, budget, covered_until: Vec::new(), full: false }
     }
 
     /// Opens a new row, or marks the grid full when the pasted text has no more rows.
@@ -214,15 +223,19 @@ impl Grid {
                 break;
             }
         }
-        let end_col = self.col().saturating_sub(1);
-        let end_row = r.saturating_add(rowspan).saturating_sub(1);
-        let overlaps = (start..=end_col).any(|c| self.covered_until.get(c).is_some_and(|&until| until > r));
-        if !overlaps
-            && (colspan > 1 || rowspan > 1)
-            && let (Ok(start_col), Ok(end_col), Ok(end_row), Ok(start_row)) =
-                (u32::try_from(start), u32::try_from(end_col), u32::try_from(end_row), u32::try_from(r))
-        {
-            self.merges.push(RangeRef::new(CellRef::new(start_row, start_col), CellRef::new(end_row, end_col)));
+        if self.record_merges {
+            let end_col = self.col().saturating_sub(1);
+            let end_row = r.saturating_add(rowspan).saturating_sub(1);
+            let overlaps = (start..=end_col).any(|c| self.covered_until.get(c).is_some_and(|&until| until > r));
+            // Every coordinate is below MAX_ROWS/MAX_COLS (1,048,576/16,384); the fallible cast is
+            // defensive and cannot drop a real merge.
+            if !overlaps
+                && (colspan > 1 || rowspan > 1)
+                && let (Ok(start_col), Ok(end_col), Ok(end_row), Ok(start_row)) =
+                    (u32::try_from(start), u32::try_from(end_col), u32::try_from(end_row), u32::try_from(r))
+            {
+                self.merges.push(RangeRef::new(CellRef::new(start_row, start_col), CellRef::new(end_row, end_col)));
+            }
         }
         if rowspan > 1 {
             let (end, until) = (self.col(), r.saturating_add(rowspan));
@@ -496,6 +509,11 @@ mod tests {
         assert_eq!(rows[0][0].num, Some(1.0));
         assert!(table_cells(&html, 0, 5).is_empty());
         assert!(table_cells(&html, 4, 0).iter().all(Vec::is_empty));
+
+        // Recording spans must not outgrow the cell budget or keep single-cell ranges.
+        let table = table_with_merges(&html, usize::MAX, usize::MAX);
+        assert!(table.merges.len() <= MAX_HTML_CELLS);
+        assert!(table.merges.iter().all(|m| !m.is_single()));
     }
 
     #[test]
@@ -551,6 +569,20 @@ mod tests {
             let table = table_with_merges(html, 5, 5);
             assert!(table.rows.is_empty() && table.merges.is_empty(), "{html:?}");
         }
+    }
+
+    #[test]
+    fn a_span_clipped_to_one_cell_is_dropped() {
+        let table = table_with_merges("<table><tr><td>a</td></tr><tr><td rowspan=99>b</td></tr></table>", 5, 5);
+        assert!(table.merges.is_empty(), "A2:A99 clips to A2, which is single");
+        let table = table_with_merges("<table><tr><td colspan=2 rowspan=99>b</td></tr></table>", 5, 5);
+        assert_eq!(table.merges, vec![RangeRef::parse("A1:B1").unwrap()]);
+    }
+
+    #[test]
+    fn a_merge_is_clipped_to_the_columns_it_materialises() {
+        let table = table_with_merges("<table><tr><td colspan=3 rowspan=2>x</td></tr><tr></tr></table>", 2, 2);
+        assert_eq!(table.merges, vec![RangeRef::parse("A1:B2").unwrap()]);
     }
 
     #[test]
