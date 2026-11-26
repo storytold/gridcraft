@@ -359,12 +359,23 @@ pub fn write_csv_limited(sheet: &Sheet, delimiter: u8, limit: usize, mut cell_te
                 out.push(delim);
             }
             let t = cell_text(CellRef::new(row, col));
+            // A file that starts with U+FEFF reads as a UTF-8 byte-order mark, which readers
+            // drop: a first field that starts with one is quoted so the character survives. A
+            // field `push_field` leaves bare has no quote in it to double.
+            let bom_quoted = out.is_empty() && t.starts_with('\u{FEFF}') && craft_csv::field_len(&t, delim) == t.len();
+            let len = if bom_quoted { t.len() + 2 } else { craft_csv::field_len(&t, delim) };
             // The exact size of the field as written (the delimiter was pushed above), so a row
             // never grows past the cap unseen.
-            if out.len().saturating_add(craft_csv::field_len(&t, delim)) > limit {
+            if out.len().saturating_add(len) > limit {
                 return Err(too_large(format!("more than {} MiB (stopped at row {})", limit >> 20, row + 1)));
             }
-            craft_csv::push_field(&mut out, &t, delim);
+            if bom_quoted {
+                out.push('"');
+                out.push_str(&t);
+                out.push('"');
+            } else {
+                craft_csv::push_field(&mut out, &t, delim);
+            }
         }
         out.push_str("\r\n");
         if out.len() > limit {
