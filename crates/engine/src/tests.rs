@@ -7657,3 +7657,134 @@ fn history_charges_the_storage_of_empty_comment_replies() {
     // 500 replies of no text are still 500 elements.
     assert!(crate::sheet_text_bytes(&sheet) >= 500 * std::mem::size_of::<(String, String)>());
 }
+
+/// Paste Link would write links to the cells a cut empties, losing them: a cut can't be pasted
+/// as links, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_as_links() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "link": true, "at": "E1"})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
+}
+
+/// A cut pasted into a row the filter hides would skip every cell it writes, so the cells would
+/// leave the sheet with the cut: it is refused and nothing changes. A visible row takes it.
+#[test]
+fn a_cut_is_not_pasted_into_filtered_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=5 {
+        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [[1, 2]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.cut", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "A3:B3"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!((v(&s, "E1"), v(&s, "F1")), (Value::Number(1.0), Value::Number(2.0)));
+    assert_eq!(v(&s, "A3"), Value::from("v3"));
+    s.execute("selection.set", json!({"range": "A4:B4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B4"), v(&s, "E1")), (Value::Number(1.0), Value::Number(2.0), Value::Empty));
+}
+
+/// A taller cut, or one pasted at an explicit cell, goes straight down: refused when a row the
+/// filter hides is among the rows it would land on, and nothing changes. A visible place takes it.
+#[test]
+fn an_anchored_cut_is_not_pasted_over_filtered_rows() {
+    let mut s = s();
+    let mut rows = vec![json!(["Val", "Tag"])];
+    for i in 2..=5 {
+        rows.push(json!([format!("v{i}"), if i == 3 { "hide" } else { "keep" }]));
+    }
+    s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+    s.execute("range.setValues", json!({"range": "A10", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+    s.execute("data.filter", json!({})).unwrap();
+    s.execute("data.filterBy", json!({"column": "B", "values": ["keep"]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A10:B11"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "A2"})).is_err());
+    assert_eq!((v(&s, "A10"), v(&s, "B11")), (Value::Number(1.0), Value::Number(4.0)));
+    assert_eq!((v(&s, "A2"), v(&s, "A3")), (Value::from("v2"), Value::from("v3")));
+    s.execute("edit.paste", json!({"at": "A4"})).unwrap();
+    assert_eq!((v(&s, "A4"), v(&s, "B5"), v(&s, "A10")), (Value::Number(1.0), Value::Number(4.0), Value::Empty));
+}
+
+/// Skip Blanks would empty a cut's blank cells along with their note and format, then skip them:
+/// a cut takes no Paste Special option, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_skipping_blanks() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1]]})).unwrap();
+    s.execute("review.newNote", json!({"cell": "B1", "text": "note", "author": "Example"})).unwrap();
+    s.execute("home.bold", json!({"range": "B1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "E1"})).is_err());
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    let b1 = CellRef::parse("B1").unwrap();
+    assert!(sh.comments.contains_key(&b1));
+    assert!(d.wb.styles.get(sh.style_id(b1)).font.bold);
+    assert_eq!((v(&s, "A1"), v(&s, "E1")), (Value::Number(1.0), Value::Empty));
+}
+
+/// Transposing a cut would move references to it as if it were not transposed: refused, and a
+/// formula reading the cut cells still reads them.
+#[test]
+fn a_cut_is_not_pasted_transposed() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "H1", "input": "=B1"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E5"})).is_err());
+    assert_eq!(formula_at(&s, "H1").as_deref(), Some("B1"));
+    assert_eq!((v(&s, "A1"), v(&s, "B1"), v(&s, "E5"), v(&s, "E6")), (Value::Number(1.0), Value::Number(2.0), Value::Empty, Value::Empty));
+}
+
+/// A cut lands in one place: onto a larger or differently shaped selection it is refused, as in
+/// Excel, rather than tiled.
+#[test]
+fn a_cut_is_not_pasted_over_a_larger_area() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    s.execute("selection.set", json!({"range": "E1:E3"})).unwrap();
+    assert!(s.execute("edit.paste", json!({})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "E1"), v(&s, "E2"), v(&s, "E3")), (Value::Number(5.0), Value::Empty, Value::Empty, Value::Empty));
+}
+
+/// A paste operation or a partial paste (values only) of a cut would empty the cut cells and
+/// combine or keep only part of them: refused, and nothing changes.
+#[test]
+fn a_cut_is_not_pasted_with_an_operation_or_in_part() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[5]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "E1", "values": [[2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "operation": "add", "at": "E1"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "values", "at": "E1"})).is_err());
+    assert_eq!((v(&s, "A1"), v(&s, "E1")), (Value::Number(5.0), Value::Number(2.0)));
+}
+
+/// A refused paste leaves the cut pending: a plain Paste onto one cell, or onto an area of the cut's
+/// size, still moves it.
+#[test]
+fn a_refused_cut_paste_leaves_the_cut_to_paste_plainly() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1, 2]]})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E5"})).is_err());
+    s.execute("selection.set", json!({"range": "E1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "A1"), v(&s, "E1"), v(&s, "F1")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
+    assert!(s.clipboard.is_none());
+    s.execute("edit.cut", json!({"range": "E1:F1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C3:D3"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!((v(&s, "E1"), v(&s, "C3"), v(&s, "D3")), (Value::Empty, Value::Number(1.0), Value::Number(2.0)));
+}
