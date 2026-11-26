@@ -12,6 +12,7 @@ mod controls_tests;
 mod csv_tests;
 mod encrypted_tests;
 mod equation_tests;
+mod extlist;
 mod fixtures;
 mod google_sheets_dummy;
 mod ink_roundtrip;

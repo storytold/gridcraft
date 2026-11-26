@@ -40,6 +40,10 @@ pub struct Ctx<'a> {
     pub pivot_charts: Vec<(u32, Vec<crate::chart::PivotSeriesCache>)>,
     /// Shared point-expansion budget across all charts in the workbook.
     pub chart_budget: crate::chart::ChartReadBudget,
+    /// Kept extensions of the current sheet's `<extLst>` (URI, rebuilt XML), until attached.
+    pub sheet_exts: Vec<(String, String)>,
+    /// URIs of the current sheet's extensions that were dropped.
+    pub sheet_exts_dropped: Vec<String>,
     /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
     /// formulas, evaluated with implicit intersection), collected per sheet.
     pub legacy_formulas: Vec<gridcraft_core::CellRef>,
@@ -326,6 +330,8 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         cf_ext_ids: vec![],
         pivot_charts: vec![],
         chart_budget: crate::chart::ChartReadBudget::new(),
+        sheet_exts: vec![],
+        sheet_exts_dropped: vec![],
         legacy_formulas: vec![],
         shared_formula_bytes: 0,
         known_function,
@@ -428,6 +434,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &read_controls);
+        sheet.preserved = crate::extlist::keep_sheet(&mut cx, &name, sheet.preserved.take(), kept.keeps());
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,

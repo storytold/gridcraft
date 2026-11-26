@@ -525,9 +525,9 @@ fn watch_list(wb: &Workbook) -> Option<&str> {
     wb.names.iter().find(|n| n.name == WATCH_NAME).map(|n| n.formula.as_str())
 }
 
-/// The workbook with view state (active sheet, scroll, active cell, Normal / Page Layout / Page
-/// Break Preview) and the Watch Window list reset: undo restores view state as it was, but
-/// switching sheets or views isn't an undoable edit.
+/// The workbook with view state (active sheet, scroll, active cell, zoom, Normal / Page Layout /
+/// Page Break Preview) and the Watch Window list reset: undo restores view state as it was, but
+/// switching sheets, zooming or switching views isn't an undoable edit.
 fn canonical(wb: &Workbook) -> Workbook {
     let mut wb = wb.clone();
     wb.set_active_sheet(0);
@@ -536,6 +536,7 @@ fn canonical(wb: &Workbook) -> Workbook {
         let sh = Arc::make_mut(sh);
         sh.view_active = CellRef::default();
         sh.view_top_left = CellRef::default();
+        sh.zoom = 100;
         sh.view = SheetViewMode::Normal;
     }
     wb
