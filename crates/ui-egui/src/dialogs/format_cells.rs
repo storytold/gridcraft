@@ -69,7 +69,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             st.num_fmt = gridcraft_engine::model::NumFmt::new(&code);
         }
         "Alignment" => {
-            use gridcraft_engine::model::{HAlign, VAlign};
+            use gridcraft_engine::model::{HAlign, ReadingOrder, VAlign};
             ui.label(egui::RichText::new(lang.tr("Horizontal")).strong());
             ui.horizontal_wrapped(|ui| {
                 for (h, n) in [
@@ -97,6 +97,17 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
                     ui.radio_value(&mut st.align.v, v, lang.tr(n));
                 }
             });
+            ui.label(egui::RichText::new(lang.tr("Reading direction")).strong());
+            ui.horizontal_wrapped(|ui| {
+                for (order, name) in
+                    [(ReadingOrder::Context, "Context"), (ReadingOrder::LeftToRight, "Left to right"), (ReadingOrder::RightToLeft, "Right to left")]
+                {
+                    let selected = st.align.reading_order.unwrap_or_default() == order;
+                    if ui.radio(selected, lang.tr(name)).clicked() {
+                        st.align.reading_order = Some(order);
+                    }
+                }
+            });
             let mut indent = st.align.indent as f32;
             ui.add(egui::Slider::new(&mut indent, 0.0..=15.0).text(lang.tr("Indent")));
             st.align.indent = indent as u8;
@@ -107,7 +118,7 @@ pub(super) fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog
             ui.checkbox(&mut st.align.shrink, lang.tr("Shrink to fit"));
         }
         "Font" => {
-            craft_ui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
+            egui::ComboBox::from_label(lang.tr("Font")).selected_text(st.font.name.clone()).show_ui(ui, |ui| {
                 for f in crate::fonts::families() {
                     ui.selectable_value(&mut st.font.name, f.clone(), f.clone());
                 }

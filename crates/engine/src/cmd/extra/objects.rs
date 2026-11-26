@@ -57,6 +57,7 @@ pub(super) fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> 
     let kind = kind_param(p, "arrange")?;
     let extreme = bool_param(p, "toFront").or(bool_param(p, "toBack")).unwrap_or(false);
     let si = s.doc()?.wb.active_sheet();
+    crate::cmd::controls::check_objects_unlocked(s, si, kind, &[id])?;
     fn reorder<T>(v: &mut Vec<T>, i: usize, forward: bool, extreme: bool) {
         if i >= v.len() {
             return;
@@ -81,6 +82,7 @@ pub(super) fn arrange(s: &mut Session, p: &Json, forward: bool) -> Result<Json> 
             ObjKind::Shape | ObjKind::Equation => {
                 sh.shapes.iter().position(|c| c.id == id && shape_is(kind, c)).map(|i| reorder(&mut sh.shapes, i, forward, extreme))
             }
+            ObjKind::Control => sh.controls.iter().position(|c| c.id == id).map(|i| reorder(&mut sh.controls, i, forward, extreme)),
         };
         found.ok_or_else(|| bad("arrange", "no such object"))?;
         Ok(Json::Null)
@@ -106,6 +108,12 @@ pub(super) fn selection_pane(s: &mut Session, _: &Json) -> Result<Json> {
         let name = if c.caption.is_empty() { &c.column } else { &c.caption };
         v.push(json!({"kind": "slicer", "id": c.id, "name": name, "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}));
     }
+    // Form controls paint above everything else.
+    for c in &sh.controls {
+        v.push(
+            json!({"kind": "control", "id": c.id, "name": c.display_name(), "at": c.anchor.cell.a1(), "anchorMode": anchor_mode_name(c.anchor.mode)}),
+        );
+    }
     Ok(Json::Array(v))
 }
 
@@ -115,6 +123,7 @@ fn anchors_of(sh: &mut Sheet, kind: ObjKind) -> Vec<(u32, &mut Anchor)> {
         ObjKind::Chart => sh.charts.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         ObjKind::Image => sh.images.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         ObjKind::Slicer => sh.slicers.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
+        ObjKind::Control => sh.controls.iter_mut().map(|c| (c.id, &mut c.anchor)).collect(),
         ObjKind::Shape | ObjKind::Equation => sh.shapes.iter_mut().filter(|c| shape_is(kind, c)).map(|c| (c.id, &mut c.anchor)).collect(),
     }
 }
@@ -133,6 +142,7 @@ pub(super) fn align(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let how = str_param(p, "align").unwrap_or("left").to_string();
     let si = s.doc()?.wb.active_sheet();
+    crate::cmd::controls::check_objects_unlocked(s, si, kind, &ids)?;
     edit(s, |cx| {
         let sheet = cx.sheet_mut(si)?;
         let geo: Vec<(u32, f64, f64, f32, f32)> = {
