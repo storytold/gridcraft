@@ -1409,6 +1409,55 @@ fn filter_top10_items_and_percent() {
     assert_eq!(r["hiddenRows"], 4);
 }
 
+/// Percentage AutoFilter truncates non-integer ranks toward zero with a minimum of one (#4497).
+#[test]
+fn filter_top10_percent_rounds_rank_down_with_min_one() {
+    let visible_values = |s: &Session, last_row: u32| -> Vec<Value> {
+        let sh = s.doc().unwrap().wb.sheet(0).unwrap();
+        (1..=last_row).filter(|&row| !sh.is_row_hidden(row)).map(|row| sh.value(CellRef::new(row, 0))).collect()
+    };
+
+    let mut session = s();
+    session.execute("range.setValues", json!({"range": "A1", "values": [["Val"], [10], [20], [30], [40], [50], [60]]})).unwrap();
+    session.execute("selection.set", json!({"cell": "A1"})).unwrap();
+    session.execute("data.filter", json!({})).unwrap();
+
+    // Top 20% of 6 = 1.2 -> floor 1 -> only 60.
+    session.execute("data.filterBy", json!({"column": "A", "top": {"count": 20, "percent": true}})).unwrap();
+    assert_eq!(visible_values(&session, 6), vec![Value::number(60.0)]);
+
+    // Save to XLSX, reopen, and Reapply: still only 60, and updating 10 -> 100 keeps only 100.
+    let bytes = gridcraft_xlsx::write_xlsx(&session.doc().unwrap().wb).unwrap();
+    let (reopened, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    let mut s2 = Session::new();
+    s2.add_document(crate::DocState::from_saved(reopened, None, "top20.xlsx".into(), crate::Trust::FromFile));
+    s2.execute("data.reapply", json!({})).unwrap();
+    assert_eq!(visible_values(&s2, 6), vec![Value::number(60.0)]);
+    s2.execute("cell.set", json!({"cell": "A2", "input": "100"})).unwrap();
+    s2.execute("data.reapply", json!({})).unwrap();
+    assert_eq!(visible_values(&s2, 6), vec![Value::number(100.0)]);
+
+    // Top 45% of 6 = 2.7 -> floor 2 -> 50 and 60.
+    session.execute("data.filterBy", json!({"column": "A", "top": {"count": 45, "percent": true}})).unwrap();
+    assert_eq!(visible_values(&session, 6), vec![Value::number(50.0), Value::number(60.0)]);
+
+    // Bottom 20% of 6 = 1.2 -> floor 1 -> only 10.
+    session.execute("data.filterBy", json!({"column": "A", "top": {"count": 20, "percent": true, "bottom": true}})).unwrap();
+    assert_eq!(visible_values(&session, 6), vec![Value::number(10.0)]);
+
+    // Top 10% of 6 = 0.6 -> floor 0 clamped to 1 -> only 60.
+    session.execute("data.filterBy", json!({"column": "A", "top": {"count": 10, "percent": true}})).unwrap();
+    assert_eq!(visible_values(&session, 6), vec![Value::number(60.0)]);
+
+    // Additional blank and text rows do not inflate the numeric count for Top 20%.
+    let mut s3 = s();
+    s3.execute("range.setValues", json!({"range": "A1", "values": [["Val"], [10], [20], [""], ["note"], [30], [40], [50], [60]]})).unwrap();
+    s3.execute("selection.set", json!({"range": "A1:A9"})).unwrap();
+    s3.execute("data.filter", json!({"range": "A1:A9"})).unwrap();
+    s3.execute("data.filterBy", json!({"column": "A", "top": {"count": 20, "percent": true}})).unwrap();
+    assert_eq!(visible_values(&s3, 8), vec![Value::number(60.0)]);
+}
+
 /// Two Top 10 criteria on one column (possible in a native JSON file) each keep their own
 /// cutoff: Top 3 and Bottom 4 of 1..5 keep 3 and 4.
 #[test]

@@ -198,7 +198,7 @@ pub(crate) fn apply_filter(wb: &mut Workbook, sheet: usize) {
             let thr = match c {
                 FilterCriterion::Top10 { bottom, percent, count } => {
                     nums.sort_by(|a, b| if *bottom { a.partial_cmp(b) } else { b.partial_cmp(a) }.unwrap_or(Ordering::Equal));
-                    let k = if *percent { ((nums.len() as f64) * (*count as f64) / 100.0).ceil() as usize } else { *count as usize };
+                    let k = if *percent { ((nums.len() as f64) * (*count as f64) / 100.0).floor() as usize } else { *count as usize };
                     let k = k.clamp(1, nums.len().max(1));
                     nums.get(k - 1).copied()
                 }
