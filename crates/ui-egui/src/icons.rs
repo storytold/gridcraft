@@ -103,6 +103,7 @@ pub enum Icon {
     Comment,
     Note,
     TextBox,
+    WordArt,
     Symbol,
     /// An equation: a radical sign over an italic x.
     Equation,
@@ -167,6 +168,8 @@ pub enum Icon {
     OpenFolder,
     Info,
     Print,
+    /// Quick Analysis: a small table with a spark.
+    QuickAnalysis,
     /// A macro: a script page with a run arrow.
     Macro,
     /// Record Macro: a ring around the recording dot.
@@ -631,6 +634,10 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.rect(2.0, 3.0, 12.0, 10.0, None, Some(c));
             g.text(8.0, 8.0, "A", 8.0, c, (false, false));
         }
+        Icon::WordArt => {
+            g.text(9.0, 9.0, "A", 13.0, Color32::from_rgb(0x8E, 0x4F, 0xB5), (true, false));
+            g.text(8.0, 8.0, "A", 13.0, c, (true, false));
+        }
         Icon::Symbol => g.text(8.0, 8.0, "Ω", 12.0, c, (false, false)),
         Icon::Equation => {
             g.line(&[(1.5, 9.0), (3.5, 8.0), (5.5, 13.5), (8.5, 2.5), (14.5, 2.5)], c, 1.2);
@@ -866,6 +873,13 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
             g.line(&[(4.0, 11.5), (1.5, 11.5), (1.5, 5.5), (14.5, 5.5), (14.5, 11.5), (12.0, 11.5)], c, 1.1);
             g.line(&[(4.5, 9.0), (4.5, 14.5), (11.5, 14.5), (11.5, 9.0), (4.5, 9.0)], c, 1.1);
             g.circle(12.3, 7.6, 0.6, Some(c), None);
+        }
+        Icon::QuickAnalysis => {
+            g.rect(2.0, 3.0, 12.0, 10.0, None, Some(c));
+            g.stroke(&[(2.0, 6.5), (14.0, 6.5)], light);
+            g.stroke(&[(6.0, 3.0), (6.0, 13.0)], light);
+            g.stroke(&[(10.0, 3.0), (10.0, 13.0)], light);
+            g.line(&[(10.0, 1.0), (6.5, 8.0), (9.5, 8.0), (6.5, 15.0)], blue, 1.7);
         }
         Icon::Macro => {
             g.rect(2.5, 1.5, 9.0, 12.0, Some(paper), Some(c));
