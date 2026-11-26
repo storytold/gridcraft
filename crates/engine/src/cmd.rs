@@ -18,6 +18,7 @@ pub mod macros;
 pub mod pivot;
 pub mod print;
 pub mod python;
+pub mod quick_analysis;
 pub mod review;
 pub mod sheet;
 pub mod slicer;
@@ -26,6 +27,7 @@ pub mod spelling;
 pub mod stash;
 pub mod view;
 pub mod whatif;
+pub mod wordart;
 
 use gridcraft_calc::Key;
 use gridcraft_core::{CellRef, RangeRef};
@@ -176,6 +178,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(extra::specs());
         v.extend(macros::specs());
         v.extend(draw::specs());
+        v.extend(wordart::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());
         v.extend(pivot::specs());
@@ -185,6 +188,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(forecast::specs());
         v.extend(analysis::specs());
         v.extend(print::specs());
+        v.extend(quick_analysis::specs());
         v
     })
 }
