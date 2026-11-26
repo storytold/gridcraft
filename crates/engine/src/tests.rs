@@ -8234,6 +8234,37 @@ fn tables_never_hold_merged_cells() {
     assert!(sh.merges.iter().all(|m| sh.tables.iter().all(|t| !t.range.intersects(m))));
 }
 
+#[test]
+fn hyperlink_function_makes_a_cell_link() {
+    let mut s = s();
+    s.link_policy = crate::links::LinkPolicy::Allow;
+    s.execute("cell.set", json!({"cell": "A1", "input": "https://example.com/x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "=HYPERLINK(A1,\"Go\")"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C3", "input": "=HYPERLINK(\"google.com\")"})).unwrap();
+    s.take_ui_requests();
+    s.execute("link.open", json!({"cell": "B2"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://example.com/x".into())]);
+    s.execute("link.open", json!({"cell": "C3"})).unwrap();
+    assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl("https://google.com".into())]);
+    assert!(s.execute("link.open", json!({"cell": "A1"})).is_err());
+    // a scheme-less address with a query, fragment or port opens over https too
+    for (cell, input, url) in [
+        ("D1", "=HYPERLINK(\"google.com?q=rust\")", "https://google.com?q=rust"),
+        ("D2", "=HYPERLINK(\"google.com#results\")", "https://google.com#results"),
+        ("D3", "=HYPERLINK(\"example.com:8443/x\")", "https://example.com:8443/x"),
+    ] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        s.execute("link.open", json!({"cell": cell})).unwrap();
+        assert_eq!(s.take_ui_requests(), vec![crate::UiRequest::OpenUrl(url.into())], "{input}");
+    }
+    // a table named like an address stays an internal target
+    s.execute("range.setValues", json!({"range": "F1:G2", "values": [["a", "b"], [1, 2]]})).unwrap();
+    s.execute("insert.table", json!({"range": "F1:G2", "name": "sales.data"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D4", "input": "=HYPERLINK(\"sales.data\")"})).unwrap();
+    let link = crate::links::cell_link(&s.doc().unwrap().wb, 0, gridcraft_core::CellRef::parse("D4").unwrap()).unwrap();
+    assert_eq!(link.target, "sales.data");
+}
+
 /// #1348: the selection a workbook opens with, and the one a sheet gets on its first visit, take
 /// a merged active cell whole, as a click on it does: a merge at A1 and one elsewhere. A
 /// selection the sheet remembers comes back as it was, even inside a merged cell.
