@@ -478,6 +478,7 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
 /// One grid frame of `app` in a headless context.
 fn grid_frame(app: &mut crate::SheetApp) {
     let ctx = egui::Context::default();
+    crate::framework::install_headless(&ctx);
     let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 800.0));
     let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| super::show(app, ui));
     out.textures_delta.clear(); // nothing consumes the uploads in a headless test

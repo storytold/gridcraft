@@ -23,7 +23,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
     let pages: Vec<Json> = bs.preview.as_ref().and_then(|(_, p)| p.get("pageList")).and_then(Json::as_array).cloned().unwrap_or_default();
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
-            ui.set_width(250.0);
+            ui.set_width(340.0);
             if let Some(discover) = &app.services.printers {
                 crate::printing::show(&mut app.printing, ui, discover, |label| lang.tr(label).to_owned());
             }
@@ -36,7 +36,7 @@ pub(super) fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &m
             }
             ui.add_space(16.0);
             let scope = if bs.print_all { "Print Entire Workbook" } else { "Print Active Sheets" };
-            craft_ui::ComboBox::from_id_salt("backstage_print_scope")
+            egui::ComboBox::from_id_salt("backstage_print_scope")
                 .width(230.0)
                 .selected_text(lang.tr(scope))
                 .show_ui(ui, |ui| {

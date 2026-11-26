@@ -520,6 +520,12 @@ impl Tokens {
         Tokens::palette(ctx.global_style().visuals.dark_mode, dark_sheet(ctx))
     }
 
+    /// The ring around a focused control on a popup or menu surface. The sheet's own focus colour
+    /// is too dim on the dark popup (2.5:1), so this follows the theme's accent instead.
+    pub fn popup_focus_ring(&self) -> Color32 {
+        self.accent
+    }
+
     /// One colour of the category palette.
     pub fn cat(&self, c: Cat) -> Color32 {
         self.cat.get(c as usize).copied().unwrap_or(self.text)
@@ -775,6 +781,9 @@ mod contrast_tests {
         add("slider fill on sheet", t.sheet_fill, t.grid_bg, GLYPH);
         add("slider fill on track", t.sheet_fill, t.sheet_track, GLYPH);
         add("control focus ring on sheet", t.sheet_focus, t.grid_bg, GLYPH);
+        for (name, bg) in [("menu", t.menu_bg), ("hover", t.hover), ("pressed", t.pressed)] {
+            add(&format!("popup control focus ring on {name}"), t.popup_focus_ring(), bg, GLYPH);
+        }
         add("recording dot on ribbon", t.recording, t.ribbon, GLYPH);
         add("recording dot on status bar", t.recording, t.status_bar, GLYPH);
         for (name, c) in [

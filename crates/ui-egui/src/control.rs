@@ -19,7 +19,7 @@
 
 use std::sync::mpsc::Sender;
 
-use craft_ui::capture::CaptureSlot;
+use crate::capture::CaptureSlot;
 use gridcraft_engine::core::CellRef;
 use serde_json::{Value as Json, json};
 

@@ -233,12 +233,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
         });
     });
     bs.text_edit_focused = ctx.text_edit_focused();
-    if !typing
-        && app.dialog.is_none()
-        && app.message.is_none()
-        && !egui::Popup::is_any_open(&ctx)
-        && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
-    {
+    if !typing && app.dialog.is_none() && app.message.is_none() && !egui::Popup::is_any_open(&ctx) && crate::framework::consume_escape(&ctx) {
         out.close = true;
     }
     if let Some(page) = out.page {
@@ -681,7 +676,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let current = SAVE_TYPES.iter().find(|(ext, _)| *ext == fmt).map_or("Excel Workbook (*.xlsx)", |(_, label)| *label);
     ui.horizontal(|ui| {
         let label = ui.label(lang.tr("Save as type"));
-        craft_ui::ComboBox::from_id_salt("backstage_save_type")
+        egui::ComboBox::from_id_salt("backstage_save_type")
             .width(280.0)
             .selected_text(lang.tr(current))
             .show_ui(ui, |ui| {
