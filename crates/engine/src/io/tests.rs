@@ -503,7 +503,8 @@ const CUT_LIST: &str = "1;511;184;P3_L1_led;2162PE;16;1MM_2162PE;1MM_2162PE;;;12
 
 /// A spreadsheet's own web page writes a run of ordinary spaces as no-break spaces inside a
 /// `mso-spacerun:yes` span, so the browser shows them all; reading the page back gives the
-/// spaces, while a no-break space written outside such a span stays one (#4529).
+/// spaces, while a no-break space written outside such a span stays one (#4529). A span holding
+/// other text, even inside a nested span or with a line break, reads as ordinary text.
 #[test]
 fn web_page_space_runs_read_back_as_ordinary_spaces() {
     let page = "<html><body><table>\
@@ -514,11 +515,13 @@ fn web_page_space_runs_read_back_as_ordinary_spaces() {
         <tr><td><span style='mso-spacerun:yes'>&nbsp; </span></td></tr>\
         <tr><td>Alpha Beta</td></tr>\
         <tr><td>Alpha&nbsp;Beta</td></tr>\
+        <tr><td>A<span style='mso-spacerun:yes'>&nbsp;<span>X</span>&nbsp;</span>B</td></tr>\
+        <tr><td>A<span style='mso-spacerun:yes'>X<br>Y</span>Z</td></tr>\
         </table></body></html>";
     let (wb, _) = open_bytes("sheet001.htm", page.as_bytes()).unwrap();
     let sh = wb.sheet(0).unwrap();
-    let texts: Vec<String> = (0..7).map(|r| sh.value(CellRef::new(r, 0)).as_text().unwrap_or_default().to_string()).collect();
-    assert_eq!(texts, ["Alpha  Beta", "Alpha   Beta", " Alpha", "Alpha ", "  ", "Alpha Beta", "Alpha\u{a0}Beta"]);
+    let texts: Vec<String> = (0..9).map(|r| sh.value(CellRef::new(r, 0)).as_text().unwrap_or_default().to_string()).collect();
+    assert_eq!(texts, ["Alpha  Beta", "Alpha   Beta", " Alpha", "Alpha ", "  ", "Alpha Beta", "Alpha\u{a0}Beta", "A\u{a0}X\u{a0}B", "AX YZ"]);
 }
 
 #[test]

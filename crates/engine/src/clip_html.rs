@@ -96,25 +96,30 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                     rowspan,
                     runs: Vec::new(),
                     spacerun: None,
+                    spacerun_depth: 0,
                 });
             }
             ("span", false) => {
                 if let Some(c) = cell.as_mut() {
-                    c.end_spacerun();
-                    if is_spacerun(attrs) {
+                    if c.spacerun.is_some() {
+                        c.spacerun_depth += 1; // a span inside the run belongs to it
+                    } else if is_spacerun(attrs) {
                         c.spacerun = Some(String::new());
                     }
                 }
             }
             ("span", true) => {
                 if let Some(c) = cell.as_mut() {
-                    c.end_spacerun();
+                    match c.spacerun_depth.checked_sub(1) {
+                        Some(depth) => c.spacerun_depth = depth,
+                        None => c.end_spacerun(),
+                    }
                 }
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("br", _) => {
                 if let Some(c) = cell.as_mut() {
-                    c.cell.text.push(' ');
+                    c.push_text(" ");
                 }
             }
             _ => {}
@@ -140,6 +145,8 @@ struct OpenCell {
     runs: Vec<(usize, usize)>,
     /// The raw text of the `mso-spacerun` span being read, if any.
     spacerun: Option<String>,
+    /// Spans opened inside that one and not closed yet.
+    spacerun_depth: usize,
 }
 
 impl OpenCell {
@@ -155,6 +162,7 @@ impl OpenCell {
     /// cell holds ordinary spaces, one per space the browser shows. A span holding anything else
     /// is read as ordinary text.
     fn end_spacerun(&mut self) {
+        self.spacerun_depth = 0;
         let Some(raw) = self.spacerun.take() else { return };
         let text = entities(&raw);
         if text.is_empty() || !text.chars().all(|c| c == '\u{a0}' || c.is_ascii_whitespace()) {
