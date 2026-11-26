@@ -1,5 +1,9 @@
 # GridCraft roadmap
 
+> **2026-11-07 update:** custom totals formulas follow table and column renames;
+> synthetic XLSX round-trip and undo/redo coverage added (related to #3389).
+> Readiness estimates unchanged.
+
 **Stage: alpha** · next: beta, ~25 points of "ready for real work" and ~160–240 h away
 
 > **Last reviewed:** 2026-11-15 · **Last updated:** 2026-11-16 · **Change:** minor (a selected chart outlines its names, categories and values in Excel's colours, and dragging the values outline's corner changes the chart's data, #4389, #4390; earlier: performance: formula entry and XLSX save win back time lost since 23829d8c (#2654), 465 → 420 ms and 540 → 488 ms on the 100k-row benchmark; Sandbox refuses fcntl's asynchronous notification and the socket ioctls that notify another process on Linux (#3846); CI provisions pinned fonts for coverage tests; the oversized pivot-cache warning's test names the part limit; readiness estimates unchanged) · **Target:** Microsoft Excel (Microsoft 365)
@@ -136,6 +140,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | What landed |
 |---|---|
 | 2026-11-16 | A selected chart outlines its data as Excel does (series names red, category labels purple, values one blue block), and dragging a corner of the values outline changes the cells the chart plots: series keep their formatting, a wider block adds series, aligned names and labels follow, one undo step, Esc cancels; `chart.setValuesRange` does the same for scripts, the CLI and MCP (#4389, #4390) |
+| 2026-11-07 | Table and column renames update structured references in stored custom totals formulas; plain totals labels stay unchanged. Synthetic import/save/reopen and undo/redo tests cover both rename paths (related to #3389; calculated-column formulas are separate). |
 | 2026-11-06 | A sheet keeps its own scroll position when sheets are inserted, deleted or moved before it: a new PivotTable or inserted sheet opens at the top instead of where its neighbour was scrolled; a closed window's positions are let go (#3485) |
 | 2026-11-02 | Form controls: Insert › Controls places buttons, sliders (scroll bars) and spin buttons on the sheet. A slider or spin button holds a whole number from 0 to 30000 in a linked cell (a drag or a held arrow is one undo step, and editing the cell moves the control); a button runs a macro or one command through the macro policy, asking first in a workbook opened from a file; Assign Action and Format Control edit them, and XLSX files read and write them (control properties, `<controls>` and VML), alongside the form controls GridCraft keeps unchanged |
 | 2026-11-02 | Dialogs take ranges by selection on the grid: reference boxes (RefEdit) with a collapse button that shrinks the dialog while the person selects, in Goal Seek, Solver (including the Model Range of Load/Save) and Data Analysis; while collapsed, the arrow keys move the selection and Shift+arrow extends it, and F4 cycles a reference's anchors |
@@ -282,6 +287,9 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-16 | minor | Progress log: chart data outline in three colours, dragged from its corners (#4389, #4390) |
+| 2026-11-10 | minor | Retain custom-total Unicode source/destination binding scope alongside current CJK baseline, legacy-array and regional-format updates; estimates unchanged. |
+| 2026-11-09 | minor | Custom totals use Unicode-aware LET/LAMBDA source and destination binding checks; source shadowing, initializer/nested scopes and reparsed explicit table references have regressions. |
+| 2026-11-08 | minor | Custom totals also rename bare table references, preserving defined names and LET/LAMBDA bindings; synthetic import/save/reopen and undo/redo coverage extended; estimates unchanged. |
 | 2026-11-06 | trivial | Progress log: scroll positions follow their sheet through sheet inserts, deletes and moves (#3485) |
 | 2026-11-05 | minor | Reconcile upstream form-control progress with the CJK baseline update |
 | 2026-11-02 | minor | Form controls; catalog 277 / 292 → 281 / 296 (Developer › Controls); progress log row |
