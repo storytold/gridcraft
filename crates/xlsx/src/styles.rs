@@ -175,15 +175,15 @@ fn pattern_name(p: PatternType) -> &'static str {
     }
 }
 
-/// A `<fill>`. In differential formats a solid fill's colour is the *background* colour and the
-/// pattern type may be omitted.
+/// A `<fill>`. In differential formats a solid fill's colour is the *foreground* colour; the
+/// background is the fallback for files that state only it, and the pattern type may be omitted.
 pub fn read_fill(e: &El, palette: &[u32], dxf: bool) -> Fill {
     if let Some(p) = e.child("patternFill") {
         let fg = opt_color(p.child("fgColor"), palette);
         let bg = opt_color(p.child("bgColor"), palette);
         let pt = p.attr("patternType");
         if dxf && (pt.is_none() || pt == Some("solid")) {
-            let c = if bg != Color::Auto { bg } else { fg };
+            let c = if fg != Color::Auto { fg } else { bg };
             if c == Color::Auto && pt.is_none() {
                 return Fill::default();
             }

@@ -1,3 +1,5 @@
+use gridcraft_model::Color;
+
 use super::{
     AutoFilter, CellRef, Comment, Ctx, El, FilterCriterion, HashMap, MAX_COLS, MAX_ROWS, NoteBox, NoteCorner, RangeRef, Sheet, Table, TableColumn,
     TotalsFn, XmlColumnPr, from_file, xml,
@@ -145,7 +147,15 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
             }
         } else if let Some(c) = fc.child("colorFilter") {
             let Some(dxf) = c.attr_u32("dxfId").and_then(|i| cx.dxfs.get(i as usize)) else { continue };
-            if c.flag("cellColor", true) { FilterCriterion::FillColor(dxf.fill.fg) } else { FilterCriterion::FontColor(dxf.font.color) }
+            let cell_color = c.flag("cellColor", true);
+            let swatch = if cell_color {
+                if dxf.fill.fg != Color::Auto { dxf.fill.fg } else { dxf.font.color }
+            } else if dxf.font.color != Color::Auto {
+                dxf.font.color
+            } else {
+                dxf.fill.fg
+            };
+            if cell_color { FilterCriterion::FillColor(swatch) } else { FilterCriterion::FontColor(swatch) }
         } else if let Some(i) = fc.child("iconFilter") {
             let Some(set) = i.attr("iconSet") else { continue };
             FilterCriterion::Icon { set: set.to_string(), id: i.attr_u32("iconId") }

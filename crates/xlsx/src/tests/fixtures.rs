@@ -1,13 +1,24 @@
 //! Hand-written packages exercising specific reader paths.
 
 use gridcraft_core::{CellError, CellRef, DateSystem, RangeRef, Value};
-use gridcraft_model::{CalcMode, CfRule, Color, HAlign, PatternType, StyleId, Underline, Visibility};
+use gridcraft_model::{CalcMode, CfRule, Color, Fill, FilterCriterion, HAlign, PatternType, StyleId, Underline, Visibility};
 
 use super::minimal;
 use crate::read_xlsx;
 
 fn at(a: &str) -> CellRef {
     CellRef::parse(a).unwrap()
+}
+
+const STYLES_REL: &str =
+    r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+
+fn styles_with_dxfs(dxfs: &[&str]) -> String {
+    format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><color theme="1"/><name val="Calibri"/></font></fonts><fills count="1"><fill><patternFill patternType="none"/></fill></fills><borders count="1"><border/></borders><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs><dxfs count="{}">{}</dxfs></styleSheet>"#,
+        dxfs.len(),
+        dxfs.concat()
+    )
 }
 
 #[test]
@@ -977,4 +988,107 @@ fn two_column_groups_on_different_axes_preserve_secondary_and_kind() {
     assert!(!ch2.series[0].secondary);
     assert!(ch2.series[1].secondary);
     assert_eq!(ch2.series_kinds(), vec![gridcraft_model::ChartKind::ColumnClustered; 2]);
+}
+
+#[test]
+fn color_filter_reads_a_solid_dxfs_foreground_colour() {
+    let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/><bgColor rgb="FFFFFFFF"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let bytes = minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FillColor(Color::Rgb(0xFF0000)))]);
+}
+
+#[test]
+fn color_filter_keeps_a_dxf_theme_colour_and_tint() {
+    let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor theme="4" tint="0.4"/><bgColor rgb="FFFFFFFF"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let expected = vec![(0, FilterCriterion::FillColor(Color::Theme(4, 400)))];
+    assert_eq!(wb.sheet(0).unwrap().autofilter.as_ref().unwrap().criteria, expected);
+    let (back, _) = read_xlsx(&crate::write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().autofilter.as_ref().unwrap().criteria, expected);
+}
+
+#[test]
+fn a_solid_conditional_format_dxf_uses_its_foreground_colour() {
+    let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFFFFFFF"/><bgColor rgb="FFFF0000"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    match &wb.sheet(0).unwrap().cond_formats[0].rule {
+        CfRule::CellIs { style, .. } => assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFFFFFF))),
+        r => panic!("{r:?}"),
+    }
+    let out = crate::write_xlsx(&wb).unwrap();
+    let saved = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let saved = String::from_utf8(saved).unwrap();
+    assert!(saved.contains(r#"<dxfs count="1">"#), "{saved}");
+}
+
+#[test]
+fn a_font_colour_filter_reads_the_colour_its_dxf_states_in_the_fill() {
+    let dxf = r#"<dxf><fill><patternFill patternType="solid"><fgColor rgb="FFC00000"/><bgColor rgb="FFFFFFFF"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0" cellColor="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FontColor(Color::Rgb(0xC00000)))]);
+}
+
+#[test]
+fn color_filter_falls_back_to_a_conditional_format_dxfs_background() {
+    let dxf = r#"<dxf><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FillColor(Color::Rgb(0xFFC7CE)))]);
+}
+
+#[test]
+fn font_color_filter_keeps_a_dxf_that_states_the_colour_in_its_font() {
+    let dxf = r#"<dxf><font><color rgb="FF0000FF"/></font></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0" cellColor="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FontColor(Color::Rgb(0x0000FF)))]);
+}
+
+#[test]
+fn a_color_filter_sharing_a_conditional_format_dxf_keeps_the_filters_colour() {
+    let dxf = r#"<dxf><font><color rgb="FF9C0006"/></font><fill><patternFill><bgColor rgb="FFFFC7CE"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0" cellColor="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let sheet = wb.sheet(0).unwrap();
+    match &sheet.cond_formats[0].rule {
+        CfRule::CellIs { style, .. } => assert_eq!(style.fill, Fill::solid(Color::Rgb(0xFFC7CE))),
+        r => panic!("{r:?}"),
+    }
+    assert_eq!(sheet.autofilter.as_ref().expect("the autoFilter was read").criteria, vec![(0, FilterCriterion::FontColor(Color::Rgb(0x9C0006)))]);
+    let out = crate::write_xlsx(&wb).unwrap();
+    let saved = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let saved = String::from_utf8(saved).unwrap();
+    assert!(saved.contains(r#"<dxfs count="2">"#), "{saved}");
+}
+
+#[test]
+fn a_color_filter_without_a_valid_dxf_is_dropped() {
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="9"/></filterColumn></autoFilter>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    assert!(wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read").criteria.is_empty());
 }
