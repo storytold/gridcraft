@@ -554,13 +554,14 @@ impl Calc {
 
     /// Evaluates the dirty set and writes results (and spills) back.
     fn run(&mut self, wb: &mut Workbook, mut dirty: Vec<Key>, full: bool) {
+        let mut prior_spills = SpillIndex::default();
         let mut dynamic_again = !self.graph.dynamic.is_empty();
         self.last_recalc_cells = 0;
         let mut seen: HashSet<Key> = HashSet::default();
         if !full {
             self.standing = Standing::default();
         }
-        for _round in 0..8 {
+        for round in 0..8 {
             if dirty.is_empty() {
                 break;
             }
@@ -579,6 +580,16 @@ impl Calc {
                     }
                 }
             }
+            // The first pass settles changed spill shapes. Only layouts produced by this
+            // recalculation establish child dependencies; pre-edit rectangles may be obsolete.
+            // Later cycle errors keep that established ownership until this run finishes.
+            if round > 0 {
+                for (sheet, sh) in wb.sheets.iter().enumerate() {
+                    for (anchor, range) in &sh.spill_ranges {
+                        prior_spills.insert((sheet, *anchor), range.height() as usize, range.width() as usize);
+                    }
+                }
+            }
             // Row-major order is a good topological guess; on-demand evaluation fixes the rest.
             dirty.sort_by_key(|(s, c)| (*s, c.row, c.col));
             let mut exprs: HashMap<Key, std::sync::Arc<Expr>> = HashMap::with_capacity_and_hasher(dirty.len(), Default::default());
@@ -594,9 +605,10 @@ impl Calc {
             let now = self.now();
             let mut rng = self.rng;
             let tp = prof_now();
-            let (results, spills, cycles) = {
+            let (results, spills, cycles, validate_lookups) = {
                 let mut host = PassHost::new(wb, &exprs, &mut rng, now).with_python(python);
                 host.standing = Some(&self.standing);
+                host.prior_spills = (round > 0).then_some(&prior_spills);
                 host.iterate = wb.calc.iterative;
                 for k in &dirty {
                     host.calculate(*k);
@@ -607,8 +619,15 @@ impl Calc {
                         eprintln!("  iterative calculation: {} passes over {} formulas", passes, host.tainted.len());
                     }
                 }
-                (host.results, host.spills, host.cycles)
+                (host.results, host.spills, host.cycles, host.lookup_needs_validation)
             };
+            // An evaluated scalar, resized spill or non-cycle error supersedes its previous
+            // footprint. Retain ownership only for an unresolved cycle with no current array.
+            for (&key, value) in &results {
+                if spills.contains_key(&key) || !matches!(value, Value::Error(CellError::Circ)) {
+                    prior_spills.remove(key);
+                }
+            }
             self.rng = rng;
             if std::env::var_os("GRIDCRAFT_PROFILE").is_some() {
                 eprintln!("  eval {} formulas {:.1} ms", results.len(), prof_now() - tp);
@@ -622,6 +641,11 @@ impl Calc {
             }
             self.circular.extend(cycles);
             let mut spill_changes = self.write_back(wb, &dirty, results, &spills);
+            // A lookup may have used a stored child while its anchor was still computing.
+            // Unchanged spill values also need this check: the new dependency can be circular.
+            if round == 0 && validate_lookups && !spills.is_empty() {
+                spill_changes.extend(dirty.iter().copied());
+            }
             // Formulas with references only known while evaluating (INDIRECT, OFFSET) may have read
             // a spill area before it was laid out: they are evaluated once more.
             if dynamic_again && !spills.is_empty() {
@@ -1333,6 +1357,26 @@ pub(crate) mod tests {
         assert_eq!(host.results.get(&(0, CellRef::parse("A1").unwrap())), Some(&Value::Number(total + 63.0)));
         assert!(host.cycles.is_empty());
         assert!(host.suspensions <= 3, "{} suspensions", host.suspensions);
+    }
+
+    #[test]
+    fn lookup_child_reads_current_spill_before_anchor_error() {
+        use crate::spill_index::SpillIndex;
+        use gridcraft_core::{Array, CellError};
+        for error in [CellError::Calc, CellError::Circ] {
+            let wb = Workbook::new();
+            let anchor = CellRef::new(0, 0);
+            let child = CellRef::new(1, 0);
+            let exprs = HashMap::default();
+            let mut prior = SpillIndex::default();
+            prior.insert((0, anchor), 2, 1);
+            let array = Array::new(2, 1, vec![Value::Error(error), Value::Number(42.0)]).unwrap();
+            let python = [((0, anchor), Value::from(array))].into_iter().collect();
+            let mut rng = 1;
+            let mut host = PassHost::new(&wb, &exprs, &mut rng, 0.0).with_python(python);
+            host.prior_spills = Some(&prior);
+            assert_eq!(host.lookup_result(0, child), Value::Number(42.0), "{error:?}");
+        }
     }
 
     /// For tests of `PassHost::visit_range`, which can't be reached from outside this module: the
