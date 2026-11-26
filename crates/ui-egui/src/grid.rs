@@ -19,6 +19,8 @@ use crate::theme::{self, Tokens};
 pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
 /// Cached Page Break Preview ranges, keyed by (doc uid, revision, sheet).
 type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
+/// Cached Normal-view page breaks (row and column page bands), keyed by (doc uid, revision, sheet).
+type PageBreaksCache = ((u64, u64, usize), Vec<(u32, u32)>, Vec<(u32, u32)>);
 /// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
 type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
 /// Cached fill-menu trend entries (label, mode), keyed by (doc uid, revision, sheet, source, dragged range).
@@ -374,6 +376,8 @@ pub struct GridState {
     pub quick_analysis: crate::quick_analysis::State,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
+    /// Normal view's page breaks: row and column page bands, cached per (doc uid, revision, sheet).
+    pub page_breaks: Option<PageBreaksCache>,
     /// Header or footer being edited in place (Page Layout view).
     pub hf_edit: Option<crate::paper_view::HfEdit>,
     /// A page margin being dragged on a ruler (Page Layout view); committed on release.

@@ -58,7 +58,7 @@ pub use gridcraft_core::color::INDEXED;
 /// Paper sizes (`pageSetup paperSize`) we name. ID 12/13 are the JIS B4/B5 that
 /// `pageLayout.pageSetup` calls `B4`/`B5`; 42 is ISO B4, and 43–88 are the Japanese postcards,
 /// envelopes and B6. The engine's `known_paper` uses the same names and sizes.
-const PAPERS: [(u32, &str); 23] = [
+const PAPERS: [(u32, &str); 24] = [
     (1, "Letter"),
     (3, "Tabloid"),
     (4, "Ledger"),
@@ -74,6 +74,7 @@ const PAPERS: [(u32, &str); 23] = [
     (27, "Envelope DL"),
     (34, "Envelope B5"),
     (42, "B4 (ISO)"),
+    (66, "A2"),
     (43, "Japanese Postcard"),
     (69, "Japanese Double Postcard"),
     (70, "A6"),
@@ -395,6 +396,8 @@ mod tests {
         assert_eq!(paper_id("b5"), Some(13));
         assert_eq!(paper_id("B5 (JIS)"), Some(13));
         assert_eq!(paper_id("B4 (ISO)"), Some(42));
+        assert_eq!(paper_id("A2"), Some(66));
+        assert_eq!(paper_name(66), Some("A2"));
         // The Japanese papers page setup names.
         assert_eq!(paper_name(43), Some("Japanese Postcard"));
         assert_eq!(paper_name(88), Some("B6"));

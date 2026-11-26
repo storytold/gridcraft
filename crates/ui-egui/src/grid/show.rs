@@ -200,6 +200,8 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         )
     };
     app.grid.cf = cf_sheet.map(|s| (s, cf));
+    // Page breaks sit on the cells, under objects and the selection, as in Excel.
+    paint_page_breaks(app, &painter.with_clip_rect(geo.cells), &geo, &wb, si, sh, &t);
     // Objects above cells. A hidden object can't stay selected: Delete or the Format pane would act
     // on something the user can't see.
     if crate::chartview::objects_hidden(&wb) {
@@ -814,6 +816,69 @@ pub(crate) fn paint_overlays(input: OverlayInput<'_>) {
     let _ = (wb, si);
 }
 
+/// Normal view with Show page breaks on: Excel's dashed lines where each page ends. The
+/// pagination is the printing one (`layout_sheet`, no PDF), cached per (doc uid, revision, sheet)
+/// and computed only while the lines are shown. Other views draw nothing here.
+fn paint_page_breaks(app: &mut SheetApp, p: &Painter, geo: &Geo, wb: &Workbook, si: usize, sh: &Sheet, t: &Tokens) {
+    if sh.view != gridcraft_engine::model::SheetViewMode::Normal || !sh.show_page_breaks || geo.paper.is_some() {
+        return;
+    }
+    let Some(d) = app.session.active() else { return };
+    let key = (d.uid, d.revision, si);
+    if app.grid.page_breaks.as_ref().is_none_or(|(k, ..)| *k != key) {
+        use gridcraft_engine::cmd::print::{PrintOptions, layout_sheet, print_range};
+        // A sheet with nothing to print has no pages (the layout would still give A1 one).
+        let bands = print_range(sh)
+            .and_then(|_| layout_sheet(wb, si, &PrintOptions::default(), None))
+            .map(|l| (l.row_bands, l.col_bands))
+            .unwrap_or_default();
+        app.grid.page_breaks = Some((key, bands.0, bands.1));
+    }
+    let Some((_, rows, cols)) = &app.grid.page_breaks else { return };
+    let stroke = Stroke::new(1.0, t.page_break);
+    for seg in page_break_lines(sh, geo, rows, cols, p.clip_rect()) {
+        p.extend(egui::Shape::dashed_line(&seg, stroke, BREAK_DASH, BREAK_GAP));
+    }
+}
+
+const BREAK_DASH: f32 = 3.0;
+const BREAK_GAP: f32 = 2.0;
+
+/// The dashed lines of `paint_page_breaks`, in grid coordinates: one after the last column of
+/// each page column and one after the last row of each page row, across the printed extent. A
+/// line scrolled under a frozen pane is left out, and the extent starts below / right of the
+/// frozen panes when the printed cells do. Lines are cut to `clip` (a dashed line costs a shape
+/// per dash, and the extent of a long list is far taller than the screen); a cut start moves to
+/// the next dash boundary of the whole line, so the dashes don't crawl while scrolling.
+fn page_break_lines(sh: &Sheet, geo: &Geo, rows: &[(u32, u32)], cols: &[(u32, u32)], clip: Rect) -> Vec<[egui::Pos2; 2]> {
+    let (Some(r0), Some(r1), Some(c0), Some(c1)) = (rows.first(), rows.last(), cols.first(), cols.last()) else { return vec![] };
+    let pane_top = geo.cells.top() + geo.frozen_h;
+    let pane_left = geo.cells.left() + geo.frozen_w;
+    let period = BREAK_DASH + BREAK_GAP;
+    // The first dash boundary of the whole line at or past `edge`.
+    let cut = |start: f32, edge: f32| if start < edge { start + ((edge - start) / period).ceil() * period } else { start };
+    let top = cut(geo.y(sh, r0.0), if r0.0 >= geo.fr { pane_top.max(clip.top()) } else { clip.top() });
+    let left = cut(geo.x(sh, c0.0), if c0.0 >= geo.fc { pane_left.max(clip.left()) } else { clip.left() });
+    let bottom = geo.y(sh, r1.1.saturating_add(1)).min(clip.bottom());
+    let right = geo.x(sh, c1.1.saturating_add(1)).min(clip.right());
+    let mut out = Vec::new();
+    for &(_, last) in cols {
+        let col = last.saturating_add(1);
+        let x = geo.x(sh, col);
+        if (col < geo.fc || x >= pane_left) && (clip.left()..=clip.right()).contains(&x) && bottom > top {
+            out.push([pos2(x, top), pos2(x, bottom)]);
+        }
+    }
+    for &(_, last) in rows {
+        let row = last.saturating_add(1);
+        let y = geo.y(sh, row);
+        if (row < geo.fr || y >= pane_top) && (clip.top()..=clip.bottom()).contains(&y) && right > left {
+            out.push([pos2(left, y), pos2(right, y)]);
+        }
+    }
+    out
+}
+
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
     let key = (d.uid, d.revision, d.wb.active_sheet());
@@ -1146,5 +1211,80 @@ mod trace_arrow_tests {
         assert_eq!(top.first().copied(), Some(link(&app, &geo, "A1", "A2")));
         let (_, further) = lines_in(&mut app, colour, vec2(0.0, 20.0 * 1500.0));
         assert!((30..=60).contains(&further.len()), "{}", further.len());
+    }
+}
+
+#[cfg(test)]
+mod page_break_tests {
+    use super::*;
+    use gridcraft_engine::model::{DEFAULT_COL_WIDTH, DEFAULT_ROW_HEIGHT};
+
+    /// Two pages across and two down, with a hidden row inside the first page row: the lines sit
+    /// after columns E and J and after rows 10 and 20, and the hidden row takes no height.
+    #[test]
+    fn page_breaks_follow_the_page_bands_in_both_directions() {
+        let mut sh = Sheet::new("S");
+        sh.rows.entry(4).or_default().hidden = true;
+        let geo = Geo::new(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(2000.0, 2000.0)), vec2(0.0, 0.0));
+        let (x0, y0, z) = (geo.cells.left(), geo.cells.top(), geo.z);
+        let (w, h) = (DEFAULT_COL_WIDTH * z, DEFAULT_ROW_HEIGHT * z);
+        let lines = page_break_lines(&sh, &geo, &[(0, 9), (10, 19)], &[(0, 4), (5, 9)], geo.cells);
+        let (bottom, right) = (y0 + 19.0 * h, x0 + 10.0 * w);
+        let expect = [
+            [pos2(x0 + 5.0 * w, y0), pos2(x0 + 5.0 * w, bottom)],
+            [pos2(right, y0), pos2(right, bottom)],
+            [pos2(x0, y0 + 9.0 * h), pos2(right, y0 + 9.0 * h)],
+            [pos2(x0, bottom), pos2(right, bottom)],
+        ];
+        assert_eq!(lines.len(), expect.len(), "{lines:?}");
+        for (got, want) in lines.iter().zip(expect) {
+            for (g, w) in got.iter().zip(want) {
+                assert!((g.x - w.x).abs() < 0.01 && (g.y - w.y).abs() < 0.01, "{lines:?}");
+            }
+        }
+        assert!(page_break_lines(&sh, &geo, &[], &[(0, 4)], geo.cells).is_empty(), "no pages, no lines");
+    }
+
+    /// Frozen rows: a page break scrolled up under them is not drawn over the frozen rows, and the
+    /// vertical lines start below them.
+    #[test]
+    fn page_breaks_scrolled_under_frozen_rows_are_hidden() {
+        let mut sh = Sheet::new("S");
+        sh.freeze = Some((3, 0));
+        let geo = Geo::new(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(2000.0, 2000.0)), vec2(0.0, 10.0 * DEFAULT_ROW_HEIGHT));
+        let pane_top = geo.cells.top() + geo.frozen_h;
+        let lines = page_break_lines(&sh, &geo, &[(5, 9), (10, 40)], &[(5, 9)], geo.cells);
+        let horizontal: Vec<_> = lines.iter().filter(|l| l[0].y == l[1].y).collect();
+        assert_eq!(horizontal.len(), 1, "the break after row 10 is under the frozen rows: {lines:?}");
+        assert!(horizontal[0][0].y > pane_top);
+        let vertical: Vec<_> = lines.iter().filter(|l| l[0].x == l[1].x).collect();
+        assert_eq!(vertical.len(), 1);
+        let start = vertical[0][0].y;
+        assert!(start >= pane_top && start < pane_top + BREAK_DASH + BREAK_GAP, "starts below the frozen rows: {start} vs {pane_top}");
+    }
+
+    /// A 100,000-row print extent scrolled to its middle: every line is cut to the visible cells
+    /// (a dashed line is one shape per dash), and the cut keeps the dash phase of the whole line.
+    #[test]
+    fn page_breaks_are_cut_to_the_visible_cells() {
+        let sh = Sheet::new("S");
+        let geo = Geo::new(&sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(2000.0, 2000.0)), vec2(0.0, 50_001.0 * DEFAULT_ROW_HEIGHT));
+        let rows: Vec<(u32, u32)> = (0..2000).map(|i| (i * 50, i * 50 + 49)).collect();
+        let lines = page_break_lines(&sh, &geo, &rows, &[(0, 4), (5, 9)], geo.cells);
+        let horizontal = lines.iter().filter(|l| l[0].y == l[1].y).count();
+        assert!(horizontal > 0 && horizontal < 10, "only the breaks on screen: {horizontal}");
+        assert_eq!(lines.len() - horizontal, 2);
+        for l in &lines {
+            for pt in l {
+                assert!(geo.cells.expand(BREAK_DASH + BREAK_GAP).contains(*pt), "{pt:?} outside {:?}", geo.cells);
+            }
+        }
+        let full_top = geo.y(&sh, 0);
+        let vertical = lines.iter().find(|l| l[0].x == l[1].x).unwrap();
+        // 50,001 rows above at 16 px each put the view's top 1 px past a dash boundary of the whole
+        // line: the cut line starts at the next boundary, 4 px down (`max` would start it at the top).
+        assert!((vertical[0].y - (geo.cells.top() + 4.0)).abs() < 0.15, "{:?} vs {}", vertical[0], geo.cells.top());
+        let phase = (vertical[0].y - full_top) % (BREAK_DASH + BREAK_GAP);
+        assert!(phase.abs() < 0.15 || (BREAK_DASH + BREAK_GAP - phase).abs() < 0.15, "phase {phase}");
     }
 }

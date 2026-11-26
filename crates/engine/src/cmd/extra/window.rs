@@ -1,10 +1,11 @@
 use super::{
-    CellRef, EngineError, Json, Result, Session, SheetViewMode, VIEWS_NAME, WATCH_NAME, Workbook, bad, bool_param, edit, json, ok, split_sheet,
-    stash_get, stash_map, stash_set, str_param, target_sheet, u32_param,
+    CellRef, EngineError, Json, Result, Session, Sheet, SheetViewMode, VIEWS_NAME, WATCH_NAME, Workbook, bad, bool_param, edit, json, ok,
+    split_sheet, stash_get, stash_map, stash_set, str_param, target_sheet, u32_param,
 };
 
 /// Switches a sheet's view. Like zoom, the view is saved with the file but is not an edit: it
-/// neither records an undo step nor marks a clean workbook as changed.
+/// neither records an undo step nor marks a clean workbook as changed. Page Break Preview also
+/// turns on the sheet's page breaks, which Normal view then keeps showing (as in Excel).
 pub(super) fn set_view(s: &mut Session, p: &Json, mode: SheetViewMode) -> Result<Json> {
     let si = target_sheet(s, p)?;
     let d = s.doc_mut()?;
@@ -12,6 +13,9 @@ pub(super) fn set_view(s: &mut Session, p: &Json, mode: SheetViewMode) -> Result
     let wb = std::sync::Arc::make_mut(&mut d.wb);
     if let Some(sh) = wb.sheet_mut(si) {
         sh.view = mode;
+        if mode == SheetViewMode::PageBreakPreview {
+            sh.show_page_breaks = true;
+        }
     }
     if !dirty {
         d.saved = d.wb.clone();
@@ -36,6 +40,29 @@ pub(crate) fn keep_watch_list(from: &Workbook, to: &mut std::sync::Arc<Workbook>
     let wb = std::sync::Arc::make_mut(to);
     wb.names.retain(|n| n.name != WATCH_NAME);
     wb.names.extend(keep);
+}
+
+/// Show page breaks isn't an edit either: undo and redo keep each sheet's current setting
+/// (matched by name) when they swap in another snapshot of the workbook. A sheet the current
+/// workbook has no name for (an undone rename or delete) keeps the snapshot's setting. Like a
+/// view kept by `keep_view_modes`, a setting kept this way doesn't make a saved workbook dirty.
+pub(crate) fn keep_page_breaks(d: &mut crate::DocState, from: &Workbook) {
+    let wanted = |sh: &Sheet| from.sheets.iter().find(|f| f.name == sh.name).map_or(sh.show_page_breaks, |f| f.show_page_breaks);
+    if d.wb.sheets.iter().all(|sh| sh.show_page_breaks == wanted(sh)) {
+        return;
+    }
+    let dirty = d.is_dirty();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    // Only the sheets that differ are copied (`sheet_mut` unshares the sheet).
+    for i in 0..wb.sheets.len() {
+        let Some(on) = wb.sheet(i).map(wanted).filter(|on| wb.sheet(i).is_some_and(|sh| sh.show_page_breaks != *on)) else { continue };
+        if let Some(sh) = wb.sheet_mut(i) {
+            sh.show_page_breaks = on;
+        }
+    }
+    if !dirty {
+        d.saved = d.wb.clone();
+    }
 }
 
 /// Normal, Page Layout and Page Break Preview belong to the window, not to the edits: Excel doesn't

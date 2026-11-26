@@ -38,6 +38,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!("view.gridlines", "Gridlines", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "gridlines")),
         cmd!("view.headings", "Headings", ["View", "Show"], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "headings")),
         cmd!("view.showZeros", "Show Zeros", [], None, "{on?}", has_doc, |s, p| sheet_flag(s, p, "zeros")),
+        cmd!(
+            noundo "view.showPageBreaks",
+            "Show Page Breaks",
+            [],
+            None,
+            "{sheet?, on?} → {on}: dashed page boundaries in Normal view (a display option, not saved with the file)",
+            has_doc,
+            show_page_breaks
+        ),
         cmd!("view.showOutlineSymbols", "Show Outline Symbols", [], Some("Ctrl+8"), "{on?}", has_doc, |s, p| sheet_flag(s, p, "outlineSymbols")),
         cmd!("view.showObjects", "Show Objects", [], Some("Ctrl+6"), "{on?}", has_doc, show_objects),
         cmd!(
@@ -84,7 +93,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Size",
             ["Page Layout", "Page Setup"],
             None,
-            "{paper: Letter|Legal|A4|A3|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes)}",
+            "{paper: Letter|Legal|A0|A1|A2|A3|A4|A5|A6|Tabloid|Executive|Ledger|B4|B5|B6|B4 (ISO)|B5 (ISO)|B6 (ISO)|Japanese Postcard|Japanese Double Postcard|Japanese Envelope #3|Japanese Envelope #4|Japanese Envelope Kaku #2|Japanese Envelope Kaku #3 (B4/B5/B6 are the JIS sizes)}",
             has_doc,
             paper
         ),
@@ -223,6 +232,26 @@ fn workbook_view_flag(s: &mut Session, p: &Json, which: &str) -> Result<Json> {
         *slot = bool_param(p, "on").unwrap_or(!*slot);
         Ok(json!({"on": *slot}))
     })
+}
+
+/// Excel's Show page breaks: a display option of the sheet, so it neither records an undo step
+/// nor marks a clean workbook as changed (like `set_view`).
+fn show_page_breaks(s: &mut Session, p: &Json) -> Result<Json> {
+    let si = target_sheet(s, p)?;
+    let d = s.doc_mut()?;
+    let dirty = d.is_dirty();
+    let current = d.wb.sheet(si).is_some_and(|sh| sh.show_page_breaks);
+    let on = bool_param(p, "on").unwrap_or(!current);
+    if on != current {
+        let wb = std::sync::Arc::make_mut(&mut d.wb);
+        if let Some(sh) = wb.sheet_mut(si) {
+            sh.show_page_breaks = on;
+        }
+        if !dirty {
+            d.saved = d.wb.clone();
+        }
+    }
+    Ok(json!({"on": on}))
 }
 
 /// Ctrl+6: hides every object, or shows them again. Placeholders (from a file) count as shown.

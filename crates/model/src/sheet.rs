@@ -131,6 +131,10 @@ pub struct Sheet {
     #[serde(default = "yes")]
     pub summary_right: bool,
     pub right_to_left: bool,
+    /// Excel's Show page breaks (Options › Advanced, "Display options for this worksheet"): dashed
+    /// page boundaries in Normal view. Page Break Preview turns it on; not saved with the file.
+    #[serde(skip)]
+    pub show_page_breaks: bool,
     pub zoom: u16,
     pub cond_formats: Vec<CondFormat>,
     pub validations: Vec<Validation>,
@@ -211,6 +215,7 @@ impl Sheet {
             show_formulas: false,
             show_zeros: true,
             right_to_left: false,
+            show_page_breaks: false,
             zoom: 100,
             cond_formats: vec![],
             validations: vec![],

@@ -1891,9 +1891,9 @@ fn doc_props_keep_boundary_whitespace() {
 }
 
 /// Japanese paper sizes survive an XLSX save and reopen. IDs 12/13 are the JIS B4/B5; the
-/// Japanese postcards and envelopes have their own IDs, and `B4 (ISO)` keeps ISO B4. The ISO B5/B6
-/// names only exist in the engine: ECMA-376 has no `paperSize` id for them (only ISO B4), so they
-/// are not part of the round-trip.
+/// Japanese postcards and envelopes have their own IDs, `B4 (ISO)` keeps ISO B4 and A2 is 66. The
+/// ISO B5/B6, A1 and A0 names only exist in the engine: ECMA-376 has no `paperSize` id for them,
+/// so they are not part of the round-trip.
 #[test]
 fn japanese_paper_sizes_round_trip() {
     for paper in [
@@ -1901,6 +1901,7 @@ fn japanese_paper_sizes_round_trip() {
         "B5",
         "B6",
         "B4 (ISO)",
+        "A2",
         "A6",
         "Japanese Postcard",
         "Japanese Double Postcard",

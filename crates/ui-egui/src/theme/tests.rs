@@ -489,3 +489,12 @@ fn fedora_package_folders_are_searched_after_the_other_linux_layouts() {
     let noto = mono.iter().position(|p| p == "/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf");
     assert!(noto.is_some() && noto.unwrap_or(0) + 1 == mono.len(), "Fedora's default Noto Sans Mono must be the last resort: {mono:?}");
 }
+
+#[test]
+fn page_breaks_stand_out_from_the_grid_in_both_themes() {
+    // WCAG 1.4.11 asks 3:1 for graphical objects; the grid stays white in dark mode too.
+    for t in [Tokens::light(), Tokens::dark()] {
+        let ratio = contrast(t.page_break, t.grid_bg);
+        assert!(ratio >= 3.0, "page breaks at {ratio:.2}:1 on the grid (dark: {})", t.dark);
+    }
+}

@@ -247,6 +247,25 @@ fn file_options_opens_the_options_page_and_pages_are_reachable_by_command() {
     assert!(h.state().backstage.is_none());
 }
 
+/// Options › Show page breaks reflects and switches the active sheet's page breaks (Excel's
+/// "Display options for this worksheet").
+#[test]
+fn options_show_page_breaks_switches_the_active_sheet() {
+    let mut h = harness(Services::default());
+    let on = |h: &egui_kittest::Harness<'static, SheetApp>| h.state().session.active().unwrap().wb.active().unwrap().show_page_breaks;
+    h.state_mut().run("view.pageBreakPreview", serde_json::json!({})).unwrap();
+    h.state_mut().run("view.normal", serde_json::json!({})).unwrap();
+    h.state_mut().run("file.options", serde_json::json!({})).unwrap();
+    h.run_steps(3);
+    assert!(on(&h));
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Show page breaks").click();
+    h.run_steps(3);
+    assert!(!on(&h), "unchecking hides them");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Show page breaks").click();
+    h.run_steps(3);
+    assert!(on(&h));
+}
+
 #[test]
 fn translated_options_headings_show_no_context_prefix() {
     for language in [Language::Fr, Language::Sr, Language::Nl, Language::Ro] {

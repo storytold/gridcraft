@@ -3945,6 +3945,62 @@ fn show_outline_symbols_toggles() {
     assert!(!on(&s));
 }
 
+/// Show page breaks (Excel: Options › Advanced, per worksheet): off on a new sheet, turned on by
+/// Page Break Preview and kept in Normal view, switched without making the workbook dirty.
+#[test]
+fn page_break_preview_turns_on_show_page_breaks_for_its_sheet() {
+    let mut s = s();
+    s.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    s.doc_mut().unwrap().saved = wb;
+    let on = |s: &Session, name: &str| s.active().unwrap().wb.sheets.iter().find(|x| x.name == name).unwrap().show_page_breaks;
+    assert!(!on(&s, "Two"));
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("view.normal", json!({})).unwrap();
+    assert!(on(&s, "Two"), "Normal view keeps the page breaks Page Break Preview showed");
+    assert!(!on(&s, "Sheet1"), "only the previewed sheet");
+    assert_eq!(s.execute("view.showPageBreaks", json!({})).unwrap(), json!({"on": false}));
+    assert!(!on(&s, "Two"));
+    assert_eq!(s.execute("view.showPageBreaks", json!({"on": true})).unwrap(), json!({"on": true}));
+    assert!(on(&s, "Two"));
+    assert!(!s.doc().unwrap().is_dirty(), "a display option, not an edit");
+}
+
+/// Undo and redo swap in another snapshot of the workbook; the page breaks shown stay as they are
+/// (a display option isn't undone), matched by sheet name.
+#[test]
+fn undo_and_redo_keep_show_page_breaks() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("view.normal", json!({})).unwrap();
+    let on = |s: &Session| s.active().unwrap().wb.active().unwrap().show_page_breaks;
+    assert!(on(&s));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(on(&s), "undoing the typing leaves the page breaks on");
+    s.execute("view.showPageBreaks", json!({"on": false})).unwrap();
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(!on(&s), "redo doesn't bring back the snapshot's page breaks either");
+    assert!(s.active().unwrap().wb.active().unwrap().cell(CellRef::new(0, 0)).is_some(), "the redo itself happened");
+}
+
+/// Undoing a rename brings back a sheet name the current workbook doesn't have: its page breaks
+/// stay as the snapshot has them, not off.
+#[test]
+fn undoing_a_rename_keeps_show_page_breaks() {
+    let mut s = s();
+    s.execute("view.pageBreakPreview", json!({})).unwrap();
+    s.execute("view.normal", json!({})).unwrap();
+    s.execute("sheet.rename", json!({"name": "Renamed"})).unwrap();
+    let on = |s: &Session| s.active().unwrap().wb.active().unwrap().show_page_breaks;
+    assert!(on(&s));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_ne!(s.active().unwrap().wb.active().unwrap().name, "Renamed", "the rename was undone");
+    assert!(on(&s), "the lines stay on");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert!(on(&s));
+}
+
 fn reopen(s: &mut Session) {
     let r = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap();
     let b64 = r["base64"].as_str().unwrap().to_string();

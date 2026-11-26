@@ -61,6 +61,8 @@ pub struct Tokens {
     /// Behind the pages in Page Layout view.
     pub desk: Color32,
     pub gridline: Color32,
+    /// Normal view's dashed page breaks. The grid is white in both themes, so this stays dark.
+    pub page_break: Color32,
     pub header_bg: Color32,
     pub header_text: Color32,
     pub header_line: Color32,
@@ -231,6 +233,7 @@ impl Tokens {
             grid_bg: Color32::WHITE,
             desk: pick(dark, Color32::from_rgb(0xDE, 0xDE, 0xDE), Color32::from_rgb(0x3A, 0x3A, 0x3A)),
             gridline: Color32::from_rgb(0xE1, 0xE1, 0xE1),
+            page_break: Color32::from_rgb(0x61, 0x61, 0x61),
             header_bg: pick(dark, Color32::from_rgb(0xF8, 0xF8, 0xF8), Color32::from_rgb(0x30, 0x30, 0x30)),
             header_text: pick(dark, Color32::from_rgb(0x42, 0x42, 0x42), Color32::from_rgb(0xCC, 0xCC, 0xCC)),
             header_line: pick(dark, Color32::from_rgb(0xD6, 0xD6, 0xD6), Color32::from_rgb(0x45, 0x45, 0x45)),
