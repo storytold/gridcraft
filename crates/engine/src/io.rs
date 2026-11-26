@@ -380,8 +380,9 @@ const HTML_SNIFF_BYTES: usize = 64 << 10;
 /// A web page that holds a table, whatever its extension: a web app's "Export to Excel" is often
 /// HTML saved as `.xls` (#3166). Excel opens its table as a sheet (after warning that the format
 /// and extension don't match): the cells read like typed input (or as text with `csv_as_text`),
-/// header cells (`<th>`) are bold and centred, and the sheet takes the name the page gives it
-/// (`<x:Name>`) or the file's. `None` when the bytes aren't such a page.
+/// header cells (`<th>`) are bold and centred, `colspan`/`rowspan` become merged ranges, and the
+/// sheet takes the name the page gives it (`<x:Name>`) or the file's. `None` when the bytes aren't
+/// such a page.
 fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text: bool) -> Option<Result<(Workbook, Vec<String>)>> {
     // Every other text file (CSV, TSV, JSON) passes through here: look at the start only, and decode
     // the whole file once it is known to be a page within the size a text import takes.
@@ -403,13 +404,13 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
     }
     // Decoded as a CSV is (BOM, UTF-8, else Windows-1252/1256), so a legacy page keeps its letters.
     let text = gridcraft_xlsx::decode_text(bytes);
-    let rows = crate::clip_html::table_cells(&text, gridcraft_core::MAX_ROWS as usize, gridcraft_core::MAX_COLS as usize);
-    if rows.iter().all(Vec::is_empty) {
+    let table = crate::clip_html::table_with_merges(&text, gridcraft_core::MAX_ROWS as usize, gridcraft_core::MAX_COLS as usize);
+    if table.rows.iter().all(Vec::is_empty) {
         return None;
     }
     // The cells go through the CSV reader, so numbers, dates and text read exactly as they do there.
     let mut tsv = String::new();
-    for row in &rows {
+    for row in &table.rows {
         let fields: Vec<String> = row
             .iter()
             .map(|cell| {
@@ -429,10 +430,14 @@ fn read_html_table(name: &str, kind: Option<FileKind>, bytes: &[u8], csv_as_text
     let opts = gridcraft_xlsx::CsvOptions { delimiter: b'\t', parse_values: !csv_as_text, ..Default::default() };
     let read = gridcraft_xlsx::read_csv_with_report(tsv.as_bytes(), &opts).map_err(|e| EngineError::Other(e.to_string()));
     Some(read.map(|(mut wb, report)| {
+        if let Some(sh) = wb.sheet_mut(0) {
+            sh.merges.extend_from_slice(&table.merges);
+        }
         wb.csv_delimiter = None;
         // Header cells are bold and centred on top of the style the CSV reader gave them, so a
         // date in a header keeps its date format.
-        let headers: Vec<CellRef> = rows
+        let headers: Vec<CellRef> = table
+            .rows
             .iter()
             .enumerate()
             .flat_map(|(r, row)| row.iter().enumerate().filter(|(_, cell)| cell.header && !cell.text.trim().is_empty()).map(move |(c, _)| CellRef::new(r as u32, c as u32)))

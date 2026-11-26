@@ -851,6 +851,59 @@ fn a_web_page_table_keeps_its_characters_text_and_header_formats() {
 }
 
 #[test]
+fn a_web_page_table_keeps_its_merged_cells() {
+    let page = crate::clip_html::FOUR_RANGE_PAGE;
+    let (wb, _) = open_bytes("merges.html", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    let expected: Vec<RangeRef> = ["A1:B1", "A2:A4", "B2:C3", "D4:E5"].iter().map(|s| RangeRef::parse(s).unwrap()).collect();
+    assert_eq!(sh.merges, expected);
+    assert_eq!(sh.value(CellRef::parse("D4").unwrap()), gridcraft_core::Value::text("Foot"));
+}
+
+#[test]
+fn a_web_page_table_without_spans_has_no_merges() {
+    let page = "<html><body><table><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></table></body></html>";
+    let (wb, _) = open_bytes("plain.html", page.as_bytes()).unwrap();
+    assert!(wb.sheet(0).unwrap().merges.is_empty());
+}
+
+#[test]
+fn a_web_page_table_clips_a_span_to_the_rows_it_reads() {
+    let page = "<html><body><table><tr><td rowspan=99>A</td><td>B</td></tr><tr><td>C</td></tr></table></body></html>";
+    let (wb, _) = open_bytes("tall.html", page.as_bytes()).unwrap();
+    assert_eq!(wb.sheet(0).unwrap().merges, vec![RangeRef::parse("A1:A2").unwrap()]);
+}
+
+#[test]
+fn a_web_page_overlapping_spans_do_not_make_overlapping_merges() {
+    let page =
+        "<html><body><table><tr><td>A1</td><td rowspan=2>B1</td><td>C1</td></tr><tr><td colspan=3>A2</td><td>D2</td></tr></table></body></html>";
+    let (wb, _) = open_bytes("overlap.html", page.as_bytes()).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.merges, vec![RangeRef::parse("B1:B2").unwrap()]);
+    assert_eq!(sh.value(CellRef::parse("A2").unwrap()), gridcraft_core::Value::text("A2"));
+    assert_eq!(sh.value(CellRef::parse("D2").unwrap()), gridcraft_core::Value::text("D2"), "neighbouring values still land");
+}
+
+#[test]
+fn html_export_then_import_keeps_the_same_merges() {
+    let mut wb = Workbook::new();
+    let expected: Vec<RangeRef> = ["A1:B1", "A2:A4", "B2:C3", "D4:E5"].iter().map(|s| RangeRef::parse(s).unwrap()).collect();
+    {
+        let sh = wb.sheet_mut(0).unwrap();
+        for row in 0..5 {
+            for col in 0..5 {
+                sh.set_value(CellRef::new(row, col), gridcraft_core::Value::text(format!("{row},{col}")));
+            }
+        }
+        sh.merges = expected.clone();
+    }
+    let html = to_html(&wb, 0).unwrap();
+    let (back, _) = open_bytes("export.html", html.as_bytes()).unwrap();
+    assert_eq!(back.sheet(0).unwrap().merges, expected);
+}
+
+#[test]
 fn a_web_page_table_opens_after_a_leading_comment_and_keeps_nonbreaking_spaces() {
     // An exporter's comment before <html> still makes a web page; `&nbsp;` stays a non-breaking
     // space, as Excel keeps it, while ordinary whitespace collapses.
