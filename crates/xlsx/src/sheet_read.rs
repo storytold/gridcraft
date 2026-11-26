@@ -7,7 +7,7 @@ use craft_xlsx::{
     CellFormula as CraftFormula, CellValue as CraftValue, FormulaKind as CraftFormulaKind, Row as CraftRow, SheetEntry as CraftSheetEntry,
     SheetKind as CraftSheetKind, SheetPart as CraftSheetPart, Visibility as CraftVisibility,
 };
-use gridcraft_core::date::{serial_from_ymd, time_fraction};
+use gridcraft_core::date::{days_in_month, serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
 use gridcraft_model::{
@@ -951,7 +951,8 @@ pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
         let y: i64 = it.next()?.parse().ok()?;
         let m: i64 = it.next()?.parse().ok()?;
         let d: i64 = it.next()?.parse().ok()?;
-        if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        let year = i32::try_from(y).ok()?;
+        if !(1..=12).contains(&m) || !(1..=31).contains(&d) || d > i64::from(days_in_month(year, u32::try_from(m).ok()?)) {
             return None;
         }
         serial = serial_from_ymd(sys, y, m, d)?;
@@ -1093,6 +1094,15 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+        assert_eq!(parse_iso_datetime("2023-02-29", DateSystem::D1900), None);
+        assert_eq!(parse_iso_datetime("2024-04-31", DateSystem::D1900), None);
+        assert_eq!(parse_iso_datetime("2024-02-30", DateSystem::D1900), None);
+        assert_eq!(parse_iso_datetime("1900-02-29", DateSystem::D1900), None, "t=\"d\" is a real ISO date");
+        assert_eq!(parse_iso_datetime("1904-02-30", DateSystem::D1904), None);
+        assert_eq!(
+            parse_iso_datetime("2024-02-29", DateSystem::D1900),
+            Some(gridcraft_core::date::serial_from_ymd(DateSystem::D1900, 2024, 2, 29).unwrap())
+        );
     }
 
     fn ctx(pkg: crate::package::Package<'_>) -> Ctx<'_> {
