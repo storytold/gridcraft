@@ -83,7 +83,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HFIA", Entry::Finish(Action::Pending("home.fillAcrossWorksheets"))), // pending; Excel: Fill Across Worksheets; Fill Across Worksheets; reserved until the command lands
     ("HFID", Entry::Finish(Action::Command("edit.fillDown"))),             // Excel: Fill Down
     ("HFIF", Entry::Finish(Action::Command("edit.flashFill"))),            // Excel: Flash Fill
-    ("HFIJ", Entry::Finish(Action::Command("home.justify"))),              // Excel: Fill Justify; containment(Justify)
+    ("HFIJ", Entry::Finish(Action::Command("edit.fillJustify"))),          // Excel: Fill Justify
     ("HFIL", Entry::Finish(Action::Command("edit.fillLeft"))),             // Excel: Fill Left
     ("HFIR", Entry::Finish(Action::Command("edit.fillRight"))),            // Excel: Fill Right
     ("HFIS", Entry::Finish(Action::Dialog("series"))),                     // Excel: Fill Series; containment(Series)
@@ -390,6 +390,7 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("EAM", Entry::Finish(Action::Command("edit.clearComments"))), // Excel: Edit > Clear > Comments; Legacy Excel 2003 menu path (#941).
     ("EF", Entry::Finish(Action::Dialog("find"))),         // Excel: Edit > Find; Legacy Excel 2003 menu path (#941).
     ("EG", Entry::Finish(Action::Dialog("goTo"))),         // Excel: Edit > Go To; Legacy Excel 2003 menu path (#941).
+    ("EIJ", Entry::Finish(Action::Command("edit.fillJustify"))), // Excel: Edit > Fill > Justify; Legacy Excel 2003 menu path (#1673).
     ("ORA", Entry::Finish(Action::Command("home.autofitRowHeight"))), // Excel: Format > Row > AutoFit; Legacy Excel 2003 menu path (#941).
     ("ORE", Entry::Finish(Action::Dialog("rowHeight"))),   // Excel: Format > Row > Height; Legacy Excel 2003 menu path (#941).
     ("ORH", Entry::Finish(Action::Command("home.hideRows"))), // Excel: Format > Row > Hide; Legacy Excel 2003 menu path (#941).

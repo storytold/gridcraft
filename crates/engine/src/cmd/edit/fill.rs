@@ -1,4 +1,4 @@
-use super::{CellRef, EngineError, Json, RangeRef, Result, Session, bad, edit, f64_param, json, str_param, target_range, target_sheet};
+use super::{CellRef, EngineError, Json, RangeRef, Result, Session, bad, bool_param, edit, f64_param, json, str_param, target_range, target_sheet};
 
 // ---------------------------------------------------------------- fill
 
@@ -94,4 +94,19 @@ pub(super) fn flash_fill(s: &mut Session, p: &Json) -> Result<Json> {
         ));
     }
     Ok(json!({"filled": n}))
+}
+
+/// Fill › Justify over the selection (see [`crate::fill::justify`]).
+pub(super) fn fill_justify(s: &mut Session, p: &Json) -> Result<Json> {
+    let sheet = target_sheet(s, p)?;
+    // Reflowing one area could run into the next, and which one a prompt meant would be unclear.
+    let areas = super::target_ranges(s, p)?;
+    if areas.len() > 1 {
+        return Err(EngineError::Other("Fill Justify works on one range at a time.".into()));
+    }
+    let r = target_range(s, p)?;
+    let overwrite = bool_param(p, "overwrite").unwrap_or(false);
+    let measure = s.text_width.clone();
+    let done = edit(s, |cx| crate::fill::justify(cx, sheet, r, measure.as_ref(), overwrite))?;
+    Ok(json!({"lines": done.lines, "range": done.range.a1()}))
 }

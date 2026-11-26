@@ -144,12 +144,32 @@ impl SheetApp {
             self.open_switch_windows = true;
             return;
         }
+        let asked = self.bound_to_selection(&params);
         match self.run(id, params) {
             // A refused cell draft already shows its own message (with the rule's title).
             Err(e) if self.message.as_ref().is_some_and(|(_, m)| *m == e) => {}
+            // A command that would replace data asks first; OK runs it again with `overwrite`, on
+            // the sheet and cells it asked about even if the selection moves meanwhile.
+            Err(e) if crate::macro_ui::ask(self, "GridCraft", id, &asked, &e) => {}
             Err(e) => self.alert(e),
             Ok(_) => {}
         }
+    }
+
+    /// `params` with the active sheet and selection named, when they name no range: the command
+    /// they run again later then acts where it was asked about.
+    fn bound_to_selection(&self, params: &Json) -> Json {
+        let mut bound = params.clone();
+        if let (Some(m), Some(d)) = (bound.as_object_mut(), self.session.active())
+            && !m.contains_key("range")
+            && let Some(sh) = d.wb.active()
+        {
+            m.insert("sheet".into(), json!(sh.name));
+            // The area a command takes from the selection (`target_range`): its first.
+            let area = d.selection.ranges.first().copied().unwrap_or_else(|| d.selection.current());
+            m.insert("range".into(), json!(area.a1()));
+        }
+        bound
     }
 
     /// Shows a command error: a toast for an unavailable command, else a message box.

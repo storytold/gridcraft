@@ -567,9 +567,9 @@
   {
    "seq": "HFIJ",
    "kind": "command",
-   "target": "home.justify",
+   "target": "edit.fillJustify",
    "excel": "Fill Justify",
-   "note": "containment(Justify)"
+   "note": ""
   },
   {
    "seq": "HFIL",
@@ -2705,6 +2705,13 @@
    "target": "goTo",
    "excel": "Edit > Go To",
    "note": "Legacy Excel 2003 menu path (#941)."
+  },
+  {
+   "seq": "EIJ",
+   "kind": "command",
+   "target": "edit.fillJustify",
+   "excel": "Edit > Fill > Justify",
+   "note": "Legacy Excel 2003 menu path (#1673)."
   },
   {
    "seq": "ORA",
