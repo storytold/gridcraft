@@ -4,11 +4,12 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
-mod b64;
+pub mod b64;
 pub mod cell;
 mod cellmap;
 pub mod features;
 pub mod macros;
+pub mod paper;
 pub mod password;
 pub mod preserved;
 pub mod python;
@@ -31,7 +32,7 @@ pub use style::{
 };
 pub use workbook::{
     CalcMode, CalcSettings, DefinedName, DocProps, EQUATION_BUDGET_MESSAGE, MAX_EQUATION_LAYOUT_BYTES, PhoneticProps, PhoneticRun, PhoneticString,
-    RefHost, ShowObjects, Workbook, WorkbookView,
+    RefHost, ShowObjects, Workbook, WorkbookView, WriteReservation,
 };
 
 /// Font used for new workbooks. Only a name: renderers substitute an available open font

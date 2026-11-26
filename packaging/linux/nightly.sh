@@ -20,10 +20,11 @@ STAGE="$NIGHTLY_WORK/stage"
 mkdir -p "$STAGE"
 # The kit's tar layout: `gridcraft` is the launcher people run and `gridcraft-bin` is the GUI it
 # starts. An unpacked archive is isolated too, because the GUI refuses to start without a launch
-# profile and the launcher is the only thing that supplies one.
+# profile and the launcher is the only thing that supplies one. The launcher is craft-common-actions'
+# canonical template rendered for this app (scripts/nightly_app.py launcher), not a local script.
 cp "$NIGHTLY_GUI" "$STAGE/gridcraft-bin"
 chmod 755 "$STAGE/gridcraft-bin"
-cp "$ROOT/packaging/linux/nightly-launch.sh" "$STAGE/gridcraft"
+cp "$ROOT/packaging/linux/nightly-tar-launch.sh" "$STAGE/gridcraft"
 chmod 755 "$STAGE/gridcraft"
 # The nightly channel's own icon (deeper field); the archive member name stays as the helper requires.
 cp "$ROOT/assets/app-icon/gridcraft-nightly.png" "$STAGE/gridcraft-nightly.png"

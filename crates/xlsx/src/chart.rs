@@ -54,7 +54,16 @@ pub(crate) fn map_dml_color(c: &DmlColor) -> Option<Color> {
     }
 }
 
+/// Whether a line group draws markers: the group's `c:marker` is on (or missing) and not every
+/// series hides its marker.
+fn line_group_markers(g: &El) -> bool {
+    let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+    let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
+    group_markers && !(all_none && g.kids("ser").next().is_some())
+}
+
 fn map_chart_type(k: ChartType, plot: Option<&El>) -> ChartKind {
+    let line_groups = || plot.into_iter().flat_map(|p| p.kids("lineChart").chain(p.kids("line3DChart")));
     match k {
         ChartType::Column => ChartKind::ColumnClustered,
         ChartType::StackedColumn => ChartKind::ColumnStacked,
@@ -63,19 +72,22 @@ fn map_chart_type(k: ChartType, plot: Option<&El>) -> ChartKind {
         ChartType::StackedBar => ChartKind::BarStacked,
         ChartType::PercentBar => ChartKind::BarStacked100,
         ChartType::Line => {
-            let markers = plot
-                .into_iter()
-                .flat_map(|p| p.kids("lineChart").chain(p.kids("line3DChart")))
-                .filter(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked")))
-                .any(|g| {
-                    let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
-                    let all_none = g.kids("ser").all(|s| s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none"));
-                    group_markers && !(all_none && g.kids("ser").next().is_some())
-                });
+            let markers = line_groups().filter(|g| !matches!(g.child_val("grouping"), Some("stacked" | "percentStacked"))).any(line_group_markers);
             if markers { ChartKind::LineMarkers } else { ChartKind::Line }
         }
         ChartType::LineMarkers => ChartKind::LineMarkers,
-        ChartType::StackedLine => ChartKind::LineStacked,
+        // `percentStacked` and `stacked` line groups both read as stacked lines; the grouping
+        // tells them apart.
+        ChartType::StackedLine => {
+            let pct: Vec<&El> = line_groups().filter(|g| g.child_val("grouping") == Some("percentStacked")).collect();
+            if pct.is_empty() {
+                ChartKind::LineStacked
+            } else if pct.iter().any(|g| line_group_markers(g)) {
+                ChartKind::LineStacked100Markers
+            } else {
+                ChartKind::LineStacked100
+            }
+        }
         ChartType::Area => ChartKind::Area,
         ChartType::StackedArea => {
             let pct = plot
@@ -214,15 +226,17 @@ fn group_kind(g: &El) -> Option<ChartKind> {
             }
         }
         "lineChart" | "line3DChart" => {
-            if stacked || pct {
+            if stacked {
                 ChartKind::LineStacked
             } else {
                 // The group's kind is its first series' (each series may differ; see
                 // `series_kind_in`).
+                let (plain, marked) =
+                    if pct { (ChartKind::LineStacked100, ChartKind::LineStacked100Markers) } else { (ChartKind::Line, ChartKind::LineMarkers) };
                 match g.kids("ser").next() {
-                    Some(first) => series_kind_in(g, ChartKind::LineMarkers, first),
-                    None if g.child_val("marker").is_some_and(|v| v == "0" || v == "false") => ChartKind::Line,
-                    None => ChartKind::LineMarkers,
+                    Some(first) => series_kind_in(g, marked, first),
+                    None if g.child_val("marker").is_some_and(|v| v == "0" || v == "false") => plain,
+                    None => marked,
                 }
             }
         }
@@ -249,15 +263,20 @@ fn group_kind(g: &El) -> Option<ChartKind> {
     })
 }
 
-/// The kind series `s` of group `g` (of kind `k`) is drawn as: in a line group its own markers
-/// (none when it says so), in a scatter group its own lines; otherwise the group's.
+/// The kind series `s` of group `g` (of kind `k`) is drawn as: in a line or 100% stacked line
+/// group its own markers (none when it says so), in a scatter group its own lines; otherwise
+/// the group's.
 fn series_kind_in(g: &El, k: ChartKind, s: &El) -> ChartKind {
+    let marked = || {
+        let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
+        let none = s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
+        group_markers && !none
+    };
     match k {
-        ChartKind::Line | ChartKind::LineMarkers => {
-            let group_markers = g.child_val("marker").is_none_or(|v| v == "1" || v == "true");
-            let none = s.path(&["marker", "symbol"]).and_then(|m| m.attr("val")) == Some("none");
-            if group_markers && !none { ChartKind::LineMarkers } else { ChartKind::Line }
-        }
+        ChartKind::Line | ChartKind::LineMarkers if marked() => ChartKind::LineMarkers,
+        ChartKind::Line | ChartKind::LineMarkers => ChartKind::Line,
+        ChartKind::LineStacked100 | ChartKind::LineStacked100Markers if marked() => ChartKind::LineStacked100Markers,
+        ChartKind::LineStacked100 | ChartKind::LineStacked100Markers => ChartKind::LineStacked100,
         ChartKind::Scatter | ChartKind::ScatterLines if g.child_val("scatterStyle") != Some("marker") => {
             if s.path(&["spPr", "ln"]).is_some_and(|l| l.child("noFill").is_some()) { ChartKind::Scatter } else { ChartKind::ScatterLines }
         }
@@ -468,7 +487,7 @@ pub fn read_chart(root: &El) -> Option<Chart> {
 #[derive(Clone, Copy, PartialEq)]
 enum G {
     Bar { bar: bool, grouping: &'static str },
-    Line { stacked: bool, markers: bool },
+    Line { grouping: &'static str, markers: bool },
     Pie,
     Doughnut,
     Area { grouping: &'static str },
@@ -510,7 +529,7 @@ fn fit_axes(g: G, family: Axes) -> G {
     let line_like = matches!(g, G::Line { .. } | G::Area { .. } | G::Radar | G::Scatter { .. });
     match family {
         Axes::None => g,
-        Axes::Category if line_like => G::Line { stacked: false, markers: false },
+        Axes::Category if line_like => G::Line { grouping: "standard", markers: false },
         Axes::Category => G::Bar { bar: false, grouping: "clustered" },
         Axes::Horizontal => G::Bar { bar: true, grouping: "clustered" },
         Axes::Values => G::Scatter { lines: true },
@@ -524,9 +543,11 @@ fn group_for(k: ChartKind) -> G {
         ChartKind::BarClustered => G::Bar { bar: true, grouping: "clustered" },
         ChartKind::BarStacked => G::Bar { bar: true, grouping: "stacked" },
         ChartKind::BarStacked100 => G::Bar { bar: true, grouping: "percentStacked" },
-        ChartKind::Line => G::Line { stacked: false, markers: false },
-        ChartKind::LineMarkers => G::Line { stacked: false, markers: true },
-        ChartKind::LineStacked => G::Line { stacked: true, markers: false },
+        ChartKind::Line => G::Line { grouping: "standard", markers: false },
+        ChartKind::LineMarkers => G::Line { grouping: "standard", markers: true },
+        ChartKind::LineStacked => G::Line { grouping: "stacked", markers: false },
+        ChartKind::LineStacked100 => G::Line { grouping: "percentStacked", markers: false },
+        ChartKind::LineStacked100Markers => G::Line { grouping: "percentStacked", markers: true },
         ChartKind::Pie => G::Pie,
         ChartKind::Doughnut => G::Doughnut,
         ChartKind::Area => G::Area { grouping: "standard" },
@@ -752,7 +773,7 @@ fn multi_level_cat(f: &str, values: &str, wb: &Workbook, si: usize) -> Option<St
 /// or lines within its group.
 fn series_xml(s: &Series, idx: usize, g: G, own: ChartKind, wb: &Workbook, si: usize) -> String {
     let g = match (g, group_for(own)) {
-        (G::Line { stacked, .. }, G::Line { markers, .. }) => G::Line { stacked, markers },
+        (G::Line { grouping, .. }, G::Line { markers, .. }) => G::Line { grouping, markers },
         (G::Scatter { .. }, mine @ G::Scatter { .. }) => mine,
         _ => g,
     };
@@ -902,9 +923,8 @@ fn group_xml(g: G, series: &[(usize, &Series)], kinds: &[ChartKind], ch: &Chart,
             )
         }
         // Each series states its own markers; an empty group's say whether the chart has them.
-        G::Line { stacked, markers } => format!(
-            "<c:lineChart><c:grouping val=\"{}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"{}\"/>{ax}</c:lineChart>",
-            if stacked { "stacked" } else { "standard" },
+        G::Line { grouping, markers } => format!(
+            "<c:lineChart><c:grouping val=\"{grouping}\"/><c:varyColors val=\"0\"/>{sers}{dl}<c:marker val=\"{}\"/>{ax}</c:lineChart>",
             u8::from(markers || !series.is_empty())
         ),
         G::Pie => format!("<c:pieChart><c:varyColors val=\"1\"/>{sers}{dl}<c:firstSliceAng val=\"{}\"/></c:pieChart>", ch.first_slice_angle % 360),
@@ -1010,7 +1030,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     let stock = ch.kind == ChartKind::Stock;
     let kinds = ch.series_kinds();
     let group_of = |i: usize| match group_for(kinds.get(i).copied().unwrap_or(ChartKind::ColumnClustered)) {
-        G::Line { stacked, .. } => G::Line { stacked, markers: false },
+        G::Line { grouping, .. } => G::Line { grouping, markers: false },
         G::Scatter { .. } => G::Scatter { lines: true },
         g => g,
     };
@@ -1037,7 +1057,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
         // A stock group holds 3 or 4 series (high-low-close, open-high-low-close); others are
         // lines, which join a line group already there rather than setting its grouping.
         let (out, stock_lines): (Vec<_>, Vec<_>) = out.into_iter().partition(|(g, m)| *g != G::Stock || (3..=4).contains(&m.len()));
-        let stock_lines = stock_lines.into_iter().map(|(_, m)| (G::Line { stacked: false, markers: false }, m));
+        let stock_lines = stock_lines.into_iter().map(|(_, m)| (G::Line { grouping: "standard", markers: false }, m));
         // One group per type on a pair of axes (as Excel keeps them; `Chart::series_kind` gives
         // the series of one type one grouping). Groups that fit the axes come first, so a group
         // moved onto them joins one of its type there rather than setting its grouping.
@@ -1065,7 +1085,7 @@ pub fn write_chart(wb: &Workbook, si: usize, ch: &Chart, book_name: &str) -> Str
     // stock group must hold series, so an empty stock chart has a line group).
     if primary.is_empty() {
         let g = match group_for(ch.kind) {
-            G::Stock => G::Line { stacked: false, markers: false },
+            G::Stock => G::Line { grouping: "standard", markers: false },
             g => g,
         };
         primary.push((g, Vec::new()));

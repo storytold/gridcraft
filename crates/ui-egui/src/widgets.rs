@@ -303,7 +303,7 @@ pub fn committed_text(ui: &mut Ui, id: egui::Id, current: &str, width: Option<f3
     let r = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(width));
     if r.lost_focus() {
         ui.data_mut(|d| d.remove::<String>(draft));
-        return (!ui.input(|i| i.key_pressed(egui::Key::Escape))).then_some(text);
+        return (!crate::framework::escape_pressed(ui.ctx())).then_some(text);
     }
     if r.has_focus() {
         ui.data_mut(|d| d.insert_temp(draft, text));
@@ -600,7 +600,8 @@ pub fn message_box(app: &mut SheetApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.button(format!("  {}  ", lang.tr("OK"))).clicked()
-                || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
+                || ui.input(|i| i.key_pressed(egui::Key::Enter))
+                || crate::framework::escape_pressed(ui.ctx())
             {
                 close = true;
             }
