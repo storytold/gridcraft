@@ -160,6 +160,13 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                     [("Edit Hyperlink…", "ui:insertLink"), ("Open Hyperlink", "ui:openLink"), ("Remove Hyperlink", "edit.clearHyperlinks")],
                 );
             }
+            let pivot = crate::pivot_pane::active_pivot(app);
+            if pivot.is_some()
+                && let Some(i) = items.iter().position(|(_, id)| *id == "edit.clearContents")
+            {
+                items.insert(i + 1, ("-", ""));
+                items.insert(i + 2, ("Refresh", "pivot.refresh"));
+            }
             if show_details_offered(app)
                 && let Some(i) = items.iter().position(|(_, id)| *id == "data.sortDescending")
             {
@@ -205,6 +212,11 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                             app.copy_to_clipboard(ui.ctx(), id);
                         }
                         "edit.paste" => app.paste_from_clipboard(),
+                        "pivot.refresh" => {
+                            if let Some(name) = &pivot {
+                                app.run_or_alert("pivot.refresh", json!({"pivot": name}));
+                            }
+                        }
                         other => app.run_or_alert(other, json!({})),
                     }
                 }
