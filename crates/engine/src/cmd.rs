@@ -845,7 +845,8 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
         {
             {
                 e.size = None;
-                if *e == gridcraft_model::LineInfo::default() {
+                // A visible entry is kept when rows are hidden by default: removing it would hide the row.
+                if *e == gridcraft_model::LineInfo::default() && !shm.rows_hidden_by_default {
                     shm.rows.remove(&row);
                 }
             }
@@ -890,9 +891,11 @@ pub(crate) fn fit_row_height(wb: &mut Workbook, si: usize, row: u32, sweep: &mut
         need = need.max(h.min(546.0));
     }
     let Some(shm) = wb.sheet_mut(si) else { return };
-    let e = shm.rows.entry(row).or_default();
+    // An entry no different from having none is dropped (hidden, when rows are hidden by default).
+    let blank = shm.blank_row_info();
+    let e = shm.row_entry(row);
     e.size = if (need - default).abs() < 0.5 { None } else { Some(need) };
-    if *e == gridcraft_model::LineInfo::default() {
+    if *e == blank {
         shm.rows.remove(&row);
     }
 }

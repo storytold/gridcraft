@@ -41,10 +41,12 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let before = outline::summary_before(sh, rows);
+        // A row without an entry stays as it is shown: hidden when rows are hidden by default.
+        let blank = if rows { sh.blank_row_info() } else { LineInfo::default() };
         let map = if rows { &mut sh.rows } else { &mut sh.cols };
         let b = b.min(a.saturating_add(1_048_575));
         for i in a..=b {
-            let e = map.entry(i).or_default();
+            let e = map.entry(i).or_insert(blank);
             e.outline = if on { (e.outline + 1).min(outline::MAX_LEVEL) } else { e.outline.saturating_sub(1) };
             if !on && e.outline == 0 {
                 e.hidden = false;

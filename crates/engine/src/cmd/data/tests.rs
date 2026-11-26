@@ -698,3 +698,51 @@ fn list_search_source_matches_list_items_within_budget() {
     // The spilled SEQUENCE is read cell by cell like stored values.
     assert_eq!(list_search_source(&wb, 0, CellRef::new(0, 2), &rules[1], 100).items, ["1", "2", "3", "4"]);
 }
+
+/// #4502: on a sheet with rows hidden by default, Unhide Rows shows rows that have no entry (it
+/// gives them one), Unhide Rows over the whole sheet ends the setting, and grouping, AutoFit or
+/// typing into a hidden row does not show it.
+#[test]
+fn rows_hidden_by_default_unhide_and_stay_hidden_otherwise() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["a"], ["b"], ["c"]]})).unwrap();
+    {
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.rows_hidden_by_default = true;
+        sh.rows.insert(0, LineInfo::default());
+    }
+    let hidden = |s: &Session, r: u32| s.doc().unwrap().wb.active().unwrap().is_row_hidden(r);
+    assert!(!hidden(&s, 0) && hidden(&s, 1) && hidden(&s, 2) && hidden(&s, 50));
+    s.execute("data.group", json!({"rows": "20:22"})).unwrap();
+    s.execute("home.autofitRowHeight", json!({"rows": "2:3"})).unwrap();
+    s.execute("range.setValues", json!({"range": "A21", "values": [["x"]]})).unwrap();
+    assert!(hidden(&s, 1) && hidden(&s, 2) && hidden(&s, 20), "grouping, AutoFit and typing keep rows hidden");
+    s.execute("home.unhideRows", json!({"rows": "2:2"})).unwrap();
+    assert!(!hidden(&s, 1), "row 2 shows");
+    assert!(hidden(&s, 30), "rows outside the selection stay hidden");
+    assert!(s.doc().unwrap().wb.active().unwrap().rows_hidden_by_default);
+    s.execute("home.unhideRows", json!({"rows": "1:1048576"})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert!(!sh.rows_hidden_by_default);
+    assert!(!sh.is_row_hidden(50) && !sh.is_row_hidden(20) && !sh.is_row_hidden(1_048_575));
+}
+
+/// #4502: sorting keeps each row's own hidden state on a sheet with rows hidden by default. A row
+/// height moving onto a row without an entry must not make that row show.
+#[test]
+fn sort_keeps_rows_hidden_by_default_hidden() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[3], [2], [1]]})).unwrap();
+    {
+        let sh = Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.rows_hidden_by_default = true;
+        sh.rows.insert(0, LineInfo { size: Some(40.0), custom: true, ..LineInfo::default() });
+    }
+    s.execute("data.sort", json!({"range": "A1:A3", "header": false, "keys": [{"column": "A"}]})).unwrap();
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    assert_eq!(sh.value(CellRef::new(2, 0)).display(), "3");
+    assert!(!sh.is_row_hidden(0), "row 1 keeps its entry and shows");
+    assert!(sh.is_row_hidden(1) && sh.is_row_hidden(2), "rows 2 and 3 stay hidden");
+}

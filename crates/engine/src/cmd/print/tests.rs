@@ -1250,3 +1250,26 @@ fn chart_budget_counts_path_points_and_drops_charts_that_do_not_fit() {
     assert!(pics.chart((0, 1), || vec![line(1000)]).is_none());
     assert!(pics.charts.is_empty() && pics.rejected_charts.contains(&(0, 1)));
 }
+
+/// #4502: on a sheet with rows hidden by default only the rows with an entry print. Values in
+/// rows 1-4, 9 (hidden itself) and 120 with a print area of A1:B120 make one page, not three.
+#[test]
+fn rows_hidden_by_default_do_not_print() {
+    let mut s = s();
+    for r in [1, 2, 3, 4, 9, 120] {
+        s.execute("range.setValues", json!({"range": format!("A{r}"), "values": [[r]]})).unwrap();
+    }
+    s.execute("pageLayout.pageSetup", json!({"printArea": "A1:B120"})).unwrap();
+    assert_eq!(pdf_of(&mut s, json!({})).1, 3);
+    {
+        let sh = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap();
+        sh.rows_hidden_by_default = true;
+        for r in [0, 1, 2, 3, 119] {
+            sh.rows.insert(r, gridcraft_model::LineInfo::default());
+        }
+        sh.rows.insert(8, gridcraft_model::LineInfo { hidden: true, ..Default::default() });
+    }
+    assert_eq!(pdf_of(&mut s, json!({})).1, 1);
+    let pv = s.execute("file.printPreview", json!({})).unwrap();
+    assert_eq!(pv["pages"], 1);
+}

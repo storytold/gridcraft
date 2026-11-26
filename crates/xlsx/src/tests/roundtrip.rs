@@ -2473,3 +2473,66 @@ fn issue_778_full_workbook_import_save_reopen_roundtrip() {
     let out_chart = read_part("xl/charts/chart1.xml");
     assert!(out_chart.contains("<c:numCache>") && out_chart.contains("<c:v>42.5</c:v>"), "{out_chart}");
 }
+
+/// #4502: `sheetFormatPr zeroHeight="1"` (rows hidden by default) survives open and save. Rows
+/// with an element show (even one with nothing on it), a row element marked hidden stays hidden,
+/// and every row without an element stays hidden, through to the last row of the sheet.
+#[test]
+fn rows_hidden_by_default_survive_a_round_trip() {
+    use gridcraft_core::{CellRef, MAX_ROWS};
+    let row = |r: u32, extra: &str| format!(r#"<row r="{r}"{extra}><c r="A{r}"><v>{r}</v></c></row>"#);
+    let body = format!(
+        r#"<sheetFormatPr defaultRowHeight="15" zeroHeight="1"/><sheetData>{}{}{}{}<row r="5"/>{}{}</sheetData>"#,
+        row(1, ""),
+        row(2, ""),
+        row(3, ""),
+        row(4, r#" ht="30" customHeight="1""#),
+        row(9, r#" hidden="1""#),
+        row(120, "")
+    );
+    let check = |wb: &gridcraft_model::Workbook, what: &str| {
+        let s = wb.sheet(0).unwrap();
+        assert!(s.rows_hidden_by_default, "{what}");
+        for r in [0, 1, 2, 3, 4, 119] {
+            assert!(!s.is_row_hidden(r), "{what}: row {}", r + 1);
+        }
+        for r in [5, 8, 118, 120, MAX_ROWS - 1] {
+            assert!(s.is_row_hidden(r), "{what}: row {}", r + 1);
+        }
+        assert_eq!(s.value(CellRef::new(8, 0)), gridcraft_core::Value::Number(9.0), "{what}");
+        assert!((s.row_height(3) - crate::tables::pt_to_px(30.0)).abs() < 0.01, "{what}");
+    };
+    let (wb, _) = read_xlsx(&super::minimal(&body, &[], "", "")).unwrap();
+    check(&wb, "opened");
+    let saved = write_xlsx(&wb).unwrap();
+    let xml = part_text(&saved, "xl/worksheets/sheet1.xml");
+    assert!(xml.contains(r#"zeroHeight="1""#), "{xml}");
+    // The bare row 5 is written so it still shows.
+    assert!(xml.contains(r#"<row r="5"/>"#), "{xml}");
+    let (back, _) = read_xlsx(&saved).unwrap();
+    check(&back, "saved and reopened");
+}
+
+/// A row that has cells but no entry on a sheet with rows hidden by default is written hidden,
+/// so the saved file hides it as the sheet did; without the setting no attribute is added.
+#[test]
+fn rows_without_an_entry_are_written_hidden_when_rows_are_hidden_by_default() {
+    use gridcraft_core::{CellRef, Value};
+    let mut wb = gridcraft_model::Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.set_value(CellRef::new(6, 0), Value::Number(7.0));
+    let plain = part_text(&write_xlsx(&wb).unwrap(), "xl/worksheets/sheet1.xml");
+    assert!(!plain.contains("zeroHeight") && !plain.contains("hidden=\"1\""), "{plain}");
+    wb.sheet_mut(0).unwrap().rows_hidden_by_default = true;
+    let xml = part_text(&write_xlsx(&wb).unwrap(), "xl/worksheets/sheet1.xml");
+    assert!(xml.contains(r#"<row r="7" hidden="1">"#), "{xml}");
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(back.sheet(0).unwrap().is_row_hidden(6));
+}
+
+fn part_text(bytes: &[u8], name: &str) -> String {
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut t = String::new();
+    z.by_name(name).unwrap().read_to_string(&mut t).unwrap();
+    t
+}
