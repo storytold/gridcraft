@@ -1,0 +1,5 @@
+# Shapes with text and a picture from base64 (a 1x1 PNG)
+insert.shape={"kind":"rectangle","at":"K30","width":120,"height":40,"text":"Box","fill":"#FFC000"}
+insert.shape={"kind":"ellipse","at":"O30","width":80,"height":40}
+insert.shape={"kind":"arrow","at":"K33","width":80,"height":30}
+insert.picture={"base64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==","mime":"image/png","at":"B20","width":60,"height":60,"alt":"dot"}
