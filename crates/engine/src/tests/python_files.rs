@@ -56,7 +56,7 @@ fn with_parts(bytes: &[u8], edit: impl Fn(&str, &str) -> String, add: &[(&str, &
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let name = f.name().to_string();
+        let name = f.name().unwrap().to_string();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
         if let Ok(text) = std::str::from_utf8(&data) {
@@ -250,7 +250,7 @@ fn with_damaged_part(bytes: &[u8], name: &str, marker: &str) -> Vec<u8> {
     let mut out = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for i in 0..z.len() {
         let mut f = z.by_index(i).unwrap();
-        let entry = f.name().to_string();
+        let entry = f.name().unwrap().to_string();
         let mut data = Vec::new();
         f.read_to_end(&mut data).unwrap();
         let options = zip::write::SimpleFileOptions::default();
