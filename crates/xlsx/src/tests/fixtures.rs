@@ -236,6 +236,38 @@ fn dxf_font_and_parts_stated_at_their_defaults_survive_save() {
     assert_eq!(written, Some(format!(r#" count="4">{dxfs}"#).as_str()));
 }
 
+/// Differential fonts that turn outlined letters on, or state them off (alone, or after strike),
+/// keep it on save, like strike.
+#[test]
+fn dxf_outline_font_survives_save() {
+    let dxfs = concat!(
+        r#"<dxf><font><outline/></font></dxf>"#,
+        r#"<dxf><font><strike val="0"/><outline val="0"/></font></dxf>"#,
+        r#"<dxf><font><outline val="0"/></font></dxf>"#,
+    );
+    let styles = format!(
+        r#"<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+      <fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>
+      <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
+      <borders count="1"><border/></borders>
+      <cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellXfs>
+      <dxfs count="3">{dxfs}</dxfs>
+    </styleSheet>"#
+    );
+    let rels = r#"<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <conditionalFormatting sqref="A1"><cfRule type="cellIs" dxfId="0" priority="1" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A2"><cfRule type="cellIs" dxfId="1" priority="2" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>
+      <conditionalFormatting sqref="A3"><cfRule type="cellIs" dxfId="2" priority="3" operator="greaterThan"><formula>0</formula></cfRule></conditionalFormatting>"#;
+    let bytes = minimal(body, &[("xl/styles.xml", &styles)], rels, "");
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let out = crate::write_xlsx(&wb).unwrap();
+    let st = crate::package::Package::open(&out).unwrap().read("xl/styles.xml").unwrap().unwrap();
+    let st = String::from_utf8(st).unwrap();
+    let written = st.split_once("<dxfs").and_then(|(_, r)| r.split_once("</dxfs>")).map(|(d, _)| d);
+    assert_eq!(written, Some(format!(r#" count="3">{dxfs}"#).as_str()));
+}
+
 /// A dxf writes its parts in schema order: the border comes before the protection.
 #[test]
 fn dxf_border_is_written_before_protection() {
@@ -445,7 +477,7 @@ fn drawing_with_picture_and_chart() {
             let mut f = z.by_index(i).unwrap();
             let mut d = vec![];
             std::io::Read::read_to_end(&mut f, &mut d).unwrap();
-            parts.push((f.name().to_string(), d));
+            parts.push((f.name().unwrap().to_string(), d));
         }
         parts.push(("xl/media/image1.png".into(), png.to_vec()));
         let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
@@ -882,4 +914,44 @@ fn inline_dxf_number_formats_are_shared() {
     assert_eq!(read.dxfs.len(), 3);
     assert_eq!(read.dxfs[0].num_fmt.as_str(), code);
     assert!(read.dxfs.iter().all(|d| std::sync::Arc::ptr_eq(&d.num_fmt.0, &read.dxfs[0].num_fmt.0)));
+}
+
+#[test]
+fn two_column_groups_on_different_axes_preserve_secondary_and_kind() {
+    let drawing = r#"<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+      <xdr:twoCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>6</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>15</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:graphicFrame><xdr:nvGraphicFramePr><xdr:cNvPr id="2" name="Chart 1"/><xdr:cNvGraphicFramePr/></xdr:nvGraphicFramePr><xdr:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/></xdr:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" r:id="rId1"/></a:graphicData></a:graphic></xdr:graphicFrame><xdr:clientData/></xdr:twoCellAnchor>
+    </xdr:wsDr>"#;
+    let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><c:chart><c:plotArea>
+      <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="0"/><c:tx><c:v>Primary</c:v></c:tx><c:val><c:numRef><c:f>Data!$B$2:$B$5</c:f></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:barChart>
+      <c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:ser><c:idx val="1"/><c:tx><c:v>Secondary</c:v></c:tx><c:val><c:numRef><c:f>Data!$C$2:$C$5</c:f></c:numRef></c:val></c:ser><c:axId val="3"/><c:axId val="4"/></c:barChart>
+      <c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:catAx><c:axId val="3"/></c:catAx><c:valAx><c:axId val="4"/></c:valAx>
+    </c:plotArea></c:chart></c:chartSpace>"#;
+    let drels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>"#;
+    let srels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>"#;
+    let bytes = minimal(
+        r#"<sheetData/><drawing r:id="rId1"/>"#,
+        &[
+            ("xl/worksheets/_rels/sheet1.xml.rels", srels),
+            ("xl/drawings/drawing1.xml", drawing),
+            ("xl/drawings/_rels/drawing1.xml.rels", drels),
+            ("xl/charts/chart1.xml", chart),
+        ],
+        "",
+        "",
+    );
+    let (wb, _) = read_xlsx(&bytes).unwrap();
+    let ch = &wb.sheet(0).unwrap().charts[0];
+    // Series of one kind are one chart, a column chart with a secondary-axis series.
+    assert_eq!(ch.kind, gridcraft_model::ChartKind::ColumnClustered);
+    assert!(!ch.series[0].secondary);
+    assert!(ch.series[1].secondary);
+    assert_eq!(ch.series_kinds(), vec![gridcraft_model::ChartKind::ColumnClustered; 2]);
+
+    let out = crate::write_xlsx(&wb).unwrap();
+    let (wb2, _) = read_xlsx(&out).unwrap();
+    let ch2 = &wb2.sheet(0).unwrap().charts[0];
+    assert_eq!(ch2.kind, gridcraft_model::ChartKind::ColumnClustered);
+    assert!(!ch2.series[0].secondary);
+    assert!(ch2.series[1].secondary);
+    assert_eq!(ch2.series_kinds(), vec![gridcraft_model::ChartKind::ColumnClustered; 2]);
 }

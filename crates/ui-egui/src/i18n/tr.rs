@@ -286,6 +286,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Recent" => "Son Kullanılanlar",
         "No recent workbooks yet." => "Henüz son kullanılan çalışma kitabı yok.",
         "More workbooks" => "Diğer çalışma kitapları",
+        "More entries not shown" => "Diğer öğeler gösterilmiyor",
         "Modified" => "Değiştirilme Tarihi",
         "Not available" => "Kullanılamıyor",
         "Just now" => "Az önce",
@@ -451,6 +452,12 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Show" => "Göster",
         "Collapse dialog" => "İletişim kutusunu daralt",
         "Expand dialog" => "İletişim kutusunu genişlet",
+        "Distinct Count" => "Benzersiz Sayı",
+        "Summarize by Distinct Count" => "Benzersiz Sayıya göre özetle",
+        "A calculated field can't use Distinct Count." => "Hesaplanmış alan Benzersiz Sayı kullanamaz.",
+        "This workbook has a PivotTable with a Distinct Count value field. In the .xlsx file it is stored as a plain Count plus a marker that only GridCraft reads, so Excel's Refresh turns it into a plain count." => {
+            "Bu çalışma kitabında değer alanı “Benzersiz Sayı” olan bir PivotTable var. .xlsx dosyasında düz bir Sayı olarak ve yalnızca GridCraft'in okuduğu bir işaretle saklanır; bu yüzden Excel'de Yenile onu düz bir sayıya dönüştürür."
+        }
         "My list has headers" => "Verilerimde üst bilgi var",
         "Sort by" => "Sıralama ölçütü",
         "Then by" => "Sonra",
@@ -581,6 +588,18 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "\\@char has non-numeric argument {argument}" => "\\@char sayısal olmayan bir bağımsız değişkene sahip: {argument}",
         "\\@char with invalid code point {code}" => "\\@char geçersiz bir kod noktası içeriyor: {code}",
         "Invalid environment name character: {character}" => "Ortam adında geçersiz karakter: {character}",
+        "Copy Cells" => "Hücreleri Kopyala",
+        "Fill Series" => "Seriyi Doldur",
+        "Fill Formatting Only" => "Yalnızca Biçimleri Doldur",
+        "Fill Without Formatting" => "Biçimlendirmeden Doldur",
+        "Fill Days" => "Günleri Doldur",
+        "Fill Weekdays" => "İş Günlerini Doldur",
+        "Fill Months" => "Ayları Doldur",
+        "Fill Years" => "Yılları Doldur",
+        "Auto Fill Options" => "Otomatik Doldurma Seçenekleri",
+        "Series…" => "Seri…",
+        "Down" => "Aşağı",
+        "Up" => "Yukarı",
         _ => return None,
     })
 }
