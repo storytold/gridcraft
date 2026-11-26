@@ -1576,11 +1576,13 @@ fn vba_code_name_warning_does_not_imply_macro_loss() {
 #[test]
 fn plain_open_warning_becomes_an_info_notice() {
     let mut h = harness(blank());
-    h.state_mut().show_open_warnings(&json!({"warnings": ["links to external workbooks are not supported"]}));
-    let n = h.state().notice.clone().unwrap();
-    assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Info);
-    assert!(n.action.is_none());
-    assert!(n.text.contains("external"));
+    for warning in ["links to external workbooks are not supported", r#"sheet "macros": an optional part was dropped"#] {
+        h.state_mut().show_open_warnings(&json!({"warnings": [warning]}));
+        let n = h.state().notice.as_ref().unwrap();
+        assert_eq!(n.kind, gridcraft_ui_egui::NoticeKind::Info);
+        assert!(n.action.is_none());
+        assert_eq!(n.text, warning);
+    }
     // No warnings → no notice, no panic.
     h.state_mut().show_open_warnings(&json!({"warnings": []}));
     assert!(h.state().notice.is_none());
