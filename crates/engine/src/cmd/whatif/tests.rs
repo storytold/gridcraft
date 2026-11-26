@@ -206,6 +206,84 @@ fn advanced_filter_in_place_and_copy() {
     assert!(s.execute("data.advancedFilter", json!({"range": "A1:B6", "criteria": "H1:I3", "copyTo": "B2"})).is_err());
 }
 
+fn set_equality_criterion(s: &mut Session, target: f64, explicit: bool) {
+    s.execute("range.setValues", json!({"range": "C1", "values": [["Amount"], [target]]})).unwrap();
+    if explicit {
+        // A leading apostrophe stores the criterion as text rather than evaluating a formula.
+        s.execute("cell.set", json!({"cell": "C2", "input": format!("'={target}")})).unwrap();
+        assert_eq!(v(s, "C2"), Value::from(format!("={target}")));
+    } else {
+        assert_eq!(v(s, "C2"), Value::Number(target));
+    }
+}
+
+#[test]
+fn advanced_filter_numeric_equality_copies_only_the_equal_number() {
+    for (target, near, far) in [(0.0, 5e-13, 5e-12), (1.0, 1.0 + 5e-13, 1.0 + 5e-12), (1e9, 1e9 + 0.0005, 1e9 + 0.005)] {
+        for explicit in [false, true] {
+            let mut s = s();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["Amount"], [target], [near], [far]]})).unwrap();
+            set_equality_criterion(&mut s, target, explicit);
+            let result = s.execute("data.advancedFilter", json!({"range": "A1:A4", "criteria": "C1:C2", "copyTo": "E1"})).unwrap();
+            assert_eq!(result["matched"], 1, "target {target}, explicit equality {explicit}");
+            assert_eq!(result["range"], "E1:E2");
+            assert_eq!(v(&s, "E1"), Value::from("Amount"));
+            assert_eq!(v(&s, "E2"), Value::Number(target));
+            assert_eq!(v(&s, "E3"), Value::Empty);
+            assert_eq!(v(&s, "A3"), Value::Number(near));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(v(&s, "E1"), Value::Empty);
+            s.execute("edit.redo", json!({})).unwrap();
+            assert_eq!(v(&s, "E2"), Value::Number(target));
+            let bytes = crate::io::save_bytes(&s.doc().unwrap().wb, "filter.xlsx").unwrap();
+            let (wb, _) = crate::io::open_bytes("filter.xlsx", &bytes).unwrap();
+            let sheet = wb.active().unwrap();
+            assert_eq!(sheet.value(CellRef::parse("E2").unwrap()), Value::Number(target));
+            assert_eq!(sheet.value(CellRef::parse("E3").unwrap()), Value::Empty);
+            assert_eq!(sheet.value(CellRef::parse("A3").unwrap()), Value::Number(near));
+        }
+    }
+}
+
+#[test]
+fn advanced_filter_numeric_equality_hides_distinct_nearby_numbers() {
+    for (target, near) in [(0.0, 5e-13), (1.0, 1.0 + 5e-13), (1e9, 1e9 + 0.0005)] {
+        for explicit in [false, true] {
+            let mut s = s();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["Amount"], [target], [near]]})).unwrap();
+            set_equality_criterion(&mut s, target, explicit);
+            let result = s.execute("data.advancedFilter", json!({"range": "A1:A3", "criteria": "C1:C2"})).unwrap();
+            assert_eq!(result["matched"], 1, "target {target}, explicit equality {explicit}");
+            assert!(!s.doc().unwrap().wb.active().unwrap().is_row_hidden(1));
+            assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2));
+            s.execute("edit.undo", json!({})).unwrap();
+            assert!(!s.doc().unwrap().wb.active().unwrap().is_row_hidden(2));
+            s.execute("edit.redo", json!({})).unwrap();
+            assert!(s.doc().unwrap().wb.active().unwrap().is_row_hidden(2));
+            assert_eq!(v(&s, "A3"), Value::Number(near));
+        }
+    }
+}
+
+#[test]
+fn advanced_filter_plain_text_number_criterion_is_exact() {
+    for (target, near, far) in [(0.0, 5e-13, 5e-12), (1.0, 1.0 + 5e-13, 1.0 + 5e-12), (1e9, 1e9 + 0.0005, 1e9 + 0.005)] {
+        let mut s = s();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Amount"], [target], [near], [far]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "C1", "values": [["Amount"]]})).unwrap();
+        // A leading apostrophe stores the criterion as plain text, with no operator in front of the number.
+        s.execute("cell.set", json!({"cell": "C2", "input": format!("'{target}")})).unwrap();
+        assert_eq!(v(&s, "C2"), Value::from(format!("{target}")));
+        let result = s.execute("data.advancedFilter", json!({"range": "A1:A4", "criteria": "C1:C2"})).unwrap();
+        assert_eq!(result["matched"], 1, "target {target}");
+        let sheet = s.doc().unwrap().wb.active().unwrap();
+        assert!(!sheet.is_row_hidden(1), "target {target} stays visible");
+        assert!(sheet.is_row_hidden(2), "{near} is not {target}");
+        assert!(sheet.is_row_hidden(3), "{far} is not {target}");
+        assert_eq!(v(&s, "A3"), Value::Number(near));
+    }
+}
+
 #[test]
 fn advanced_filter_copy_preserves_cells_beyond_result() {
     let mut s = s();
