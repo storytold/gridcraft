@@ -940,6 +940,10 @@ fn read_craft_formula_text(
 /// `2024-03-15`, `2024-03-15T10:30:00Z`, `10:30:00` → serial.
 pub fn parse_iso_datetime(s: &str, sys: DateSystem) -> Option<f64> {
     let s = s.trim_end_matches('Z');
+    if s.is_empty() {
+        // `Z` alone or an empty value is not a date; do not turn it into serial 0.
+        return None;
+    }
     let (date, time) = match s.split_once('T') {
         Some((d, t)) => (d, Some(t)),
         None if s.contains(':') => ("", Some(s)),
@@ -1094,6 +1098,8 @@ mod tests {
         assert_eq!(parse_iso_datetime("06:00:00", DateSystem::D1900), Some(0.25));
         assert_eq!(parse_iso_datetime("garbage", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-13-01", DateSystem::D1900), None);
+        assert_eq!(parse_iso_datetime("Z", DateSystem::D1900), None, "Z alone is not a date");
+        assert_eq!(parse_iso_datetime("", DateSystem::D1900), None, "an empty value is not a date");
         assert_eq!(parse_iso_datetime("2023-02-29", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-04-31", DateSystem::D1900), None);
         assert_eq!(parse_iso_datetime("2024-02-30", DateSystem::D1900), None);
