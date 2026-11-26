@@ -197,6 +197,24 @@ const DASHES: [(LineDash, &str); 11] = [
 
 const EMU_PER_PT: f64 = 12_700.0;
 
+/// The chart's style (1-48). Excel 2010 and later save it inside `mc:AlternateContent`: a
+/// `c14:style` (the style plus 100) as the Choice and a `c:style` as the Fallback. Without one,
+/// Excel's default style 2.
+fn chart_style(root: &El) -> u32 {
+    // Each candidate must be a style itself: an invalid one gives way to the next.
+    let valid = |v: u32| (1..=48).contains(&v).then_some(v);
+    let parse = |v: &str| v.trim().parse::<u32>().ok();
+    let direct = root.child_val("style").and_then(parse).and_then(valid);
+    let alternate = || {
+        root.kids("AlternateContent").find_map(|a| {
+            let fallback = a.path(&["Fallback", "style"]).and_then(|s| s.attr("val")).and_then(parse).and_then(valid);
+            fallback
+                .or_else(|| a.path(&["Choice", "style"]).and_then(|s| s.attr("val")).and_then(parse).and_then(|v| v.checked_sub(100)).and_then(valid))
+        })
+    };
+    direct.or_else(alternate).unwrap_or(2)
+}
+
 fn group_kind(g: &El) -> Option<ChartKind> {
     let grouping = g.child_val("grouping").unwrap_or("standard");
     let stacked = grouping == "stacked";
@@ -443,7 +461,7 @@ pub(crate) fn from_dml_chart(dc: DmlChart, root: Option<&El>) -> Chart {
             outline: t.outline,
         }),
         gridlines: dc.gridlines,
-        style: dc.style,
+        style: root.map_or(dc.style, chart_style),
         hole_size,
         first_slice_angle: dc.first_slice_angle,
         x_title: axis_titles.0,
