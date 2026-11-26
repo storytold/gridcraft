@@ -50,7 +50,7 @@ pub fn place(app: &mut SheetApp, ui: &Ui, resp: &egui::Response, geo: &Geo, sh: 
         return false;
     };
     let ctx = ui.ctx().clone();
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if crate::framework::escape_pressed(&ctx) {
         app.grid.placing = None;
         app.grid.place_start = None;
         return true;

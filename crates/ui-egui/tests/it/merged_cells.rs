@@ -39,7 +39,9 @@ fn click_cell(h: &mut Harness, cell: &str) {
         Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE },
         Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE },
     ]);
-    h.run_steps(2);
+    // The runtime takes one press per frame: the release arrives in the next frame, and the frame
+    // after it shows what the click did.
+    h.run_steps(3);
 }
 
 fn text(h: &mut Harness, text: &str) {
