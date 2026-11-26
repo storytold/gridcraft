@@ -168,7 +168,8 @@
           "vert": "Baseline",
           "charset": null,
           "family": null,
-          "minor": true
+          "minor": true,
+          "outline": false
         },
         "fill": {
           "pattern": "None",
@@ -219,6 +220,7 @@
           "bold": false,
           "italic": false,
           "strike": false,
+          "outline": false,
           "underline": false,
           "size": false,
           "name": false,
@@ -238,7 +240,8 @@
           "vert": "Baseline",
           "charset": null,
           "family": null,
-          "minor": true
+          "minor": true,
+          "outline": false
         },
         "fill": {
           "pattern": "None",
@@ -289,6 +292,7 @@
           "bold": false,
           "italic": false,
           "strike": false,
+          "outline": false,
           "underline": false,
           "size": false,
           "name": false,
@@ -308,7 +312,8 @@
           "vert": "Baseline",
           "charset": null,
           "family": null,
-          "minor": true
+          "minor": true,
+          "outline": false
         },
         "fill": {
           "pattern": "None",
@@ -359,6 +364,7 @@
           "bold": false,
           "italic": false,
           "strike": false,
+          "outline": false,
           "underline": false,
           "size": false,
           "name": false,

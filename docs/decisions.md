@@ -133,3 +133,61 @@ so there the caps and the fuzzed input space are the protection. `crates/math/te
 gate on every test run, so a version bump has to pass it. RaTeX positions glyphs with KaTeX
 font metrics; GridCraft never bundles the KaTeX fonts, so glyphs are drawn with system fonts
 and a glyph no font has is drawn as a `[?]` box.
+
+## Number formats widen columns that weren't sized by hand (#1077)
+
+Increase/Decrease Decimal, the ribbon's other number formats (the Number Format list, Accounting,
+Percent, Comma) and a number format set in Format Cells widen a column so the formatted numbers in
+the target fit, instead of showing `####`.
+Microsoft's support article "Stop showing rounded numbers" says only that "the column width adjusts
+automatically", so the rule comes from observing Excel 16.0 (build 17932, Windows) with synthetic
+workbooks:
+
+- A column at the default width, AutoFitted, or widened this way before widens to the widest number
+  in the formatted range, also with Wrap Text and a large bold font. It never narrows.
+- A width set with Column Width (or by dragging the border) stays, even when it equals the default:
+  the number shows `####`. AutoFit makes such a column automatic again.
+- Hidden columns, text, General numbers (they round to fit instead), merged cells and shrink-to-fit
+  cells don't widen.
+- In XLSX, Excel writes `customWidth="1"` for every width it stores and adds `bestFit="1"` for widths
+  that AutoFit or a number format set. Only `customWidth` without `bestFit` is read as set by hand: a
+  width with no flags, `bestFit` alone, or both, keeps widening after the file is opened again.
+
+`LineInfo::custom`, already used for rows set by hand, now marks columns set by hand too; GridCraft
+writes and reads the two flags as Excel does. In `.xls`, COLINFO's fUserSet marks a column set by
+hand; the shared craft-xls reader does not report fBestFit, so a `.xls` width with both flags also
+counts as set by hand.
+Files that earlier GridCraft versions saved have `customWidth` without `bestFit` on every stored
+width, so those columns open as set by hand and keep their width.
+
+The engine has no font metrics, so the width is the same estimate AutoFit Column Width uses, which
+errs on the wide side; a UI test checks that the real font then draws the number, not `####`.
+Excel doesn't widen when a value is entered into a cell that already has the format (observed through
+the `Value` property: the cell shows `####`), and neither does GridCraft. Typing into such a cell
+wasn't observed.
+
+## CSV: Excel's `sep=` first line (#1446)
+
+A CSV file whose first line is `sep=` plus one character is split at that character when File ›
+Open detects the delimiter, and the line isn't data. Observed in Excel 16.0 (build 17932, Windows)
+opening synthetic files: spaces anywhere in the line are ignored (`sep= |`, ` sep=|  `), case
+doesn't matter, the line may be quoted as a whole field, and a BOM before it is fine. `sep=` with
+nothing after it (or only spaces) is dropped and nothing is split; a non-ASCII character is dropped
+the same way. Two characters after `=` (a tab counts, `sep=|<tab>`), or the line anywhere but first,
+is data. `sep="` splits at the quotes, so nothing is quoted. (#1446 measured `sep=` alone as data in
+Excel for Microsoft 365, de-DE; this build drops it.)
+
+A delimiter given by the caller wins and the line stays data, so a `.tsv`/`.txt` file (read with
+tabs) keeps it. Saving: Excel writes its list separator and drops the line. GridCraft saves a CSV
+with the separator it was read with, so it keeps a named `,` `;` or tab only when detection picks
+it again on reopening; otherwise (`|`, or `sep=;` over text with as many commas) it saves commas.
+Saving drops quotes a field no longer needs, so the written text can still read differently
+(`"a,b";x` saved with `;` is `a,b;x`, a tie that detection gives to comma; `a;b;c|d;e;f` saved with
+commas is `a;b;c,d;e;f`, which detection reads as `;`). Whenever detection on the written text would
+pick another delimiter, or a first row would itself read as a `sep=` line (a lone `sep=;` cell), the
+file starts with a `sep=` line naming its delimiter, so it reopens in the same columns. A `.tsv` or
+`.txt` file is read with tabs given, so it gets no such line. Excel writes
+such a row bare (`"sep=;";`) and reopens the file garbled (observed: A1 `sep=;;`, row 2 in one cell).
+
+From Text/CSV still guesses its own delimiter; making it detect like File › Open (and so honour
+`sep=`) is another part of #1446.
