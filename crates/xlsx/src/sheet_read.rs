@@ -1106,6 +1106,7 @@ mod tests {
             cf_ext_ids: vec![],
             known_function: None,
             python: Default::default(),
+            pictures: Default::default(),
             cells: 0,
             shared_formula_bytes: 0,
             legacy_formulas: vec![],

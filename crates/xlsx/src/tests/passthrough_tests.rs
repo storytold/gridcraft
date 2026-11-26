@@ -44,7 +44,7 @@ const VML: &str = r##"<xml xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:
 /// external link (with formulas using it), a connection, and on sheet "Data" a query table,
 /// printer settings, an OLE object (in `mc:AlternateContent`), a form control, a note and the VML
 /// drawing all of them share.
-fn rich_package() -> Vec<u8> {
+pub(super) fn rich_package() -> Vec<u8> {
     rich_package_with(CONTENT_TYPES, false)
 }
 

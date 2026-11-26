@@ -2,6 +2,8 @@
 //! relationships with GridCraft's `Rel`, part-name resolution, and a deterministic zip writer.
 //! Parts are parsed with this crate's XML reader.
 
+use std::collections::HashMap;
+
 use crate::IoError;
 use crate::xml::{self, El};
 
@@ -19,6 +21,24 @@ const LIMITS: craft_opc::Limits = craft_opc::Limits::new(MAX_ENTRIES, MAX_PART, 
 pub struct Package<'a> {
     opc: craft_opc::LazyPackage<'a>,
     craft: craft_xlsx::Package<'a>,
+    /// The bytes of the parts several readers look up, read so far, by normalized name:
+    /// relationships (a sheet's: its cells, its PivotTables, pass-through), VML drawings (notes,
+    /// form controls, pass-through) and form-control properties (form controls, pass-through).
+    /// `craft-opc` charges every read to the package total, so each is read and charged once.
+    /// With the pictures read once too (`Ctx::pictures`), the writer's check of what a package
+    /// unpacks to (`write.rs`, #3817) is what the reader charges.
+    shared: HashMap<String, Vec<u8>>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every part read on this thread, normalized, in order: tests check no part is read twice.
+    pub static READS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether a part is one several readers look up (see `Package::shared`).
+fn is_shared(name: &str) -> bool {
+    name.ends_with(".rels") || name.ends_with(".vml") || name.split('/').any(|dir| dir == "ctrlprops")
 }
 
 /// A relationship.
@@ -61,7 +81,7 @@ impl<'a> Package<'a> {
     pub fn open(bytes: &'a [u8]) -> Result<Package<'a>, IoError> {
         let opc = craft_opc::LazyPackage::open(bytes, &LIMITS).map_err(error)?;
         let craft = craft_xlsx::Package::open(bytes, &craft_xlsx::Limits::default()).map_err(craft_error)?;
-        Ok(Package { opc, craft })
+        Ok(Package { opc, craft, shared: HashMap::new() })
     }
 
     pub(crate) fn craft_mut(&mut self) -> &mut craft_xlsx::Package<'a> {
@@ -80,18 +100,50 @@ impl<'a> Package<'a> {
 
     /// Reads a part's bytes; `Ok(None)` when it doesn't exist.
     pub fn read(&mut self, part: &str) -> Result<Option<Vec<u8>>, IoError> {
-        self.opc.read(part).map_err(error)
+        self.read_limited(part, MAX_PART)
     }
 
     /// Reads a part the reader can do without (the caller warns and goes on when it fails). A read
     /// that fails partway is charged this part's whole allowance instead of ending the package's.
     pub fn read_optional_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, IoError> {
-        self.opc.read_optional_limited(part, maximum).map_err(error)
+        if let Some(hit) = self.cached(part, maximum) {
+            return hit;
+        }
+        let out = self.opc.read_optional_limited(part, maximum).map_err(error)?;
+        Ok(self.keep(part, out))
     }
 
     /// Reads a small metadata part without allowing it to expand to the general part limit.
     pub fn read_limited(&mut self, part: &str, maximum: u64) -> Result<Option<Vec<u8>>, IoError> {
-        self.opc.read_limited(part, maximum).map_err(error)
+        if let Some(hit) = self.cached(part, maximum) {
+            return hit;
+        }
+        let out = self.opc.read_limited(part, maximum).map_err(error)?;
+        Ok(self.keep(part, out))
+    }
+
+    /// A shared part already read: its bytes again, uncharged, or the error a first read under
+    /// `maximum` would give.
+    fn cached(&self, part: &str, maximum: u64) -> Option<Result<Option<Vec<u8>>, IoError>> {
+        let bytes = self.shared.get(&normalize(part))?;
+        let maximum = maximum.min(MAX_PART);
+        Some(if bytes.len() as u64 > maximum {
+            Err(IoError::TooLarge(format!("{part} expands to more than {maximum} bytes")))
+        } else {
+            Ok(Some(bytes.clone()))
+        })
+    }
+
+    /// Records a part just read (tests) and keeps its bytes when it is a shared part.
+    fn keep(&mut self, part: &str, out: Option<Vec<u8>>) -> Option<Vec<u8>> {
+        let bytes = out?;
+        let key = normalize(part);
+        #[cfg(test)]
+        READS.with(|r| r.borrow_mut().push(key.clone()));
+        if is_shared(&key) {
+            self.shared.insert(key, bytes.clone());
+        }
+        Some(bytes)
     }
 
     pub fn read_xml(&mut self, part: &str) -> Result<Option<El>, IoError> {
@@ -104,7 +156,10 @@ impl<'a> Package<'a> {
     /// Relationships of a part (`xl/workbook.xml` → `xl/_rels/workbook.xml.rels`). Missing or
     /// broken rels parts give an empty list.
     pub fn rels(&mut self, part: &str) -> Result<Vec<Rel>, IoError> {
-        let rels = self.opc.rels(part).map_err(error)?;
+        // Read through `read`, so the relationships part is charged once however many readers
+        // ask for it; parsed as `LazyPackage::rels` parses it.
+        let Some(bytes) = self.read(&craft_opc::rels_path(part))? else { return Ok(Vec::new()) };
+        let rels = craft_opc::Rels::parse_in(&bytes, part, |n| self.opc.has(n).then(|| n.to_string()));
         Ok(rels
             .list
             .into_iter()

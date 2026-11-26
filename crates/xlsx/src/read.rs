@@ -46,6 +46,10 @@ pub struct Ctx<'a> {
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// Drawing pictures already read, by normalized part name. The writer stores a picture used
+    /// in several places once, so it is read, charged to the package budget and kept in memory
+    /// once as well (#3817).
+    pub pictures: std::collections::HashMap<String, Arc<Vec<u8>>>,
     /// Cell elements read so far, across every sheet (capped by `sheet_read::MAX_CELLS`).
     pub cells: u64,
 }
@@ -323,6 +327,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        pictures: Default::default(),
         cells: 0,
     };
     let root_rels = cx.pkg.rels("")?;
