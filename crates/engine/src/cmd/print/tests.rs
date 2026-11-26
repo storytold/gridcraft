@@ -1101,6 +1101,122 @@ fn rotated_wrapped_text_prints_rotated() {
     assert!((1..=3).contains(&up) && (1..=3).contains(&down), "up {up}, down {down}: {blocks:?}");
 }
 
+/// Encodes `img` as a PNG.
+fn png_of(img: image::DynamicImage) -> Vec<u8> {
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    png
+}
+
+/// Rewrites a PNG's IHDR size (and its CRC) so the header declares `w`×`h` pixels.
+fn forge_png_size(png: &mut [u8], w: u32, h: u32) {
+    let ihdr = png.windows(4).position(|c| c == b"IHDR").unwrap();
+    png[ihdr + 4..ihdr + 8].copy_from_slice(&w.to_be_bytes());
+    png[ihdr + 8..ihdr + 12].copy_from_slice(&h.to_be_bytes());
+    let mut crc = !0u32;
+    for &b in &png[ihdr..ihdr + 17] {
+        crc ^= u32::from(b);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+        }
+    }
+    png[ihdr + 17..ihdr + 21].copy_from_slice(&(!crc).to_be_bytes());
+}
+
+/// Print decodes pictures within the side, pixel and byte caps, and a sheet holding an oversized
+/// picture still prints without it.
+#[test]
+fn print_decodes_pictures_within_byte_limits() {
+    use super::objects::{DecodeCaps, FLOATING_PICTURE_CAPS, decode_image, decode_limited};
+    // The byte limit counts the bit depth and channels the header declares, not just pixels:
+    // 64×64 is 16 KiB as 8-bit RGBA but 32 KiB as 16-bit RGBA.
+    let rgba8 = png_of(image::DynamicImage::ImageRgba8(image::RgbaImage::new(64, 64)));
+    let rgba16 = png_of(image::DynamicImage::ImageRgba16(image::ImageBuffer::new(64, 64)));
+    let caps = DecodeCaps { max_side: 1024, max_pixels: 1_000_000, max_alloc: 24 * 1024 };
+    assert!(decode_limited(&rgba8, caps).is_some());
+    assert!(decode_limited(&rgba16, caps).is_none());
+    assert!(decode_limited(&rgba8, DecodeCaps { max_side: 32, ..caps }).is_none());
+    assert!(decode_limited(&rgba8, DecodeCaps { max_pixels: 64 * 64 - 1, ..caps }).is_none());
+    assert!(decode_limited(b"not a picture", caps).is_none());
+
+    // A header declaring 7000×7000 16-bit RGBA pixels (49 megapixels, under the pixel cap, but
+    // about 392 MB) is refused from its header, before anything that size is allocated.
+    let mut bomb = rgba16.clone();
+    forge_png_size(&mut bomb, 7000, 7000);
+    assert_eq!(image::ImageReader::with_format(std::io::Cursor::new(&bomb), image::ImageFormat::Png).into_dimensions().unwrap(), (7000, 7000));
+    assert!(decode_limited(&bomb, FLOATING_PICTURE_CAPS).is_none());
+    assert!(decode_image(&bomb, 100, 100).is_none());
+    assert!(decode_image(&rgba16, 100, 100).is_some_and(|(px, w, h)| (w, h) == (64, 64) && px.len() == 64 * 64 * 4));
+
+    // Printing a sheet holding such a picture leaves it out instead of failing.
+    let mut s = s();
+    let d = s.doc_mut().unwrap();
+    let wb = std::sync::Arc::make_mut(&mut d.wb);
+    let id = wb.next_object_id();
+    wb.sheet_mut(0).unwrap().images.push(Image {
+        id,
+        anchor: Anchor { cell: CellRef::new(1, 1), dx: 0.0, dy: 0.0, width: 40.0, height: 40.0, mode: gridcraft_model::AnchorMode::MoveAndSize },
+        data: bomb.into(),
+        mime: "image/png".into(),
+        alt: String::new(),
+    });
+    s.execute("cell.set", json!({"cell": "A1", "input": "Report"})).unwrap();
+    let (pdf, pages) = pdf_of(&mut s, json!({}));
+    assert_eq!(pages, 1);
+    assert!(contains(&pdf, "(Report) Tj"));
+    assert!(!contains(&pdf, "/Subtype /Image"));
+}
+
+/// A PNG whose IHDR is over the side or pixel caps (or empty) is refused from IHDR, before the
+/// decoder's header probe reads the chunks after it.
+#[test]
+fn print_refuses_oversized_png_before_the_header_probe() {
+    use super::objects::{DecodeCaps, PROBES, decode_limited};
+    let probes = || PROBES.with(std::cell::Cell::get);
+    let png = png_of(image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8)));
+    let caps = DecodeCaps { max_side: 1024, max_pixels: 10_000, max_alloc: 1024 * 1024 };
+    let before = probes();
+    assert!(decode_limited(&png, caps).is_some());
+    assert_eq!(probes(), before + 1);
+    // 1000×1000 is within the side cap (which the probe checks itself) but over the pixel cap.
+    for (w, h) in [(1000, 1000), (0, 8), (8, 0), (2000, 1)] {
+        let mut forged = png.clone();
+        forge_png_size(&mut forged, w, h);
+        assert!(decode_limited(&forged, caps).is_none(), "{w}×{h}");
+        assert_eq!(probes(), before + 1, "{w}×{h} reached the header probe");
+    }
+}
+
+/// The size that admits a JPEG comes from the decoder's own header reader, not `io::image_size`:
+/// after a fill byte that sniffer lands on a decoy 1×1 SOF inside a comment, while the decoder
+/// skips the fill byte and the comment and reads the real, larger SOF.
+#[test]
+fn print_sizes_jpeg_pictures_by_the_decoder_not_the_sniffer() {
+    use super::objects::{DecodeCaps, decode_limited};
+    let mut real = Vec::new();
+    image::DynamicImage::ImageLuma8(image::GrayImage::new(128, 128))
+        .write_to(&mut std::io::Cursor::new(&mut real), image::ImageFormat::Jpeg)
+        .unwrap();
+    // After SOI: a fill byte, then a comment of the largest length. The sniffer reads the fill
+    // byte as a marker and the comment's marker and length high byte (0xFE, 0xFF) as its length.
+    let comment_start = 7; // SOI, fill byte, COM marker, two length bytes
+    let landing = 2 + 2 + 0xFEFF;
+    let mut comment = vec![0u8; 0xFFFF - 2];
+    comment[landing - comment_start..][..13].copy_from_slice(&[0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00]);
+    let mut jpeg = real[..2].to_vec();
+    jpeg.extend_from_slice(&[0xFF, 0xFF, 0xFE, 0xFF, 0xFF]);
+    jpeg.extend_from_slice(&comment);
+    jpeg.extend_from_slice(&real[2..]);
+    assert_eq!(crate::io::image_size(&jpeg), Some((1, 1)));
+    assert_eq!(image::ImageReader::with_format(std::io::Cursor::new(&jpeg), image::ImageFormat::Jpeg).into_dimensions().unwrap(), (128, 128));
+
+    let caps = DecodeCaps { max_side: 1024, max_pixels: 10_000, max_alloc: 1024 * 1024 };
+    // The crafted file decodes when its real size is within the caps...
+    assert!(decode_limited(&jpeg, DecodeCaps { max_pixels: 128 * 128, ..caps }).is_some_and(|img| (img.width(), img.height()) == (128, 128)));
+    // ...and is refused when its real size (16384 pixels) is over them, whatever the sniffer says.
+    assert!(decode_limited(&jpeg, caps).is_none());
+}
+
 #[test]
 fn checkbox_cells_print_as_boxes_not_true_false() {
     // #2972: a checkbox cell printed its value as TRUE or FALSE.
