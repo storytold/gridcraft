@@ -49,7 +49,7 @@ pub(super) fn fallback_lines(text: &str, h: f32, line_h: f32) -> impl Iterator<I
     text.lines().take(n)
 }
 
-fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
+pub(super) fn anchor_rect(sh: &Sheet, a: &Anchor) -> (f64, f64, f64, f64) {
     (sh.col_left(a.cell.col) + a.dx as f64, sh.row_top(a.cell.row) + a.dy as f64, a.width.max(0.0) as f64, a.height.max(0.0) as f64)
 }
 
