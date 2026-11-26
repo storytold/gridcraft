@@ -84,6 +84,24 @@ fn push_fragment_kids(root: &mut craft_xml::El, xml: &str) {
     }
 }
 
+pub(crate) fn valid_code_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic() || !c.is_ascii())
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || !c.is_ascii())
+        && name.chars().count() <= 31
+}
+
+/// The code name to save for sheet `si`: its own, unless the workbook or an earlier sheet already
+/// uses it (code names are case-insensitive in VBA); Excel names a sheet saved without one.
+pub(crate) fn sheet_code_name(wb: &Workbook, si: usize) -> Option<&str> {
+    // XLSX and JSON import already report invalid or conflicting code names before export.
+    let name = wb.sheets.get(si)?.code_name.as_deref().filter(|n| valid_code_name(n))?;
+    let taken = |other: Option<&str>| other.is_some_and(|o| caseless::default_caseless_match_str(o, name));
+    let clash = taken(wb.code_name.as_deref().filter(|n| valid_code_name(n)))
+        || wb.sheets.iter().take(si).any(|sh| taken(sh.code_name.as_deref().filter(|n| valid_code_name(n))));
+    (!clash).then_some(name)
+}
+
 pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (String, Rels) {
     let mut rels = Rels::default();
     let Some(sheet) = wb.sheet(si) else { return (String::new(), rels) };
@@ -146,8 +164,12 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     // sheetPr
     let fit = sheet.print.fit_to.is_some();
     let summary = !sheet.summary_below || !sheet.summary_right;
-    if sheet.tab_color.is_some() || fit || summary {
+    let code_name = sheet_code_name(wb, si);
+    if sheet.tab_color.is_some() || fit || summary || code_name.is_some() {
         let mut pr = craft_xml::El::new("sheetPr");
+        if let Some(name) = code_name {
+            pr.set_attr("codeName", name);
+        }
         if let Some(c) = &sheet.tab_color {
             let xml = format!("<tabColor {}/>", color_attrs(c));
             if let Some(el) = parse_craft_fragment(&xml) {

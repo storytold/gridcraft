@@ -169,6 +169,10 @@ pub struct Sheet {
     /// tables). Goes away with the sheet; not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
+    /// VBA code name (XLSX `sheetPr codeName`): the name the workbook's macros use for this
+    /// sheet's module. Kept so a macro-enabled workbook keeps its sheet modules bound on save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_name: Option<String>,
 }
 
 fn yes() -> bool {
@@ -232,6 +236,7 @@ impl Sheet {
             view_top_left: CellRef::default(),
             view: SheetViewMode::Normal,
             preserved: None,
+            code_name: None,
         }
     }
 

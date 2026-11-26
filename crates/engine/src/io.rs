@@ -16,6 +16,8 @@ pub const XLSX_FUNCTIONS: gridcraft_xlsx::FunctionInfo = gridcraft_xlsx::Functio
     is_scalar_arg: |name, i| gridcraft_functions::lookup(name).is_none_or(|s| s.is_scalar_arg(i)),
 };
 
+pub use gridcraft_xlsx::VBA_PRESERVED_NOTICE;
+
 /// File formats GridCraft reads or writes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileKind {
@@ -320,9 +322,10 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
                 // The file's macros are read after this (`macros::load`), so they come along.
-                let macros = std::mem::take(&mut wb.macros_read);
-                wb = Workbook::new();
-                wb.macros_read = macros;
+                let mut empty = Workbook::new();
+                empty.macros_read = wb.macros_read;
+                empty.code_name = wb.code_name;
+                wb = empty;
             }
             // The file's band placement and cell count are derived state: rebuild them from the
             // cells themselves, dropping what is outside the sheet grid (#1008).
@@ -331,6 +334,9 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             if dropped > 0 {
                 warnings.push(format!("{name}: {dropped} cells outside the 1,048,576 × 16,384 grid were dropped"));
             }
+            let mut report = gridcraft_xlsx::ReadReport::default();
+            report.repair_code_names(&mut wb);
+            warnings.extend(report.warnings);
             Ok((wb, warnings))
         }
         Some(FileKind::Sylk) => {

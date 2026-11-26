@@ -261,6 +261,10 @@ pub struct Workbook {
     /// Shared between snapshots, as nothing changes them.
     #[serde(skip)]
     pub macros_unread: Arc<Vec<serde_json::Value>>,
+    /// VBA code name of the workbook (XLSX `workbookPr codeName`, usually `ThisWorkbook`): the
+    /// name of the workbook's module in the VBA project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code_name: Option<String>,
     /// Unmodelled file content kept for saving (package root and workbook level). Not in JSON.
     #[serde(skip)]
     pub preserved: Option<Arc<crate::preserved::Preserved>>,
@@ -570,6 +574,7 @@ impl Workbook {
             macros: crate::macros::Macros::default(),
             macros_read: vec![],
             macros_unread: Arc::default(),
+            code_name: None,
             preserved: None,
             source_dir: None,
             region: gridcraft_core::region::default_region(),

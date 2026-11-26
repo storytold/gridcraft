@@ -332,6 +332,7 @@ fn apply_craft_sheet_part(
         match child.name.as_str() {
             "sheetPr" => {
                 let e = from_craft_el(child);
+                sheet.code_name = e.attr("codeName").map(str::to_string);
                 if let Some(t) = e.child("tabColor") {
                     sheet.tab_color = Some(read_color(t, &cx.palette));
                 }

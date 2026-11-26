@@ -2653,6 +2653,18 @@ fn copies_of_a_long_named_sheet_get_unique_names() {
 }
 
 #[test]
+fn a_copied_sheet_does_not_take_the_original_vba_code_name() {
+    // Two sheets with one code name would stop Excel loading the workbook's VBA project; the
+    // module stays bound to the original sheet and Excel names the copy's on open.
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().code_name = Some("DataModule".into());
+    s.execute("sheet.move", json!({"sheet": 0, "to": 1, "copy": true})).unwrap();
+    let d = s.doc().unwrap();
+    let codes: Vec<Option<&str>> = d.wb.sheets.iter().map(|x| x.code_name.as_deref()).collect();
+    assert_eq!(codes, [Some("DataModule"), None]);
+}
+
+#[test]
 fn row_and_column_inserts_move_legacy_array_ranges() {
     // Found by the command-sequence fuzzer: the formula cell moved but its array range stayed,
     // so the array covered the wrong cells (and read back from XLSX as #SPILL!).
