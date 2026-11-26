@@ -33,7 +33,9 @@ mod parts;
 mod rules;
 
 pub(crate) use parts::password_attrs;
-use parts::{autofilter_xml, comments_xml, protected_ranges_xml, table_columns, table_name, table_xml, thread_ids, threaded_xml, vml_xml};
+use parts::{
+    autofilter_xml, comments_xml, protected_ranges_xml, table_columns, table_filter, table_name, table_xml, thread_ids, threaded_xml, vml_xml,
+};
 use rules::{cf_rule_xml, solid_bar_x14, validation_xml, x14_cf_rule_xml};
 
 fn sqref(ranges: &[RangeRef]) -> String {
@@ -203,7 +205,8 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.table_id += 1;
             let n = out.tables;
             let name = table_name(&t.name, &mut used_names, out.table_id);
-            let xml = table_xml(t, cols, &name, out.table_id, out);
+            let filter = table_filter(sheet, t);
+            let xml = table_xml(t, cols, &name, out.table_id, &filter, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             part.features.table_parts.push(rels.add("table", &format!("../tables/table{n}.xml")));
         }

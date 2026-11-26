@@ -7,10 +7,16 @@
 //! mapped to XML elements, form controls other than the buttons, scroll bars and spin buttons
 //! `controls.rs` models, ActiveX controls, OLE objects, the sheet background and printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
-//! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
-//! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
-//! Chart sheets are kept whole, and each embedded chart GridCraft reads keeps its original chart
-//! part with the style, colour and shape parts behind it, together with the chart as it was read.
+//! footers, `&G`, with their `<legacyDrawingHF>`). The workbook's Data Model (`xl/model/item.data`)
+//! is kept with its data connections. PivotTables whose source is in another workbook, a data
+//! connection or the Data Model are kept too: the PivotTable parts with their sheet, the cache
+//! definition and records parts (with the cache's link to the other workbook's path) with the
+//! workbook and its `<pivotCache>` entry, its `cacheId` unchanged; a cache on a connection only
+//! when the connections are kept, and on the Data Model only when the model is kept. The workbook
+//! also keeps its `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the
+//! saved values. Chart sheets are kept whole, and each embedded chart GridCraft reads keeps its
+//! original chart part with the style, colour and shape parts behind it, together with the chart
+//! as it was read.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -21,6 +27,7 @@
 //!   opened, followed or refreshed. A relative path to a linked workbook is rewritten when the
 //!   workbook is saved into another folder ([`rebase_links`]), so it still names the same file.
 //! - Sheet content lives on the sheet: deleting the sheet drops it, Copy Sheet doesn't copy it.
+//!   A kept pivot cache no kept PivotTable uses any more is dropped with it.
 //!   Cell references inside kept parts (a control's linked cell, a query table's range, a cell
 //!   mapped to an XML element) are kept as they were, not adjusted to inserted or deleted rows.
 //! - An embedded chart's original XML is written back only while the model's chart still equals
@@ -45,6 +52,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::IoError;
 use crate::package::{self, normalize};
+use crate::pivot::{CT_PIVOT_CACHE_DEF, CT_PIVOT_TABLE, ExternalPivot, KeptSource};
 use crate::read::Ctx;
 use crate::write::{NS_REL, Out, Rels, XML_DECL};
 use crate::xml::{self, esc_attr};
@@ -57,7 +65,9 @@ pub use read::KeptReader;
 pub use rebase::{SheetKept, rebase_links};
 #[cfg(test)]
 pub(crate) use write::sheet_names_in;
-pub use write::{KeptOut, SheetIds, WorkbookKept, kept_chart, workbook_elements, write_kept_chart, write_package_rels, write_workbook};
+pub use write::{
+    KeptOut, SheetIds, WorkbookKept, finish_style_ids, kept_chart, workbook_elements, write_kept_chart, write_package_rels, write_workbook,
+};
 
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
@@ -108,6 +118,13 @@ const SHEET_ELEMENT_KINDS: &[&str] = &["oleObject", "ctrlProp", "control", "imag
 const FILE_VERSION_ATTRS: &[&str] = &["appName", "lastEdited", "lowestEdited", "rupBuild", "codeName"];
 /// Kept sheet elements, in schema order (all after `<legacyDrawing>`, before `<tableParts>`).
 const SHEET_SLOTS: &[&str] = &["legacyDrawingHF", "picture", "oleObjects", "controls"];
+/// Rewritten kinds a kept PivotTable (source in another workbook) reaches: the table, from the
+/// sheet, and its cache, which the workbook keeps (several tables can share one cache).
+const PIVOT_TABLE_GRAPH: &[&str] = &["pivotTable", "pivotCacheDefinition"];
+/// Rewritten kinds a kept pivot cache reaches.
+const PIVOT_CACHE_GRAPH: &[&str] = &["pivotCacheDefinition", "pivotCacheRecords"];
+/// The workbook's Data Model part (Power Pivot), kept byte for byte when its connections are.
+const DATA_MODEL_GRAPH: &[&str] = &["powerPivotData"];
 
 /// Relationship kinds GridCraft reads and rewrites, or that depend on content it rewrites:
 /// kept content whose graph reaches one of them is dropped.
@@ -177,6 +194,7 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/model/",
 ];
 
 fn kind(rel_type: &str) -> &str {
