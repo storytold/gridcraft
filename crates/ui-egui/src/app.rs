@@ -376,7 +376,13 @@ mod lifecycle_tests {
         use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
         let ctx = egui::Context::default();
         let mut app = app();
-        let wheel = |modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, source: egui::MouseWheelSource::Unknown, delta: vec2(0.0, 3.0), phase: TouchPhase::Move, modifiers };
+        let wheel = |modifiers| Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            delta: vec2(0.0, 3.0),
+            phase: TouchPhase::Move,
+            modifiers,
+        };
         app.synthetic.push_back(vec![wheel(Modifiers::CTRL)]);
         app.synthetic.push_back(vec![wheel(Modifiers::NONE)]);
         let mut raw = egui::RawInput::default();
@@ -388,7 +394,13 @@ mod lifecycle_tests {
         app.synthetic_injected_at_pass = None;
         let mut raw = egui::RawInput::default();
         app.raw_input_hook(&ctx, &mut raw);
-        let end = Event::MouseWheel { unit: MouseWheelUnit::Point, source: egui::MouseWheelSource::Unknown, delta: egui::Vec2::ZERO, phase: TouchPhase::End, modifiers: Modifiers::NONE };
+        let end = Event::MouseWheel {
+            unit: MouseWheelUnit::Point,
+            source: egui::MouseWheelSource::Unknown,
+            delta: egui::Vec2::ZERO,
+            phase: TouchPhase::End,
+            modifiers: Modifiers::NONE,
+        };
         assert_eq!(raw.events, vec![end, wheel(Modifiers::NONE)]);
     }
 

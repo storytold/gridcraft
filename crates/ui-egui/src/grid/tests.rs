@@ -408,8 +408,20 @@ fn upward_text_with_middle_align_is_centred_in_a_merged_block() {
 fn a_wheel_turn_without_ctrl_ends_a_ctrl_wheel_touch() {
     use super::end_stuck_ctrl_wheel;
     use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase, vec2};
-    let wheel = |phase, modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, source: egui::MouseWheelSource::Unknown, delta: vec2(0.0, 3.0), phase, modifiers };
-    let end = Event::MouseWheel { unit: MouseWheelUnit::Point, source: egui::MouseWheelSource::Unknown, delta: egui::Vec2::ZERO, phase: TouchPhase::End, modifiers: Modifiers::NONE };
+    let wheel = |phase, modifiers| Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
+        delta: vec2(0.0, 3.0),
+        phase,
+        modifiers,
+    };
+    let end = Event::MouseWheel {
+        unit: MouseWheelUnit::Point,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::Vec2::ZERO,
+        phase: TouchPhase::End,
+        modifiers: Modifiers::NONE,
+    };
     let mut ctrl_wheel = false;
     // Wayland: a plain turn starts a touch that never ends; nothing to change yet.
     let mut events = vec![wheel(TouchPhase::Start, Modifiers::NONE), wheel(TouchPhase::Move, Modifiers::NONE)];

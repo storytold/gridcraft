@@ -83,7 +83,13 @@ pub(crate) fn end_stuck_ctrl_wheel(events: &mut Vec<egui::Event>, ctrl_wheel: &m
                 egui::TouchPhase::Start => *ctrl_wheel = ctrl,
                 egui::TouchPhase::Move if ctrl => *ctrl_wheel = true,
                 egui::TouchPhase::Move if *ctrl_wheel => {
-                    out.push(egui::Event::MouseWheel { unit: *unit, source: *source, delta: egui::Vec2::ZERO, phase: egui::TouchPhase::End, modifiers: *modifiers });
+                    out.push(egui::Event::MouseWheel {
+                        unit: *unit,
+                        source: *source,
+                        delta: egui::Vec2::ZERO,
+                        phase: egui::TouchPhase::End,
+                        modifiers: *modifiers,
+                    });
                     *ctrl_wheel = false;
                 }
                 egui::TouchPhase::Move => {}
