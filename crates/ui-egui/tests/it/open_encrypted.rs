@@ -159,3 +159,18 @@ fn app_open_over_the_control_channel_never_opens_a_dialog() {
     assert_eq!(h.state().ui.recent.first(), Some(&p));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
 }
+
+#[test]
+fn open_path_says_whether_the_workbook_opened() {
+    let path = encrypted_file("returns");
+    let mut h = harness(Services::default());
+    assert!(!h.state_mut().open_path(&path.to_string_lossy()), "a password prompt is not an open");
+    assert!(!h.state_mut().open_path("/nonexistent/gridcraft/Missing.xlsx"), "an error is not an open");
+    h.state_mut().dialog = None;
+    let plain = path.with_file_name("Plain.xlsx");
+    let mut s = Session::new();
+    s.new_workbook();
+    std::fs::write(&plain, gridcraft_engine::io::save_bytes(&s.active().unwrap().wb, "book.xlsx").unwrap()).unwrap();
+    assert!(h.state_mut().open_path(&plain.to_string_lossy()));
+    std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
