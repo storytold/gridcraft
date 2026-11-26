@@ -1373,6 +1373,52 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "{command} valid only within array environment" => "{command} მოქმედებს მხოლოდ array გარემოში",
         "{subarray} can contain only one column" => "{subarray} შეიძლება შეიცავდეს მხოლოდ ერთ სვეტს",
+        "100% Stacked Line" => "100% დასტად ხაზოვანი",
+        "100% Stacked Line with Markers" => "100% დასტად ხაზოვანი მარკერებით",
+        "2-Color Scale" => "2-ფერიანი შკალა",
+        "3-Color Scale" => "3-ფერიანი შკალა",
+        "A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft." => "თავიდან დაწერილი, ღია კოდის ელცხრილი Rust-ზე. ArtCraft-ის ნაწილი.",
+        "Add or Remove Selection" => "მონიშვნის დამატება ან მოხსნა",
+        "Automation in this workbook. GridCraft runs its own scripts; a file's VBA project is preserved but not executed." => {
+            "ამ სამუშაო წიგნის ავტომატიზაცია. GridCraft საკუთარ სკრიპტებს უშვებს; ფაილის VBA პროექტი ინახება, მაგრამ არ სრულდება."
+        }
+        "Edit Formatting Rule" => "ფორმატირების წესის რედაქტირება",
+        "Edit the Rule Description" => "წესის აღწერის რედაქტირება",
+        "Extend Selection" => "მონიშვნის გაფართოება",
+        "Format Style:" => "ფორმატის სტილი:",
+        "Format all cells based on their values" => "ყველა უჯრის დაფორმატება მათი მნიშვნელობების მიხედვით",
+        "Format only cells that contain" => "მხოლოდ იმ უჯრების დაფორმატება, რომლებიც შეიცავს",
+        "Format only top or bottom ranked values" => "მხოლოდ რანგით ზედა ან ქვედა მნიშვნელობების დაფორმატება",
+        "Format only unique or duplicate values" => "მხოლოდ უნიკალური ან განმეორებადი მნიშვნელობების დაფორმატება",
+        "Format only values that are above or below average" => "მხოლოდ საშუალოზე მეტი ან ნაკლები მნიშვნელობების დაფორმატება",
+        "Formula" => "ფორმულა",
+        "GRG Nonlinear: a local optimum of a smooth model, from the current values." => {
+            "GRG არაწრფივი: გლუვი მოდელის ლოკალური ოპტიმუმი, მიმდინარე მნიშვნელობებიდან დაწყებული."
+        }
+        "GridCraft is fully drivable by agents. Every menu item, button and gesture is a command:" => {
+            "GridCraft-ის სრულად მართვა აგენტებსაც შეუძლიათ. ყველა მენიუს პუნქტი, ღილაკი და ჟესტი ბრძანებაა:"
+        }
+        "Growth Trend" => "ზრდის ტრენდი",
+        "Highest value" => "უდიდესი მნიშვნელობა",
+        "Linear Trend" => "წრფივი ტრენდი",
+        "Lowest value" => "უმცირესი მნიშვნელობა",
+        "Midpoint" => "შუა წერტილი",
+        "More Rules…" => "სხვა წესები…",
+        "New Formatting Rule" => "ფორმატირების ახალი წესი",
+        "Percentile" => "პროცენტილი",
+        "Print Selection" => "მონიშნულის ბეჭდვა",
+        "Return to the original worksheet to insert this picture, or cancel and choose another cell." => {
+            "სურათის ჩასასმელად დაბრუნდით საწყის ფურცელზე, ან გააუქმეთ და აირჩიეთ სხვა უჯრა."
+        }
+        "Select a Rule Type" => "აირჩიეთ წესის ტიპი",
+        "Simplex LP: for linear models; integer and binary constraints by branch and bound." => {
+            "Simplex LP: წრფივი მოდელებისთვის; მთელრიცხვა და ორობითი შეზღუდვები შტოებისა და საზღვრების მეთოდით."
+        }
+        "This rule type isn't available yet." => "ეს წესის ტიპი ჯერ ხელმისაწვდომი არ არის.",
+        "Use a formula to determine which cells to format" => "დასაფორმატებელი უჯრების ფორმულით განსაზღვრა",
+        "{count} engine commands are available. See docs/mcp.md and docs/control-protocol.md." => {
+            "ხელმისაწვდომია ძრავის {count} ბრძანება. იხილეთ docs/mcp.md და docs/control-protocol.md."
+        }
         _ => return None,
     })
 }
