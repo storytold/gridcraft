@@ -9,6 +9,7 @@ pub mod cell;
 mod cellmap;
 pub mod features;
 pub mod macros;
+pub mod paper;
 pub mod password;
 pub mod preserved;
 pub mod python;

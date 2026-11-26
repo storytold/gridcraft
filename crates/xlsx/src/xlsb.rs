@@ -244,7 +244,7 @@ fn preserve_external_links(
         let part_name = format!("xl/externalLinks/externalLink{next_ordinal}.xml");
         let (xml, rels) = external_link_part_xml(book);
         p.rels.push(PreservedRel { id: rid.clone(), rel_type: format!("{NS_REL}/externalLink"), target: part_name.clone(), external: false });
-        p.parts.push(PreservedPart { name: part_name, content_type: CT_EXT_LINK.into(), data: xml.into_bytes().into(), rels });
+        p.parts.push(PreservedPart { name: part_name, content_type: CT_EXT_LINK.into(), data: xml.into_bytes().into(), rels, ..Default::default() });
         let _ = write!(refs_xml, "<externalReference r:id=\"{rid}\"/>");
     }
     if had_unpreserved {
