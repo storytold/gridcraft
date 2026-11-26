@@ -4,10 +4,16 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, RangeRef, Value, sort_compare};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, AnchorMode, AutoFilter, Cell, CfOperator, Comment, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo, Sheet, Validation,
+    ValidationKind, Workbook,
+};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cell_param, cell_param_on, cmd, edit, has_doc, ok, parse_lines, split_sheet,
+    str_param, target_range, target_ranges, target_sheet,
+};
 use crate::outline;
 use crate::selection::current_region;
 
@@ -17,17 +23,21 @@ mod sort;
 mod tools;
 mod validation;
 
-pub use filter::filter_values;
 pub(crate) use filter::{apply_filter, grow_autofilter};
 use filter::{clear_filter, filter_by, reapply, toggle_filter};
+pub use filter::{filter_selection, filter_values};
 use grouping::{detail, group, outline_settings, show_levels, subtotal};
+pub use sort::sort_context;
 use sort::{quick_sort, sort};
 #[cfg(test)]
 use tools::split_delimited;
 use tools::{remove_duplicates, text_to_columns};
-pub use validation::{check_validation, list_items};
-use validation::{circle_invalid, validate_cmd, validation};
-pub(super) use validation::{move_rule_formula, remove_validation_cells};
+pub use validation::{
+    LIST_MATCH_CAP, LIST_SOURCE_BUDGET, ListSource, check_validation, filter_list_items, list_items, list_search_source, search_fold, search_matches,
+    search_term,
+};
+use validation::{circle_invalid, validate_cmd, validation, validation_list_cmd};
+pub(super) use validation::{move_rule_formula, moved_rule_parts, remove_rule_cells, remove_validation_cells};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -92,19 +102,40 @@ pub fn specs() -> Vec<CommandSpec> {
             validation
         ),
         cmd!(query "data.validate", "Check Value Against Validation", [], None, "{cell?, input} → {ok, message?}", has_doc, validate_cmd),
-        cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → invalid cells", has_doc, circle_invalid),
         cmd!(
-            "data.group",
-            "Group",
-            ["Data", "Outline"],
-            Some("Alt+Shift+Right"),
-            "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
+            query "data.validationList",
+            "Validation List Items",
+            [],
+            None,
+            "{cell?, search?} → {items: [..], truncated} (the cell's list validation entries; `search` keeps those with a word starting with it, ignoring case and the accents of Latin letters; at most 10,000 entries, read from at most 200,000 cells of the source; `truncated`: more may exist)",
             has_doc,
-            |s, p| group(s, p, true)
+            validation_list_cmd
         ),
-        cmd!("data.ungroup", "Ungroup", ["Data", "Outline"], Some("Alt+Shift+Left"), "{rows? | cols? | by?: rows|cols, sheet?}", has_doc, |s, p| {
-            group(s, p, false)
-        }),
+        cmd!(noundo "data.circleInvalid", "Circle Invalid Data", ["Data", "Data Tools", "Data Validation"], None, "{} → {invalid: [cell], truncated: bool (true when the 100,000-cell scan allowance ended before every range was checked)}", has_doc, circle_invalid),
+        CommandSpec {
+            shortcut_mac: Some("Cmd+Shift+K"),
+            ..cmd!(
+                "data.group",
+                "Group",
+                ["Data", "Outline"],
+                Some("Alt+Shift+Right"),
+                "{rows?: \"2:5\" | cols?: \"B:C\" | by?: rows|cols (the selection's rows or columns; a block of cells groups rows by default), sheet?}",
+                has_doc,
+                |s, p| group(s, p, true)
+            )
+        },
+        CommandSpec {
+            shortcut_mac: Some("Cmd+Shift+J"),
+            ..cmd!(
+                "data.ungroup",
+                "Ungroup",
+                ["Data", "Outline"],
+                Some("Alt+Shift+Left"),
+                "{rows? | cols? | by?: rows|cols, sheet?}",
+                has_doc,
+                |s, p| { group(s, p, false) }
+            )
+        },
         cmd!(
             "data.hideDetail",
             "Hide Detail",
@@ -194,7 +225,7 @@ fn data_target(s: &Session, p: &Json, cmd: &str) -> Result<(usize, RangeRef)> {
 /// Excel's header guess: the first row is text over a column of numbers, or is bold.
 fn guess_header(wb: &Workbook, sh: &Sheet, r: RangeRef) -> bool {
     if let Some(t) = sh.table_at(r.start) {
-        return t.header_row;
+        return t.header_row && r.start.row == t.range.start.row;
     }
     if r.height() < 2 {
         return false;

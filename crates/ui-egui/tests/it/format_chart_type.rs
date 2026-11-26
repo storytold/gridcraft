@@ -18,7 +18,7 @@ fn open_chart_type(t: &str, sub: &str) -> (Harness, u32) {
     let chart = session.execute("insert.chart", json!({"type": t, "subtype": sub, "at": "E3"})).unwrap();
     let id = chart["chart"].as_u64().unwrap() as u32;
     let mut h = crate::support::harness(session, 4);
-    h.state_mut().selected_chart = Some(id);
+    h.state_mut().select_object_id(Some(id));
     h.state_mut().grid.pane = Some("formatChart".into());
     h.run_steps(2);
     h.get_by_role_and_label(Role::DisclosureTriangle, "Chart Type").click();
@@ -88,4 +88,15 @@ fn chart_type_marks_the_chart_s_current_type() {
             assert_eq!(marked(&h, other), other == label, "{other} on a {t} {sub} chart");
         }
     }
+}
+
+#[test]
+fn chart_type_offers_and_marks_the_hundred_percent_stacked_line_types() {
+    let (mut h, id) = open_chart_type("line", "stacked100Markers");
+    assert!(marked(&h, "100% Stacked Line with Markers"));
+    assert!(!marked(&h, "100% Stacked Line"));
+    click(&mut h, "100% Stacked Line");
+    assert_eq!(kind(&h, id), ChartKind::LineStacked100);
+    click(&mut h, "100% Stacked Line with Markers");
+    assert_eq!(kind(&h, id), ChartKind::LineStacked100Markers);
 }

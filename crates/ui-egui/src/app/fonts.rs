@@ -1,4 +1,4 @@
-use super::*;
+use super::{SheetApp, theme};
 use crate::fonts;
 
 impl SheetApp {
@@ -65,6 +65,7 @@ impl SheetApp {
         } else if self.fonts_rebind {
             // A font-set change made last frame is active now.
             self.fonts_rebind = false;
+            self.chart_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         } else if !defer_font_change && !self.prepared_fonts && fonts::scan_done() {
             self.rebind_workbook_fonts(ctx);
         }
@@ -75,10 +76,12 @@ impl SheetApp {
     fn start_font_setup(&mut self, ctx: &egui::Context) {
         if self.fonts_set {
             self.fonts_ready = true;
+            // The new set is active now: chart text was measured with the old one.
+            self.chart_cache.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
             return;
         }
         if self.prepared_fonts {
-            ctx.set_fonts(theme::pinned_font_definitions());
+            craft_ui::fonts::load(ctx, theme::pinned_font_definitions());
             theme::apply(ctx, self.ui.dark);
         } else {
             SheetApp::setup_context_for_language(ctx, self.ui.dark, self.ui.language);
@@ -104,7 +107,7 @@ impl SheetApp {
         if used == self.fonts_bound {
             return;
         }
-        ctx.set_fonts(theme::font_definitions_with(self.ui.language, &used));
+        craft_ui::fonts::load(ctx, theme::font_definitions_with(self.ui.language, &used));
         self.fonts_bound = used;
         self.fonts_rebind = true;
         ctx.request_repaint();

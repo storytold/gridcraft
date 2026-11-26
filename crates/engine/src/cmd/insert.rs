@@ -1,28 +1,34 @@
 //! Insert tab: tables, charts, sparklines, pictures, shapes, hyperlinks, comments and notes,
 //! conditional formatting (Home › Styles) and symbols.
 
-use gridcraft_core::{CellRef, MAX_ROWS, RangeRef};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, BorderLine, BorderStyle, Borders, Cell, CellPicture, CfOperator, CfRule, CfValueKind, Chart, ChartKind, Color, Comment, CondFormat, Fill,
+    Formula, Hyperlink, Image, LegendPos, ObjKind, ObjRef, Series, Shape, ShapeKind, Sheet, Sparkline, SparklineKind, Style, Table, TableColumn,
+    TotalsFn, Underline, Workbook,
+};
 use serde_json::{Value as Json, json};
 
 use super::sheet::{rewrite, shift_cell_features};
-use super::*;
+use super::{
+    CommandSpec, EngineError, PROTECTED, Result, Session, anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, cell_param_on, cmd, edit,
+    f64_param, has_doc, locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+};
 use crate::selection::current_region;
-
 mod chart;
 mod cond_format;
 mod links;
 mod objects;
 mod table;
 
+pub(super) use chart::update_data_table;
 pub use chart::{build_chart, chart_kind, recommend_charts, scatter_x_from_first, series_from_range};
 use chart::{chart_delete, chart_set, chart_switch, insert_chart};
 use cond_format::{add_cf, clear_cf, insert_icon, manage_cf};
 use links::{comment, delete_comment, insert_link, open_link, reply_comment, resolve_comment, show_note};
 use objects::{delete_object, insert_picture, insert_shape, insert_sparkline, move_object, set_anchor_mode, shape_set_text};
 use table::{format_as_table, insert_table, table_convert, table_flag, table_rename, table_style, table_total_fn};
-
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -78,7 +84,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Chart",
             ["Insert", "Charts"],
             None,
-            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers, title?, at?: \"H2\", width?, height?}",
+            "{range?, type?: column|bar|line|pie|doughnut|area|scatter|bubble|radar|combo|histogram|waterfall|funnel|treemap|sunburst|boxWhisker|stock, subtype?: clustered|stacked|stacked100|markers|stacked100Markers, title?, at?: \"H2\", width?, height?}",
             has_doc,
             insert_chart
         ),
@@ -105,7 +111,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Chart Properties",
             ["Chart Design"],
             None,
-            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, quartiles?: exclusive|inclusive, style?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
+            "{chart?: id, type?, subtype?, title?, legend?: none|bottom|top|left|right, dataLabels?, gridlines?, dataTable?: bool, dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool (data tables: column/bar/line/area and compatible combo charts), quartiles?: exclusive|inclusive, style?, holeSize?, firstSliceAngle?, xTitle?, yTitle?, at?, width?, height?, dx?, dy?}",
             has_doc,
             chart_set
         ),
@@ -152,14 +158,22 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "kind", json!("textBox"))
         )),
         cmd!("shape.setText", "Edit Text Box", [], None, "{id: textBox id, text: string}", has_doc, shape_set_text),
-        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape, id}", has_doc, delete_object),
-        cmd!("object.move", "Move Object", [], None, "{kind: chart|image|shape, id, at?: \"C3\", dx?, dy?, width?, height?}", has_doc, move_object),
+        cmd!("object.delete", "Delete Object", [], None, "{kind: chart|image|shape|slicer|equation|control, id}", has_doc, delete_object),
+        cmd!(
+            "object.move",
+            "Move Object",
+            [],
+            None,
+            "{kind: chart|image|shape|slicer|equation|control, id, at?: \"C3\", dx?, dy?, width?, height? (each at most 10,000 points, or the object's current size when a file made it larger), rotation?: degrees clockwise (shapes, not ink)}",
+            has_doc,
+            move_object
+        ),
         cmd!(
             "object.setAnchorMode",
             "Object Properties",
             [],
             None,
-            "{kind: chart|image|shape, id, mode: moveAndSize|moveOnly|absolute}",
+            "{kind: chart|image|shape|slicer|equation|control, id, mode: moveAndSize|moveOnly|absolute}",
             has_doc,
             set_anchor_mode
         ),
@@ -177,7 +191,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open Hyperlink",
             [],
             None,
-            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); only http, https and mailto are opened, any other scheme is an error; the UI asks before opening",
+            "{url?: \"https://…\" | \"mailto:…\" | \"Sheet2!A1\", cell?} (default: the cell's link); a reference selects; a web or e-mail address is an error unless the host allows it: the user opens those by clicking the link and confirming; any scheme but http, https and mailto is always an error",
             has_doc,
             open_link
         ),
@@ -203,7 +217,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Formatting",
             ["Home", "Styles"],
             None,
-            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
+            "{range?, rule: {type: cellIs|expression|containsText|beginsWith|endsWith|blanks|noBlanks|errors|noErrors|duplicate|unique|top10|aboveAverage|timePeriod|colorScale|dataBar|iconSet, operator?, value?, value2?, formula?, text?, rank?, bottom?, percent?, below?, period?, colors?: [..], stops?: [{type: min|max|num|percent|percentile|formula, value?, color}], color?, set?, style?: {font?: {bold?, italic?, color?}, fill?: \"#FFC7CE\" | {pattern?, fg?, bg?}, borders?, num_fmt?} (colours \"#RRGGBB\") | preset?: lightRedFill|redText|yellowFill|greenFill|redBorder|lightRedFillDarkRedText…}; a text `value` is matched as text, or kept when already a quoted literal}",
             has_doc,
             add_cf
         ),
@@ -213,7 +227,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Manage Rules…",
             ["Home", "Styles", "Conditional Formatting"],
             None,
-            "{delete?: index, moveUp?: index, moveDown?: index}",
+            "{delete?: index, moveUp?: index, moveDown?: index, edit?: index, rule?: {...} (with edit)}",
             has_doc,
             manage_cf
         ),
@@ -238,6 +252,20 @@ fn block(s: &Session, p: &Json) -> Result<RangeRef> {
     }
     Ok(current_region(sh, d.selection.active))
 }
+/// Largest offset (points) `object.move` accepts from the anchor cell.
+const MAX_OBJECT_OFFSET: f64 = 100_000.0;
+
+/// Largest width or height (points) `object.move` and `chart.set` give an object that is not
+/// already larger: see [`size_cap`].
+const MAX_OBJECT_SIZE: f64 = 10_000.0;
+
+/// The most a command may make a dimension that is `current` now: [`MAX_OBJECT_SIZE`], or the
+/// current size when a file made the object larger (the XLSX reader accepts anchors far past the
+/// limit). Such an object keeps its size when it is moved and shrinks by what a resize asks, but
+/// it never grows further, so hostile input is still capped. Never NaN: `f64::max` drops one.
+fn size_cap(current: f32) -> f64 {
+    MAX_OBJECT_SIZE.max(f64::from(current))
+}
 
 fn insert_symbol(s: &mut Session, p: &Json) -> Result<Json> {
     let ch = str_param(p, "char").unwrap_or("").to_string();
@@ -250,6 +278,163 @@ fn insert_symbol(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chart_from_whole_columns_uses_the_rows_in_use() {
+        // #3114: selecting two whole columns of data refused the chart as "range too large".
+        let mut s = Session::new();
+        s.new_workbook();
+        let values: Vec<Vec<String>> = (1..=5).map(|i| vec![i.to_string(), (i * 10).to_string()]).collect();
+        s.execute("range.setValues", json!({"range": "A1:B5", "values": values})).unwrap();
+        s.execute("selection.set", json!({"range": "A:B"})).unwrap();
+        s.execute("insert.chart", json!({"type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$5", "Sheet1!$B$1:$B$5"]);
+        // A block that really is too large still is.
+        s.execute("cell.set", json!({"cell": "B600000", "input": "1"})).unwrap();
+        assert!(s.execute("insert.chart", json!({"range": "A:B", "type": "line"})).is_err());
+        // A bounded block keeps its extent, even where it runs past the data.
+        s.execute("insert.chart", json!({"range": "A1:A20", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$A$1:$A$20"]);
+        // A bounded block entirely below the data keeps its extent.
+        s.execute("insert.chart", json!({"range": "C700000:C700010", "type": "line"})).unwrap();
+        let d = s.doc().unwrap();
+        let chart = d.wb.active().unwrap().charts.last().unwrap();
+        let values: Vec<&str> = chart.series.iter().map(|x| x.values.as_str()).collect();
+        assert_eq!(values, ["Sheet1!$C$700000:$C$700010"]);
+    }
+
+    #[test]
+    fn chart_data_table_commands_undo_and_follow_live_values() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Quarter", "Sales"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "column"})).unwrap();
+        s.execute("chart.addElement", json!({"element": "dataTable", "dataTableKeys": false})).unwrap();
+        let get = |s: &Session| s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        let table = get(&s).data_table.unwrap();
+        assert!(!table.show_keys && table.horizontal_border && table.vertical_border && table.outline);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(get(&s).data_table, None);
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(get(&s).data_table, Some(table));
+        s.execute("chart.set", json!({"dataTableKeys": true, "dataTableHorizontalBorder": false})).unwrap();
+        assert!(get(&s).data_table.as_ref().unwrap().show_keys);
+        assert!(!get(&s).data_table.as_ref().unwrap().horizontal_border);
+        s.execute("cell.set", json!({"cell": "B2", "input": "=12*3"})).unwrap();
+        let d = s.active().unwrap();
+        assert_eq!(gridcraft_chart::resolve(&d.wb, 0, &get(&s)).series[0].values[0], Some(36.0));
+        s.execute("chart.addElement", json!({"element": "dataTable", "on": false})).unwrap();
+        assert_eq!(get(&s).data_table, None);
+        // Old JSON documents have no table field.
+        let mut json = serde_json::to_value(get(&s)).unwrap();
+        json.as_object_mut().unwrap().remove("data_table");
+        assert_eq!(serde_json::from_value::<Chart>(json).unwrap().data_table, None);
+    }
+
+    #[test]
+    fn chart_type_change_drops_series_kinds_it_does_not_draw() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A", "B"], ["Q1", 10, 1], ["Q2", 20, 2]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:C3", "type": "combo"})).unwrap();
+        let chart = |s: &Session| s.active().unwrap().wb.active().unwrap().charts[0].clone();
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        let active = wb.active_sheet();
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[0].kind = Some(ChartKind::Area);
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        // A new type applies to every series: neither the area nor the markers stay.
+        s.execute("chart.set", json!({"type": "line"})).unwrap();
+        let c = chart(&s);
+        assert_eq!(c.series.iter().map(|x| x.kind).collect::<Vec<_>>(), vec![None, None]);
+        assert_eq!((c.series_kind(0), c.series_kind(1)), (ChartKind::Line, ChartKind::Line));
+        // Setting the type a chart already has keeps a series' own markers (a file's).
+        let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+        if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+            c.series[1].kind = Some(ChartKind::LineMarkers);
+        }
+        s.execute("chart.set", json!({"type": "line", "subtype": ""})).unwrap();
+        assert_eq!(chart(&s).series_kinds(), vec![ChartKind::Line, ChartKind::LineMarkers]);
+        // Trendlines go by the kind each series is drawn as.
+        s.execute("chart.set", json!({"type": "pie"})).unwrap();
+        assert!(s.execute("chart.addElement", json!({"element": "trendline"})).is_err());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(chart(&s).series[1].kind, Some(ChartKind::LineMarkers));
+    }
+
+    /// Adding a trendline to every series of a combo chart works out the series' kinds in one
+    /// pass, however many series it holds (a stored chart isn't held to the renderer's limit):
+    /// eight times the series is about eight times the work, not sixty-four.
+    #[test]
+    fn trendlines_for_every_series_are_checked_in_linear_time() {
+        let visits = |n: usize| {
+            let mut s = Session::new();
+            s.new_workbook();
+            s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "A"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+            s.execute("insert.chart", json!({"range": "A1:B3", "type": "combo"})).unwrap();
+            // Line series, then as many column series: asked one at a time, each column series
+            // looks back past every line series for the first column series of its group.
+            let wb = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().wb);
+            let active = wb.active_sheet();
+            if let Some(c) = wb.sheet_mut(active).unwrap().charts.get_mut(0) {
+                let one = c.series[0].clone();
+                c.series = (0..2 * n)
+                    .map(|i| {
+                        let mut se = one.clone();
+                        se.kind = Some(if i < n { ChartKind::Line } else { ChartKind::ColumnClustered });
+                        se
+                    })
+                    .collect();
+            }
+            gridcraft_model::features::work::take_series_visits();
+            s.execute("chart.addElement", json!({"element": "trendline"})).unwrap();
+            let visits = gridcraft_model::features::work::take_series_visits();
+            let c = s.active().unwrap().wb.active().unwrap().charts[0].clone();
+            assert!(c.series.iter().all(|se| se.trendlines.len() == 1));
+            visits
+        };
+        let (small, large) = (visits(200), visits(1_600));
+        assert!(small >= 400, "every series' kind is worked out: {small}");
+        assert!(large < 16 * small, "eight times the series took {large} visits against {small}");
+    }
+
+    #[test]
+    fn chart_data_table_refuses_unsupported_types_without_changing_history() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["Q", "Sales"], ["Q1", 10], ["Q2", 20]]})).unwrap();
+        s.execute("insert.chart", json!({"range": "A1:B3", "type": "pie"})).unwrap();
+        let before = s.active().unwrap().wb.clone();
+        let history = s.execute("history.list", json!({})).unwrap();
+        for params in [json!({"dataTable": true}), json!({"dataTableKeys": true}), json!({"dataTable": "yes"})] {
+            assert!(s.execute("chart.set", params).is_err());
+            assert_eq!(s.active().unwrap().wb, before);
+            assert_eq!(s.execute("history.list", json!({})).unwrap(), history);
+        }
+        assert!(s.execute("chart.addElement", json!({"element": "dataTable"})).is_err());
+        s.execute("chart.set", json!({"type": "line", "dataTable": true})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_some());
+        s.execute("chart.set", json!({"type": "scatter"})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_none());
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.active().unwrap().wb.active().unwrap().charts[0].data_table.is_some());
+    }
+
+    #[test]
+    fn insert_submodules_are_compiled() {
+        assert!(chart::compiled());
+        assert!(cond_format::compiled());
+        assert!(links::compiled());
+        assert!(objects::compiled());
+        assert!(table::compiled());
+    }
 
     #[test]
     fn manage_rules_delete_then_move() {
@@ -310,5 +495,303 @@ mod tests {
         }
         s.execute("table.rename", json!({"table": "Table1", "name": "Table1"})).unwrap();
         s.execute("table.rename", json!({"table": "Table1", "name": "Rates"})).unwrap();
+    }
+
+    #[test]
+    fn colour_scale_thresholds_are_clamped_to_the_percent_range() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "percent", "value": -5, "color": "#112233"},
+                {"type": "percentile", "value": 150, "color": "#445566"},
+                {"type": "max", "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::ColorScale { stops } = rule else { panic!("expected a colour scale") };
+        assert_eq!(
+            stops,
+            vec![
+                (CfValueKind::Percent(0.0), Color::Rgb(0x112233)),
+                (CfValueKind::Percentile(100.0), Color::Rgb(0x445566)),
+                (CfValueKind::Max, Color::Rgb(0x778899)),
+            ]
+        );
+    }
+
+    #[test]
+    fn colour_scale_stops_reject_empty_formulas_and_unknown_types() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let with_stops = |stops: Json| json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": stops}});
+        let err = s
+            .execute(
+                "home.conditionalFormat",
+                with_stops(json!([
+                    {"type": "min", "color": "#112233"},
+                    {"type": "formula", "value": "  ", "color": "#445566"},
+                    {"type": "max", "color": "#778899"},
+                ])),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("home.conditionalFormat"), "{err}");
+        assert!(err.contains("formula"), "{err}");
+
+        let err = s
+            .execute(
+                "home.conditionalFormat",
+                with_stops(json!([
+                    {"type": "min", "color": "#112233"},
+                    {"type": "median", "value": 50, "color": "#445566"},
+                    {"type": "max", "color": "#778899"},
+                ])),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown stop type `median`"), "{err}");
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn colour_scale_rejects_a_stops_value_that_is_not_an_array() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // `stops` present but misshapen used to fall back to the default scale instead of erroring.
+        for stops in [json!({}), json!(null), json!("min")] {
+            let err = s
+                .execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": stops}}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("home.conditionalFormat"), "{err}");
+            assert!(err.contains("`stops` must be an array"), "{err}");
+        }
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0), "an invalid `stops` creates no rule");
+    }
+
+    #[test]
+    fn colour_scale_formulas_are_stored_verbatim() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "min", "color": "#112233"},
+                {"type": "formula", "value": "=$Z$1", "color": "#445566"},
+                {"type": "max", "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::ColorScale { stops } = rule else { panic!("expected a colour scale") };
+        assert_eq!(stops[1].0, CfValueKind::Formula("=$Z$1".into()));
+    }
+
+    #[test]
+    fn manage_rules_rejects_a_non_index_edit() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}})).unwrap();
+        for bad in [json!("0"), json!(1.5), json!(-1), json!(true)] {
+            let err = s
+                .execute("home.manageRules", json!({"edit": bad, "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}}))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("`edit` must be a rule index"), "{err}");
+        }
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn manage_rules_rejects_an_edit_past_the_last_rule() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}})).unwrap();
+        let err = s
+            .execute("home.manageRules", json!({"edit": 1, "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        assert!(err.contains("index 1"), "{err}");
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(1), "the failed edit leaves the rule alone");
+    }
+
+    #[test]
+    fn manage_rules_rejects_an_edit_index_that_does_not_fit_a_usize() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "A1>2"}})).unwrap();
+        // On a 32-bit target this used to cast to zero and replace the rule at index 0.
+        let err =
+            s.execute("home.manageRules", json!({"edit": 4294967296u64, "rule": {"type": "expression", "formula": "A1>3"}})).unwrap_err().to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        assert!(err.contains("index 4294967296"), "{err}");
+        let rule: CfRule = serde_json::from_value(s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::Expression { formula, .. } = rule else { panic!("expected a formula rule, got {rule:?}") };
+        assert_eq!(formula, "A1>2", "the failed edit leaves the rule alone");
+    }
+
+    #[test]
+    fn manage_rules_names_itself_in_a_style_error() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "colorScale", "colors": ["#112233", "#778899"]}})).unwrap();
+        // A style shared by both commands must name the one that was called.
+        let rule = json!({"type": "cellIs", "operator": "greater", "value": 1, "style": {"nope": 1}});
+        let err = s.execute("home.manageRules", json!({"edit": 0, "rule": rule.clone()})).unwrap_err().to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        assert!(!err.contains("home.conditionalFormat"), "{err}");
+        let err = s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": rule})).unwrap_err().to_string();
+        assert!(err.contains("home.conditionalFormat"), "{err}");
+    }
+
+    #[test]
+    fn manage_rules_names_itself_in_a_stop_count_error() {
+        let mut s = Session::new();
+        s.new_workbook();
+        let err = s
+            .execute(
+                "home.manageRules",
+                json!({"edit": 0, "rule": {"type": "colorScale", "stops": [
+                    {"type": "min", "color": "#112233"},
+                ]}}),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+    }
+
+    #[test]
+    fn a_formula_rule_needs_a_formula_that_parses() {
+        let mut s = Session::new();
+        s.new_workbook();
+        // An empty box used to create a rule that never applies.
+        let err =
+            s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": ""}})).unwrap_err().to_string();
+        assert!(err.contains("formula is empty"), "{err}");
+        // `=C1>` used to be written as `<formula>C1&gt;</formula>`, which Excel refuses to open.
+        let err = s
+            .execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "=C1>"}}))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("invalid"), "{err}");
+        assert!(err.contains("does not parse"), "{err}");
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0), "a refused rule is not stored");
+    }
+
+    #[test]
+    fn an_invalid_formula_on_edit_leaves_the_rule_alone() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("home.conditionalFormat", json!({"range": "A1:A3", "rule": {"type": "expression", "formula": "A1>2"}})).unwrap();
+        let err = s.execute("home.manageRules", json!({"edit": 0, "rule": {"type": "expression", "formula": "=C1>"}})).unwrap_err().to_string();
+        assert!(err.contains("home.manageRules"), "{err}");
+        let rule: CfRule = serde_json::from_value(s.execute("home.manageRules", json!({})).unwrap()["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::Expression { formula, .. } = rule else { panic!("expected a formula rule, got {rule:?}") };
+        assert_eq!(formula, "A1>2");
+    }
+
+    #[test]
+    fn a_given_stop_value_must_be_a_number() {
+        let mut s = Session::new();
+        s.new_workbook();
+        for ty in ["num", "percent", "percentile"] {
+            let err = s
+                .execute(
+                    "home.conditionalFormat",
+                    json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                        {"type": ty, "value": "5", "color": "#112233"},
+                        {"type": "max", "color": "#778899"},
+                    ]}}),
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("home.conditionalFormat"), "{ty}: {err}");
+            assert!(err.contains(&format!("`{ty}` stop's `value` must be a number")), "{ty}: {err}");
+        }
+        // A refused scale stores nothing.
+        let rules = s.execute("home.manageRules", json!({})).unwrap();
+        assert_eq!(rules["rules"].as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn an_omitted_stop_value_is_zero() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "num", "color": "#112233"},
+                {"type": "percent", "color": "#445566"},
+                {"type": "percentile", "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let CfRule::ColorScale { stops } = rule else { panic!("expected a colour scale") };
+        assert_eq!(
+            stops,
+            vec![
+                (CfValueKind::Number(0.0), Color::Rgb(0x112233)),
+                (CfValueKind::Percent(0.0), Color::Rgb(0x445566)),
+                (CfValueKind::Percentile(0.0), Color::Rgb(0x778899)),
+            ]
+        );
+    }
+
+    #[test]
+    fn colour_scale_stops_keep_their_thresholds_and_can_be_edited() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute(
+            "home.conditionalFormat",
+            json!({"range": "A1:A3", "rule": {"type": "colorScale", "stops": [
+                {"type": "min", "color": "#112233"},
+                {"type": "num", "value": 5, "color": "#445566"},
+                {"type": "percentile", "value": 90, "color": "#778899"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let stops = match rule {
+            CfRule::ColorScale { stops } => stops,
+            _ => Vec::new(),
+        };
+        assert_eq!(
+            stops,
+            vec![
+                (CfValueKind::Min, Color::Rgb(0x112233)),
+                (CfValueKind::Number(5.0), Color::Rgb(0x445566)),
+                (CfValueKind::Percentile(90.0), Color::Rgb(0x778899)),
+            ]
+        );
+
+        s.execute(
+            "home.manageRules",
+            json!({"edit": 0, "rule": {"type": "colorScale", "stops": [
+                {"type": "formula", "value": "$B$1", "color": "#ABCABC"},
+                {"type": "max", "color": "#DEFDEF"},
+            ]}}),
+        )
+        .unwrap();
+        let list = s.execute("home.manageRules", json!({})).unwrap();
+        let rule: CfRule = serde_json::from_value(list["rules"][0]["rule"].clone()).unwrap();
+        let stops = match rule {
+            CfRule::ColorScale { stops } => stops,
+            _ => Vec::new(),
+        };
+        assert_eq!(stops, vec![(CfValueKind::Formula("$B$1".into()), Color::Rgb(0xABCABC)), (CfValueKind::Max, Color::Rgb(0xDEFDEF))]);
     }
 }

@@ -25,11 +25,11 @@ const INVOICE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   <NFe xmlns="http://example.test/nfe">
     <infNFe versao="4.00" Id="NFe123">
       <ide><cUF>26</cUF><nNF>1975</nNF><dhEmi>2026-09-30T14:18:05-03:00</dhEmi></ide>
-      <emit><CNPJ>03987707000121</CNPJ><xNome>Seller</xNome></emit>
+      <emit><CNPJ>01234567000195</CNPJ><xNome>Seller</xNome></emit>
       <dest><xNome>Buyer &amp; Co</xNome></dest>
       <det nItem="1"><prod><cProd>A1</cProd><vProd>170.4300000000</vProd></prod></det>
       <det nItem="2"><prod><cProd>B2</cProd><vProd>20</vProd></prod></det>
-      <chave>26260903987707000121550050000019751506435810</chave>
+      <chave>26260901234567000195550050000019751506435810</chave>
     </infNFe>
   </NFe>
 </nfeProc>"#;
@@ -80,8 +80,8 @@ fn numbers_become_numbers_but_codes_and_keys_stay_text() {
     assert_eq!(v(&wb, 1, col("vProd")), Value::Number(170.43));
     assert_eq!(v(&wb, 2, col("vProd")), Value::Number(20.0));
     // A leading zero (CNPJ) and 44 digits (access key) would be corrupted by a number.
-    assert_eq!(v(&wb, 1, col("CNPJ")), Value::text("03987707000121"));
-    assert_eq!(v(&wb, 1, col("chave")), Value::text("26260903987707000121550050000019751506435810"));
+    assert_eq!(v(&wb, 1, col("CNPJ")), Value::text("01234567000195"));
+    assert_eq!(v(&wb, 1, col("chave")), Value::text("26260901234567000195550050000019751506435810"));
     // Dates stay as written.
     assert_eq!(v(&wb, 1, col("dhEmi")), Value::text("2026-09-30T14:18:05-03:00"));
     // Entities are decoded.
@@ -238,4 +238,23 @@ fn logical_and_date_columns_are_typed() {
     // An impossible day is not a date.
     let (wb, _) = read_xml_table(b"<r><i><d>2024-02-30</d></i><i><d>2024-03-01</d></i></r>").unwrap();
     assert_eq!(v(&wb, 1, 0), Value::text("2024-02-30"));
+}
+
+/// Entities a document declares are not expanded (no "billion laughs"), and an external one is
+/// never read: only the five predefined entities and character references become text.
+#[test]
+fn declared_entities_are_not_expanded_and_external_ones_are_not_read() {
+    let doc = r#"<?xml version="1.0"?>
+<!DOCTYPE r [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;"><!ENTITY x SYSTEM "file:///etc/hostname">]>
+<r><v>&b;</v><w>&x;</w><z>&amp; &#65;</z></r>"#;
+    let (wb, _) = read_xml_table(doc.as_bytes()).unwrap();
+    let cells: Vec<String> = (0..3)
+        .map(|c| match v(&wb, 1, c) {
+            Value::Text(t) => t.to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(cells[0], "&b;");
+    assert_eq!(cells[1], "&x;");
+    assert_eq!(cells[2], "& A");
 }

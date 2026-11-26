@@ -1,6 +1,6 @@
 use super::calc::formula_text;
 use super::package::{REBUILT_KINDS, relationship_kinds, validate_package};
-use super::*;
+use super::{BTreeSet, Category, Cell, CellError, CellRef, Diffs, Options, RoundTrip, Sheet, Value, Workbook, number_text, quote_sheet};
 
 // ---------------------------------------------------------------- round trip
 
@@ -63,6 +63,13 @@ fn cond_format_list(s: &Sheet) -> Vec<String> {
     let mut cfs: Vec<_> = s.cond_formats.iter().collect();
     cfs.sort_by_key(|c| c.priority);
     cfs.iter().map(|c| format!("{:?} {:?} stopIfTrue={}", c.ranges, c.rule, c.stop_if_true)).collect()
+}
+
+/// The sheet's PivotTables: those modelled, and those kept unchanged for saving (their source is
+/// in another workbook, a data connection or the Data Model).
+fn pivot_count(s: &Sheet) -> usize {
+    let kept = s.preserved.as_deref().map_or(0, |p| p.rels.iter().filter(|r| !r.external && r.rel_type.ends_with("/pivotTable")).count());
+    s.pivots.len() + kept
 }
 
 fn diff_count(d: &mut Diffs, sheet: &str, a: usize, b: usize) {
@@ -154,7 +161,7 @@ pub fn diff_workbooks(a: &Workbook, b: &Workbook, opts: &Options) -> Vec<Categor
         }
         diff_count(&mut comments, &name, sa.comments.len(), sb.comments.len());
         diff_count(&mut hyperlinks, &name, sa.hyperlinks.len(), sb.hyperlinks.len());
-        diff_count(&mut pivots, &name, sa.pivots.len(), sb.pivots.len());
+        diff_count(&mut pivots, &name, pivot_count(sa), pivot_count(sb));
     }
     let mut names = Diffs::new("names", m);
     let name_list = |wb: &Workbook| -> BTreeSet<String> {

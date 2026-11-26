@@ -10,10 +10,10 @@ use std::collections::{HashMap, HashSet};
 
 use gridcraft_core::date::datetime_from_serial;
 pub use gridcraft_core::quote_sheet;
-use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, split_sheet};
+use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, number_to_text, split_sheet};
 use gridcraft_model::{
-    BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDateGroup, PivotField, PivotFilter, PivotFunc, PivotLayout, PivotShowAs,
-    PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
+    BorderLine, BorderStyle, Cell, Chart, Color, Fill, HAlign, NumFmt, PivotDataCell, PivotDateGroup, PivotField, PivotFilter, PivotFunc,
+    PivotItemRef, PivotLayout, PivotLookup, PivotShowAs, PivotSort, PivotTable, PivotValue, Series, Style, StyleId, Workbook,
 };
 
 use crate::pivot_calc::CalcSet;
@@ -32,7 +32,6 @@ pub use items::{distinct_labels, func_caption, item_label};
 use output::data_cols_exceed_sheet;
 pub use output::{CellKind, OutCell, Output, RowKind};
 use output::{cell_style, look};
-
 /// Largest source block read (cells).
 pub const MAX_SOURCE_CELLS: u64 = 10_000_000;
 /// Largest report written (cells).
@@ -41,6 +40,9 @@ pub const MAX_OUTPUT_CELLS: u64 = 2_000_000;
 pub const MAX_AXIS_FIELDS: usize = 32;
 /// Most fields in the Values area.
 pub const MAX_VALUE_FIELDS: usize = 256;
+/// Most report value cells a report may have (every one is indexed for GETPIVOTDATA; bigger
+/// reports are rejected).
+pub const MAX_INDEXED_CELLS: usize = 1_000_000;
 
 const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -58,11 +60,51 @@ pub struct Source {
     /// Numeric with a date number format.
     pub dates: Vec<bool>,
     pub rows: Vec<Vec<Value>>,
+    /// The sheet row of each record (blank rows are skipped).
+    pub record_rows: Vec<u32>,
 }
 
 impl Source {
     pub fn col(&self, name: &str) -> Option<usize> {
         self.headers.iter().position(|h| h.eq_ignore_ascii_case(name))
+    }
+    /// Per record: the column's cell is a number whose own format is a date (Excel caches such
+    /// a number as `<d>` and sorts it after errors), and no cell of the column holds that number
+    /// with a non-date format: a number in any General cell is a number item, whatever the row
+    /// order or report filter. Looks up each distinct style once.
+    pub fn date_cells(&self, wb: &Workbook, col: usize) -> Vec<bool> {
+        let (Some(sh), Ok(off)) = (wb.sheet(self.sheet), u32::try_from(col)) else {
+            return vec![false; self.rows.len()];
+        };
+        let c = self.range.start.col + off;
+        let mut memo: HashMap<StyleId, bool> = HashMap::new();
+        let mut dates: Vec<bool> = self
+            .rows
+            .iter()
+            .zip(&self.record_rows)
+            .map(|(rec, &row)| {
+                rec.get(col).is_some_and(Value::is_number)
+                    && *memo
+                        .entry(sh.style_id(CellRef::new(row, c)))
+                        .or_insert_with_key(|id| crate::display::number_format(wb.styles.get(*id).num_fmt.as_str()).is_date())
+            })
+            .collect();
+        if !dates.contains(&true) {
+            return dates;
+        }
+        let number = |rec: &Vec<Value>| match rec.get(col) {
+            Some(Value::Number(n)) => Some(n.to_bits()),
+            _ => None,
+        };
+        let general: HashSet<u64> = dates.iter().zip(&self.rows).filter(|(d, _)| !**d).filter_map(|(_, rec)| number(rec)).collect();
+        if !general.is_empty() {
+            for (d, rec) in dates.iter_mut().zip(&self.rows) {
+                if *d && number(rec).is_some_and(|n| general.contains(&n)) {
+                    *d = false;
+                }
+            }
+        }
+        dates
     }
 }
 
@@ -156,6 +198,7 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
     }
     let w = headers.len();
     let mut rows = Vec::new();
+    let mut record_rows = Vec::new();
     let mut numeric = vec![true; w];
     let mut any = vec![false; w];
     if r.end.row > r.start.row {
@@ -176,14 +219,15 @@ pub fn read_source(wb: &Workbook, text: &str, default_sheet: usize) -> Result<So
                     }
                 }
             }
+            record_rows.push(row);
             rows.push(rec);
         }
     }
     for (n, a) in numeric.iter_mut().zip(any.iter()) {
         *n = *n && *a;
     }
-    let dates = numeric.iter().zip(formats.iter()).map(|(n, f)| *n && crate::display::number_format(f).is_date()).collect();
-    Ok(Source { sheet: si, range: r, headers, formats, numeric, dates, rows })
+    let dates = numeric.iter().zip(formats.iter()).map(|(n, f)| *n && crate::display::parsed(f).is_date()).collect();
+    Ok(Source { sheet: si, range: r, headers, formats, numeric, dates, rows, record_rows })
 }
 
 /// Computes a PivotTable report from the workbook.
@@ -228,7 +272,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     if !replace {
         for (c, cell) in sh.cells.iter_range(area) {
-            if (!cell.value.is_empty() || cell.formula.is_some()) && !pt.last_range.is_some_and(|r| r.contains(c)) {
+            if cell.has_content() && !pt.last_range.is_some_and(|r| r.contains(c)) {
                 return Err(format!(
                     "There's already data in {}!{}. Do you want to replace it? (Run again with replace: true to overwrite.)",
                     quote_sheet(&sh.name),
@@ -278,7 +322,10 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
             if oc.value.is_empty() && id == StyleId::default() {
                 continue;
             }
-            cells.push((CellRef::new(origin.row + ri as u32, origin.col + ci as u32), Cell { value: oc.value.clone(), formula: None, style: id }));
+            cells.push((
+                CellRef::new(origin.row + ri as u32, origin.col + ci as u32),
+                Cell { value: oc.value.clone(), formula: None, style: id, py: None },
+            ));
         }
     }
     // Column widths that fit the labels.
@@ -311,7 +358,40 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     let sheet_name = shm.name.clone();
     rebind_charts(wb, &sheet_name, &pt.name, origin, &out);
+    // The index of the new report; its lookup hash is built on the first GETPIVOTDATA.
+    if let Some(p) = wb.sheet_mut(sheet).and_then(|s| s.pivots.get_mut(idx)) {
+        let index = PivotLookup::default();
+        index.set_cells(out.data);
+        p.data_index = index;
+    }
     Ok(area)
+}
+
+/// The value cells of a PivotTable's report, for GETPIVOTDATA when a refresh did not set the
+/// index (a workbook just opened from XLSX). The positions must describe the report as it is
+/// stored on the sheet, not as the current source would render it: the source is recomputed only
+/// to learn the layout, and the result is accepted when every label and header cell of that
+/// layout equals the stored cell at the same place. A source changed since the last refresh gives
+/// a different layout, so there is no trustworthy index and the lookup fails until a refresh.
+pub fn index_cells(wb: &Workbook, sheet: usize, pt: &PivotTable) -> Result<Vec<PivotDataCell>, String> {
+    const STALE: &str = "The stored report no longer matches the source. Refresh the PivotTable.";
+    let report = pt.last_range.ok_or("The PivotTable has no report.")?;
+    let out = compute(wb, pt, sheet)?;
+    let sh = wb.sheet(sheet).ok_or("There's no such sheet.")?;
+    let rows = u64::from(report.end.row) - u64::from(report.start.row) + 1;
+    let cols = u64::from(report.end.col) - u64::from(report.start.col) + 1;
+    if rows != u64::from(out.height().max(1)) || cols != u64::from(out.width.max(1)) {
+        return Err(STALE.into());
+    }
+    let labels = [CellKind::Header, CellKind::RowLabel, CellKind::ColLabel, CellKind::Filter];
+    for (r, row) in out.grid.iter().enumerate() {
+        for (c, oc) in row.iter().enumerate() {
+            if labels.contains(&oc.kind) && sh.value(CellRef::new(report.start.row + r as u32, report.start.col + c as u32)) != oc.value {
+                return Err(STALE.into());
+            }
+        }
+    }
+    Ok(out.data)
 }
 
 #[cfg(test)]

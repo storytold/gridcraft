@@ -1,10 +1,10 @@
 //! Draw tab: pen and eraser tools, ink strokes, Ink to Shape.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::*;
+use gridcraft_model::{Anchor, Color, Shape, ShapeKind};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, f64_param, has_doc, ok, str_param, u32_param};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -80,6 +80,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
     let text = pts.iter().map(|q| format!("{:.1},{:.1}", q[0] - minx, q[1] - miny)).collect::<Vec<_>>().join(";");
     let id = d.wb.next_object_id();
     let shape = Shape {
+        math: Default::default(),
         id,
         kind: ShapeKind::Ink,
         anchor: Anchor {
@@ -95,6 +96,7 @@ fn stroke(s: &mut Session, p: &Json) -> Result<Json> {
         line: Color::from_hex(&color).unwrap_or(Color::rgb(0x1F, 0x5F, 0xC9)),
         text,
         format: Default::default(),
+        rotation: 0.0,
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.shapes.push(shape);

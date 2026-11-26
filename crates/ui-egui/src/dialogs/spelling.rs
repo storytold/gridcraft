@@ -1,4 +1,4 @@
-use super::*;
+use super::{Dialog, Json, SheetApp, json};
 
 pub(super) fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bool) {
     let r = d.result.clone().unwrap_or(Json::Null);

@@ -47,13 +47,11 @@ pub fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
 }
 
 /// Milliseconds since the Unix epoch (UTC) from the system clock; `None` when the clock is unavailable.
-/// On wasm32 `std::time::SystemTime::now` traps, so the browser clock is read through `Date.now()`.
-#[allow(clippy::disallowed_methods)] // the std clock is read only off wasm
+/// Chrono uses the browser clock on wasm32, where the standard library clock methods trap.
 pub fn unix_now_ms() -> Option<f64> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?;
-        Some(d.as_secs_f64() * 1000.0)
+        Some(chrono::Utc::now().timestamp_millis() as f64)
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -162,6 +160,43 @@ pub fn serial_from_ymd(sys: DateSystem, year: i64, month: i64, day: i64) -> Opti
         return None;
     }
     Some(serial as f64)
+}
+
+/// The calendar date a pivot cache's ISO 8601 date items (`<d>`, `minDate`, `startDate`…) give
+/// a date of a date system's calendar, as [`datetime_from_serial`] returns it. Those dates count
+/// real days: from 1899-12-30 in the 1900 system and from 1904-01-01 in the 1904 system. Up to
+/// February 1900 the 1900 system's own calendar, with its day 1900-01-00 and the fictitious
+/// 1900-02-29, runs one day ahead of that: serial 0 (the date part of a time) is 1899-12-30,
+/// serial 1 is 1899-12-31 and serial 60 is 1900-02-28. Excel writes its caches that way.
+pub fn iso_ymd(sys: DateSystem, year: i32, month: u32, day: u32) -> (i32, u32, u32) {
+    if sys == DateSystem::D1900 && year == 1900 && month <= 2 {
+        let serial = if month <= 1 { day } else { 31 + day };
+        return civil_from_days(i64::from(serial) + UNIX_1899_12_30);
+    }
+    (year, month, day)
+}
+
+/// Serial for an ISO 8601 calendar date, the inverse of [`iso_ymd`]. Unlike [`serial_from_ymd`]
+/// (`DATE()`), years below 1900 aren't moved on by 1900 and month or day overflow is invalid.
+/// The 1900 system also takes 1900-02-29 (serial 60), which some writers use for that day; the
+/// 1904 system takes 1899-12-30 as the date part of a time (serial 0). `None` for an invalid date,
+/// or one before the epoch or after 9999-12-31.
+pub fn serial_from_iso_ymd(sys: DateSystem, year: i64, month: i64, day: i64) -> Option<f64> {
+    let (y, m, d) = (i32::try_from(year).ok()?, u32::try_from(month).ok()?, u32::try_from(day).ok()?);
+    match (sys, y, m, d) {
+        (DateSystem::D1900, 1900, 2, 29) => return Some(60.0),
+        (DateSystem::D1904, 1899, 12, 30) => return Some(0.0),
+        _ => {}
+    }
+    if !(1..=9999).contains(&y) || !(1..=12).contains(&m) || d < 1 || d > days_in_month(y, m) {
+        return None;
+    }
+    let base = match sys {
+        DateSystem::D1900 => UNIX_1899_12_30,
+        DateSystem::D1904 => UNIX_1904_01_01,
+    };
+    let serial = days_from_civil(y, m, d) - base;
+    (0..=max_serial(sys)).contains(&serial).then_some(serial as f64)
 }
 
 /// Date/time from a serial. `None` for negative or too-large serials.
@@ -323,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn fictitious_1900_02_29() {
+    fn fictitious_1900_02_29() -> Result<(), std::io::Error> {
         // Excel's 1900 calendar has a 29 February 1900 (serial 60); day and month overflow count
         // through it.
         let s = DateSystem::D1900;
@@ -345,7 +380,7 @@ mod tests {
         assert_eq!(serial_from_ymd(s, 1904, 2, 29), Some(1521.0));
         // Every serial up to 1900-12-31 comes back from its own year, month and day.
         for serial in 0..=366 {
-            let d = datetime_from_serial(s, serial as f64).unwrap();
+            let d = datetime_from_serial(s, serial as f64).ok_or_else(|| std::io::Error::other("serial should convert"))?;
             assert_eq!(serial_from_ymd(s, d.year as i64, d.month as i64, d.day as i64), Some(serial as f64), "{d:?}");
         }
         assert_eq!(days_in_month_in(s, 1900, 2), 29);
@@ -358,6 +393,7 @@ mod tests {
         assert_eq!(serial_from_ymd(s, 1904, 3, 1), Some(60.0));
         assert_eq!(serial_from_ymd(s, 1904, 1, 0), None);
         assert_eq!(serial_from_ymd(s, 1900, 2, 29), None);
+        Ok(())
     }
 
     #[test]
@@ -371,17 +407,46 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip() {
+    fn roundtrip() -> Result<(), std::io::Error> {
         let s = DateSystem::D1900;
         for serial in [1.0, 59.0, 60.0, 61.0, 36526.0, 46302.0, 2958465.0] {
-            let d = datetime_from_serial(s, serial).unwrap();
+            let d = datetime_from_serial(s, serial).ok_or_else(|| std::io::Error::other("serial should convert"))?;
             assert_eq!(serial_from_ymd(s, d.year as i64, d.month as i64, d.day as i64), Some(serial));
         }
-        let d = datetime_from_serial(s, 60.0).unwrap();
+        let d = datetime_from_serial(s, 60.0).ok_or_else(|| std::io::Error::other("leap-day serial should convert"))?;
         assert_eq!((d.year, d.month, d.day), (1900, 2, 29));
-        let d = datetime_from_serial(s, 46302.75).unwrap();
+        let d = datetime_from_serial(s, 46302.75).ok_or_else(|| std::io::Error::other("time serial should convert"))?;
         assert_eq!((d.hour, d.minute, d.weekday), (18, 0, 3)); // 2026-10-07 is a Wednesday
-        let d = datetime_from_serial(s, 1.0).unwrap();
+        let d = datetime_from_serial(s, 1.0).ok_or_else(|| std::io::Error::other("first serial should convert"))?;
         assert_eq!(d.weekday, 0); // 1900-01-01 was a Sunday in Excel's calendar
+        Ok(())
+    }
+
+    #[test]
+    fn iso_dates_count_real_days() {
+        let s = DateSystem::D1900;
+        // Excel writes serial 0 (a time's date part) as 1899-12-30 and serial 1 as 1899-12-31.
+        for (serial, ymd) in
+            [(0, (1899, 12, 30)), (1, (1899, 12, 31)), (2, (1900, 1, 1)), (60, (1900, 2, 28)), (61, (1900, 3, 1)), (46302, (2026, 10, 7))]
+        {
+            let d = datetime_from_serial(s, serial as f64).unwrap();
+            assert_eq!(iso_ymd(s, d.year, d.month, d.day), ymd, "{serial}");
+            assert_eq!(serial_from_iso_ymd(s, ymd.0 as i64, ymd.1 as i64, ymd.2 as i64), Some(serial as f64), "{serial}");
+        }
+        assert_eq!(serial_from_iso_ymd(s, 1900, 2, 29), Some(60.0));
+        assert_eq!(serial_from_iso_ymd(s, 1899, 12, 29), None);
+        assert_eq!(serial_from_iso_ymd(s, 2024, 2, 30), None);
+        assert_eq!(serial_from_iso_ymd(s, 2024, 13, 1), None);
+        assert_eq!(serial_from_iso_ymd(s, 9999, 12, 31), Some(2958465.0));
+        assert_eq!(serial_from_iso_ymd(s, 10000, 1, 1), None);
+        assert_eq!(serial_from_iso_ymd(s, i64::MAX, 1, 1), None);
+        // The 1904 system has no offset; 1899-12-30 stands for a time's date part there too.
+        let s = DateSystem::D1904;
+        let d = datetime_from_serial(s, 0.5).unwrap();
+        assert_eq!(iso_ymd(s, d.year, d.month, d.day), (1904, 1, 1));
+        assert_eq!(serial_from_iso_ymd(s, 1904, 1, 1), Some(0.0));
+        assert_eq!(serial_from_iso_ymd(s, 1904, 3, 1), Some(60.0));
+        assert_eq!(serial_from_iso_ymd(s, 1899, 12, 30), Some(0.0));
+        assert_eq!(serial_from_iso_ymd(s, 1903, 12, 31), None);
     }
 }

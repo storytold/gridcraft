@@ -1,4 +1,5 @@
-use super::*;
+use super::{CellRef, RangeRef};
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Orientation {
@@ -10,7 +11,10 @@ pub enum Orientation {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PrintSettings {
     pub orientation: Orientation,
-    /// Paper size name (`Letter`, `A4`, `Legal`…).
+    /// Paper size name (`Letter`, `A4`, `Legal`…; see [`crate::paper`]). Empty means no paper is
+    /// stated, so the printer's or locale's paper applies: a reader may leave it so for a file
+    /// that states none (none does yet). Print layout falls back to Letter and XLSX writes no
+    /// `paperSize`. New sheets default to Letter.
     pub paper: String,
     /// Margins in inches: left, right, top, bottom, header, footer.
     pub margins: [f32; 6],
@@ -48,10 +52,55 @@ pub struct PrintSettings {
     pub hf_scale_with_doc: bool,
     #[serde(default = "yes")]
     pub hf_align_with_margins: bool,
+    /// Page Setup › Sheet › Page order: the sequence pages are numbered and printed in when the
+    /// sheet is more than one page wide and tall.
+    #[serde(default)]
+    pub page_order: PageOrder,
+    /// Page Setup › Page › First page number: the number the sheet's first printed page takes,
+    /// or `None` for Automatic (XLSX `pageSetup firstPageNumber` with `useFirstPageNumber`). Left
+    /// out of a JSON workbook when Automatic, so files without it are written as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_page_number: Option<u32>,
 }
 
 fn yes() -> bool {
     true
+}
+
+/// The sequence of a sheet's pages (XLSX `pageSetup pageOrder`, ECMA-376 `ST_PageOrder`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PageOrder {
+    /// Down the first column of pages, then down the next one (Excel's default).
+    #[default]
+    DownThenOver,
+    /// Across the first row of pages, then across the next one.
+    OverThenDown,
+}
+
+impl PageOrder {
+    /// The id `pageLayout.pageSetup` takes and XLSX writes.
+    pub fn id(self) -> &'static str {
+        match self {
+            PageOrder::DownThenOver => "downThenOver",
+            PageOrder::OverThenDown => "overThenDown",
+        }
+    }
+    pub fn parse(id: &str) -> Option<PageOrder> {
+        match id {
+            "downThenOver" => Some(PageOrder::DownThenOver),
+            "overThenDown" => Some(PageOrder::OverThenDown),
+            _ => None,
+        }
+    }
+    /// The 0-based place in the printed sequence of the page in page row `row` and page column
+    /// `col`, on a sheet `rows` pages tall and `cols` pages wide.
+    pub fn index(self, row: usize, col: usize, rows: usize, cols: usize) -> usize {
+        match self {
+            PageOrder::DownThenOver => col.saturating_mul(rows).saturating_add(row),
+            PageOrder::OverThenDown => row.saturating_mul(cols).saturating_add(col),
+        }
+    }
 }
 
 /// Which header/footer pair a printed page uses.
@@ -145,14 +194,16 @@ impl Default for PrintSettings {
             even_footer: String::new(),
             hf_scale_with_doc: true,
             hf_align_with_margins: true,
+            page_order: PageOrder::DownThenOver,
+            first_page_number: None,
         }
     }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SheetProtection {
-    /// Hash of the password (Excel-compatible, written to XLSX `sheetProtection`; never the
-    /// password itself).
+    /// Hash of the password, never the password itself. XLSX `sheetProtection` writes its Excel
+    /// form ([`crate::PasswordHash::excel`]); a digest alone has none and is not written there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<crate::PasswordHash>,
     /// The internal hash older GridCraft JSON workbooks stored ([`password_hash`]); still
@@ -210,7 +261,47 @@ pub struct LineInfo {
     pub outline: u8,
     pub collapsed: bool,
     pub style: Option<crate::style::StyleId>,
-    /// The size was set by the user (rows): automatic heights follow the content.
+    /// The size was set by the user. Rows without it follow their content's height; columns
+    /// without it widen when a number format makes their numbers wider (`home.increaseDecimal`…).
     #[serde(default)]
     pub custom: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn page_order_numbers_pages_and_old_settings_load_down_then_over() {
+        // Two pages tall, three wide: (row, col) → place in the printed sequence.
+        let place = |order: PageOrder| [(0, 0), (1, 0), (0, 1), (1, 1), (0, 2), (1, 2)].map(|(r, c)| order.index(r, c, 2, 3));
+        assert_eq!(place(PageOrder::DownThenOver), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(place(PageOrder::OverThenDown), [0, 3, 1, 4, 2, 5]);
+        assert_eq!(PageOrder::OverThenDown.index(usize::MAX, usize::MAX, usize::MAX, usize::MAX), usize::MAX);
+        for order in [PageOrder::DownThenOver, PageOrder::OverThenDown] {
+            assert_eq!(PageOrder::parse(order.id()), Some(order));
+        }
+        assert_eq!(PageOrder::parse("OverThenDown"), None);
+        // Saved under the same id the command takes; settings saved before the field existed load
+        // with Excel's default.
+        let mut p = PrintSettings { page_order: PageOrder::OverThenDown, ..Default::default() };
+        let mut saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["page_order"], "overThenDown");
+        assert!(saved.as_object_mut().unwrap().remove("page_order").is_some());
+        p = serde_json::from_value(saved).unwrap();
+        assert_eq!(p, PrintSettings::default());
+    }
+
+    #[test]
+    fn first_page_number_is_saved_only_when_set() {
+        // Automatic writes nothing, so a JSON workbook without a first page number is unchanged and
+        // one saved before the field existed loads as Automatic.
+        let saved = serde_json::to_value(PrintSettings::default()).unwrap();
+        assert!(saved.get("first_page_number").is_none(), "{saved}");
+        assert_eq!(serde_json::from_value::<PrintSettings>(saved).unwrap().first_page_number, None);
+        let p = PrintSettings { first_page_number: Some(7), ..Default::default() };
+        let saved = serde_json::to_value(&p).unwrap();
+        assert_eq!(saved["first_page_number"], 7);
+        assert_eq!(serde_json::from_value::<PrintSettings>(saved).unwrap(), p);
+    }
 }

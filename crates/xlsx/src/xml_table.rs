@@ -192,7 +192,7 @@ pub fn read_xml_table(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
                 Kind::DateTime => (date(text).map_or_else(|| Value::text(&**text), |(n, _)| Value::number(n)), time_style),
                 Kind::Text => (Value::text(&**text), text_style),
             };
-            sheet.cells.set(pos, Cell { value, formula: None, style });
+            sheet.cells.set(pos, Cell { value, formula: None, style, py: None });
             if r < FIT_ROWS
                 && let Some(f) = fit.get_mut(*c)
             {
