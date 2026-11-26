@@ -19,6 +19,7 @@ mod locale_numfmt;
 mod malformed;
 mod multilevel_category_roundtrip;
 mod note_box;
+mod numbers_tests;
 mod ods_tests;
 mod page_order;
 mod passthrough_tests;

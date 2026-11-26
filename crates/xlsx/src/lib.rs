@@ -20,6 +20,7 @@ mod csv;
 mod drawing;
 mod feature_bags;
 mod fmla;
+mod numbers;
 mod ods;
 mod omml;
 mod package;
@@ -48,6 +49,7 @@ use gridcraft_model::Workbook;
 
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, decode_text, read_csv, read_csv_with_report, write_csv, write_csv_limited};
+pub use numbers::read_numbers;
 pub use ods::read_ods;
 pub use package::MAX_PART;
 pub use passthrough::rebase_links;
@@ -247,6 +249,8 @@ pub enum Format {
     Xlsx,
     Xlsb,
     Ods,
+    /// An Apple Numbers document (data import only).
+    Numbers,
     Csv,
     /// A password-protected (encrypted) workbook: a compound file with an `EncryptedPackage`.
     Encrypted,
@@ -257,13 +261,15 @@ pub enum Format {
     Unknown,
 }
 
-/// Guesses the format from content: ODS mimetype, XLSB package content types, other ZIP packages as XLSX, text as CSV.
+/// Guesses the format from content: ODS mimetype, XLSB package content types, the Numbers document index, other ZIP packages as XLSX, text as CSV.
 pub fn sniff(bytes: &[u8]) -> Format {
     if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") || bytes.starts_with(b"PK\x07\x08") {
         return if ods::has_mimetype(bytes) {
             Format::Ods
         } else if xlsb::is_xlsb(bytes) {
             Format::Xlsb
+        } else if numbers::is_numbers(bytes) {
+            Format::Numbers
         } else {
             Format::Xlsx
         };
