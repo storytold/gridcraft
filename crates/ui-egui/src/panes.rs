@@ -334,7 +334,7 @@ fn format_chart(app: &mut SheetApp, ui: &mut Ui) {
         let b = ui.add(egui::DragValue::new(&mut h).prefix("Height ").range(range(current.1)));
         if a.drag_stopped() || a.lost_focus() || b.drag_stopped() || b.lost_focus() {
             ui.data_mut(|d| d.remove::<(f32, f32)>(draft));
-            if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if !crate::framework::escape_pressed(ui.ctx()) {
                 // Only an edited dimension is sent: the other keeps what the chart has, however
                 // large a file made it.
                 let mut params = serde_json::Map::new();
@@ -365,7 +365,7 @@ fn chart_slider(ui: &mut Ui, draft: egui::Id, value: u32, range: std::ops::Range
     let r = ui.add(egui::Slider::new(&mut current, range).text(label));
     if r.drag_stopped() || r.clicked() || r.lost_focus() {
         ui.data_mut(|d| d.remove::<u32>(draft));
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) || current == value { None } else { Some(current) }
+        if crate::framework::escape_pressed(ui.ctx()) || current == value { None } else { Some(current) }
     } else if r.dragged() || r.has_focus() {
         ui.data_mut(|d| d.insert_temp(draft, current));
         None

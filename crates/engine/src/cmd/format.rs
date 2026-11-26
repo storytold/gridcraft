@@ -870,6 +870,33 @@ mod tests {
         assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["num_fmt"], "0.00");
     }
 
+    /// Outlined letters have no Font-group command; Format Cells' style JSON sets and clears them.
+    #[test]
+    fn format_cells_sets_outlined_letters() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"outline": true}}})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["font"]["outline"], true);
+        s.execute("home.formatCells", json!({"range": "A1", "style": {"font": {"outline": false}}})).unwrap();
+        assert_eq!(s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["font"]["outline"], false);
+    }
+
+    /// The Format Cells dialog sends the active cell's whole style to every selected cell, so a
+    /// non-outlined active cell must clear outline on the others, as it does bold.
+    #[test]
+    fn format_cells_whole_style_clears_outline_on_the_selection() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "plain"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "hollow"})).unwrap();
+        s.execute("home.formatCells", json!({"range": "B1", "style": {"font": {"outline": true, "bold": true}}})).unwrap();
+        let style = s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"].clone();
+        s.execute("home.formatCells", json!({"range": "A1:B1", "style": style})).unwrap();
+        let font = s.execute("cell.get", json!({"cell": "B1"})).unwrap()["style"]["font"].clone();
+        assert_eq!((font["bold"].clone(), font["outline"].clone()), (json!(false), json!(false)));
+    }
+
     #[test]
     fn arabic_vowel_and_direction_marks_add_no_width() {
         let plain = approx_text_width("محمد يدرس في المدرسة", 11.0, false);
