@@ -2543,3 +2543,45 @@ fn issue_778_full_workbook_import_save_reopen_roundtrip() {
     let out_chart = read_part("xl/charts/chart1.xml");
     assert!(out_chart.contains("<c:numCache>") && out_chart.contains("<c:v>42.5</c:v>"), "{out_chart}");
 }
+
+#[test]
+fn font_color_filter_dxfs_write_the_swatch_in_their_fill() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:B7"),
+        criteria: vec![(0, FilterCriterion::FillColor(Color::Rgb(0xFF0000))), (1, FilterCriterion::FontColor(Color::Rgb(0x0000FF)))],
+    });
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    let mut styles = String::new();
+    zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap().by_name("xl/styles.xml").unwrap().read_to_string(&mut styles).unwrap();
+    assert!(styles.contains(r#"<dxfs count="2">"#), "{styles}");
+    assert!(styles.contains(r#"<font><color rgb="FF0000FF"/></font>"#), "{styles}");
+    assert!(styles.contains(r#"<fgColor rgb="FF0000FF"/>"#), "{styles}");
+    assert!(xml.contains(r#"<colorFilter dxfId="1" cellColor="0"/>"#), "{xml}");
+}
+
+#[test]
+fn color_filter_criteria_survive_two_saves() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    s.autofilter = Some(AutoFilter {
+        range: rr("A1:B7"),
+        criteria: vec![(0, FilterCriterion::FillColor(Color::Theme(4, 400))), (1, FilterCriterion::FontColor(Color::Rgb(0x0000FF)))],
+    });
+    let expected = s.autofilter.clone();
+    let first = write_xlsx(&wb).unwrap();
+    let (wb1, _) = read_xlsx(&first).unwrap();
+    assert_eq!(wb1.sheet(0).unwrap().autofilter, expected);
+    let second = write_xlsx(&wb1).unwrap();
+    let (wb2, _) = read_xlsx(&second).unwrap();
+    assert_eq!(wb2.sheet(0).unwrap().autofilter, expected);
+    let count = |bytes: &[u8]| {
+        let mut styles = String::new();
+        zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap().by_name("xl/styles.xml").unwrap().read_to_string(&mut styles).unwrap();
+        let start = styles.find("<dxfs count=\"").unwrap() + "<dxfs count=\"".len();
+        styles[start..].split('"').next().unwrap().parse::<usize>().unwrap()
+    };
+    assert_eq!(count(&first), count(&second));
+}
