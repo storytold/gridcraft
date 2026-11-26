@@ -42,12 +42,12 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
     while !rest.is_empty() && !grid.full {
         let Some(lt) = rest.find('<') else {
             if let Some(c) = cell.as_mut() {
-                c.cell.text.push_str(rest);
+                c.push_text(rest);
             }
             break;
         };
         if let Some(c) = cell.as_mut() {
-            c.cell.text.push_str(rest.get(..lt).unwrap_or_default());
+            c.push_text(rest.get(..lt).unwrap_or_default());
         }
         rest = rest.get(lt..).unwrap_or_default();
         if let Some(after) = rest.strip_prefix("<!--") {
@@ -90,7 +90,26 @@ pub(crate) fn table_cells(html: &str, max_rows: usize, max_cols: usize) -> Vec<V
                 let num = attr(attrs, "x:num").or_else(|| attr(attrs, "sdval")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|n| n.is_finite());
                 let colspan = span(attrs, "colspan", MAX_SPAN);
                 let rowspan = span(attrs, "rowspan", MAX_ROW_SPAN);
-                cell = Some(OpenCell { cell: HtmlCell { text: String::new(), num, header: name == "th" }, colspan, rowspan });
+                cell = Some(OpenCell {
+                    cell: HtmlCell { text: String::new(), num, header: name == "th" },
+                    colspan,
+                    rowspan,
+                    runs: Vec::new(),
+                    spacerun: None,
+                });
+            }
+            ("span", false) => {
+                if let Some(c) = cell.as_mut() {
+                    c.end_spacerun();
+                    if is_spacerun(attrs) {
+                        c.spacerun = Some(String::new());
+                    }
+                }
+            }
+            ("span", true) => {
+                if let Some(c) = cell.as_mut() {
+                    c.end_spacerun();
+                }
             }
             ("td" | "th", true) | ("tr", true) => grid.finish(&mut cell),
             ("br", _) => {
@@ -116,6 +135,50 @@ struct OpenCell {
     cell: HtmlCell,
     colspan: usize,
     rowspan: usize,
+    /// Runs of spaces from `mso-spacerun` spans: the byte offset in the raw `cell.text` where
+    /// each goes and how many spaces it holds. They are kept as written, not collapsed.
+    runs: Vec<(usize, usize)>,
+    /// The raw text of the `mso-spacerun` span being read, if any.
+    spacerun: Option<String>,
+}
+
+impl OpenCell {
+    fn push_text(&mut self, raw: &str) {
+        match self.spacerun.as_mut() {
+            Some(run) => run.push_str(raw),
+            None => self.cell.text.push_str(raw),
+        }
+    }
+
+    /// Closes the `mso-spacerun` span being read. A spreadsheet's web page writes a run of
+    /// spaces there as no-break spaces (alternating with spaces) so a browser shows them all; the
+    /// cell holds ordinary spaces, one per space the browser shows. A span holding anything else
+    /// is read as ordinary text.
+    fn end_spacerun(&mut self) {
+        let Some(raw) = self.spacerun.take() else { return };
+        let text = entities(&raw);
+        if text.is_empty() || !text.chars().all(|c| c == '\u{a0}' || c.is_ascii_whitespace()) {
+            self.cell.text.push_str(&raw);
+            return;
+        }
+        let mut n = 0;
+        let mut space = false;
+        for c in text.chars() {
+            if c == '\u{a0}' || !space {
+                n += 1;
+            }
+            space = c != '\u{a0}';
+        }
+        self.runs.push((self.cell.text.len(), n));
+    }
+}
+
+/// Whether a tag's attributes carry the `mso-spacerun:yes` style.
+fn is_spacerun(attrs: &str) -> bool {
+    attr(attrs, "style").is_some_and(|style| {
+        let style: String = style.chars().filter(|c| !c.is_whitespace()).collect();
+        style.split(';').any(|d| d.eq_ignore_ascii_case("mso-spacerun:yes"))
+    })
 }
 
 /// The table being read, with its size limits.
@@ -166,7 +229,9 @@ impl Grid {
     /// Closes the open cell (if any) into the current row, decoding its text: first past the
     /// columns a `rowspan` above still covers, then the cell, then a placeholder per extra column.
     fn finish(&mut self, open: &mut Option<OpenCell>) {
-        let Some(OpenCell { mut cell, colspan, rowspan }) = open.take() else { return };
+        let Some(mut open) = open.take() else { return };
+        open.end_spacerun();
+        let OpenCell { mut cell, colspan, rowspan, runs, .. } = open;
         if self.rows.is_empty() {
             self.start_row();
         }
@@ -177,7 +242,7 @@ impl Grid {
             }
         }
         let start = self.col();
-        cell.text = decode(&cell.text);
+        cell.text = decode_with_runs(&cell.text, &runs);
         if !self.push(cell) {
             return;
         }
@@ -275,9 +340,35 @@ fn attr<'a>(attrs: &'a str, name: &str) -> Option<&'a str> {
 /// when a paste holds many bare `&`).
 const ENTITY_WINDOW: usize = 12;
 
-/// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
-/// space, trimmed. The text only serves to match a cell with the tab-separated text.
+/// [`decode_with_runs`] for text without `mso-spacerun` spans.
+#[cfg(test)]
 fn decode(raw: &str) -> String {
+    decode_with_runs(raw, &[])
+}
+
+/// HTML text to plain text: entities decoded, whitespace runs (and `<br>`) collapsed to one
+/// space, trimmed. The text only serves to match a cell with the tab-separated text. `runs` of
+/// spaces (byte offset in `raw`, count) from `mso-spacerun` spans are put in as written: a run is
+/// cell content, so it is neither collapsed nor trimmed.
+fn decode_with_runs(raw: &str, runs: &[(usize, usize)]) -> String {
+    let mut text = String::with_capacity(raw.len());
+    let mut space = false;
+    let mut from = 0;
+    for &(at, n) in runs {
+        fold(&mut text, &mut space, &entities(raw.get(from..at).unwrap_or_default()));
+        if space && !text.is_empty() {
+            text.push(' ');
+        }
+        space = false;
+        text.push_str(&" ".repeat(n));
+        from = at;
+    }
+    fold(&mut text, &mut space, &entities(raw.get(from..).unwrap_or_default()));
+    text
+}
+
+/// HTML entities decoded.
+fn entities(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut rest = raw;
     while let Some(amp) = rest.find('&') {
@@ -315,20 +406,23 @@ fn decode(raw: &str) -> String {
         }
     }
     out.push_str(rest);
-    let mut text = String::with_capacity(out.len());
-    let mut space = false;
-    for c in out.chars() {
+    out
+}
+
+/// Appends `s` to `text` with whitespace runs collapsed to one space; `space` carries a run
+/// not yet written across calls, and a run at the start or end of the text is dropped.
+fn fold(text: &mut String, space: &mut bool, s: &str) {
+    for c in s.chars() {
         if c.is_whitespace() && c != '\u{a0}' {
-            space = true;
+            *space = true;
             continue;
         }
-        if space && !text.is_empty() {
+        if *space && !text.is_empty() {
             text.push(' ');
         }
-        space = false;
+        *space = false;
         text.push(c);
     }
-    text
 }
 
 /// Same-looking text: non-breaking spaces as spaces, whitespace runs collapsed, trimmed.
@@ -418,6 +512,7 @@ mod tests {
             "<!--",
             "<style>",
             "<table><table><td>",
+            "<table><td>a<span style='mso-spacerun:yes'>&nbsp; &nbsp",
         ] {
             let _ = table_cells(html, MAX_ROW_SPAN, MAX_SPAN);
         }
