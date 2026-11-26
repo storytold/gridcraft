@@ -4,38 +4,131 @@
 
 use crate::xml::El;
 
-/// Deepest OMML nesting converted.
+/// Deepest OMML nesting marked.
 const MAX_DEPTH: usize = 64;
-/// Longest LaTeX the conversion produces before it gives up. `gridcraft_math::check` refuses a
-/// longer source anyway, so converting the rest of a wide or long equation would only spend time
-/// and memory on a hostile file.
-const MAX_OUT_BYTES: usize = gridcraft_math::MAX_SOURCE_BYTES;
 
 /// The LaTeX for an `m:oMath` (or `m:oMathPara`) element, if every part is in the subset and the
 /// result lays out.
 pub fn to_latex(e: &El) -> Option<String> {
-    let out = convert(e)?;
+    if e.name != "oMathPara" && e.name != "oMath" {
+        return None;
+    }
+    validate_conversion(e, 0, false, &mut (1 << 20))?;
+    let mut xml = String::new();
+    write_el(e, &mut xml);
+    let math = craft_math::omml::read_str(&xml)?;
+    let out = craft_math::math_latex::to_latex(&math.nodes);
+    let out = out.trim().to_string();
     (!out.is_empty() && gridcraft_math::check(&out).is_ok()).then_some(out)
 }
 
-/// The conversion itself, before the final check: `None` for a construct outside the subset, an
-/// equation nested past [`MAX_DEPTH`] or one whose LaTeX exceeds [`MAX_OUT_BYTES`].
-fn convert(e: &El) -> Option<String> {
-    let mut out = String::new();
-    match e.name.as_str() {
-        "oMathPara" => {
-            let maths: Vec<&El> = e.kids("oMath").collect();
-            for (i, m) in maths.iter().enumerate() {
-                if i > 0 {
-                    out.push_str(" \\\\ ");
-                }
-                seq(m, &mut out, 0)?;
-            }
-        }
-        "oMath" => seq(e, &mut out, 0)?,
-        _ => return None,
+// The shared reader is tolerant; this importer must fall back instead of losing
+// equation content. Bound escaped XML before serializing or descending further.
+fn validate_conversion(e: &El, depth: usize, property: bool, remaining: &mut usize) -> Option<()> {
+    if depth > MAX_DEPTH {
+        return None;
     }
-    Some(out.trim().to_string())
+    let charge = e.name.len().checked_mul(2)?.checked_add(16)?.checked_add(e.text.len().checked_mul(6)?)?;
+    *remaining = remaining.checked_sub(charge)?;
+    for (key, value) in &e.attrs {
+        *remaining = remaining.checked_sub(key.len().checked_add(value.len().checked_mul(6)?)?.checked_add(8)?)?;
+    }
+    let property = property || e.name.ends_with("Pr");
+    if !property
+        && !matches!(
+            e.name.as_str(),
+            "oMath"
+                | "oMathPara"
+                | "r"
+                | "t"
+                | "f"
+                | "num"
+                | "den"
+                | "rad"
+                | "deg"
+                | "e"
+                | "sSup"
+                | "sSub"
+                | "sSubSup"
+                | "sPre"
+                | "sub"
+                | "sup"
+                | "nary"
+                | "d"
+                | "m"
+                | "mr"
+                | "eqArr"
+                | "acc"
+                | "bar"
+                | "groupChr"
+                | "limLow"
+                | "limUpp"
+                | "lim"
+                | "func"
+                | "fName"
+                | "borderBox"
+                | "phant"
+                | "box"
+        )
+    {
+        return None;
+    }
+    // These limits truncate in the shared reader rather than refusing the matrix.
+    if (e.name == "m" && e.kids("mr").count() > 1000) || (e.name == "mr" && e.kids("e").count() > 64) {
+        return None;
+    }
+    // The pinned emitter treats a literal caret as syntax. Preserve original text
+    // rather than inventing a superscript; structural scripts remain supported.
+    if e.name == "t" && e.text.contains('^') {
+        return None;
+    }
+    for child in &e.children {
+        validate_conversion(child, depth + 1, property, remaining)?;
+    }
+    Some(())
+}
+
+fn write_el(e: &El, out: &mut String) {
+    out.push_str("<m:");
+    out.push_str(&e.name);
+    for (k, v) in &e.attrs {
+        out.push(' ');
+        if k == "val" {
+            out.push_str("m:val");
+        } else {
+            out.push_str(k);
+        }
+        out.push_str("=\"");
+        push_xml_escaped(v, out);
+        out.push('"');
+    }
+    if e.children.is_empty() && e.text.is_empty() {
+        out.push_str("/>");
+        return;
+    }
+    out.push('>');
+    if !e.text.is_empty() {
+        push_xml_escaped(&e.text, out);
+    }
+    for c in &e.children {
+        write_el(c, out);
+    }
+    out.push_str("</m:");
+    out.push_str(&e.name);
+    out.push('>');
+}
+
+fn push_xml_escaped(s: &str, out: &mut String) {
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
 }
 
 /// The first `m:oMath`/`m:oMathPara` under `e` (an `a14:m` element or a paragraph), searched to a
@@ -178,35 +271,8 @@ fn mark_bytes(h: &mut u64, bytes: &[u8]) {
 }
 
 /// Children in order, skipping property elements.
-fn seq(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    for c in &e.children {
-        node(c, out, depth + 1)?;
-        if out.len() > MAX_OUT_BYTES {
-            return None;
-        }
-    }
-    Some(())
-}
-
-/// `{…}` around a child's contents (empty group when the child is missing).
-fn group(e: Option<&El>, out: &mut String, depth: usize) -> Option<()> {
-    out.push('{');
-    if let Some(e) = e {
-        seq(e, out, depth)?;
-    }
-    out.push('}');
-    Some(())
-}
-
-/// The property elements and the properties in them that this converter reads, so the ones
-/// that decide what an equation says beyond its structure and text. [`body_marker`] hashes
-/// exactly these, and [`val`] and [`on`] read only these, so the two cannot drift: a property
-/// read here without a row in this table reads as absent, which the conversion tests show.
 const PROPERTIES: &[(&str, &[&str])] = &[
-    ("rPr", &["nor", "sty", "scr"]),
+    ("rPr", &["nor", "sty", "scr", "lit"]),
     ("fPr", &["type"]),
     ("radPr", &["degHide"]),
     ("naryPr", &["chr", "limLoc", "subHide", "supHide"]),
@@ -219,446 +285,6 @@ const PROPERTIES: &[(&str, &[&str])] = &[
 /// The properties of the property element `pr` that the converter reads.
 fn read_properties(pr: &str) -> &'static [&'static str] {
     PROPERTIES.iter().find(|(name, _)| *name == pr).map_or(&[], |(_, names)| names)
-}
-
-/// The `val` of property `name` in the property element `props`, when the converter reads it.
-fn val<'a>(props: Option<&'a El>, name: &str) -> Option<&'a str> {
-    props.filter(|p| read_properties(&p.name).contains(&name)).and_then(|p| p.child(name)).and_then(|c| c.attr("val"))
-}
-
-/// Whether the switch `name` in the property element `props` is on, when the converter reads it.
-fn on(props: Option<&El>, name: &str) -> bool {
-    props
-        .filter(|p| read_properties(&p.name).contains(&name))
-        .and_then(|p| p.child(name))
-        .is_some_and(|c| c.attr("val").is_none_or(|v| v == "1" || v == "on" || v == "true"))
-}
-
-/// LaTeX for one character of a math run.
-fn char_latex(c: char) -> Option<&'static str> {
-    Some(match c {
-        'α' => "\\alpha ",
-        'β' => "\\beta ",
-        'γ' => "\\gamma ",
-        'δ' => "\\delta ",
-        'ε' => "\\varepsilon ",
-        'ϵ' => "\\epsilon ",
-        'ζ' => "\\zeta ",
-        'η' => "\\eta ",
-        'θ' => "\\theta ",
-        'ϑ' => "\\vartheta ",
-        'ι' => "\\iota ",
-        'κ' => "\\kappa ",
-        'λ' => "\\lambda ",
-        'μ' => "\\mu ",
-        'ν' => "\\nu ",
-        'ξ' => "\\xi ",
-        'π' => "\\pi ",
-        'ρ' => "\\rho ",
-        'σ' => "\\sigma ",
-        'τ' => "\\tau ",
-        'υ' => "\\upsilon ",
-        'φ' => "\\varphi ",
-        'ϕ' => "\\phi ",
-        'χ' => "\\chi ",
-        'ψ' => "\\psi ",
-        'ω' => "\\omega ",
-        'Γ' => "\\Gamma ",
-        'Δ' => "\\Delta ",
-        'Θ' => "\\Theta ",
-        'Λ' => "\\Lambda ",
-        'Ξ' => "\\Xi ",
-        'Π' => "\\Pi ",
-        'Σ' => "\\Sigma ",
-        'Υ' => "\\Upsilon ",
-        'Φ' => "\\Phi ",
-        'Ψ' => "\\Psi ",
-        'Ω' => "\\Omega ",
-        '±' => "\\pm ",
-        '∓' => "\\mp ",
-        '×' => "\\times ",
-        '÷' => "\\div ",
-        '⋅' | '·' => "\\cdot ",
-        '−' => "-",
-        '≤' => "\\le ",
-        '≥' => "\\ge ",
-        '≠' => "\\ne ",
-        '≈' => "\\approx ",
-        '≡' => "\\equiv ",
-        '∼' => "\\sim ",
-        '∝' => "\\propto ",
-        '∞' => "\\infty ",
-        '∂' => "\\partial ",
-        '∇' => "\\nabla ",
-        '∀' => "\\forall ",
-        '∃' => "\\exists ",
-        '∈' => "\\in ",
-        '∉' => "\\notin ",
-        '⊂' => "\\subset ",
-        '⊆' => "\\subseteq ",
-        '⊃' => "\\supset ",
-        '∪' => "\\cup ",
-        '∩' => "\\cap ",
-        '∅' => "\\emptyset ",
-        '→' => "\\to ",
-        '←' => "\\leftarrow ",
-        '⇒' => "\\Rightarrow ",
-        '⇔' => "\\Leftrightarrow ",
-        '…' => "\\ldots ",
-        '⋯' => "\\cdots ",
-        '∘' => "\\circ ",
-        '{' => "\\{",
-        '}' => "\\}",
-        '%' => "\\%",
-        '#' => "\\#",
-        '&' => "\\&",
-        '$' => "\\$",
-        '_' => "\\_",
-        '\\' => "\\backslash ",
-        '~' => "\\sim ",
-        '^' => "\\hat{}",
-        _ => return None,
-    })
-}
-
-fn run_text(r: &El) -> String {
-    r.kids("t").map(|t| t.text.as_str()).collect()
-}
-
-/// Appends `s` escaped for `\text{…}`; `None` once the LaTeX exceeds [`MAX_OUT_BYTES`], checked
-/// after every character so that a long run never expands in full.
-fn escape_text(s: &str, out: &mut String) -> Option<()> {
-    for c in s.chars() {
-        match c {
-            '{' | '}' | '%' | '#' | '&' | '$' | '_' => {
-                out.push('\\');
-                out.push(c);
-            }
-            '\\' => out.push_str("\\textbackslash "),
-            '^' | '~' => out.push(' '),
-            c => out.push(c),
-        }
-        if out.len() > MAX_OUT_BYTES {
-            return None;
-        }
-    }
-    Some(())
-}
-
-/// Known operator names written upright in a run (`sin`, `log`, `lim`).
-const FUNCTIONS: &[&str] = &[
-    "sin", "cos", "tan", "cot", "sec", "csc", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh", "log", "ln", "lg", "exp", "lim", "max", "min",
-    "sup", "inf", "det", "gcd", "deg", "dim", "ker", "arg", "Pr", "liminf", "limsup",
-];
-
-fn run(r: &El, out: &mut String) -> Option<()> {
-    let text = run_text(r);
-    if text.is_empty() {
-        return Some(());
-    }
-    let rpr = r.child("rPr");
-    if on(rpr, "nor") {
-        out.push_str("\\text{");
-        escape_text(&text, out)?;
-        out.push('}');
-        return Some(());
-    }
-    let plain = val(rpr, "sty") == Some("p");
-    if plain && FUNCTIONS.contains(&text.trim()) {
-        out.push('\\');
-        out.push_str(text.trim());
-        out.push(' ');
-        return Some(());
-    }
-    let wrap = match (val(rpr, "scr"), val(rpr, "sty")) {
-        (Some("double-struck"), _) => Some("\\mathbb{"),
-        (Some("script"), _) => Some("\\mathcal{"),
-        (Some("fraktur"), _) => Some("\\mathfrak{"),
-        (Some("sans-serif"), _) => Some("\\mathsf{"),
-        (Some("monospace"), _) => Some("\\mathtt{"),
-        (_, Some("b")) => Some("\\mathbf{"),
-        (_, Some("bi")) => Some("\\boldsymbol{"),
-        (_, Some("p")) if text.chars().any(|c| c.is_alphabetic()) => Some("\\mathrm{"),
-        _ => None,
-    };
-    if let Some(w) = wrap {
-        out.push_str(w);
-    }
-    for c in text.chars() {
-        match char_latex(c) {
-            Some(l) => out.push_str(l),
-            None => out.push(c),
-        }
-        // Checked per character, not from the run's byte length: a character may map to a
-        // longer macro or a shorter sign, so only the LaTeX produced counts.
-        if out.len() > MAX_OUT_BYTES {
-            return None;
-        }
-    }
-    if wrap.is_some() {
-        out.push('}');
-    }
-    Some(())
-}
-
-/// A delimiter character as a `\left`/`\right` argument.
-fn delim(c: Option<&str>, default: &str) -> String {
-    let c = c.unwrap_or(default);
-    match c {
-        "" => ".".into(),
-        "{" => "\\{".into(),
-        "}" => "\\}".into(),
-        "⟨" | "〈" => "\\langle".into(),
-        "⟩" | "〉" => "\\rangle".into(),
-        "⌊" => "\\lfloor".into(),
-        "⌋" => "\\rfloor".into(),
-        "⌈" => "\\lceil".into(),
-        "⌉" => "\\rceil".into(),
-        "‖" => "\\|".into(),
-        "∣" => "|".into(),
-        other => other.into(),
-    }
-}
-
-fn nary_op(chr: &str) -> Option<&'static str> {
-    Some(match chr {
-        "∑" => "\\sum",
-        "∏" => "\\prod",
-        "∐" => "\\coprod",
-        "∫" => "\\int",
-        "∬" => "\\iint",
-        "∭" => "\\iiint",
-        "∮" => "\\oint",
-        "⋃" => "\\bigcup",
-        "⋂" => "\\bigcap",
-        "⋁" => "\\bigvee",
-        "⋀" => "\\bigwedge",
-        "⨁" => "\\bigoplus",
-        "⨂" => "\\bigotimes",
-        _ => return None,
-    })
-}
-
-fn accent(chr: &str) -> Option<&'static str> {
-    Some(match chr {
-        "\u{0302}" | "^" => "\\hat",
-        "\u{030C}" => "\\check",
-        "\u{0303}" | "~" => "\\tilde",
-        "\u{0301}" => "\\acute",
-        "\u{0300}" => "\\grave",
-        "\u{0307}" => "\\dot",
-        "\u{0308}" => "\\ddot",
-        "\u{0306}" => "\\breve",
-        "\u{0305}" | "\u{0304}" | "¯" => "\\bar",
-        "\u{20D7}" | "→" => "\\vec",
-        "\u{20D6}" => "\\overleftarrow",
-        "\u{030A}" => "\\mathring",
-        _ => return None,
-    })
-}
-
-fn node(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    if depth > MAX_DEPTH {
-        return None;
-    }
-    match e.name.as_str() {
-        // Properties and run-level DrawingML are not content.
-        n if n.ends_with("Pr") => {}
-        "r" => run(e, out)?,
-        "f" => fraction(e, out, depth)?,
-        "rad" => radical(e, out, depth)?,
-        "sSup" | "sSub" | "sSubSup" => scripts(e, out, depth)?,
-        "nary" => nary(e, out, depth)?,
-        "d" => delimiters(e, out, depth)?,
-        "m" => matrix(e, out, depth)?,
-        "eqArr" => equation_array(e, out, depth)?,
-        "acc" => {
-            out.push_str(accent(val(e.child("accPr"), "chr").unwrap_or("\u{0302}"))?);
-            group(e.child("e"), out, depth)?;
-        }
-        "bar" => {
-            out.push_str(if val(e.child("barPr"), "pos") == Some("top") { "\\overline" } else { "\\underline" });
-            group(e.child("e"), out, depth)?;
-        }
-        "groupChr" => group_char(e, out, depth)?,
-        "limLow" | "limUpp" => limit(e, out, depth)?,
-        "func" => {
-            seq(e.child("fName")?, out, depth)?;
-            out.push(' ');
-            group(e.child("e"), out, depth)?;
-        }
-        "borderBox" => {
-            out.push_str("\\boxed");
-            group(e.child("e"), out, depth)?;
-        }
-        "phant" => {
-            out.push_str("\\phantom");
-            group(e.child("e"), out, depth)?;
-        }
-        "box" => group(e.child("e"), out, depth)?,
-        _ => return None,
-    }
-    Some(())
-}
-
-/// `m:f`: a fraction, or a binomial-style stack without a bar.
-fn fraction(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    if val(e.child("fPr"), "type") == Some("noBar") {
-        out.push_str("\\genfrac{}{}{0pt}{}");
-    } else {
-        out.push_str("\\frac");
-    }
-    group(e.child("num"), out, depth)?;
-    group(e.child("den"), out, depth)
-}
-
-/// `m:rad`: a square root, or a root with a degree.
-fn radical(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    let hide = on(e.child("radPr"), "degHide");
-    match e.child("deg").filter(|d| !hide && !d.children.is_empty()) {
-        Some(d) => {
-            out.push_str("\\sqrt[");
-            seq(d, out, depth)?;
-            out.push(']');
-        }
-        None => out.push_str("\\sqrt"),
-    }
-    group(e.child("e"), out, depth)
-}
-
-/// `m:sSup`, `m:sSub`, `m:sSubSup`: a base with scripts.
-fn scripts(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    group(e.child("e"), out, depth)?;
-    if let Some(sub) = e.child("sub") {
-        out.push('_');
-        group(Some(sub), out, depth)?;
-    }
-    if let Some(sup) = e.child("sup") {
-        out.push('^');
-        group(Some(sup), out, depth)?;
-    }
-    Some(())
-}
-
-/// `m:nary`: a large operator with its limits and operand.
-fn nary(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    let p = e.child("naryPr");
-    let op = nary_op(val(p, "chr").unwrap_or("∫"))?;
-    out.push_str(op);
-    if val(p, "limLoc") == Some("undOvr") && op.contains("int") {
-        out.push_str("\\limits");
-    }
-    if !on(p, "subHide") {
-        out.push('_');
-        group(e.child("sub"), out, depth)?;
-    }
-    if !on(p, "supHide") {
-        out.push('^');
-        group(e.child("sup"), out, depth)?;
-    }
-    out.push(' ');
-    group(e.child("e"), out, depth)
-}
-
-/// `m:d`: delimiters around one or more parts, with a separator between them.
-fn delimiters(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    let p = e.child("dPr");
-    out.push_str("\\left");
-    out.push_str(&delim(val(p, "begChr"), "("));
-    out.push(' ');
-    let sep = delim(val(p, "sepChr"), "|");
-    for (i, part) in e.kids("e").enumerate() {
-        if i > 0 {
-            out.push_str(" \\middle");
-            out.push_str(&sep);
-            out.push(' ');
-        }
-        seq(part, out, depth)?;
-    }
-    out.push_str(" \\right");
-    out.push_str(&delim(val(p, "endChr"), ")"));
-    Some(())
-}
-
-/// `m:m`: a matrix, row by row.
-fn matrix(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    out.push_str("\\begin{matrix}");
-    for (i, row) in e.kids("mr").enumerate() {
-        if i > 0 {
-            out.push_str(" \\\\ ");
-        }
-        for (k, cell) in row.kids("e").enumerate() {
-            if k > 0 {
-                out.push_str(" & ");
-            }
-            seq(cell, out, depth)?;
-        }
-    }
-    out.push_str("\\end{matrix}");
-    Some(())
-}
-
-/// `m:eqArr`: equations stacked one per row.
-fn equation_array(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    out.push_str("\\begin{gathered}");
-    for (i, row) in e.kids("e").enumerate() {
-        if i > 0 {
-            out.push_str(" \\\\ ");
-        }
-        seq(row, out, depth)?;
-    }
-    out.push_str("\\end{gathered}");
-    Some(())
-}
-
-/// Effective brace orientation, including the character default and its precedence over position.
-fn group_char_is_over(e: &El) -> bool {
-    let p = e.child("groupChrPr");
-    match val(p, "chr").unwrap_or("\u{23DF}") {
-        "\u{23DE}" => true,
-        "\u{23DF}" => false,
-        _ => val(p, "pos") == Some("top"),
-    }
-}
-
-/// `m:groupChr`: a brace over or under its content.
-fn group_char(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    out.push_str(if group_char_is_over(e) { "\\overbrace" } else { "\\underbrace" });
-    group(e.child("e"), out, depth)
-}
-
-/// `m:limLow`, `m:limUpp`: a limit under or over its base.
-fn limit(e: &El, out: &mut String, depth: usize) -> Option<()> {
-    let low = e.name == "limLow";
-    let base = e.child("e");
-    // A function name with a limit (lim, max) takes it as a subscript with \limits.
-    let base_is_fn = base.is_some_and(|b| {
-        let t: String = b.kids("r").map(run_text).collect();
-        b.children.iter().all(|c| c.name == "r") && FUNCTIONS.contains(&t.trim())
-    });
-    // A brace alone under the limit is a labelled brace, as `gridcraft_math::to_omml` writes
-    // `\underbrace{x}_{n}` and `\overbrace{x}^{n}`: the label is the brace's own script, below
-    // for an underbrace and above for an overbrace. An opposite-side limit keeps its placement.
-    let brace = base
-        .and_then(|b| {
-            let mut content = b.children.iter().filter(|c| !c.name.ends_with("Pr"));
-            content.next().filter(|c| c.name == "groupChr" && content.next().is_none())
-        })
-        .filter(|brace| low != group_char_is_over(brace));
-    if base_is_fn {
-        seq(base?, out, depth)?;
-        out.push_str(if low { "\\limits_" } else { "\\limits^" });
-        group(e.child("lim"), out, depth)?;
-    } else if let Some(brace) = brace {
-        group_char(brace, out, depth + 1)?;
-        out.push(if low { '_' } else { '^' });
-        group(e.child("lim"), out, depth)?;
-    } else {
-        out.push_str(if low { "\\underset" } else { "\\overset" });
-        group(e.child("lim"), out, depth)?;
-        group(base, out, depth)?;
-    }
-    Some(())
 }
 
 #[cfg(test)]
@@ -674,6 +300,29 @@ mod tests {
     }
 
     #[test]
+    fn conversion_does_not_accept_a_partial_equation() {
+        assert_eq!(latex("<m:r><m:t>x</m:t></m:r><m:unknown/>"), None);
+        assert_eq!(
+            latex(
+                "<m:r><m:t>x</m:t></m:r><mc:AlternateContent xmlns:mc=\"mc\"><mc:Fallback><m:r><m:t>y</m:t></m:r></mc:Fallback></mc:AlternateContent>"
+            ),
+            None
+        );
+        assert_eq!(latex("<m:r><m:t>x^2</m:t></m:r>"), None);
+        assert_eq!(latex("<m:sSup><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup>").as_deref(), Some("{x}^{2}"));
+        let cells = "<m:e><m:r><m:t>x</m:t></m:r></m:e>".repeat(65);
+        assert_eq!(latex(&format!("<m:m><m:mr>{cells}</m:mr></m:m>")), None);
+    }
+
+    #[test]
+    fn literal_run_property_invalidates_the_saved_source_marker() {
+        let plain = el("<m:r><m:t>x</m:t></m:r>");
+        let literal = el("<m:r><m:rPr><m:lit/></m:rPr><m:t>x</m:t></m:r>");
+        assert_ne!(body_marker(&plain), body_marker(&literal));
+        assert_eq!(body_marker(&plain), body_marker(&plain.clone()));
+    }
+
+    #[test]
     fn the_subset_reads_back() {
         assert_eq!(latex("<m:r><m:t>x+1</m:t></m:r>").as_deref(), Some("x+1"));
         assert_eq!(latex("<m:f><m:num><m:r><m:t>a</m:t></m:r></m:num><m:den><m:r><m:t>b</m:t></m:r></m:den></m:f>").as_deref(), Some("\\frac{a}{b}"));
@@ -685,13 +334,13 @@ mod tests {
         let sum = latex(
             "<m:nary><m:naryPr><m:chr m:val=\"∑\"/><m:limLoc m:val=\"undOvr\"/></m:naryPr><m:sub><m:r><m:t>i=1</m:t></m:r></m:sub><m:sup><m:r><m:t>n</m:t></m:r></m:sup><m:e><m:r><m:t>i</m:t></m:r></m:e></m:nary>",
         );
-        assert_eq!(sum.as_deref(), Some("\\sum_{i=1}^{n} {i}"));
+        assert_eq!(sum.as_deref(), Some("\\sum\\limits_{i=1}^{n} {i}"));
         // An integral without a character, with hidden limits.
         assert_eq!(latex("<m:nary><m:naryPr><m:subHide m:val=\"1\"/><m:supHide m:val=\"1\"/></m:naryPr><m:sub/><m:sup/><m:e><m:r><m:t>f</m:t></m:r></m:e></m:nary>").as_deref(), Some("\\int {f}"));
         let m = latex(
             "<m:d><m:dPr><m:begChr m:val=\"[\"/><m:endChr m:val=\"]\"/></m:dPr><m:e><m:m><m:mr><m:e><m:r><m:t>1</m:t></m:r></m:e><m:e><m:r><m:t>0</m:t></m:r></m:e></m:mr><m:mr><m:e><m:r><m:t>0</m:t></m:r></m:e><m:e><m:r><m:t>1</m:t></m:r></m:e></m:mr></m:m></m:e></m:d>",
         );
-        assert_eq!(m.as_deref(), Some("\\left[ \\begin{matrix}1 & 0 \\\\ 0 & 1\\end{matrix} \\right]"));
+        assert_eq!(m.as_deref(), Some("\\left[\\begin{matrix}1&0\\\\0&1\\end{matrix}\\right]"));
         assert_eq!(latex("<m:r><m:rPr><m:sty m:val=\"p\"/></m:rPr><m:t>sin</m:t></m:r><m:r><m:t>x</m:t></m:r>").as_deref(), Some("\\sin x"));
         assert_eq!(latex("<m:r><m:rPr><m:scr m:val=\"double-struck\"/></m:rPr><m:t>R</m:t></m:r>").as_deref(), Some("\\mathbb{R}"));
         assert_eq!(latex("<m:r><m:rPr><m:nor/></m:rPr><m:t>if {x}</m:t></m:r>").as_deref(), Some("\\text{if \\{x\\}}"));
@@ -703,9 +352,9 @@ mod tests {
 
     #[test]
     fn what_is_outside_the_subset_is_none() {
-        assert_eq!(latex("<m:sPre><m:sub/><m:sup/><m:e/></m:sPre>"), None);
+        assert_eq!(latex("<m:sPre><m:sub/><m:sup/><m:e/></m:sPre>").as_deref(), Some("{}_{}^{}{}"));
         assert_eq!(latex(""), None, "an empty equation is not maths");
-        assert_eq!(latex("<m:nary><m:naryPr><m:chr m:val=\"☃\"/></m:naryPr><m:e/></m:nary>"), None);
+        assert_eq!(latex("<m:nary><m:naryPr><m:chr m:val=\"☃\"/></m:naryPr><m:e/></m:nary>").as_deref(), Some("☃ {}"));
         // Deep nesting stops instead of recursing without bound.
         let deep = format!("{}<m:r><m:t>x</m:t></m:r>{}", "<m:box><m:e>".repeat(100), "</m:e></m:box>".repeat(100));
         assert_eq!(latex(&deep), None);
@@ -719,22 +368,21 @@ mod tests {
         // refusing it, so the caller falls back to the writer's text in bounded time.
         let wide = el(&"<m:r><m:t>x</m:t></m:r>".repeat(100_000));
         let start = std::time::Instant::now();
-        assert_eq!(convert(&wide), None);
         assert_eq!(to_latex(&wide), None);
         assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
         // One run whose text alone is past the cap is refused before it is escaped (each
         // backslash would otherwise grow to `\textbackslash `).
-        let long = el(&format!("<m:r><m:rPr><m:nor/></m:rPr><m:t>{}</m:t></m:r>", "\\".repeat(MAX_OUT_BYTES + 1)));
-        assert_eq!(convert(&long), None);
+        let long = el(&format!("<m:r><m:rPr><m:nor/></m:rPr><m:t>{}</m:t></m:r>", "\\".repeat(gridcraft_math::MAX_SOURCE_BYTES + 1)));
+        assert_eq!(to_latex(&long), None);
         // Groups count the braces they add even when no run adds text.
-        let groups = el(&"<m:box><m:e/></m:box>".repeat(MAX_OUT_BYTES / 2 + 1));
-        assert_eq!(convert(&groups), None);
+        let groups = el(&"<m:box><m:e/></m:box>".repeat(gridcraft_math::MAX_SOURCE_BYTES / 2 + 1));
+        assert_eq!(to_latex(&groups), None);
         // At the cap the equation still reads back, and the cap counts the LaTeX produced, not
         // the run's bytes: a minus sign (three bytes of UTF-8) becomes a one-byte `-`.
-        let at_cap = el(&"<m:r><m:t>x</m:t></m:r>".repeat(MAX_OUT_BYTES));
-        assert_eq!(to_latex(&at_cap).map(|s| s.len()), Some(MAX_OUT_BYTES));
-        let minus = el(&format!("<m:r><m:t>{}</m:t></m:r>", "\u{2212}".repeat(MAX_OUT_BYTES)));
-        assert_eq!(to_latex(&minus), Some("-".repeat(MAX_OUT_BYTES)));
+        let at_cap = el(&"<m:r><m:t>x</m:t></m:r>".repeat(gridcraft_math::MAX_SOURCE_BYTES));
+        assert_eq!(to_latex(&at_cap).map(|s| s.len()), Some(gridcraft_math::MAX_SOURCE_BYTES));
+        let minus = el(&format!("<m:r><m:t>{}</m:t></m:r>", "\u{2212}".repeat(gridcraft_math::MAX_SOURCE_BYTES)));
+        assert_eq!(to_latex(&minus), Some("-".repeat(gridcraft_math::MAX_SOURCE_BYTES)));
     }
 
     #[test]
@@ -764,17 +412,17 @@ mod tests {
 
     #[test]
     fn a_limit_on_the_opposite_side_of_a_brace_keeps_its_placement() {
-        for (properties, brace, opposite, same, script) in [
-            (r#"<m:chr m:val="&#x23DF;"/><m:pos m:val="top"/>"#, "underbrace", "limUpp", "limLow", '_'),
-            (r#"<m:chr m:val="&#x23DE;"/><m:pos m:val="bot"/>"#, "overbrace", "limLow", "limUpp", '^'),
-            (r#"<m:pos m:val="top"/>"#, "underbrace", "limUpp", "limLow", '_'),
-            (r#"<m:chr m:val="?"/><m:pos m:val="top"/>"#, "overbrace", "limLow", "limUpp", '^'),
+        for (properties, brace, opposite, same) in [
+            (r#"<m:chr m:val="&#x23DF;"/><m:pos m:val="top"/>"#, "overbrace", "limUpp", "limLow"),
+            (r#"<m:chr m:val="&#x23DE;"/><m:pos m:val="bot"/>"#, "underbrace", "limLow", "limUpp"),
+            (r#"<m:pos m:val="top"/>"#, "overbrace", "limUpp", "limLow"),
+            (r#"<m:chr m:val="?"/><m:pos m:val="top"/>"#, "overbrace", "limLow", "limUpp"),
         ] {
             let base = format!("<m:groupChr><m:groupChrPr>{properties}</m:groupChrPr><m:e><m:r><m:t>x</m:t></m:r></m:e></m:groupChr>");
             let limit = |kind: &str| format!("<m:{kind}><m:e>{base}</m:e><m:lim><m:r><m:t>n</m:t></m:r></m:lim></m:{kind}>");
-            let placement = if opposite == "limLow" { "underset" } else { "overset" };
-            assert_eq!(latex(&limit(opposite)), Some(format!("\\{placement}{{n}}{{\\{brace}{{x}}}}")), "{properties}");
-            assert_eq!(latex(&limit(same)), Some(format!("\\{brace}{{x}}{script}{{n}}")), "{properties}");
+            let script = |kind: &str| if kind == "limUpp" { '^' } else { '_' };
+            assert_eq!(latex(&limit(opposite)), Some(format!("\\{brace}{{x}}{}{{n}}", script(opposite))), "{properties}");
+            assert_eq!(latex(&limit(same)), Some(format!("\\{brace}{{x}}{}{{n}}", script(same))), "{properties}");
         }
     }
 

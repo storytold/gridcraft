@@ -35,11 +35,72 @@ pub struct Ctx<'a> {
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
+    /// Kept extensions of the current sheet's `<extLst>` (URI, rebuilt XML), until attached.
+    pub sheet_exts: Vec<(String, String)>,
+    /// URIs of the current sheet's extensions that were dropped.
+    pub sheet_exts_dropped: Vec<String>,
+    /// Cells of the worksheet being read whose formulas lack dynamic-array metadata (legacy
+    /// formulas, evaluated with implicit intersection), collected per sheet.
+    pub legacy_formulas: Vec<gridcraft_core::CellRef>,
+    /// Bytes charged so far for shared formulas expanded into dependent cells (see
+    /// [`crate::sheet_read::MAX_SHARED_FORMULA_BYTES`]).
+    pub shared_formula_bytes: u64,
     /// Whether GridCraft calculates a function, when the caller says: cell formulas wrapped by
     /// Google Sheets' export are then read as the formula inside (see [`crate::read_xlsx_with`]).
     pub known_function: Option<&'a dyn Fn(&str) -> bool>,
     /// The code of the workbook's Python cells, from its Python part.
     pub python: crate::python_part::ScriptsIn,
+    /// Cell elements read so far, across every sheet (capped by `sheet_read::MAX_CELLS`).
+    pub cells: u64,
+}
+
+/// The most worksheets read from one workbook (as the XLS reader allows).
+const MAX_SHEETS: usize = 4096;
+/// The most shared strings read from one workbook (as the XLS reader allows): each is an
+/// `Arc<str>` of its own, so a hundred million tiny `<si/>` would ask for gigabytes.
+const MAX_STRINGS: usize = 4_000_000;
+
+/// Sheet names taken while reading, compared as `Workbook::sheet_index` compares them (ASCII case
+/// folded), with the next `(n)` suffix to try for each base, so renaming duplicates stays linear.
+#[derive(Default)]
+pub(crate) struct SheetNames {
+    taken: HashSet<String>,
+    next_suffix: HashMap<String, usize>,
+}
+
+impl SheetNames {
+    /// Records `name` as taken.
+    pub(crate) fn insert(&mut self, name: &str) {
+        self.taken.insert(name.to_ascii_lowercase());
+    }
+
+    /// A valid name for the `i`-th sheet based on `name`, not yet taken; it is recorded as taken.
+    pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
+        let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
+        if base.trim().is_empty() {
+            base = format!("Sheet{}", i + 1);
+        }
+        if self.taken.insert(base.to_ascii_lowercase()) {
+            return base;
+        }
+        let key: String = base.chars().take(25).collect::<String>().to_ascii_lowercase();
+        let mut n = self.next_suffix.get(&key).copied().unwrap_or(2);
+        loop {
+            // 25 characters of the base, fewer once the suffix grows past ` (999)`, so the name
+            // stays within 31 characters however many duplicates there are.
+            let suffix = format!(" ({n})");
+            let short: String = base.chars().take(31usize.saturating_sub(suffix.len()).min(25)).collect();
+            let candidate = format!("{short}{suffix}");
+            n = n.saturating_add(1);
+            if self.taken.insert(candidate.to_ascii_lowercase()) {
+                self.next_suffix.insert(key, n);
+                return candidate;
+            }
+            if n == usize::MAX {
+                return base;
+            }
+        }
+    }
 }
 
 impl Ctx<'_> {
@@ -114,6 +175,9 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
                 let mut phonetics = Vec::new();
                 let mut dropped = 0usize;
                 let res = xml::parse_streaming(&b, &["si"], &mut |si| {
+                    if sst.len() >= MAX_STRINGS {
+                        return Err(IoError::TooLarge(format!("the workbook has more than {MAX_STRINGS} shared strings")));
+                    }
                     let text = xml::rich_text(&si);
                     let raw = si.kids("rPh").count();
                     let (runs, props) = xml::phonetic_data(&si, &text);
@@ -124,8 +188,10 @@ fn read_shared_strings(cx: &mut Ctx<'_>, wb_rels: &[Rel]) -> Result<(), IoError>
                     sst.push(Arc::from(text));
                     Ok(())
                 });
-                if let Err(e) = res {
-                    cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len()));
+                match res {
+                    Ok(_) => {}
+                    Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
+                    Err(e) => cx.warn(format!("shared strings are damaged ({e}); kept {} strings", sst.len())),
                 }
                 if dropped > 0 {
                     cx.warn(format!("shared strings: {dropped} phonetic runs were dropped (bad sb/eb or no reading)"));
@@ -238,7 +304,9 @@ fn selected_workbook_view(workbook: &El) -> Option<&El> {
     views.kids("workbookView").find(|view| view.attr("visibility").unwrap_or("visible") == "visible").or_else(|| views.child("workbookView"))
 }
 
-pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) -> bool>) -> Result<(Workbook, ReadReport), IoError> {
+pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(Workbook, ReadReport), IoError> {
+    let functions = opts.functions;
+    let known_function = opts.known_function;
     let pkg = Package::open(bytes)?;
     let mut cx = Ctx {
         pkg,
@@ -255,8 +323,13 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
         num_fmts: Default::default(),
         cell_pictures: vec![],
         cf_ext_ids: vec![],
+        sheet_exts: vec![],
+        sheet_exts_dropped: vec![],
+        legacy_formulas: vec![],
+        shared_formula_bytes: 0,
         known_function,
         python: Default::default(),
+        cells: 0,
     };
     let root_rels = cx.pkg.rels("")?;
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
@@ -305,13 +378,23 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
 
     // Sheets. `file_to_model[i]` maps the i-th <sheet> to a model sheet index.
     let mut file_to_model: Vec<Option<usize>> = vec![];
+    // Legacy formula cells per model sheet, rewritten once names and tables are known.
+    let mut legacy_formulas: Vec<(usize, Vec<gridcraft_core::CellRef>)> = vec![];
     let mut pivot_caches = crate::pivot::CachesIn::new(&wb_xml, &wb_rels);
     pivot_caches.read_connections(&mut cx, &wb_rels);
-    let sheet_els: Vec<El> = wb_xml.child("sheets").map(|s| s.kids("sheet").cloned().collect()).unwrap_or_default();
+    let sheet_els: Vec<&El> = wb_xml.child("sheets").map(|s| s.kids("sheet").collect()).unwrap_or_default();
+    if sheet_els.len() > MAX_SHEETS {
+        return Err(IoError::TooLarge(format!("the workbook has more than {MAX_SHEETS} sheets")));
+    }
+    let mut rel_by_id: HashMap<&str, &Rel> = HashMap::with_capacity(wb_rels.len());
+    for r in &wb_rels {
+        // The first of duplicate ids wins, as a linear search would find it.
+        rel_by_id.entry(r.id.as_str()).or_insert(r);
+    }
     let mut names = SheetNames::default();
     for (i, se) in sheet_els.iter().enumerate() {
         let name = se.attr("name").unwrap_or("").to_string();
-        let rel = se.attr("id").and_then(|id| wb_rels.iter().find(|r| r.id == id)).cloned();
+        let rel = se.attr("id").and_then(|id| rel_by_id.get(id).copied()).cloned();
         let Some(rel) = rel else {
             cx.warn(format!("sheet \"{name}\" has no part; skipped"));
             file_to_model.push(None);
@@ -328,15 +411,18 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             continue;
         }
         let name = names.unique(&name, i);
+        cx.legacy_formulas.clear();
         let (mut sheet, read_controls) = match crate::sheet_read::read_sheet(&mut cx, &rel.target, &name) {
             Ok(s) => s,
             Err(IoError::TooLarge(m)) => return Err(IoError::TooLarge(m)),
             Err(e) => {
                 cx.warn(format!("sheet \"{name}\" could not be read: {e}"));
+                cx.legacy_formulas.clear();
                 (Sheet::new(name.clone()), Default::default())
             }
         };
         let mut external_pivots = vec![];
+        legacy_formulas.push((wb.sheets.len(), std::mem::take(&mut cx.legacy_formulas)));
         match crate::pivot::read_pivots(&mut cx, &mut pivot_caches, &rel.target, &name) {
             Ok(p) => {
                 sheet.pivots = p.tables;
@@ -346,6 +432,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
             Err(e) => cx.warn(format!("PivotTables on sheet \"{name}\" could not be read: {e}")),
         }
         sheet.preserved = kept.sheet(&mut cx, &rel.target, &name, &external_pivots, &read_controls);
+        sheet.preserved = crate::extlist::keep_sheet(&mut cx, &name, sheet.preserved.take(), kept.keeps());
         sheet.file_id = se.attr_u32("sheetId").unwrap_or(0);
         sheet.visibility = match se.attr("state") {
             Some("hidden") => Visibility::Hidden,
@@ -459,49 +546,11 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], known_function: Option<&'a dyn Fn(&str) ->
     }
     // Calls of LAMBDA names are spelled like the names (the parser upper-cases them).
     wb.apply_name_call_case();
+    // Legacy formulas read as dynamic-array formulas with Excel's implicit `@`.
+    crate::array_formula::apply_legacy(&mut wb, legacy_formulas, functions);
     wb.styles = cx.styles;
     wb.phonetics = cx.phonetics;
     Ok((wb, cx.report))
-}
-
-/// The sheet names an import has assigned so far, for repairing repeated ones.
-#[derive(Default)]
-pub(crate) struct SheetNames {
-    /// Assigned names, ASCII-lowercased.
-    taken: HashSet<String>,
-    /// For each lowercased stem, the next suffix to try: a file full of repeated names would
-    /// otherwise retry every occupied suffix for every sheet.
-    next: HashMap<String, u64>,
-}
-
-impl SheetNames {
-    pub(crate) fn of(wb: &Workbook) -> Self {
-        SheetNames { taken: wb.sheets.iter().map(|s| s.name.to_ascii_lowercase()).collect(), next: HashMap::new() }
-    }
-
-    /// A valid name for the i-th sheet, unique among the names assigned so far, which it joins.
-    pub(crate) fn unique(&mut self, name: &str, i: usize) -> String {
-        let mut base: String = name.chars().filter(|c| !matches!(c, ':' | '\\' | '/' | '?' | '*' | '[' | ']')).take(31).collect();
-        if base.trim().is_empty() {
-            base = format!("Sheet{}", i + 1);
-        }
-        let name = if self.taken.contains(&base.to_ascii_lowercase()) {
-            let stem: String = base.chars().take(25).collect();
-            let next = self.next.entry(stem.to_ascii_lowercase()).or_insert(2);
-            let found = (*next..).find(|n| !self.taken.contains(&format!("{stem} ({n})").to_ascii_lowercase()));
-            match found {
-                Some(n) => {
-                    *next = n + 1;
-                    format!("{stem} ({n})")
-                }
-                None => base,
-            }
-        } else {
-            base
-        };
-        self.taken.insert(name.to_ascii_lowercase());
-        name
-    }
 }
 
 /// Strips a sheet qualifier (`'My Sheet'!$A$1` → `$A$1`).

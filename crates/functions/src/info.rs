@@ -91,7 +91,7 @@ fn na(_a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn n_fn(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     // N(range) reads the range's first cell, but a computed array (N(A1:A3>0), N({...})) is
     // converted element by element, so N can stand in for `--` inside SUMPRODUCT.
-    if let Some(Arg { value: Value::Array(arr), from_ref: false }) = a.first() {
+    if let Some(Arg { value: Value::Array(arr), from_ref: false, .. }) = a.first() {
         let data = arr.data.iter().map(|v| n_of(v.clone()).unwrap_or_else(Value::Error)).collect();
         return Array::new(arr.rows, arr.cols, data).map(Value::from).ok_or(CellError::Calc);
     }

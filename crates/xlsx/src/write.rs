@@ -6,10 +6,11 @@ use std::fmt::Write as _;
 use gridcraft_core::RangeRef;
 use gridcraft_formula::quote_sheet;
 use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style, Visibility, Workbook, WorkbookView};
+use sha2::Digest as _;
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
-use crate::{IoError, XlsxKind};
+use crate::{FunctionInfo, IoError, XlsxKind};
 
 pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -110,8 +111,15 @@ pub struct Out {
     overrides: Vec<(String, String)>,
     defaults: BTreeMap<String, String>,
     pub dxfs: Vec<Style>,
+    /// Number format ids assigned so far (inline `x14:dxf` formats); `styles.xml` adds the rest.
+    pub num_fmts: crate::styles::NumFmts,
+    /// Excel 2010 conditional format rules written so far (each needs a unique id).
+    pub x14_cf_rules: u32,
     pub sst: Sst,
     pub images: u32,
+    /// Media parts written so far, by extension and SHA-256 of their bytes: a picture used again
+    /// is found here instead of being compared byte by byte with every earlier one.
+    media: HashMap<(String, [u8; 32]), String>,
     pub charts: u32,
     /// The workbook's file name, which a PivotChart's link to its PivotTable names in brackets.
     pub book_name: String,
@@ -132,6 +140,10 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// Decides which formulas need dynamic-array metadata.
+    pub functions: FunctionInfo,
+    /// Defined names analysed for implicit intersection, shared by every formula written.
+    pub(crate) names: crate::array_formula::NameCache,
     /// The code of the Python cells written so far, in order: script `i` of the Python part.
     pub python_scripts: Vec<String>,
 }
@@ -141,20 +153,25 @@ impl Out {
         if let Some(ct) = content_type {
             self.overrides.push((format!("/{name}"), ct.to_string()));
         }
+        // Every `xl/media/image*.ext` part is indexed as it is added, preserved ones included, so a
+        // later identical picture finds it instead of writing a second copy.
+        if let Some((ext, file)) = name.strip_prefix("xl/media/").filter(|f| f.starts_with("image")).and_then(|f| Some((f.rsplit_once('.')?.1, f))) {
+            self.media.entry((ext.to_string(), sha2::Sha256::digest(&data).into())).or_insert_with(|| file.to_string());
+        }
         self.parts.push((name.to_string(), data));
     }
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
-        let existing = self.parts.iter().find(|(name, bytes)| {
-            name.strip_prefix("xl/media/image").is_some_and(|rest| rest.ends_with(&format!(".{ext}"))) && bytes.as_slice() == data
-        });
-        if let Some((name, _)) = existing {
-            return name.trim_start_matches("xl/media/").to_string();
+        let key = (ext.to_string(), sha2::Sha256::digest(data).into());
+        if let Some(file) = self.media.get(&key) {
+            return file.clone();
         }
         self.images += 1;
         let file = format!("image{}.{ext}", self.images);
-        self.part(&format!("xl/media/{file}"), None, data.to_vec());
+        // Not through `part`: that would hash the same bytes again to index them.
+        self.parts.push((format!("xl/media/{file}"), data.to_vec()));
+        self.media.insert(key, file.clone());
         file
     }
     /// Replaces the bytes of a part already added.
@@ -172,6 +189,12 @@ impl Out {
 /// file only needs ids that are unique within it).
 pub fn person_guid(i: usize) -> String {
     format!("{{00000000-0000-4000-8002-{:012X}}}", i as u64 & 0xFFFF_FFFF_FFFF)
+}
+
+/// Id of the i-th Excel 2010 conditional format rule of the package (deterministic and unique,
+/// like [`person_guid`]).
+pub fn x14_cf_rule_guid(i: u32) -> String {
+    format!("{{00000000-0000-4000-8003-{i:012X}}}")
 }
 
 /// `$A$1:$D$20` (or `$1:$3` / `$A:$C`).
@@ -216,8 +239,8 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
 /// Workbook name written in a PivotChart's link when the file name isn't known.
 const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
-pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named(wb, kind, None)
+pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, None, functions)
 }
 
 /// The `<workbookView>` attributes beyond `activeTab`: the window's display settings
@@ -254,15 +277,18 @@ fn validate_xlsx_workbook(wb: &Workbook) -> Result<(), IoError> {
     check_sheet_names(wb)
 }
 
-pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     validate_xlsx_workbook(wb)?;
     let mut out = Out {
         parts: vec![],
         overrides: vec![],
         defaults: BTreeMap::new(),
         dxfs: vec![],
+        num_fmts: Default::default(),
+        x14_cf_rules: 0,
         sst: Sst::default(),
         images: 0,
+        media: HashMap::new(),
         charts: 0,
         book_name: book_name.filter(|n| !n.is_empty() && !n.contains(['[', ']'])).unwrap_or(DEFAULT_BOOK_NAME).to_string(),
         chart_names: vec![],
@@ -278,6 +304,8 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        functions,
+        names: Default::default(),
         python_scripts: vec![],
     };
     out.kept.reserve_vml_blocks(wb);
@@ -305,7 +333,7 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
             extra_fmts.push(code);
         }
     }
-    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &extra_fmts);
+    let (styles, fmt_ids) = crate::styles::write_styles(wb, &out.dxfs, &extra_fmts, std::mem::take(&mut out.num_fmts));
     let fmt_id = |code: &str| crate::tables::builtin_id(code).or_else(|| fmt_ids.get(code).copied());
     pivots.finish(wb, &mut out, &fmt_id);
     crate::passthrough::finish_style_ids(&mut out, &fmt_id);
@@ -615,3 +643,7 @@ fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, c
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).
 const METADATA: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<metadata xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:xda=\"http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray\"><metadataTypes count=\"1\"><metadataType name=\"XLDAPR\" minSupportedVersion=\"120000\" copy=\"1\" pasteAll=\"1\" pasteValues=\"1\" merge=\"1\" splitFirst=\"1\" rowColShift=\"1\" clearFormats=\"1\" clearComments=\"1\" assign=\"1\" coerce=\"1\" cellMeta=\"1\"/></metadataTypes><futureMetadata name=\"XLDAPR\" count=\"1\"><bk><extLst><ext uri=\"{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}\"><xda:dynamicArrayProperties fDynamic=\"1\" fCollapsed=\"0\"/></ext></extLst></bk></futureMetadata><cellMetadata count=\"1\"><bk><rc t=\"1\" v=\"0\"/></bk></cellMetadata></metadata>";
+/// Writes a workbook with a caller-supplied file name and the default function facts.
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+}
