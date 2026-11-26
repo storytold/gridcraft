@@ -1080,6 +1080,17 @@ fn color_filter_falls_back_to_a_conditional_format_dxfs_background() {
 }
 
 #[test]
+fn font_color_filter_keeps_an_explicit_text_1_font_as_auto() {
+    let dxf = r#"<dxf><font><color theme="1"/></font><fill><patternFill patternType="solid"><fgColor rgb="FFFF0000"/><bgColor rgb="FFFFFFFF"/></patternFill></fill></dxf>"#;
+    let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>
+      <autoFilter ref="A1:A4"><filterColumn colId="0"><colorFilter dxfId="0" cellColor="0"/></filterColumn></autoFilter>"#;
+    let styles = styles_with_dxfs(&[dxf]);
+    let (wb, _) = read_xlsx(&minimal(body, &[("xl/styles.xml", styles.as_str())], STYLES_REL, "")).unwrap();
+    let af = wb.sheet(0).unwrap().autofilter.as_ref().expect("the autoFilter was read");
+    assert_eq!(af.criteria, vec![(0, FilterCriterion::FontColor(Color::Auto))]);
+}
+
+#[test]
 fn font_color_filter_keeps_a_dxf_that_states_the_colour_in_its_font() {
     let dxf = r#"<dxf><font><color rgb="FF0000FF"/></font></dxf>"#;
     let body = r#"<sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData>

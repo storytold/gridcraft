@@ -25,6 +25,8 @@ pub struct Ctx<'a> {
     pub dxfs: Vec<Style>,
     /// The solid fill colour each dxf states for a colour filter (foreground first).
     pub dxf_fill_colors: Vec<Color>,
+    /// Whether each dxf has an explicit font colour element.
+    pub dxf_has_font_color: Vec<bool>,
     pub palette: Vec<u32>,
     pub date_system: DateSystem,
     pub styles: StyleTable,
@@ -224,7 +226,8 @@ fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) ->
     }
     if let Some(r) = find_rel(wb_rels, "styles").cloned() {
         if let Some(x) = cx.optional_xml(&r.target)? {
-            let StylesIn { xfs, dxfs, dxf_fill_colors, palette, named, num_fmts } = read_styles(&x, &checkboxes, &wb.theme.minor_font);
+            let StylesIn { xfs, dxfs, dxf_fill_colors, dxf_has_font_color, palette, named, num_fmts } =
+                read_styles(&x, &checkboxes, &wb.theme.minor_font);
             cx.num_fmts = num_fmts;
             // Cell format 0 is the Normal cell format: everything on it (font, number format,
             // fill, borders, alignment, protection) is what a cell without its own format shows
@@ -235,6 +238,7 @@ fn read_workbook_styles(cx: &mut Ctx<'_>, wb: &mut Workbook, wb_rels: &[Rel]) ->
             cx.xf_map = xfs.into_iter().enumerate().map(|(i, s)| if i == 0 { StyleId::DEFAULT } else { cx.styles.intern(s) }).collect();
             cx.dxfs = dxfs;
             cx.dxf_fill_colors = dxf_fill_colors;
+            cx.dxf_has_font_color = dxf_has_font_color;
             cx.palette = palette;
             wb.cell_styles = named;
         }
@@ -327,6 +331,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
         xf_map: vec![],
         dxfs: vec![],
         dxf_fill_colors: vec![],
+        dxf_has_font_color: vec![],
         palette: crate::tables::INDEXED.to_vec(),
         date_system: DateSystem::D1900,
         styles: StyleTable::default(),

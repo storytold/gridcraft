@@ -149,11 +149,12 @@ pub fn read_autofilter(cx: &mut Ctx<'_>, e: &El) -> Option<AutoFilter> {
             let Some(dxf_id) = c.attr_u32("dxfId") else { continue };
             let Some(dxf) = cx.dxfs.get(dxf_id as usize) else { continue };
             let fill_color = cx.dxf_fill_colors.get(dxf_id as usize).copied().unwrap_or(Color::Auto);
+            let has_font_color = cx.dxf_has_font_color.get(dxf_id as usize).copied().unwrap_or(false);
             let font_color = dxf.font.color;
             let cell_color = c.flag("cellColor", true);
             let swatch = if cell_color {
                 if fill_color != Color::Auto { fill_color } else { font_color }
-            } else if font_color != Color::Auto {
+            } else if has_font_color {
                 font_color
             } else {
                 fill_color

@@ -27,6 +27,8 @@ pub struct StylesIn {
     pub dxfs: Vec<Style>,
     /// The solid fill colour each dxf states for a colour filter: foreground first, then background.
     pub dxf_fill_colors: Vec<Color>,
+    /// Whether each dxf has an explicit font colour element, even one that normalizes to `Auto`.
+    pub dxf_has_font_color: Vec<bool>,
     pub palette: Vec<u32>,
     /// Named cell styles (`cellStyles` with their `cellStyleXfs`).
     pub named: Vec<(String, Style)>,
@@ -417,7 +419,9 @@ pub fn read_styles(root: &El, checkboxes: &[bool], minor_font: &str) -> StylesIn
     let mut inline_fmts = HashMap::new();
     let dxfs = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf(x, &palette, &shared_fmts, &mut inline_fmts)).collect()).unwrap_or_default();
     let dxf_fill_colors = root.child("dxfs").map(|d| d.kids("dxf").map(|x| read_dxf_fill_color(x, &palette)).collect()).unwrap_or_default();
-    StylesIn { xfs, dxfs, dxf_fill_colors, palette, named, num_fmts: fmts }
+    let dxf_has_font_color =
+        root.child("dxfs").map(|d| d.kids("dxf").map(|x| x.child("font").and_then(|f| f.child("color")).is_some()).collect()).unwrap_or_default();
+    StylesIn { xfs, dxfs, dxf_fill_colors, dxf_has_font_color, palette, named, num_fmts: fmts }
 }
 
 /// The solid fill colour a colour filter's dxf states: its foreground first (the reference's
