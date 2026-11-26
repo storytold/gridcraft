@@ -86,6 +86,36 @@ fn push_fragment_kids(root: &mut craft_xml::El, xml: &str) {
     }
 }
 
+/// Worksheet children that come before `<customSheetViews>` (`CT_Worksheet`).
+const BEFORE_CUSTOM_VIEWS: &[&str] = &[
+    "sheetPr",
+    "dimension",
+    "sheetViews",
+    "sheetFormatPr",
+    "cols",
+    "sheetData",
+    "sheetCalcPr",
+    "sheetProtection",
+    "protectedRanges",
+    "scenarios",
+    "autoFilter",
+    "sortState",
+    "dataConsolidate",
+];
+
+/// Puts a kept `<customSheetViews>` among the sheet's own children where the schema has it. The
+/// part writer places the elements it generates around the children already there by name.
+fn insert_custom_views(root: &mut craft_xml::El, xml: &str) {
+    let wrapped = format!("<root xmlns:r=\"{NS_REL}\">{xml}</root>");
+    let Some(parsed) = parse_craft_fragment(&wrapped) else { return };
+    let at = root
+        .children
+        .iter()
+        .rposition(|n| matches!(n, craft_xml::Node::El(e) if BEFORE_CUSTOM_VIEWS.contains(&e.name.as_str())))
+        .map_or(0, |i| i + 1);
+    root.children.splice(at..at, parsed.children);
+}
+
 pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (String, Rels) {
     let mut rels = Rels::default();
     let Some(sheet) = wb.sheet(si) else { return (String::new(), rels) };
@@ -197,6 +227,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     part.features.drawing = write_sheet_drawing_rel(wb, si, sheet, &mut rels, out);
     let (legacy_rid, notes_frag) = write_sheet_notes_frag(sheet, si, &kept, &mut rels, out);
     part.features.legacy_drawing = legacy_rid;
+    if let Some(x) = kept.custom_views() {
+        insert_custom_views(&mut part.root, &x);
+    }
 
     if !tables.is_empty() {
         let mut used_names: HashSet<String> = HashSet::new();

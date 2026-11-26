@@ -14,7 +14,10 @@
 //! workbook and its `<pivotCache>` entry, its `cacheId` unchanged; a cache on a connection only
 //! when the connections are kept, and on the Data Model only when the model is kept. The workbook
 //! also keeps its `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the
-//! saved values. Chart sheets are kept whole, and each embedded chart GridCraft reads keeps its
+//! saved values. A shared workbook keeps its change history and list of users (`xl/revisions/`)
+//! as they were (edits made here are not recorded in them) and the users' own views: the
+//! workbook's `<customWorkbookViews>` and each sheet's `<customSheetViews>` with the printer
+//! settings they name. Chart sheets are kept whole, and each embedded chart GridCraft reads keeps its
 //! original chart part with the style, colour and shape parts behind it, together with the chart
 //! as it was read.
 //!
@@ -110,6 +113,8 @@ const CT_VML: &str = "application/vnd.openxmlformats-officedocument.vmlDrawing";
 const PACKAGE_ROOTS: &[&str] = &["custom-properties", "extensibility", "webextensiontaskpanes"];
 /// Relationship kinds kept from the workbook without a workbook element.
 const WORKBOOK_ROOTS: &[&str] = &["customXml", "connections", "xmlMaps"];
+/// Relationship kinds of a shared workbook's change history and the list of its users.
+const SHARED_ROOTS: &[&str] = &["revisionHeaders", "usernames"];
 /// Relationship kinds kept from a sheet without a sheet element.
 const SHEET_ROOTS: &[&str] = &["queryTable", "tableSingleCells"];
 /// Sheet relationship kinds that mean the sheet XML may hold elements worth keeping.
@@ -118,6 +123,9 @@ const SHEET_ELEMENT_KINDS: &[&str] = &["oleObject", "ctrlProp", "control", "imag
 const FILE_VERSION_ATTRS: &[&str] = &["appName", "lastEdited", "lowestEdited", "rupBuild", "codeName"];
 /// Kept sheet elements, in schema order (all after `<legacyDrawing>`, before `<tableParts>`).
 const SHEET_SLOTS: &[&str] = &["legacyDrawingHF", "picture", "oleObjects", "controls"];
+/// The users' own views of a sheet in a shared workbook (filters, print settings), kept apart
+/// from [`SHEET_SLOTS`] because they come before `<mergeCells>`.
+const CUSTOM_SHEET_VIEWS: &str = "customSheetViews";
 /// Rewritten kinds a kept PivotTable (source in another workbook) reaches: the table, from the
 /// sheet, and its cache, which the workbook keeps (several tables can share one cache).
 const PIVOT_TABLE_GRAPH: &[&str] = &["pivotTable", "pivotCacheDefinition"];
@@ -195,6 +203,7 @@ const OWN_DIRS: &[&str] = &[
     "xl/webextensions/",
     "xl/printersettings/",
     "xl/model/",
+    "xl/revisions/",
 ];
 
 fn kind(rel_type: &str) -> &str {

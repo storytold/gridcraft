@@ -555,6 +555,7 @@ fn write_workbook_xml(
         w.push_str(" fullCalcOnLoad=\"1\"");
     }
     w.push_str("/>");
+    w.push_str(&crate::passthrough::workbook_elements(wb, "customWorkbookViews"));
     w.push_str(&pivots.workbook_xml(wb_rels));
     let exts = crate::passthrough::workbook_elements(wb, "ext");
     if !exts.is_empty() {

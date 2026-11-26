@@ -347,7 +347,7 @@ pub fn read_xlsx<'a>(bytes: &'a [u8], opts: crate::ReadOptions<'a>) -> Result<(W
     let wb_part = find_rel(&root_rels, "officeDocument").map(|r| r.target.clone()).unwrap_or_else(|| "xl/workbook.xml".into());
     let wb_xml = workbook_xml(&mut cx.pkg, &wb_part)?;
     let wb_rels = cx.pkg.rels(&wb_part)?;
-    let mut kept = crate::passthrough::KeptReader::new(&mut cx);
+    let mut kept = crate::passthrough::KeptReader::new(&mut cx, &wb_xml);
     cx.cell_pictures = match crate::richdata::read(&mut cx, &wb_rels) {
         Ok(pictures) => pictures,
         Err(error) => {

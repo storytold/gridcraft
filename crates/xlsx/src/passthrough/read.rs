@@ -56,6 +56,8 @@ pub struct KeptReader {
     /// Cache definition parts of the PivotTables kept with their sheets (source in another
     /// workbook, a data connection or the Data Model), kept with the workbook.
     pivot_caches: Vec<(String, KeptSource)>,
+    /// The workbook has users' own views (`<customWorkbookViews>`), so its sheets may have some.
+    custom_views: bool,
 }
 
 impl KeptReader {
@@ -64,7 +66,7 @@ impl KeptReader {
         self.on
     }
 
-    pub fn new(cx: &mut Ctx<'_>) -> KeptReader {
+    pub fn new(cx: &mut Ctx<'_>, wb_xml: &xml::El) -> KeptReader {
         let mut k = KeptReader {
             on: true,
             strict: false,
@@ -73,6 +75,7 @@ impl KeptReader {
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
             pivot_caches: vec![],
+            custom_views: wb_xml.child("customWorkbookViews").is_some(),
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -224,6 +227,26 @@ impl KeptReader {
         for r in wb_rels.iter().filter(|r| is_kind(r, WORKBOOK_ROOTS)) {
             if let Err(why) = self.keep(cx, &mut p, std::slice::from_ref(r), &mut seen) {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
+            }
+        }
+        // A shared workbook: its change history and the users who have it open, kept as they were.
+        // Edits made here are not recorded in the history.
+        let shared: Vec<PreservedRel> = wb_rels.iter().filter(|r| !r.external && is_kind(r, SHARED_ROOTS)).cloned().collect();
+        if shared.iter().any(|r| is_kind(r, &["revisionHeaders"])) {
+            match self.keep(cx, &mut p, &shared, &mut seen) {
+                Ok(()) => cx.warn(
+                    "this is a shared workbook: sharing isn't supported here. Its change history is kept as it was, but edits made here are not recorded in it",
+                ),
+                Err(why) => cx.warn(format!("this is a shared workbook: its change history was dropped ({why}) and saving stops sharing it")),
+            }
+        }
+        if self.custom_views {
+            match cx.pkg.read(wb_part).ok().flatten().and_then(|b| top_fragment(&b, b"customWorkbookViews")) {
+                Some(x) => {
+                    p.elements.push(PreservedXml { slot: "customWorkbookViews".into(), xml: x });
+                    cx.warn("custom views can't be shown or changed here; they are kept for saving");
+                }
+                None => cx.warn("custom views could not be read and were dropped"),
             }
         }
         // The Data Model: its tables are loaded through the workbook's connections, so it is kept
@@ -415,7 +438,7 @@ impl KeptReader {
         // Notes have one VML drawing per sheet; another one holds the header and footer pictures.
         let vml_drawings = rels.iter().filter(|r| is_kind(r, &["vmlDrawing"])).count();
         let notes = rels.iter().filter(|r| is_kind(r, &["comments"])).count();
-        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes || controls.vml_only_unmodelled {
+        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes || controls.vml_only_unmodelled || self.custom_views {
             self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen, controls);
         }
         for ep in pivots {
@@ -489,7 +512,7 @@ impl KeptReader {
             .collect();
         // Controls and OLE objects are drawn from shapes in the legacy VML drawing. Controls only
         // the drawing lists need it too, whether or not a `<controls>` element is left.
-        if frags.iter().any(|(slot, _)| slot != "picture") || controls.vml_only_unmodelled {
+        if frags.iter().any(|(slot, _)| slot != "picture" && slot != CUSTOM_SHEET_VIEWS) || controls.vml_only_unmodelled {
             match self.vml(cx, rels, scan.legacy_drawing.as_deref(), seen, read_controls) {
                 Ok((vml, parts)) => {
                     p.parts.extend(parts);
@@ -497,7 +520,7 @@ impl KeptReader {
                 }
                 Err(why) => {
                     cx.warn(format!("sheet \"{name}\": controls and embedded objects were dropped: {why}"));
-                    frags.retain(|(slot, _)| slot == "picture");
+                    frags.retain(|(slot, _)| slot == "picture" || slot == CUSTOM_SHEET_VIEWS);
                 }
             }
         }
@@ -644,14 +667,7 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
             Event::Eof => break,
             Event::Start(e) if !in_root => {
                 in_root = true;
-                for a in e.attributes().with_checks(false).flatten() {
-                    if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
-                        && let (Ok(p), Ok(v)) = (std::str::from_utf8(p), std::str::from_utf8(&a.value))
-                        && !v.contains('"')
-                    {
-                        decls.push((p.to_string(), v.to_string()));
-                    }
-                }
+                decls = root_decls(&e);
             }
             Event::Start(e) => {
                 let local = e.local_name().as_ref().to_vec();
@@ -663,7 +679,7 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
                 }
                 reader.read_to_end(e.name()).ok()?;
                 let end = usize::try_from(reader.buffer_position()).ok()?;
-                let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent");
+                let wanted = matches!(local.as_slice(), b"picture" | b"oleObjects" | b"controls" | b"AlternateContent" | b"customSheetViews");
                 if wanted && end.saturating_sub(start) <= MAX_FRAGMENT {
                     let frag = text.get(start..end)?;
                     push_fragment(&mut out, frag, &local, &decls);
@@ -712,9 +728,56 @@ fn push_fragment(out: &mut SheetScan, frag: &str, local: &[u8], decls: &[(String
     } else {
         String::from_utf8_lossy(local).into_owned()
     };
-    if SHEET_SLOTS.contains(&slot.as_str()) && !out.fragments.iter().any(|(s, _)| *s == slot) {
+    if (SHEET_SLOTS.contains(&slot.as_str()) || slot == CUSTOM_SHEET_VIEWS) && !out.fragments.iter().any(|(s, _)| *s == slot) {
         out.fragments.push((slot, frag));
     }
+}
+
+/// The first child of the root named `local` (any prefix), with the root's namespace
+/// declarations it needs. `None` when there is none, it is too large or the XML is damaged.
+fn top_fragment(bytes: &[u8], local: &[u8]) -> Option<String> {
+    let data = xml::to_utf8(bytes);
+    let text = std::str::from_utf8(&data).ok()?;
+    let mut reader = Reader::from_str(text);
+    let mut decls: Vec<(String, String)> = vec![];
+    let mut in_root = false;
+    loop {
+        let start = usize::try_from(reader.buffer_position()).ok()?;
+        match reader.read_event().ok()? {
+            Event::Eof | Event::End(_) => return None,
+            Event::Start(e) if !in_root => {
+                in_root = true;
+                decls = root_decls(&e);
+            }
+            Event::Start(e) => {
+                let found = e.local_name().as_ref() == local;
+                reader.read_to_end(e.name()).ok()?;
+                let end = usize::try_from(reader.buffer_position()).ok()?;
+                if found {
+                    let frag = text.get(start..end).filter(|_| end.saturating_sub(start) <= MAX_FRAGMENT)?;
+                    return Some(with_decls(frag, &decls));
+                }
+            }
+            Event::Empty(e) if in_root && e.local_name().as_ref() == local => {
+                return Some(with_decls(text.get(start..usize::try_from(reader.buffer_position()).ok()?)?, &decls));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The `xmlns:` declarations of a root element.
+fn root_decls(e: &BytesStart<'_>) -> Vec<(String, String)> {
+    let mut decls = vec![];
+    for a in e.attributes().with_checks(false).flatten() {
+        if let Some(p) = a.key.as_ref().strip_prefix(b"xmlns:")
+            && let (Ok(p), Ok(v)) = (std::str::from_utf8(p), std::str::from_utf8(&a.value))
+            && !v.contains('"')
+        {
+            decls.push((p.to_string(), v.to_string()));
+        }
+    }
+    decls
 }
 
 /// Adds the root's namespace declarations a fragment doesn't declare itself.

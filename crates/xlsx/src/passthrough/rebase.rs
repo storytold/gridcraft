@@ -83,6 +83,13 @@ impl<'a> SheetKept<'a> {
         self.ids.get(old).map(String::as_str)
     }
 
+    /// The kept `<customSheetViews>` (users' own views of a shared workbook), with its printer
+    /// settings' new relationship ids.
+    pub fn custom_views(&self) -> Option<String> {
+        let e = self.p?.elements.iter().find(|e| e.slot == CUSTOM_SHEET_VIEWS)?;
+        remap(&e.xml, &self.ids)
+    }
+
     /// The kept sheet elements, in schema order, with GridCraft's own form control entries
     /// (`controls`, see `controls::write`) in the sheet's one `<controls>` element.
     pub fn elements(&self, controls: &str) -> String {
