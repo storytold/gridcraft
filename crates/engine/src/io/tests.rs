@@ -40,6 +40,29 @@ fn json_import_repairs_vba_code_names() {
 }
 
 #[test]
+fn json_import_reports_invalid_vba_code_names() {
+    for code in ["", "1st", "_Sheet", "Bad Name", "Bad\"Name", &"表".repeat(32)] {
+        let mut source = Workbook::new();
+        source.code_name = Some(code.into());
+        source.sheet_mut(0).unwrap().code_name = Some(code.into());
+        let (wb, warnings) = open_bytes("book.json", &save_bytes(&source, "book.json").unwrap()).unwrap();
+        assert_eq!(
+            warnings,
+            [
+                format!("workbook: invalid VBA code name \"{code}\" was dropped"),
+                format!("sheet \"Sheet1\": invalid VBA code name \"{code}\" was dropped"),
+            ]
+        );
+        assert!(wb.code_name.is_none());
+        assert!(wb.sheet(0).unwrap().code_name.is_none());
+        let (back, warnings) = open_bytes("book.xlsm", &save_bytes(&wb, "book.xlsm").unwrap()).unwrap();
+        assert!(back.code_name.is_none());
+        assert!(back.sheet(0).unwrap().code_name.is_none());
+        assert!(warnings.is_empty(), "{warnings:?}");
+    }
+}
+
+#[test]
 fn json_import_checks_vba_code_names_without_sheets() {
     for code in [None, Some("ThisWorkbook"), Some("Bad.Name")] {
         let mut source = Workbook::new();
@@ -56,7 +79,25 @@ fn json_import_checks_vba_code_names_without_sheets() {
         }
         assert_eq!(wb.sheets.len(), 1);
         assert_eq!(wb.active_sheet(), 0);
+        let (back, warnings) = open_bytes("book.xlsm", &save_bytes(&wb, "book.xlsm").unwrap()).unwrap();
+        assert_eq!(back.code_name, wb.code_name);
+        assert!(warnings.is_empty(), "{warnings:?}");
     }
+}
+
+#[test]
+fn json_import_keeps_vba_code_name_and_project_without_sheets() {
+    let mut source = Workbook::new();
+    source.code_name = Some("ThisWorkbook".into());
+    source.vba_project = Some(std::sync::Arc::new(b"opaque VBA project".to_vec()));
+    source.sheets.clear();
+    let (wb, warnings) = open_bytes("book.json", &save_bytes(&source, "book.json").unwrap()).unwrap();
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let saved = save_bytes(&wb, "book.xlsm").unwrap();
+    let (reopened, warnings) = open_bytes("book.xlsm", &saved).unwrap();
+    assert_eq!(reopened.vba_project, source.vba_project);
+    assert_eq!(reopened.code_name, source.code_name);
+    assert_eq!(warnings, [VBA_PRESERVED_NOTICE]);
 }
 
 fn book(rtl: bool, cells: &[(&str, gridcraft_core::Value, gridcraft_model::HAlign)]) -> Workbook {

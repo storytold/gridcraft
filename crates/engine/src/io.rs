@@ -321,11 +321,8 @@ fn read_plain(name: &str, bytes: &[u8], csv_as_text: bool) -> Result<(Workbook, 
             let mut wb: Workbook = craft_gridcraft_format::read(bytes).map_err(|e| EngineError::Other(e.to_string()))?;
             wb.styles.rebuild_index();
             if wb.sheets.is_empty() {
-                // The file's macros are read after this (`macros::load`), so they come along.
-                let mut empty = Workbook::new();
-                empty.macros_read = wb.macros_read;
-                empty.code_name = wb.code_name;
-                wb = empty;
+                wb.sheets.push(std::sync::Arc::new(Sheet::new("Sheet1")));
+                wb.set_active_sheet(0);
             }
             // The file's band placement and cell count are derived state: rebuild them from the
             // cells themselves, dropping what is outside the sheet grid (#1008).
